@@ -22,7 +22,8 @@ Idempotency-Key: 8f3c1e2a-...
   `_system/idempotency/{sha256(user:route\nkey)}.json` with create-if-absent.
   A hit replays it. See `IdempotencyService` (core) and `idempotentCreate` (api).
 - **External delivery mechanics** — the alert test stores a separate claim before it sends the message.
-  A pre-delivery rejection does not store a claim.
+  Deterministic checks run before the claim. If rate-limit admission fails after claiming, the
+  server releases the unused claim before returning the error.
   A completed test stores its response under the result scope.
   A concurrent or uncertain request cannot send the message again with the same key.
 - **Retention** — pruned after 24h by the maintenance cron, so replay is

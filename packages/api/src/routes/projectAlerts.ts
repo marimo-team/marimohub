@@ -7,6 +7,7 @@ import {
 	PROJECT_ALERT_KINDS,
 	ProjectAlertKindSchema,
 	ResourceExhaustedError,
+	assertVersionMatch,
 	createSlidingWindowBudget,
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -331,6 +332,7 @@ app.openapi(testDestination, async (c) => {
 	);
 	const routeId = `POST /projects/${pid}/alert-destinations/${aid}/test`;
 	const resultScope = `${user.id}:${routeId}`;
+	const deliveryScope = `${resultScope}:external-delivery`;
 	const respond = (data: unknown) => {
 		const destination = data as z.infer<typeof AlertDestinationResponseSchema>;
 		c.header('ETag', etagFor(destination.updated_at));
@@ -338,8 +340,14 @@ app.openapi(testDestination, async (c) => {
 	};
 	let completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
 	if (completed) return respond(completed.data);
+	if (await deps.services.idempotency.lookup(deliveryScope, idempotencyKey)) {
+		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
+	}
 
-	assertTestBudget(user.id);
+	const expectedVersion = ifMatchToken(c);
+	const current = (await alerts.store.list(pid)).find((destination) => destination.id === aid);
+	if (!current) throw new NotFoundError(`Alert destination ${aid} not found`);
+	assertVersionMatch(current.updated_at, expectedVersion);
 	const [notification] = notificationRouter.render({
 		kind: 'alert.test',
 		project,
@@ -349,18 +357,21 @@ app.openapi(testDestination, async (c) => {
 	});
 	if (!notification) throw new Error('Test alert renderer returned no notification');
 
-	const ownsDelivery = await deps.services.idempotency.reserve(
-		`${resultScope}:external-delivery`,
-		idempotencyKey,
-	);
+	const ownsDelivery = await deps.services.idempotency.reserve(deliveryScope, idempotencyKey);
 	if (!ownsDelivery) {
 		completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
 		if (completed) return respond(completed.data);
 		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
 	}
+	try {
+		assertTestBudget(user.id);
+	} catch (error) {
+		await deps.services.idempotency.releaseReservation(deliveryScope, idempotencyKey);
+		throw error;
+	}
 	let destination: z.infer<typeof AlertDestinationResponseSchema>;
 	try {
-		destination = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);
+		destination = await alerts.dispatcher.test(pid, aid, expectedVersion, notification);
 	} catch (error) {
 		await audit(
 			deps,

@@ -213,7 +213,7 @@ describe('project alert destination routes', () => {
 		expect(dispatcher.test).toHaveBeenCalledOnce();
 	});
 
-	it('allows only one concurrent delivery for the same idempotency key', async () => {
+	it('allows only one concurrent delivery without charging reservation losers', async () => {
 		let releaseTest!: () => void;
 		const testGate = new Promise<void>((resolve) => {
 			releaseTest = resolve;
@@ -237,13 +237,23 @@ describe('project alert destination routes', () => {
 
 		const firstResponse = local.request('POST', path, undefined, headers);
 		await vi.waitFor(() => expect(test).toHaveBeenCalledOnce());
-		await expectError(await local.request('POST', path, undefined, headers), 409, 'CONFLICT');
+		for (let attempt = 0; attempt < 10; attempt++) {
+			await expectError(await local.request('POST', path, undefined, headers), 409, 'CONFLICT');
+		}
 		releaseTest();
 		const first = await expectOk<any>(await firstResponse);
 		const replay = await expectOk<any>(await local.request('POST', path, undefined, headers));
+		await expectOk(
+			await local.request(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(undefined, 'fresh-key-after-conflicts'),
+			),
+		);
 
 		expect(replay).toEqual(first);
-		expect(test).toHaveBeenCalledOnce();
+		expect(test).toHaveBeenCalledTimes(2);
 	});
 
 	it('does not redeliver when persisting the completed result fails', async () => {
@@ -383,7 +393,7 @@ describe('project alert destination routes', () => {
 		expect(testCalls[0]?.[3].dedupe_key).not.toBe(testCalls[1]?.[3].dedupe_key);
 	});
 
-	it('rejects a stale test precondition', async () => {
+	it('rejects a stale test precondition without consuming the idempotency key', async () => {
 		const created = await expectOk<any>(
 			await request('POST', `/projects/${pid}/alert-destinations`, {
 				name: 'Slack',
@@ -392,7 +402,7 @@ describe('project alert destination routes', () => {
 			}),
 			201,
 		);
-		await expectOk(
+		const updated = await expectOk<any>(
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
@@ -400,18 +410,20 @@ describe('project alert destination routes', () => {
 				{ 'if-match': created.updated_at },
 			),
 		);
+		const idempotencyKey = 'retry-after-stale-precondition';
+		const path = `/projects/${pid}/alert-destinations/${created.id}/test`;
 
 		await expectError(
-			await request(
-				'POST',
-				`/projects/${pid}/alert-destinations/${created.id}/test`,
-				undefined,
-				alertTestHeaders(created.updated_at),
-			),
+			await request('POST', path, undefined, alertTestHeaders(created.updated_at, idempotencyKey)),
 			412,
 			'PRECONDITION_FAILED',
 		);
-		expect((await store.list(pid as never))[0]?.verified_at).toBeNull();
+		const verified = await expectOk<any>(
+			await request('POST', path, undefined, alertTestHeaders(updated.updated_at, idempotencyKey)),
+		);
+
+		expect(verified.verified_at).not.toBeNull();
+		expect(dispatcher.test).toHaveBeenCalledOnce();
 	});
 
 	it('hides destinations from non-managers', async () => {
