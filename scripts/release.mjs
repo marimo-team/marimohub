@@ -2,7 +2,7 @@
 // origin/main and open a PR titled "release: X.Y.Z". Merging that PR triggers
 // the tag + publish workflows — see development_docs/releasing.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 const run = (cmd, ...args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 const fail = (message) => {
@@ -16,26 +16,6 @@ if (!arg) {
 	process.exit(1);
 }
 
-const pkgPath = new URL('../package.json', import.meta.url);
-const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-const cargoPath = new URL('../apps/cli/Cargo.toml', import.meta.url);
-
-let version = arg;
-if (arg === 'patch' || arg === 'minor' || arg === 'major') {
-	const [major, minor, patch] = pkg.version.split('.').map(Number);
-	version =
-		arg === 'major'
-			? `${major + 1}.0.0`
-			: arg === 'minor'
-				? `${major}.${minor + 1}.0`
-				: `${major}.${minor}.${patch + 1}`;
-} else if (!/^\d+\.\d+\.\d+$/.test(version)) {
-	console.error(`invalid version "${version}" — expected X.Y.Z, patch, minor, or major`);
-	process.exit(1);
-}
-
-// Everything below and up to the checkout is read-only, so a failed
-// precondition leaves the repository untouched.
 const missing = ['git', 'gh', 'cargo'].filter((tool) => {
 	try {
 		execFileSync(tool, ['--version'], { stdio: 'ignore' });
@@ -58,14 +38,34 @@ if (run('git', 'status', '--porcelain') !== '') {
 	process.exit(1);
 }
 
+// The release branch is cut from origin/main, so validate and bump the files
+// as they exist there — the local checkout may be on an older commit.
+run('git', 'fetch', 'origin', 'main');
+const pkgPath = new URL('../package.json', import.meta.url);
+const pkg = JSON.parse(run('git', 'show', 'origin/main:package.json'));
+const cargoPath = new URL('../apps/cli/Cargo.toml', import.meta.url);
+const cargoToml = run('git', 'show', 'origin/main:apps/cli/Cargo.toml');
 const cargoPattern = /^version = "[^"]+"$/m;
-if (!cargoPattern.test(readFileSync(cargoPath, 'utf8'))) {
+if (!cargoPattern.test(cargoToml)) {
 	fail('could not find the current Cargo package version');
+}
+
+let version = arg;
+if (arg === 'patch' || arg === 'minor' || arg === 'major') {
+	const [major, minor, patch] = pkg.version.split('.').map(Number);
+	version =
+		arg === 'major'
+			? `${major + 1}.0.0`
+			: arg === 'minor'
+				? `${major}.${minor + 1}.0`
+				: `${major}.${minor}.${patch + 1}`;
+} else if (!/^\d+\.\d+\.\d+$/.test(version)) {
+	console.error(`invalid version "${version}" — expected X.Y.Z, patch, minor, or major`);
+	process.exit(1);
 }
 
 const branch = `release/${version}`;
 const tag = `v${version}`;
-run('git', 'fetch', 'origin', 'main');
 const localRefExists = (ref) => {
 	try {
 		run('git', 'show-ref', '--verify', '--quiet', ref);
@@ -90,10 +90,7 @@ run('git', 'checkout', '-b', branch, 'origin/main');
 pkg.version = version;
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, '\t')}\n`);
 
-writeFileSync(
-	cargoPath,
-	readFileSync(cargoPath, 'utf8').replace(cargoPattern, `version = "${version}"`),
-);
+writeFileSync(cargoPath, cargoToml.replace(cargoPattern, `version = "${version}"`));
 run('cargo', 'update', '--manifest-path', 'apps/cli/Cargo.toml', '--package', 'mohub');
 
 run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock');
