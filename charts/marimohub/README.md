@@ -61,6 +61,9 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `image.repository` | `ghcr.io/marimo-team/marimohub` | |
 | `image.tag` | `""` → chart `appVersion` | Override to decouple image from chart version |
 | `replicaCount` | `2` | Stateless API replicas |
+| `serviceAccount.create` / `.name` | `true` / `""` | Create a release-scoped account, or name an existing account |
+| `serviceAccount.annotations` | `{}` | Workload identity annotations, such as EKS IRSA or GKE Workload Identity |
+| `serviceAccount.automountServiceAccountToken` | `true` | Mount the Kubernetes API token in API and maintenance pods |
 | `compute.profiles` | `""` | Ordered sandbox CPU/memory profiles; first is the default |
 | `compute.profileOverride` | `none` | Set to `editors` to allow per-notebook profile selection |
 | `maintenance.enabled` | `true` | Singleton session reaper |
@@ -81,3 +84,34 @@ baked in, so the chart is portable across any Kubernetes.
 The chart sets `MARIMOHUB_RUN_MAINTENANCE` per deployment (`false` on API pods,
 `true` on the maintenance pod), overriding any value in `config`. The maintenance
 pod is pinned to one replica with the `Recreate` strategy — don't scale it.
+
+### ServiceAccount
+
+By default, the chart creates a ServiceAccount using the chart fullname and uses
+it for both the API and maintenance pods. Add cloud workload identity annotations
+to the generated account:
+
+```yaml
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/marimohub
+```
+
+To use an account managed outside the chart:
+
+```yaml
+serviceAccount:
+  create: false
+  name: marimohub
+```
+
+Set `automountServiceAccountToken: false` when marimohub does not need a projected
+Kubernetes token. Keep it enabled for Kubernetes compute and workload identity
+providers that use that token. This account belongs to the marimohub control plane;
+`config.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` separately selects the
+ServiceAccount assigned to notebook kernel pods.
+
+The chart does not grant the control-plane account any RBAC permissions. Bind it
+to cluster-specific Roles separately, as shown in
+[`examples/kubernetes/rbac.yaml`](../../examples/kubernetes/rbac.yaml) for the
+native Kubernetes compute backend.

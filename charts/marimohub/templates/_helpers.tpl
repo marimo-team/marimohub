@@ -31,6 +31,15 @@ app.kubernetes.io/name: {{ include "marimohub.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/* Resolve the managed, existing, or namespace-default ServiceAccount name. */}}
+{{- define "marimohub.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "marimohub.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Resolved image ref: repository:(tag|appVersion). */}}
 {{- define "marimohub.image" -}}
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
@@ -71,6 +80,8 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
+  serviceAccountName: {{ include "marimohub.serviceAccountName" $root }}
+  automountServiceAccountToken: {{ $v.serviceAccount.automountServiceAccountToken }}
   enableServiceLinks: false
   {{- with $v.imagePullSecrets }}
   imagePullSecrets:

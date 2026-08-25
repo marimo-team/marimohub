@@ -14,6 +14,16 @@ imagePullSecrets: []
 nameOverride: ''
 fullnameOverride: ''
 
+# Kubernetes ServiceAccount used by both the API and maintenance pods.
+serviceAccount:
+  # Create a release-scoped ServiceAccount. Set to false to use an existing one.
+  create: true
+  # Annotations for workload identity integrations such as EKS IRSA or GKE.
+  annotations: {}
+  # Empty and create=true uses the chart fullname; empty and create=false uses "default".
+  name: ''
+  automountServiceAccountToken: true
+
 # The API tier is stateless, so it scales freely.
 replicaCount: 2
 
