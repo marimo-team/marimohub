@@ -15,6 +15,11 @@ if (!arg) {
 	console.error('usage: pnpm release <X.Y.Z | patch | minor | major>');
 	process.exit(1);
 }
+const isBump = arg === 'patch' || arg === 'minor' || arg === 'major';
+if (!isBump && !/^\d+\.\d+\.\d+$/.test(arg)) {
+	console.error(`invalid version "${arg}" — expected X.Y.Z, patch, minor, or major`);
+	process.exit(1);
+}
 
 const missing = ['git', 'gh', 'cargo'].filter((tool) => {
 	try {
@@ -44,14 +49,16 @@ run('git', 'fetch', 'origin', 'main');
 const pkgPath = new URL('../package.json', import.meta.url);
 const pkg = JSON.parse(run('git', 'show', 'origin/main:package.json'));
 const cargoPath = new URL('../apps/cli/Cargo.toml', import.meta.url);
-const cargoToml = run('git', 'show', 'origin/main:apps/cli/Cargo.toml');
+const cargoToml = execFileSync('git', ['show', 'origin/main:apps/cli/Cargo.toml'], {
+	encoding: 'utf8',
+});
 const cargoPattern = /^version = "[^"]+"$/m;
 if (!cargoPattern.test(cargoToml)) {
 	fail('could not find the current Cargo package version');
 }
 
 let version = arg;
-if (arg === 'patch' || arg === 'minor' || arg === 'major') {
+if (isBump) {
 	const [major, minor, patch] = pkg.version.split('.').map(Number);
 	version =
 		arg === 'major'
@@ -59,9 +66,6 @@ if (arg === 'patch' || arg === 'minor' || arg === 'major') {
 			: arg === 'minor'
 				? `${major}.${minor + 1}.0`
 				: `${major}.${minor}.${patch + 1}`;
-} else if (!/^\d+\.\d+\.\d+$/.test(version)) {
-	console.error(`invalid version "${version}" — expected X.Y.Z, patch, minor, or major`);
-	process.exit(1);
 }
 
 const branch = `release/${version}`;
