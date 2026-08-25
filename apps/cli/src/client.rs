@@ -8,6 +8,8 @@ use clap::ArgMatches;
 use indicatif::{ProgressBar, ProgressStyle};
 use inquire::Confirm;
 use secrecy::{ExposeSecret, SecretString};
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use tabled::{builder::Builder, settings::Style};
 use url::Url;
@@ -42,6 +44,37 @@ pub struct Runtime<'a> {
     pub timeout: Duration,
     pub output: &'a str,
     pub raw_envelope: bool,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct CliDeviceAuthorization {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Deserialize)]
+struct CliToken {
+    token: String,
+}
+
+#[derive(Debug)]
+pub enum CliDevicePoll {
+    Pending,
+    Approved(SecretString),
+    Retryable { retry_after: Option<Duration> },
+}
+
+fn cli_runtime(base_url: &str, timeout: Duration) -> Runtime<'_> {
+    Runtime {
+        base_url,
+        token: None,
+        timeout,
+        output: "json",
+        raw_envelope: false,
+    }
 }
 
 fn values(matches: &ArgMatches, id: &str, repeatable: bool) -> Vec<String> {
@@ -692,43 +725,146 @@ pub fn update_notebook_deployment(
         .ok_or_else(|| Error::Http("notebook update response has no data".into()))
 }
 
-pub fn exchange_cli_authorization(
+fn post_cli_response(
     base_url: &str,
     timeout: Duration,
-    code: &str,
-    code_verifier: &str,
-) -> Result<SecretString, Error> {
-    let url = Url::parse(&format!(
-        "{}/api/cli/v1/token",
-        base_url.trim_end_matches('/')
-    ))?;
-    let body = serde_json::to_vec(&serde_json::json!({
-        "code": code,
-        "code_verifier": code_verifier,
-    }))?;
-    let runtime = Runtime {
-        base_url,
-        token: None,
-        timeout,
-        output: "json",
-        raw_envelope: false,
-    };
+    path: &str,
+    body: Value,
+) -> Result<HttpResponse, Error> {
+    let url = Url::parse(&format!("{}{}", base_url.trim_end_matches('/'), path))?;
+    let body = serde_json::to_vec(&body)?;
+    let runtime = cli_runtime(base_url, timeout);
     let agent = ureq::AgentBuilder::new().timeout(timeout).build();
-    let response = send_once(
+    send_once(
         &agent,
         &runtime,
         "POST",
         &url,
         &BTreeMap::new(),
         Some(&body),
+    )
+}
+
+fn post_cli_json(
+    base_url: &str,
+    timeout: Duration,
+    path: &str,
+    body: Value,
+) -> Result<(u16, Value), Error> {
+    let response = post_cli_response(base_url, timeout, path, body)?;
+    let status = response.status;
+    Ok((status, ensure_success(&response)?))
+}
+
+fn cli_data<T: DeserializeOwned>(envelope: &Value, operation: &str) -> Result<T, Error> {
+    let data = envelope
+        .get("data")
+        .cloned()
+        .ok_or_else(|| Error::Http(format!("{operation} response has no data")))?;
+    serde_json::from_value(data)
+        .map_err(|error| Error::Http(format!("{operation} response has invalid data: {error}")))
+}
+
+fn expect_cli_status(status: u16, expected: u16, operation: &str) -> Result<(), Error> {
+    if status == expected {
+        Ok(())
+    } else {
+        Err(Error::Http(format!(
+            "{operation} returned unexpected HTTP {status}"
+        )))
+    }
+}
+
+pub fn exchange_cli_authorization(
+    base_url: &str,
+    timeout: Duration,
+    code: &str,
+    code_verifier: &str,
+) -> Result<SecretString, Error> {
+    let (status, envelope) = post_cli_json(
+        base_url,
+        timeout,
+        "/api/cli/v1/token",
+        serde_json::json!({ "code": code, "code_verifier": code_verifier }),
     )?;
+    expect_cli_status(status, 200, "CLI token exchange")?;
+    let response: CliToken = cli_data(&envelope, "CLI token exchange")?;
+    if response.token.is_empty() {
+        return Err(Error::Http("CLI token exchange returned no token".into()));
+    }
+    Ok(SecretString::from(response.token))
+}
+
+pub fn request_cli_device_authorization(
+    base_url: &str,
+    timeout: Duration,
+    code_challenge: &str,
+) -> Result<CliDeviceAuthorization, Error> {
+    let (status, envelope) = post_cli_json(
+        base_url,
+        timeout,
+        "/api/cli/v1/device-authorizations",
+        serde_json::json!({ "code_challenge": code_challenge }),
+    )?;
+    expect_cli_status(status, 200, "CLI device authorization")?;
+    let response: CliDeviceAuthorization = cli_data(&envelope, "CLI device authorization")?;
+    if response.device_code.is_empty()
+        || response.user_code.is_empty()
+        || response.verification_uri.is_empty()
+        || response.expires_in == 0
+        || response.interval == 0
+    {
+        return Err(Error::Http(
+            "CLI device authorization response has invalid data".into(),
+        ));
+    }
+    Ok(response)
+}
+
+pub fn poll_cli_device_authorization(
+    base_url: &str,
+    timeout: Duration,
+    device_code: &str,
+    code_verifier: &str,
+) -> Result<CliDevicePoll, Error> {
+    let response = post_cli_response(
+        base_url,
+        timeout,
+        "/api/cli/v1/device-token",
+        serde_json::json!({ "device_code": device_code, "code_verifier": code_verifier }),
+    )?;
+    if matches!(response.status, 429 | 503) {
+        let retry_after = response
+            .headers
+            .get("retry-after")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs);
+        return Ok(CliDevicePoll::Retryable { retry_after });
+    }
+    let status = response.status;
     let envelope = ensure_success(&response)?;
-    let token = envelope
-        .pointer("/data/token")
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| Error::Http("CLI token exchange returned no token".into()))?;
-    Ok(SecretString::from(token.to_owned()))
+    match status {
+        202 => {
+            if envelope.pointer("/data/status").and_then(Value::as_str)
+                != Some("authorization_pending")
+            {
+                return Err(Error::Http(
+                    "CLI device poll response has invalid pending status".into(),
+                ));
+            }
+            Ok(CliDevicePoll::Pending)
+        }
+        200 => {
+            let response: CliToken = cli_data(&envelope, "CLI device poll")?;
+            if response.token.is_empty() {
+                return Err(Error::Http("CLI device poll returned no token".into()));
+            }
+            Ok(CliDevicePoll::Approved(SecretString::from(response.token)))
+        }
+        _ => Err(Error::Http(format!(
+            "CLI device poll returned unexpected HTTP {status}"
+        ))),
+    }
 }
 
 pub fn execute(
@@ -926,6 +1062,68 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
+    fn serve_cli_device(
+        path: &str,
+        status: u16,
+        body: &str,
+        expected_body: &str,
+    ) -> (String, thread::JoinHandle<()>) {
+        serve_cli_device_with_headers(path, status, body, expected_body, &[])
+    }
+
+    fn serve_cli_device_with_headers(
+        path: &str,
+        status: u16,
+        body: &str,
+        expected_body: &str,
+        headers: &[(&str, &str)],
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let path = path.to_owned();
+        let body = body.to_owned();
+        let expected_body = expected_body.to_owned();
+        let headers = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
+            let mut request = String::new();
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request header");
+                assert!(!line.is_empty(), "request ended before its headers");
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().expect("numeric content length");
+                    }
+                }
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut request_body = vec![0; content_length];
+            reader
+                .read_exact(&mut request_body)
+                .expect("read request body");
+            request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+            assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
+            assert!(!request.to_ascii_lowercase().contains("authorization:"));
+            assert!(request.contains(&expected_body));
+            write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("write response");
+        });
+        (format!("http://{address}"), handle)
+    }
+
     #[test]
     fn current_user_validates_the_token_with_me() {
         let (base_url, server) = serve_once(
@@ -981,6 +1179,213 @@ mod tests {
 
         server.join().expect("test server");
         assert_eq!(token.expose_secret(), "mhub_pat_returned");
+    }
+
+    #[test]
+    fn cli_device_authorization_parses_the_verification_instructions() {
+        let (base_url, server) = serve_cli_device(
+            "/api/cli/v1/device-authorizations",
+            200,
+            r#"{"success":true,"data":{"device_code":"mhub_cli_device","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","verification_uri_complete":"https://hub.example.com/cli/device?user_code=WDJB-MJHT","expires_in":600,"interval":5}}"#,
+            r#""code_challenge":"challenge""#,
+        );
+
+        let authorization =
+            request_cli_device_authorization(&base_url, Duration::from_secs(1), "challenge")
+                .expect("request succeeds");
+
+        server.join().expect("test server");
+        assert_eq!(authorization.device_code, "mhub_cli_device");
+        assert_eq!(authorization.user_code, "WDJB-MJHT");
+        assert_eq!(authorization.expires_in, 600);
+        assert_eq!(authorization.interval, 5);
+    }
+
+    #[test]
+    fn cli_device_poll_distinguishes_pending_and_approved() {
+        let (base_url, pending_server) = serve_cli_device(
+            "/api/cli/v1/device-token",
+            202,
+            r#"{"success":true,"data":{"status":"authorization_pending"}}"#,
+            r#""device_code":"mhub_cli_device""#,
+        );
+        assert!(matches!(
+            poll_cli_device_authorization(
+                &base_url,
+                Duration::from_secs(1),
+                "mhub_cli_device",
+                "verifier",
+            )
+            .expect("pending poll succeeds"),
+            CliDevicePoll::Pending
+        ));
+        pending_server.join().expect("pending test server");
+
+        let (base_url, approved_server) = serve_cli_device(
+            "/api/cli/v1/device-token",
+            200,
+            r#"{"success":true,"data":{"token":"mhub_pat_returned"}}"#,
+            r#""code_verifier":"verifier""#,
+        );
+        let result = poll_cli_device_authorization(
+            &base_url,
+            Duration::from_secs(1),
+            "mhub_cli_device",
+            "verifier",
+        )
+        .expect("approved poll succeeds");
+        approved_server.join().expect("approved test server");
+        match result {
+            CliDevicePoll::Approved(token) => {
+                assert_eq!(token.expose_secret(), "mhub_pat_returned");
+            }
+            CliDevicePoll::Pending | CliDevicePoll::Retryable { .. } => {
+                panic!("expected approved device authorization")
+            }
+        }
+    }
+
+    #[test]
+    fn cli_device_poll_surfaces_retryable_responses_and_retry_after() {
+        for (status, retry_after, expected) in [
+            (429, Some("17"), Some(Duration::from_secs(17))),
+            (503, None, None),
+            (503, Some("invalid"), None),
+        ] {
+            let headers = retry_after
+                .map(|value| vec![("Retry-After", value)])
+                .unwrap_or_default();
+            let (base_url, server) = serve_cli_device_with_headers(
+                "/api/cli/v1/device-token",
+                status,
+                "not-json",
+                r#""device_code":"mhub_cli_device""#,
+                &headers,
+            );
+
+            let result = poll_cli_device_authorization(
+                &base_url,
+                Duration::from_secs(1),
+                "mhub_cli_device",
+                "verifier",
+            )
+            .expect("transient response remains retryable");
+            server.join().expect("test server");
+            assert!(matches!(
+                result,
+                CliDevicePoll::Retryable { retry_after } if retry_after == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn cli_device_poll_does_not_retry_other_error_responses() {
+        let (base_url, server) = serve_cli_device(
+            "/api/cli/v1/device-token",
+            500,
+            r#"{"success":false,"error":{"code":"INTERNAL","message":"failed"}}"#,
+            r#""device_code":"mhub_cli_device""#,
+        );
+
+        let error = poll_cli_device_authorization(
+            &base_url,
+            Duration::from_secs(1),
+            "mhub_cli_device",
+            "verifier",
+        )
+        .expect_err("non-retryable response must fail");
+        server.join().expect("test server");
+        assert!(matches!(error, Error::Http(message) if message.contains("HTTP 500")));
+    }
+
+    #[test]
+    fn cli_device_authorization_rejects_incomplete_or_invalid_data() {
+        for body in [
+            r#"{"success":true}"#,
+            r#"{"success":true,"data":{"device_code":"","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","expires_in":600,"interval":5}}"#,
+            r#"{"success":true,"data":{"device_code":"mhub_cli_device","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","expires_in":0,"interval":5}}"#,
+            r#"{"success":true,"data":{"device_code":"mhub_cli_device","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","expires_in":"600","interval":5}}"#,
+        ] {
+            let (base_url, server) = serve_cli_device(
+                "/api/cli/v1/device-authorizations",
+                200,
+                body,
+                r#""code_challenge":"challenge""#,
+            );
+
+            let error =
+                request_cli_device_authorization(&base_url, Duration::from_secs(1), "challenge")
+                    .expect_err("invalid response must fail");
+            server.join().expect("test server");
+            assert!(matches!(error, Error::Http(_)));
+        }
+    }
+
+    #[test]
+    fn cli_device_poll_rejects_malformed_status_and_token_responses() {
+        for (status, body, expected) in [
+            (
+                202,
+                r#"{"success":true,"data":{"status":"approved"}}"#,
+                "invalid pending status",
+            ),
+            (
+                200,
+                r#"{"success":true,"data":{"token":""}}"#,
+                "returned no token",
+            ),
+            (
+                201,
+                r#"{"success":true,"data":{"token":"mhub_pat_returned"}}"#,
+                "unexpected HTTP 201",
+            ),
+        ] {
+            let (base_url, server) = serve_cli_device(
+                "/api/cli/v1/device-token",
+                status,
+                body,
+                r#""device_code":"mhub_cli_device""#,
+            );
+
+            let error = poll_cli_device_authorization(
+                &base_url,
+                Duration::from_secs(1),
+                "mhub_cli_device",
+                "verifier",
+            )
+            .expect_err("invalid response must fail");
+            server.join().expect("test server");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn cli_token_exchange_rejects_missing_tokens_and_unexpected_statuses() {
+        for (status, body, expected) in [
+            (200, r#"{"success":true,"data":{}}"#, "invalid data"),
+            (
+                202,
+                r#"{"success":true,"data":{"token":"mhub_pat_returned"}}"#,
+                "unexpected HTTP 202",
+            ),
+        ] {
+            let (base_url, server) = serve_cli_device(
+                "/api/cli/v1/token",
+                status,
+                body,
+                r#""code":"mhub_cli_code""#,
+            );
+
+            let error = exchange_cli_authorization(
+                &base_url,
+                Duration::from_secs(1),
+                "mhub_cli_code",
+                "verifier",
+            )
+            .expect_err("invalid response must fail");
+            server.join().expect("test server");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 
     #[test]

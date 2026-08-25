@@ -24,7 +24,13 @@ export { SyncedNotebookService } from './content/SyncedNotebookService';
 export { IdentityService } from './identity/IdentityService';
 export {
 	CliAuthorizationService,
+	formatCliDeviceUserCode,
+	normalizeCliDeviceUserCode,
 	parseCliAuthorizationCode,
+} from './tokens/CliAuthorizationService';
+export type {
+	CliDevicePollResult,
+	RequestedCliDeviceAuthorization,
 } from './tokens/CliAuthorizationService';
 export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';

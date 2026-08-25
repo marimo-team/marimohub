@@ -378,31 +378,46 @@ fn wait_for_authorization(
     })
 }
 
-fn browser_login(
-    matches: &ArgMatches,
-    base_url: &str,
-    no_browser: bool,
-) -> Result<BrowserCredential, Error> {
+fn login_timeout(matches: &ArgMatches) -> Duration {
+    Duration::from_secs(
+        *matches
+            .get_one::<u64>("timeout")
+            .expect("defaulted by clap"),
+    )
+}
+
+fn pkce_pair() -> Result<(String, String), Error> {
+    let verifier = random_base64url(32)?;
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    Ok((verifier, challenge))
+}
+
+fn authentication_error(base_url: &str, reason: impl ToString) -> Error {
+    Error::Authentication {
+        server: server_label(base_url),
+        reason: reason.to_string(),
+    }
+}
+
+fn browser_login(matches: &ArgMatches, base_url: &str) -> Result<BrowserCredential, Error> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let callback_uri = format!("http://{}/callback", listener.local_addr()?);
     let state = random_base64url(24)?;
-    let code_verifier = random_base64url(32)?;
-    let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+    let (code_verifier, code_challenge) = pkce_pair()?;
     let login_url = cli_login_url(base_url, &callback_uri, &state, &code_challenge)?;
 
-    if no_browser || open_browser(login_url.as_str()).is_err() {
+    if open_browser(login_url.as_str()).is_err() {
         eprintln!("Open this URL to sign in:\n\n{login_url}\n");
+        eprintln!(
+            "This loopback flow requires a browser on this machine. For a remote shell, run `mohub login --device-code`.\n"
+        );
     } else {
         eprintln!("Opening {base_url} in your browser…");
     }
     eprintln!("Waiting for approval…");
 
     let mut callback = wait_for_authorization(&listener, &state)?;
-    let timeout = Duration::from_secs(
-        *matches
-            .get_one::<u64>("timeout")
-            .expect("defaulted by clap"),
-    );
+    let timeout = login_timeout(matches);
     match client::exchange_cli_authorization(base_url, timeout, &callback.code, &code_verifier) {
         Ok(token) => Ok(BrowserCredential {
             token,
@@ -410,12 +425,64 @@ fn browser_login(
         }),
         Err(error) => {
             let _ = callback_response(&mut callback.stream, false);
-            Err(Error::Authentication {
-                server: server_label(base_url),
-                reason: error.to_string(),
-            })
+            Err(authentication_error(base_url, error))
         }
     }
+}
+
+fn next_device_poll_interval(
+    current: Duration,
+    base: Duration,
+    retry_after: Option<Duration>,
+) -> Duration {
+    retry_after
+        .map(|delay| delay.max(base))
+        .unwrap_or_else(|| current.saturating_mul(2).min(Duration::from_secs(60)))
+}
+
+fn device_login(matches: &ArgMatches, base_url: &str) -> Result<SecretString, Error> {
+    let (code_verifier, code_challenge) = pkce_pair()?;
+    let timeout = login_timeout(matches);
+    let authorization =
+        client::request_cli_device_authorization(base_url, timeout, &code_challenge)
+            .map_err(|error| authentication_error(base_url, error))?;
+
+    eprintln!(
+        "In a browser on any device, open:\n\n{}\n\nEnter this code:\n\n{}\n",
+        authorization.verification_uri, authorization.user_code,
+    );
+    eprintln!("Waiting for approval…");
+
+    let lifetime = Duration::from_secs(authorization.expires_in).min(CLI_LOGIN_TIMEOUT);
+    let deadline = Instant::now() + lifetime;
+    let base_interval = Duration::from_secs(authorization.interval.clamp(5, 60));
+    let mut interval = base_interval;
+    while Instant::now() < deadline {
+        thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
+        let request_timeout = timeout.min(deadline.saturating_duration_since(Instant::now()));
+        if request_timeout.is_zero() {
+            break;
+        }
+        match client::poll_cli_device_authorization(
+            base_url,
+            request_timeout,
+            &authorization.device_code,
+            &code_verifier,
+        ) {
+            Ok(client::CliDevicePoll::Pending) => interval = base_interval,
+            Ok(client::CliDevicePoll::Approved(token)) => return Ok(token),
+            Ok(client::CliDevicePoll::Retryable { retry_after }) => {
+                interval = next_device_poll_interval(interval, base_interval, retry_after);
+            }
+            Err(Error::Transport(_)) => {
+                interval = next_device_poll_interval(interval, base_interval, None);
+            }
+            Err(error) => {
+                return Err(authentication_error(base_url, error));
+            }
+        }
+    }
+    Err(authentication_error(base_url, "device sign-in timed out"))
 }
 
 fn selected_login_target(matches: &ArgMatches) -> Result<(String, String, Option<String>), Error> {
@@ -503,17 +570,23 @@ fn handle_login(
     }
 
     browser_login_origin(&base_url)?;
-    let mut credential = browser_login(matches, &base_url, leaf.get_flag("no-browser"))?;
-    if let Err(error) = config::complete_browser_login(
-        &profile,
-        &base_url,
-        expected_base_url.as_deref(),
-        &credential.token,
-    ) {
-        let _ = callback_response(&mut credential.callback, false);
+    let (token, mut callback) = if leaf.get_flag("device-code") {
+        (device_login(matches, &base_url)?, None)
+    } else {
+        let credential = browser_login(matches, &base_url)?;
+        (credential.token, Some(credential.callback))
+    };
+    if let Err(error) =
+        config::complete_browser_login(&profile, &base_url, expected_base_url.as_deref(), &token)
+    {
+        if let Some(callback) = &mut callback {
+            let _ = callback_response(callback, false);
+        }
         return Err(error);
     }
-    let _ = callback_response(&mut credential.callback, true);
+    if let Some(callback) = &mut callback {
+        let _ = callback_response(callback, true);
+    }
     write_stdout(format_args!(
         "Logged in to {base_url} (profile {profile}).\n"
     ))?;
@@ -862,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn login_supports_a_headless_browser_flow() {
+    fn login_supports_a_device_code_flow_and_no_browser_alias() {
         let matches = cli::build(&manifest::load())
             .try_get_matches_from([
                 "mohub",
@@ -875,7 +948,29 @@ mod tests {
         let (path, leaf) = selected_command(&matches);
 
         assert_eq!(path, ["login"]);
-        assert!(leaf.get_flag("no-browser"));
+        assert!(leaf.get_flag("device-code"));
+    }
+
+    #[test]
+    fn device_poll_retries_respect_server_delay_and_back_off_without_one() {
+        let base = Duration::from_secs(5);
+
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(10), base, Some(Duration::from_secs(23)),),
+            Duration::from_secs(23),
+        );
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(10), base, Some(Duration::from_secs(1)),),
+            base,
+        );
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(10), base, None),
+            Duration::from_secs(20),
+        );
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(60), base, None),
+            Duration::from_secs(60),
+        );
     }
 
     #[test]

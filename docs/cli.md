@@ -87,22 +87,28 @@ Run `mohub login`:
 mohub login
 ```
 
-The CLI starts a temporary loopback server and opens the selected marimohub in
-your browser. Review the account and token lifetime (30 days by default), then
-select **Authorize CLI**. The Hub returns a short-lived, single-use code to the
-loopback server; the CLI exchanges it for a token and stores the token in the
-operating system credential store. The token is never placed in a browser URL.
+The CLI opens the selected Hub in your browser. Review the account and token
+lifetime, then select **Authorize CLI**. The default lifetime is 30 days. The CLI
+exchanges the one-time approval code and stores the token in the operating
+system credential store.
 
-If a browser is available on the same machine but cannot be opened automatically,
-print the approval URL instead:
+If the browser does not open automatically, the CLI prints the loopback approval
+URL. Open this URL on the same machine as the CLI.
+
+For a remote or headless environment, use device login:
 
 ```bash
-mohub login --no-browser
+mohub login --device-code
 ```
 
-The browser must run on the same machine as the CLI because authorization returns
-to a temporary loopback listener. For a remote or fully headless shell, create an
-API token in the Hub and use `mohub login --token-stdin`.
+The CLI prints a URL and an eight-letter code. It waits for approval for up to
+ten minutes. Open the URL on any device and sign in.
+
+WARNING: If the browser and terminal show different codes, do not approve the
+request. An attacker can use a code that they send to you to access your account.
+
+`--no-browser` is an alias for `--device-code`. Both login flows use PKCE and a
+one-time grant. The Hub never puts the personal access token in a browser URL.
 
 You can also create the default profile and sign in in one command:
 
@@ -112,8 +118,7 @@ mohub --base-url https://hub.example.com login
 
 Browser login requires an origin URL without a path prefix. Path-prefixed Hub
 deployments can use the non-interactive token flow below.
-Non-loopback server URLs must use HTTPS so credentials are never sent over a
-plaintext network connection. Local development URLs may use HTTP on a loopback host.
+Non-loopback server URLs must use HTTPS. Local loopback URLs can use HTTP.
 
 For non-interactive automation, create an API token in the Hub and send it
 through standard input:

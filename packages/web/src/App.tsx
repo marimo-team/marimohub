@@ -22,6 +22,11 @@ const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPag
 const CliLoginPage = lazy(() =>
 	import('@/components/Account/CliLoginPage').then((module) => ({ default: module.CliLoginPage })),
 );
+const CliDeviceLoginPage = lazy(() =>
+	import('@/components/Account/CliDeviceLoginPage').then((module) => ({
+		default: module.CliDeviceLoginPage,
+	})),
+);
 
 function AppErrorBoundary({ children }: { children: React.ReactNode }) {
 	return (
@@ -145,6 +150,7 @@ function AppContent() {
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
 						<Route path="/cli/login" element={<CliLoginPage />} />
+						<Route path="/cli/device" element={<CliDeviceLoginPage />} />
 						<Route path="/projects/:pid/notebooks/:nid" element={<NotebookPage />} />
 						{/* The shared app, full-screen like the editor (outside StandardLayout). */}
 						<Route

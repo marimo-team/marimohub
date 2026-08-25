@@ -103,6 +103,8 @@ s3-bucket/
 │   │   └── {token-id}.json                 ← personal access token record (mutable, last-writer-wins)
 │   ├── cli-authorizations/
 │   │   └── {authorization-id}.json         ← short-lived PKCE login grant (CAS-claimed)
+│   ├── cli-device-user-codes/
+│   │   └── {user-code}.json                ← immutable lookup claim for a device grant
 │   ├── integrations/                       ← organization-wide integrations (§4.12)
 │   │   ├── _names/
 │   │   │   └── {name}.json                 ← name claim (CAS, app-claim pattern)
@@ -187,6 +189,7 @@ selected version and cannot write changes back.
 | `_system/identities/{user-id}.json`                                       | JSON     | User display identity (`{ id, email, name, picture_url?, suspended_at? }`). Owned and CAS-updated by `IdentityService`. Resolves opaque `author`/`user_id` IDs to a person and gates suspended users at authentication time.                                                                                                                                                                                                                                                                           |
 | `_system/tokens/{token-id}.json`                                          | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
 | `_system/cli-authorizations/{authorization-id}.json`                      | JSON     | Ten-minute browser-to-CLI PKCE grant. Stores hashes/challenges, never a PAT or plaintext authorization secret. `CliAuthorizationService` CAS-claims it before minting one token, then deletes it. See §4.11.1.                                                                                                                                                                                                                                                                                         |
+| `_system/cli-device-user-codes/{user-code}.json`                          | JSON     | Create-if-absent lookup claim from an eight-letter device user code to its short-lived CLI authorization. `CliAuthorizationService` owns the claim. It deletes the claim after exchange and prunes it after ten minutes. See §4.11.1.                                                                                                                                                                                                                                                                  |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                             | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
 | `_system/reconcile/orphans/{sandbox-id}.json`                             | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
@@ -566,19 +569,25 @@ A personal access token record — the machine-credential counterpart of a sessi
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
 
-### 4.11.1 `_system/cli-authorizations/{authorization-id}.json`
+### 4.11.1 CLI authorization records
 
-An approved CLI login grant binds the signed-in user, requested PAT lifetime,
-and PKCE S256 challenge to a one-time `mhub_cli_…` authorization code. The
-stored record contains only the code's SHA-256 hash. It expires after ten
-minutes.
+A loopback grant binds the user, PAT lifetime, and PKCE challenge to a one-time
+`mhub_cli_…` code. A device grant starts without a user. It has an eight-letter,
+base-20 user code. The create-if-absent user-code claim provides an exact lookup.
+Browser approval uses CAS to add the user and PAT lifetime. Grants expire after
+ten minutes.
 
-`CliAuthorizationService` is the only writer. Exchange verifies both the code
-secret and the CLI-held verifier, then changes `pending` to `claimed` with an
-ETag compare-and-swap before minting the PAT. A competing or replayed exchange
-cannot mint another token. Successful exchanges delete the claimed record;
-each new approval also prunes at most 100 expired or abandoned records from the
-oldest page, keeping request-path cleanup bounded.
+The CLI receives the authorization secret. Storage contains only its SHA-256
+hash. Device polling must also supply the PKCE verifier before it reveals the
+grant status. User codes are case-insensitive. Each process limits approval
+attempts to five per user and limits polling separately.
+
+`CliAuthorizationService` is the only writer. Exchange uses CAS to change the
+grant from `pending` to `claimed` before it creates the PAT. This step prevents
+replay and concurrent token creation. Exchange deletes the grant and user-code
+claim. Creating a loopback grant prunes at most 100 expired authorization records.
+Creating a device grant prunes the same records and at most 100 expired user-code
+claims. Device approval, exchange, and polling do not prune records.
 
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 
