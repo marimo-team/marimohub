@@ -13,6 +13,7 @@ use keyring::Entry;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
+use url::Host;
 
 use crate::Error;
 
@@ -164,6 +165,24 @@ pub fn normalize_base_url(value: &str) -> Result<String, Error> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::Usage(
             "server URL must not contain a username or password".into(),
+        ));
+    }
+    let loopback = url.host().is_some_and(|host| match host {
+        Host::Domain(host) => host
+            .strip_suffix('.')
+            .unwrap_or(host)
+            .eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => {
+            address.is_loopback()
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback())
+        }
+    });
+    if url.scheme() == "http" && !loopback {
+        return Err(Error::Usage(
+            "non-loopback server URLs must use HTTPS".into(),
         ));
     }
     if url.query().is_some() || url.fragment().is_some() {
@@ -675,6 +694,22 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[test]
+    fn plaintext_base_urls_accept_every_loopback_form() {
+        for url in [
+            "http://localhost.:3000",
+            "http://127.42.0.1:3000",
+            "http://[::1]:3000",
+            "http://[::ffff:127.42.0.1]:3000",
+        ] {
+            assert!(normalize_base_url(url).is_ok(), "{url}");
+        }
+        assert!(matches!(
+            normalize_base_url("http://[::ffff:192.168.1.1]:3000"),
+            Err(Error::Usage(message)) if message.contains("must use HTTPS")
+        ));
+    }
 
     #[test]
     fn token_input_is_trimmed() {

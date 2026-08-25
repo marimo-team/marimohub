@@ -35,7 +35,8 @@ interface SyncSettingsDialogProps {
 	notebookId: string;
 	title: string;
 	syncUrl?: string;
-	canEdit: boolean;
+	canManage: boolean;
+	canOperate: boolean;
 	initialToken?: string;
 }
 
@@ -69,7 +70,8 @@ export function SyncSettingsDialog({
 	notebookId,
 	title,
 	syncUrl,
-	canEdit,
+	canManage,
+	canOperate,
 	initialToken,
 }: SyncSettingsDialogProps) {
 	const detail = useNotebookQuery(projectId, notebookId, { staleTime: 0 });
@@ -93,7 +95,7 @@ export function SyncSettingsDialog({
 		defaultValues: values,
 		validators: schemaValidators(settingsSchema),
 		onSubmit: async ({ value }) => {
-			if (!source) return;
+			if (!source || !canManage) return;
 			try {
 				const data = await updateSource.mutateAsync({
 					notebookId,
@@ -133,7 +135,7 @@ export function SyncSettingsDialog({
 						.
 					</p>
 				</div>
-				{canEdit && (
+				{canOperate && (
 					<Button type="button" size="sm" onPress={() => setConfirmRotate(true)}>
 						Rotate token
 					</Button>
@@ -148,7 +150,7 @@ export function SyncSettingsDialog({
 			) : (
 				<p className="rounded-md border border-input bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
 					The token is shown only when the notebook is created or its token is rotated.
-					{canEdit ? ' Rotate it to mint a new one.' : ''}
+					{canOperate ? ' Rotate it to mint a new one.' : ''}
 				</p>
 			)}
 		</div>
@@ -159,7 +161,7 @@ export function SyncSettingsDialog({
 			projectId={projectId}
 			notebookId={notebookId}
 			source={source}
-			enabled={canEdit}
+			enabled={canOperate}
 			className="rounded-md border border-input bg-muted/40 px-3 py-2"
 		/>
 	);
@@ -184,7 +186,7 @@ export function SyncSettingsDialog({
 		<p className="text-sm text-muted-foreground">Loading sync settings...</p>
 	);
 
-	const dialog = canEdit ? (
+	const dialog = canManage ? (
 		<FormDialog
 			form={form}
 			isPending={updateSource.isPending}
@@ -256,7 +258,7 @@ export function SyncSettingsDialog({
 	return (
 		<>
 			{dialog}
-			{source?.sync_mode === 'push' && (
+			{canOperate && source?.sync_mode === 'push' && (
 				<ConfirmDialog
 					isOpen={confirmRotate}
 					onClose={() => setConfirmRotate(false)}

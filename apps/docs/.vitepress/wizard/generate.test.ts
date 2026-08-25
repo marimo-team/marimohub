@@ -123,15 +123,26 @@ describe('config -> code generators', () => {
 			values: {
 				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS:
 					'{"route.openshift.io/termination":"edge"}',
-				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'controller-default',
 			},
 		};
 		const env = generateEnv(selection);
-		expect(env).toContain('MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default');
+		expect(env).toContain('MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default');
 		expect(env).toContain(
 			'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS={"route.openshift.io/termination":"edge"}',
 		);
 		expect(env).not.toContain('MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET');
+	});
+
+	it('selects secret mode when a kubernetes TLS secret is provided', () => {
+		const selection: WizardSelection = {
+			...CASES['azure + kubernetes + oidc'],
+			values: { MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert' },
+		};
+		const env = generateEnv(selection);
+		expect(env).toContain('MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=secret');
+		expect(env).toContain('MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=wildcard-cert');
+		expect(validateSelection(selection)).toEqual([]);
 	});
 
 	it('uses runtime ingress validators in generated kubernetes library wiring', () => {
@@ -154,5 +165,61 @@ describe('validateSelection', () => {
 
 	it('is silent for a safe production combo', () => {
 		expect(validateSelection(CASES['default-prod (s3 + modal + oidc)'])).toEqual([]);
+	});
+
+	it('flags plaintext or contradictory kubernetes TLS settings', () => {
+		const selection = CASES['azure + kubernetes + oidc'];
+		expect(
+			validateSelection({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled' },
+			}),
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ level: 'danger', title: expect.stringMatching(/plaintext/i) }),
+				expect.objectContaining({ level: 'danger', title: expect.stringMatching(/scheme/i) }),
+			]),
+		);
+		expect(
+			validateSelection({
+				...selection,
+				values: {
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'controller-default',
+					MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert',
+				},
+			}),
+		).toEqual([
+			expect.objectContaining({ level: 'danger', title: expect.stringMatching(/conflict/i) }),
+		]);
+	});
+
+	it('flags incomplete or invalid kubernetes TLS configurations', () => {
+		const selection = CASES['azure + kubernetes + oidc'];
+		expect(
+			validateSelection({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert' },
+			}),
+		).toEqual([]);
+		for (const [values, title] of [
+			[{ MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'secret' }, /secret is missing/i],
+			[{ MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'invalid' }, /mode is invalid/i],
+			[
+				{ MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}' },
+				/scheme conflicts/i,
+			],
+		] as const) {
+			expect(validateSelection({ ...selection, values })).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ level: 'danger', title: expect.stringMatching(title) }),
+				]),
+			);
+		}
+		expect(
+			validateSelection({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'HTTPS://{id}.{host}' },
+			}),
+		).toEqual([]);
 	});
 });

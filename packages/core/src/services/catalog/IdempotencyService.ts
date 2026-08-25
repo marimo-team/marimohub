@@ -29,12 +29,31 @@ async function digestKey(scope: string, key: string): Promise<string> {
 /**
  * At-most-once replay for the create routes, keyed by `(user, route,
  * Idempotency-Key)`. Records live under `_system/idempotency/` as append-only
- * objects pruned by the maintenance sweep (24h). Concurrent first-use of the same
- * key is resolved last-writer-loses via create-if-absent, so a small double-create
- * window exists under simultaneous first use — acceptable.
+ * objects pruned by the maintenance sweep (24h). Concurrent callers can both
+ * create before either records a response. The first stored response wins.
+ * Reserve a distinct claim scope before an external side effect that cannot
+ * tolerate that window.
  */
 export class IdempotencyService {
 	constructor(private bucket: Bucket) {}
+
+	/** Existing claims, including corrupt records, fail closed. */
+	async reserve(scope: string, key: string): Promise<boolean> {
+		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
+		const record: IdempotencyRecord = {
+			schema_version: 1,
+			scope,
+			data: null,
+			created_at: new Date().toISOString(),
+		};
+		try {
+			await this.bucket.put(objectKey, JSON.stringify(record), { onlyIfNotExists: true });
+			return true;
+		} catch (err) {
+			if (err instanceof PreconditionFailedError) return false;
+			throw err;
+		}
+	}
 
 	/** The recorded `data` for a prior `(scope, key)`, or null if this is a first use. */
 	async lookup(scope: string, key: string): Promise<{ data: unknown } | null> {

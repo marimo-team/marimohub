@@ -207,6 +207,7 @@ function makeFetch({
 			if (method === 'POST' && url.includes('/query-readiness')) {
 				return ok([
 					{
+						id: 'no-access-delegation',
 						label: 'Set access delegation to none',
 						ready: false,
 						field: 'access_delegation',
@@ -239,18 +240,21 @@ function makeFetch({
 		if (url.includes(`/projects/${PID}/integrations/query-readiness`) && method === 'POST') {
 			return ok([
 				{
+					id: 'no-access-delegation',
 					label: 'Set access delegation to none',
 					ready: false,
 					field: 'access_delegation',
 					reason: 'delegation is unsupported',
 				},
 				{
+					id: 's3-storage',
 					label: 'Switch Storage to the s3 scheme',
 					ready: false,
 					field: 'storage',
 					reason: 's3 storage is required',
 				},
 				{
+					id: 'guarded-s3-read-location',
 					label: 'Add at least one guarded S3 read location',
 					ready: false,
 					field: 'storage',

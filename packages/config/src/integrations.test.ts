@@ -20,13 +20,21 @@ const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password
 afterEach(() => vi.restoreAllMocks());
 
 describe('makeIntegrations', () => {
-	it('is OPT-IN (two-phase rollout): unset/off disabled, on enabled', () => {
-		expect(makeIntegrations({}, new MemoryBucket())).toEqual({});
+	it('is enabled by default and supports an explicit on/off kill switch', () => {
+		const defaultWiring = makeIntegrations({}, new MemoryBucket());
+		expect(defaultWiring.integrations).toBeDefined();
+		expect(defaultWiring.orgIntegrations).toBeDefined();
+
 		expect(makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'off' }, new MemoryBucket())).toEqual({});
-		expect(makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'none' }, new MemoryBucket())).toEqual({});
 		const wired = makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket());
 		expect(wired.integrations).toBeDefined();
 		expect(wired.orgIntegrations).toBeDefined();
+
+		for (const value of ['true', 'none']) {
+			expect(() => makeIntegrations({ MARIMOHUB_INTEGRATIONS: value }, new MemoryBucket())).toThrow(
+				ConfigError,
+			);
+		}
 	});
 
 	it('org and project tiers share one bucket: org instances inherit into projects', async () => {
@@ -358,10 +366,10 @@ describe('makeIntegrations data browser', () => {
 		expect(checked).toBe(true);
 	});
 
-	it('refuses to enable browsing without integrations', () => {
-		expect(() =>
-			makeIntegrations({ MARIMOHUB_DATA_BROWSER: 'metadata' }, new MemoryBucket()),
-		).toThrow(/MARIMOHUB_INTEGRATIONS=on/);
+	it('allows browsing by default and rejects it when integrations are disabled', () => {
+		expect(
+			makeIntegrations({ MARIMOHUB_DATA_BROWSER: 'metadata' }, new MemoryBucket()).dataBrowser,
+		).toBeDefined();
 		expect(() =>
 			makeIntegrations(
 				{ MARIMOHUB_INTEGRATIONS: 'off', MARIMOHUB_DATA_BROWSER: 'metadata' },

@@ -199,7 +199,7 @@ accordingly. Unset (the default) means no super admins.
 ## Deprovisioning and user suspension
 
 Super admins can suspend a known user from **Admin -> Users**, or with
-`PUT /api/v1/users/{id}/suspension`; `DELETE` on the same path reactivates the
+`PUT /api/v1/admin/users/{id}/suspension`; `DELETE` on the same path reactivates the
 user. Suspension blocks both browser-session authentication and personal access
 tokens. Requests authenticated with a browser session receive
 `403 USER_SUSPENDED`; PAT authentication fails as an invalid credential.

@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ProjectAlertsDialog } from './ProjectAlertsDialog';
+import { projectKeys } from '@/api/queryKeys';
 import { createTestQueryClient } from '@/test/render';
 import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
 
@@ -56,6 +57,7 @@ function renderDialog(
 			{ wrapper },
 		),
 		fetchMock,
+		client,
 	};
 }
 
@@ -93,6 +95,20 @@ async function patchBody(
 		callInput instanceof Request ? callInput.method === 'PATCH' : callInit?.method === 'PATCH',
 	)!;
 	return input instanceof Request ? input.clone().json() : JSON.parse(String(init?.body));
+}
+
+function testRequestIdempotencyKeys(
+	fetchMock: ReturnType<typeof renderDialog>['fetchMock'],
+): (string | null)[] {
+	return fetchMock.mock.calls
+		.filter(([input, init]) =>
+			input instanceof Request ? input.method === 'POST' : init?.method === 'POST',
+		)
+		.map(([input, init]) =>
+			input instanceof Request
+				? input.headers.get('idempotency-key')
+				: new Headers(init?.headers).get('idempotency-key'),
+		);
 }
 
 beforeEach(() => {
@@ -262,6 +278,78 @@ describe('ProjectAlertsDialog', () => {
 			),
 		);
 		expect(screen.getByRole('heading', { name: 'Delete alert destination' })).toBeInTheDocument();
+	});
+
+	it('reuses the idempotency key when a test delivery is retried', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-test-00000001', { name: 'Production Slack' });
+		let attempts = 0;
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			if (method !== 'POST') return ok(destinationPage([destination]));
+			attempts++;
+			if (attempts === 1) {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'SERVICE_UNAVAILABLE', message: 'Delivery response was lost' },
+					}),
+					{ status: 503, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return ok({ ...destination, verified_at: '2026-08-12T12:05:00.000Z' });
+		});
+		const button = await screen.findByRole('button', { name: 'Test' });
+
+		await user.click(button);
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Delivery response was lost'));
+		await waitFor(() => expect(button).toBeEnabled());
+		await user.click(button);
+		await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Test alert delivered.'));
+
+		const keys = testRequestIdempotencyKeys(fetchMock);
+		expect(keys).toHaveLength(2);
+		expect(keys[0]).toBeTruthy();
+		expect(keys[1]).toBe(keys[0]);
+	});
+
+	it('starts a new test operation when the destination version changes', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-test-00000002', { name: 'Production Slack' });
+		let attempts = 0;
+		const { client, fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			if (method !== 'POST') return ok(destinationPage([destination]));
+			attempts++;
+			return new Response(
+				JSON.stringify({
+					success: false,
+					error: { code: 'SERVICE_UNAVAILABLE', message: 'Delivery response was lost' },
+				}),
+				{ status: 503, headers: { 'content-type': 'application/json' } },
+			);
+		});
+
+		const button = await screen.findByRole('button', { name: 'Test' });
+		await user.click(button);
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Delivery response was lost'));
+		await waitFor(() => expect(button).toBeEnabled());
+
+		client.setQueryData(projectKeys.alerts('proj-0123456789abcdef'), [
+			{
+				...destination,
+				name: 'Updated Slack',
+				updated_at: '2026-08-12T12:01:00.000Z',
+			},
+		]);
+		await screen.findByText('Updated Slack');
+		await user.click(button);
+		await waitFor(() => expect(attempts).toBe(2));
+
+		const keys = testRequestIdempotencyKeys(fetchMock);
+		expect(keys).toHaveLength(2);
+		expect(keys[0]).toBeTruthy();
+		expect(keys[1]).not.toBe(keys[0]);
 	});
 
 	it('omits kinds from an edit when the selection is untouched', async () => {

@@ -54,6 +54,7 @@ import {
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId, Timings } from '@marimo-hub/core';
 import { createK8sClient } from './client';
+import { resolveIngressTlsMode, validateIngressTlsHostnameTemplate } from './shared';
 import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 export * from './shared';
@@ -578,6 +579,9 @@ export class KubernetesCompute implements SandboxProvider {
 		private readonly config: KubernetesConfig,
 		client?: K8sClient,
 	) {
+		const template = config.hostnameTemplate ?? 'https://{id}.{host}';
+		const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
+		if (config.hostname) validateIngressTlsHostnameTemplate(template, tlsMode);
 		this.client = client;
 	}
 

@@ -28,7 +28,7 @@ describe('parseExperiments', () => {
 			ts: expect.any(String),
 			event: 'experiment_unknown',
 			id: 'duckdb-wasm-preveiw',
-			known: ['duckdb-wasm-preview', 'duckdb-wasm-sql'],
+			known: ['duckdb-wasm-preview'],
 		});
 	});
 

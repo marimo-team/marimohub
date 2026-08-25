@@ -325,7 +325,7 @@ export function localDevEnv(
 		// but keeps the config honest for anyone pointing dev at a real backend.
 		MARIMOHUB_DATA_PREVIEW_IMAGE:
 			env.MARIMOHUB_DATA_PREVIEW_IMAGE ?? 'ghcr.io/marimo-team/marimo-sandbox:latest',
-		MARIMOHUB_EXPERIMENTS: env.MARIMOHUB_EXPERIMENTS ?? 'duckdb-wasm-preview,duckdb-wasm-sql',
+		MARIMOHUB_EXPERIMENTS: env.MARIMOHUB_EXPERIMENTS ?? 'duckdb-wasm-preview',
 		MARIMOHUB_SECRETS_KEK: env.MARIMOHUB_SECRETS_KEK ?? devSecretsKek(durableStorage),
 	};
 }

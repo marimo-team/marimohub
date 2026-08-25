@@ -28,44 +28,11 @@ import { ConfigError } from './errors';
 import type { Env } from './env';
 import { readFolded } from './env';
 import { createGuardedProbe } from './integrationProbe';
+import { sendNotificationRequest } from './notificationTransport';
 import { makeSecretSources } from './secrets';
 
 const DOCS = 'docs/project-alerts.md';
 const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
-const RATE_LIMIT_RETRY_DELAY_MS = 1_000;
-const MAX_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
-
-class AlertHttpError extends Error {
-	constructor(
-		readonly status: number,
-		readonly retryAfterMs?: number,
-	) {
-		super(`Alert destination returned HTTP ${status}`);
-		this.name = 'AlertHttpError';
-	}
-}
-
-function retryAfterMilliseconds(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const seconds = Number(value);
-	if (Number.isFinite(seconds) && seconds >= 0) {
-		return Math.min(Math.ceil(seconds * 1_000), MAX_RATE_LIMIT_RETRY_DELAY_MS);
-	}
-	const at = Date.parse(value);
-	return Number.isNaN(at)
-		? undefined
-		: Math.min(Math.max(0, at - Date.now()), MAX_RATE_LIMIT_RETRY_DELAY_MS);
-}
-
-function retryableAlertError(error: unknown): boolean {
-	return (
-		!(error instanceof AlertHttpError) ||
-		error.status === 408 ||
-		error.status === 429 ||
-		error.status >= 500
-	);
-}
-
 export interface ProjectAlertsConfig {
 	store: ProjectAlertStore;
 	dispatcher: ProjectAlertDispatcher;
@@ -215,11 +182,16 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 					? await new SlackNotifier({
 							webhookUrl: destination.webhook_url,
 							fetcher: async (url, options) => {
-								await this.request(url, {
-									method: options.method,
-									headers: { 'content-type': 'application/json' },
-									body: JSON.stringify(options.body),
-								});
+								await sendNotificationRequest(
+									this.probe,
+									url,
+									{
+										method: options.method,
+										headers: { 'content-type': 'application/json' },
+										body: JSON.stringify(options.body),
+									},
+									{ retries: 0, delay: this.delay },
+								);
 								return { ok: true };
 							},
 						}).deliver(notification)
@@ -227,20 +199,11 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 							url: destination.url,
 							secret: destination.signing_secret,
 							fetcher: async (url, options) => {
-								let lastError: unknown;
-								for (let attempt = 0; attempt <= options.retry; attempt++) {
-									try {
-										await this.request(url, options);
-										return { ok: true };
-									} catch (error) {
-										lastError = error;
-										if (attempt === options.retry || !retryableAlertError(error)) throw error;
-										if (error instanceof AlertHttpError && error.status === 429) {
-											await this.delay(error.retryAfterMs ?? RATE_LIMIT_RETRY_DELAY_MS);
-										}
-									}
-								}
-								throw lastError;
+								await sendNotificationRequest(this.probe, url, options, {
+									retries: options.retry,
+									delay: this.delay,
+								});
+								return { ok: true };
 							},
 						}).deliver(notification);
 			this.metrics.increment(`project_alert.${outcome}`, 1, {
@@ -254,19 +217,6 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 				kind: notification.kind,
 			});
 			throw error;
-		}
-	}
-
-	private async request(
-		url: string,
-		options: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string },
-	): Promise<void> {
-		const response = await this.probe.fetch(url, options);
-		if (!response.ok) {
-			throw new AlertHttpError(
-				response.status,
-				retryAfterMilliseconds(response.headers?.['retry-after']),
-			);
 		}
 	}
 }

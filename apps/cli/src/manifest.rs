@@ -23,7 +23,6 @@ pub struct Operation {
     pub destructive: bool,
     pub paginated: bool,
     pub response_kind: ResponseKind,
-    pub session_only: bool,
     pub accepts_if_match: bool,
     pub accepts_idempotency_key: bool,
     #[serde(default)]
@@ -81,7 +80,7 @@ pub fn load() -> Manifest {
         "/generated/cli-manifest.json"
     )))
     .expect("embedded CLI manifest must be valid JSON");
-    assert_eq!(manifest.version, 1, "unsupported embedded CLI manifest");
+    assert_eq!(manifest.version, 2, "unsupported embedded CLI manifest");
     assert!(
         !manifest.api_version.is_empty(),
         "manifest API version is empty"

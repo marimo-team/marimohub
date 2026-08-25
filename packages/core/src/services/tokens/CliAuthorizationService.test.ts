@@ -16,6 +16,21 @@ async function challenge(verifier = VERIFIER): Promise<string> {
 	return toBase64Url(new Uint8Array(digest));
 }
 
+async function approve(
+	authorizations: CliAuthorizationService,
+	overrides: Partial<{ codeChallenge: string; tokenName: string; expiresInDays: number }> = {},
+) {
+	return authorizations.approve(
+		{
+			codeChallenge: await challenge(),
+			tokenName: 'mohub CLI',
+			expiresInDays: 30,
+			...overrides,
+		},
+		OWNER,
+	);
+}
+
 describe('CliAuthorizationService', () => {
 	let bucket: MemoryBucket;
 	let tokens: TokenService;
@@ -32,10 +47,7 @@ describe('CliAuthorizationService', () => {
 	afterEach(restoreClock);
 
 	it('exchanges an approved PKCE code for a bounded PAT exactly once', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
-		);
+		const approved = await approve(authorizations);
 
 		const created = await authorizations.exchange(approved.code, VERIFIER);
 		expect(created.token).toMatch(/^mhub_pat_/);
@@ -50,10 +62,7 @@ describe('CliAuthorizationService', () => {
 	});
 
 	it('stores only the authorization-code hash', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
-		);
+		const approved = await approve(authorizations);
 		const id = approved.code.split('_')[2];
 		const object = await bucket.get(paths.cliAuthorization(id as never));
 		const stored = await object!.text();
@@ -63,10 +72,7 @@ describe('CliAuthorizationService', () => {
 	});
 
 	it('rejects the wrong PKCE verifier without consuming the code', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
-		);
+		const approved = await approve(authorizations);
 
 		await expect(authorizations.exchange(approved.code, 'wrong')).rejects.toThrow(
 			/invalid or expired/,
@@ -75,27 +81,18 @@ describe('CliAuthorizationService', () => {
 	});
 
 	it('rejects and prunes expired authorizations', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
-		);
+		const approved = await approve(authorizations);
 		advanceTime(CliAuthorizationService.AUTHORIZATION_TTL_MS + 1);
 
 		await expect(authorizations.exchange(approved.code, VERIFIER)).rejects.toThrow(
 			/invalid or expired/,
 		);
-		await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'next', expiresInDays: 7 },
-			OWNER,
-		);
+		await approve(authorizations, { tokenName: 'next', expiresInDays: 7 });
 		expect((await bucket.list({ prefix: paths.cliAuthorizationsPrefix })).objects).toHaveLength(1);
 	});
 
 	it('allows only one winner when exchanges race', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
-		);
+		const approved = await approve(authorizations);
 		const results = await Promise.allSettled([
 			authorizations.exchange(approved.code, VERIFIER),
 			authorizations.exchange(approved.code, VERIFIER),
@@ -105,11 +102,39 @@ describe('CliAuthorizationService', () => {
 		expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
 	});
 
-	it('does not reopen a consumed code when best-effort cleanup fails', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
+	it('rejects the wrong authorization secret without consuming the code', async () => {
+		const approved = await approve(authorizations);
+		const separator = approved.code.lastIndexOf('_') + 1;
+		const wrongCode = `${approved.code.slice(0, separator)}${'z'.repeat(32)}`;
+
+		await expect(authorizations.exchange(wrongCode, VERIFIER)).rejects.toThrow(
+			/invalid or expired/,
 		);
+		await expect(authorizations.exchange(approved.code, VERIFIER)).resolves.toBeTruthy();
+	});
+
+	it('rejects a corrupt stored authorization', async () => {
+		const approved = await approve(authorizations);
+		const id = CliAuthorizationId.parse(approved.code.split('_')[2]);
+		await bucket.put(paths.cliAuthorization(id), '{not-json');
+
+		await expect(authorizations.exchange(approved.code, VERIFIER)).rejects.toThrow(
+			/invalid or expired/,
+		);
+	});
+
+	it('propagates storage failures without consuming the code', async () => {
+		const approved = await approve(authorizations);
+		vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('storage unavailable'));
+
+		await expect(authorizations.exchange(approved.code, VERIFIER)).rejects.toThrow(
+			'storage unavailable',
+		);
+		await expect(authorizations.exchange(approved.code, VERIFIER)).resolves.toBeTruthy();
+	});
+
+	it('does not reopen a consumed code when best-effort cleanup fails', async () => {
+		const approved = await approve(authorizations);
 		vi.spyOn(bucket, 'delete').mockRejectedValueOnce(new Error('storage unavailable'));
 
 		await expect(authorizations.exchange(approved.code, VERIFIER)).resolves.toBeTruthy();
@@ -120,10 +145,7 @@ describe('CliAuthorizationService', () => {
 	});
 
 	it('burns a claimed code when token minting fails', async () => {
-		const approved = await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'mohub CLI', expiresInDays: 30 },
-			OWNER,
-		);
+		const approved = await approve(authorizations);
 		const create = vi
 			.spyOn(tokens, 'create')
 			.mockRejectedValueOnce(new Error('storage unavailable'));
@@ -146,10 +168,7 @@ describe('CliAuthorizationService', () => {
 		const get = vi.spyOn(bucket, 'get');
 		const list = vi.spyOn(bucket, 'list');
 
-		await authorizations.approve(
-			{ codeChallenge: await challenge(), tokenName: 'new', expiresInDays: 30 },
-			OWNER,
-		);
+		await approve(authorizations, { tokenName: 'new' });
 
 		expect(get).not.toHaveBeenCalled();
 		expect(list).toHaveBeenCalledOnce();

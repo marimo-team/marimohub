@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
-import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { CliLoginPage, parseCliLoginRequest } from './CliLoginPage';
 
 const CALLBACK = 'http://127.0.0.1:49152/callback';
@@ -18,7 +18,7 @@ function loginPath(callback = CALLBACK): string {
 	return `/cli/login?${query}`;
 }
 
-function setup() {
+function setup(options: { approvalFails?: boolean } = {}) {
 	const calls: { url: string; body?: unknown }[] = [];
 	vi.stubGlobal(
 		'fetch',
@@ -30,6 +30,9 @@ function setup() {
 				return jsonOk({ id: 'user-one', email: 'dev@example.com', logout_url: null });
 			}
 			if (url === '/api/v1/me/cli-authorizations') {
+				if (options.approvalFails) {
+					return jsonError('UNAVAILABLE', 'Authorization could not be created', 503);
+				}
 				return jsonOk(
 					{
 						redirect_uri: `${CALLBACK}?code=mhub_cli_code&state=${STATE}`,
@@ -100,6 +103,35 @@ describe('CliLoginPage', () => {
 
 		await user.click(screen.getByRole('button', { name: '90d' }));
 		expect(screen.getByLabelText('Token lifetime (days)')).toHaveValue('90');
+	});
+
+	it.each(['', '0', '3651', '1.5', 'abc'])(
+		'rejects an invalid token lifetime: %s',
+		async (value) => {
+			const user = userEvent.setup();
+			const { calls, navigate } = setup();
+			await screen.findByText(/dev@example.com/);
+
+			await user.clear(screen.getByLabelText('Token lifetime (days)'));
+			if (value) await user.type(screen.getByLabelText('Token lifetime (days)'), value);
+			await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+			expect(await screen.findByText(/between 1 and 3650 days/i)).toBeInTheDocument();
+			expect(calls.filter((call) => call.url.includes('cli-authorizations'))).toEqual([]);
+			expect(navigate).not.toHaveBeenCalled();
+		},
+	);
+
+	it('stays on the approval page when authorization fails', async () => {
+		const user = userEvent.setup();
+		const { navigate } = setup({ approvalFails: true });
+		await screen.findByText(/dev@example.com/);
+
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+		expect(await screen.findByText('Authorization could not be created')).toBeInTheDocument();
+		expect(navigate).not.toHaveBeenCalled();
+		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeEnabled();
 	});
 
 	it('returns an access-denied callback when cancelled', async () => {

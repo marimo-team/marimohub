@@ -47,7 +47,11 @@ describe('Admin routes', () => {
 		const { request } = createTestApi({ bucket, userId: ACTOR });
 		await expectError(await request('GET', '/admin/users'), 403, 'FORBIDDEN');
 		await expectError(await request('GET', '/admin/config'), 403, 'FORBIDDEN');
-		await expectError(await request('PUT', `/users/${uid('target')}/suspension`), 403, 'FORBIDDEN');
+		await expectError(
+			await request('PUT', `/admin/users/${uid('target')}/suspension`),
+			403,
+			'FORBIDDEN',
+		);
 	});
 
 	it('rejects a super admin PAT with 403 — admin endpoints are session-only', async () => {
@@ -66,7 +70,7 @@ describe('Admin routes', () => {
 		for (const path of [
 			'/api/v1/admin/users',
 			'/api/v1/admin/config',
-			`/api/v1/users/${uid('target')}/suspension`,
+			`/api/v1/admin/users/${uid('target')}/suspension`,
 		]) {
 			const res = await composed.request(path, {
 				method: path.includes('/suspension') ? 'PUT' : 'GET',
@@ -93,8 +97,10 @@ describe('Admin routes', () => {
 		};
 		expect(doc.paths['/api/v1/admin/users'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/config'].get.security).toEqual([{ cookieAuth: [] }]);
-		expect(doc.paths['/api/v1/users/{id}/suspension'].put.security).toEqual([{ cookieAuth: [] }]);
-		expect(doc.paths['/api/v1/users/{id}/suspension'].delete.security).toEqual([
+		expect(doc.paths['/api/v1/admin/users/{id}/suspension'].put.security).toEqual([
+			{ cookieAuth: [] },
+		]);
+		expect(doc.paths['/api/v1/admin/users/{id}/suspension'].delete.security).toEqual([
 			{ cookieAuth: [] },
 		]);
 	});
@@ -202,13 +208,13 @@ describe('Admin routes', () => {
 			await seedTarget(deps);
 
 			const suspended = await expectOk<AdminUser>(
-				await request('PUT', `/users/${target}/suspension`),
+				await request('PUT', `/admin/users/${target}/suspension`),
 			);
 			expect(suspended.suspended_at).toEqual(expect.any(String));
 			expect(await deps.services.identities.isSuspended(target)).toBe(true);
 
 			const active = await expectOk<AdminUser>(
-				await request('DELETE', `/users/${target}/suspension`),
+				await request('DELETE', `/admin/users/${target}/suspension`),
 			);
 			expect(active.suspended_at).toBeNull();
 			expect(await deps.services.identities.isSuspended(target)).toBe(false);
@@ -228,7 +234,7 @@ describe('Admin routes', () => {
 			await request('GET', '/me');
 
 			const error = await expectError(
-				await request('PUT', `/users/${ACTOR}/suspension`),
+				await request('PUT', `/admin/users/${ACTOR}/suspension`),
 				403,
 				'FORBIDDEN',
 			);
@@ -239,7 +245,7 @@ describe('Admin routes', () => {
 		it('returns 404 for a user absent from the directory', async () => {
 			const { request } = superAdminApi();
 			await expectError(
-				await request('PUT', `/users/${uid('missing')}/suspension`),
+				await request('PUT', `/admin/users/${uid('missing')}/suspension`),
 				404,
 				'NOT_FOUND',
 			);

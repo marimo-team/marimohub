@@ -49,12 +49,18 @@ run('git', 'fetch', 'origin', 'main');
 const pkgPath = new URL('../package.json', import.meta.url);
 const pkg = JSON.parse(run('git', 'show', 'origin/main:package.json'));
 const cargoPath = new URL('../apps/cli/Cargo.toml', import.meta.url);
+const cliDocsPath = new URL('../docs/cli.md', import.meta.url);
 const cargoToml = execFileSync('git', ['show', 'origin/main:apps/cli/Cargo.toml'], {
 	encoding: 'utf8',
 });
+const cliDocs = run('git', 'show', 'origin/main:docs/cli.md');
 const cargoPattern = /^version = "[^"]+"$/m;
+const cliDocsPattern = /(\s+version: ')[0-9]+\.[0-9]+\.[0-9]+(')/;
 if (!cargoPattern.test(cargoToml)) {
 	fail('could not find the current Cargo package version');
+}
+if (!cliDocsPattern.test(cliDocs)) {
+	fail('could not find the current CLI setup example version');
 }
 
 let version = arg;
@@ -95,9 +101,10 @@ pkg.version = version;
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, '\t')}\n`);
 
 writeFileSync(cargoPath, cargoToml.replace(cargoPattern, `version = "${version}"`));
+writeFileSync(cliDocsPath, cliDocs.replace(cliDocsPattern, `$1${version}$2`));
 run('cargo', 'update', '--manifest-path', 'apps/cli/Cargo.toml', '--package', 'mohub');
 
-run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock');
+run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock', 'docs/cli.md');
 run('git', 'commit', '-m', `release: ${version}`);
 run('git', 'push', '-u', 'origin', branch);
 execFileSync(

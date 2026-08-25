@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { SqlReadinessChecklist } from './SqlReadinessChecklist';
 
 const check = (label: string, field: string, ready = false) => ({
+	id: label.toLowerCase().replaceAll(' ', '-'),
 	label,
 	field,
 	ready,

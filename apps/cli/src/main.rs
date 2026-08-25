@@ -689,7 +689,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 86);
+        assert_eq!(manifest.operations.len(), 79);
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest
@@ -697,7 +697,7 @@ mod tests {
                 .iter()
                 .filter(|operation| operation.paginated)
                 .count(),
-            17
+            16
         );
         assert_eq!(
             manifest
@@ -729,6 +729,22 @@ mod tests {
         assert!(matches!(
             normalize_base_url("https://user:secret@example.com/api"),
             Err(Error::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn base_urls_allow_plaintext_only_for_loopback_hosts() {
+        for url in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://127.42.0.1:3000",
+            "http://[::1]:3000",
+        ] {
+            assert!(normalize_base_url(url).is_ok(), "{url}");
+        }
+        assert!(matches!(
+            normalize_base_url("http://hub.example.com"),
+            Err(Error::Usage(message)) if message.contains("must use HTTPS")
         ));
     }
 

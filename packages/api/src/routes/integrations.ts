@@ -206,6 +206,7 @@ const QueryReadinessBody = z
 
 const QueryReadinessCheckSchema = z
 	.object({
+		id: z.string().min(1),
 		label: z.string().min(1),
 		ready: z.boolean(),
 		field: z.string(),

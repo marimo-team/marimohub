@@ -44,22 +44,19 @@ jobs:
       - run: vp check
       - run: vp run -r typecheck
       - run: vp run audit:prod
+      - name: Test release shell helpers
+        run: vp run test:release-scripts
       # The full tree includes build tooling that runs with repository write access.
       - name: Audit all dependencies (non-blocking)
         continue-on-error: true
         run: vp pm audit -- --audit-level=high
 
-      # Build resolves packages from source, not dist, so it's independent of the
-      # tests — run both at once. `--configLoader=runner`/`--pool=threads` cut the
-      # per-worker cold starts the old bare `vp run -r test` paid.
-      - name: Test and build
-        run: |
-          vp run -r test --configLoader=runner --pool=threads & test_pid=$!
-          vp run -r build & build_pid=$!
-          rc=0
-          wait $test_pid || rc=1
-          wait $build_pid || rc=1
-          exit $rc
+      # Keep the package graphs sequential so their child processes cannot
+      # exhaust the runner's process limit under a cold cache.
+      - name: Test
+        run: vp run -r test --configLoader=runner --pool=threads
+      - name: Build
+        run: vp run -r build
 
       # The build task restores dist/ when its cache hits.
       - run: node scripts/check-bundle-size.mjs

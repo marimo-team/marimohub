@@ -58,6 +58,7 @@ describe('buildConfigSummary', () => {
 
 		// Storage has a spec default selector; Server / API has no selector at all.
 		expect(group(summary, 'Storage').backend).toBe('s3');
+		expect(group(summary, 'Integrations').backend).toBe('on');
 		expect(group(summary, 'Server / API').backend).toBeNull();
 		expect(group(summary, 'Server / API').settings.length).toBeGreaterThan(0);
 	});

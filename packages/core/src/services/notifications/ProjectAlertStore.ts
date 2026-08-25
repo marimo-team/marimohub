@@ -90,6 +90,7 @@ export type CreateProjectAlertDestinationInput =
 	  };
 
 export interface UpdateProjectAlertDestinationInput {
+	type?: 'slack' | 'webhook';
 	name?: string;
 	kinds?: ProjectAlertKind[];
 	enabled?: boolean;
@@ -195,6 +196,9 @@ export class ProjectAlertStore {
 			const current = config.destinations.find((candidate) => candidate.id === id);
 			if (!current) throw new NotFoundError(`Alert destination ${id} not found`);
 			assertVersionMatch(current.updated_at, expectedVersion);
+			if (input.type !== undefined && input.type !== current.type) {
+				throw new ValidationError('Alert destination type cannot be changed');
+			}
 			const secretChanged =
 				(current.type === 'slack' && input.webhook_url !== undefined) ||
 				(current.type === 'webhook' &&

@@ -22,7 +22,8 @@ const activeSource = {
 };
 
 function setup(options: {
-	canEdit?: boolean;
+	canManage?: boolean;
+	canOperate?: boolean;
 	initialToken?: string;
 	pending?: boolean;
 	provider?: string;
@@ -122,7 +123,8 @@ function setup(options: {
 			notebookId={NID}
 			title="Dash"
 			syncUrl={SYNC_URL}
-			canEdit={options.canEdit ?? true}
+			canManage={options.canManage ?? true}
+			canOperate={options.canOperate ?? true}
 			initialToken={options.initialToken}
 		/>,
 	);
@@ -197,13 +199,25 @@ describe('SyncSettingsDialog', () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
-	it('renders read-only settings for a viewer without rotation controls', async () => {
-		setup({ canEdit: false });
+	it('renders read-only settings for a viewer without operational controls', async () => {
+		setup({ canManage: false, canOperate: false });
 
 		const repo = await screen.findByLabelText('Repository');
+		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
 		expect(repo).toHaveAttribute('readonly');
 		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
+	});
+
+	it('keeps settings read-only while allowing editor operations', async () => {
+		setup({ canManage: false, canOperate: true, syncProviders: ['github'] });
+
+		const repo = await screen.findByLabelText('Repository');
+		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
+		expect(repo).toHaveAttribute('readonly');
+		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Rotate token' })).toBeInTheDocument();
+		expect(await screen.findByRole('button', { name: 'Sync now' })).toBeInTheDocument();
 	});
 
 	it('rotates the token after confirmation and displays it once', async () => {
@@ -256,8 +270,8 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('hides server-sync chrome for a viewer even when a reader exists', async () => {
-		setup({ canEdit: false, syncProviders: ['github'] });
-		await screen.findByLabelText('Repository');
+		setup({ canManage: false, canOperate: false, syncProviders: ['github'] });
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
 		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
 	});
 

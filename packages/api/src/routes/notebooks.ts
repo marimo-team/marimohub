@@ -245,6 +245,7 @@ const createGitNotebook = createRoute({
 	operationId: 'notebooks.create-git',
 	tags: ['Notebooks'],
 	summary: 'Create a git-synced workspace notebook',
+	description: 'Requires project manager access because this selects a server-side repository.',
 	request: { params: ProjectIdParam, body: jsonBody(CreateGitNotebookBody) },
 	responses: {
 		201: jsonContent(
@@ -280,6 +281,7 @@ const updateGitSource = createRoute({
 	operationId: 'notebooks.update-source',
 	tags: ['Notebooks'],
 	summary: 'Update a git-synced notebook source',
+	description: 'Requires project manager access because this changes the server-side repository.',
 	request: { params: NotebookIdParam, body: jsonBody(UpdateGitSourceBody) },
 	responses: {
 		200: jsonContent(
@@ -603,7 +605,7 @@ app.openapi(createGitNotebook, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'editor', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
@@ -679,7 +681,7 @@ app.openapi(updateGitSource, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'editor', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	const input = c.req.valid('json');
 	const current = assertSyncedSource((await notebooks.getNotebook(pid, nid)).source);
 	const prospective = applyGitSourceUpdate(current, input) ?? current;

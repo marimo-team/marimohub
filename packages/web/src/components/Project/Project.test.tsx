@@ -15,6 +15,7 @@ const project = (): ProjectDetail =>
 		name: 'Sales',
 		description: 'revenue',
 		federation: { enabled: false },
+		your_role: 'manager',
 	}) as ProjectDetail;
 
 const notebook = (): NotebookEntry =>
@@ -694,6 +695,36 @@ describe('Project — Notebook Actions', () => {
 		expect(screen.getByLabelText<HTMLInputElement>('Sync URL').value).toContain(
 			`/api/sync/git/v1/projects/${PID}/notebooks/nb-1`,
 		);
+	});
+
+	it('keeps source settings read-only but operational controls available to editors', async () => {
+		const user = userEvent.setup();
+		makeFetch({ role: 'editor', notebooks: [{ ...notebook(), source_type: 'git' }] });
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Sync settings');
+		const repo = await screen.findByLabelText('Repository');
+		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
+		expect(repo).toHaveAttribute('readonly');
+		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Rotate token' })).toBeInTheDocument();
+	});
+
+	it('offers git notebook creation only to managers', async () => {
+		const user = userEvent.setup();
+		makeFetch({ role: 'manager' });
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'More create options' }));
+		expect(await screen.findByText('Sync from git repo')).toBeInTheDocument();
+	});
+
+	it('does not offer git notebook creation to editors', async () => {
+		makeFetch({ role: 'editor' });
+		await renderProject();
+
+		expect(screen.queryByRole('button', { name: 'More create options' })).not.toBeInTheDocument();
+		expect(screen.queryByText('Sync from git repo')).not.toBeInTheDocument();
 	});
 
 	it("a git row's source tile opens a popover with GitHub links", async () => {

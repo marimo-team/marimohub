@@ -40,7 +40,15 @@ function concreteDefault(d?: string): string {
  */
 function effective(sel: WizardSelection): Record<string, string> {
 	const optionDefaults = Object.fromEntries(EXTRA_OPTIONS.map((o) => [o.id, o.default]));
-	return { ...optionDefaults, ...sel.options, ...sel.values };
+	const values = { ...optionDefaults, ...sel.options, ...sel.values };
+	if (
+		sel.compute === 'kubernetes' &&
+		values.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET?.trim() &&
+		!values.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE?.trim()
+	) {
+		values.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE = 'secret';
+	}
+	return values;
 }
 
 /** Resolve a var's value: explicit override -> example -> concrete default -> unset. */
@@ -113,17 +121,7 @@ function sections(sel: WizardSelection): Section[] {
 }
 
 function configuredVars(section: Section, values: Record<string, string>): ConfigVar[] {
-	return section.vars.filter((v) => {
-		if (
-			v.id === 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET' &&
-			['default', 'disabled'].includes(
-				values.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE?.trim().toLowerCase(),
-			)
-		) {
-			return false;
-		}
-		return !v.optIn || Boolean(values[v.id]?.trim());
-	});
+	return section.vars.filter((v) => !v.optIn || Boolean(values[v.id]?.trim()));
 }
 
 // --- CONFIGS: .env ---
@@ -235,6 +233,7 @@ export interface SelectionWarning {
 /** Pre-flight warnings for risky backend choices. */
 export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 	const warnings: SelectionWarning[] = [];
+	const values = effective(sel);
 	if (sel.auth === 'dev') {
 		warnings.push({
 			level: 'danger',
@@ -273,6 +272,56 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 			message:
 				'Notebooks are browsable, but kernels will not start until you choose a compute backend.',
 		});
+	}
+	if (sel.compute === 'kubernetes') {
+		const tlsSecret = values.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET?.trim();
+		const configuredTlsMode =
+			values.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE?.trim().toLowerCase() ||
+			(tlsSecret ? 'secret' : 'controller-default');
+		const tlsMode = configuredTlsMode === 'default' ? 'controller-default' : configuredTlsMode;
+		const hostnameTemplate =
+			values.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE?.trim() || 'https://{id}.{host}';
+		const scheme = /^([a-z][a-z\d+.-]*):\/\//i.exec(hostnameTemplate)?.[1]?.toLowerCase();
+		if (!['disabled', 'controller-default', 'secret'].includes(tlsMode)) {
+			warnings.push({
+				level: 'danger',
+				title: 'Kubernetes TLS mode is invalid',
+				message: 'Use controller-default, secret, or disabled.',
+			});
+		} else if (tlsMode === 'secret' && !tlsSecret) {
+			warnings.push({
+				level: 'danger',
+				title: 'Kubernetes TLS secret is missing',
+				message: 'Secret TLS mode requires a Kubernetes TLS secret name.',
+			});
+		} else if (tlsSecret && tlsMode !== 'secret') {
+			warnings.push({
+				level: 'danger',
+				title: 'Kubernetes TLS settings conflict',
+				message: 'Use secret mode with this TLS secret, or remove the secret.',
+			});
+		}
+		if (
+			(tlsMode === 'disabled' && scheme !== 'http') ||
+			(tlsMode !== 'disabled' && scheme !== 'https')
+		) {
+			warnings.push({
+				level: 'danger',
+				title: 'Kubernetes hostname scheme conflicts with TLS',
+				message:
+					tlsMode === 'disabled'
+						? 'Disabled TLS requires an http:// hostname template.'
+						: 'Kubernetes ingress TLS requires an https:// hostname template.',
+			});
+		}
+		if (tlsMode === 'disabled') {
+			warnings.push({
+				level: 'danger',
+				title: 'Kubernetes kernel traffic is plaintext',
+				message:
+					'Disabled ingress TLS exposes tokenless kernel traffic. Use a TLS secret or the ingress controller default in production.',
+			});
+		}
 	}
 	return warnings;
 }

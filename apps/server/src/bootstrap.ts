@@ -22,6 +22,7 @@ type Signal = 'SIGTERM' | 'SIGINT';
 export interface BootstrapOverrides {
 	createDeps?: typeof createFromEnv;
 	prepareDeps?: (deps: ApiDeps) => Promise<void>;
+	hostname?: string;
 	serveFn?: typeof serve;
 	startOtelFn?: typeof startOtel;
 	exit?: (code: number) => void;
@@ -144,8 +145,14 @@ export async function bootstrap(
 	}
 
 	const port = Number(validatedEnv.PORT ?? 3000);
-	const server = serveFn({ fetch: app.fetch, port }, (info) => {
-		console.log(`[marimohub] server listening on :${info.port}`);
+	const serverOptions = {
+		fetch: app.fetch,
+		port,
+		...(overrides.hostname ? { hostname: overrides.hostname } : {}),
+	};
+	const server = serveFn(serverOptions, (info) => {
+		const address = info.address.includes(':') ? `[${info.address}]` : info.address;
+		console.log(`[marimohub] server listening on http://${address}:${info.port}`);
 	});
 
 	// In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the

@@ -213,4 +213,22 @@ describe('CLI manifest', () => {
 
 		expect(manifest.operations).toEqual([]);
 	});
+
+	it('omits operations that require a browser session', () => {
+		const manifest = generateCliManifest({
+			openapi: '3.1.0',
+			info: { title: 'Test', version: '1.0.0' },
+			paths: {
+				'/tokens': {
+					get: {
+						operationId: 'auth.tokens.list',
+						security: [{ cookieAuth: [] }],
+						responses: { 200: { description: 'Tokens' } },
+					},
+				},
+			},
+		});
+
+		expect(manifest.operations).toEqual([]);
+	});
 });

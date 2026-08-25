@@ -14,7 +14,8 @@ export const SANDBOX_ID_ANNOTATION = 'marimohub.io/sandbox-id';
 /** `imagePullPolicy` for the kernel container. See `defaultImagePullPolicy`. */
 export type ImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
 
-export type IngressTlsMode = 'disabled' | 'default' | 'secret';
+export type IngressTlsMode = 'disabled' | 'default' | 'controller-default' | 'secret';
+export type ResolvedIngressTlsMode = Exclude<IngressTlsMode, 'default'>;
 
 const ANNOTATION_NAME = /^[A-Za-z0-9](?:[-_.A-Za-z0-9]*[A-Za-z0-9])?$/;
 const DNS_LABEL = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/;
@@ -71,19 +72,35 @@ export function parseIngressAnnotations(
 export function resolveIngressTlsMode(
 	mode: string | undefined,
 	tlsSecretName?: string,
-): IngressTlsMode {
+): ResolvedIngressTlsMode {
 	const normalized = mode?.trim().toLowerCase();
-	if (!normalized) return tlsSecretName ? 'secret' : 'disabled';
-	if (!['disabled', 'default', 'secret'].includes(normalized)) {
-		throw new Error(`invalid ingress TLS mode "${mode}" (expected disabled, default, or secret)`);
+	if (!normalized) return tlsSecretName ? 'secret' : 'controller-default';
+	if (!['disabled', 'default', 'controller-default', 'secret'].includes(normalized)) {
+		throw new Error(
+			`invalid ingress TLS mode "${mode}" (expected disabled, controller-default, default, or secret)`,
+		);
 	}
-	if (normalized === 'secret' && !tlsSecretName) {
+	const resolved = normalized === 'default' ? 'controller-default' : normalized;
+	if (resolved === 'secret' && !tlsSecretName) {
 		throw new Error('ingress TLS mode "secret" requires a TLS secret name');
 	}
-	if (normalized !== 'secret' && tlsSecretName) {
+	if (resolved !== 'secret' && tlsSecretName) {
 		throw new Error(`ingress TLS mode "${normalized}" conflicts with a TLS secret name`);
 	}
-	return normalized as IngressTlsMode;
+	return resolved as ResolvedIngressTlsMode;
+}
+
+export function validateIngressTlsHostnameTemplate(
+	template: string,
+	tlsMode: ResolvedIngressTlsMode,
+): void {
+	const scheme = /^([a-z][a-z\d+.-]*):\/\//i.exec(template)?.[1]?.toLowerCase();
+	if (tlsMode === 'disabled' && scheme !== 'http') {
+		throw new Error('Disabled Kubernetes ingress TLS requires an http:// hostname template');
+	}
+	if (tlsMode !== 'disabled' && scheme !== 'https') {
+		throw new Error('Kubernetes ingress TLS requires an https:// hostname template');
+	}
 }
 
 /**
@@ -137,7 +154,7 @@ export interface KubernetesConfig {
 	ingressClassName?: string;
 	/** Deployment-controlled annotations copied to every per-session Ingress. */
 	ingressAnnotations?: Record<string, string>;
-	/** TLS declaration mode. Unset preserves the legacy secret-or-disabled behavior. */
+	/** TLS declaration mode. Plaintext exposure requires an explicit `disabled` value. */
 	ingressTlsMode?: IngressTlsMode;
 	/** TLS secret (typically a wildcard cert for `*.{host}`) for the Ingress. */
 	tlsSecretName?: string;

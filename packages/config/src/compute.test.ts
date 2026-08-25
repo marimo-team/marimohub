@@ -217,13 +217,21 @@ describe('makeCompute fail-fast', () => {
 					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
 					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS:
 						'{"route.openshift.io/termination":"edge"}',
-					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'controller-default',
 				}),
 			),
 		).toMatchObject({
 			ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
-			ingressTlsMode: 'default',
+			ingressTlsMode: 'controller-default',
 		});
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+				}),
+			),
+		).toMatchObject({ ingressTlsMode: 'controller-default' });
 	});
 
 	it('forwards explicit disabled mode without a TLS secret', () => {
@@ -247,8 +255,53 @@ describe('makeCompute fail-fast', () => {
 			),
 		).toMatchObject({ ingressTlsMode: 'secret', tlsSecretName: 'wildcard-cert' });
 		expect(configOf(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes' }))).toMatchObject({
-			ingressTlsMode: 'disabled',
+			ingressTlsMode: 'controller-default',
 		});
+	});
+
+	it('requires URL schemes that match the kubernetes ingress TLS mode', () => {
+		const disabledError = getConfigError(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
+			}),
+		);
+		expect(disabledError.message).toMatch(/requires an http:\/\//);
+		expect(disabledError.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
+		const enabledError = getConfigError(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
+				MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'controller-default',
+			}),
+		);
+		expect(enabledError.message).toMatch(/requires an https:\/\//);
+		expect(enabledError.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
+					MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}',
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
+				}),
+			),
+		).toMatchObject({ ingressTlsMode: 'disabled' });
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'HTTPS://{id}.{host}',
+			}),
+		).not.toThrow();
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'HTTP://{id}.{host}',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
+			}),
+		).not.toThrow();
 	});
 
 	it.each([
@@ -283,7 +336,7 @@ describe('makeCompute fail-fast', () => {
 		expect(() =>
 			makeCompute({
 				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
-				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'controller-default',
 				MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert',
 			}),
 		).toThrow(/conflicts with a TLS secret name/);

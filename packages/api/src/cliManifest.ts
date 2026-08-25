@@ -34,14 +34,13 @@ export interface CliOperation {
 	destructive: boolean;
 	paginated: boolean;
 	response_kind: 'json' | 'raw';
-	session_only: boolean;
 	accepts_if_match: boolean;
 	accepts_idempotency_key: boolean;
 	preflight_operation_id?: string;
 }
 
 export interface CliManifest {
-	version: 1;
+	version: 2;
 	api_version: string;
 	operations: CliOperation[];
 }
@@ -235,6 +234,7 @@ export function generateCliManifest(documentValue: Record<string, unknown>): Cli
 			if (!operationValue) continue;
 			const operation = object(operationValue, `${method.toUpperCase()} ${path}`);
 			if (operation['x-cli-hidden'] === true) continue;
+			if (isSessionOnly(operation)) continue;
 			if (typeof operation.operationId !== 'string') {
 				throw new TypeError(`${method.toUpperCase()} ${path} has no operationId`);
 			}
@@ -254,7 +254,6 @@ export function generateCliManifest(documentValue: Record<string, unknown>): Cli
 				destructive: method === 'delete' || operation['x-cli-destructive'] === true,
 				paginated: isPaginated(document, operation),
 				response_kind: responseKind(document, operation),
-				session_only: isSessionOnly(operation),
 				accepts_if_match: parameters.some(
 					(parameter) => parameter.name.toLowerCase() === 'if-match',
 				),
@@ -279,7 +278,7 @@ export function generateCliManifest(documentValue: Record<string, unknown>): Cli
 
 	const info = object(document.info, 'OpenAPI info');
 	return {
-		version: 1,
+		version: 2,
 		api_version: String(info.version),
 		operations,
 	};

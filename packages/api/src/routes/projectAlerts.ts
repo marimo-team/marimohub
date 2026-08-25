@@ -1,11 +1,13 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	AlertDestinationId,
+	ConflictError,
 	notificationRouter,
 	NotFoundError,
 	PROJECT_ALERT_KINDS,
 	ProjectAlertKindSchema,
 	ResourceExhaustedError,
+	assertVersionMatch,
 	createSlidingWindowBudget,
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -21,6 +23,7 @@ import {
 	extensibleResponseEnum,
 	ifMatchToken,
 	IfMatchHeader,
+	RequiredIdempotencyKeyHeader,
 	jsonBody,
 	jsonContent,
 	ProjectIdParam,
@@ -71,24 +74,36 @@ const CreateDestinationBody = z.discriminatedUnion('type', [
 	DestinationInputCommonSchema.extend({
 		type: z.literal('slack'),
 		webhook_url: z.url(),
-	}),
+	}).strict(),
 	DestinationInputCommonSchema.extend({
 		type: z.literal('webhook'),
 		url: z.url(),
 		signing_secret: z.string().min(1),
-	}),
+	}).strict(),
 ]);
 
-const UpdateDestinationBody = DestinationInputCommonSchema.partial()
-	.extend({
-		enabled: z.boolean().optional(),
-		webhook_url: z.url().optional(),
-		url: z.url().optional(),
-		signing_secret: z.string().min(1).optional(),
-	})
-	.refine((body) => Object.values(body).some((value) => value !== undefined), {
-		message: 'At least one destination field is required.',
-	});
+const UpdateDestinationCommonSchema = DestinationInputCommonSchema.partial().extend({
+	enabled: z.boolean().optional(),
+});
+
+const UpdateDestinationBody = z
+	.discriminatedUnion('type', [
+		UpdateDestinationCommonSchema.extend({
+			type: z.literal('slack'),
+			webhook_url: z.url().optional(),
+		}).strict(),
+		UpdateDestinationCommonSchema.extend({
+			type: z.literal('webhook'),
+			url: z.url().optional(),
+			signing_secret: z.string().min(1).optional(),
+		}).strict(),
+	])
+	.refine(
+		(body) => Object.entries(body).some(([name, value]) => name !== 'type' && value !== undefined),
+		{
+			message: 'At least one destination field is required.',
+		},
+	);
 
 const listDestinations = createRoute({
 	method: 'get',
@@ -171,7 +186,13 @@ const testDestination = createRoute({
 	operationId: 'alerts.destinations.test',
 	tags: ['Alerts'],
 	summary: 'Send a test project alert',
-	request: { params: AlertDestinationIdParam, headers: IfMatchHeader },
+	description:
+		'Sends a real external message. A completed Idempotency-Key replays its result. A concurrent, failed, or uncertain delivery returns 409 on reuse. A pre-delivery rejection does not consume the key. Use a new key to start another test.',
+	'x-cli-destructive': true,
+	request: {
+		params: AlertDestinationIdParam,
+		headers: IfMatchHeader.extend(RequiredIdempotencyKeyHeader.shape),
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: AlertDestinationResponseSchema }),
@@ -190,10 +211,23 @@ function requireProjectAlerts(deps: ApiDeps): NonNullable<ApiDeps['projectAlerts
 
 const testBudget = createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_000 });
 
-function assertTestBudget(userId: string): void {
-	if (!testBudget.consume(userId)) {
+function admitTestBudget(userId: string) {
+	const admission = testBudget.admit(userId);
+	if (!admission) {
 		throw new ResourceExhaustedError('Too many alert tests; try again in a minute');
 	}
+	return admission;
+}
+
+async function alertTestDeliveryId(
+	userId: UserId,
+	projectId: string,
+	destinationId: string,
+	idempotencyKey: string,
+): Promise<string> {
+	const operation = JSON.stringify([userId, projectId, destinationId, idempotencyKey]);
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(operation));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function audit(
@@ -261,9 +295,9 @@ app.openapi(updateDestination, async (c) => {
 			alert_destination_id: aid,
 			alert_destination_type: destination.type,
 			endpoint_changed:
-				body.webhook_url !== undefined ||
-				body.url !== undefined ||
-				body.signing_secret !== undefined,
+				body.type === 'slack'
+					? body.webhook_url !== undefined
+					: body.url !== undefined || body.signing_secret !== undefined,
 		},
 	);
 	return c.json({ success: true, data: destination }, 200);
@@ -289,6 +323,7 @@ app.openapi(testDestination, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, aid } = c.req.valid('param');
+	const idempotencyKey = c.req.valid('header')['idempotency-key'];
 	const alerts = requireProjectAlerts(deps);
 	const project = await assertProjectRole(
 		deps.services.projects,
@@ -297,34 +332,77 @@ app.openapi(testDestination, async (c) => {
 		'manager',
 		deps.policy,
 	);
-	assertTestBudget(user.id);
+	const routeId = `POST /projects/${pid}/alert-destinations/${aid}/test`;
+	const resultScope = `${user.id}:${routeId}`;
+	const deliveryScope = `${resultScope}:external-delivery`;
+	const respond = (data: unknown) => {
+		const destination = data as z.infer<typeof AlertDestinationResponseSchema>;
+		c.header('ETag', etagFor(destination.updated_at));
+		return c.json({ success: true, data: destination }, 200);
+	};
+	let completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
+	if (completed) return respond(completed.data);
+	if (await deps.services.idempotency.lookup(deliveryScope, idempotencyKey)) {
+		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
+	}
+
+	const expectedVersion = ifMatchToken(c);
+	const current = (await alerts.store.list(pid)).find((destination) => destination.id === aid);
+	if (!current) throw new NotFoundError(`Alert destination ${aid} not found`);
+	assertVersionMatch(current.updated_at, expectedVersion);
 	const [notification] = notificationRouter.render({
 		kind: 'alert.test',
 		project,
 		destinationId: aid,
 		actor: user,
-		testId: c.get('requestId'),
+		testId: await alertTestDeliveryId(user.id, pid, aid, idempotencyKey),
 	});
 	if (!notification) throw new Error('Test alert renderer returned no notification');
+
+	const budgetAdmission = admitTestBudget(user.id);
+	let ownsDelivery: boolean;
 	try {
-		const destination = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);
-		c.header('ETag', etagFor(destination.updated_at));
-		await audit(
-			deps,
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'project_alert.test',
-			{ project_id: pid, alert_destination_id: aid, outcome: 'success' },
-		);
-		return c.json({ success: true, data: destination }, 200);
+		ownsDelivery = await deps.services.idempotency.reserve(deliveryScope, idempotencyKey);
+	} catch (error) {
+		budgetAdmission.refund();
+		throw error;
+	}
+	if (!ownsDelivery) {
+		budgetAdmission.refund();
+		completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
+		if (completed) return respond(completed.data);
+		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
+	}
+	let destination: z.infer<typeof AlertDestinationResponseSchema>;
+	try {
+		destination = await alerts.dispatcher.test(pid, aid, expectedVersion, notification);
 	} catch (error) {
 		await audit(
 			deps,
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			{
+				requestId: c.get('requestId'),
+				method: c.req.method,
+				path: c.req.path,
+				userId: user.id,
+			},
 			'project_alert.test',
 			{ project_id: pid, alert_destination_id: aid, outcome: 'failure' },
 		);
 		throw error;
 	}
+	await deps.services.idempotency.record(resultScope, idempotencyKey, destination);
+	await audit(
+		deps,
+		{
+			requestId: c.get('requestId'),
+			method: c.req.method,
+			path: c.req.path,
+			userId: user.id,
+		},
+		'project_alert.test',
+		{ project_id: pid, alert_destination_id: aid, outcome: 'success' },
+	);
+	return respond(destination);
 });
 
 export default app;

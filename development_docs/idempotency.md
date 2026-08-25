@@ -12,17 +12,21 @@ Idempotency-Key: 8f3c1e2a-...
 → 201 { same body }                          # replay: no new project
 ```
 
-- **Routes** — `POST /projects` and `POST …/notebooks`. `POST …/sessions`
-  accepts the header but is already idempotent on `(user, notebook)` via its
-  create-or-reuse path, so it needs no store.
+- **Create routes** — `POST /projects` and `POST …/notebooks` accept the header.
+  `POST …/sessions` accepts it but already reuses a session for `(user, notebook)`.
+- **External delivery** — `POST …/alert-destinations/{aid}/test` requires the header because it sends a real message.
 - **Scope** — keyed by `(user, route, key)`; a different user or route is a
   distinct first use. The header is optional (omit it for plain, non-idempotent
   creates).
 - **Mechanics** — the first response's `data` is stored at
-  `_system/idempotency/{sha256(user:route\nkey)}.json` with create-if-absent; a
-  hit replays it. See `IdempotencyService` (core) + `idempotentCreate` (api).
+  `_system/idempotency/{sha256(user:route\nkey)}.json` with create-if-absent.
+  A hit replays it. See `IdempotencyService` (core) and `idempotentCreate` (api).
+- **External delivery mechanics** — deterministic checks run first. The server then admits a refundable test-budget entry before it stores a separate delivery claim.
+  If claim storage fails or another request owns the claim, the server refunds the budget entry.
+  Only the claim owner keeps the budget charge and attempts delivery.
+  A completed test stores its response under the result scope.
+  A concurrent or uncertain request cannot send the message again with the same key.
 - **Retention** — pruned after 24h by the maintenance cron, so replay is
   guaranteed only within that window.
-- **Concurrency** — no cross-replica lock: two requests racing on the _same
-  unused_ key can both create (a small, documented window). A retry after the
-  first response is recorded always replays.
+- **Create concurrency** — two requests with the same unused key can both create before either request stores its response.
+  The first stored response wins. Later requests replay that response.

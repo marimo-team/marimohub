@@ -201,7 +201,7 @@ E2B sandboxes (e2b.dev). The `e2b` SDK is an optional, bring-your-own dependency
 
 `MARIMOHUB_COMPUTE_BACKEND=kubernetes`
 
-Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. TLS is optional: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default` and leave the secret unset for the ingress controller's default certificate, or set the mode to `disabled` and leave the secret unset to omit Ingress TLS. The `default` and `disabled` modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.
+Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. A TLS secret requires `secret` mode; `controller-default` and `disabled` cannot be combined with one. marimohub runs in-cluster with RBAC on pods/services/ingresses.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
@@ -209,8 +209,8 @@ Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kube
 | `MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{id}`, `{port}`, `{host}`, `{token}`. | — | `https://{id}.{host}` | — |
 | `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS` | `ingressClassName` for the per-session Ingress. | — | — | `traefik` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS` | JSON object of string annotations copied to every per-session Ingress. Keys must use Kubernetes annotation syntax, and the combined keys and values cannot exceed 256 KiB. | — | — | `{"route.openshift.io/termination":"edge"}` |
-| `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE` | How each per-session Ingress declares TLS: `disabled` omits `spec.tls`, `default` emits `tls: [{}]` for an ingress-controller default certificate, and `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`. When unset, a configured secret selects `secret`; otherwise TLS is disabled. | — | `secret when TLS secret is set, else disabled` | `default` |
-| `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` | TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. | — | — | `marimo-kernels-wildcard-tls` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE` | How each per-session Ingress declares TLS: `controller-default` emits `tls: [{}]` for an ingress-controller default certificate, `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`, and `disabled` explicitly opts into plaintext and requires an `http://` hostname template. The legacy `default` value remains an alias for `controller-default`. When unset, a configured secret selects `secret`; otherwise the controller default is used. | — | `secret when TLS secret is set, else controller-default` | `controller-default` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` | TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. Requires `secret` mode; when the mode is unset, providing this secret selects `secret` automatically. | — | — | `marimo-kernels-wildcard-tls` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` | ServiceAccount the kernel Pod runs as. Omit for the namespace default. | — | — | `marimo-kernel` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` | `imagePullSecrets` name for pulling a private kernel image. | — | — | `regcred` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` | Kernel-container `imagePullPolicy`: `Always`, `IfNotPresent`, or `Never`. Defaults like Kubernetes: `Always` for a `:latest`/untagged image, `IfNotPresent` for a pinned tag or digest. Pin the image to skip the per-start registry round-trip. | — | `Always for :latest, else IfNotPresent` | `Always` |
@@ -326,7 +326,7 @@ Server-wide settings; no backend selector.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`, `duckdb-wasm-sql`. | — | — | `duckdb-wasm-preview` |
+| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current value: `duckdb-wasm-preview`. | — | — | `duckdb-wasm-preview` |
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |
@@ -496,7 +496,7 @@ Posts the complete notification as signed JSON.
 
 ## Integrations
 
-Selected by `MARIMOHUB_INTEGRATIONS` (default `off`); one of `on`, `off`.
+Selected by `MARIMOHUB_INTEGRATIONS` (default `on`); one of `on`, `off`.
 
 Integrations provide versioned configuration for data sources and environment
 variables. See the [integrations guide](./integrations.md) for supported kinds.
@@ -507,11 +507,12 @@ New, non-ephemeral sessions receive the applicable configuration as environment
 variables and files. The hub injects configuration, not Python libraries. Each
 kind lists the packages to add to the notebook.
 
-Enable this feature only after every replica can preserve unknown session
-fields. Otherwise, an older replica can remove the integration audit pin during
-a rolling deployment. See the two-phase policy in
-`development_docs/migrations.md`. The feature requires only the deployment
-bucket.
+Integrations are enabled by default. Set `MARIMOHUB_INTEGRATIONS=off` to
+disable the management routes and session injection. The feature requires only
+the deployment bucket.
+
+Before upgrading, replace the former `true` and `none` aliases with `on`
+and `off`. Those aliases are no longer accepted.
 
 Secret fields use inline encryption or an external resolver. A rendering error
 blocks session creation. Disable or override the integration to restore access.
@@ -521,14 +522,14 @@ See the [secret-source guide](./integration-secrets.md).
 
 `MARIMOHUB_INTEGRATIONS=on`
 
-Integration management and session injection are enabled. Project entries use
+Integration management and session injection are enabled by default. Project entries use
 `projects/{pid}/integrations/`. Organization entries use
 `_system/integrations/`.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and requires `MARIMOHUB_DATA_BROWSER=off`. | — | `guarded` | — |
-| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing. | — | `off` | — |
+| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires integrations to remain enabled and an enabled integration probe. `off` disables browsing. | — | `off` | — |
 | `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of runtime-backed previews in this server process. | — | `4` | — |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of runtime-backed previews for one user. | — | `1` | — |

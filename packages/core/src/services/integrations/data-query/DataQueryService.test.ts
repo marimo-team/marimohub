@@ -114,6 +114,58 @@ describe('DataQueryService', () => {
 		expect(terminate).toHaveBeenCalledOnce();
 	});
 
+	it('rejects a pre-aborted query without executing and terminates its executor', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const execute = vi.fn();
+		const terminate = vi.fn();
+		const create = vi.fn(async (signal: AbortSignal) => {
+			expect(signal.aborted).toBe(true);
+			return { runtime: 'worker' as const, execute, terminate };
+		});
+		const service = createService({ create }, { executionTimeoutMs: 10_000 });
+
+		await expect(
+			service.query(user, { sql: 'select 1', connection }, controller.signal),
+		).rejects.toThrow('cancelled');
+		await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
+		expect(create).toHaveBeenCalledOnce();
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it('releases capacity and terminates a late executor for a pre-aborted query', async () => {
+		let resolveFirst!: (executor: DisposableDataQueryExecutor) => void;
+		const lateExecute = vi.fn();
+		const lateTerminate = vi.fn();
+		const nextExecute = vi.fn(async () => ({ columns: ['value'], rows: [[2]], truncated: false }));
+		const nextTerminate = vi.fn();
+		const create = vi
+			.fn<DataQueryExecutorFactory['create']>()
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveFirst = resolve;
+					}),
+			)
+			.mockResolvedValueOnce({ runtime: 'worker', execute: nextExecute, terminate: nextTerminate });
+		const service = createService({ create }, { maxConcurrent: 1, executionTimeoutMs: 10_000 });
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			service.query(user, { sql: 'select 1', connection }, controller.signal),
+		).rejects.toThrow('cancelled');
+		await expect(service.query(user, { sql: 'select 2', connection })).resolves.toMatchObject({
+			rows: [[2]],
+		});
+
+		resolveFirst({ runtime: 'process', execute: lateExecute, terminate: lateTerminate });
+		await vi.waitFor(() => expect(lateTerminate).toHaveBeenCalledOnce());
+		expect(lateExecute).not.toHaveBeenCalled();
+		expect(nextExecute).toHaveBeenCalledOnce();
+		expect(nextTerminate).toHaveBeenCalledOnce();
+	});
+
 	it('bounds factory creation and terminates an executor that resolves after the deadline', async () => {
 		let resolveFactory!: (executor: DisposableDataQueryExecutor) => void;
 		const terminate = vi.fn();

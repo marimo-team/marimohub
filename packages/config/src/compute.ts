@@ -11,6 +11,7 @@ import {
 	KubernetesCompute,
 	parseIngressAnnotations,
 	resolveIngressTlsMode,
+	validateIngressTlsHostnameTemplate,
 } from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
@@ -84,18 +85,37 @@ function kubernetesIngressAnnotations(env: Env, key: string): Record<string, str
 	}
 }
 
-function kubernetesIngressTlsMode(env: Env): 'disabled' | 'default' | 'secret' {
-	const key = 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE';
+function kubernetesIngressTlsMode(env: Env): 'disabled' | 'controller-default' | 'secret' {
+	const modeKey = 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE';
+	let mode: 'disabled' | 'controller-default' | 'secret';
 	try {
-		return resolveIngressTlsMode(env[key], env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET);
+		mode = resolveIngressTlsMode(env[modeKey], env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET);
 	} catch (cause) {
 		const detail = cause instanceof Error ? cause.message : 'invalid TLS settings';
-		throw new ConfigError(`Invalid ${key} (${detail})`, {
-			variable: key,
+		throw new ConfigError(`Invalid ${modeKey} (${detail})`, {
+			variable: modeKey,
 			remediation:
-				'Use secret with a TLS secret name, or remove the secret when using default/disabled.',
+				'Use secret with a TLS secret name, or remove the secret when using controller-default/disabled.',
 		});
 	}
+
+	const templateKey = 'MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE';
+	const template = env[templateKey] ?? 'https://{id}.{host}';
+	try {
+		if (env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME) {
+			validateIngressTlsHostnameTemplate(template, mode);
+		}
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid hostname template';
+		throw new ConfigError(`Invalid ${templateKey} (${detail})`, {
+			variable: templateKey,
+			remediation:
+				mode === 'disabled'
+					? 'Use an http:// hostname template with disabled TLS.'
+					: 'Use an https:// hostname template when Kubernetes ingress TLS is enabled.',
+		});
+	}
+	return mode;
 }
 
 export interface ComputeOptions {

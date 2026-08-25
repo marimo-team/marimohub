@@ -1,16 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	AesGcmSecretCodec,
 	ProjectAlertStore,
 	UnavailableError,
 	assertVersionMatch,
 } from '@marimo-hub/core';
-import type { ProjectAlertDispatcher } from '@marimo-hub/core';
+import type { ProjectAlertDispatcher, UserId } from '@marimo-hub/core';
 import { uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
 const KEK = '00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100';
+let testKeySequence = 0;
+
+function alertTestHeaders(updatedAt?: string, idempotencyKey?: string) {
+	return {
+		'idempotency-key': idempotencyKey ?? `alert-test-${++testKeySequence}`,
+		...(updatedAt ? { 'if-match': updatedAt } : {}),
+	};
+}
 
 describe('project alert destination routes', () => {
 	let bucket: MemoryBucket;
@@ -18,6 +26,10 @@ describe('project alert destination routes', () => {
 	let dispatcher: ProjectAlertDispatcher;
 	let request: ReturnType<typeof createTestApi>['request'];
 	let pid: string;
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
@@ -41,6 +53,30 @@ describe('project alert destination routes', () => {
 		);
 		pid = project.id;
 	});
+
+	async function createLocalDestination(
+		userId: UserId,
+		localDispatcher: ProjectAlertDispatcher = dispatcher,
+	) {
+		const api = createTestApi({
+			bucket,
+			userId,
+			deps: { projectAlerts: { store, dispatcher: localDispatcher, maxDestinations: 10 } },
+		});
+		const project = await expectOk<{ id: string }>(
+			await api.request('POST', '/projects', { name: `Alerts ${userId}`, description: '' }),
+			201,
+		);
+		const destination = await expectOk<any>(
+			await api.request('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/local',
+			}),
+			201,
+		);
+		return { ...api, pid: project.id, destination };
+	}
 
 	it('creates disabled redacted destinations with all kinds selected by default', async () => {
 		const destination = await expectOk<any>(
@@ -82,7 +118,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${destination.id}`,
-				{ enabled: true },
+				{ type: 'slack', enabled: true },
 				{ 'if-match': destination.updated_at },
 			),
 			409,
@@ -94,7 +130,7 @@ describe('project alert destination routes', () => {
 				'POST',
 				`/projects/${pid}/alert-destinations/${destination.id}/test`,
 				undefined,
-				{ 'if-match': destination.updated_at },
+				alertTestHeaders(destination.updated_at),
 			),
 		);
 		expect(verified.verified_at).not.toBeNull();
@@ -103,7 +139,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${destination.id}`,
-				{ enabled: true },
+				{ type: 'slack', enabled: true },
 				{ 'if-match': verified.updated_at },
 			),
 		);
@@ -121,7 +157,12 @@ describe('project alert destination routes', () => {
 		);
 
 		const verified = await expectOk<any>(
-			await request('POST', `/projects/${pid}/alert-destinations/${destination.id}/test`),
+			await request(
+				'POST',
+				`/projects/${pid}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(),
+			),
 		);
 		expect(verified.verified_at).not.toBeNull();
 		expect(dispatcher.test).toHaveBeenCalledWith(
@@ -132,7 +173,227 @@ describe('project alert destination routes', () => {
 		);
 	});
 
-	it('rejects a stale test precondition', async () => {
+	it('requires an idempotency key for a test delivery', async () => {
+		const destination = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+
+		await expectError(
+			await request('POST', `/projects/${pid}/alert-destinations/${destination.id}/test`),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(dispatcher.test).not.toHaveBeenCalled();
+	});
+
+	it('replays a successful test without sending another external message', async () => {
+		const destination = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+		const headers = alertTestHeaders(destination.updated_at, 'replay-test-delivery');
+		const path = `/projects/${pid}/alert-destinations/${destination.id}/test`;
+
+		const firstResponse = await request('POST', path, undefined, headers);
+		const first = await expectOk<any>(firstResponse);
+		const replayResponse = await request('POST', path, undefined, headers);
+		const replay = await expectOk<any>(replayResponse);
+
+		expect(replay).toEqual(first);
+		expect(replayResponse.headers.get('etag')).toBe(firstResponse.headers.get('etag'));
+		expect(dispatcher.test).toHaveBeenCalledOnce();
+	});
+
+	it('allows only one concurrent delivery without charging reservation losers', async () => {
+		let releaseTest!: () => void;
+		const testGate = new Promise<void>((resolve) => {
+			releaseTest = resolve;
+		});
+		const test = vi.fn<ProjectAlertDispatcher['test']>(
+			async (projectId, destinationId, expectedVersion) => {
+				await testGate;
+				const [resolved] = await store.resolve(projectId, { id: destinationId });
+				if (!resolved) throw new Error('Alert destination not found');
+				assertVersionMatch(resolved.updated_at, expectedVersion);
+				return store.markVerified(projectId, destinationId, resolved.updated_at);
+			},
+		);
+		const localDispatcher: ProjectAlertDispatcher = {
+			deliver: vi.fn(async () => 'delivered' as const),
+			test,
+		};
+		const local = await createLocalDestination(uid('alert_concurrent_test'), localDispatcher);
+		const path = `/projects/${local.pid}/alert-destinations/${local.destination.id}/test`;
+		const headers = alertTestHeaders(local.destination.updated_at, 'concurrent-delivery');
+
+		const firstResponse = local.request('POST', path, undefined, headers);
+		await vi.waitFor(() => expect(test).toHaveBeenCalledOnce());
+		for (let attempt = 0; attempt < 10; attempt++) {
+			await expectError(await local.request('POST', path, undefined, headers), 409, 'CONFLICT');
+		}
+		releaseTest();
+		const first = await expectOk<any>(await firstResponse);
+		const replay = await expectOk<any>(await local.request('POST', path, undefined, headers));
+		await expectOk(
+			await local.request(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(undefined, 'fresh-key-after-conflicts'),
+			),
+		);
+
+		expect(replay).toEqual(first);
+		expect(test).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not redeliver when persisting the completed result fails', async () => {
+		const local = await createLocalDestination(uid('alert_result_failure'));
+		const record = vi
+			.spyOn(local.deps.services.idempotency, 'record')
+			.mockRejectedValueOnce(new Error('result storage unavailable'));
+		const path = `/projects/${local.pid}/alert-destinations/${local.destination.id}/test`;
+		const headers = alertTestHeaders(local.destination.updated_at, 'result-record-failure');
+
+		await expectError(await local.request('POST', path, undefined, headers), 500, 'INTERNAL_ERROR');
+		await expectError(await local.request('POST', path, undefined, headers), 409, 'CONFLICT');
+
+		expect(record).toHaveBeenCalledOnce();
+		expect(dispatcher.test).toHaveBeenCalledOnce();
+	});
+
+	it('records the completed result when best-effort success auditing fails', async () => {
+		const local = await createLocalDestination(uid('alert_audit_failure'));
+		const append = vi
+			.spyOn(local.deps.services.events, 'append')
+			.mockRejectedValueOnce(new Error('audit storage unavailable'));
+		const path = `/projects/${local.pid}/alert-destinations/${local.destination.id}/test`;
+		const headers = alertTestHeaders(local.destination.updated_at, 'success-audit-failure');
+
+		const first = await expectOk<any>(await local.request('POST', path, undefined, headers));
+		const replay = await expectOk<any>(await local.request('POST', path, undefined, headers));
+
+		expect(replay).toEqual(first);
+		expect(append).toHaveBeenCalledOnce();
+		expect(dispatcher.test).toHaveBeenCalledOnce();
+	});
+
+	it('scopes an idempotency key to one project destination', async () => {
+		const resourceUser = uid('alert_resource_scope');
+		const local = createTestApi({
+			bucket,
+			userId: resourceUser,
+			deps: { projectAlerts: { store, dispatcher, maxDestinations: 10 } },
+		}).request;
+		const project = await expectOk<{ id: string }>(
+			await local('POST', '/projects', { name: 'Resource scope', description: '' }),
+			201,
+		);
+		const first = await expectOk<any>(
+			await local('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'First',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/first',
+			}),
+			201,
+		);
+		const second = await expectOk<any>(
+			await local('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'Second',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/second',
+			}),
+			201,
+		);
+		const idempotencyKey = 'same-key-for-two-destinations';
+
+		const testedFirst = await expectOk<any>(
+			await local(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${first.id}/test`,
+				undefined,
+				alertTestHeaders(first.updated_at, idempotencyKey),
+			),
+		);
+		const testedSecond = await expectOk<any>(
+			await local(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${second.id}/test`,
+				undefined,
+				alertTestHeaders(second.updated_at, idempotencyKey),
+			),
+		);
+
+		expect(testedFirst.id).toBe(first.id);
+		expect(testedSecond.id).toBe(second.id);
+		expect(dispatcher.test).toHaveBeenCalledTimes(2);
+	});
+
+	it('gives different delivery dedupe keys to different users reusing one client key', async () => {
+		const firstUser = uid('alert_test_first_manager');
+		const secondUser = uid('alert_test_second_manager');
+		const firstManager = createTestApi({
+			bucket,
+			userId: firstUser,
+			deps: { projectAlerts: { store, dispatcher, maxDestinations: 10 } },
+		}).request;
+		const secondManager = createTestApi({
+			bucket,
+			userId: secondUser,
+			deps: { projectAlerts: { store, dispatcher, maxDestinations: 10 } },
+		}).request;
+		const project = await expectOk<{ id: string }>(
+			await firstManager('POST', '/projects', { name: 'User scope', description: '' }),
+			201,
+		);
+		await expectOk(
+			await firstManager('POST', `/projects/${project.id}/members`, {
+				user_id: secondUser,
+				role: 'manager',
+			}),
+			201,
+		);
+		const destination = await expectOk<any>(
+			await firstManager('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'Shared',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/shared',
+			}),
+			201,
+		);
+		const idempotencyKey = 'same-key-for-two-users';
+		const tested = await expectOk<any>(
+			await firstManager(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(destination.updated_at, idempotencyKey),
+			),
+		);
+		await expectOk(
+			await secondManager(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(tested.updated_at, idempotencyKey),
+			),
+		);
+
+		const testCalls = vi.mocked(dispatcher.test).mock.calls;
+		expect(testCalls).toHaveLength(2);
+		expect(testCalls[0]?.[3].dedupe_key).not.toBe(testCalls[1]?.[3].dedupe_key);
+	});
+
+	it('rejects a stale test precondition without consuming the idempotency key', async () => {
 		const created = await expectOk<any>(
 			await request('POST', `/projects/${pid}/alert-destinations`, {
 				name: 'Slack',
@@ -141,23 +402,28 @@ describe('project alert destination routes', () => {
 			}),
 			201,
 		);
-		await expectOk(
+		const updated = await expectOk<any>(
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ name: 'Renamed' },
+				{ type: 'slack', name: 'Renamed' },
 				{ 'if-match': created.updated_at },
 			),
 		);
+		const idempotencyKey = 'retry-after-stale-precondition';
+		const path = `/projects/${pid}/alert-destinations/${created.id}/test`;
 
 		await expectError(
-			await request('POST', `/projects/${pid}/alert-destinations/${created.id}/test`, undefined, {
-				'if-match': created.updated_at,
-			}),
+			await request('POST', path, undefined, alertTestHeaders(created.updated_at, idempotencyKey)),
 			412,
 			'PRECONDITION_FAILED',
 		);
-		expect((await store.list(pid as never))[0]?.verified_at).toBeNull();
+		const verified = await expectOk<any>(
+			await request('POST', path, undefined, alertTestHeaders(updated.updated_at, idempotencyKey)),
+		);
+
+		expect(verified.verified_at).not.toBeNull();
+		expect(dispatcher.test).toHaveBeenCalledOnce();
 	});
 
 	it('hides destinations from non-managers', async () => {
@@ -201,6 +467,37 @@ describe('project alert destination routes', () => {
 		).toEqual({ items: [], next_cursor: null });
 	});
 
+	it('rejects destination fields that do not match the discriminated type', async () => {
+		await expectError(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Mixed',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+				url: 'https://events.example.com/hook',
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		const created = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+		await expectError(
+			await request(
+				'PATCH',
+				`/projects/${pid}/alert-destinations/${created.id}`,
+				{ type: 'webhook', name: 'Still Slack' },
+				{ 'if-match': created.updated_at },
+			),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
 	it('rejects stale updates and deletes while preserving the latest value', async () => {
 		const created = await expectOk<any>(
 			await request('POST', `/projects/${pid}/alert-destinations`, {
@@ -214,7 +511,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ name: 'Current' },
+				{ type: 'slack', name: 'Current' },
 				{ 'if-match': created.updated_at },
 			),
 		);
@@ -223,7 +520,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ name: 'Stale' },
+				{ type: 'slack', name: 'Stale' },
 				{ 'if-match': created.updated_at },
 			),
 			412,
@@ -257,7 +554,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{},
+				{ type: 'slack' },
 				{ 'if-match': created.updated_at },
 			),
 			422,
@@ -276,15 +573,18 @@ describe('project alert destination routes', () => {
 			201,
 		);
 		const verified = await expectOk<any>(
-			await request('POST', `/projects/${pid}/alert-destinations/${created.id}/test`, undefined, {
-				'if-match': created.updated_at,
-			}),
+			await request(
+				'POST',
+				`/projects/${pid}/alert-destinations/${created.id}/test`,
+				undefined,
+				alertTestHeaders(created.updated_at),
+			),
 		);
 		const enabled = await expectOk<any>(
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ enabled: true },
+				{ type: 'slack', enabled: true },
 				{ 'if-match': verified.updated_at },
 			),
 		);
@@ -293,7 +593,11 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ webhook_url: 'https://hooks.example.com/services/replacement', enabled: true },
+				{
+					type: 'slack',
+					webhook_url: 'https://hooks.example.com/services/replacement',
+					enabled: true,
+				},
 				{ 'if-match': enabled.updated_at },
 			),
 			409,
@@ -303,7 +607,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ webhook_url: 'https://hooks.example.com/services/replacement' },
+				{ type: 'slack', webhook_url: 'https://hooks.example.com/services/replacement' },
 				{ 'if-match': enabled.updated_at },
 			),
 		);
@@ -329,6 +633,7 @@ describe('project alert destination routes', () => {
 		}).request;
 		const endpoint = 'https://events.example.com/hooks/private-path';
 		const secret = 'audit-secret-must-not-leak';
+		const idempotencyKey = 'retry-key-must-not-leak';
 		const destination = await expectOk<any>(
 			await local('POST', `/projects/${pid}/alert-destinations`, {
 				name: 'Webhook',
@@ -339,13 +644,41 @@ describe('project alert destination routes', () => {
 			201,
 		);
 
+		const path = `/projects/${pid}/alert-destinations/${destination.id}/test`;
 		await expectError(
-			await local('POST', `/projects/${pid}/alert-destinations/${destination.id}/test`, undefined, {
-				'if-match': destination.updated_at,
-			}),
+			await local(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(destination.updated_at, idempotencyKey),
+			),
 			503,
 			'SERVICE_UNAVAILABLE',
 		);
+		await expectError(
+			await local(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(destination.updated_at, idempotencyKey),
+			),
+			409,
+			'CONFLICT',
+		);
+		await expectError(
+			await local(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(destination.updated_at, 'new-key-after-failure'),
+			),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		const testCalls = vi.mocked(failingDispatcher.test).mock.calls;
+		expect(testCalls).toHaveLength(2);
+		expect(testCalls[0]?.[3].dedupe_key).not.toBe(testCalls[1]?.[3].dedupe_key);
+		expect(testCalls[0]?.[3].dedupe_key).not.toContain(idempotencyKey);
 		expect((await store.list(pid as never))[0]).toMatchObject({
 			verified_at: null,
 			enabled: false,
@@ -365,16 +698,19 @@ describe('project alert destination routes', () => {
 		expect(serialized).not.toContain(endpoint);
 		expect(serialized).not.toContain('private-path');
 		expect(serialized).not.toContain(secret);
+		expect(serialized).not.toContain(idempotencyKey);
 	});
 
 	it('limits failed tests to ten attempts per user per minute', async () => {
+		const startedAt = Date.now();
+		const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
 		const limiterUser = uid('alert_test_limiter');
 		const limiterBucket = await createInitializedBucket();
 		const limiterStore = new ProjectAlertStore(limiterBucket, new AesGcmSecretCodec({ kek: KEK }));
 		const test = vi.fn(async () => {
 			throw new UnavailableError('Alert destination test failed');
 		});
-		const limiter = createTestApi({
+		const limiterApi = createTestApi({
 			bucket: limiterBucket,
 			userId: limiterUser,
 			deps: {
@@ -384,7 +720,8 @@ describe('project alert destination routes', () => {
 					maxDestinations: 10,
 				},
 			},
-		}).request;
+		});
+		const limiter = limiterApi.request;
 		const project = await expectOk<{ id: string }>(
 			await limiter('POST', '/projects', { name: 'Rate limit', description: '' }),
 			201,
@@ -397,28 +734,62 @@ describe('project alert destination routes', () => {
 			}),
 			201,
 		);
+		const reserve = vi
+			.spyOn(limiterApi.deps.services.idempotency, 'reserve')
+			.mockRejectedValueOnce(new Error('reservation storage unavailable'));
+		await expectError(
+			await limiter(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(destination.updated_at, 'reservation-storage-failure'),
+			),
+			500,
+			'INTERNAL_ERROR',
+		);
+		expect(test).not.toHaveBeenCalled();
 		for (let attempt = 0; attempt < 10; attempt++) {
 			await expectError(
 				await limiter(
 					'POST',
 					`/projects/${project.id}/alert-destinations/${destination.id}/test`,
 					undefined,
-					{ 'if-match': destination.updated_at },
+					alertTestHeaders(destination.updated_at),
 				),
 				503,
 				'SERVICE_UNAVAILABLE',
 			);
 		}
-		await expectError(
-			await limiter(
-				'POST',
-				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
-				undefined,
-				{ 'if-match': destination.updated_at },
-			),
-			429,
-			'RESOURCE_EXHAUSTED',
-		);
-		expect(test).toHaveBeenCalledTimes(10);
+		const retryKey = 'retry-after-rate-limit';
+		try {
+			await expectError(
+				await limiter(
+					'POST',
+					`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+					undefined,
+					alertTestHeaders(destination.updated_at, retryKey),
+				),
+				429,
+				'RESOURCE_EXHAUSTED',
+			);
+			expect(test).toHaveBeenCalledTimes(10);
+			expect(reserve).toHaveBeenCalledTimes(11);
+
+			now.mockReturnValue(startedAt + 60_001);
+			await expectError(
+				await limiter(
+					'POST',
+					`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+					undefined,
+					alertTestHeaders(destination.updated_at, retryKey),
+				),
+				503,
+				'SERVICE_UNAVAILABLE',
+			);
+			expect(test).toHaveBeenCalledTimes(11);
+			expect(reserve).toHaveBeenCalledTimes(12);
+		} finally {
+			now.mockRestore();
+		}
 	});
 });

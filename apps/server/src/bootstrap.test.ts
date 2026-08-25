@@ -36,7 +36,7 @@ function makeHarness(
 ) {
 	const server = fakeServer(options.closeImmediately);
 	const createDeps = vi.fn(() => deps);
-	const serveFn = vi.fn(() => server.server);
+	const serveFn = vi.fn<NonNullable<BootstrapOverrides['serveFn']>>(() => server.server);
 	const exit = vi.fn<(code: number) => void>();
 	const signals = new Map<Signal, () => void>();
 	const registerSignal = vi.fn((signal: Signal, handler: () => void) => {
@@ -112,6 +112,41 @@ describe('bootstrap', () => {
 		await expect(bootstrap(BASE_ENV, harness.overrides)).resolves.toBeDefined();
 		expect(harness.serveFn).toHaveBeenCalledOnce();
 		expect(harness.exit).not.toHaveBeenCalled();
+	});
+
+	it('passes the port and fetch handler as the exact default serve options', async () => {
+		const harness = makeHarness(deps);
+
+		await bootstrap({ ...BASE_ENV, PORT: '4100' }, harness.overrides);
+
+		expect(harness.serveFn).toHaveBeenCalledWith(
+			{ fetch: expect.any(Function), port: 4100 },
+			expect.any(Function),
+		);
+	});
+
+	it('passes an explicit hostname to the server', async () => {
+		const harness = makeHarness(deps);
+
+		await bootstrap(BASE_ENV, { ...harness.overrides, hostname: '127.0.0.1' });
+
+		expect(harness.serveFn).toHaveBeenCalledWith(
+			{ fetch: expect.any(Function), hostname: '127.0.0.1', port: 3000 },
+			expect.any(Function),
+		);
+	});
+
+	it.each([
+		[{ address: '127.0.0.1', family: 'IPv4' as const, port: 3000 }, 'http://127.0.0.1:3000'],
+		[{ address: '::1', family: 'IPv6' as const, port: 4100 }, 'http://[::1]:4100'],
+	])('logs the concrete bound address %#', async (address, expected) => {
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+
+		const onListening = harness.serveFn.mock.calls[0][1];
+		onListening?.(address);
+
+		expect(console.log).toHaveBeenCalledWith(`[marimohub] server listening on ${expected}`);
 	});
 
 	it('prepares dependencies before preflight and serving', async () => {

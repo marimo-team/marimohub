@@ -4,10 +4,6 @@ export const EXPERIMENTS = {
 	'duckdb-wasm-preview': {
 		description: 'Run compatible integration-authored preview SQL in DuckDB-Wasm',
 	},
-	'duckdb-wasm-sql': {
-		description:
-			'Run bounded SQL against compatible integrations in an isolated DuckDB-Wasm worker',
-	},
 } as const;
 
 export type Experiment = keyof typeof EXPERIMENTS;

@@ -22,7 +22,7 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 # For OpenShift, replace `traefik` above with the cluster's IngressClass
 # (usually `openshift-default`; verify with `oc get ingressclass`), remove or
 # comment out the TLS_SECRET line, then uncomment these settings:
-# MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
+# MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default
 # MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
 # Optional per-kernel resources:
 # MARIMOHUB_COMPUTE_KUBERNETES_CPU=2  MARIMOHUB_COMPUTE_KUBERNETES_MEMORY=4Gi  MARIMOHUB_COMPUTE_KUBERNETES_GPU=1

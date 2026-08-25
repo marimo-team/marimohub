@@ -146,9 +146,10 @@ describe('createFromEnv auth backend selection', () => {
 				...baseEnv,
 				MARIMOHUB_AUTH_BACKEND: 'dev',
 				MARIMOHUB_DATA_BROWSER: 'full',
+				MARIMOHUB_INTEGRATIONS: 'off',
 				MARIMOHUB_INTEGRATIONS_PROBE: 'bogus',
 			}),
-		).toThrow(/MARIMOHUB_DATA_BROWSER requires MARIMOHUB_INTEGRATIONS=on/);
+		).toThrow(/MARIMOHUB_DATA_BROWSER requires integrations to be enabled/);
 	});
 
 	it('wires Run SQL whenever full data-browser mode is enabled', async () => {
@@ -330,7 +331,6 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-sql',
 		};
 		expect(() =>
 			createFromEnv({ ...env, MARIMOHUB_DATA_QUERY_MAX_ROWS: '9007199254740992' }),
