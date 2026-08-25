@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IntegrationProbe } from '@marimo-hub/core';
 import { sendNotificationRequest } from './notificationTransport';
 
 function probe(fetch: IntegrationProbe['fetch']): IntegrationProbe {
 	return { fetch };
 }
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe('sendNotificationRequest', () => {
 	it('retries transient failures but not permanent HTTP responses', async () => {

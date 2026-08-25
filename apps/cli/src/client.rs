@@ -988,5 +988,4 @@ mod tests {
             assert!(normalize_stdout_result(Err(error)).is_ok());
         }
     }
-
 }

@@ -697,7 +697,7 @@ mod tests {
                 .iter()
                 .filter(|operation| operation.paginated)
                 .count(),
-			16
+            16
         );
         assert_eq!(
             manifest

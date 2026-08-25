@@ -40,11 +40,22 @@ make_source() {
 
 bash -n "$repo_root/scripts/retry.sh"
 bash -n "$repo_root/scripts/stage-cli-release-assets.sh"
+bash -n "$repo_root/scripts/upload-release-assets.sh"
 bash -n "$repo_root/scripts/verify-release-tag.sh"
 
 verification_bin="$temporary/verification-bin"
 mkdir "$verification_bin"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$MOCK_RELEASE_SHA"\n' >"$verification_bin/gh"
+printf '%s\n' \
+	'#!/usr/bin/env bash' \
+	'printf "%s\n" "$*" >> "${MOCK_GH_LOG:-/dev/null}"' \
+	'if [[ "$1" == "api" ]]; then' \
+	'  printf "%s\n" "$MOCK_RELEASE_SHA"' \
+	'  exit 0' \
+	'fi' \
+	'if [[ "$1" == "release" && "$2" == "upload" ]]; then' \
+	'  exit "${MOCK_UPLOAD_EXIT:-0}"' \
+	'fi' \
+	'exit 2' >"$verification_bin/gh"
 chmod +x "$verification_bin/gh"
 expected_release_sha="0123456789abcdef0123456789abcdef01234567"
 GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
@@ -55,6 +66,25 @@ if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="${expected_release_
 	"$repo_root/scripts/verify-release-tag.sh" v1.2.3 "$expected_release_sha" >/dev/null 2>&1; then
 	fail 'moved release tag was accepted'
 fi
+
+upload_asset="$temporary/mohub-test.tar.gz"
+upload_log="$temporary/upload-gh.log"
+touch "$upload_asset"
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_GH_LOG="$upload_log" PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" v1.2.3 "$expected_release_sha" "$upload_asset"
+[[ "$(grep -c '^api ' "$upload_log")" == 2 ]] || fail 'upload did not validate before and after'
+[[ "$(grep -c '^release upload ' "$upload_log")" == 1 ]] || fail 'asset was not uploaded once'
+
+: >"$upload_log"
+if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_UPLOAD_EXIT=9 MOCK_GH_LOG="$upload_log" PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" \
+	v1.2.3 "$expected_release_sha" "$upload_asset" >/dev/null 2>&1; then
+	fail 'failed release upload returned success'
+fi
+[[ "$(grep -c '^api ' "$upload_log")" == 1 ]] || fail 'failed upload ran post-validation'
+[[ "$(grep -c '^release upload ' "$upload_log")" == 1 ]] || fail 'failed upload count changed'
 
 make_source "$temporary/success"
 "$repo_root/scripts/stage-cli-release-assets.sh" \

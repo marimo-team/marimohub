@@ -240,7 +240,6 @@ describe('makeCompute fail-fast', () => {
 				makeCompute({
 					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
 					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
-					MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}',
 				}),
 			),
 		).toMatchObject({ ingressTlsMode: 'disabled', tlsSecretName: undefined });

@@ -149,6 +149,13 @@ describe('resourceName', () => {
 describe('KubernetesCompute', () => {
 	it('requires the public URL scheme to match ingress TLS', () => {
 		const world = makeWorld();
+		expect(() =>
+			makeCompute(world, {
+				...baseConfig,
+				hostname: undefined,
+				ingressTlsMode: 'disabled',
+			}),
+		).not.toThrow();
 		expect(() => makeCompute(world, { ...baseConfig, ingressTlsMode: 'disabled' })).toThrow(
 			/requires an http:\/\//,
 		);

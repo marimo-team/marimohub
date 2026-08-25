@@ -39,11 +39,12 @@ configured flags.
 API clients follow the same create, test, then enable sequence. Save the `ETag` returned by
 create and send it as `If-Match` when testing or updating the destination. A test sends a real
 external message and requires an `Idempotency-Key`. Reusing a key from a completed test returns
-the original redacted destination without sending another message. A concurrent, failed, or
-ambiguous attempt returns `409 CONFLICT` on reuse because the server reserves the key before
-delivery. Use a new key only when deliberately starting another test. Use the returned `ETag`
-when enabling the verified destination. The CLI also treats a test as a confirming operation and
-requires `--yes` in non-interactive use.
+the original redacted destination without sending another message. A pre-delivery rejection does
+not consume the key. The same key remains valid after a `429 RESOURCE_EXHAUSTED` window ends.
+The server reserves the key immediately before delivery. If delivery fails or its outcome is
+uncertain, reuse returns `409 CONFLICT` without another message. If you start another test, use a
+new key. When you enable the verified destination, use the returned `ETag`. The CLI also
+treats a test as a confirming operation and requires `--yes` in non-interactive use.
 
 ## Alert catalog
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	AesGcmSecretCodec,
 	ProjectAlertStore,
@@ -26,6 +26,10 @@ describe('project alert destination routes', () => {
 	let dispatcher: ProjectAlertDispatcher;
 	let request: ReturnType<typeof createTestApi>['request'];
 	let pid: string;
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
@@ -686,6 +690,8 @@ describe('project alert destination routes', () => {
 	});
 
 	it('limits failed tests to ten attempts per user per minute', async () => {
+		const startedAt = Date.now();
+		const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
 		const limiterUser = uid('alert_test_limiter');
 		const limiterBucket = await createInitializedBucket();
 		const limiterStore = new ProjectAlertStore(limiterBucket, new AesGcmSecretCodec({ kek: KEK }));
@@ -727,16 +733,34 @@ describe('project alert destination routes', () => {
 				'SERVICE_UNAVAILABLE',
 			);
 		}
-		await expectError(
-			await limiter(
-				'POST',
-				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
-				undefined,
-				alertTestHeaders(destination.updated_at),
-			),
-			429,
-			'RESOURCE_EXHAUSTED',
-		);
-		expect(test).toHaveBeenCalledTimes(10);
+		const retryKey = 'retry-after-rate-limit';
+		try {
+			await expectError(
+				await limiter(
+					'POST',
+					`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+					undefined,
+					alertTestHeaders(destination.updated_at, retryKey),
+				),
+				429,
+				'RESOURCE_EXHAUSTED',
+			);
+			expect(test).toHaveBeenCalledTimes(10);
+
+			now.mockReturnValue(startedAt + 60_001);
+			await expectError(
+				await limiter(
+					'POST',
+					`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+					undefined,
+					alertTestHeaders(destination.updated_at, retryKey),
+				),
+				503,
+				'SERVICE_UNAVAILABLE',
+			);
+			expect(test).toHaveBeenCalledTimes(11);
+		} finally {
+			now.mockRestore();
+		}
 	});
 });

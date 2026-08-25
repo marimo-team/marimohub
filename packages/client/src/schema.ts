@@ -207,7 +207,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Send a test project alert
-		 * @description Sends a real external message. A completed Idempotency-Key replays its result. A concurrent, failed, or ambiguous attempt returns 409 without redelivery; use a new key to start another test.
+		 * @description Sends a real external message. A completed Idempotency-Key replays its result. A concurrent, failed, or uncertain delivery returns 409 on reuse. A pre-delivery rejection does not consume the key. Use a new key to start another test.
 		 */
 		post: operations['alerts.destinations.test'];
 		delete?: never;

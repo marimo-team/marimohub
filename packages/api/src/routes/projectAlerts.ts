@@ -186,7 +186,7 @@ const testDestination = createRoute({
 	tags: ['Alerts'],
 	summary: 'Send a test project alert',
 	description:
-		'Sends a real external message. A completed Idempotency-Key replays its result. A concurrent, failed, or ambiguous attempt returns 409 without redelivery; use a new key to start another test.',
+		'Sends a real external message. A completed Idempotency-Key replays its result. A concurrent, failed, or uncertain delivery returns 409 on reuse. A pre-delivery rejection does not consume the key. Use a new key to start another test.',
 	'x-cli-destructive': true,
 	request: {
 		params: AlertDestinationIdParam,
@@ -338,15 +338,6 @@ app.openapi(testDestination, async (c) => {
 	};
 	let completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
 	if (completed) return respond(completed.data);
-	const ownsDelivery = await deps.services.idempotency.reserve(
-		`${resultScope}:external-delivery`,
-		idempotencyKey,
-	);
-	if (!ownsDelivery) {
-		completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
-		if (completed) return respond(completed.data);
-		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
-	}
 
 	assertTestBudget(user.id);
 	const [notification] = notificationRouter.render({
@@ -357,6 +348,16 @@ app.openapi(testDestination, async (c) => {
 		testId: await alertTestDeliveryId(user.id, pid, aid, idempotencyKey),
 	});
 	if (!notification) throw new Error('Test alert renderer returned no notification');
+
+	const ownsDelivery = await deps.services.idempotency.reserve(
+		`${resultScope}:external-delivery`,
+		idempotencyKey,
+	);
+	if (!ownsDelivery) {
+		completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
+		if (completed) return respond(completed.data);
+		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
+	}
 	let destination: z.infer<typeof AlertDestinationResponseSchema>;
 	try {
 		destination = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);

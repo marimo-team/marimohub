@@ -102,7 +102,9 @@ function kubernetesIngressTlsMode(env: Env): 'disabled' | 'controller-default' |
 	const templateKey = 'MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE';
 	const template = env[templateKey] ?? 'https://{id}.{host}';
 	try {
-		validateIngressTlsHostnameTemplate(template, mode);
+		if (env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME) {
+			validateIngressTlsHostnameTemplate(template, mode);
+		}
 	} catch (cause) {
 		const detail = cause instanceof Error ? cause.message : 'invalid hostname template';
 		throw new ConfigError(`Invalid ${templateKey} (${detail})`, {

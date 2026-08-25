@@ -581,7 +581,7 @@ export class KubernetesCompute implements SandboxProvider {
 	) {
 		const template = config.hostnameTemplate ?? 'https://{id}.{host}';
 		const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
-		validateIngressTlsHostnameTemplate(template, tlsMode);
+		if (config.hostname) validateIngressTlsHostnameTemplate(template, tlsMode);
 		this.client = client;
 	}
 

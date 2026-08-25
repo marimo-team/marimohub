@@ -126,11 +126,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          scripts/retry.sh bash -c '
-            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber
-            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
-          '
+          scripts/retry.sh scripts/upload-release-assets.sh \
+            "$RELEASE_TAG" "$SOURCE_SHA" release-assets/*
 
       - name: Create checksums and dependency SBOM
         env:
@@ -151,9 +148,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          scripts/retry.sh bash -c '
-            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
-            gh release upload "$RELEASE_TAG" \
-              release-assets/mohub.cdx.json release-assets/SHA256SUMS --clobber
-            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
-          '
+          scripts/retry.sh scripts/upload-release-assets.sh \
+            "$RELEASE_TAG" "$SOURCE_SHA" \
+            release-assets/mohub.cdx.json release-assets/SHA256SUMS

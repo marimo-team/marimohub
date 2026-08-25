@@ -303,6 +303,7 @@ describe('ProjectAlertsDialog', () => {
 
 		await user.click(button);
 		await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Delivery response was lost'));
+		await waitFor(() => expect(button).toBeEnabled());
 		await user.click(button);
 		await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Test alert delivered.'));
 
@@ -329,8 +330,10 @@ describe('ProjectAlertsDialog', () => {
 			);
 		});
 
-		await user.click(await screen.findByRole('button', { name: 'Test' }));
-		await waitFor(() => expect(attempts).toBe(1));
+		const button = await screen.findByRole('button', { name: 'Test' });
+		await user.click(button);
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Delivery response was lost'));
+		await waitFor(() => expect(button).toBeEnabled());
 
 		client.setQueryData(projectKeys.alerts('proj-0123456789abcdef'), [
 			{
@@ -340,7 +343,7 @@ describe('ProjectAlertsDialog', () => {
 			},
 		]);
 		await screen.findByText('Updated Slack');
-		await user.click(screen.getByRole('button', { name: 'Test' }));
+		await user.click(button);
 		await waitFor(() => expect(attempts).toBe(2));
 
 		const keys = testRequestIdempotencyKeys(fetchMock);
