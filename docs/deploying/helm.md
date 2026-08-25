@@ -61,6 +61,7 @@ at a semver range; the chart works with either.
 
 - **API Deployment** — `replicaCount` stateless replicas (`MARIMOHUB_RUN_MAINTENANCE=false`).
 - **Maintenance Deployment** — single replica, `Recreate`, runs the session reaper.
+- **ServiceAccount** — release-scoped by default, shared by the API and maintenance pods.
 - **ConfigMap** from `config`, **Secret** from `secrets` (or your `existingSecret`),
   both consumed via `envFrom`.
 - **Service** (ClusterIP) and an optional **Ingress** with TLS.
@@ -70,6 +71,24 @@ cluster-specific scheduling is baked in; set `nodeSelector` / `tolerations` /
 `podLabels` per cluster. The chart covers the marimohub tier only — install your
 ingress controller, cert-manager, and any kernel-namespace resources separately
 (see [Kubernetes](./kubernetes.md) and [CKS](./cks.md)).
+
+## ServiceAccount
+
+The chart creates a ServiceAccount using its fullname by default. Use annotations
+to connect it to a cloud workload identity:
+
+```yaml
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/marimohub
+```
+
+To use an existing account, set `serviceAccount.create: false` and
+`serviceAccount.name`. The API and maintenance pods use the same account. The
+chart does not create cluster-specific RBAC bindings; install those separately if
+the server needs Kubernetes API access. The ServiceAccount configured for kernel
+pods is a separate setting:
+`config.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT`.
 
 ## Validate
 
