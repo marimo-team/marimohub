@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
+import {
+	NOT_A_DIRECTORY_EXIT_CODE,
+	NOT_A_DIRECTORY_MARKER,
+	shellQuote,
+} from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
@@ -161,19 +165,28 @@ describe('KubernetesCompute', () => {
 			expectExecResult(result, { success: false, stderr: 'boom' });
 		});
 
-		it('passes the exec timeout to the Kubernetes client', async () => {
+		it('runs the timeout supervisor in the login shell and passes the client deadline', async () => {
 			const world = makeWorld();
 
 			await makeCompute(world).create(SANDBOX_ID).exec('uv sync', { timeout: 300_000 });
 
 			expect(world.execCalls.at(-1)?.options).toEqual({ timeout: 300_000 });
-			expect(world.execCalls.at(-1)?.command).toEqual([
-				'python3',
-				'-c',
-				expect.stringContaining('os.killpg(process.pid, signal.SIGKILL)'),
-				'299900',
-				'uv sync',
-			]);
+			const command = world.execCalls.at(-1)?.command;
+			expect(command?.slice(0, 2)).toEqual(['sh', '-lc']);
+			expect(command?.[2]).toContain('exec python3 -c ');
+			expect(command?.[2]).toContain('os.killpg(process.pid, signal.SIGKILL)');
+			expect(command?.[2]).toContain(`${shellQuote('299900')} ${shellQuote('uv sync')}`);
+		});
+
+		it('quotes hostile command text passed to the timeout supervisor', async () => {
+			const world = makeWorld();
+			const hostile = `printf '%s' "$(id)"; touch /tmp/escaped; echo \`whoami\``;
+
+			await makeCompute(world).create(SANDBOX_ID).exec(hostile, { timeout: 5000 });
+
+			const command = world.execCalls.at(-1)?.command;
+			expect(command?.slice(0, 2)).toEqual(['sh', '-lc']);
+			expect(command?.[2]).toContain(`${shellQuote('4900')} ${shellQuote(hostile)}`);
 		});
 	});
 

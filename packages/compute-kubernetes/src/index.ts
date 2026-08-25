@@ -117,7 +117,11 @@ function execCommand(cmd: string, login: boolean, timeout?: number): string[] {
 		return ['sh', login ? '-lc' : '-c', cmd];
 	}
 	const supervisorTimeout = Math.max(1, timeout - Math.min(EXEC_TIMEOUT_GRACE_MS, timeout / 10));
-	return ['python3', '-c', EXEC_TIMEOUT_SUPERVISOR, String(supervisorTimeout), cmd];
+	return [
+		'sh',
+		'-lc',
+		`exec python3 -c ${shellQuote(EXEC_TIMEOUT_SUPERVISOR)} ${shellQuote(String(supervisorTimeout))} ${shellQuote(cmd)}`,
+	];
 }
 
 /**

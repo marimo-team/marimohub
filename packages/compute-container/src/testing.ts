@@ -231,7 +231,7 @@ export function containerCliContract(
 		});
 
 		it('kills a stalled engine client when its timeout expires', async () => {
-			const result = await spawnRunner('sh').run(['-c', 'sleep 10'], { timeout: 20 });
+			const result = await spawnRunner('sh').run(['-c', 'exec sleep 10'], { timeout: 20 });
 
 			expect(result).toMatchObject({
 				exitCode: 124,

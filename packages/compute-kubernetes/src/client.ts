@@ -47,9 +47,25 @@ const SANDBOX_NAME_LABEL = 'marimohub.io/sandbox-name';
 const CONTAINER_NAME = 'marimo';
 
 interface ExecSocket {
-	on(event: 'close', listener: () => void): void;
-	on(event: 'error', listener: (error: unknown) => void): void;
-	terminate(): void;
+	on?(event: 'close' | 'error', listener: (event?: unknown) => void): void;
+	addEventListener?(event: 'close' | 'error', listener: (event?: unknown) => void): void;
+	close(): void;
+}
+
+function addExecSocketListener(
+	socket: ExecSocket,
+	event: 'close' | 'error',
+	listener: (value?: unknown) => void,
+): void {
+	if (socket.addEventListener) {
+		socket.addEventListener(event, listener);
+		return;
+	}
+	if (socket.on) {
+		socket.on(event, listener);
+		return;
+	}
+	throw new Error('exec WebSocket does not support event listeners');
 }
 
 /** True when an error is a k8s API error with the given HTTP status code. */
@@ -400,7 +416,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 						? setTimeout(() => {
 								stdinStream?.destroy();
 								fail(new Error(`command timed out after ${options.timeout}ms`));
-								socket?.terminate();
+								socket?.close();
 							}, options.timeout)
 						: undefined;
 				timer?.unref();
@@ -421,17 +437,17 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					.then((connectedSocket: ExecSocket) => {
 						socket = connectedSocket;
 						if (settled) {
-							connectedSocket.terminate();
+							connectedSocket.close();
 							return;
 						}
-						connectedSocket.on('close', () =>
+						addExecSocketListener(connectedSocket, 'close', () =>
 							finish({
 								stdout: out.text(),
 								stderr: errc.text(),
 								exitCode: exitCodeFromStatus(status),
 							}),
 						);
-						connectedSocket.on('error', fail);
+						addExecSocketListener(connectedSocket, 'error', fail);
 					})
 					.catch(fail);
 			});

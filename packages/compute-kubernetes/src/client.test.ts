@@ -552,15 +552,33 @@ describe('createK8sClient', () => {
 		]);
 	});
 
-	it('terminates the exec WebSocket when the command times out', async () => {
+	it('closes the exec WebSocket when the command times out', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
-		const socket = Object.assign(new EventEmitter(), { terminate: vi.fn() });
+		const socket = Object.assign(new EventTarget(), { close: vi.fn() });
 		k8sMock.exec.mockResolvedValueOnce(socket);
 
 		await expect(
 			client.exec('pod-1', ['sh', '-lc', 'uv sync'], undefined, { timeout: 10 }),
 		).rejects.toThrow('command timed out after 10ms');
-		expect(socket.terminate).toHaveBeenCalledOnce();
+		expect(socket.close).toHaveBeenCalledOnce();
+	});
+
+	it('closes an exec WebSocket that connects after the command times out', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const socket = Object.assign(new EventTarget(), { close: vi.fn() });
+		let connect: ((connectedSocket: typeof socket) => void) | undefined;
+		k8sMock.exec.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					connect = resolve;
+				}),
+		);
+
+		await expect(
+			client.exec('pod-1', ['sh', '-lc', 'uv sync'], undefined, { timeout: 10 }),
+		).rejects.toThrow('command timed out after 10ms');
+		connect?.(socket);
+		await vi.waitFor(() => expect(socket.close).toHaveBeenCalledOnce());
 	});
 
 	it('rethrows a 403 RBAC-forbidden pod create (only 409 is tolerated)', async () => {
