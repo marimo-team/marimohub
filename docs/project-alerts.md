@@ -36,6 +36,13 @@ verification. Renaming it or changing its selected events preserves verification
 and secrets are never returned to the browser; the UI shows only the endpoint hostname and
 configured flags.
 
+API clients follow the same create, test, then enable sequence. Save the `ETag` returned by
+create and send it as `If-Match` when testing or updating the destination. A test sends a real
+external message and requires an `Idempotency-Key`; reuse the same key when retrying a request
+whose outcome is unknown. A successful replay returns the original redacted destination without
+sending another message. Use the returned `ETag` when enabling the verified destination. The CLI
+also treats a test as a confirming operation and requires `--yes` in non-interactive use.
+
 ## Alert catalog
 
 | Kind                  | Trigger                                                         | Severity |
@@ -57,9 +64,10 @@ app stops do not create it.
 
 ## Delivery and payloads
 
-Slack gets one attempt. A generic webhook gets one immediate retry after a transport failure,
-HTTP 408, HTTP 429, or a 5xx response. Other 4xx responses are not retried. Webhooks receive the
-same `schema_version: 1` notification envelope documented in
+Slack gets one attempt. A generic webhook gets one retry after a transport failure, HTTP 408,
+HTTP 429, or a 5xx response. A `Retry-After` value on a 429 delays that retry by 1–60 seconds;
+other retries are immediate. Other 4xx responses are not retried. Webhooks receive the same
+`schema_version: 1` notification envelope documented in
 [Notifications](./notifications.md). Only the destination's selected kinds are sent. Error
 events contain a sanitized error code, not provider messages, URLs, credentials, or secrets.
 Project alert webhooks use the same `X-Marimohub-Signature` header and HMAC construction as

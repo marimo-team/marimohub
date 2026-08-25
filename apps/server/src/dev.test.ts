@@ -45,7 +45,7 @@ describe('local development setup', () => {
 			MARIMOHUB_INTEGRATIONS_PROBE: 'private',
 			MARIMOHUB_DATA_BROWSER: 'full',
 			MARIMOHUB_DATA_PREVIEW_IMAGE: 'ghcr.io/marimo-team/marimo-sandbox:latest',
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview,duckdb-wasm-sql',
+			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 		});
 		expect(env.MARIMOHUB_SECRETS_KEK).toBeTruthy();
 	});

@@ -733,6 +733,22 @@ mod tests {
     }
 
     #[test]
+    fn base_urls_allow_plaintext_only_for_loopback_hosts() {
+        for url in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://127.42.0.1:3000",
+            "http://[::1]:3000",
+        ] {
+            assert!(normalize_base_url(url).is_ok(), "{url}");
+        }
+        assert!(matches!(
+            normalize_base_url("http://hub.example.com"),
+            Err(Error::Usage(message)) if message.contains("must use HTTPS")
+        ));
+    }
+
+    #[test]
     fn server_overrides_must_match_profile_urls() {
         assert!(matching_server(
             Some("https://hub.example.com/"),

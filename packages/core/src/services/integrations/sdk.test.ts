@@ -387,6 +387,7 @@ describe('defineIntegration available-reason guard', () => {
 			query: {
 				readiness: (config) => [
 					{
+						id: 'secret-check',
 						label: `Remove ${String((config as { token?: unknown }).token)}`,
 						ready: false,
 						field: String((config as { token?: unknown }).token),
@@ -406,6 +407,7 @@ describe('defineIntegration available-reason guard', () => {
 		});
 		expect(queryLeaky.query!.readiness?.({ token: 'query secret/value' })).toEqual([
 			{
+				id: 'secret-check',
 				label: 'Meet the SQL configuration requirements',
 				ready: false,
 				field: '',

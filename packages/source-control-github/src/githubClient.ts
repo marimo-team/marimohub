@@ -105,7 +105,7 @@ export class GitHubClient {
 		return response;
 	}
 
-	async installationToken(owner: string, repo: string): Promise<string> {
+	async installationToken(owner: string, repo: string, access: 'read' | 'write'): Promise<string> {
 		let jwt: string;
 		try {
 			jwt = this.appJwt();
@@ -143,7 +143,10 @@ export class GitHubClient {
 					method: 'POST',
 					body: JSON.stringify({
 						repositories: [repo],
-						permissions: { contents: 'write', pull_requests: 'write' },
+						permissions:
+							access === 'read'
+								? { contents: 'read' }
+								: { contents: 'write', pull_requests: 'write' },
 					}),
 				},
 			);

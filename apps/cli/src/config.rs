@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::sync::Once;
@@ -164,6 +165,15 @@ pub fn normalize_base_url(value: &str) -> Result<String, Error> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::Usage(
             "server URL must not contain a username or password".into(),
+        ));
+    }
+    let loopback = url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(|address| address.is_loopback())
+    });
+    if url.scheme() == "http" && !loopback {
+        return Err(Error::Usage(
+            "non-loopback server URLs must use HTTPS".into(),
         ));
     }
     if url.query().is_some() || url.fragment().is_some() {

@@ -564,12 +564,13 @@ const advancedS3Fields = [
 ] as const;
 
 function readinessCheck(
+	id: string,
 	label: string,
 	ready: boolean,
 	field: string,
 	reason: string,
 ): QueryReadinessCheck {
-	return { label, ready, field, reason };
+	return { id, label, ready, field, reason };
 }
 
 function parsedUrl(value: unknown): URL | undefined {
@@ -635,84 +636,98 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 
 	return [
 		readinessCheck(
+			'catalog-auth',
 			'Use no catalog authentication or a bearer token',
 			authMethod === 'none' || authMethod === 'bearer_token',
 			'auth',
 			`${String(authMethod)} authentication is not supported by DuckDB-Wasm preview`,
 		),
 		readinessCheck(
+			'system-tls',
 			'Use system TLS without custom certificates',
 			!tls.ca_bundle && !tls.client_certificate,
 			'tls',
 			'custom TLS material is not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			'no-custom-headers',
 			'Remove custom headers',
 			Object.keys(headers).length === 0,
 			'headers',
 			'custom headers are not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			'no-extra-properties',
 			'Remove extra properties',
 			Object.keys(extraProperties).length === 0,
 			'extra_properties',
 			'extra properties are not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			'catalog-url-query',
 			'Use a catalog URL without query parameters',
 			catalogUrl?.search === '',
 			'uri',
 			'catalog URLs with query parameters are not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			'catalog-url-path',
 			'Use a catalog URL without encoded path separators',
 			catalogUrl !== undefined && !/%2f|%5c/i.test(catalogUrl.pathname),
 			'uri',
 			'catalog URLs with encoded path separators are not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			'no-access-delegation',
 			'Set access delegation to none',
 			config.access_delegation === 'none',
 			'access_delegation',
 			'catalog access delegation is not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			's3-storage',
 			'Switch Storage to the s3 scheme',
 			storageIsS3,
 			'storage',
 			'DuckDB-Wasm preview requires explicit S3 storage configuration',
 		),
 		readinessCheck(
+			's3-endpoint',
 			'Set an explicit S3 endpoint',
 			storageIsS3 && hasEndpoint,
 			storageIsS3 ? 'storage.endpoint' : 'storage',
 			'DuckDB-Wasm preview requires an explicit S3 endpoint',
 		),
 		readinessCheck(
+			's3-endpoint-origin',
 			'Use an origin-only S3 endpoint',
 			storageIsS3 && endpointOriginOnly,
 			storageIsS3 ? 'storage.endpoint' : 'storage',
 			'DuckDB-Wasm preview requires an origin-only S3 endpoint',
 		),
 		readinessCheck(
+			's3-path-style',
 			'Use path-style S3 addressing',
 			storageIsS3 && storage.force_virtual_addressing !== true,
 			storageIsS3 ? 'storage.force_virtual_addressing' : 'storage',
 			'virtual-hosted S3 addressing is not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			's3-basic-options',
 			'Remove advanced S3 client options',
 			storageIsS3 && advancedField === undefined,
 			storageIsS3 && advancedField ? `storage.${advancedField}` : 'storage',
 			'advanced S3 client options are not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			's3-credentials',
 			'Use static S3 credentials or anonymous access',
 			supportedCredentials,
 			storageIsS3 ? 'storage.credentials' : 'storage',
 			credentialsReason,
 		),
 		readinessCheck(
+			's3-read-locations',
 			'Add at least one guarded S3 read location',
 			storageIsS3 &&
 				Array.isArray(storage.broker_read_locations) &&
@@ -721,12 +736,14 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 			'DuckDB-Wasm preview requires at least one guarded S3 read location',
 		),
 		readinessCheck(
+			'default-runtime-options',
 			'Keep PyIceberg runtime options at their defaults',
 			Object.keys(runtime).length === Object.keys(ICEBERG_RUNTIME_DEFAULTS).length,
 			'runtime',
 			'PyIceberg runtime options are not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
+			'default-rest-options',
 			'Keep REST client options at their defaults',
 			defaultRestOptions,
 			'rest',

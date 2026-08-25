@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gzipSync, zipSync } from 'fflate';
+import { gzipSync, Zip, ZipDeflate, zipSync } from 'fflate';
 import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
 import { BadRequestError } from '../errors';
 import { parseWorkspaceArchive, WorkspaceTarCollector } from './workspaceArchive';
@@ -20,17 +20,60 @@ function concat(chunks: Uint8Array[]): Uint8Array {
 function setZipOriginalSizes(archive: Uint8Array, sizes: number[]): Uint8Array {
 	const patched = new Uint8Array(archive);
 	const view = new DataView(patched.buffer, patched.byteOffset, patched.byteLength);
-	let entry = 0;
+	let localEntry = 0;
+	let centralEntry = 0;
 	for (let offset = 0; offset <= patched.length - 4; offset += 1) {
-		if (view.getUint32(offset, true) !== 0x02014b50) continue;
-		if (entry >= sizes.length)
-			throw new Error('ZIP has more central-directory entries than expected');
-		view.setUint32(offset + 24, sizes[entry], true);
-		entry += 1;
+		const signature = view.getUint32(offset, true);
+		if (signature === 0x04034b50) {
+			if (localEntry >= sizes.length) throw new Error('ZIP has more local entries than expected');
+			view.setUint32(offset + 22, sizes[localEntry], true);
+			localEntry += 1;
+		}
+		if (signature === 0x02014b50) {
+			if (centralEntry >= sizes.length)
+				throw new Error('ZIP has more central-directory entries than expected');
+			view.setUint32(offset + 24, sizes[centralEntry], true);
+			centralEntry += 1;
+		}
 	}
-	if (entry !== sizes.length)
+	if (localEntry !== sizes.length || centralEntry !== sizes.length)
 		throw new Error('ZIP has fewer central-directory entries than expected');
 	return patched;
+}
+
+function setZipOriginalSizeEverywhere(archive: Uint8Array, size: number): Uint8Array {
+	const patched = new Uint8Array(archive);
+	const view = new DataView(patched.buffer, patched.byteOffset, patched.byteLength);
+	for (let offset = 0; offset <= patched.length - 28; offset += 1) {
+		const signature = view.getUint32(offset, true);
+		if (signature === 0x04034b50) view.setUint32(offset + 22, size, true);
+		if (signature === 0x02014b50) view.setUint32(offset + 24, size, true);
+	}
+	return patched;
+}
+
+function corruptZipCrc(archive: Uint8Array): Uint8Array {
+	const patched = new Uint8Array(archive);
+	const view = new DataView(patched.buffer, patched.byteOffset, patched.byteLength);
+	for (let offset = 0; offset <= patched.length - 20; offset += 1) {
+		const signature = view.getUint32(offset, true);
+		if (signature === 0x04034b50) view.setUint32(offset + 14, 0, true);
+		if (signature === 0x02014b50) view.setUint32(offset + 16, 0, true);
+	}
+	return patched;
+}
+
+function streamingZip(name: string, bytes: Uint8Array): Uint8Array {
+	const chunks: Uint8Array[] = [];
+	const archive = new Zip((error, chunk) => {
+		if (error) throw error;
+		chunks.push(new Uint8Array(chunk));
+	});
+	const entry = new ZipDeflate(name);
+	archive.add(entry);
+	entry.push(bytes, true);
+	archive.end();
+	return concat(chunks);
 }
 
 /** A single 512-byte tar header with the given name, body size, and typeflag. */
@@ -105,6 +148,11 @@ describe('parseWorkspaceArchive', () => {
 		expect(new TextDecoder().decode(tarFiles[0].bytes)).toBe('print(2)');
 	});
 
+	it('parses streaming zip entries that use a data descriptor', () => {
+		const files = parseWorkspaceArchive(streamingZip('app.py', encode('print(1)')), 'zip', '');
+		expect(new TextDecoder().decode(files[0].bytes)).toBe('print(1)');
+	});
+
 	it('rejects unsafe paths for files and directory entries', () => {
 		expect(() =>
 			parseWorkspaceArchive(zipSync({ '../app.py': encode('print(1)') }), 'zip', ''),
@@ -143,6 +191,19 @@ describe('parseWorkspaceArchive', () => {
 				'',
 			),
 		).toThrow(/Decompressed archive exceeds/);
+	});
+
+	it('rejects zip entries whose declared size or CRC does not match the inflated bytes', () => {
+		const archive = zipSync({ 'payload.bin': new Uint8Array(1024 * 1024) });
+		expect(() =>
+			parseWorkspaceArchive(setZipOriginalSizeEverywhere(archive, 1), 'zip', ''),
+		).toThrow(BadRequestError);
+		expect(() => parseWorkspaceArchive(corruptZipCrc(archive), 'zip', '')).toThrow(BadRequestError);
+
+		const bomb = zipSync({ 'payload.bin': new Uint8Array(MAX_WORKSPACE_FILE_BYTES + 1) });
+		expect(() => parseWorkspaceArchive(setZipOriginalSizeEverywhere(bomb, 1), 'zip', '')).toThrow(
+			/Archive file exceeds/,
+		);
 	});
 
 	it('rejects zip archives with more than 1000 files', () => {
@@ -229,14 +290,22 @@ describe('parseWorkspaceArchive', () => {
 		expect(files.map((f) => f.path)).toEqual(['app.py']);
 	});
 
-	it('rejects a gzip member whose declared size exceeds the cap', () => {
+	it('rejects a gzip member whose declared size does not match the inflated bytes', () => {
 		const tar = tarArchive({ 'app.py': 'print(1)' });
-		const gz = gzipSync(tar);
-		// Forge the ISIZE trailer (last 4 bytes, little-endian) to claim ~4 GiB.
-		gz[gz.length - 1] = 0xff;
-		gz[gz.length - 2] = 0xff;
-		gz[gz.length - 3] = 0xff;
-		gz[gz.length - 4] = 0xff;
+		for (const declaredSize of [1, 0xffffffff]) {
+			const gz = gzipSync(tar);
+			new DataView(gz.buffer, gz.byteOffset, gz.byteLength).setUint32(
+				gz.length - 4,
+				declaredSize,
+				true,
+			);
+			expect(() => parseWorkspaceArchive(gz, 'tar.gz', '')).toThrow(BadRequestError);
+		}
+	});
+
+	it('rejects a gzip member whose CRC does not match the inflated bytes', () => {
+		const gz = gzipSync(tarArchive({ 'app.py': 'print(1)' }));
+		new DataView(gz.buffer, gz.byteOffset, gz.byteLength).setUint32(gz.length - 8, 0, true);
 		expect(() => parseWorkspaceArchive(gz, 'tar.gz', '')).toThrow(BadRequestError);
 	});
 

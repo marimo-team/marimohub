@@ -57,7 +57,7 @@ import {
 	supportsComputeProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
-import { integrationProbePolicy, makeIntegrations } from './integrations';
+import { integrationProbePolicy, integrationsEnabled, makeIntegrations } from './integrations';
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
@@ -521,10 +521,8 @@ export function createFromEnv(
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 	});
-	const integrationsSetting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	const brokerPolicy =
-		(integrationsSetting === 'on' || integrationsSetting === 'true') &&
-		env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
+		integrationsEnabled(env) && env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
 			: undefined;
 	const duckdbHttpSessionFactory =
@@ -599,8 +597,6 @@ export function createFromEnv(
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
 		...makeSourceControl(env),
-		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
-		// two-phase rollout note on makeIntegrations).
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time

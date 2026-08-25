@@ -76,7 +76,8 @@ SMTP does not send personal content to administrator addresses. If a personal re
 - A render or delivery failure does not change the API response.
 - One failed backend does not stop another backend.
 - SMTP and Slack make one delivery attempt.
-- The generic webhook permits one request retry.
+- The generic webhook permits one request retry. HTTP 429 honors `Retry-After`, clamped to
+  1–60 seconds; other retryable failures retry immediately.
 - Both HTTP adapters use a 10-second timeout.
 - There is no durable retry queue. The system drops a notification after all delivery attempts fail.
 - Use `dedupe_key` to reject duplicate webhook deliveries.

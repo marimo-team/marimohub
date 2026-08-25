@@ -48,7 +48,7 @@ MARIMOHUB_INTEGRATIONS=on
 MARIMOHUB_INTEGRATIONS_PROBE=private
 MARIMOHUB_DATA_BROWSER=full
 MARIMOHUB_DATA_PREVIEW_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest
-MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview,duckdb-wasm-sql
+MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview
 ```
 
 The entrypoint also generates a random local `MARIMOHUB_SECRETS_KEK` so
@@ -61,6 +61,12 @@ values.
 Startup is ready when the `server` process is listening on port `3000` and the
 `web` process prints a Vite local URL on port `5175`. The server owns the API;
 the web dev server proxies `/api` requests to it.
+
+The development API binds to `127.0.0.1` because development authentication
+grants every request a fixed super-admin identity. Set `DEV_HOST` only when you
+intend to expose that identity to other clients; a non-loopback value prints a
+warning. For example, `DEV_HOST=0.0.0.0 pnpm dev` accepts connections on every
+interface.
 
 `PORT` overrides the API port and `WEB_PORT` overrides the Vite port. For
 parallel worktrees, set `DEV_PORT_BASE`; the API uses that port and the web app

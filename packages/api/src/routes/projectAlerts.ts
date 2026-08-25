@@ -10,6 +10,7 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import type { UserId } from '@marimo-hub/core';
+import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
 import {
 	assertProjectRole,
@@ -21,6 +22,7 @@ import {
 	extensibleResponseEnum,
 	ifMatchToken,
 	IfMatchHeader,
+	RequiredIdempotencyKeyHeader,
 	jsonBody,
 	jsonContent,
 	ProjectIdParam,
@@ -71,24 +73,36 @@ const CreateDestinationBody = z.discriminatedUnion('type', [
 	DestinationInputCommonSchema.extend({
 		type: z.literal('slack'),
 		webhook_url: z.url(),
-	}),
+	}).strict(),
 	DestinationInputCommonSchema.extend({
 		type: z.literal('webhook'),
 		url: z.url(),
 		signing_secret: z.string().min(1),
-	}),
+	}).strict(),
 ]);
 
-const UpdateDestinationBody = DestinationInputCommonSchema.partial()
-	.extend({
-		enabled: z.boolean().optional(),
-		webhook_url: z.url().optional(),
-		url: z.url().optional(),
-		signing_secret: z.string().min(1).optional(),
-	})
-	.refine((body) => Object.values(body).some((value) => value !== undefined), {
-		message: 'At least one destination field is required.',
-	});
+const UpdateDestinationCommonSchema = DestinationInputCommonSchema.partial().extend({
+	enabled: z.boolean().optional(),
+});
+
+const UpdateDestinationBody = z
+	.discriminatedUnion('type', [
+		UpdateDestinationCommonSchema.extend({
+			type: z.literal('slack'),
+			webhook_url: z.url().optional(),
+		}).strict(),
+		UpdateDestinationCommonSchema.extend({
+			type: z.literal('webhook'),
+			url: z.url().optional(),
+			signing_secret: z.string().min(1).optional(),
+		}).strict(),
+	])
+	.refine(
+		(body) => Object.entries(body).some(([name, value]) => name !== 'type' && value !== undefined),
+		{
+			message: 'At least one destination field is required.',
+		},
+	);
 
 const listDestinations = createRoute({
 	method: 'get',
@@ -171,7 +185,13 @@ const testDestination = createRoute({
 	operationId: 'alerts.destinations.test',
 	tags: ['Alerts'],
 	summary: 'Send a test project alert',
-	request: { params: AlertDestinationIdParam, headers: IfMatchHeader },
+	description:
+		'Sends a real external message. Reuse the required Idempotency-Key when retrying the same test.',
+	'x-cli-destructive': true,
+	request: {
+		params: AlertDestinationIdParam,
+		headers: IfMatchHeader.extend(RequiredIdempotencyKeyHeader.shape),
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: AlertDestinationResponseSchema }),
@@ -194,6 +214,11 @@ function assertTestBudget(userId: string): void {
 	if (!testBudget.consume(userId)) {
 		throw new ResourceExhaustedError('Too many alert tests; try again in a minute');
 	}
+}
+
+async function alertTestDeliveryId(idempotencyKey: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(idempotencyKey));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function audit(
@@ -261,9 +286,9 @@ app.openapi(updateDestination, async (c) => {
 			alert_destination_id: aid,
 			alert_destination_type: destination.type,
 			endpoint_changed:
-				body.webhook_url !== undefined ||
-				body.url !== undefined ||
-				body.signing_secret !== undefined,
+				body.type === 'slack'
+					? body.webhook_url !== undefined
+					: body.url !== undefined || body.signing_secret !== undefined,
 		},
 	);
 	return c.json({ success: true, data: destination }, 200);
@@ -289,6 +314,7 @@ app.openapi(testDestination, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, aid } = c.req.valid('param');
+	const idempotencyKey = c.req.valid('header')['idempotency-key'];
 	const alerts = requireProjectAlerts(deps);
 	const project = await assertProjectRole(
 		deps.services.projects,
@@ -297,34 +323,51 @@ app.openapi(testDestination, async (c) => {
 		'manager',
 		deps.policy,
 	);
-	assertTestBudget(user.id);
-	const [notification] = notificationRouter.render({
-		kind: 'alert.test',
-		project,
-		destinationId: aid,
-		actor: user,
-		testId: c.get('requestId'),
-	});
-	if (!notification) throw new Error('Test alert renderer returned no notification');
-	try {
-		const destination = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);
-		c.header('ETag', etagFor(destination.updated_at));
-		await audit(
-			deps,
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'project_alert.test',
-			{ project_id: pid, alert_destination_id: aid, outcome: 'success' },
-		);
-		return c.json({ success: true, data: destination }, 200);
-	} catch (error) {
-		await audit(
-			deps,
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'project_alert.test',
-			{ project_id: pid, alert_destination_id: aid, outcome: 'failure' },
-		);
-		throw error;
-	}
+	const destination = await idempotentCreate(
+		c,
+		'POST /projects/{pid}/alert-destinations/{aid}/test',
+		async () => {
+			assertTestBudget(user.id);
+			const [notification] = notificationRouter.render({
+				kind: 'alert.test',
+				project,
+				destinationId: aid,
+				actor: user,
+				testId: await alertTestDeliveryId(idempotencyKey),
+			});
+			if (!notification) throw new Error('Test alert renderer returned no notification');
+			try {
+				const result = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);
+				await audit(
+					deps,
+					{
+						requestId: c.get('requestId'),
+						method: c.req.method,
+						path: c.req.path,
+						userId: user.id,
+					},
+					'project_alert.test',
+					{ project_id: pid, alert_destination_id: aid, outcome: 'success' },
+				);
+				return result;
+			} catch (error) {
+				await audit(
+					deps,
+					{
+						requestId: c.get('requestId'),
+						method: c.req.method,
+						path: c.req.path,
+						userId: user.id,
+					},
+					'project_alert.test',
+					{ project_id: pid, alert_destination_id: aid, outcome: 'failure' },
+				);
+				throw error;
+			}
+		},
+	);
+	c.header('ETag', etagFor(destination.updated_at));
+	return c.json({ success: true, data: destination }, 200);
 });
 
 export default app;

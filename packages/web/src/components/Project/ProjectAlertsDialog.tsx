@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Bell, CheckCircle2, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -76,6 +76,7 @@ export function ProjectAlertsDialog({
 	const update = useUpdateProjectAlert(projectId);
 	const remove = useDeleteProjectAlert(projectId);
 	const test = useTestProjectAlert(projectId);
+	const testKeys = useRef(new Map<string, string>());
 	const confirmDelete = useDialogTarget<ProjectAlertDestination>();
 	const [editor, setEditor] = useState<EditorState | null>(null);
 	const pending = create.isPending || update.isPending;
@@ -126,6 +127,7 @@ export function ProjectAlertsDialog({
 				await update.mutateAsync({
 					id: editor.destination.id,
 					updatedAt: editor.destination.updated_at,
+					type: editor.type,
 					name: editor.name.trim(),
 					...(kindsPristine
 						? {}
@@ -300,18 +302,25 @@ export function ProjectAlertsDialog({
 								</div>
 								<Button
 									size="sm"
-									onPress={() =>
+									onPress={() => {
+										const idempotencyKey =
+											testKeys.current.get(destination.id) ?? crypto.randomUUID();
+										testKeys.current.set(destination.id, idempotencyKey);
 										test.mutate(
 											{
 												id: destination.id,
 												updatedAt: destination.updated_at,
+												idempotencyKey,
 											},
 											{
-												onSuccess: () => toast.success('Test alert delivered.'),
+												onSuccess: () => {
+													testKeys.current.delete(destination.id);
+													toast.success('Test alert delivered.');
+												},
 												onError: toastError,
 											},
-										)
-									}
+										);
+									}}
 									isDisabled={test.isPending}
 								>
 									<Send className="size-3.5" /> Test
@@ -323,6 +332,7 @@ export function ProjectAlertsDialog({
 											{
 												id: destination.id,
 												updatedAt: destination.updated_at,
+												type: destination.type,
 												enabled: !destination.enabled,
 											},
 											{ onError: toastError },

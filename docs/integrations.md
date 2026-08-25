@@ -19,13 +19,9 @@ the hub API or storage. The hub injects configuration, not Python libraries.
 Each kind lists the required packages below. Add those packages to the notebook
 dependencies.
 
-Set `MARIMOHUB_INTEGRATIONS=on` to enable integrations. If it is unset or
-`off`, the routes return `404` and sessions receive no integration
-configuration.
-
-Before you enable integrations, deploy a compatible release to every replica.
-Older replicas do not preserve the integration audit pins in session records.
-See the two-phase policy in `development_docs/migrations.md`.
+Integrations are enabled by default. Set `MARIMOHUB_INTEGRATIONS=off` to make
+the routes return `404` and prevent integration configuration from being
+injected into sessions.
 
 Integration configuration is versioned. Each save creates an immutable
 revision. Each session records the revisions that it uses.
@@ -809,7 +805,7 @@ of the two.
 
 | Variable                       | Description                                                             |
 | ------------------------------ | ----------------------------------------------------------------------- |
-| `MARIMOHUB_INTEGRATIONS`       | `off` (default) or `on` — see the rollout note above.                   |
+| `MARIMOHUB_INTEGRATIONS`       | `on` (default) or `off` to disable routes and session injection.        |
 | `MARIMOHUB_INTEGRATIONS_PROBE` | "Test connection" egress policy: `guarded` (default), `private`, `off`. |
 | `MARIMOHUB_SECRETS_KEK`        | Enables inline encrypted integration secret fields.                     |
 

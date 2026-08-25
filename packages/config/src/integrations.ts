@@ -21,14 +21,16 @@ import { ConfigError } from './errors';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
 
-/**
- * Wires the bucket-backed integration provider when explicitly enabled. Opt-in
- * for now, per the two-phase rollout policy (development_docs/migrations.md):
- * this release ships the tolerant session reader (loose SessionSchema); turning
- * the writer on before every replica preserves unknown session fields would let
- * an old replica's heartbeat strip the audit pin. Flip the default once the
- * reader has rolled out everywhere.
- */
+export function integrationsEnabled(env: Env): boolean {
+	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
+	if (setting === undefined || setting === '' || setting === 'on') return true;
+	if (setting === 'off') return false;
+	throw new ConfigError(
+		`Unknown MARIMOHUB_INTEGRATIONS: ${env.MARIMOHUB_INTEGRATIONS} (supported: on, off).`,
+		{ variable: 'MARIMOHUB_INTEGRATIONS', docs: 'docs/integrations.md' },
+	);
+}
+
 export function makeIntegrations(
 	env: Env,
 	bucket: Bucket,
@@ -36,22 +38,18 @@ export function makeIntegrations(
 	dataPreview?: DataPreviewService,
 	dataQuery?: DataQueryService,
 ): Pick<ApiDeps, 'integrations' | 'orgIntegrations' | 'dataBrowser'> {
-	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	const dataBrowser = dataBrowserSetting(env);
-	if (setting === undefined || setting === '' || setting === 'off' || setting === 'none') {
+	if (!integrationsEnabled(env)) {
 		if (dataBrowser !== 'off') {
-			throw new ConfigError('MARIMOHUB_DATA_BROWSER requires MARIMOHUB_INTEGRATIONS=on.', {
-				variable: 'MARIMOHUB_DATA_BROWSER',
-				docs: 'docs/integrations.md',
-			});
+			throw new ConfigError(
+				'MARIMOHUB_DATA_BROWSER requires integrations to be enabled; remove MARIMOHUB_INTEGRATIONS=off or set it to on.',
+				{
+					variable: 'MARIMOHUB_DATA_BROWSER',
+					docs: 'docs/integrations.md',
+				},
+			);
 		}
 		return {};
-	}
-	if (setting !== 'on' && setting !== 'true') {
-		throw new ConfigError(
-			`Unknown MARIMOHUB_INTEGRATIONS: ${env.MARIMOHUB_INTEGRATIONS} (supported: on, off).`,
-			{ variable: 'MARIMOHUB_INTEGRATIONS', docs: 'docs/integrations.md' },
-		);
 	}
 	const secretSources = makeSecretSources(env);
 	const enabledDataQuery = dataBrowser === 'full' ? dataQuery : undefined;

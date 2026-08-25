@@ -17,6 +17,13 @@ const AUTHORIZATION_RE = /^mhub_cli_([0-9A-Z]{26})_([0-9a-z]{32})$/;
 const SECRET_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
 const SECRET_LENGTH = 32;
 
+export function parseCliAuthorizationCode(
+	code: string,
+): { id: CliAuthorizationId; secret: string } | null {
+	const match = AUTHORIZATION_RE.exec(code);
+	return match ? { id: CliAuthorizationId.parse(match[1]), secret: match[2] } : null;
+}
+
 const CliAuthorizationSchema = z.looseObject({
 	id: z.string().refine(CliAuthorizationId.is),
 	user_id: UserIdSchema,
@@ -128,9 +135,9 @@ export class CliAuthorizationService {
 	}
 
 	async exchange(code: string, codeVerifier: string): Promise<CreatedToken> {
-		const match = AUTHORIZATION_RE.exec(code);
-		if (!match) throw invalidAuthorization();
-		const id = CliAuthorizationId.parse(match[1]);
+		const parsed = parseCliAuthorizationCode(code);
+		if (!parsed) throw invalidAuthorization();
+		const { id, secret } = parsed;
 		const key = paths.cliAuthorization(id);
 		const object = await this.bucket.get(key);
 		if (!object) throw invalidAuthorization();
@@ -140,7 +147,7 @@ export class CliAuthorizationService {
 		}
 
 		const encoder = new TextEncoder();
-		const presentedHash = encoder.encode(await hash(match[2]));
+		const presentedHash = encoder.encode(await hash(secret));
 		if (!timingSafeEqual(presentedHash, encoder.encode(record.code_hash))) {
 			throw invalidAuthorization();
 		}

@@ -11,6 +11,14 @@ import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
 const KEK = '00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100';
+let testKeySequence = 0;
+
+function alertTestHeaders(updatedAt?: string, idempotencyKey?: string) {
+	return {
+		'idempotency-key': idempotencyKey ?? `alert-test-${++testKeySequence}`,
+		...(updatedAt ? { 'if-match': updatedAt } : {}),
+	};
+}
 
 describe('project alert destination routes', () => {
 	let bucket: MemoryBucket;
@@ -82,7 +90,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${destination.id}`,
-				{ enabled: true },
+				{ type: 'slack', enabled: true },
 				{ 'if-match': destination.updated_at },
 			),
 			409,
@@ -94,7 +102,7 @@ describe('project alert destination routes', () => {
 				'POST',
 				`/projects/${pid}/alert-destinations/${destination.id}/test`,
 				undefined,
-				{ 'if-match': destination.updated_at },
+				alertTestHeaders(destination.updated_at),
 			),
 		);
 		expect(verified.verified_at).not.toBeNull();
@@ -103,7 +111,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${destination.id}`,
-				{ enabled: true },
+				{ type: 'slack', enabled: true },
 				{ 'if-match': verified.updated_at },
 			),
 		);
@@ -121,7 +129,12 @@ describe('project alert destination routes', () => {
 		);
 
 		const verified = await expectOk<any>(
-			await request('POST', `/projects/${pid}/alert-destinations/${destination.id}/test`),
+			await request(
+				'POST',
+				`/projects/${pid}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(),
+			),
 		);
 		expect(verified.verified_at).not.toBeNull();
 		expect(dispatcher.test).toHaveBeenCalledWith(
@@ -130,6 +143,46 @@ describe('project alert destination routes', () => {
 			undefined,
 			expect.objectContaining({ kind: 'alert.test' }),
 		);
+	});
+
+	it('requires an idempotency key for a test delivery', async () => {
+		const destination = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+
+		await expectError(
+			await request('POST', `/projects/${pid}/alert-destinations/${destination.id}/test`),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(dispatcher.test).not.toHaveBeenCalled();
+	});
+
+	it('replays a successful test without sending another external message', async () => {
+		const destination = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+		const headers = alertTestHeaders(destination.updated_at, 'replay-test-delivery');
+		const path = `/projects/${pid}/alert-destinations/${destination.id}/test`;
+
+		const firstResponse = await request('POST', path, undefined, headers);
+		const first = await expectOk<any>(firstResponse);
+		const replayResponse = await request('POST', path, undefined, headers);
+		const replay = await expectOk<any>(replayResponse);
+
+		expect(replay).toEqual(first);
+		expect(replayResponse.headers.get('etag')).toBe(firstResponse.headers.get('etag'));
+		expect(dispatcher.test).toHaveBeenCalledOnce();
 	});
 
 	it('rejects a stale test precondition', async () => {
@@ -145,15 +198,18 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ name: 'Renamed' },
+				{ type: 'slack', name: 'Renamed' },
 				{ 'if-match': created.updated_at },
 			),
 		);
 
 		await expectError(
-			await request('POST', `/projects/${pid}/alert-destinations/${created.id}/test`, undefined, {
-				'if-match': created.updated_at,
-			}),
+			await request(
+				'POST',
+				`/projects/${pid}/alert-destinations/${created.id}/test`,
+				undefined,
+				alertTestHeaders(created.updated_at),
+			),
 			412,
 			'PRECONDITION_FAILED',
 		);
@@ -201,6 +257,37 @@ describe('project alert destination routes', () => {
 		).toEqual({ items: [], next_cursor: null });
 	});
 
+	it('rejects destination fields that do not match the discriminated type', async () => {
+		await expectError(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Mixed',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+				url: 'https://events.example.com/hook',
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		const created = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+		await expectError(
+			await request(
+				'PATCH',
+				`/projects/${pid}/alert-destinations/${created.id}`,
+				{ type: 'webhook', name: 'Still Slack' },
+				{ 'if-match': created.updated_at },
+			),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
 	it('rejects stale updates and deletes while preserving the latest value', async () => {
 		const created = await expectOk<any>(
 			await request('POST', `/projects/${pid}/alert-destinations`, {
@@ -214,7 +301,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ name: 'Current' },
+				{ type: 'slack', name: 'Current' },
 				{ 'if-match': created.updated_at },
 			),
 		);
@@ -223,7 +310,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ name: 'Stale' },
+				{ type: 'slack', name: 'Stale' },
 				{ 'if-match': created.updated_at },
 			),
 			412,
@@ -257,7 +344,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{},
+				{ type: 'slack' },
 				{ 'if-match': created.updated_at },
 			),
 			422,
@@ -276,15 +363,18 @@ describe('project alert destination routes', () => {
 			201,
 		);
 		const verified = await expectOk<any>(
-			await request('POST', `/projects/${pid}/alert-destinations/${created.id}/test`, undefined, {
-				'if-match': created.updated_at,
-			}),
+			await request(
+				'POST',
+				`/projects/${pid}/alert-destinations/${created.id}/test`,
+				undefined,
+				alertTestHeaders(created.updated_at),
+			),
 		);
 		const enabled = await expectOk<any>(
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ enabled: true },
+				{ type: 'slack', enabled: true },
 				{ 'if-match': verified.updated_at },
 			),
 		);
@@ -293,7 +383,11 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ webhook_url: 'https://hooks.example.com/services/replacement', enabled: true },
+				{
+					type: 'slack',
+					webhook_url: 'https://hooks.example.com/services/replacement',
+					enabled: true,
+				},
 				{ 'if-match': enabled.updated_at },
 			),
 			409,
@@ -303,7 +397,7 @@ describe('project alert destination routes', () => {
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{ webhook_url: 'https://hooks.example.com/services/replacement' },
+				{ type: 'slack', webhook_url: 'https://hooks.example.com/services/replacement' },
 				{ 'if-match': enabled.updated_at },
 			),
 		);
@@ -329,6 +423,7 @@ describe('project alert destination routes', () => {
 		}).request;
 		const endpoint = 'https://events.example.com/hooks/private-path';
 		const secret = 'audit-secret-must-not-leak';
+		const idempotencyKey = 'retry-key-must-not-leak';
 		const destination = await expectOk<any>(
 			await local('POST', `/projects/${pid}/alert-destinations`, {
 				name: 'Webhook',
@@ -339,13 +434,22 @@ describe('project alert destination routes', () => {
 			201,
 		);
 
-		await expectError(
-			await local('POST', `/projects/${pid}/alert-destinations/${destination.id}/test`, undefined, {
-				'if-match': destination.updated_at,
-			}),
-			503,
-			'SERVICE_UNAVAILABLE',
-		);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await expectError(
+				await local(
+					'POST',
+					`/projects/${pid}/alert-destinations/${destination.id}/test`,
+					undefined,
+					alertTestHeaders(destination.updated_at, idempotencyKey),
+				),
+				503,
+				'SERVICE_UNAVAILABLE',
+			);
+		}
+		const testCalls = vi.mocked(failingDispatcher.test).mock.calls;
+		expect(testCalls).toHaveLength(2);
+		expect(testCalls[0]?.[3].dedupe_key).toBe(testCalls[1]?.[3].dedupe_key);
+		expect(testCalls[0]?.[3].dedupe_key).not.toContain(idempotencyKey);
 		expect((await store.list(pid as never))[0]).toMatchObject({
 			verified_at: null,
 			enabled: false,
@@ -365,6 +469,7 @@ describe('project alert destination routes', () => {
 		expect(serialized).not.toContain(endpoint);
 		expect(serialized).not.toContain('private-path');
 		expect(serialized).not.toContain(secret);
+		expect(serialized).not.toContain(idempotencyKey);
 	});
 
 	it('limits failed tests to ten attempts per user per minute', async () => {
@@ -403,7 +508,7 @@ describe('project alert destination routes', () => {
 					'POST',
 					`/projects/${project.id}/alert-destinations/${destination.id}/test`,
 					undefined,
-					{ 'if-match': destination.updated_at },
+					alertTestHeaders(destination.updated_at),
 				),
 				503,
 				'SERVICE_UNAVAILABLE',
@@ -414,7 +519,7 @@ describe('project alert destination routes', () => {
 				'POST',
 				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
 				undefined,
-				{ 'if-match': destination.updated_at },
+				alertTestHeaders(destination.updated_at),
 			),
 			429,
 			'RESOURCE_EXHAUSTED',

@@ -60,7 +60,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 	}
 
 	private async publicationContext(owner: string, repo: string): Promise<GitHubPublicationContext> {
-		const token = await this.client.installationToken(owner, repo);
+		const token = await this.client.installationToken(owner, repo, 'write');
 		const repository = new GitHubRepositoryWriter(this.client, owner, repo, token);
 		return {
 			repository,
@@ -73,7 +73,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		const { owner, repo } = parseRepository(repository);
 		return {
 			base: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-			token: await this.client.installationToken(owner, repo),
+			token: await this.client.installationToken(owner, repo, 'read'),
 		};
 	}
 
@@ -130,7 +130,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 			repo,
 			commit,
 			branch,
-			token: await this.client.installationToken(owner, repo),
+			token: await this.client.installationToken(owner, repo, 'read'),
 			fetcher: this.fetcher,
 		});
 	}

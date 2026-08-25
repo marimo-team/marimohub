@@ -609,12 +609,20 @@ describe('Integrations routes', () => {
 			},
 		});
 		const checks =
-			await expectOk<{ label: string; ready: boolean; field: string; reason: string }[]>(response);
+			await expectOk<
+				{ id: string; label: string; ready: boolean; field: string; reason: string }[]
+			>(response);
 
 		expect(checks).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ label: 'Remove custom headers', field: 'headers', ready: false }),
 				expect.objectContaining({
+					id: 'no-custom-headers',
+					label: 'Remove custom headers',
+					field: 'headers',
+					ready: false,
+				}),
+				expect.objectContaining({
+					id: 'no-extra-properties',
 					label: 'Remove extra properties',
 					field: 'extra_properties',
 					ready: false,

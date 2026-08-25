@@ -14,6 +14,7 @@ import type { Env } from './env';
 import { parseBool, parseList, required } from './env';
 import { createGuardedProbe } from './integrationProbe';
 import type { ProbeTransport } from './integrationProbe';
+import { sendNotificationRequest } from './notificationTransport';
 
 export const NOTIFICATION_BACKENDS = ['smtp', 'slack', 'webhook'] as const;
 export type NotificationBackend = (typeof NOTIFICATION_BACKENDS)[number];
@@ -62,22 +63,6 @@ export function notificationKindsForBackend(env: Env, backend: NotificationBacke
 	return parseKinds(env, BACKEND_KIND_VARIABLES[backend], globalKinds);
 }
 
-class NotificationHttpError extends Error {
-	constructor(readonly status: number) {
-		super(`Notification delivery returned HTTP ${status}`);
-		this.name = 'NotificationHttpError';
-	}
-}
-
-function retryableNotificationError(error: unknown): boolean {
-	return (
-		!(error instanceof NotificationHttpError) ||
-		error.status === 408 ||
-		error.status === 429 ||
-		error.status >= 500
-	);
-}
-
 export function makeNotifier(env: Env, metrics?: Metrics, transport?: ProbeTransport): Notifier {
 	// Deliveries are notification volume, not connection tests, so lift the probe
 	// default of 30/minute out of the way (projectAlerts.ts does the same).
@@ -93,18 +78,8 @@ export function makeNotifier(env: Env, metrics?: Metrics, transport?: ProbeTrans
 		options: ProbeRequestInit,
 		retry: number,
 	): Promise<{ ok: boolean }> => {
-		let lastError: unknown;
-		for (let attempt = 0; attempt <= retry; attempt++) {
-			try {
-				const response = await guardedProbe.fetch(url, options);
-				if (!response.ok) throw new NotificationHttpError(response.status);
-				return { ok: true };
-			} catch (error) {
-				lastError = error;
-				if (attempt === retry || !retryableNotificationError(error)) throw error;
-			}
-		}
-		throw lastError;
+		await sendNotificationRequest(guardedProbe, url, options, { retries: retry });
+		return { ok: true };
 	};
 	const targets: NamedNotifier[] = notificationBackends(env).map((backend) => {
 		let notifier: Notifier;

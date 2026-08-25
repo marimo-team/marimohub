@@ -204,12 +204,12 @@ export function useSetUserSuspension() {
 		({ userId, suspended }: { userId: string; suspended: boolean }): Promise<AdminUser> =>
 			suspended
 				? apiData(
-						apiClient.PUT('/api/v1/users/{id}/suspension', {
+						apiClient.PUT('/api/v1/admin/users/{id}/suspension', {
 							params: { path: { id: userId } },
 						}),
 					)
 				: apiData(
-						apiClient.DELETE('/api/v1/users/{id}/suspension', {
+						apiClient.DELETE('/api/v1/admin/users/{id}/suspension', {
 							params: { path: { id: userId } },
 						}),
 					),
@@ -339,10 +339,10 @@ export function useUpdateProjectAlert(projectId: string) {
 			name?: string;
 			kinds?: ProjectAlertKind[];
 			enabled?: boolean;
-			webhook_url?: string;
-			url?: string;
-			signing_secret?: string;
-		}) =>
+		} & (
+			| { type: 'slack'; webhook_url?: string }
+			| { type: 'webhook'; url?: string; signing_secret?: string }
+		)) =>
 			apiData(
 				apiClient.PATCH('/api/v1/projects/{pid}/alert-destinations/{aid}', {
 					params: {
@@ -373,12 +373,20 @@ export function useDeleteProjectAlert(projectId: string) {
 
 export function useTestProjectAlert(projectId: string) {
 	return useApiMutation(
-		({ id, updatedAt }: { id: string; updatedAt: string }) =>
+		({
+			id,
+			updatedAt,
+			idempotencyKey,
+		}: {
+			id: string;
+			updatedAt: string;
+			idempotencyKey: string;
+		}) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/alert-destinations/{aid}/test', {
 					params: {
 						path: { pid: projectId, aid: id },
-						header: { 'if-match': updatedAt },
+						header: { 'if-match': updatedAt, 'idempotency-key': idempotencyKey },
 					},
 				}),
 			),

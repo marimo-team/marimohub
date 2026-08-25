@@ -325,7 +325,9 @@ mod tests {
     fn request_body_fields_do_not_shadow_reserved_flags() {
         let command = build(&crate::manifest::load());
         let operation = command
-            .find_subcommand("openNotebookChangeRequest")
+            .find_subcommand("notebooks")
+            .and_then(|command| command.find_subcommand("change-requests"))
+            .and_then(|command| command.find_subcommand("open"))
             .unwrap();
         let body = operation
             .get_arguments()

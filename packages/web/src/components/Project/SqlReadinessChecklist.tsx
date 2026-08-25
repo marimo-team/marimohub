@@ -61,7 +61,7 @@ export function SqlReadinessChecklist({
 			</div>
 			<ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
 				{checks.map((check) => (
-					<li key={check.label}>
+					<li key={check.id}>
 						<a
 							href={`#${schemaFieldId(check.field)}`}
 							onClick={(event) => {

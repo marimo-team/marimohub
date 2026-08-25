@@ -590,12 +590,6 @@ pub fn execute(
     operation: &Operation,
     matches: &ArgMatches,
 ) -> Result<(), Error> {
-    if operation.session_only {
-        return Err(Error::Usage(format!(
-            "{} requires a browser session, which the CLI does not support",
-            operation.id
-        )));
-    }
     let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
     confirm(operation, matches)?;
     let body = request_body(operation, matches)?;
@@ -995,37 +989,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn session_only_operations_are_rejected_before_http() {
-        let manifest = crate::manifest::load();
-        let matches = crate::cli::build(&manifest)
-            .try_get_matches_from(["mohub", "auth", "tokens", "list"])
-            .expect("valid command");
-        let leaf = matches
-            .subcommand_matches("auth")
-            .and_then(|matches| matches.subcommand_matches("tokens"))
-            .and_then(|matches| matches.subcommand_matches("list"))
-            .expect("auth tokens list matches");
-        let runtime = Runtime {
-            base_url: "http://127.0.0.1:9",
-            token: None,
-            timeout: Duration::from_secs(1),
-            output: "json",
-            raw_envelope: false,
-        };
-
-        let error = execute(
-            &manifest,
-            &runtime,
-            operation(&manifest, "auth.tokens.list"),
-            leaf,
-        )
-        .expect_err("session-only operation should be rejected locally");
-
-        assert!(matches!(
-            error,
-            Error::Usage(message)
-                if message.contains("requires a browser session")
-        ));
-    }
 }

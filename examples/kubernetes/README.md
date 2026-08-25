@@ -45,7 +45,7 @@ cluster.
    `oc get ingressclass`), then add:
 
    ```bash
-   MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
+   MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default
    MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
    ```
 

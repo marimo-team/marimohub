@@ -205,7 +205,10 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Send a test project alert */
+		/**
+		 * Send a test project alert
+		 * @description Sends a real external message. Reuse the required Idempotency-Key when retrying the same test.
+		 */
 		post: operations['alerts.destinations.test'];
 		delete?: never;
 		options?: never;
@@ -273,7 +276,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/users/{id}/suspension': {
+	'/api/v1/admin/users/{id}/suspension': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -344,7 +347,10 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Create a git-synced workspace notebook */
+		/**
+		 * Create a git-synced workspace notebook
+		 * @description Requires project manager access because this selects a server-side repository.
+		 */
 		post: operations['notebooks.create-git'];
 		delete?: never;
 		options?: never;
@@ -382,7 +388,10 @@ export interface paths {
 		delete?: never;
 		options?: never;
 		head?: never;
-		/** Update a git-synced notebook source */
+		/**
+		 * Update a git-synced notebook source
+		 * @description Requires project manager access because this changes the server-side repository.
+		 */
 		patch: operations['notebooks.update-source'];
 		trace?: never;
 	};
@@ -583,7 +592,7 @@ export interface paths {
 		 * Publish notebook changes to a new or existing change request
 		 * @description A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.
 		 */
-		post: operations['openNotebookChangeRequest'];
+		post: operations['notebooks.change-requests.open'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2106,6 +2115,7 @@ export interface components {
 					id: string;
 			  };
 		IntegrationQueryReadinessCheck: {
+			id: string;
 			label: string;
 			ready: boolean;
 			field: string;
@@ -3869,27 +3879,48 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': {
-					name?: string;
-					kinds?: (
-						| 'member.invited'
-						| 'member.added'
-						| 'member.role_changed'
-						| 'member.removed'
-						| 'session.takeover'
-						| 'notebook.deleted'
-						| 'project.deleted'
-						| 'app.start_failed'
-						| 'app.unavailable'
-						| 'sync.failed'
-					)[];
-					enabled?: boolean;
-					/** Format: uri */
-					webhook_url?: string;
-					/** Format: uri */
-					url?: string;
-					signing_secret?: string;
-				};
+				'application/json':
+					| {
+							name?: string;
+							kinds?: (
+								| 'member.invited'
+								| 'member.added'
+								| 'member.role_changed'
+								| 'member.removed'
+								| 'session.takeover'
+								| 'notebook.deleted'
+								| 'project.deleted'
+								| 'app.start_failed'
+								| 'app.unavailable'
+								| 'sync.failed'
+							)[];
+							enabled?: boolean;
+							/** @enum {string} */
+							type: 'slack';
+							/** Format: uri */
+							webhook_url?: string;
+					  }
+					| {
+							name?: string;
+							kinds?: (
+								| 'member.invited'
+								| 'member.added'
+								| 'member.role_changed'
+								| 'member.removed'
+								| 'session.takeover'
+								| 'notebook.deleted'
+								| 'project.deleted'
+								| 'app.start_failed'
+								| 'app.unavailable'
+								| 'sync.failed'
+							)[];
+							enabled?: boolean;
+							/** @enum {string} */
+							type: 'webhook';
+							/** Format: uri */
+							url?: string;
+							signing_secret?: string;
+					  };
 			};
 		};
 		responses: {
@@ -3996,8 +4027,10 @@ export interface operations {
 	'alerts.destinations.test': {
 		parameters: {
 			query?: never;
-			header?: {
+			header: {
 				'if-match'?: string;
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key': string;
 			};
 			path: {
 				pid: string;
@@ -6502,7 +6535,7 @@ export interface operations {
 			};
 		};
 	};
-	openNotebookChangeRequest: {
+	'notebooks.change-requests.open': {
 		parameters: {
 			query?: never;
 			header: {
@@ -11211,11 +11244,19 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
-					/** Format: uri */
+					/**
+					 * Format: uri
+					 * @description HTTP loopback callback using 127.0.0.1 or [::1], an explicit port, and the exact /callback path.
+					 * @example http://127.0.0.1:49152/callback
+					 */
 					callback_uri: string;
+					/** @description Opaque base64url CSRF state generated by the CLI. */
 					state: string;
+					/** @description Base64url-encoded SHA-256 PKCE challenge generated by the CLI. */
 					code_challenge: string;
+					/** @description Name shown in the user's personal access token list. */
 					token_name: string;
+					/** @description Lifetime of the personal access token minted during exchange. */
 					expires_in_days: number;
 				};
 			};

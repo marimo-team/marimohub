@@ -47,6 +47,7 @@ const NAME = 'mh-sb-abc';
 const baseConfig: KubernetesConfig = {
 	image: 'my-image',
 	hostname: 'hub.example.com',
+	ingressTlsMode: 'controller-default',
 	podReadyTimeout: Millis.seconds(2),
 };
 
@@ -146,6 +147,26 @@ describe('resourceName', () => {
 });
 
 describe('KubernetesCompute', () => {
+	it('requires the public URL scheme to match ingress TLS', () => {
+		const world = makeWorld();
+		expect(() => makeCompute(world, { ...baseConfig, ingressTlsMode: 'disabled' })).toThrow(
+			/requires an http:\/\//,
+		);
+		expect(() =>
+			makeCompute(world, {
+				...baseConfig,
+				hostnameTemplate: 'http://{id}.{host}',
+			}),
+		).toThrow(/requires an https:\/\//);
+		expect(() =>
+			makeCompute(world, {
+				...baseConfig,
+				ingressTlsMode: 'disabled',
+				hostnameTemplate: 'http://{id}.{host}',
+			}),
+		).not.toThrow();
+	});
+
 	describe('exec()', () => {
 		it('runs user commands in a login shell (profile-provided PATH keeps working)', async () => {
 			const world = makeWorld();
@@ -236,7 +257,7 @@ describe('KubernetesCompute', () => {
 			await makeCompute(world, {
 				...baseConfig,
 				ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
-				ingressTlsMode: 'default',
+				ingressTlsMode: 'controller-default',
 				serviceAccountName: 'marimo-kernel',
 				imagePullSecret: 'regcred',
 				imagePullPolicy: 'Always',
@@ -246,7 +267,7 @@ describe('KubernetesCompute', () => {
 				.exec('true');
 			expect(world.ensured[0]).toMatchObject({
 				ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
-				ingressTlsMode: 'default',
+				ingressTlsMode: 'controller-default',
 				serviceAccountName: 'marimo-kernel',
 				imagePullSecret: 'regcred',
 				imagePullPolicy: 'Always',

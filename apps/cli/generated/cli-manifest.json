@@ -1,87 +1,7 @@
 {
-	"version": 1,
+	"version": 2,
 	"api_version": "1.0.0",
 	"operations": [
-		{
-			"id": "admin.config.get",
-			"command": ["admin", "config", "get"],
-			"method": "GET",
-			"path": "/api/v1/admin/config",
-			"summary": "Describe the deployment's configuration",
-			"description": "Read-only view of every configuration group (storage, compute, auth, …) as resolved from the serving replica's environment at boot; secret values are never included, only whether they are set. Super-admin only, session-only.",
-			"parameters": [],
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": true,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "admin.users.list",
-			"command": ["admin", "users", "list"],
-			"method": "GET",
-			"path": "/api/v1/admin/users",
-			"summary": "List all users in the identity directory",
-			"description": "Every user who has signed in at least once, name-sorted. Currently a single page (`next_cursor` is always null). Super-admin only, and session-only: a PAT — even a super admin’s — is rejected with 403.",
-			"parameters": [],
-			"destructive": false,
-			"paginated": true,
-			"response_kind": "json",
-			"session_only": true,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "admin.users.suspend",
-			"command": ["admin", "users", "suspend"],
-			"method": "PUT",
-			"path": "/api/v1/users/{id}/suspension",
-			"summary": "Suspend a user",
-			"description": "Blocks the user at authentication time, including personal access tokens. Super-admin only and session-only. A super admin cannot suspend their own account.",
-			"parameters": [
-				{
-					"name": "id",
-					"cli_name": "id",
-					"in": "path",
-					"required": true,
-					"description": "The user's identity-provider subject id",
-					"value_type": "string",
-					"repeatable": false
-				}
-			],
-			"destructive": true,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": true,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "admin.users.unsuspend",
-			"command": ["admin", "users", "unsuspend"],
-			"method": "DELETE",
-			"path": "/api/v1/users/{id}/suspension",
-			"summary": "Reactivate a suspended user",
-			"description": "Restores authentication for a known user. Super-admin only and session-only.",
-			"parameters": [
-				{
-					"name": "id",
-					"cli_name": "id",
-					"in": "path",
-					"required": true,
-					"description": "The user's identity-provider subject id",
-					"value_type": "string",
-					"repeatable": false
-				}
-			],
-			"destructive": true,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": true,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
 		{
 			"id": "alerts.destinations.create",
 			"command": ["alerts", "destinations", "create"],
@@ -106,7 +26,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -145,7 +64,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false
 		},
@@ -168,7 +86,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -178,7 +95,17 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/alert-destinations/{aid}/test",
 			"summary": "Send a test project alert",
+			"description": "Sends a real external message. Reuse the required Idempotency-Key when retrying the same test.",
 			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": true,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
 				{
 					"name": "if-match",
 					"cli_name": "if-match",
@@ -204,12 +131,11 @@
 					"repeatable": false
 				}
 			],
-			"destructive": false,
+			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
-			"accepts_idempotency_key": false
+			"accepts_idempotency_key": true
 		},
 		{
 			"id": "alerts.destinations.update",
@@ -245,55 +171,11 @@
 			],
 			"body": {
 				"required": true,
-				"properties": [
-					{
-						"name": "enabled",
-						"cli_name": "enabled",
-						"required": false,
-						"value_type": "boolean",
-						"repeatable": false
-					},
-					{
-						"name": "kinds",
-						"cli_name": "kinds",
-						"required": false,
-						"value_type": "string",
-						"repeatable": true
-					},
-					{
-						"name": "name",
-						"cli_name": "name",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "signing_secret",
-						"cli_name": "signing-secret",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "url",
-						"cli_name": "url",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "webhook_url",
-						"cli_name": "webhook-url",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					}
-				]
+				"properties": []
 			},
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false
 		},
@@ -367,81 +249,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "auth.tokens.create",
-			"command": ["auth", "tokens", "create"],
-			"method": "POST",
-			"path": "/api/v1/me/tokens",
-			"summary": "Create a personal access token",
-			"description": "Mint a machine credential that acts as the calling user (CI, scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The plaintext token is returned once, in this response, and never again. Requires session (SSO) auth — a token cannot mint tokens.",
-			"parameters": [],
-			"body": {
-				"required": true,
-				"properties": [
-					{
-						"name": "expires_in_days",
-						"cli_name": "expires-in-days",
-						"required": false,
-						"description": "Days until expiry; omit for a non-expiring token.",
-						"value_type": "integer",
-						"repeatable": false
-					},
-					{
-						"name": "name",
-						"cli_name": "name",
-						"required": true,
-						"value_type": "string",
-						"repeatable": false
-					}
-				]
-			},
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": true,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "auth.tokens.list",
-			"command": ["auth", "tokens", "list"],
-			"method": "GET",
-			"path": "/api/v1/me/tokens",
-			"summary": "List the caller's personal access tokens",
-			"description": "Metadata only — the secret is never retrievable after creation.",
-			"parameters": [],
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": true,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "auth.tokens.revoke",
-			"command": ["auth", "tokens", "revoke"],
-			"method": "DELETE",
-			"path": "/api/v1/me/tokens/{tokenId}",
-			"summary": "Revoke a personal access token",
-			"description": "Deletes the token; API requests using it fail within the verification-cache TTL (~30 seconds) on other replicas, immediately on this one.",
-			"parameters": [
-				{
-					"name": "tokenId",
-					"cli_name": "token-id",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				}
-			],
-			"destructive": true,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": true,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -455,7 +262,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -469,7 +275,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -516,7 +321,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -547,7 +351,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "integrations.org.get"
@@ -571,7 +374,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -602,7 +404,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -635,7 +436,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -653,7 +453,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -717,7 +516,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "integrations.org.get"
@@ -757,7 +555,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -814,7 +611,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -846,7 +642,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -910,7 +705,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -965,7 +759,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1045,7 +838,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "raw",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1100,7 +892,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1179,7 +970,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1250,7 +1040,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1308,7 +1097,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1372,7 +1160,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1416,7 +1203,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1463,7 +1249,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1519,7 +1304,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1630,7 +1414,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1694,7 +1477,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1743,7 +1525,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1799,7 +1580,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1838,7 +1618,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "integrations.project.get"
@@ -1870,7 +1649,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1909,7 +1687,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1951,7 +1728,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -1978,7 +1754,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2050,7 +1825,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "integrations.project.get"
@@ -2098,7 +1872,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2112,9 +1885,85 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.change-requests.open",
+			"command": ["notebooks", "change-requests", "open"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests",
+			"summary": "Publish notebook changes to a new or existing change request",
+			"description": "A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": true,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "body",
+						"cli_name": "body",
+						"required": false,
+						"description": "Change request description. Defaults to the session and base commit.",
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "target_proposal_id",
+						"cli_name": "target-proposal-id",
+						"required": false,
+						"description": "Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.",
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": false,
+						"description": "Change request title. Defaults to the notebook title.",
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
 		},
 		{
 			"id": "notebooks.content",
@@ -2143,7 +1992,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2243,7 +2091,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": true
 		},
@@ -2253,6 +2100,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/git",
 			"summary": "Create a git-synced workspace notebook",
+			"description": "Requires project manager access because this selects a server-side repository.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -2363,7 +2211,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2402,7 +2249,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "notebooks.get"
@@ -2455,7 +2301,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": true
 		},
@@ -2486,7 +2331,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2518,7 +2362,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "raw",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2557,7 +2400,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2588,7 +2430,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2620,7 +2461,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2652,7 +2492,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2759,7 +2598,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "notebooks.get"
@@ -2770,6 +2608,7 @@
 			"method": "PATCH",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/source",
 			"summary": "Update a git-synced notebook source",
+			"description": "Requires project manager access because this changes the server-side repository.",
 			"parameters": [
 				{
 					"name": "nid",
@@ -2831,7 +2670,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2870,7 +2708,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2910,7 +2747,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "raw",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2957,7 +2793,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -2996,87 +2831,8 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
-		},
-		{
-			"id": "openNotebookChangeRequest",
-			"command": ["openNotebookChangeRequest"],
-			"method": "POST",
-			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests",
-			"summary": "Publish notebook changes to a new or existing change request",
-			"description": "A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.",
-			"parameters": [
-				{
-					"name": "idempotency-key",
-					"cli_name": "idempotency-key",
-					"in": "header",
-					"required": true,
-					"description": "Stable client-generated key reused for retries of the same operation.",
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "nid",
-					"cli_name": "nid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "pid",
-					"cli_name": "pid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "sid",
-					"cli_name": "sid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				}
-			],
-			"body": {
-				"required": true,
-				"properties": [
-					{
-						"name": "body",
-						"cli_name": "body",
-						"required": false,
-						"description": "Change request description. Defaults to the session and base commit.",
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "target_proposal_id",
-						"cli_name": "target-proposal-id",
-						"required": false,
-						"description": "Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.",
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "title",
-						"cli_name": "title",
-						"required": false,
-						"description": "Change request title. Defaults to the notebook title.",
-						"value_type": "string",
-						"repeatable": false
-					}
-				]
-			},
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"session_only": false,
-			"accepts_if_match": false,
-			"accepts_idempotency_key": true
 		},
 		{
 			"id": "projects.audit.list",
@@ -3107,7 +2863,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3164,7 +2919,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": true
 		},
@@ -3195,7 +2949,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "projects.get"
@@ -3219,7 +2972,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3250,7 +3002,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3300,7 +3051,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3324,7 +3074,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3356,7 +3105,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3400,7 +3148,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3464,7 +3211,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": true,
 			"accepts_idempotency_key": false,
 			"preflight_operation_id": "projects.get"
@@ -3532,7 +3278,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": true
 		},
@@ -3563,7 +3308,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3627,7 +3371,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3666,7 +3409,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3705,7 +3447,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3744,7 +3485,6 @@
 			"destructive": false,
 			"paginated": true,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3783,7 +3523,6 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3808,7 +3547,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3840,7 +3578,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		},
@@ -3855,7 +3592,6 @@
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
-			"session_only": false,
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
 		}

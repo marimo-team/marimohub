@@ -43,7 +43,7 @@ function setup(items: AdminUser[] = USERS, currentUserId = 'user-self') {
 			const url = String(input);
 			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/admin/users') return jsonOk({ items: current, next_cursor: null });
-			const match = /^\/api\/v1\/users\/([^/]+)\/suspension$/.exec(url);
+			const match = /^\/api\/v1\/admin\/users\/([^/]+)\/suspension$/.exec(url);
 			if (match) {
 				const userId = decodeURIComponent(match[1]);
 				const suspended = init?.method === 'PUT';
@@ -100,7 +100,7 @@ describe('AdminUsersPage', () => {
 		expect(await screen.findByText('Suspended')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
 		expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-			'/api/v1/users/user-grace/suspension',
+			'/api/v1/admin/users/user-grace/suspension',
 			expect.objectContaining({ method: 'PUT' }),
 		);
 	});
@@ -116,7 +116,7 @@ describe('AdminUsersPage', () => {
 		expect(await screen.findAllByRole('button', { name: 'Suspend' })).toHaveLength(2);
 		expect(screen.queryByText('Suspended')).not.toBeInTheDocument();
 		expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-			'/api/v1/users/user-grace/suspension',
+			'/api/v1/admin/users/user-grace/suspension',
 			expect.objectContaining({ method: 'DELETE' }),
 		);
 	});

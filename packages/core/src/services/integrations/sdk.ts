@@ -296,6 +296,7 @@ function guardedQuery<C>(
 						} catch {
 							return [
 								{
+									id: 'readiness-evaluation',
 									label: 'Use a supported SQL configuration',
 									ready: false,
 									field: '',

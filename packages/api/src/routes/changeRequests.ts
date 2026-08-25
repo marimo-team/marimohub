@@ -73,7 +73,7 @@ function commitCoAuthor(user: AuthUser): SourceControlCommitIdentity {
 const openChangeRequest = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests',
-	operationId: 'openNotebookChangeRequest',
+	operationId: 'notebooks.change-requests.open',
 	tags: ['Source control publishing'],
 	summary: 'Publish notebook changes to a new or existing change request',
 	description:

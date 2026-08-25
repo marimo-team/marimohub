@@ -53,6 +53,10 @@ function reader(routes: (url: URL, init?: RequestInit) => Response | null) {
 		const url = new URL(input);
 		if (url.pathname === '/repos/owner/repo/installation') return response({ id: 42 });
 		if (url.pathname === '/app/installations/42/access_tokens') {
+			expect(JSON.parse(String(init?.body))).toEqual({
+				repositories: ['repo'],
+				permissions: { contents: 'read' },
+			});
 			return response({ token: 'installation-token' });
 		}
 		const matched = routes(url, init);

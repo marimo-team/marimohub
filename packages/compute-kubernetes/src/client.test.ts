@@ -157,7 +157,7 @@ describe('createK8sClient', () => {
 		expect(k8sMock.net.replaceNamespacedIngress).not.toHaveBeenCalled();
 	});
 
-	it('emits an empty TLS entry for the ingress-controller default certificate', async () => {
+	it('preserves the legacy default alias for the ingress-controller certificate', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		await client.ensure({
 			name: 'mh-sb',
@@ -195,7 +195,7 @@ describe('createK8sClient', () => {
 			port: 2718,
 			namespace: 'kernels',
 			ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
-			ingressTlsMode: 'default',
+			ingressTlsMode: 'controller-default',
 		});
 
 		expect(k8sMock.net.readNamespacedIngress).toHaveBeenCalledWith({
@@ -217,6 +217,83 @@ describe('createK8sClient', () => {
 				}),
 				spec: expect.objectContaining({ tls: [{}] }),
 			}),
+		});
+	});
+
+	it('refuses to replace an unmanaged ingress', async () => {
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress.mockResolvedValueOnce({
+			metadata: { resourceVersion: '7', labels: { 'app.kubernetes.io/managed-by': 'other' } },
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+			}),
+		).rejects.toThrow(/unmanaged Ingress/);
+		expect(k8sMock.net.replaceNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('rejects a managed ingress without a resource version', async () => {
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress.mockResolvedValueOnce({
+			metadata: { labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE } },
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+			}),
+		).rejects.toThrow(/has no resourceVersion/);
+		expect(k8sMock.net.replaceNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('re-reads and retries an ingress replacement conflict', async () => {
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress
+			.mockResolvedValueOnce({
+				metadata: {
+					resourceVersion: '7',
+					labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+				},
+			})
+			.mockResolvedValueOnce({
+				metadata: {
+					resourceVersion: '8',
+					labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+				},
+			});
+		k8sMock.net.replaceNamespacedIngress
+			.mockRejectedValueOnce({ code: 409 })
+			.mockResolvedValueOnce({});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+			}),
+		).resolves.toEqual({ createdPod: true });
+		expect(k8sMock.net.readNamespacedIngress).toHaveBeenCalledTimes(2);
+		expect(k8sMock.net.replaceNamespacedIngress).toHaveBeenCalledTimes(2);
+		expect(k8sMock.net.replaceNamespacedIngress.mock.calls[1]?.[0].body.metadata).toMatchObject({
+			resourceVersion: '8',
 		});
 	});
 

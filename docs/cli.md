@@ -112,6 +112,8 @@ mohub --base-url https://hub.example.com login
 
 Browser login requires an origin URL without a path prefix. Path-prefixed Hub
 deployments can use the non-interactive token flow below.
+Non-loopback server URLs must use HTTPS so credentials are never sent over a
+plaintext network connection. Local development URLs may use HTTP on a loopback host.
 
 For non-interactive automation, create an API token in the Hub and send it
 through standard input:
@@ -188,7 +190,7 @@ Standalone release archives also contain completion files and man pages.
 ## Upgrade
 
 Standalone shell and PowerShell installations include `mohub-update`. Homebrew,
-npm, and MSI installations use their package manager.
+npm, and other package-manager installations use their package manager.
 
 ## Log out
 

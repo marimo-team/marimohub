@@ -51,14 +51,15 @@ describe('CLI authorization routes', () => {
 		expect(redirect.searchParams.get('state')).toBe(STATE);
 		const code = redirect.searchParams.get('code')!;
 
-		const exchanged = await expectOk<{ token: string }>(
-			await app.request('/api/cli/v1/token', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ code, code_verifier: VERIFIER }),
-			}),
-		);
+		const exchangeResponse = await app.request('/api/cli/v1/token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ code, code_verifier: VERIFIER }),
+		});
+		const exchanged = await expectOk<{ token: string }>(exchangeResponse);
 		expect(exchanged.token).toMatch(/^mhub_pat_/);
+		expect(exchangeResponse.headers.get('Cache-Control')).toBe('no-store');
+		expect(exchangeResponse.headers.get('Pragma')).toBe('no-cache');
 
 		const patApp = createApi({
 			...makeTestDeps(bucket),
@@ -70,6 +71,40 @@ describe('CLI authorization routes', () => {
 			}),
 		);
 		expect(me.id).toBe(ACTOR);
+	});
+
+	it('marks approval redirects as non-cacheable', async () => {
+		const response = await request('POST', '/me/cli-authorizations', {
+			callback_uri: CALLBACK,
+			state: STATE,
+			code_challenge: CHALLENGE,
+			token_name: 'mohub CLI',
+			expires_in_days: 30,
+		});
+		await expectOk(response, 201);
+		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(response.headers.get('Pragma')).toBe('no-cache');
+	});
+
+	it.each([
+		{ state: 'short' },
+		{ code_challenge: 'short' },
+		{ token_name: ' ' },
+		{ expires_in_days: 0 },
+		{ expires_in_days: 3651 },
+	])('rejects invalid approval input: %#', async (overrides) => {
+		await expectError(
+			await request('POST', '/me/cli-authorizations', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				...overrides,
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
 	});
 
 	it('rejects non-loopback and decorated callback URLs', async () => {
@@ -232,13 +267,13 @@ describe('CLI authorization routes', () => {
 			}
 			await expectOk(await exchangeRequest(validCode));
 
-			for (let attempt = 66; attempt < 600; attempt += 1) {
+			for (let attempt = 67; attempt < 600; attempt += 1) {
 				await expectError(await exchangeRequest(randomCode()), 400, 'BAD_REQUEST');
 			}
 			const globalResponse = await exchangeRequest(randomCode());
 			await expectError(globalResponse, 429, 'RESOURCE_EXHAUSTED');
 			expect(globalResponse.headers.get('Retry-After')).toBe('5');
-			expect(exchange).toHaveBeenCalledTimes(600);
+			expect(exchange).toHaveBeenCalledTimes(599);
 		} finally {
 			vi.setSystemTime(realNow);
 			vi.useRealTimers();

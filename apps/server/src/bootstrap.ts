@@ -22,6 +22,7 @@ type Signal = 'SIGTERM' | 'SIGINT';
 export interface BootstrapOverrides {
 	createDeps?: typeof createFromEnv;
 	prepareDeps?: (deps: ApiDeps) => Promise<void>;
+	hostname?: string;
 	serveFn?: typeof serve;
 	startOtelFn?: typeof startOtel;
 	exit?: (code: number) => void;
@@ -144,7 +145,12 @@ export async function bootstrap(
 	}
 
 	const port = Number(validatedEnv.PORT ?? 3000);
-	const server = serveFn({ fetch: app.fetch, port }, (info) => {
+	const serverOptions = {
+		fetch: app.fetch,
+		port,
+		...(overrides.hostname ? { hostname: overrides.hostname } : {}),
+	};
+	const server = serveFn(serverOptions, (info) => {
 		console.log(`[marimohub] server listening on :${info.port}`);
 	});
 

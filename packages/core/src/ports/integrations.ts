@@ -283,6 +283,7 @@ export interface QueryReadinessRequest {
 }
 
 export interface QueryReadinessCheck {
+	id: string;
 	label: string;
 	ready: boolean;
 	field: string;

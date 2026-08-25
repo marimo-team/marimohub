@@ -340,6 +340,49 @@ describe('Notebook routes', () => {
 		expect(data.source.pending_config).toBeUndefined();
 	});
 
+	it('requires a manager to select or change a server-side repository', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb('/git'), {
+				title: 'GitHub app',
+				description: 'Synced',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			}),
+			201,
+		);
+		const editor = uid('git-source-editor');
+		await createServices(bucket).projects.addMember(
+			projectId,
+			{ user_id: editor },
+			'editor',
+			ACTOR,
+		);
+		const editorRequest = createTestApi({ bucket, userId: editor }).request;
+
+		await expectError(
+			await editorRequest('POST', nb('/git'), {
+				title: 'Other repository',
+				description: 'Synced',
+				repo: 'private/other',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			}),
+			403,
+			'FORBIDDEN',
+		);
+		await expectError(
+			await editorRequest('PATCH', nb(`/${created.notebook.id}/source`), {
+				repo: 'private/other',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+			}),
+			403,
+			'FORBIDDEN',
+		);
+	});
+
 	it('PATCH /{nid}/source stages changes after the first sync', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb('/git'), {

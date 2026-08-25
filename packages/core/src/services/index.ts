@@ -22,7 +22,10 @@ export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';
 export { SyncedNotebookService } from './content/SyncedNotebookService';
 export { IdentityService } from './identity/IdentityService';
-export { CliAuthorizationService } from './tokens/CliAuthorizationService';
+export {
+	CliAuthorizationService,
+	parseCliAuthorizationCode,
+} from './tokens/CliAuthorizationService';
 export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';

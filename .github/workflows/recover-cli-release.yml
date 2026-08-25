@@ -33,6 +33,7 @@ jobs:
       SOURCE_RUN_ID: ${{ inputs.source-run-id }}
     steps:
       - name: Validate recovery source
+        id: source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -57,6 +58,12 @@ jobs:
             echo "::error::Run $SOURCE_RUN_ID is not a tag-triggered Release workflow"
             exit 1
           fi
+          SOURCE_SHA=$(jq -r '.head_sha' <<< "$SOURCE_RUN")
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Run $SOURCE_RUN_ID has an invalid source commit"
+            exit 1
+          fi
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Checkout recovery workflow
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -69,6 +76,16 @@ jobs:
           ref: ${{ inputs.tag }}
           path: release-source
           fetch-depth: 0
+
+      - name: Verify release commit
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          TAG_SHA=$(git -C release-source rev-parse HEAD)
+          if [[ "$TAG_SHA" != "$SOURCE_SHA" ]]; then
+            echo "::error::Run $SOURCE_RUN_ID built $SOURCE_SHA, but $RELEASE_TAG now points to $TAG_SHA"
+            exit 1
+          fi
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

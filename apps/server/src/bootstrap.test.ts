@@ -114,6 +114,28 @@ describe('bootstrap', () => {
 		expect(harness.exit).not.toHaveBeenCalled();
 	});
 
+	it('passes the port and fetch handler as the exact default serve options', async () => {
+		const harness = makeHarness(deps);
+
+		await bootstrap({ ...BASE_ENV, PORT: '4100' }, harness.overrides);
+
+		expect(harness.serveFn).toHaveBeenCalledWith(
+			{ fetch: expect.any(Function), port: 4100 },
+			expect.any(Function),
+		);
+	});
+
+	it('passes an explicit hostname to the server', async () => {
+		const harness = makeHarness(deps);
+
+		await bootstrap(BASE_ENV, { ...harness.overrides, hostname: '127.0.0.1' });
+
+		expect(harness.serveFn).toHaveBeenCalledWith(
+			{ fetch: expect.any(Function), hostname: '127.0.0.1', port: 3000 },
+			expect.any(Function),
+		);
+	});
+
 	it('prepares dependencies before preflight and serving', async () => {
 		const order: string[] = [];
 		deps.preflight = async () => {

@@ -1,4 +1,4 @@
-import { gunzipSync, unzipSync } from 'fflate';
+import { Gunzip, Inflate, strFromU8 } from 'fflate';
 import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
 import { BadRequestError } from '../errors';
 import { isSafeWorkspacePath } from './remoteWorkspace';
@@ -70,54 +70,229 @@ function toArchiveFiles(files: Map<string, Uint8Array>): ArchiveFile[] {
 	return [...files.entries()].map(([path, bytes]) => ({ path, bytes }));
 }
 
-function parseZip(bytes: Uint8Array, mapPath: (path: string) => string | null): ArchiveFile[] {
+const ZIP_END_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_SIGNATURE = 0x04034b50;
+const ZIP_FLAG_DATA_DESCRIPTOR = 0x0008;
+const ZIP_FLAG_ENCRYPTED = 0x0001;
+const INFLATE_INPUT_CHUNK_BYTES = 1024;
+
+interface ZipEntry {
+	mapped: string;
+	compression: number;
+	crc32: number;
+	compressedSize: number;
+	originalSize: number;
+	dataOffset: number;
+}
+
+function findZipEnd(view: DataView): number {
+	const minimum = Math.max(0, view.byteLength - 65_557);
+	for (let offset = view.byteLength - 22; offset >= minimum; offset--) {
+		if (view.getUint32(offset, true) !== ZIP_END_SIGNATURE) continue;
+		const commentLength = view.getUint16(offset + 20, true);
+		if (offset + 22 + commentLength === view.byteLength) return offset;
+	}
+	throw new BadRequestError('Invalid zip archive');
+}
+
+function zipEntries(bytes: Uint8Array, mapPath: (path: string) => string | null): ZipEntry[] {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const endOffset = findZipEnd(view);
+	const disk = view.getUint16(endOffset + 4, true);
+	const centralDisk = view.getUint16(endOffset + 6, true);
+	const entriesOnDisk = view.getUint16(endOffset + 8, true);
+	const entryCount = view.getUint16(endOffset + 10, true);
+	const centralSize = view.getUint32(endOffset + 12, true);
+	const centralOffset = view.getUint32(endOffset + 16, true);
+	if (
+		disk !== 0 ||
+		centralDisk !== 0 ||
+		entriesOnDisk !== entryCount ||
+		entryCount === 0xffff ||
+		centralSize === 0xffffffff ||
+		centralOffset === 0xffffffff ||
+		centralOffset + centralSize > endOffset
+	) {
+		throw new BadRequestError('Invalid zip archive');
+	}
+
 	const paths = new Set<string>();
 	const limits: ArchiveLimitState = { fileCount: 0, totalBytes: 0 };
-	try {
-		// Read the central directory without inflating anything. fflate sizes each
-		// output allocation from this metadata, so rejecting the complete archive in
-		// this pass prevents a late entry from exceeding the budget after earlier
-		// entries have already consumed memory.
-		unzipSync(bytes, {
-			filter: ({ name, originalSize }) => {
-				if (name.endsWith('/')) {
-					assertSafeArchiveDirectoryPath(name);
-					return false;
-				}
-				const mapped = mapPath(name);
-				if (mapped === null) return false;
-				assertSafeArchiveFilePath(mapped);
-				if (paths.has(mapped)) throw new BadRequestError(`Duplicate archive path: ${mapped}`);
-				paths.add(mapped);
-				enforceArchiveFileLimits(limits, mapped, originalSize);
-				return false;
-			},
+	const entries: ZipEntry[] = [];
+	let offset = centralOffset;
+	for (let index = 0; index < entryCount; index++) {
+		if (offset + 46 > centralOffset + centralSize) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+		if (view.getUint32(offset, true) !== ZIP_CENTRAL_SIGNATURE) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+		const flags = view.getUint16(offset + 8, true);
+		const compression = view.getUint16(offset + 10, true);
+		const crc32 = view.getUint32(offset + 16, true);
+		const compressedSize = view.getUint32(offset + 20, true);
+		const originalSize = view.getUint32(offset + 24, true);
+		const nameLength = view.getUint16(offset + 28, true);
+		const extraLength = view.getUint16(offset + 30, true);
+		const commentLength = view.getUint16(offset + 32, true);
+		const localDisk = view.getUint16(offset + 34, true);
+		const localOffset = view.getUint32(offset + 42, true);
+		const nextOffset = offset + 46 + nameLength + extraLength + commentLength;
+		if (
+			nextOffset > centralOffset + centralSize ||
+			localDisk !== 0 ||
+			compressedSize === 0xffffffff ||
+			originalSize === 0xffffffff ||
+			localOffset === 0xffffffff
+		) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+		const name = strFromU8(
+			bytes.subarray(offset + 46, offset + 46 + nameLength),
+			(flags & 0x0800) === 0,
+		);
+		offset = nextOffset;
+		if (name.endsWith('/')) {
+			assertSafeArchiveDirectoryPath(name);
+			continue;
+		}
+		const mapped = mapPath(name);
+		if (mapped === null) continue;
+		assertSafeArchiveFilePath(mapped);
+		if (paths.has(mapped)) throw new BadRequestError(`Duplicate archive path: ${mapped}`);
+		paths.add(mapped);
+		enforceArchiveFileLimits(limits, mapped, originalSize);
+		if ((flags & ZIP_FLAG_ENCRYPTED) !== 0 || (compression !== 0 && compression !== 8)) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+
+		if (
+			localOffset + 30 > centralOffset ||
+			view.getUint32(localOffset, true) !== ZIP_LOCAL_SIGNATURE
+		) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+		const localFlags = view.getUint16(localOffset + 6, true);
+		const localCompression = view.getUint16(localOffset + 8, true);
+		const localNameLength = view.getUint16(localOffset + 26, true);
+		const localExtraLength = view.getUint16(localOffset + 28, true);
+		const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+		const localName = strFromU8(
+			bytes.subarray(localOffset + 30, localOffset + 30 + localNameLength),
+			(localFlags & 0x0800) === 0,
+		);
+		if (
+			dataOffset + compressedSize > centralOffset ||
+			localFlags !== flags ||
+			localCompression !== compression ||
+			localName !== name
+		) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+		if (
+			(flags & ZIP_FLAG_DATA_DESCRIPTOR) === 0 &&
+			(view.getUint32(localOffset + 14, true) !== crc32 ||
+				view.getUint32(localOffset + 18, true) !== compressedSize ||
+				view.getUint32(localOffset + 22, true) !== originalSize)
+		) {
+			throw new BadRequestError('Invalid zip archive');
+		}
+		entries.push({
+			mapped,
+			compression,
+			crc32,
+			compressedSize,
+			originalSize,
+			dataOffset,
 		});
+	}
+	if (offset !== centralOffset + centralSize) throw new BadRequestError('Invalid zip archive');
+	return entries;
+}
+
+const crcTable = new Uint32Array(256).map((_, index) => {
+	let value = index;
+	for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
+	return value >>> 0;
+});
+
+function updateCrc32(state: number, bytes: Uint8Array): number {
+	let next = state;
+	for (const byte of bytes) next = crcTable[(next ^ byte) & 0xff] ^ (next >>> 8);
+	return next >>> 0;
+}
+
+function pushCompressedChunks(
+	bytes: Uint8Array,
+	push: (chunk: Uint8Array, final: boolean) => void,
+): void {
+	if (bytes.length === 0) {
+		push(bytes, true);
+		return;
+	}
+	for (let offset = 0; offset < bytes.length; offset += INFLATE_INPUT_CHUNK_BYTES) {
+		const end = Math.min(bytes.length, offset + INFLATE_INPUT_CHUNK_BYTES);
+		push(bytes.subarray(offset, end), end === bytes.length);
+	}
+}
+
+function inflateZipEntry(
+	archive: Uint8Array,
+	entry: ZipEntry,
+	actual: ArchiveLimitState,
+): Uint8Array {
+	actual.fileCount += 1;
+	if (actual.fileCount > MAX_ARCHIVE_FILES) {
+		throw new BadRequestError(`Archive exceeds the ${MAX_ARCHIVE_FILES}-file limit`);
+	}
+	let size = 0;
+	let crc = 0xffffffff;
+	let finished = entry.compression === 0;
+	const chunks: Uint8Array[] = [];
+	const accept = (chunk: Uint8Array) => {
+		if (chunk.length === 0) return;
+		size += chunk.length;
+		if (size > MAX_WORKSPACE_FILE_BYTES) {
+			throw new BadRequestError(
+				`Archive file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit: ${entry.mapped}`,
+			);
+		}
+		actual.totalBytes += chunk.length;
+		if (actual.totalBytes > MAX_DECOMPRESSED_ARCHIVE_BYTES) {
+			throw new BadRequestError('Decompressed archive exceeds the size limit');
+		}
+		crc = updateCrc32(crc, chunk);
+		chunks.push(new Uint8Array(chunk));
+	};
+	const compressed = archive.subarray(entry.dataOffset, entry.dataOffset + entry.compressedSize);
+	if (entry.compression === 0) {
+		accept(compressed);
+	} else {
+		const inflater = new Inflate((chunk, final) => {
+			accept(chunk);
+			finished = final;
+		});
+		pushCompressedChunks(compressed, (chunk, final) => inflater.push(chunk, final));
+	}
+	if (!finished || size !== entry.originalSize || (crc ^ 0xffffffff) >>> 0 !== entry.crc32) {
+		throw new BadRequestError('Invalid zip archive');
+	}
+	return concatBytes(chunks);
+}
+
+function parseZip(bytes: Uint8Array, mapPath: (path: string) => string | null): ArchiveFile[] {
+	try {
+		const entries = zipEntries(bytes, mapPath);
+		const actual: ArchiveLimitState = { fileCount: 0, totalBytes: 0 };
+		const files = new Map<string, Uint8Array>();
+		for (const entry of entries)
+			addFile(files, entry.mapped, inflateZipEntry(bytes, entry, actual));
+		return toArchiveFiles(files);
 	} catch (error) {
 		if (error instanceof BadRequestError) throw error;
 		throw new BadRequestError('Invalid zip archive');
 	}
-
-	let unzipped: Record<string, Uint8Array>;
-	try {
-		unzipped = unzipSync(bytes, {
-			filter: ({ name }) => !name.endsWith('/') && mapPath(name) !== null,
-		});
-	} catch {
-		throw new BadRequestError('Invalid zip archive');
-	}
-	const files = new Map<string, Uint8Array>();
-	// Re-enforce the caps on the actual inflated sizes. fflate sizes each output
-	// from the central-directory metadata checked above, so today this can never
-	// fire — it pins the invariant locally instead of relying on that behavior.
-	const actual: ArchiveLimitState = { fileCount: 0, totalBytes: 0 };
-	for (const [path, body] of Object.entries(unzipped)) {
-		const mapped = mapPath(path);
-		if (mapped === null) continue;
-		enforceArchiveFileLimits(actual, mapped, body.length);
-		addFile(files, mapped, body);
-	}
-	return toArchiveFiles(files);
 }
 
 function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
@@ -356,30 +531,44 @@ function isGzip(bytes: Uint8Array, format: string | undefined): boolean {
 	return bytes[0] === 0x1f && bytes[1] === 0x8b;
 }
 
-function gunzip(bytes: Uint8Array): Uint8Array {
-	// The gzip ISIZE trailer (uncompressed size mod 2^32, little-endian) is a cheap
-	// pre-check against a decompression bomb before we allocate the inflated output.
-	if (bytes.length >= 4) {
-		const isize =
-			(bytes[bytes.length - 4] |
-				(bytes[bytes.length - 3] << 8) |
-				(bytes[bytes.length - 2] << 16) |
-				(bytes[bytes.length - 1] << 24)) >>>
-			0;
-		if (isize > MAX_DECOMPRESSED_ARCHIVE_BYTES) {
-			throw new BadRequestError('Decompressed archive exceeds the size limit');
-		}
-	}
-	let out: Uint8Array;
+function parseGzipTar(bytes: Uint8Array, mapPath: (path: string) => string | null): ArchiveFile[] {
+	if (bytes.length < 18) throw new BadRequestError('Invalid gzip archive');
+	const trailer = new DataView(bytes.buffer, bytes.byteOffset + bytes.byteLength - 8, 8);
+	const expectedCrc = trailer.getUint32(0, true);
+	const expectedSize = trailer.getUint32(4, true);
+	const collector = new WorkspaceTarCollector({ mapPath });
+	let crc = 0xffffffff;
+	let size = 0;
+	let finished = false;
+	let memberCount = 1;
 	try {
-		out = gunzipSync(bytes);
-	} catch {
+		const inflater = new Gunzip((chunk, final) => {
+			size += chunk.length;
+			if (size > MAX_DECOMPRESSED_ARCHIVE_BYTES) {
+				throw new BadRequestError('Decompressed archive exceeds the size limit');
+			}
+			crc = updateCrc32(crc, chunk);
+			collector.push(chunk);
+			finished = final;
+		});
+		inflater.onmember = () => {
+			memberCount += 1;
+			throw new BadRequestError('Multi-member gzip archives are not supported');
+		};
+		pushCompressedChunks(bytes, (chunk, final) => inflater.push(chunk, final));
+	} catch (error) {
+		if (error instanceof BadRequestError) throw error;
 		throw new BadRequestError('Invalid gzip archive');
 	}
-	if (out.length > MAX_DECOMPRESSED_ARCHIVE_BYTES) {
-		throw new BadRequestError('Decompressed archive exceeds the size limit');
+	if (
+		!finished ||
+		memberCount !== 1 ||
+		size >>> 0 !== expectedSize ||
+		(crc ^ 0xffffffff) >>> 0 !== expectedCrc
+	) {
+		throw new BadRequestError('Invalid gzip archive');
 	}
-	return out;
+	return collector.finish();
 }
 
 function parseUncompressed(
@@ -412,8 +601,7 @@ export function parseWorkspaceArchive(
 	const mapPath = options.mapPath ?? ((path: string) => path);
 	const lowerFormat = format?.toLowerCase();
 	if (isGzip(bytes, lowerFormat)) {
-		// gzip on this endpoint is always a `.tar.gz` — decompress, then parse as tar.
-		return parseUncompressed(gunzip(bytes), 'tar', contentType, mapPath);
+		return parseGzipTar(bytes, mapPath);
 	}
 	return parseUncompressed(bytes, lowerFormat, contentType, mapPath);
 }

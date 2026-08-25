@@ -572,7 +572,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'kubernetes',
 				supportsComputeProfiles: true,
 				description:
-					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. TLS is optional: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default` and leave the secret unset for the ingress controller's default certificate, or set the mode to `disabled` and leave the secret unset to omit Ingress TLS. The `default` and `disabled` modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
+					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. TLS modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE',
@@ -606,10 +606,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE',
 						name: 'Kubernetes ingress TLS mode',
 						description:
-							'How each per-session Ingress declares TLS: `disabled` omits `spec.tls`, `default` emits `tls: [{}]` for an ingress-controller default certificate, and `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`. When unset, a configured secret selects `secret`; otherwise TLS is disabled.',
-						default: 'secret when TLS secret is set, else disabled',
-						example: 'default',
-						optIn: true,
+							'How each per-session Ingress declares TLS: `controller-default` emits `tls: [{}]` for an ingress-controller default certificate, `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`, and `disabled` explicitly opts into plaintext and requires an `http://` hostname template. The legacy `default` value remains an alias for `controller-default`. When unset, a configured secret selects `secret`; otherwise the controller default is used.',
+						default: 'secret when TLS secret is set, else controller-default',
+						example: 'controller-default',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET',
@@ -617,6 +616,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress.',
 						example: 'marimo-kernels-wildcard-tls',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT',
@@ -933,7 +933,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_EXPERIMENTS',
 						name: 'Experiments',
 						description:
-							'Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`, `duckdb-wasm-sql`.',
+							'Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current value: `duckdb-wasm-preview`.',
 						example: 'duckdb-wasm-preview',
 					},
 					{
@@ -1494,7 +1494,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Integrations',
 		selector: 'MARIMOHUB_INTEGRATIONS',
-		selectorDefault: 'off',
+		selectorDefault: 'on',
 		description: `Integrations provide versioned configuration for data sources and environment
 variables. See the [integrations guide](./integrations.md) for supported kinds.
 Project managers manage project integrations. Super admins manage organization
@@ -1504,11 +1504,9 @@ New, non-ephemeral sessions receive the applicable configuration as environment
 variables and files. The hub injects configuration, not Python libraries. Each
 kind lists the packages to add to the notebook.
 
-Enable this feature only after every replica can preserve unknown session
-fields. Otherwise, an older replica can remove the integration audit pin during
-a rolling deployment. See the two-phase policy in
-\`development_docs/migrations.md\`. The feature requires only the deployment
-bucket.
+Integrations are enabled by default. Set \`MARIMOHUB_INTEGRATIONS=off\` to
+disable the management routes and session injection. The feature requires only
+the deployment bucket.
 
 Secret fields use inline encryption or an external resolver. A rendering error
 blocks session creation. Disable or override the integration to restore access.
@@ -1517,7 +1515,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 			{
 				name: 'On',
 				selectorValue: 'on',
-				description: `Integration management and session injection are enabled. Project entries use
+				description: `Integration management and session injection are enabled by default. Project entries use
 \`projects/{pid}/integrations/\`. Organization entries use
 \`_system/integrations/\`.`,
 				vars: [
@@ -1532,7 +1530,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_DATA_BROWSER',
 						name: 'Data browser',
 						description:
-							'Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing.',
+							'Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires integrations to remain enabled and an enabled integration probe. `off` disables browsing.',
 						default: 'off',
 					},
 					{

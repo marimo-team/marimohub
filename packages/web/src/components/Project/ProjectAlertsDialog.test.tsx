@@ -264,6 +264,46 @@ describe('ProjectAlertsDialog', () => {
 		expect(screen.getByRole('heading', { name: 'Delete alert destination' })).toBeInTheDocument();
 	});
 
+	it('reuses the idempotency key when a test delivery is retried', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-test-00000001', { name: 'Production Slack' });
+		let attempts = 0;
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			if (method !== 'POST') return ok(destinationPage([destination]));
+			attempts++;
+			if (attempts === 1) {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'SERVICE_UNAVAILABLE', message: 'Delivery response was lost' },
+					}),
+					{ status: 503, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return ok({ ...destination, verified_at: '2026-08-12T12:05:00.000Z' });
+		});
+		const button = await screen.findByRole('button', { name: 'Test' });
+
+		await user.click(button);
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Delivery response was lost'));
+		await user.click(button);
+		await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Test alert delivered.'));
+
+		const keys = fetchMock.mock.calls
+			.filter(([input, init]) =>
+				input instanceof Request ? input.method === 'POST' : init?.method === 'POST',
+			)
+			.map(([input, init]) =>
+				input instanceof Request
+					? input.headers.get('idempotency-key')
+					: new Headers(init?.headers).get('idempotency-key'),
+			);
+		expect(keys).toHaveLength(2);
+		expect(keys[0]).toBeTruthy();
+		expect(keys[1]).toBe(keys[0]);
+	});
+
 	it('omits kinds from an edit when the selection is untouched', async () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-edit-00000002', {

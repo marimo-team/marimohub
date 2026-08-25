@@ -84,16 +84,32 @@ function kubernetesIngressAnnotations(env: Env, key: string): Record<string, str
 	}
 }
 
-function kubernetesIngressTlsMode(env: Env): 'disabled' | 'default' | 'secret' {
+function kubernetesIngressTlsMode(env: Env): 'disabled' | 'controller-default' | 'secret' {
 	const key = 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE';
 	try {
-		return resolveIngressTlsMode(env[key], env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET);
+		const mode = resolveIngressTlsMode(env[key], env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET);
+		const template = env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE ?? 'https://{id}.{host}';
+		if (
+			env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME &&
+			mode === 'disabled' &&
+			!template.startsWith('http://')
+		) {
+			throw new Error('disabled mode requires an http:// hostname template');
+		}
+		if (
+			env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME &&
+			mode !== 'disabled' &&
+			!template.startsWith('https://')
+		) {
+			throw new Error('TLS modes require an https:// hostname template');
+		}
+		return mode;
 	} catch (cause) {
 		const detail = cause instanceof Error ? cause.message : 'invalid TLS settings';
 		throw new ConfigError(`Invalid ${key} (${detail})`, {
 			variable: key,
 			remediation:
-				'Use secret with a TLS secret name, or remove the secret when using default/disabled.',
+				'Use secret with a TLS secret name, or remove the secret when using controller-default/disabled.',
 		});
 	}
 }

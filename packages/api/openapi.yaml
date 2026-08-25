@@ -1894,6 +1894,9 @@ components:
     IntegrationQueryReadinessCheck:
       type: object
       properties:
+        id:
+          type: string
+          minLength: 1
         label:
           type: string
           minLength: 1
@@ -1905,6 +1908,7 @@ components:
           type: string
           minLength: 1
       required:
+        - id
         - label
         - ready
         - field
@@ -3767,6 +3771,7 @@ paths:
                     - name
                     - type
                     - webhook_url
+                  additionalProperties: false
                 - type: object
                   properties:
                     name:
@@ -3804,6 +3809,7 @@ paths:
                     - type
                     - url
                     - signing_secret
+                  additionalProperties: false
       responses:
         '201':
           description: Alert destination created
@@ -3933,39 +3939,78 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                  minLength: 1
-                  maxLength: 100
-                kinds:
-                  type: array
-                  items:
-                    type: string
-                    enum:
-                      - member.invited
-                      - member.added
-                      - member.role_changed
-                      - member.removed
-                      - session.takeover
-                      - notebook.deleted
-                      - project.deleted
-                      - app.start_failed
-                      - app.unavailable
-                      - sync.failed
-                  minItems: 1
-                enabled:
-                  type: boolean
-                webhook_url:
-                  type: string
-                  format: uri
-                url:
-                  type: string
-                  format: uri
-                signing_secret:
-                  type: string
-                  minLength: 1
+              oneOf:
+                - type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 100
+                    kinds:
+                      type: array
+                      items:
+                        type: string
+                        enum:
+                          - member.invited
+                          - member.added
+                          - member.role_changed
+                          - member.removed
+                          - session.takeover
+                          - notebook.deleted
+                          - project.deleted
+                          - app.start_failed
+                          - app.unavailable
+                          - sync.failed
+                      minItems: 1
+                    enabled:
+                      type: boolean
+                    type:
+                      type: string
+                      enum:
+                        - slack
+                    webhook_url:
+                      type: string
+                      format: uri
+                  required:
+                    - type
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 100
+                    kinds:
+                      type: array
+                      items:
+                        type: string
+                        enum:
+                          - member.invited
+                          - member.added
+                          - member.role_changed
+                          - member.removed
+                          - session.takeover
+                          - notebook.deleted
+                          - project.deleted
+                          - app.start_failed
+                          - app.unavailable
+                          - sync.failed
+                      minItems: 1
+                    enabled:
+                      type: boolean
+                    type:
+                      type: string
+                      enum:
+                        - webhook
+                    url:
+                      type: string
+                      format: uri
+                    signing_secret:
+                      type: string
+                      minLength: 1
+                  required:
+                    - type
+                  additionalProperties: false
       responses:
         '200':
           description: Alert destination updated
@@ -4156,6 +4201,9 @@ paths:
       tags:
         - Alerts
       summary: Send a test project alert
+      description: Sends a real external message. Reuse the required Idempotency-Key
+        when retrying the same test.
+      x-cli-destructive: true
       parameters:
         - schema:
             type: string
@@ -4176,6 +4224,17 @@ paths:
             example: '"2025-03-05T14:00:00Z"'
           required: false
           name: if-match
+          in: header
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: true
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
           in: header
       responses:
         '200':
@@ -4572,7 +4631,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/users/{id}/suspension:
+  /api/v1/admin/users/{id}/suspension:
     put:
       operationId: admin.users.suspend
       x-cli-destructive: true
@@ -5060,6 +5119,8 @@ paths:
       tags:
         - Notebooks
       summary: Create a git-synced workspace notebook
+      description: Requires project manager access because this selects a server-side
+        repository.
       parameters:
         - schema:
             type: string
@@ -5316,6 +5377,8 @@ paths:
       tags:
         - Notebooks
       summary: Update a git-synced notebook source
+      description: Requires project manager access because this changes the
+        server-side repository.
       parameters:
         - schema:
             type: string
@@ -6737,7 +6800,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests:
     post:
-      operationId: openNotebookChangeRequest
+      operationId: notebooks.change-requests.open
       tags:
         - Source control publishing
       summary: Publish notebook changes to a new or existing change request
@@ -11734,20 +11797,27 @@ paths:
                   type: string
                   maxLength: 300
                   format: uri
+                  description: HTTP loopback callback using 127.0.0.1 or [::1], an explicit port,
+                    and the exact /callback path.
+                  example: http://127.0.0.1:49152/callback
                 state:
                   type: string
                   pattern: ^[A-Za-z0-9_-]{32,128}$
+                  description: Opaque base64url CSRF state generated by the CLI.
                 code_challenge:
                   type: string
                   pattern: ^[A-Za-z0-9_-]{43}$
+                  description: Base64url-encoded SHA-256 PKCE challenge generated by the CLI.
                 token_name:
                   type: string
                   minLength: 1
                   maxLength: 100
+                  description: Name shown in the user's personal access token list.
                 expires_in_days:
                   type: integer
                   minimum: 1
                   maximum: 3650
+                  description: Lifetime of the personal access token minted during exchange.
               required:
                 - callback_uri
                 - state

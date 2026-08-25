@@ -151,7 +151,7 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 function ingressTls(o: EnsureSandboxOptions): V1IngressTLS[] | undefined {
 	const mode = resolveIngressTlsMode(o.ingressTlsMode, o.tlsSecretName);
 	if (mode === 'disabled') return undefined;
-	if (mode === 'default') return [{}];
+	if (mode === 'controller-default') return [{}];
 	if (!o.tlsSecretName) throw new Error('Ingress TLS mode "secret" requires a TLS secret name');
 	return [{ hosts: [o.host], secretName: o.tlsSecretName }];
 }
