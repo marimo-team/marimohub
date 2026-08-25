@@ -506,11 +506,10 @@ describe('CoreWeaveCompute', () => {
 			expect(entry.fake.startCalls.at(-1)).toEqual(['sh', '-lc', 'uv run marimo edit --port 2718']);
 		});
 
-		// Launch setup rides the kernel command, so a broken env kills the process
-		// outright; the port then never opens and the wait would otherwise run the
-		// full (2 minute) timeout. The SDK records an exit code ONLY on a clean exit,
-		// so `failed` (a gRPC stream reset — see RUNBOOK H1) and `cancelled` have to
-		// be recognised by status or they sail past a poll()-based check.
+		// A broken kernel command can exit before opening the port, and the wait would
+		// otherwise run the full (2 minute) timeout. The SDK records an exit code ONLY
+		// on a clean exit, so `failed` (a gRPC stream reset — see RUNBOOK H1) and
+		// `cancelled` have to be recognised by status or they sail past a poll()-based check.
 		it.each(['exited', 'failed', 'cancelled'] as const)(
 			'a %s kernel is reported without burning the timeout',
 			async (status) => {

@@ -61,6 +61,7 @@ import type {
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -100,6 +101,28 @@ const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
  * must never delay a sandbox that is already Running.
  */
 const POST_BOOT_READ_TIMEOUT_MS = 250;
+const EXEC_TIMEOUT_GRACE_MS = 100;
+const EXEC_TIMEOUT_SUPERVISOR = `import os, signal, subprocess, sys
+process = subprocess.Popen(['sh', '-lc', sys.argv[2]], start_new_session=True)
+try:
+	code = process.wait(timeout=float(sys.argv[1]) / 1000)
+except subprocess.TimeoutExpired:
+	os.killpg(process.pid, signal.SIGKILL)
+	process.wait()
+	code = 124
+sys.exit(code)`;
+
+function execCommand(cmd: string, login: boolean, timeout?: number): string[] {
+	if (!login || timeout === undefined || timeout <= 0) {
+		return ['sh', login ? '-lc' : '-c', cmd];
+	}
+	const supervisorTimeout = Math.max(1, timeout - Math.min(EXEC_TIMEOUT_GRACE_MS, timeout / 10));
+	return [
+		'sh',
+		'-lc',
+		`exec python3 -c ${shellQuote(EXEC_TIMEOUT_SUPERVISOR)} ${shellQuote(String(supervisorTimeout))} ${shellQuote(cmd)}`,
+	];
+}
 
 /**
  * Milliseconds from a kubelet `Pulled` event message — `Successfully pulled
@@ -360,15 +383,25 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private execInPod(
 		cmd: string,
-		opts?: { login?: boolean; stdin?: string | Uint8Array },
+		opts?: { login?: boolean; stdin?: string | Uint8Array; timeout?: number },
 	): Promise<K8sExecResult> {
 		this.execCount++;
-		return this.client.exec(this.name, ['sh', opts?.login ? '-lc' : '-c', cmd], opts?.stdin);
+		return this.client.exec(
+			this.name,
+			execCommand(cmd, opts?.login ?? false, opts?.timeout),
+			opts?.stdin,
+			{
+				timeout: opts?.timeout,
+			},
+		);
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensure();
-		const res = await this.execInPod(this.withEnv(cmd), { login: true });
+		const res = await this.execInPod(this.withEnv(cmd), {
+			login: true,
+			timeout: options?.timeout,
+		});
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 

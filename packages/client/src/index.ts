@@ -86,6 +86,7 @@ const KNOWN_SERVER_ERROR_CODES = {
 	NOT_INITIALIZED: true,
 	NO_HTML_SNAPSHOT: true,
 	SERVICE_UNAVAILABLE: true,
+	PYTHON_ENV_SETUP_FAILED: true,
 	INTERNAL_ERROR: true,
 } satisfies Record<ServerErrorCode, true>;
 

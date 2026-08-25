@@ -10,6 +10,7 @@ const CONTAINER_NAME = 'marimohub-sbx-sb-aaaaaaaaaaaaaaaa';
 export interface ContainerCliCall {
 	args: string[];
 	stdin?: string | Uint8Array;
+	timeout?: number;
 }
 
 export function createRecordingContainerRunner(
@@ -20,7 +21,7 @@ export function createRecordingContainerRunner(
 		calls,
 		runner: {
 			async run(args, options) {
-				calls.push({ args, stdin: options?.stdin });
+				calls.push({ args, stdin: options?.stdin, timeout: options?.timeout });
 				return handler(args, options?.stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
 			},
 		},
@@ -206,6 +207,36 @@ export function containerCliContract(
 			const result = await spawnRunner(`marimohub-no-such-${engine}-binary-xyz`).run(['ps']);
 			expect(result.exitCode).toBe(127);
 			expect(result.stderr).toBeTruthy();
+		});
+
+		it('bounds both the engine client and the in-container command', async () => {
+			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
+
+			await makeProvider({}, runner).create(SANDBOX_ID).exec('uv sync', { timeout: 250 });
+
+			const call = calls.find((candidate) => candidate.args[0] === 'exec');
+			expect(call).toEqual({
+				args: [
+					'exec',
+					CONTAINER_NAME,
+					'python3',
+					'-c',
+					expect.stringContaining('os.killpg(process.pid, signal.SIGKILL)'),
+					'225',
+					'uv sync',
+				],
+				stdin: undefined,
+				timeout: 250,
+			});
+		});
+
+		it('kills a stalled engine client when its timeout expires', async () => {
+			const result = await spawnRunner('sh').run(['-c', 'exec sleep 10'], { timeout: 20 });
+
+			expect(result).toMatchObject({
+				exitCode: 124,
+				stderr: expect.stringContaining('command timed out after 20ms'),
+			});
 		});
 	});
 }

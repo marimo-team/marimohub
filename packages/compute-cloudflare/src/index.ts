@@ -12,6 +12,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core';
 import type {
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -75,8 +76,12 @@ class CloudflareSandboxInstance implements SandboxInstance {
 		this.useTunnel = useTunnel;
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
-		const res = await this.sandbox.exec(this.withDefaults(cmd));
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
+		const command = this.withDefaults(cmd);
+		const res =
+			options?.timeout === undefined
+				? await this.sandbox.exec(command)
+				: await this.sandbox.exec(command, { timeout: options.timeout });
 		return execResult(res.success, res.stdout, res.stderr);
 	}
 

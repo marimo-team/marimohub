@@ -17,8 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
     LANGUAGE=en_US:en \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    UV_CACHE_DIR=/opt/uv-cache \
+    UV_PROJECT_ENVIRONMENT=/opt/marimohub/venv \
+    UV_CACHE_DIR=/opt/marimohub/uv-cache \
     MARIMO_SKIP_UPDATE_CHECK=1 \
     _MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD=[html]
 
@@ -58,13 +58,13 @@ RUN cd /tmp \
       openpyxl \
       sqlglot \
  && rm -rf /tmp/base \
- && chown -R appuser:appuser /opt/venv /opt/uv-cache
+ && chown -R appuser:appuser /opt/marimohub
 
 # uv compiles installed packages, but not the interpreter's standard library.
 RUN python3 -m compileall -j 0 -q /usr/local/lib/python3.13 || true
 
-ENV VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:$PATH
+ENV VIRTUAL_ENV=/opt/marimohub/venv \
+    PATH=/opt/marimohub/venv/bin:$PATH
 
 # The hub's compute adapters exec commands via a login shell (`sh -lc`), and
 # /etc/profile resets PATH — dropping the venv set by ENV above. profile.d runs

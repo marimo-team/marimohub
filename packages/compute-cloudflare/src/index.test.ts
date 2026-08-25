@@ -97,6 +97,15 @@ describe('CloudflareSandboxProvider', () => {
 				error: { code: 'COMMAND_FAILED' },
 			});
 		});
+
+		it('passes an extended command timeout to the SDK', async () => {
+			fakeSandbox.exec.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+
+			await makeProvider().create(SANDBOX_ID).exec('uv sync', { timeout: 300_000 });
+
+			expect(fakeSandbox.exec).toHaveBeenCalledWith('uv sync', { timeout: 300_000 });
+		});
 	});
 
 	describe('instance.writeFiles() bytes', () => {

@@ -34,6 +34,7 @@ import {
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
+	K8sExecOptions,
 	K8sExecResult,
 	K8sPodPhaseInfo,
 	K8sSandboxInfo,
@@ -44,6 +45,40 @@ import type {
 const SANDBOX_NAME_LABEL = 'marimohub.io/sandbox-name';
 /** The single container name in each kernel Pod (the exec target). */
 const CONTAINER_NAME = 'marimo';
+
+interface ExecSocket {
+	on?(event: 'close' | 'error', listener: (event?: unknown) => void): void;
+	addEventListener?(event: 'close' | 'error', listener: (event?: unknown) => void): void;
+	close(): void;
+}
+
+function addExecSocketListener(
+	socket: ExecSocket,
+	event: 'close' | 'error',
+	listener: (value?: unknown) => void,
+): void {
+	if (socket.on) {
+		socket.on(event, listener);
+		return;
+	}
+	if (socket.addEventListener) {
+		socket.addEventListener(event, listener);
+		return;
+	}
+	throw new Error('exec WebSocket does not support event listeners');
+}
+
+function execSocketError(value: unknown): Error {
+	if (value instanceof Error) return value;
+	if (typeof value === 'object' && value !== null) {
+		const event = value as { error?: unknown; message?: unknown };
+		if (event.error instanceof Error) return event.error;
+		if (typeof event.message === 'string' && event.message) return new Error(event.message);
+		if (typeof event.error === 'string' && event.error) return new Error(event.error);
+		return new Error('exec WebSocket error');
+	}
+	return new Error(String(value));
+}
 
 /** True when an error is a k8s API error with the given HTTP status code. */
 function hasCode(err: unknown, code: number): boolean {
@@ -362,6 +397,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			name: string,
 			command: string[],
 			stdin?: string | Uint8Array,
+			options?: K8sExecOptions,
 		): Promise<K8sExecResult> {
 			const { exec } = await apis();
 			const out = collector();
@@ -373,6 +409,29 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 
 			return new Promise<K8sExecResult>((resolve, reject) => {
 				let status: V1Status | undefined;
+				let settled = false;
+				let socket: ExecSocket | undefined;
+				const finish = (result: K8sExecResult) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					resolve(result);
+				};
+				const fail = (error: unknown) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					reject(execSocketError(error));
+				};
+				const timer =
+					options?.timeout !== undefined && options.timeout > 0
+						? setTimeout(() => {
+								stdinStream?.destroy();
+								fail(new Error(`command timed out after ${options.timeout}ms`));
+								socket?.close();
+							}, options.timeout)
+						: undefined;
+				timer?.unref();
 				exec
 					.exec(
 						namespace,
@@ -387,17 +446,22 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 							status = s;
 						},
 					)
-					.then((socket) => {
-						socket.on('close', () =>
-							resolve({
+					.then((connectedSocket: ExecSocket) => {
+						socket = connectedSocket;
+						if (settled) {
+							connectedSocket.close();
+							return;
+						}
+						addExecSocketListener(connectedSocket, 'close', () =>
+							finish({
 								stdout: out.text(),
 								stderr: errc.text(),
 								exitCode: exitCodeFromStatus(status),
 							}),
 						);
-						socket.on('error', reject);
+						addExecSocketListener(connectedSocket, 'error', fail);
 					})
-					.catch(reject);
+					.catch(fail);
 			});
 		},
 

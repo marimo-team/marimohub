@@ -17,6 +17,7 @@ import type {
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -273,8 +274,10 @@ class ModalSandboxInstance implements SandboxInstance {
 		});
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
-		return runProcess(await this.spawn(['sh', '-lc', this.withDefaults(cmd)]));
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
+		return runProcess(
+			await this.spawn(['sh', '-lc', this.withDefaults(cmd)], { timeout: options?.timeout }),
+		);
 	}
 
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {

@@ -2,6 +2,7 @@ import type { SandboxId } from '../ids';
 import type {
 	ActiveSandbox,
 	CreateSandboxOptions,
+	ExecOptions,
 	ExecResult,
 	ExposePortOptions,
 	FileInfo,
@@ -24,6 +25,8 @@ export const EXPOSED_URL = 'https://sandbox.example/kernel';
 /** Records every call the provision/teardown paths make against a fake sandbox. */
 export interface SandboxCalls {
 	exec: string[];
+	/** Options of each `exec` call, index-aligned with `exec`. */
+	execOptions: (ExecOptions | undefined)[];
 	mountBucket: MountBucketOptions[];
 	startProcess: { cmd: string; options?: StartProcessOptions }[];
 	exposePort: { port: number; options: ExposePortOptions }[];
@@ -69,6 +72,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 	const writtenFiles = new Set<string>();
 	const calls: SandboxCalls = {
 		exec: [],
+		execOptions: [],
 		mountBucket: [],
 		startProcess: [],
 		exposePort: [],
@@ -96,8 +100,9 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 	};
 
 	const instance: SandboxInstance = {
-		exec: async (cmd: string): Promise<ExecResult> => {
+		exec: async (cmd: string, options?: ExecOptions): Promise<ExecResult> => {
 			calls.exec.push(cmd);
+			calls.execOptions.push(options);
 			if (opts.failExec !== undefined && cmd === opts.failExec) {
 				throw new Error('sandbox unreachable');
 			}
@@ -203,6 +208,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 	);
 	const calls: SandboxCalls = {
 		exec: [],
+		execOptions: [],
 		mountBucket: [],
 		startProcess: [],
 		exposePort: [],
@@ -222,8 +228,9 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 		path === root ? '' : path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
 
 	const instance = {
-		async exec(cmd: string): Promise<ExecResult> {
+		async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 			calls.exec.push(cmd);
+			calls.execOptions.push(options);
 			// Capture: base64 -w0 '<path>' or the portable base64 < '<path>' form.
 			const capture = cmd.match(/^base64(?: -w0)?(?: <)? (.+)$/);
 			if (capture) {

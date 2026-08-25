@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
+import {
+	NOT_A_DIRECTORY_EXIT_CODE,
+	NOT_A_DIRECTORY_MARKER,
+	shellQuote,
+} from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
@@ -21,6 +25,7 @@ import {
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
+	K8sExecOptions,
 	K8sExecResult,
 	K8sPodPhaseInfo,
 	KubernetesConfig,
@@ -65,7 +70,12 @@ function makeWorld(opts?: {
 }) {
 	const ensured: EnsureSandboxOptions[] = [];
 	const deleted: string[] = [];
-	const execCalls: { name: string; command: string[]; stdin?: string | Uint8Array }[] = [];
+	const execCalls: {
+		name: string;
+		command: string[];
+		stdin?: string | Uint8Array;
+		options?: K8sExecOptions;
+	}[] = [];
 	const pods = new Map<string, { sandboxId: SandboxId; phase: string }>();
 
 	const client: K8sClient = {
@@ -81,8 +91,8 @@ function makeWorld(opts?: {
 		},
 		getSchedulingFailure: async () => opts?.schedulingFailure,
 		getImagePullMessage: async () => opts?.imagePullMessage,
-		exec: async (name, command, stdin) => {
-			execCalls.push({ name, command, stdin });
+		exec: async (name, command, stdin, options) => {
+			execCalls.push({ name, command, stdin, options });
 			return opts?.execImpl?.(command, stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
 		},
 		delete: async (name) => {
@@ -153,6 +163,30 @@ describe('KubernetesCompute', () => {
 			});
 			const result = await makeCompute(world).create(SANDBOX_ID).exec('bad');
 			expectExecResult(result, { success: false, stderr: 'boom' });
+		});
+
+		it('runs the timeout supervisor in the login shell and passes the client deadline', async () => {
+			const world = makeWorld();
+
+			await makeCompute(world).create(SANDBOX_ID).exec('uv sync', { timeout: 300_000 });
+
+			expect(world.execCalls.at(-1)?.options).toEqual({ timeout: 300_000 });
+			const command = world.execCalls.at(-1)?.command;
+			expect(command?.slice(0, 2)).toEqual(['sh', '-lc']);
+			expect(command?.[2]).toContain('exec python3 -c ');
+			expect(command?.[2]).toContain('os.killpg(process.pid, signal.SIGKILL)');
+			expect(command?.[2]).toContain(`${shellQuote('299900')} ${shellQuote('uv sync')}`);
+		});
+
+		it('quotes hostile command text passed to the timeout supervisor', async () => {
+			const world = makeWorld();
+			const hostile = `printf '%s' "$(id)"; touch /tmp/escaped; echo \`whoami\``;
+
+			await makeCompute(world).create(SANDBOX_ID).exec(hostile, { timeout: 5000 });
+
+			const command = world.execCalls.at(-1)?.command;
+			expect(command?.slice(0, 2)).toEqual(['sh', '-lc']);
+			expect(command?.[2]).toContain(`${shellQuote('4900')} ${shellQuote(hostile)}`);
 		});
 	});
 

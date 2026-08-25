@@ -41,7 +41,7 @@ uv sync --inexact --no-compile-bytecode   # add the notebook's deps, keep the pr
 uv run --no-sync marimo edit notebook.py …
 ```
 
-marimo + the base libraries are already installed in `/opt/venv`
+marimo and the base libraries are installed in `/opt/marimohub/venv`
 (`UV_PROJECT_ENVIRONMENT`), so a notebook that only uses them starts with no
 install. The notebook's `pyproject.toml` lists only its own extra libraries.
 
