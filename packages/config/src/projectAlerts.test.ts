@@ -53,7 +53,7 @@ describe('project alert configuration', () => {
 });
 
 function probe(fetch: IntegrationProbe['fetch']): IntegrationProbe {
-	return { fetch };
+	return { fetch, connect: () => Promise.reject(new Error('unused')) };
 }
 
 async function enabledDestination(

@@ -263,6 +263,7 @@ function browserDeps(
 		if (!options.testClickhouse || def.kind !== 'clickhouse') registry.register(def);
 	}
 	const probe = options.probe ?? {
+		connect: () => Promise.reject(new Error('no network in tests')),
 		fetch: () => Promise.reject(new Error('no network in tests')),
 	};
 	const storeOptions = {

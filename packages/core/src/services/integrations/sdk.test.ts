@@ -15,6 +15,7 @@ import { zSecret } from './secretFields';
 /** Fails the request with a message that quotes whatever the kind sent. */
 function echoingProbe(): IntegrationProbe {
 	return {
+		connect: () => Promise.reject(new Error('unused')),
 		fetch: (_url, init) =>
 			Promise.reject(new Error(`invalid header value ${JSON.stringify(init?.headers ?? {})}`)),
 	};
@@ -22,7 +23,10 @@ function echoingProbe(): IntegrationProbe {
 
 /** For kinds that fail before (or without) touching the network. */
 function unusedProbe(): IntegrationProbe {
-	return { fetch: () => Promise.reject(new Error('unused')) };
+	return {
+		connect: () => Promise.reject(new Error('unused')),
+		fetch: () => Promise.reject(new Error('unused')),
+	};
 }
 
 describe('defineIntegration secret guard', () => {
@@ -170,6 +174,7 @@ describe('defineIntegration secret guard', () => {
 
 	it('keeps a redacted success from contradicting its own ok result', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: () =>
 				Promise.resolve({
 					ok: true,
@@ -192,6 +197,7 @@ describe('defineIntegration secret guard', () => {
 
 	it('leaves secret-free details (status codes, versions) untouched', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: () =>
 				Promise.resolve({
 					ok: true,
@@ -282,6 +288,7 @@ describe('defineIntegration browse guard', () => {
 
 	it('replaces a thrown transport error with a generic failure', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: () => Promise.reject(new Error(`401 for Bearer ${config.token}`)),
 		};
 		await expect(browsy.browse!.listNamespaces(config, probe, { limit: 10 })).rejects.toThrow(

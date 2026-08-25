@@ -7,9 +7,16 @@ import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import type { RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { BlockList, isIP } from 'node:net';
+import { BlockList, connect as netConnect, isIP } from 'node:net';
+import type { TcpSocketConnectOpts } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { createSlidingWindowBudget, parseHttpUrl, withDeadline } from '@marimo-hub/core';
-import type { IntegrationProbe, ProbeRequestInit, ProbeResponse } from '@marimo-hub/core';
+import type {
+	IntegrationProbe,
+	ProbeConnectRequest,
+	ProbeRequestInit,
+	ProbeResponse,
+} from '@marimo-hub/core';
 import { createPinnedLookup } from '@marimo-hub/object-browser-commons';
 import type { GuardedHostResolver, PinnedAddress } from '@marimo-hub/object-browser-commons';
 
@@ -27,6 +34,8 @@ export interface GuardedProbeOptions {
 	maxProbesPerMinute?: number;
 	/** Injectable request layer; defaults to Node's HTTP(S) transport. */
 	transport?: ProbeTransport;
+	/** Injectable socket layer; defaults to Node's TCP/TLS transport. */
+	connectionTransport?: ProbeConnectionTransport;
 }
 
 export type { GuardedHostResolver, PinnedAddress } from '@marimo-hub/object-browser-commons';
@@ -67,6 +76,13 @@ export type ProbeTransport = (
 	request: ProbeTransportRequest,
 ) => Promise<{ status: number; body: string; headers?: Readonly<Record<string, string>> }>;
 
+export interface ProbeConnectionTransportRequest extends ProbeConnectRequest {
+	pinned: PinnedAddress[];
+	timeoutMs: number;
+}
+
+export type ProbeConnectionTransport = (request: ProbeConnectionTransportRequest) => Promise<void>;
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_MAX_PROBES_PER_MINUTE = 30;
@@ -87,6 +103,7 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 		maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
 		maxProbesPerMinute = DEFAULT_MAX_PROBES_PER_MINUTE,
 		transport = nodeTransport,
+		connectionTransport = nodeConnectionTransport,
 	} = options;
 	const probeBudget = createSlidingWindowBudget<'probe'>({
 		limit: maxProbesPerMinute,
@@ -94,11 +111,33 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 	});
 
 	return {
+		async connect(request: ProbeConnectRequest): Promise<void> {
+			const now = Date.now();
+			consumeProbeBudget(probeBudget);
+			if (!Number.isInteger(request.port) || request.port < 1 || request.port > 65_535) {
+				throw new Error('Invalid port.');
+			}
+			const hostname = request.hostname.replaceAll(/^\[|\]$/g, '');
+			if (hostname === '') throw new Error('Invalid hostname.');
+			const deadline = now + timeoutMs;
+			const pinned = await withDeadline(resolveAndValidate(hostname, allowPrivate), {
+				timeoutMs: Math.max(0, deadline - Date.now()),
+				timeoutError: timedOut,
+				signal: request.signal,
+				abortError: aborted,
+			});
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) throw timedOut();
+			await connectionTransport({
+				...request,
+				hostname,
+				pinned,
+				timeoutMs: remainingMs,
+			});
+		},
 		async fetch(url: string, init: ProbeRequestInit = {}): Promise<ProbeResponse> {
 			const now = Date.now();
-			if (!probeBudget.consume('probe')) {
-				throw new Error('Too many connection tests — try again in a minute.');
-			}
+			consumeProbeBudget(probeBudget);
 
 			// One deadline for the whole test: a slow resolver eats into the transport's
 			// share instead of granting it a fresh timeout (worst case ~2x the limit).
@@ -136,6 +175,12 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 			};
 		},
 	};
+}
+
+function consumeProbeBudget(budget: ReturnType<typeof createSlidingWindowBudget<'probe'>>): void {
+	if (!budget.consume('probe')) {
+		throw new Error('Too many connection tests — try again in a minute.');
+	}
 }
 
 const nodeTransport: ProbeTransport = (probeRequest) =>
@@ -197,6 +242,41 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 		request.on('error', (err) => settle(() => reject(err)));
 		if (probeRequest.body !== undefined) request.write(probeRequest.body);
 		request.end();
+	});
+
+const nodeConnectionTransport: ProbeConnectionTransport = (request) =>
+	new Promise((resolve, reject) => {
+		let settled = false;
+		const signal = request.signal
+			? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
+			: AbortSignal.timeout(request.timeoutMs);
+		const options: TcpSocketConnectOpts & { autoSelectFamily?: boolean } = {
+			host: request.hostname,
+			port: request.port,
+			lookup: createPinnedLookup(request.pinned),
+			autoSelectFamily: true,
+		};
+		const socket = request.tls
+			? tlsConnect({
+					...options,
+					...(isIP(request.hostname) === 0 ? { servername: request.hostname } : {}),
+					rejectUnauthorized: true,
+				})
+			: netConnect(options);
+		const successEvent = request.tls ? 'secureConnect' : 'connect';
+		const settle = (error?: Error) => {
+			if (settled) return;
+			settled = true;
+			signal.removeEventListener('abort', onAbort);
+			socket.destroy();
+			if (error) reject(error);
+			else resolve();
+		};
+		const onAbort = () => settle(request.signal?.aborted ? aborted() : timedOut());
+		socket.once(successEvent, () => settle());
+		socket.once('error', settle);
+		signal.addEventListener('abort', onAbort, { once: true });
+		if (signal.aborted) onAbort();
 	});
 
 function parseTarget(url: string): URL {

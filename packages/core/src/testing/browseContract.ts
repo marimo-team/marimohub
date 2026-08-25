@@ -201,6 +201,7 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
  */
 export function fetchProbe(): IntegrationProbe {
 	return {
+		connect: () => Promise.reject(new Error('Socket probing is not part of the browse contract.')),
 		fetch: async (url, init) => {
 			const res = await fetch(url, {
 				method: init?.method ?? 'GET',

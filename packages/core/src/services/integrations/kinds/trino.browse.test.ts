@@ -14,6 +14,7 @@ function queuedProbe(bodies: unknown[]) {
 	const calls: { url: string; init?: ProbeRequestInit }[] = [];
 	let index = 0;
 	const probe: IntegrationProbe = {
+		connect: () => Promise.reject(new Error('unused')),
 		fetch: async (url, init) => {
 			calls.push({ url, init });
 			return { ok: true, status: 200, json: async () => bodies[index++] };

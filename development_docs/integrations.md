@@ -137,6 +137,10 @@ environment variables instead. The bundle is placed under
 SSRF boundary: the Node adapter validates and pins resolved addresses, blocks
 redirects, caps response size and time, and rate-limits requests.
 
+HTTP-native kinds use `fetch`. Protocols without an HTTP endpoint may use
+`connect` for DNS, TCP, and optional TLS reachability only; it does not validate
+application-protocol authentication.
+
 When no probe is wired, every kind reports `supports_test: false`. This is the
 case for the Cloudflare Worker example because Workers do not expose the DNS
 hooks needed to pin validated addresses.
