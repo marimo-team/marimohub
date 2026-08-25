@@ -40,7 +40,9 @@ describe('integrationNotebookInfo', () => {
 	});
 
 	it('does not claim notebook guidance for unrelated integrations', () => {
-		expect(integrationNotebookInfo({ ...entry, kind: 'custom_env' }, undefined)).toBeUndefined();
+		expect(
+			integrationNotebookInfo({ ...entry, kind: 'custom_env' }, { ...kind, kind: 'custom_env' }),
+		).toBeUndefined();
 	});
 
 	it('includes PySpark and browsable kinds on the project Data page', () => {
