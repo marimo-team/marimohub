@@ -28,7 +28,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `secret_spark_config` | object[] |  |  |  |
 | `secret_spark_config[].name` | string | Yes |  |  |
 | `secret_spark_config[].value` 🔒 | string | Yes |  |  |
-| `ambient_env` | boolean |  | `false` | Also export SPARK_REMOTE so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `true` | Automatically offer this connection in marimo's data-source discovery by exporting SPARK_REMOTE. If multiple integrations request the same variables, one is discovered and every connection remains available through its notebook snippet. |
 
 **`auth.method: token`**
 

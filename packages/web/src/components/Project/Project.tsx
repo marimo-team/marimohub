@@ -77,7 +77,7 @@ import {
 	useIntegrationKindsQuery,
 	useIntegrationsQuery,
 } from '@/api/hooks';
-import { supportsTableBrowse } from '@/lib/integrationBrowse';
+import { supportsIntegrationDataPage } from '@/lib/integrationNotebook';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
@@ -201,12 +201,15 @@ export function Project() {
 	const projectAlertsAvailable = (capabilities?.project_alerts?.available ?? false) && canManage;
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
 	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
-	const browsableKinds = new Set(
-		(integrationKinds ?? []).filter(supportsTableBrowse).map((kind) => kind.kind),
-	);
-	const browsableIntegrations = (projectIntegrations ?? []).filter(
-		(entry) => entry.enabled && !entry.shadowed && browsableKinds.has(entry.kind),
-	);
+	const dataIntegrations = useMemo(() => {
+		const kindsByName = new Map((integrationKinds ?? []).map((kind) => [kind.kind, kind]));
+		return (projectIntegrations ?? []).filter(
+			(entry) =>
+				entry.enabled &&
+				!entry.shadowed &&
+				supportsIntegrationDataPage(kindsByName.get(entry.kind)),
+		);
+	}, [integrationKinds, projectIntegrations]);
 
 	const editProjectForm = useAppForm({
 		defaultValues: { name: project.name, description: project.description },
@@ -598,7 +601,7 @@ export function Project() {
 								<Bell className="size-4" />
 							</IconButton>
 						)}
-						{dataBrowserAvailable && browsableIntegrations.length > 0 && (
+						{dataBrowserAvailable && dataIntegrations.length > 0 && (
 							<IconLink to={`/projects/${pid}/data`} label="Browse data" tooltip="Browse data">
 								<Database className="size-4" />
 							</IconLink>

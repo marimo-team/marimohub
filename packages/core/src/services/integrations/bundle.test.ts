@@ -196,3 +196,47 @@ describe('bundler-owned env', () => {
 		expect(result.vars[INTEGRATIONS_DIR_ENV]).toBe(INTEGRATIONS_DIR);
 	});
 });
+
+describe('data-source discovery env', () => {
+	it('selects one complete discovery contract and warns about later claimants', () => {
+		const result = bundle([
+			rendered('staging', {
+				discoveryEnv: {
+					TRINO_HOST: 'staging.internal',
+					TRINO_USER: 'staging-user',
+					TRINO_CATALOG: 'hive',
+				},
+			}),
+			rendered('prod', {
+				discoveryEnv: { TRINO_HOST: 'prod.internal', TRINO_USER: 'prod-user' },
+			}),
+		]);
+
+		expect(result.vars).toMatchObject({
+			TRINO_HOST: 'prod.internal',
+			TRINO_USER: 'prod-user',
+		});
+		expect(result.vars.TRINO_CATALOG).toBeUndefined();
+		expect(result.warnings).toEqual([
+			expect.stringMatching(/"staging".*"prod".*TRINO_HOST, TRINO_USER/),
+		]);
+	});
+
+	it('keeps ordinary env collisions strict and records discovery warnings in the manifest', () => {
+		expect(() =>
+			bundle([
+				rendered('first', { env: { SHARED: 'one' } }),
+				rendered('second', { env: { SHARED: 'two' } }),
+			]),
+		).toThrow(/same environment variable/);
+
+		const result = bundle([
+			rendered('fallback', {
+				warnings: ['Automatic discovery is unavailable.'],
+			}),
+		]);
+		const manifest = result.files.find(({ path }) => path.endsWith('/manifest.json'));
+		const parsed = JSON.parse(manifest?.content ?? '{}') as { warnings?: string[] };
+		expect(parsed.warnings).toEqual(['Automatic discovery is unavailable.']);
+	});
+});

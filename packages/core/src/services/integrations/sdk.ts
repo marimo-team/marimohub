@@ -55,6 +55,14 @@ export interface RenderOutput {
 	 * emitting the same key with different values is a hard error.
 	 */
 	env?: Record<string, string>;
+	/**
+	 * Vendor-standard variables that enable marimo's data-source discovery.
+	 * The bundler applies this object atomically and skips it when another
+	 * integration already claims any key.
+	 */
+	discoveryEnv?: Record<string, string>;
+	/** User-safe notices produced while rendering this instance. */
+	warnings?: string[];
 	/** User-safe metadata copied into this instance's manifest entry. */
 	manifestExtra?: Record<string, unknown>;
 }

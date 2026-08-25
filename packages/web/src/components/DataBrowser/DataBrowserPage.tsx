@@ -6,13 +6,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import {
 	ArrowLeft,
-	Check,
 	ChevronDown,
 	ChevronRight,
-	Copy,
 	Database,
 	Folder,
-	NotebookPen,
 	RefreshCw,
 	Table2,
 } from 'lucide-react';
@@ -20,7 +17,6 @@ import {
 	Button,
 	Chip,
 	EmptyState,
-	IconButton,
 	IconLink,
 	SearchField,
 	Skeleton,
@@ -38,7 +34,6 @@ import {
 	useIntegrationsQuery,
 	useProjectQuery,
 } from '@/api/hooks';
-import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { BRAND_ICONS } from '@/components/Project/brandIcons';
 import {
 	objectBrowseCapability,
@@ -46,12 +41,13 @@ import {
 	supportsTableBrowse,
 	tableBrowseCapability,
 } from '@/lib/integrationBrowse';
+import { integrationNotebookInfo, supportsIntegrationDataPage } from '@/lib/integrationNotebook';
 import { formatRelative } from '@/lib/time';
 import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
 import { ApiRequestError } from '@/api/client';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
-import { useSeededNotebook } from './notebookSeed';
+import { NotebookSnippet, OpenInNotebookButton } from './NotebookActions';
 import { ObjectBrowser } from './ObjectBrowser';
 import { TabularPreviewGrid } from './TabularPreviewGrid';
 
@@ -116,14 +112,13 @@ export default function DataBrowserPage() {
 	const { data: entries } = useIntegrationsQuery({ pid: pid! }, available);
 
 	const kindsByName = useMemo(() => new Map((kinds ?? []).map((k) => [k.kind, k])), [kinds]);
-	const browsable = useMemo(
+	const dataIntegrations = useMemo(
 		() =>
 			(entries ?? []).filter(
 				(entry) =>
 					entry.enabled &&
 					!entry.shadowed &&
-					(supportsTableBrowse(kindsByName.get(entry.kind)) ||
-						supportsObjectBrowse(kindsByName.get(entry.kind))),
+					supportsIntegrationDataPage(kindsByName.get(entry.kind)),
 			),
 		[entries, kindsByName],
 	);
@@ -184,8 +179,14 @@ export default function DataBrowserPage() {
 	const selectIntegration = (entry: IntegrationEntry) => {
 		// A different integration means a different tree; selection does not carry.
 		const kind = kindsByName.get(entry.kind);
-		const surface = supportsTableBrowse(kind) ? 'tables' : 'objects';
-		void navigate(`/projects/${pid}/data/${entry.id}?surface=${surface}`);
+		const surface = supportsTableBrowse(kind)
+			? 'tables'
+			: supportsObjectBrowse(kind)
+				? 'objects'
+				: undefined;
+		void navigate(
+			`/projects/${pid}/data/${entry.id}${surface === undefined ? '' : `?surface=${surface}`}`,
+		);
 	};
 
 	const refresh = async () => {
@@ -197,8 +198,11 @@ export default function DataBrowserPage() {
 		}
 	};
 
-	const selected = browsable.find((entry) => entry.id === iid);
+	const selected = dataIntegrations.find((entry) => entry.id === iid);
 	const selectedKind = selected ? kindsByName.get(selected.kind) : undefined;
+	const selectedNotebookInfo = selected
+		? integrationNotebookInfo(selected, selectedKind)
+		: undefined;
 	const requestedSurface = searchParams.get('surface');
 	const selectedCapability = useBrowseCapabilityQuery(pid!, iid ?? '', selected !== undefined);
 	const querySurface = selectedCapability.data?.surfaces.query;
@@ -323,11 +327,11 @@ export default function DataBrowserPage() {
 					message="Data browsing is not available"
 					description="It may be disabled on this deployment, or your role in this project cannot browse data."
 				/>
-			) : browsable.length === 0 ? (
+			) : dataIntegrations.length === 0 ? (
 				<EmptyState
 					icon={<Database />}
-					message="Nothing to browse"
-					description="No enabled integration in this project supports browsing."
+					message="No data integrations"
+					description="No enabled integration in this project can be explored here."
 				/>
 			) : (
 				<div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,1fr)_minmax(0,2fr)] gap-4 text-sm max-lg:grid-cols-1 max-lg:overflow-y-auto">
@@ -341,7 +345,7 @@ export default function DataBrowserPage() {
 							/>
 						)}
 						<div className="min-h-0 flex-1 overflow-y-auto">
-							{browsable.map((entry) => (
+							{dataIntegrations.map((entry) => (
 								<IntegrationSection
 									key={entry.id}
 									projectId={pid!}
@@ -401,6 +405,13 @@ export default function DataBrowserPage() {
 									}
 								/>
 							)
+						) : selected && selectedKind && selectedNotebookInfo ? (
+							<NotebookIntegrationDetail
+								projectId={pid!}
+								integration={selected}
+								kind={selectedKind}
+								info={selectedNotebookInfo}
+							/>
 						) : selected && selection ? (
 							<TableDetail
 								// Remount per table so per-table state (the column filter)
@@ -411,17 +422,97 @@ export default function DataBrowserPage() {
 								selection={selection}
 								previewAvailable={selectedTableCapability?.preview ?? false}
 							/>
-						) : (
+						) : selected ? (
 							<EmptyState
 								icon={<Table2 />}
-								message="Select a table"
-								description="Pick an integration on the left, then drill into a namespace and choose a table to see its schema, stats, and a ready-to-paste load snippet."
+								message="Select a Table"
+								description="Drill into a namespace and choose a table to see its schema, stats, and a ready-to-paste load snippet."
+							/>
+						) : (
+							<EmptyState
+								icon={<Database />}
+								message="Select an Integration"
+								description="Choose an integration to browse its data or connect from a notebook."
 							/>
 						)}
 					</div>
 				</div>
 			)}
 		</div>
+	);
+}
+
+function NotebookIntegrationDetail({
+	projectId,
+	integration,
+	kind,
+	info,
+}: {
+	projectId: string;
+	integration: IntegrationEntry;
+	kind: IntegrationKind;
+	info: NonNullable<ReturnType<typeof integrationNotebookInfo>>;
+}) {
+	const iconSlug = kind.brand.icon;
+	const BrandIcon = iconSlug ? BRAND_ICONS[iconSlug] : undefined;
+	const notebook = {
+		title: `connect_${integration.name.replaceAll('-', '_')}`,
+		heading: `${kind.title}: ${integration.name}`,
+		description: `Connect to the ${integration.name} ${kind.title} integration.`,
+		snippet: info.snippet,
+	};
+
+	return (
+		<article className="flex h-full flex-col gap-6 overflow-y-auto rounded-xl border bg-card p-5 sm:p-6">
+			<header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+				<div className="flex min-w-0 items-center gap-3">
+					<div
+						className="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background"
+						style={{ color: kind.brand.color }}
+					>
+						{BrandIcon ? (
+							<BrandIcon className="size-6" aria-hidden />
+						) : (
+							<Database className="size-5" aria-hidden />
+						)}
+					</div>
+					<div className="min-w-0">
+						<p className="text-sm text-muted-foreground" translate="no">
+							{kind.title}
+						</p>
+						<h2 className="break-words text-xl font-semibold text-balance" translate="no">
+							{integration.name}
+						</h2>
+					</div>
+				</div>
+				<OpenInNotebookButton
+					projectId={projectId}
+					notebook={notebook}
+					label="Create PySpark Notebook"
+					className="w-full sm:w-auto"
+				/>
+			</header>
+
+			<section className="max-w-3xl rounded-lg border border-primary/20 bg-primary/5 p-4">
+				<h3 className="font-medium">Connect from a Notebook</h3>
+				<p className="mt-1 text-sm text-pretty text-muted-foreground">{info.description}</p>
+			</section>
+
+			{kind.requirements.length > 0 && (
+				<section className="flex flex-col gap-2">
+					<h3 className="text-sm font-medium">Required Package</h3>
+					<div className="flex flex-wrap gap-1.5">
+						{kind.requirements.map((requirement) => (
+							<Chip key={requirement}>
+								<code translate="no">{requirement}</code>
+							</Chip>
+						))}
+					</div>
+				</section>
+			)}
+
+			<NotebookSnippet snippet={info.snippet} title="PySpark Connection Code" />
+		</article>
 	);
 }
 
@@ -718,22 +809,8 @@ function TableDetail({
 		selection.namespace,
 		selection.table,
 	);
-	const { copied, copy } = useCopyToClipboard();
 	const [columnFilter, setColumnFilter] = useState('');
-	const seededNotebook = useSeededNotebook(projectId);
 	const qualifiedName = [...selection.namespace, selection.table].join('.');
-
-	const openInNotebook = async () => {
-		const snippet = schema.data?.snippet;
-		if (!snippet) return;
-		const title = `explore_${selection.table}`;
-		await seededNotebook.create({
-			title,
-			heading: qualifiedName,
-			description: `Explore ${qualifiedName} via the ${integration.name} integration`,
-			snippet,
-		});
-	};
 
 	if (schema.data === undefined) {
 		return schema.error ? (
@@ -812,14 +889,15 @@ function TableDetail({
 					</span>
 				</div>
 				{schema.data.snippet && (
-					<Button
-						variant="primary"
-						onPress={() => void openInNotebook()}
-						isDisabled={seededNotebook.isPending}
-					>
-						<NotebookPen className="size-4" />
-						{seededNotebook.isPending ? 'Creating…' : 'Open in notebook'}
-					</Button>
+					<OpenInNotebookButton
+						projectId={projectId}
+						notebook={{
+							title: `explore_${selection.table}`,
+							heading: qualifiedName,
+							description: `Explore ${qualifiedName} via the ${integration.name} integration`,
+							snippet: schema.data.snippet,
+						}}
+					/>
 				)}
 			</div>
 
@@ -874,21 +952,7 @@ function TableDetail({
 			)}
 
 			{schema.data.snippet && (
-				<div className="flex flex-col gap-1.5">
-					<div className="flex items-center justify-between">
-						<span className="text-xs font-medium text-muted-foreground">Load in a notebook</span>
-						<IconButton
-							label={copied ? 'Copied' : 'Copy snippet'}
-							tooltip={copied ? 'Copied' : 'Copy snippet'}
-							onPress={() => void copy(schema.data.snippet ?? '')}
-						>
-							{copied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
-						</IconButton>
-					</div>
-					<pre className="overflow-x-auto rounded-md border border-input bg-muted/40 p-3 font-mono text-xs">
-						{schema.data.snippet}
-					</pre>
-				</div>
+				<NotebookSnippet snippet={schema.data.snippet} title="Load in a Notebook" />
 			)}
 		</div>
 	);

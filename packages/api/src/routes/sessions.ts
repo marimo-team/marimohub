@@ -1224,6 +1224,10 @@ app.openapi(createSession, async (c) => {
 							});
 							if (render) {
 								observer.tag('integrations_rendered_count', render.attachments.length);
+								if (render.warnings.length > 0) {
+									observer.tag('integration_warnings', render.warnings);
+									observer.tag('integration_warning_count', render.warnings.length);
+								}
 								integrationAttachments = render.attachments;
 							}
 							return render;

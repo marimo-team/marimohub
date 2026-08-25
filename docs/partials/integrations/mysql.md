@@ -16,7 +16,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `username` | string | Yes |  |  |
 | `password` 🔒 | string | Yes |  | Password for the database user |
 | `ssl.mode` | `verify_identity`, `disabled` |  | `verify_identity` | `verify_identity` checks the CA chain and the hostname; `disabled` is plaintext |
-| `ambient_env` | boolean |  | `false` | Also export MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE, MYSQL_USER, and MYSQL_PASSWORD so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `true` | Automatically offer this connection in marimo's data-source discovery by exporting MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE, MYSQL_USER, and MYSQL_PASSWORD. If multiple integrations request the same variables, one is discovered and every connection remains available through its notebook snippet. |
 
 **`ssl.mode: verify_identity`**
 

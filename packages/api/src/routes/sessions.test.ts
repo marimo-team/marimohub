@@ -107,6 +107,40 @@ describe('Session routes', () => {
 		return data.session_id as string;
 	}
 
+	it('logs best-effort integration warnings when provisioning a session', async () => {
+		const warning =
+			'Integration "staging" uses its notebook snippet because "prod" owns automatic discovery.';
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: makeFakeCompute(),
+				deps: {
+					integrations: {
+						resolveForSession: async () => ({
+							files: [],
+							vars: {},
+							attachments: [],
+							warnings: [warning],
+						}),
+					} as never,
+				},
+			}).request;
+
+			await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			const line = log.mock.calls.find((call) =>
+				String(call[0]).includes('session_provision'),
+			)?.[0];
+			expect(JSON.parse(String(line))).toMatchObject({
+				integration_warning_count: 1,
+				integration_warnings: [warning],
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
 		// Use a notebook id that was never created in this project.
 		const bogusNid = createNotebookId();

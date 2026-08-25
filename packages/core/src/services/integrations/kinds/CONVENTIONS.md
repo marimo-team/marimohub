@@ -25,6 +25,8 @@ Use these rules for each new integration kind.
 
 - Validate protocol boundaries in the renderer. Do not depend only on the JSON Schema pattern.
 - List process-wide environment variables in `environmentVariables`.
+- Put best-effort marimo discovery variables in `RenderOutput.discoveryEnv`; keep required ambient
+  variables in `env` so conflicts still fail closed.
 - Use `resolveRequirements` when the selected configuration changes the package set.
 - Add one migration description for each increase of `schemaVersion`.
 - Keep secret values out of descriptors, errors, and manifest metadata.

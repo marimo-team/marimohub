@@ -2072,7 +2072,7 @@ const DISCOVERY_CONTRACT = [
 		overrides: { ssl: { mode: 'disabled' } },
 	},
 	{ kind: 'trino', required: ['TRINO_HOST', 'TRINO_USER', 'TRINO_CATALOG'], overrides: {} },
-	{ kind: 'pyspark', required: ['SPARK_REMOTE'], overrides: {} },
+	{ kind: 'pyspark', required: ['SPARK_REMOTE'], overrides: { app_name: undefined } },
 	{ kind: 's3', required: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'], overrides: {} },
 ];
 
@@ -2083,7 +2083,8 @@ describe('marimo data-source discovery', () => {
 			const def = defaultRegistry().get(kind);
 			const config = def.configSchema.parse(fixtureFor(def, { ambient_env: true, ...overrides }));
 			expect(() => def.validate?.(config)).not.toThrow();
-			const env = renderDefinition(def, config).env ?? {};
+			const output = renderDefinition(def, config);
+			const env = kind === 's3' ? (output.env ?? {}) : (output.discoveryEnv ?? {});
 			for (const name of required) {
 				expect(env[name], `${kind} must set ${name}`).toBeTruthy();
 			}
@@ -2091,9 +2092,20 @@ describe('marimo data-source discovery', () => {
 	);
 
 	it.each(DISCOVERY_CONTRACT.filter(({ kind }) => kind !== 's3'))(
+		'$kind enables discovery by default',
+		({ kind, required, overrides }) => {
+			const def = defaultRegistry().get(kind);
+			const config = def.configSchema.parse(fixtureFor(def, overrides));
+			const output = renderDefinition(def, config);
+			for (const name of required) expect(output.discoveryEnv?.[name], name).toBeTruthy();
+		},
+	);
+
+	it.each(DISCOVERY_CONTRACT.filter(({ kind }) => kind !== 's3'))(
 		'$kind claims nothing outside its own prefix until asked',
 		({ kind, required }) => {
-			const env = renderFixture(defaultRegistry().get(kind), { ambient_env: false }).env ?? {};
+			const env =
+				renderFixture(defaultRegistry().get(kind), { ambient_env: false }).discoveryEnv ?? {};
 			for (const name of required) expect(env[name], name).toBeUndefined();
 		},
 	);
@@ -2102,46 +2114,87 @@ describe('marimo data-source discovery', () => {
 	// connection marimo builds sets none — so these are what stop a discovered
 	// connection from being a weaker one to the same server.
 	it('postgres: the discovered connection verifies exactly like the rendered URL', () => {
-		const env = renderFixture(postgres, { ambient_env: true }).env ?? {};
+		const env = renderFixture(postgres, { ambient_env: true }).discoveryEnv ?? {};
 		expect(env.PGSSLMODE).toBe('verify-full');
 		expect(env.PGSSLROOTCERT).toBe('/etc/ssl/certs/ca-certificates.crt');
 
 		const custom = renderFixture(postgres, {
 			ambient_env: true,
 			ssl: { mode: 'verify-ca', ca_bundle: 'CA' },
-		}).env;
+		}).discoveryEnv;
 		expect(custom?.PGSSLMODE).toBe('verify-ca');
 		expect(custom?.PGSSLROOTCERT).toBe(`${INTEGRATIONS_DIR}/postgres/prod-ca.pem`);
 	});
 
-	it('mysql: refuses to advertise a TLS connection PyMySQL would open in plaintext', () => {
+	it('mysql: falls back to its notebook snippet when discovery cannot preserve TLS', () => {
 		const config = mysql.configSchema.parse(fixtureFor(mysql, { ambient_env: true }));
-		expect(() => mysql.validate?.(config)).toThrow(/plaintext/);
+		expect(() => mysql.validate?.(config)).not.toThrow();
+		const output = renderDefinition(mysql, config);
+		expect(output.discoveryEnv).toBeUndefined();
+		expect(output.warnings).toEqual([expect.stringMatching(/cannot carry its MySQL TLS settings/)]);
 	});
 
 	it('trino: exports the password so the discovered connection authenticates over HTTPS', () => {
-		const env = renderFixture(trino, { ambient_env: true }).env ?? {};
+		const env = renderFixture(trino, { ambient_env: true }).discoveryEnv ?? {};
 		expect(env.TRINO_CATALOG).toBe('hive');
 		expect(env.TRINO_PASSWORD).toBe('pw');
 	});
 
 	it.each([
-		[{ default_catalog: undefined }, /requires default_catalog/],
-		[{ auth: { method: 'jwt', token: 'jwt-token' } }, /Basic auth over HTTPS/],
-		[{ auth: { method: 'none' } }, /Basic auth over HTTPS/],
+		[{ default_catalog: undefined }, /requires a default catalog/],
+		[{ auth: { method: 'jwt', token: 'jwt-token' } }, /Basic authentication over HTTPS/],
+		[{ auth: { method: 'none' } }, /Basic authentication over HTTPS/],
 		// Nothing carries a private CA or a disabled check into the discovered
 		// connection, so it would verify differently than the configured one.
-		[{ tls: { verification: 'custom_ca', ca_bundle: 'CA' } }, /custom CA or disabled/],
-		[{ tls: { verification: 'disabled' } }, /custom CA or disabled/],
+		[{ tls: { verification: 'custom_ca', ca_bundle: 'CA' } }, /custom Trino TLS/],
+		[{ tls: { verification: 'disabled' } }, /custom Trino TLS/],
 		// marimo authenticates as TRINO_USER, so a separate query user cannot be
 		// expressed — the discovered connection would use the wrong credential.
-		[{ user: 'analyst' }, /match/],
-	])('trino: refuses discovery it cannot express (%j)', (overrides, message) => {
+		[{ user: 'analyst' }, /same Trino query user/],
+		[{ source: 'marimohub' }, /configured Trino source/],
+		[{ session_properties: { join_distribution_type: 'BROADCAST' } }, /session properties/],
+		[{ roles: { hive: 'analyst' } }, /configured Trino roles/],
+		[{ client_tags: [{ value: 'interactive' }] }, /client tags/],
+		[{ http_headers: [{ name: 'X-Trace', value: 'trace' }] }, /HTTP headers/],
+		[{ extra_credentials: [{ name: 'tenant', value: 'acme' }] }, /extra credentials/],
+		[{ timezone: 'America/New_York' }, /configured Trino timezone/],
+		[{ encoding: [{ value: 'json+zstd' }] }, /configured Trino encoding/],
+		[{ max_attempts: 5 }, /maximum attempts/],
+		[{ request_timeout_seconds: 30 }, /request timeout/],
+		[{ heartbeat_interval_seconds: 10 }, /heartbeat interval/],
+		[{ isolation_level: 'READ_COMMITTED' }, /isolation level/],
+		[{ legacy_primitive_types: true }, /legacy primitive types/],
+		[{ legacy_prepared_statements: false }, /legacy prepared statements/],
+	])('trino: falls back when discovery cannot express the config (%j)', (overrides, message) => {
 		const config = trino.configSchema.parse(fixtureFor(trino, { ambient_env: true, ...overrides }));
-		expect(() => trino.validate?.(config)).toThrow(message);
+		expect(() => trino.validate?.(config)).not.toThrow();
+		const output = renderDefinition(trino, config);
+		expect(output.discoveryEnv).toBeUndefined();
+		expect(output.warnings?.join(' ')).toMatch(message);
 	});
 
-	it('two instances claiming the same variables fail the session, naming both', () => {
+	it.each([
+		[{ app_name: 'analytics' }, /Spark application name/],
+		[{ spark_config: { 'spark.sql.session.timeZone': 'UTC' } }, /Spark session properties/],
+		[
+			{
+				secret_spark_config: [{ name: 'spark.hadoop.fs.s3a.secret.key', value: 's3-secret' }],
+			},
+			/secret Spark session properties/,
+		],
+	])('pyspark: falls back when discovery cannot express the config (%j)', (overrides, message) => {
+		const config = pyspark.configSchema.parse(
+			fixtureFor(pyspark, { ambient_env: true, app_name: undefined, ...overrides }),
+		);
+		expect(() => pyspark.validate?.(config)).not.toThrow();
+		const output = renderDefinition(pyspark, config);
+		expect(output.discoveryEnv).toBeUndefined();
+		expect(output.env?.MARIMOHUB_PYSPARK_PROD_CONFIG).toBe(`${INTEGRATIONS_DIR}/pyspark/prod.json`);
+		expect(output.files?.some(({ path }) => path === 'pyspark/prod.json')).toBe(true);
+		expect(output.warnings?.join(' ')).toMatch(message);
+	});
+
+	it('two instances claiming the same variables discover one and warn about the fallback', () => {
 		const rendered = ['prod', 'staging'].map((name, index) => ({
 			id: `intg-00000000000000${index}0` as never,
 			name,
@@ -2149,9 +2202,11 @@ describe('marimo data-source discovery', () => {
 			version: 1,
 			output: renderFixture(postgres, { ambient_env: true, host: `${name}.internal` }, name),
 		}));
-		expect(() => bundleIntegrations(rendered, createSessionId())).toThrow(
-			/"prod" and "staging" set the same environment variable/,
-		);
+		const bundle = bundleIntegrations(rendered, createSessionId());
+		expect(bundle.vars.PGHOST).toBe('prod.internal');
+		expect(bundle.warnings).toEqual([
+			expect.stringMatching(/"staging".*not automatic data-source discovery.*"prod"/),
+		]);
 	});
 });
 
