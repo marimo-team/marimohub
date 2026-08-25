@@ -519,12 +519,21 @@ mod tests {
     }
 
     fn notebook_config(path: &str) -> String {
+        let path = toml::Value::String(path.to_owned());
         format!(
             r#"project_id = "proj-7h2k9qm4xz7rp3w8"
 notebook_id = "nb-7h2k9qm4xz7rp3w8"
-path = "{path}"
+path = {path}
 "#
         )
+    }
+
+    #[test]
+    fn notebook_config_escapes_toml_string_paths() {
+        let path = r#"C:\Users\runner\app.py"#;
+        let config: toml::Value = toml::from_str(&notebook_config(path)).unwrap();
+
+        assert_eq!(config.get("path").and_then(toml::Value::as_str), Some(path));
     }
 
     #[test]
