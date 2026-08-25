@@ -162,13 +162,13 @@ function assertDeviceRequestAllowed(): void {
 }
 
 function assertDevicePollAllowed(code: string): void {
-	const authorization = parseCliAuthorizationCode(code);
-	if (authorization === null) return;
 	consumeBudget(
 		globalDevicePollBudget,
 		'deployment',
 		'Too many CLI device authorization polls; try again later.',
 	);
+	const authorization = parseCliAuthorizationCode(code);
+	if (authorization === null) return;
 	consumeBudget(
 		devicePollBudget,
 		authorization.id,
@@ -387,10 +387,8 @@ cliTokenApp.openapi(requestDeviceAuthorization, async (c) => {
 	const requested = await c
 		.get('deps')
 		.services.cliAuthorizations.requestDevice(c.req.valid('json').code_challenge);
-	const verification = new URL(c.req.url);
-	verification.pathname = '/cli/device';
-	verification.search = '';
-	verification.hash = '';
+	const publicBaseUrl = c.get('deps').sandbox.appBaseUrl ?? new URL(c.req.url).origin;
+	const verification = new URL('/cli/device', publicBaseUrl);
 	const complete = new URL(verification);
 	complete.searchParams.set('user_code', requested.userCode);
 	preventCaching(c);

@@ -585,7 +585,9 @@ attempts to five per user and limits polling separately.
 `CliAuthorizationService` is the only writer. Exchange uses CAS to change the
 grant from `pending` to `claimed` before it creates the PAT. This step prevents
 replay and concurrent token creation. Exchange deletes the grant and user-code
-claim. Each new request prunes at most 100 expired records from each prefix.
+claim. Creating a loopback grant prunes at most 100 expired authorization records.
+Creating a device grant prunes the same records and at most 100 expired user-code
+claims. Device approval, exchange, and polling do not prune records.
 
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 

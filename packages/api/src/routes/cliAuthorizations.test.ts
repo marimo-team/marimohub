@@ -150,6 +150,29 @@ describe('CLI authorization routes', () => {
 		expect(response.headers.get('Pragma')).toBe('no-cache');
 	});
 
+	it('uses the configured public app URL for device verification links', async () => {
+		const deps = makeTestDeps(bucket);
+		deps.sandbox.appBaseUrl = 'https://hub.example.com';
+		const publicApp = createApi(deps);
+
+		const device = await expectOk<{
+			user_code: string;
+			verification_uri: string;
+			verification_uri_complete: string;
+		}>(
+			await publicApp.request('http://api.internal/api/cli/v1/device-authorizations', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code_challenge: CHALLENGE }),
+			}),
+		);
+
+		expect(device.verification_uri).toBe('https://hub.example.com/cli/device');
+		expect(device.verification_uri_complete).toBe(
+			`https://hub.example.com/cli/device?user_code=${device.user_code}`,
+		);
+	});
+
 	it('does not disclose device grant state without its PKCE verifier', async () => {
 		const device = await requestDevice();
 
@@ -507,6 +530,29 @@ describe('CLI authorization routes', () => {
 			expect(globalResponse.headers.get('Retry-After')).toBe('5');
 			expect(exchange).toHaveBeenCalledTimes(599);
 		} finally {
+			vi.setSystemTime(realNow);
+			vi.useRealTimers();
+		}
+	});
+
+	it('charges malformed device codes against the global poll budget', async () => {
+		const realNow = Date.now();
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		vi.useFakeTimers({ now: realNow + 61_000 });
+		try {
+			const poll = () =>
+				app.request('/api/cli/v1/device-token', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ device_code: 'malformed', code_verifier: VERIFIER }),
+				});
+
+			for (let attempt = 0; attempt < 6_000; attempt += 1) {
+				expect((await poll()).status).toBe(400);
+			}
+			await expectError(await poll(), 429, 'RESOURCE_EXHAUSTED');
+		} finally {
+			log.mockRestore();
 			vi.setSystemTime(realNow);
 			vi.useRealTimers();
 		}

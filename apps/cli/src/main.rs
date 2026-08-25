@@ -430,6 +430,16 @@ fn browser_login(matches: &ArgMatches, base_url: &str) -> Result<BrowserCredenti
     }
 }
 
+fn next_device_poll_interval(
+    current: Duration,
+    base: Duration,
+    retry_after: Option<Duration>,
+) -> Duration {
+    retry_after
+        .map(|delay| delay.max(base))
+        .unwrap_or_else(|| current.saturating_mul(2).min(Duration::from_secs(60)))
+}
+
 fn device_login(matches: &ArgMatches, base_url: &str) -> Result<SecretString, Error> {
     let (code_verifier, code_challenge) = pkce_pair()?;
     let timeout = login_timeout(matches);
@@ -445,19 +455,27 @@ fn device_login(matches: &ArgMatches, base_url: &str) -> Result<SecretString, Er
 
     let lifetime = Duration::from_secs(authorization.expires_in).min(CLI_LOGIN_TIMEOUT);
     let deadline = Instant::now() + lifetime;
-    let mut interval = Duration::from_secs(authorization.interval.clamp(5, 60));
+    let base_interval = Duration::from_secs(authorization.interval.clamp(5, 60));
+    let mut interval = base_interval;
     while Instant::now() < deadline {
         thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
+        let request_timeout = timeout.min(deadline.saturating_duration_since(Instant::now()));
+        if request_timeout.is_zero() {
+            break;
+        }
         match client::poll_cli_device_authorization(
             base_url,
-            timeout,
+            request_timeout,
             &authorization.device_code,
             &code_verifier,
         ) {
-            Ok(client::CliDevicePoll::Pending) => {}
+            Ok(client::CliDevicePoll::Pending) => interval = base_interval,
             Ok(client::CliDevicePoll::Approved(token)) => return Ok(token),
+            Ok(client::CliDevicePoll::Retryable { retry_after }) => {
+                interval = next_device_poll_interval(interval, base_interval, retry_after);
+            }
             Err(Error::Transport(_)) => {
-                interval = (interval * 2).min(Duration::from_secs(60));
+                interval = next_device_poll_interval(interval, base_interval, None);
             }
             Err(error) => {
                 return Err(authentication_error(base_url, error));
@@ -931,6 +949,28 @@ mod tests {
 
         assert_eq!(path, ["login"]);
         assert!(leaf.get_flag("device-code"));
+    }
+
+    #[test]
+    fn device_poll_retries_respect_server_delay_and_back_off_without_one() {
+        let base = Duration::from_secs(5);
+
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(10), base, Some(Duration::from_secs(23)),),
+            Duration::from_secs(23),
+        );
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(10), base, Some(Duration::from_secs(1)),),
+            base,
+        );
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(10), base, None),
+            Duration::from_secs(20),
+        );
+        assert_eq!(
+            next_device_poll_interval(Duration::from_secs(60), base, None),
+            Duration::from_secs(60),
+        );
     }
 
     #[test]
