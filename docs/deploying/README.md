@@ -32,19 +32,28 @@ MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/marimohub/api/auth/call
 Configure nginx to strip the prefix and forward WebSocket connections:
 
 ```nginx
+location = /marimohub {
+    return 308 /marimohub/;
+}
+
 location /marimohub/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
     proxy_pass http://marimohub:3000/;
 }
 ```
 
-The trailing slash on `proxy_pass` strips the prefix. `X-Forwarded-Proto`
-preserves HTTPS in public links. The path prefix is runtime configuration, so one
-image can serve different prefixes.
+The redirect adds the trailing slash to the public URL. The trailing slash on
+`proxy_pass` strips the prefix. `X-Forwarded-Proto` preserves HTTPS in public
+links. The timeouts permit one hour between WebSocket I/O operations. nginx
+passes streamed responses without buffering. The path prefix is runtime
+configuration, so one image can serve different prefixes.
 
 After deploy, validate the same core flow on every platform:
 

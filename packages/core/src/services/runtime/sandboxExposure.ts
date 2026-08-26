@@ -47,14 +47,17 @@ export class ProxyExposure implements SandboxExposure {
 		return `/proxy/${token}`;
 	}
 
+	private async publicUrlFor(ctx: ExposureContext): Promise<string> {
+		return joinUrlPath(ctx.appBaseUrl, await this.pathFor(ctx));
+	}
+
 	async prepare(ctx: ExposureContext): Promise<ExposurePreparation> {
-		return { baseUrl: await this.pathFor(ctx) };
+		return { baseUrl: new URL(await this.publicUrlFor(ctx)).pathname };
 	}
 
 	async finalize(exposedUrl: string, ctx: ExposureContext): Promise<ExposureResult> {
-		const path = await this.pathFor(ctx);
 		return {
-			clientUrl: `${joinUrlPath(ctx.appBaseUrl, path)}/`,
+			clientUrl: `${await this.publicUrlFor(ctx)}/`,
 			originUrl: exposedUrl,
 		};
 	}
