@@ -373,7 +373,7 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('writeFiles()', () => {
-		it('collapses the per-file mkdirs into one exec, then writes the set in one call', async () => {
+		it('writes the set in one call with no exec in front of it', async () => {
 			const world = makeWorld();
 			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 
@@ -384,11 +384,9 @@ describe('CoreWeaveCompute', () => {
 			]);
 
 			const fake = [...world.registry.values()][0].fake;
-			// One mkdir covering both parents (deduped) — not one per file.
-			const mkdirs = fake.runCalls.filter((c) => c[2]?.startsWith('mkdir -p '));
-			expect(mkdirs).toHaveLength(1);
-			expect(mkdirs[0][2]).toContain(`'/w'`);
-			expect(mkdirs[0][2]).toContain(`'/w/data'`);
+			// No mkdir round-trip: AddFile creates parents.
+			expect(fake.runCalls).toHaveLength(0);
+			expect(inst.drainCounters!()).toEqual({ execs: 0 });
 			// The whole set goes to the SDK in ONE write call, bytes passed through
 			// verbatim (FileContent is string | Uint8Array — no base64 armoring).
 			expect(fake.batchWrites).toHaveLength(1);
@@ -403,6 +401,46 @@ describe('CoreWeaveCompute', () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).writeFiles([]);
 			expect(world.created).toHaveLength(0); // never even resolves the sandbox
+		});
+
+		it('defers the armed bootstrap past writes outside the user home', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] }).create(
+				SANDBOX_ID,
+				{ reuse: false },
+			);
+			await inst.writeFiles([{ path: '/workspace/notebook.py', content: 'x' }]);
+			const fake = world.registry.get('cw-1')!.fake;
+			expect(fake.runCalls).toHaveLength(0);
+			// Bootstrap rides the next command.
+			await inst.exec('true');
+			expect(fake.runCalls).toHaveLength(1);
+			expect(fake.runCalls[0][2]).toContain('addressing_style = virtual');
+		});
+
+		it('flushes the armed bootstrap before a write beneath the user home', async () => {
+			const world = makeWorld();
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const inst = makeCompute(world, {
+					...baseConfig,
+					userHomeProfileNames: ['marimohub-user-home'],
+				}).create(SANDBOX_ID, {
+					reuse: false,
+					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+				});
+				await inst.writeFiles([{ path: '/mnt/ada@example.com/notes.md', content: 'x' }]);
+				const fake = world.registry.get('cw-1')!.fake;
+				// Link first, or AddFile creates a plain dir in its place.
+				expect(fake.runCalls).toHaveLength(1);
+				expect(fake.runCalls[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
+				expect(fake.batchWrites).toHaveLength(1);
+				// Consumed once.
+				await inst.exec('true');
+				expect(fake.runCalls[1][2]).not.toContain('ln -s');
+			} finally {
+				warn.mockRestore();
+			}
 		});
 	});
 
@@ -845,18 +883,12 @@ describe('CoreWeaveCompute', () => {
 			});
 		});
 
-		it('writeFiles creates the parent directory first (nested path)', async () => {
+		it('writeFiles leaves parent-directory creation to AddFile (nested path)', async () => {
 			const world = makeWorld();
 			const inst = makeCompute(world).create(SANDBOX_ID);
 			await inst.writeFiles([{ path: '/tmp/marimohub-config/marimo/marimo.toml', content: 'x' }]);
 			const fake = [...world.registry.values()][0].fake;
-			expect(
-				fake.runCalls.some(
-					(c) =>
-						c.join(' ').includes('mkdir -p') &&
-						c.join(' ').includes('/tmp/marimohub-config/marimo'),
-				),
-			).toBe(true);
+			expect(fake.runCalls.some((c) => c.join(' ').includes('mkdir -p'))).toBe(false);
 			expect(fake.batchWrites.at(-1)![0]).toMatchObject({
 				path: '/tmp/marimohub-config/marimo/marimo.toml',
 				content: 'x',
@@ -904,10 +936,8 @@ describe('CoreWeaveCompute', () => {
 			const fake = [...world.registry.values()][0].fake;
 			// The bytes ride the SDK write API verbatim…
 			expect(fake.batchWrites.at(-1)![0].content).toBe(big);
-			// …and no exec argv (only the small mkdir) carries them.
-			for (const call of fake.runCalls) {
-				expect(call[2].length).toBeLessThan(big.length);
-			}
+			// …and no exec carries them.
+			expect(fake.runCalls).toHaveLength(0);
 		});
 
 		it('exposePort rejects when resolveExposedUrl throws', async () => {
