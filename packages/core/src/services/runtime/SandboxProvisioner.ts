@@ -15,6 +15,7 @@ import { logOperationalError } from '../../operationalLog';
 import type {
 	ComputeResources,
 	ExecResult,
+	SandboxLaunchResult,
 	SandboxUserHome,
 	SandboxInstance,
 	SandboxProcess,
@@ -24,7 +25,7 @@ import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
-import type { MarimoLaunchStrategyName } from './marimoLaunch';
+import type { MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
 import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
@@ -173,7 +174,7 @@ export interface ProvisionResult {
 	url: string;
 	/** Whether files were loaded via manual copy (true) or bucket mount (false) */
 	usedFallback: boolean;
-	/** Wall-clock total and per-phase ms: handle, reachable, files, inject, start, waitport, expose. */
+	/** Wall-clock total and per-phase ms: handle, reachable, files, inject, setup, start, waitport, expose. */
 	timings: Timings;
 	/**
 	 * Non-duration measurements for the same wide event — workspace objects/bytes
@@ -181,6 +182,38 @@ export interface ProvisionResult {
 	 * reported as milliseconds.
 	 */
 	counters: Record<string, number>;
+}
+
+interface MarimoStartup {
+	plan: MarimoLaunchPlan;
+	deadline: {
+		startedAt: number;
+		timeoutMs: number;
+	};
+}
+
+type SandboxLaunchFailure = Extract<SandboxLaunchResult, { success: false }>;
+
+function remainingStartupMs(startup: MarimoStartup): number {
+	const { startedAt, timeoutMs } = startup.deadline;
+	return timeoutMs === 0 ? 0 : Math.max(0, timeoutMs - (Date.now() - startedAt));
+}
+
+function pythonEnvironmentSetupTimeout(timeoutMs: number): PythonEnvironmentSetupError {
+	return new PythonEnvironmentSetupError(
+		`Failed to prepare the notebook Python environment within the ${Math.round(timeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
+	);
+}
+
+function kernelReadinessTimeoutStep(timeoutMs: number): string {
+	return `starting the marimo kernel: not ready within the ${Math.round(timeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`;
+}
+
+function formatKernelLogs(stdout: string, stderr: string): string {
+	return [stdout, stderr]
+		.filter((value) => value.trim())
+		.join('\n')
+		.trim();
 }
 
 /**
@@ -202,6 +235,69 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
 	// failed on, credentials included, and this string is shown to the caller and
 	// persisted on the session record.
 	return new UnavailableError(parts.join(' '), { cause: err });
+}
+
+function supervisedLaunchFailure(result: SandboxLaunchFailure, timeoutMs: number): Error {
+	if (result.reason === 'setup_timeout') return pythonEnvironmentSetupTimeout(timeoutMs);
+	if (result.reason === 'setup_exit') {
+		return pythonEnvironmentSetupFailure({
+			success: false,
+			stdout: result.stdout,
+			stderr: result.stderr,
+			error: { code: 'COMMAND_FAILED' },
+		});
+	}
+	const step =
+		result.reason === 'readiness_timeout'
+			? kernelReadinessTimeoutStep(timeoutMs)
+			: 'starting the marimo kernel';
+	const logs = formatKernelLogs(result.stdout, result.stderr);
+	return provisionFailure(
+		logs ? `${step}; kernel output:\n${logs}` : step,
+		new Error(result.reason),
+	);
+}
+
+async function readKernelLogs(process: SandboxProcess | undefined): Promise<string> {
+	if (!process) return '';
+	try {
+		const { stdout, stderr } = await process.getLogs();
+		return formatKernelLogs(stdout, stderr);
+	} catch {
+		// The process or sandbox may already be gone.
+		return '';
+	}
+}
+
+function adapterAttributedKernelCrash(error: unknown): boolean {
+	// Only the first line is adapter attribution; later lines may contain echoed kernel output.
+	const attribution = error instanceof Error ? error.message.split('\n', 1)[0] : '';
+	return /before port \d+/.test(attribution);
+}
+
+function kernelLaunchFailureStep(
+	error: unknown,
+	startup: MarimoStartup,
+	portWaitStarted: boolean,
+): string {
+	const { startedAt, timeoutMs } = startup.deadline;
+	const timedOut =
+		portWaitStarted && !adapterAttributedKernelCrash(error) && Date.now() - startedAt >= timeoutMs;
+	return timedOut ? kernelReadinessTimeoutStep(timeoutMs) : 'starting the marimo kernel';
+}
+
+function executeEnvironmentSetup(
+	sandbox: SandboxInstance,
+	command: string,
+	startup: MarimoStartup,
+): Promise<ExecResult> {
+	const timeoutMs = remainingStartupMs(startup);
+	const pending = sandbox.exec(command, { timeout: timeoutMs });
+	if (startup.deadline.timeoutMs === 0) return pending;
+	return withDeadline(pending, {
+		timeoutMs,
+		timeoutError: () => pythonEnvironmentSetupTimeout(startup.deadline.timeoutMs),
+	});
 }
 
 /**
@@ -406,12 +502,13 @@ export class SandboxProvisioner {
 			});
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
-		const startMarimoKernel = () => this.startMarimoKernel(sandbox, options, mountPath, sw);
+		const setupEnvironment = () => this.setupEnvironment(sandbox, options, mountPath, sw);
+		const launchKernel = (startup: MarimoStartup) =>
+			this.launchKernel(sandbox, mountPath, sw, startup);
 		const exposeKernel = () => this.exposeKernel(sandbox, options, sw);
 
-		// The workspace load and the credential inject touch disjoint targets (the
-		// mount path vs. credential file paths + env vars), so they overlap; the
-		// kernel start needs both. Note `files`/`inject` timings overlap too.
+		// Setup reads only the loaded workspace, so credential resolution and injection
+		// can overlap it. The kernel still waits for both to finish.
 		const { load, expose } = await all({
 			async reachable() {
 				await ensureReachable();
@@ -424,10 +521,14 @@ export class SandboxProvisioner {
 				await this.$.reachable;
 				await injectSessionEnv();
 			},
-			async start() {
+			async setup() {
 				await this.$.load;
+				return setupEnvironment();
+			},
+			async start() {
+				const startup = await this.$.setup;
 				await this.$.inject;
-				await startMarimoKernel();
+				await launchKernel(startup);
 			},
 			async expose() {
 				await this.$.start;
@@ -553,143 +654,114 @@ export class SandboxProvisioner {
 		});
 	}
 
-	private async startMarimoKernel(
+	private async setupEnvironment(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		mountPath: string,
 		sw: Stopwatch,
-	): Promise<void> {
-		const launch = buildMarimoLaunch(
-			{
-				notebookFile: options.entryNotebook ?? 'notebook.py',
-				port: MARIMO_PORT,
-				host: '0.0.0.0',
-				mode: options.launchMode,
-				assetUrl: options.assetUrl,
-				baseUrl: options.baseUrl,
-			},
-			options.launchStrategy,
-		);
-		const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
-		const startupStart = Date.now();
-		if (sandbox.launchProcess) {
-			let launched: Awaited<ReturnType<NonNullable<SandboxInstance['launchProcess']>>>;
-			try {
-				launched = await sandbox.launchProcess(launch.start, {
-					...(launch.setup.length > 0 ? { setup: launch.setup.join(' && ') } : {}),
-					cwd: mountPath,
+	): Promise<MarimoStartup> {
+		const startup: MarimoStartup = {
+			plan: buildMarimoLaunch(
+				{
+					notebookFile: options.entryNotebook ?? 'notebook.py',
 					port: MARIMO_PORT,
-					waitForPort: { mode: 'tcp' },
-					startupTimeout: startupTimeoutMs,
-				});
-			} catch (error) {
-				throw provisionFailure('starting the marimo kernel', error);
-			}
-			Object.assign(sw.timings, launched.timings);
-			if (launched.success) return;
-			if (launched.reason === 'setup_timeout') {
-				throw new PythonEnvironmentSetupError(
-					`Failed to prepare the notebook Python environment within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
-				);
-			}
-			if (launched.reason === 'setup_exit') {
-				throw pythonEnvironmentSetupFailure({
-					success: false,
-					stdout: launched.stdout,
-					stderr: launched.stderr,
-					error: { code: 'COMMAND_FAILED' },
-				});
-			}
-			const step =
-				launched.reason === 'readiness_timeout'
-					? `starting the marimo kernel: not ready within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`
-					: 'starting the marimo kernel';
-			const kernelLogs = [launched.stdout, launched.stderr]
-				.filter((value) => value.trim())
-				.join('\n')
-				.trim();
+					host: '0.0.0.0',
+					mode: options.launchMode,
+					assetUrl: options.assetUrl,
+					baseUrl: options.baseUrl,
+				},
+				options.launchStrategy,
+			),
+			deadline: {
+				startedAt: Date.now(),
+				timeoutMs: options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
+			},
+		};
+		if (startup.plan.setup.length === 0) return startup;
+
+		const command = `cd ${shellQuote(mountPath)} && ${startup.plan.setup.join(' && ')}`;
+		try {
+			await withSandboxSpan(
+				sw,
+				'setup',
+				async (time) => {
+					const result = await time(() => executeEnvironmentSetup(sandbox, command, startup));
+					if (!result.success) throw pythonEnvironmentSetupFailure(result);
+				},
+				{ launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
+			);
+		} catch (error) {
+			if (error instanceof PythonEnvironmentSetupError) throw error;
+			throw provisionFailure('preparing the notebook Python environment', error);
+		}
+		return startup;
+	}
+
+	private async launchKernel(
+		sandbox: SandboxInstance,
+		mountPath: string,
+		sw: Stopwatch,
+		startup: MarimoStartup,
+	): Promise<void> {
+		const launchProcess = sandbox.launchProcess?.bind(sandbox);
+		if (launchProcess) {
+			await this.launchSupervisedKernel(launchProcess, mountPath, sw, startup);
+			return;
+		}
+		await this.launchKernelProcess(sandbox, mountPath, sw, startup);
+	}
+
+	private async launchSupervisedKernel(
+		launchProcess: NonNullable<SandboxInstance['launchProcess']>,
+		mountPath: string,
+		sw: Stopwatch,
+		startup: MarimoStartup,
+	): Promise<void> {
+		const timeoutMs = remainingStartupMs(startup);
+		if (startup.deadline.timeoutMs !== 0 && timeoutMs === 0) {
 			throw provisionFailure(
-				kernelLogs ? `${step}; kernel output:\n${kernelLogs}` : step,
-				new Error(launched.reason),
+				kernelReadinessTimeoutStep(startup.deadline.timeoutMs),
+				new Error('readiness_timeout'),
 			);
 		}
-		if (launch.setup.length > 0) {
-			const command = `cd ${shellQuote(mountPath)} && ${launch.setup.join(' && ')}`;
-			const setupTimeoutMs =
-				startupTimeoutMs === 0 ? 0 : Math.max(0, startupTimeoutMs - (Date.now() - startupStart));
-			try {
-				await withSandboxSpan(
-					sw,
-					'setup',
-					async (time) => {
-						const setup = await time(() => {
-							const pending = sandbox.exec(command, { timeout: setupTimeoutMs });
-							return startupTimeoutMs === 0
-								? pending
-								: withDeadline(pending, {
-										timeoutMs: setupTimeoutMs,
-										timeoutError: () =>
-											new PythonEnvironmentSetupError(
-												`Failed to prepare the notebook Python environment within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
-											),
-									});
-						});
-						if (!setup.success) throw pythonEnvironmentSetupFailure(setup);
-					},
-					{ launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
-				);
-			} catch (error) {
-				if (error instanceof PythonEnvironmentSetupError) throw error;
-				throw provisionFailure('preparing the notebook Python environment', error);
-			}
+
+		let result: SandboxLaunchResult;
+		try {
+			result = await launchProcess(startup.plan.start, {
+				cwd: mountPath,
+				port: MARIMO_PORT,
+				waitForPort: { mode: 'tcp' },
+				startupTimeout: timeoutMs,
+			});
+		} catch (error) {
+			throw provisionFailure('starting the marimo kernel', error);
 		}
+		sw.timings.start = result.timings.start;
+		sw.timings.waitport = result.timings.waitport;
+		if (!result.success) throw supervisedLaunchFailure(result, startup.deadline.timeoutMs);
+	}
+
+	private async launchKernelProcess(
+		sandbox: SandboxInstance,
+		mountPath: string,
+		sw: Stopwatch,
+		startup: MarimoStartup,
+	): Promise<void> {
 		let process: SandboxProcess | undefined;
-		let portWaitStart: number | undefined;
+		let portWaitStarted = false;
 		try {
 			const proc = await withSandboxSpan(sw, 'start', (time) =>
-				time(() => sandbox.startProcess(launch.start, { cwd: mountPath })),
+				time(() => sandbox.startProcess(startup.plan.start, { cwd: mountPath })),
 			);
 			process = proc;
-			portWaitStart = Date.now();
-			const portWaitTimeoutMs =
-				startupTimeoutMs === 0 ? 0 : Math.max(0, startupTimeoutMs - (portWaitStart - startupStart));
+			portWaitStarted = true;
 			await withSandboxSpan(sw, 'waitport', (time) =>
-				time(() => proc.waitForPort(MARIMO_PORT, { timeout: portWaitTimeoutMs })),
+				time(() => proc.waitForPort(MARIMO_PORT, { timeout: remainingStartupMs(startup) })),
 			);
-		} catch (err) {
-			// Surface the kernel's own output so a startup crash isn't an opaque
-			// "exited before ready". Best-effort.
-			let kernelLogs = '';
-			if (process) {
-				try {
-					const { stdout, stderr } = await process.getLogs();
-					kernelLogs = [stdout, stderr]
-						.filter((s) => s.trim())
-						.join('\n')
-						.trim();
-				} catch {
-					// getLogs can fail once the process/sandbox is gone — ignore.
-				}
-			}
-			// `provisionFailure` drops the adapter's message, so a deadline-shaped
-			// failure must be classified here or the caller can't tell "kernel took
-			// too long" (raise the timeout) from "kernel crashed" (read the logs).
-			// A wait that consumed the full window is a timeout — unless the adapter
-			// already attributed the failure to the process ("… before port N …",
-			// the shared wording of the exited-early errors): crash detection can
-			// land arbitrarily close to the deadline, and elapsed time alone would
-			// then tell the operator to raise the timeout for a crash. Only the
-			// FIRST line is the adapter's attribution — the rest is appended
-			// process output, which can echo a "before port" phrase into a genuine
-			// timeout message.
-			const attribution = err instanceof Error ? err.message.split('\n', 1)[0] : '';
-			const crashed = /before port \d+/.test(attribution);
-			const timedOut =
-				!crashed && portWaitStart !== undefined && Date.now() - startupStart >= startupTimeoutMs;
-			const step = timedOut
-				? `starting the marimo kernel: not ready within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`
-				: 'starting the marimo kernel';
-			throw provisionFailure(kernelLogs ? `${step}; kernel output:\n${kernelLogs}` : step, err);
+		} catch (error) {
+			const logs = await readKernelLogs(process);
+			const step = kernelLaunchFailureStep(error, startup, portWaitStarted);
+			throw provisionFailure(logs ? `${step}; kernel output:\n${logs}` : step, error);
 		}
 	}
 

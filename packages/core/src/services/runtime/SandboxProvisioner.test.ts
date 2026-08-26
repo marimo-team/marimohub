@@ -12,7 +12,12 @@ import {
 	MemoryBucket,
 	setupTestEnv,
 } from '../../testing';
-import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type {
+	ExecResult,
+	FilesystemSnapshots,
+	SandboxInstance,
+	SandboxProvider,
+} from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
@@ -23,6 +28,16 @@ const bucketConfig: BucketConfig = {
 	name: 'test-bucket',
 	endpoint: 'https://r2.example',
 };
+
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
+}
 
 /**
  * A fake provider that ALSO implements the optional `FilesystemSnapshots`
@@ -169,6 +184,45 @@ describe('SandboxProvisioner', () => {
 			expect(calls.setEnvVars).toContainEqual({ A: '1' });
 		});
 
+		it('runs environment setup while sessionEnv is still resolving', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const sessionEnv = deferred<{ vars: Record<string, string> }>();
+			const setupStarted = deferred<void>();
+			const releaseSetup = deferred<void>();
+			const setupCompleted = deferred<void>();
+			const exec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				if (command.includes('uv sync --inexact')) {
+					setupStarted.resolve(undefined);
+					await releaseSetup.promise;
+				}
+				const result = await exec(command, options);
+				if (command.includes('uv sync --inexact')) setupCompleted.resolve(undefined);
+				return result;
+			};
+
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: sessionEnv.promise,
+			});
+
+			await setupStarted.promise;
+			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.startProcess).toHaveLength(0);
+
+			releaseSetup.resolve(undefined);
+			await setupCompleted.promise;
+			expect(calls.startProcess).toHaveLength(0);
+
+			sessionEnv.resolve({ vars: { A: '1' } });
+			await provision;
+			expect(calls.sequence).toEqual(['setEnvVars', 'startProcess']);
+		});
+
 		it('forwards the resolved base image to provider.create', async () => {
 			const { instance } = makeFakeSandbox();
 			const compute = fakeComputeFrom(instance);
@@ -221,6 +275,67 @@ describe('SandboxProvisioner', () => {
 
 			expect(calls.destroy).toBe(1);
 		});
+
+		it('aborts when sessionEnv rejects after environment setup finishes', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const sessionEnv = deferred<undefined>();
+			const setupCompleted = deferred<void>();
+			const exec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				const result = await exec(command, options);
+				if (command.includes('uv sync --inexact')) setupCompleted.resolve(undefined);
+				return result;
+			};
+
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: sessionEnv.promise,
+			});
+
+			await setupCompleted.promise;
+			sessionEnv.reject(new Error('secret_resolution_failed'));
+			await expect(provision).rejects.toThrow('secret_resolution_failed');
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('surfaces an injection failure without waiting for environment setup', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const setupStarted = deferred<void>();
+			const releaseSetup = deferred<void>();
+			const exec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				if (command.includes('uv sync --inexact')) {
+					setupStarted.resolve(undefined);
+					await releaseSetup.promise;
+				}
+				return exec(command, options);
+			};
+			instance.setEnvVars = async () => {
+				throw new Error('credential_write_failed');
+			};
+
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: { vars: { A: '1' } },
+			});
+
+			await setupStarted.promise;
+			await expect(provision).rejects.toThrow(
+				'Failed to start sandbox while injecting session credentials',
+			);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+			releaseSetup.resolve(undefined);
+		}, 1_000);
 
 		it('merges adapter-drained timings onto the result as reachable_*', async () => {
 			const { instance } = makeFakeSandbox();
@@ -300,6 +415,45 @@ describe('SandboxProvisioner', () => {
 				expect(setupIndex).toBeGreaterThanOrEqual(0);
 				expect(configured.calls.execOptions[setupIndex]?.timeout).toBe(300_000);
 				expect(configured.calls.waitForPortOptions).toEqual([{ timeout: 270_000 }]);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not start a supervised kernel after injection exhausts the startup deadline', async () => {
+			vi.useFakeTimers();
+			try {
+				const { instance, calls } = makeFakeSandbox();
+				const sessionEnv = deferred<undefined>();
+				const setupCompleted = deferred<void>();
+				const exec = instance.exec.bind(instance);
+				instance.ready = async () => {};
+				instance.exec = async (command, options) => {
+					const result = await exec(command, options);
+					if (command.includes('uv sync --inexact')) setupCompleted.resolve(undefined);
+					return result;
+				};
+				const launchProcess = vi.fn<NonNullable<SandboxInstance['launchProcess']>>(async () => {
+					throw new Error('launch should not run');
+				});
+				instance.launchProcess = launchProcess;
+
+				const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					sessionEnv: sessionEnv.promise,
+					startupTimeoutMs: Millis.seconds(1),
+				});
+
+				await setupCompleted.promise;
+				await vi.advanceTimersByTimeAsync(1_000);
+				sessionEnv.resolve(undefined);
+				await expect(provision).rejects.toThrow(/not ready within the 1s startup timeout/);
+				expect(launchProcess).not.toHaveBeenCalled();
+				expect(calls.destroy).toBe(1);
 			} finally {
 				vi.useRealTimers();
 			}
@@ -548,14 +702,18 @@ describe('SandboxProvisioner', () => {
 		// A command round-trip is the dominant unit of startup cost on a remote
 		// backend (~220ms each on CoreWeave), so these lock in the count.
 		describe('command round-trips', () => {
-			it('prefers combined launch and keeps its phase timings', async () => {
+			it('uses combined launch after checked setup and keeps phase timings', async () => {
 				const { instance, calls } = makeFakeSandbox();
 				instance.ready = async () => {};
-				instance.launchProcess = async (command, options) => ({
-					success: true,
-					process: await instance.startProcess(command, { cwd: options.cwd }),
-					timings: { setup: 41, start: 3, waitport: 17 },
-				});
+				let launchOptions: Parameters<NonNullable<SandboxInstance['launchProcess']>>[1] | undefined;
+				instance.launchProcess = async (command, options) => {
+					launchOptions = options;
+					return {
+						success: true,
+						process: await instance.startProcess(command, { cwd: options.cwd }),
+						timings: { setup: 0, start: 3, waitport: 17 },
+					};
+				};
 
 				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
 					sandboxId,
@@ -565,9 +723,16 @@ describe('SandboxProvisioner', () => {
 					bucket: bucketConfig,
 				});
 
-				expect(calls.exec).toHaveLength(0);
+				expect(calls.exec).toHaveLength(1);
+				expect(calls.exec[0]).toContain('uv sync');
 				expect(calls.startProcess).toHaveLength(1);
-				expect(result.timings).toMatchObject({ setup: 41, start: 3, waitport: 17 });
+				expect(result.timings).toMatchObject({
+					setup: expect.any(Number),
+					start: 3,
+					waitport: 17,
+				});
+				expect(launchOptions?.setup).toBeUndefined();
+				expect(launchOptions?.startupTimeout).toBeLessThanOrEqual(120_000);
 			});
 
 			it('a copy-path provision spends one checked setup exec', async () => {
@@ -688,6 +853,73 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess).toHaveLength(0);
 			expect(calls.destroy).toBe(1);
 		});
+
+		it('stops a hanging environment setup at the shared startup deadline', async () => {
+			vi.useFakeTimers();
+			const pendingSetup = deferred<ExecResult>();
+			try {
+				const { instance, calls } = makeFakeSandbox();
+				const exec = instance.exec.bind(instance);
+				instance.exec = (command, options) =>
+					command.includes('uv sync') ? pendingSetup.promise : exec(command, options);
+
+				const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					startupTimeoutMs: Millis.seconds(1),
+				});
+				const failure = expect(provision).rejects.toThrow(
+					'Failed to prepare the notebook Python environment within the 1s startup timeout',
+				);
+				await vi.advanceTimersByTimeAsync(1_000);
+
+				await failure;
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+			} finally {
+				pendingSetup.resolve({ success: true, stdout: '', stderr: '' });
+				vi.useRealTimers();
+			}
+		});
+
+		it('surfaces a setup failure without waiting for sessionEnv', async () => {
+			const { instance: base, calls } = makeFakeSandbox();
+			const sessionEnv = deferred<undefined>();
+			const setupStarted = deferred<void>();
+			const instance: SandboxInstance = {
+				...base,
+				async exec(command, options) {
+					if (!command.includes('uv sync')) return base.exec(command, options);
+					calls.exec.push(command);
+					calls.execOptions.push(options);
+					setupStarted.resolve(undefined);
+					return {
+						success: false,
+						stdout: '',
+						stderr: 'resolution failed',
+						error: { code: 'COMMAND_FAILED' },
+					};
+				},
+			};
+
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: sessionEnv.promise,
+			});
+
+			await setupStarted.promise;
+			await expect(provision).rejects.toMatchObject({ code: 'PYTHON_ENV_SETUP_FAILED' });
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+			sessionEnv.resolve(undefined);
+		}, 1_000);
 
 		it.each([
 			[
