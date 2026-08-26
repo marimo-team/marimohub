@@ -29,7 +29,79 @@ import { pageSchema } from '../pagination';
 
 const ECHO_COMMAND = 'echo "Hello"';
 const STEADY_STATE_EXEC_TIMEOUT_MS = 30_000;
+const UV_BENCHMARK_RUNTIME_TIMEOUT_MS = 30_000;
+const UV_BENCHMARK_DOWNLOAD_TIMEOUT_MS = 60_000;
+const UV_BENCHMARK_LOCK_TIMEOUT_MS = 120_000;
+const UV_BENCHMARK_SYNC_TIMEOUT_MS = 300_000;
+const UV_BENCHMARK_TIMEOUT_MS =
+	UV_BENCHMARK_RUNTIME_TIMEOUT_MS +
+	UV_BENCHMARK_DOWNLOAD_TIMEOUT_MS +
+	UV_BENCHMARK_LOCK_TIMEOUT_MS +
+	UV_BENCHMARK_SYNC_TIMEOUT_MS;
 const CLEANUP_LEASE_HEADROOM_MS = 60_000;
+const UV_BENCHMARK_DIR = '/tmp/marimohub-uv-sync-benchmark';
+const BOTOCORE_WHEEL_URL =
+	'https://files.pythonhosted.org/packages/5c/19/934f81592527a3f7f9b943c893e334c721a4644948642bc33885d584e9ec/botocore-1.43.36-py3-none-any.whl';
+
+const UV_BENCHMARK_RUNTIME_COMMAND = [
+	'set -eu',
+	"printf 'uname='",
+	'uname -a',
+	"printf 'kernel_osrelease='",
+	'cat /proc/sys/kernel/osrelease',
+	"printf 'kernel_version='",
+	'cat /proc/version',
+	"printf 'nproc='",
+	'nproc',
+	'printf \'UV_PROJECT_ENVIRONMENT=%s\\n\' "${UV_PROJECT_ENVIRONMENT:-unset}"',
+	'printf \'UV_CACHE_DIR=%s\\n\' "${UV_CACHE_DIR:-unset}"',
+	"if [ -d /proc/gvisor ]; then printf 'runtime_probe=gvisor (/proc/gvisor)\\n'; elif dmesg 2>&1 | grep -qi gvisor; then printf 'runtime_probe=gvisor (dmesg)\\n'; else printf 'runtime_probe=no-gvisor-marker\\n'; fi",
+	"printf '%s\\n' '--- dmesg (first 20 lines) ---'",
+	"dmesg 2>&1 | sed -n '1,20p' || true",
+	"printf '%s\\n' '--- /proc/1/status ---'",
+	"grep -E '^(Seccomp|Seccomp_filters|Cpus_allowed_list):' /proc/1/status || true",
+	'for path in /sys/fs/cgroup/cpu.max /sys/fs/cgroup/cpu.stat /sys/fs/cgroup/cpu/cpu.cfs_quota_us /sys/fs/cgroup/cpu/cpu.cfs_period_us /sys/fs/cgroup/cpu/cpu.stat; do if [ -r "$path" ]; then printf \'%s\\n\' "--- $path ---"; cat "$path"; fi; done',
+].join('\n');
+
+const UV_BENCHMARK_DOWNLOAD_COMMAND = [
+	'set -eu',
+	'curl --fail --location --silent --show-error --output /dev/null',
+	"--write-out 'http_code=%{http_code}\\nsize_download=%{size_download}\\ntime_namelookup=%{time_namelookup}\\ntime_connect=%{time_connect}\\ntime_appconnect=%{time_appconnect}\\ntime_starttransfer=%{time_starttransfer}\\ntime_total=%{time_total}\\nspeed_download=%{speed_download}\\n'",
+	`'${BOTOCORE_WHEEL_URL}'`,
+].join(' ');
+
+const UV_BENCHMARK_LOCK_COMMAND = [
+	'set -eu',
+	`benchmark_dir='${UV_BENCHMARK_DIR}'`,
+	'rm -rf "$benchmark_dir"',
+	'mkdir -p "$benchmark_dir"',
+	"printf '%s\\n' '[project]' 'name = \"marimohub-uv-benchmark\"' 'version = \"0.0.0\"' 'requires-python = \">=3.13\"' 'dependencies = [' '  \"boto3==1.43.36\",' '  \"botocore==1.43.36\",' '  \"moutils==0.4.4\",' '  \"obstore==0.11.0\",' ']' > \"$benchmark_dir/pyproject.toml\"",
+	'cd "$benchmark_dir"',
+	'uv lock --no-cache',
+].join('\n');
+
+const UV_BENCHMARK_SYNC_COMMAND = [
+	'set -u',
+	`benchmark_dir='${UV_BENCHMARK_DIR}'`,
+	'cd "$benchmark_dir"',
+	'record_cpu_stat() {',
+	'  label="$1"',
+	'  if [ -r /sys/fs/cgroup/cpu.stat ]; then',
+	'    printf "%s\\n" "--- $label /sys/fs/cgroup/cpu.stat ---"',
+	'    cat /sys/fs/cgroup/cpu.stat',
+	'  elif [ -r /sys/fs/cgroup/cpu/cpu.stat ]; then',
+	'    printf "%s\\n" "--- $label /sys/fs/cgroup/cpu/cpu.stat ---"',
+	'    cat /sys/fs/cgroup/cpu/cpu.stat',
+	'  fi',
+	'}',
+	'record_cpu_stat cpu_before',
+	'status=0',
+	'uv sync --frozen --inexact --no-compile-bytecode --no-build -v > "$benchmark_dir/uv-sync.log" 2>&1 || status=$?',
+	'grep -E \'(^|[[:space:]])(Resolved|Prepared|Installed) [0-9]+ package\' "$benchmark_dir/uv-sync.log" || true',
+	'record_cpu_stat cpu_after',
+	'if [ "$status" -ne 0 ]; then tail -n 100 "$benchmark_dir/uv-sync.log" >&2; fi',
+	'exit "$status"',
+].join('\n');
 
 const SandboxStartupPhaseSchema = z
 	.object({
@@ -50,9 +122,23 @@ const SandboxStartupRequestSchema = z
 	.object({
 		image: z.string().min(1).optional(),
 		compute_profile: z.string().min(1).optional(),
+		environment_setup_benchmark: z.boolean().optional().openapi({
+			description:
+				'Run the fixed-package uv, wheel-download, runtime, and CPU-throttling benchmark',
+		}),
 	})
 	.strict()
 	.openapi('SandboxStartupRequest');
+
+const SandboxEnvironmentSetupBenchmarkSchema = z
+	.object({
+		tool: z.string().min(1).openapi({ example: 'uv' }),
+		runtime_probe: SandboxStartupCommandSchema,
+		artifact_download: SandboxStartupCommandSchema,
+		prepare: SandboxStartupCommandSchema,
+		install: SandboxStartupCommandSchema,
+	})
+	.openapi('SandboxEnvironmentSetupBenchmark');
 
 const SandboxStartupReportSchema = z
 	.object({
@@ -70,12 +156,16 @@ const SandboxStartupReportSchema = z
 		cleanup: SandboxStartupPhaseSchema,
 		startup_timings_ms: z.record(z.string(), z.number().nonnegative()),
 		counters: z.record(z.string(), z.number()),
+		environment_setup_benchmark: SandboxEnvironmentSetupBenchmarkSchema.nullable().openapi({
+			description: 'The optional fixed-package benchmark, or null when it was not requested',
+		}),
 	})
 	.openapi('SandboxStartupReport');
 
 type SandboxStartupPhase = z.infer<typeof SandboxStartupPhaseSchema>;
 type SandboxStartupCommand = z.infer<typeof SandboxStartupCommandSchema>;
 type SandboxStartupReport = z.infer<typeof SandboxStartupReportSchema>;
+type EnvironmentSetupBenchmark = NonNullable<SandboxStartupReport['environment_setup_benchmark']>;
 
 function elapsed(started: number): number {
 	return performance.now() - started;
@@ -85,12 +175,22 @@ function skippedPhase(): SandboxStartupPhase {
 	return { status: 'skipped', duration_ms: null };
 }
 
-function skippedCommand(): SandboxStartupCommand {
+function skippedCommand(command = ECHO_COMMAND): SandboxStartupCommand {
 	return {
 		...skippedPhase(),
-		command: ECHO_COMMAND,
+		command,
 		stdout: '',
 		stderr: '',
+	};
+}
+
+function skippedEnvironmentSetupBenchmark(): EnvironmentSetupBenchmark {
+	return {
+		tool: 'uv',
+		runtime_probe: skippedCommand(UV_BENCHMARK_RUNTIME_COMMAND),
+		artifact_download: skippedCommand(UV_BENCHMARK_DOWNLOAD_COMMAND),
+		prepare: skippedCommand(UV_BENCHMARK_LOCK_COMMAND),
+		install: skippedCommand(UV_BENCHMARK_SYNC_COMMAND),
 	};
 }
 
@@ -102,22 +202,26 @@ function failedPhase(started: number, error: unknown): SandboxStartupPhase {
 	};
 }
 
-async function runEcho(sandbox: SandboxInstance, timeout: number): Promise<SandboxStartupCommand> {
+async function runCommand(
+	sandbox: SandboxInstance,
+	command: string,
+	timeout: number,
+): Promise<SandboxStartupCommand> {
 	const started = performance.now();
 	try {
-		const result = await sandbox.exec(ECHO_COMMAND, { timeout });
+		const result = await sandbox.exec(command, { timeout });
 		return result.success
 			? {
 					status: 'ok',
 					duration_ms: elapsed(started),
-					command: ECHO_COMMAND,
+					command,
 					stdout: result.stdout,
 					stderr: result.stderr,
 				}
 			: {
 					status: 'failed',
 					duration_ms: elapsed(started),
-					command: ECHO_COMMAND,
+					command,
 					stdout: result.stdout,
 					stderr: result.stderr,
 					failure_code: result.error.code,
@@ -125,11 +229,19 @@ async function runEcho(sandbox: SandboxInstance, timeout: number): Promise<Sandb
 	} catch (error) {
 		return {
 			...failedPhase(started, error),
-			command: ECHO_COMMAND,
+			command,
 			stdout: '',
 			stderr: '',
 		};
 	}
+}
+
+function runEcho(sandbox: SandboxInstance, timeout: number): Promise<SandboxStartupCommand> {
+	return runCommand(sandbox, ECHO_COMMAND, timeout);
+}
+
+function commandLogSummary(command: SandboxStartupCommand) {
+	return { status: command.status, duration_ms: command.duration_ms };
 }
 
 function selectedImage(
@@ -241,8 +353,10 @@ const testSandboxStartup = createRoute({
 	summary: 'Measure sandbox startup and command latency',
 	description:
 		'Creates a fresh ephemeral sandbox, uses the first fixed echo command as the readiness ' +
-		'probe, measures a second fixed echo command, and destroys the sandbox. Runtime failures ' +
-		'are returned as a partial report. Super-admin only and session-only.',
+		'probe, and measures a second fixed echo command. An optional fresh-sandbox uv benchmark ' +
+		'also records runtime and CPU limits, files.pythonhosted.org throughput, uv phase timings, ' +
+		'and CPU throttling counters. The sandbox is always destroyed. Runtime failures are returned ' +
+		'as a partial report. Super-admin only and session-only.',
 	security: SESSION_ONLY_SECURITY,
 	request: { body: jsonBody(SandboxStartupRequestSchema) },
 	responses: {
@@ -379,7 +493,10 @@ app.openapi(testSandboxStartup, async (c) => {
 	const acquired = await diagnosticLease.acquire(
 		user.id,
 		sandboxId,
-		startupTimeoutMs + STEADY_STATE_EXEC_TIMEOUT_MS + CLEANUP_LEASE_HEADROOM_MS,
+		startupTimeoutMs +
+			STEADY_STATE_EXEC_TIMEOUT_MS +
+			(body.environment_setup_benchmark ? UV_BENCHMARK_TIMEOUT_MS : 0) +
+			CLEANUP_LEASE_HEADROOM_MS,
 	);
 	if (!acquired) {
 		throw new ResourceExhaustedError('A sandbox startup test is already running');
@@ -392,6 +509,9 @@ app.openapi(testSandboxStartup, async (c) => {
 	let readiness = skippedCommand();
 	let exec = skippedCommand();
 	let cleanup = skippedPhase();
+	const environmentSetupBenchmark = body.environment_setup_benchmark
+		? skippedEnvironmentSetupBenchmark()
+		: null;
 	let startupTimings: Record<string, number> = {};
 	let counters: Record<string, number> = {};
 
@@ -424,6 +544,30 @@ app.openapi(testSandboxStartup, async (c) => {
 			}
 			if (readiness.status === 'ok') {
 				exec = await runEcho(sandbox, STEADY_STATE_EXEC_TIMEOUT_MS);
+				if (environmentSetupBenchmark) {
+					environmentSetupBenchmark.runtime_probe = await runCommand(
+						sandbox,
+						UV_BENCHMARK_RUNTIME_COMMAND,
+						UV_BENCHMARK_RUNTIME_TIMEOUT_MS,
+					);
+					environmentSetupBenchmark.artifact_download = await runCommand(
+						sandbox,
+						UV_BENCHMARK_DOWNLOAD_COMMAND,
+						UV_BENCHMARK_DOWNLOAD_TIMEOUT_MS,
+					);
+					environmentSetupBenchmark.prepare = await runCommand(
+						sandbox,
+						UV_BENCHMARK_LOCK_COMMAND,
+						UV_BENCHMARK_LOCK_TIMEOUT_MS,
+					);
+					if (environmentSetupBenchmark.prepare.status === 'ok') {
+						environmentSetupBenchmark.install = await runCommand(
+							sandbox,
+							UV_BENCHMARK_SYNC_COMMAND,
+							UV_BENCHMARK_SYNC_TIMEOUT_MS,
+						);
+					}
+				}
 			}
 		}
 	} finally {
@@ -469,11 +613,20 @@ app.openapi(testSandboxStartup, async (c) => {
 		}
 	}
 
+	const benchmarkOk =
+		environmentSetupBenchmark === null ||
+		[
+			environmentSetupBenchmark.runtime_probe,
+			environmentSetupBenchmark.artifact_download,
+			environmentSetupBenchmark.prepare,
+			environmentSetupBenchmark.install,
+		].every((command) => command.status === 'ok');
 	const report: SandboxStartupReport = {
 		ok:
 			handle.status === 'ok' &&
 			readiness.status === 'ok' &&
 			exec.status === 'ok' &&
+			benchmarkOk &&
 			cleanup.status === 'ok',
 		sandbox_id: sandboxId,
 		image: image ?? null,
@@ -488,6 +641,7 @@ app.openapi(testSandboxStartup, async (c) => {
 		cleanup,
 		startup_timings_ms: startupTimings,
 		counters,
+		environment_setup_benchmark: environmentSetupBenchmark,
 	};
 	logEvent({
 		level: report.ok ? 'info' : 'error',
@@ -502,6 +656,18 @@ app.openapi(testSandboxStartup, async (c) => {
 		readiness_ms: report.readiness.duration_ms,
 		exec_ms: report.exec.duration_ms,
 		cleanup_ms: report.cleanup.duration_ms,
+		environment_setup_benchmark:
+			report.environment_setup_benchmark === null
+				? null
+				: {
+						tool: report.environment_setup_benchmark.tool,
+						runtime_probe: commandLogSummary(report.environment_setup_benchmark.runtime_probe),
+						artifact_download: commandLogSummary(
+							report.environment_setup_benchmark.artifact_download,
+						),
+						prepare: commandLogSummary(report.environment_setup_benchmark.prepare),
+						install: commandLogSummary(report.environment_setup_benchmark.install),
+					},
 		startup_timings_ms: report.startup_timings_ms,
 		counters: report.counters,
 	});

@@ -332,10 +332,117 @@ describe('Admin routes', () => {
 				cleanup: { status: 'ok' },
 				startup_timings_ms: { find: 4, create: 12, boot: 34 },
 				counters: { execs: 2 },
+				environment_setup_benchmark: null,
 			});
 			expect(report.handle.duration_ms).toEqual(expect.any(Number));
 			expect(report.total_ms).toEqual(expect.any(Number));
 			expect(await deps.services.sessions.countActiveForUser(ACTOR)).toBe(0);
+		});
+
+		it('runs the optional uv, wheel download, runtime, and CPU throttle benchmark', async () => {
+			const { instance } = makeFakeSandbox();
+			instance.exec = vi
+				.fn()
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''))
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''))
+				.mockResolvedValueOnce(
+					execResult(
+						true,
+						'kernel_version=Linux version 4.4.0\nnproc=2\ncpu.max=200000 100000\n',
+						'',
+					),
+				)
+				.mockResolvedValueOnce(
+					execResult(
+						true,
+						'size_download=15313630\ntime_total=1.25\nspeed_download=12250904\n',
+						'',
+					),
+				)
+				.mockResolvedValueOnce(execResult(true, 'Resolved 15 packages in 120ms\n', ''))
+				.mockResolvedValueOnce(
+					execResult(
+						true,
+						'Resolved 15 packages in 1ms\nPrepared 9 packages in 9.2s\nInstalled 9 packages in 80ms\nnr_throttled 4\nnr_throttled 19\n',
+						'',
+					),
+				);
+			const { compute } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(
+				await request('POST', '/admin/debug/sandbox-startup', {
+					environment_setup_benchmark: true,
+				}),
+			);
+
+			expect(instance.exec).toHaveBeenCalledTimes(6);
+			expect(instance.exec).toHaveBeenNthCalledWith(
+				3,
+				expect.stringContaining('/sys/fs/cgroup/cpu.max'),
+				{ timeout: 30_000 },
+			);
+			expect(instance.exec).toHaveBeenNthCalledWith(
+				4,
+				expect.stringContaining('botocore-1.43.36-py3-none-any.whl'),
+				{ timeout: 60_000 },
+			);
+			expect(instance.exec).toHaveBeenNthCalledWith(
+				5,
+				expect.stringContaining('uv lock --no-cache'),
+				{ timeout: 120_000 },
+			);
+			expect(instance.exec).toHaveBeenNthCalledWith(
+				6,
+				expect.stringContaining('uv sync --frozen --inexact --no-compile-bytecode --no-build -v'),
+				{ timeout: 300_000 },
+			);
+			expect(report).toMatchObject({
+				ok: true,
+				environment_setup_benchmark: {
+					tool: 'uv',
+					runtime_probe: { status: 'ok', stdout: expect.stringContaining('nproc=2') },
+					artifact_download: {
+						status: 'ok',
+						stdout: expect.stringContaining('size_download=15313630'),
+					},
+					prepare: { status: 'ok', stdout: expect.stringContaining('Resolved 15 packages') },
+					install: { status: 'ok', stdout: expect.stringContaining('Prepared 9 packages') },
+				},
+			});
+		});
+
+		it('returns the independent measurements when uv lock preparation fails', async () => {
+			const { instance } = makeFakeSandbox();
+			instance.exec = vi
+				.fn()
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''))
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''))
+				.mockResolvedValueOnce(execResult(true, 'nproc=2\n', ''))
+				.mockResolvedValueOnce(execResult(true, 'time_total=1.25\n', ''))
+				.mockResolvedValueOnce(
+					execResult(false, '', 'failed to resolve dependencies', 'COMMAND_FAILED'),
+				);
+			const { compute } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(
+				await request('POST', '/admin/debug/sandbox-startup', {
+					environment_setup_benchmark: true,
+				}),
+			);
+
+			expect(instance.exec).toHaveBeenCalledTimes(5);
+			expect(report).toMatchObject({
+				ok: false,
+				environment_setup_benchmark: {
+					tool: 'uv',
+					runtime_probe: { status: 'ok' },
+					artifact_download: { status: 'ok' },
+					prepare: { status: 'failed', stderr: 'failed to resolve dependencies' },
+					install: { status: 'skipped', duration_ms: null },
+				},
+			});
 		});
 
 		it('uses deployment defaults when both selections are omitted', async () => {

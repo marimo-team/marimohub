@@ -351,7 +351,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Measure sandbox startup and command latency
-		 * @description Creates a fresh ephemeral sandbox, uses the first fixed echo command as the readiness probe, measures a second fixed echo command, and destroys the sandbox. Runtime failures are returned as a partial report. Super-admin only and session-only.
+		 * @description Creates a fresh ephemeral sandbox, uses the first fixed echo command as the readiness probe, and measures a second fixed echo command. An optional fresh-sandbox uv benchmark also records runtime and CPU limits, files.pythonhosted.org throughput, uv phase timings, and CPU throttling counters. The sandbox is always destroyed. Runtime failures are returned as a partial report. Super-admin only and session-only.
 		 */
 		post: operations['admin.debug.sandboxStartup'];
 		delete?: never;
@@ -1704,6 +1704,7 @@ export interface components {
 			counters: {
 				[key: string]: number;
 			};
+			environment_setup_benchmark: components['schemas']['SandboxEnvironmentSetupBenchmark'];
 		};
 		SandboxStartupPhase: {
 			/** @enum {string} */
@@ -1721,9 +1722,20 @@ export interface components {
 			/** @enum {string} */
 			failure_code?: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR';
 		};
+		/** @description The optional fixed-package benchmark, or null when it was not requested */
+		SandboxEnvironmentSetupBenchmark: {
+			/** @example uv */
+			tool: string;
+			runtime_probe: components['schemas']['SandboxStartupCommand'];
+			artifact_download: components['schemas']['SandboxStartupCommand'];
+			prepare: components['schemas']['SandboxStartupCommand'];
+			install: components['schemas']['SandboxStartupCommand'];
+		} | null;
 		SandboxStartupRequest: {
 			image?: string;
 			compute_profile?: string;
+			/** @description Run the fixed-package uv, wheel-download, runtime, and CPU-throttling benchmark */
+			environment_setup_benchmark?: boolean;
 		};
 		DeploymentConfig: {
 			deployment: components['schemas']['AdminDeployment'];

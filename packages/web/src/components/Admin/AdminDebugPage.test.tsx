@@ -42,7 +42,44 @@ function report(overrides: Partial<SandboxStartupReport> = {}): SandboxStartupRe
 		cleanup: { status: 'ok', duration_ms: 154 },
 		startup_timings_ms: { find: 4, create: 12, boot: 1700 },
 		counters: { execs: 2 },
+		environment_setup_benchmark: null,
 		...overrides,
+	};
+}
+
+function environmentSetupBenchmark(): NonNullable<
+	SandboxStartupReport['environment_setup_benchmark']
+> {
+	return {
+		tool: 'uv',
+		runtime_probe: {
+			status: 'ok',
+			duration_ms: 30,
+			command: 'uname -a',
+			stdout: 'nproc=2\ncpu.max=200000 100000\n',
+			stderr: '',
+		},
+		artifact_download: {
+			status: 'ok',
+			duration_ms: 1250,
+			command: 'curl https://files.pythonhosted.org/botocore.whl',
+			stdout: 'size_download=15313630\ntime_total=1.25\n',
+			stderr: '',
+		},
+		prepare: {
+			status: 'ok',
+			duration_ms: 120,
+			command: 'uv lock --no-cache',
+			stdout: 'Resolved 15 packages in 120ms\n',
+			stderr: '',
+		},
+		install: {
+			status: 'ok',
+			duration_ms: 9300,
+			command: 'uv sync --frozen -v',
+			stdout: 'Prepared 9 packages in 9.2s\nInstalled 9 packages in 80ms\n',
+			stderr: '',
+		},
 	};
 }
 
@@ -60,7 +97,9 @@ describe('AdminDebugPage', () => {
 				const url = String(input);
 				requests.push({ url, body: typeof init?.body === 'string' ? init.body : undefined });
 				if (url === '/api/v1/capabilities') return jsonOk(CAPABILITIES);
-				if (url === '/api/v1/admin/debug/sandbox-startup') return jsonOk(report());
+				if (url === '/api/v1/admin/debug/sandbox-startup') {
+					return jsonOk(report({ environment_setup_benchmark: environmentSetupBenchmark() }));
+				}
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
 		);
@@ -72,6 +111,9 @@ describe('AdminDebugPage', () => {
 		).toBeInTheDocument();
 		await user.click(await screen.findByRole('radio', { name: /py313/i }));
 		await user.click(screen.getByRole('radio', { name: /gpu/i }));
+		await user.click(
+			screen.getByRole('switch', { name: /Fresh sandbox uv sync benchmark disabled/i }),
+		);
 		await user.click(screen.getByRole('button', { name: 'Run startup test' }));
 
 		expect(await screen.findByRole('heading', { name: 'Latest report' })).toBeInTheDocument();
@@ -81,10 +123,15 @@ describe('AdminDebugPage', () => {
 		expect(bootTiming?.textContent?.replaceAll(/\D/g, '')).toBe('1700');
 		expect(screen.getByText('Readiness (first echo)')).toBeInTheDocument();
 		expect(screen.getByText('Single exec (second echo)')).toBeInTheDocument();
+		expect(screen.getByText('Fresh sandbox uv sync benchmark')).toBeInTheDocument();
+		expect(screen.getByText('Runtime and CPU limits')).toBeInTheDocument();
+		expect(screen.getByText('uv sync (fresh sandbox)')).toBeInTheDocument();
+		expect(screen.getByText(/Prepared 9 packages/)).toBeInTheDocument();
 		expect(screen.getAllByText('Hello')).toHaveLength(2);
 		expect(JSON.parse(requests.at(-1)?.body ?? '')).toEqual({
 			image: 'registry.example/sandbox:py313',
 			compute_profile: 'gpu',
+			environment_setup_benchmark: true,
 		});
 	});
 
@@ -166,6 +213,7 @@ describe('AdminDebugPage', () => {
 		expect(screen.getAllByRole('radio').every((radio) => radio.hasAttribute('disabled'))).toBe(
 			true,
 		);
+		expect(screen.getByRole('switch')).toBeDisabled();
 		finish?.(jsonOk(report()));
 		await screen.findByText('sb-first');
 	});

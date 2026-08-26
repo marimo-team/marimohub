@@ -7,14 +7,19 @@ import { useFieldContext } from '../form-context';
 export interface SwitchFieldProps {
 	/** Renders the label/content beside the toggle, given the current state. */
 	children: (isSelected: boolean) => ReactNode;
+	isDisabled?: boolean;
 }
 
 /** A boolean toggle bound to its enclosing `form.AppField`. */
-export function SwitchField({ children }: SwitchFieldProps) {
+export function SwitchField({ children, isDisabled }: SwitchFieldProps) {
 	const field = useFieldContext<boolean>();
 	return (
-		<AriaSwitchField isSelected={field.state.value} onChange={field.handleChange}>
-			<SwitchButton className="flex cursor-pointer items-center gap-3 outline-none">
+		<AriaSwitchField
+			isDisabled={isDisabled}
+			isSelected={field.state.value}
+			onChange={field.handleChange}
+		>
+			<SwitchButton className="flex cursor-pointer items-center gap-3 outline-none disabled:cursor-not-allowed disabled:opacity-50">
 				{({ isSelected }) => (
 					<>
 						<span

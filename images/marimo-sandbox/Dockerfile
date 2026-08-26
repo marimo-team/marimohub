@@ -9,7 +9,7 @@ ENV MARIMO_VERSION=${MARIMO_VERSION}
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded /uv /uvx /usr/local/bin/
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates locales \
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates locales \
  && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
  && locale-gen \
  && rm -rf /var/lib/apt/lists/*
