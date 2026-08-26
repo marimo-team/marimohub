@@ -157,6 +157,7 @@ s3-bucket/
                         ├── pyproject.toml      ← local dependency snapshot
                         ├── workspace/          ← Git sources only: complete synced tree
                         ├── git/                ← pull-mode Git sources only: credential-free `.git` payload
+                        ├── workspace.zip       ← optional packed startup copy of workspace + `.git`
                         ├── notebook.html       ← optional snapshot (see below)
                         └── session.json        ← optional snapshot (see below)
 ```
@@ -176,6 +177,10 @@ For a `git` source, each sync writes a complete tree under
 `versions/{vid}/workspace/`. The source pointer selects one immutable version.
 The notebook has no mutable workspace mirror. A session receives a copy of the
 selected version and cannot write changes back.
+Each synced version keeps a best-effort `workspace.zip` copy of the final sandbox
+tree. Provisioning prefers this single object and falls back to the canonical
+`workspace/` and `git/` objects when it is absent or invalid. The packed copy is
+created for combined workspace and Git inputs up to 32 MiB.
 
 ### 3.2 Complete Path Reference
 
@@ -222,6 +227,7 @@ selected version and cannot write changes back.
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`              | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`                | any      | Complete immutable tree from one Git sync. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/git/`                      | any      | Immutable credential-free `.git` payload for a pull-mode source version. Restored into the sandbox workdir at provision and pruned with the enclosing version.                                                                                                                                                                                                                                                                                                                                         |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace.zip`             | ZIP      | Optional duplicate of the final synced sandbox tree used only as a startup fast path. Pull-mode Git metadata is stored under `.git/`. Canonical reads and fallback restores continue to use `workspace/` and `git/`.                                                                                                                                                                                                                                                                                   |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`             | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                              |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`              | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -361,7 +367,8 @@ with a notebook-scoped sync token. Pull mode has no token. The hub reads the
 GitHub branch and creates a credential-free shallow Git directory through the
 source-control adapter. Both modes store repository files under
 `versions/{vid}/workspace/`. Pull mode also stores `.git` content under the
-sibling `versions/{vid}/git/` prefix.
+sibling `versions/{vid}/git/` prefix. The optional `workspace.zip` startup
+artifact duplicates the final sandbox tree and is pruned with the enclosing version.
 See the [sync guide](../docs/syncing.md) for the API and token lifecycle.
 
 ### 4.7 `versions/{vid}/version.json`

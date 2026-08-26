@@ -30,6 +30,7 @@ import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 import type { WorkspaceRestoreStats } from './sandboxFiles';
+import { restorePackedWorkspace } from './packedWorkspaceRestore';
 
 /**
  * Default wait for marimo to bind its port (override per deployment via
@@ -167,6 +168,8 @@ export interface ProvisionOptions {
 	workspacePrefix?: string;
 	/** Pull-source Git metadata restored into `<workdir>/.git`. */
 	gitPrefix?: string;
+	/** Optional packed copy of a synced workspace and its Git metadata. */
+	workspaceArchive?: string;
 }
 
 export interface ProvisionResult {
@@ -361,6 +364,8 @@ export interface WorkspaceLoadResult {
 	usedFallback: boolean;
 	/** What the copy moved; absent when the workspace was mounted instead. */
 	stats?: WorkspaceRestoreStats;
+	archiveStatus?: 'used' | 'missing' | 'failed';
+	archiveBytes?: number;
 }
 
 export interface WorkspaceLoadStrategy {
@@ -541,6 +546,12 @@ export class SandboxProvisioner {
 			counters.files_objects = load.stats.objectCount;
 			counters.files_bytes = load.stats.bytes;
 		}
+		if (load.archiveStatus) {
+			counters.files_archive_used = load.archiveStatus === 'used' ? 1 : 0;
+			counters.files_archive_missing = load.archiveStatus === 'missing' ? 1 : 0;
+			counters.files_archive_failed = load.archiveStatus === 'failed' ? 1 : 0;
+			if (load.archiveBytes !== undefined) counters.files_archive_bytes = load.archiveBytes;
+		}
 		// Last: the adapter's command count is only final once every phase has run.
 		Object.assign(counters, sandbox.drainCounters?.() ?? {});
 
@@ -563,6 +574,59 @@ export class SandboxProvisioner {
 	}
 
 	private async loadWorkspace(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		mountPath: string,
+		workspacePrefix: string,
+	): Promise<WorkspaceLoadResult> {
+		if (
+			options.workspaceLoadMode === 'copy-only' &&
+			options.workspaceArchive &&
+			options.bucketHandle
+		) {
+			const packed = await restorePackedWorkspace(
+				sandbox,
+				options.bucketHandle,
+				options.workspaceArchive,
+				mountPath,
+				Boolean(options.gitPrefix),
+			);
+			if (packed.status === 'restored') {
+				return {
+					usedFallback: true,
+					stats: { objectCount: 1, bytes: packed.archiveBytes },
+					archiveStatus: 'used',
+					archiveBytes: packed.archiveBytes,
+				};
+			}
+			if (packed.status === 'failed') {
+				logOperationalError(
+					'packed_workspace_restore_failed',
+					{
+						operation: 'session.workspace_archive.restore',
+						object: options.workspaceArchive,
+						project_id: options.projectId,
+						notebook_id: options.notebookId,
+						recovered: true,
+					},
+					packed.error,
+				);
+			}
+			const fallback = await this.loadWorkspaceObjects(
+				sandbox,
+				options,
+				mountPath,
+				workspacePrefix,
+			);
+			return {
+				...fallback,
+				archiveStatus: packed.status === 'missing' ? 'missing' : 'failed',
+			};
+		}
+		return this.loadWorkspaceObjects(sandbox, options, mountPath, workspacePrefix);
+	}
+
+	private async loadWorkspaceObjects(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		mountPath: string,

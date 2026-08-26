@@ -16,6 +16,8 @@ export interface VersionPaths {
 	code: string;
 	deps: string;
 	meta: string;
+	/** Optional packed copy fast path for restoring a synced sandbox. */
+	workspaceArchive: string;
 	workspacePrefix: string;
 	workspaceFile: (rel: string) => string;
 	/** Pull-source Git metadata, stored outside the workspace mirror. */
@@ -100,6 +102,7 @@ function versionPaths(base: string, vid: VersionId): VersionPaths {
 		code: `${prefix}/notebook.py`,
 		deps: `${prefix}/pyproject.toml`,
 		meta: `${prefix}/version.json`,
+		workspaceArchive: `${prefix}/workspace.zip`,
 		workspacePrefix: `${workspace}/`,
 		workspaceFile: (rel: string) => `${workspace}/${rel}`,
 		gitPrefix: `${git}/`,

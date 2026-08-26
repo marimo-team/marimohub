@@ -915,6 +915,7 @@ app.openapi(createSession, async (c) => {
 		? paths.project(pid).notebook(nid).version(syncedVersionId)
 		: undefined;
 	const workspacePrefix = syncedVersionPaths?.workspacePrefix;
+	const workspaceArchive = syncedVersionPaths?.workspaceArchive;
 	const gitPrefix =
 		notebook.source.type === 'git' && notebook.source.sync_mode === 'pull'
 			? syncedVersionPaths?.gitPrefix
@@ -1319,6 +1320,7 @@ app.openapi(createSession, async (c) => {
 								: workspacePolicy.loadMode,
 						workspacePrefix,
 						gitPrefix,
+						workspaceArchive,
 					});
 					({ url, usedFallback } = provisionResult);
 					// Per-phase durations onto the session_provision event.

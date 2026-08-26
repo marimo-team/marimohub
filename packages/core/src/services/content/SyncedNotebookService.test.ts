@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { unzipSync } from 'fflate';
 import { MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import { PreconditionFailedError } from '../../errors';
 import { ACTOR, restoreClock, setupTestEnv, useFakeClock } from '../../testing';
@@ -12,6 +13,7 @@ import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
 import { SyncedNotebookService } from './SyncedNotebookService';
 import type { CreateSyncedNotebookInput } from '../../integrations/syncedSource';
+import { MAX_PACKED_WORKSPACE_INPUT_BYTES } from '../../integrations/packedWorkspace';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -474,6 +476,76 @@ describe('SyncedNotebookService', () => {
 			expect(await (await bucket.get(version.gitFile('objects/pack/pack-a.pack')))!.text()).toBe(
 				'pack',
 			);
+			const archive = await (await bucket.get(version.workspaceArchive))!.bytes();
+			const packed = unzipSync(archive);
+			expect(new TextDecoder().decode(packed['app.py'])).toBe('import marimo');
+			expect(new TextDecoder().decode(packed['.git/HEAD'])).toBe('ref: refs/heads/main\n');
+		});
+
+		it('keeps the canonical version when the packed archive write fails', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const realPut = bucket.put.bind(bucket);
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const put = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+				if (key.endsWith('/workspace.zip')) throw new Error('archive storage unavailable');
+				return realPut(key, value, options);
+			});
+
+			try {
+				const synced = await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+				const version = paths.project(projectId).notebook(meta.id).version(synced.versionId!);
+				expect(await (await bucket.get(version.workspaceFile('app.py')))!.text()).toBe(
+					'import marimo',
+				);
+				expect(await bucket.get(version.workspaceArchive)).toBeNull();
+				expect((await notebooks.getNotebook(projectId, meta.id)).meta.status).toBe('active');
+			} finally {
+				put.mockRestore();
+				log.mockRestore();
+			}
+		});
+
+		it('skips synchronous packing when the combined input exceeds its limit', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const halfPlusOne = new Uint8Array(Math.floor(MAX_PACKED_WORKSPACE_INPUT_BYTES / 2) + 1);
+			const synced = await notebooks.synced.sync(projectId, meta.id, {
+				...syncInput('commit-aaaa'),
+				files: [
+					{ path: 'app.py', bytes: halfPlusOne },
+					{ path: 'data.bin', bytes: halfPlusOne },
+				],
+			});
+			const version = paths.project(projectId).notebook(meta.id).version(synced.versionId!);
+
+			expect(await bucket.get(version.workspaceArchive)).toBeNull();
+			expect((await bucket.get(version.workspaceFile('app.py')))!.size).toBe(
+				halfPlusOne.byteLength,
+			);
+			expect((await bucket.get(version.workspaceFile('data.bin')))!.size).toBe(
+				halfPlusOne.byteLength,
+			);
+		});
+
+		it('removes the packed archive when a canonical workspace write fails', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const realPut = bucket.put.bind(bucket);
+			const put = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+				if (key.includes('/versions/') && key.endsWith('/workspace/app.py')) {
+					throw new Error('canonical storage unavailable');
+				}
+				return realPut(key, value, options);
+			});
+
+			try {
+				await expect(
+					notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa')),
+				).rejects.toThrow('canonical storage unavailable');
+				const versionsPrefix = `${paths.project(projectId).notebook(meta.id).base}/versions/`;
+				expect((await bucket.list({ prefix: versionsPrefix })).objects).toHaveLength(0);
+				expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+			} finally {
+				put.mockRestore();
+			}
 		});
 
 		it('rejects a pull sync without Git metadata', async () => {
@@ -762,6 +834,9 @@ describe('SyncedNotebookService', () => {
 				pending_config: { repo: 'new/repo' },
 			});
 			expect(await env.notebooks.listVersions(pid, meta.id)).toHaveLength(1);
+			const versionsPrefix = `${paths.project(pid).notebook(meta.id).base}/versions/`;
+			const stored = await env.bucket.list({ prefix: versionsPrefix });
+			expect(stored.objects.filter(({ key }) => key.endsWith('/workspace.zip'))).toHaveLength(1);
 		});
 	});
 
