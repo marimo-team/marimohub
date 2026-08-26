@@ -1,4 +1,6 @@
 import { all, allSettled } from 'better-all';
+import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
+import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
@@ -21,7 +23,7 @@ import type {
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
-import { buildMarimoLaunch } from './marimoLaunch';
+import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchStrategyName } from './marimoLaunch';
 import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
@@ -207,14 +209,44 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
  * `<phase>_`. CoreWeave resolves its sandbox lazily, so its create/find ms would
  * otherwise be invisible — buried inside whichever span triggered the first call.
  */
-function drainTimingsInto(sandbox: SandboxInstance, sw: Stopwatch, phase: string): Disposable {
+function drainTimingsInto(
+	sandbox: SandboxInstance,
+	sw: Stopwatch,
+	phase: string,
+	span?: OtelSpan,
+): Disposable {
 	return {
 		[Symbol.dispose]() {
 			for (const [name, ms] of Object.entries(sandbox.drainTimings?.() ?? {})) {
 				sw.timings[`${phase}_${name}`] = ms;
+				span?.setAttribute(`${name}_ms`, ms);
 			}
 		},
 	};
+}
+
+type TimeSandboxPhase = <T>(fn: () => Promise<T>) => Promise<T>;
+
+async function withSandboxSpan<T>(
+	sw: Stopwatch,
+	name: string,
+	fn: (time: TimeSandboxPhase, span: OtelSpan) => Promise<T>,
+	attributes?: Attributes,
+): Promise<T> {
+	const time: TimeSandboxPhase = (fn) => sw.time(name, fn);
+	return trace
+		.getTracer('@marimo-hub/core')
+		.startActiveSpan(`sandbox.${name}`, { attributes }, async (span) => {
+			try {
+				return await fn(time, span);
+			} catch (error) {
+				span.recordException(error instanceof Error ? error : String(error));
+				span.setStatus({ code: SpanStatusCode.ERROR });
+				throw error;
+			} finally {
+				span.end();
+			}
+		});
 }
 
 export interface WorkspaceLoadContext {
@@ -356,14 +388,24 @@ export class SandboxProvisioner {
 
 		const ensureReachable = () => this.ensureReachable(sandbox, sw);
 		const loadWorkspace = () =>
-			this.loadWorkspace(
-				sandbox,
-				options,
-				mountPath,
-				options.workspacePrefix ?? nb.workspacePrefix,
-				sw,
-			);
-		const injectSessionEnv = () => this.injectSessionEnv(sandbox, options, sw);
+			withSandboxSpan(sw, 'files', async (time, span) => {
+				const loaded = await time(() =>
+					this.loadWorkspace(
+						sandbox,
+						options,
+						mountPath,
+						options.workspacePrefix ?? nb.workspacePrefix,
+					),
+				);
+				span.setAttributes({
+					objects: loaded.stats?.objectCount ?? 0,
+					bytes: loaded.stats?.bytes ?? 0,
+					used_fallback: loaded.usedFallback,
+				});
+				return loaded;
+			});
+		const injectSessionEnv = () =>
+			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
 		const startMarimoKernel = () => this.startMarimoKernel(sandbox, options, mountPath, sw);
 		const exposeKernel = () => this.exposeKernel(sandbox, options, sw);
 
@@ -405,16 +447,18 @@ export class SandboxProvisioner {
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {
-		using _drained = drainTimingsInto(sandbox, sw, 'reachable');
-		try {
-			// Adapters without `ready()` fall back to a no-op command, which proves the
-			// same thing at the cost of a round-trip.
-			await sw.time('reachable', async () => {
-				await (sandbox.ready?.() ?? sandbox.exec('true'));
-			});
-		} catch (err) {
-			throw new UnavailableError('Sandbox compute backend is not available', { cause: err });
-		}
+		await withSandboxSpan(sw, 'reachable', async (time, span) => {
+			using _drained = drainTimingsInto(sandbox, sw, 'reachable', span);
+			try {
+				// Adapters without `ready()` fall back to a no-op command, which proves the
+				// same thing at the cost of a round-trip.
+				await time(async () => {
+					await (sandbox.ready?.() ?? sandbox.exec('true'));
+				});
+			} catch (err) {
+				throw new UnavailableError('Sandbox compute backend is not available', { cause: err });
+			}
+		});
 	}
 
 	private async loadWorkspace(
@@ -422,9 +466,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		mountPath: string,
 		workspacePrefix: string,
-		sw: Stopwatch,
 	): Promise<WorkspaceLoadResult> {
-		using _files = sw.span('files');
 		const strategy =
 			options.workspaceLoadMode === 'copy-only'
 				? this.workspaceLoadStrategies.copyOnly
@@ -487,27 +529,28 @@ export class SandboxProvisioner {
 	private async injectSessionEnv(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
-		sw: Stopwatch,
+		time: TimeSandboxPhase,
 	): Promise<void> {
 		const sessionEnv = await options.sessionEnv;
 		if (!sessionEnv) return;
-		using _inject = sw.span('inject');
-		try {
-			// The credential files go in one write; env vars are a separate channel, so
-			// the round-trips overlap.
-			const files = sessionEnv.files ?? [];
-			const vars = sessionEnv.vars;
-			const defaults = sessionEnv.defaults;
-			await Promise.all([
-				files.length > 0 ? sandbox.writeFiles(files) : undefined,
-				vars && Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
-				defaults && Object.keys(defaults).length > 0
-					? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
-					: undefined,
-			]);
-		} catch (err) {
-			throw provisionFailure('injecting session credentials', err);
-		}
+		await time(async () => {
+			try {
+				// The credential files go in one write; env vars are a separate channel, so
+				// the round-trips overlap.
+				const files = sessionEnv.files ?? [];
+				const vars = sessionEnv.vars;
+				const defaults = sessionEnv.defaults;
+				await Promise.all([
+					files.length > 0 ? sandbox.writeFiles(files) : undefined,
+					vars && Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
+					defaults && Object.keys(defaults).length > 0
+						? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
+						: undefined,
+				]);
+			} catch (err) {
+				throw provisionFailure('injecting session credentials', err);
+			}
+		});
 	}
 
 	private async startMarimoKernel(
@@ -575,19 +618,26 @@ export class SandboxProvisioner {
 			const setupTimeoutMs =
 				startupTimeoutMs === 0 ? 0 : Math.max(0, startupTimeoutMs - (Date.now() - startupStart));
 			try {
-				const setup = await sw.time('setup', () => {
-					const pending = sandbox.exec(command, { timeout: setupTimeoutMs });
-					return startupTimeoutMs === 0
-						? pending
-						: withDeadline(pending, {
-								timeoutMs: setupTimeoutMs,
-								timeoutError: () =>
-									new PythonEnvironmentSetupError(
-										`Failed to prepare the notebook Python environment within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
-									),
-							});
-				});
-				if (!setup.success) throw pythonEnvironmentSetupFailure(setup);
+				await withSandboxSpan(
+					sw,
+					'setup',
+					async (time) => {
+						const setup = await time(() => {
+							const pending = sandbox.exec(command, { timeout: setupTimeoutMs });
+							return startupTimeoutMs === 0
+								? pending
+								: withDeadline(pending, {
+										timeoutMs: setupTimeoutMs,
+										timeoutError: () =>
+											new PythonEnvironmentSetupError(
+												`Failed to prepare the notebook Python environment within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
+											),
+									});
+						});
+						if (!setup.success) throw pythonEnvironmentSetupFailure(setup);
+					},
+					{ launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
+				);
 			} catch (error) {
 				if (error instanceof PythonEnvironmentSetupError) throw error;
 				throw provisionFailure('preparing the notebook Python environment', error);
@@ -596,15 +646,15 @@ export class SandboxProvisioner {
 		let process: SandboxProcess | undefined;
 		let portWaitStart: number | undefined;
 		try {
-			const proc = await sw.time('start', () =>
-				sandbox.startProcess(launch.start, { cwd: mountPath }),
+			const proc = await withSandboxSpan(sw, 'start', (time) =>
+				time(() => sandbox.startProcess(launch.start, { cwd: mountPath })),
 			);
 			process = proc;
 			portWaitStart = Date.now();
 			const portWaitTimeoutMs =
 				startupTimeoutMs === 0 ? 0 : Math.max(0, startupTimeoutMs - (portWaitStart - startupStart));
-			await sw.time('waitport', () =>
-				proc.waitForPort(MARIMO_PORT, { timeout: portWaitTimeoutMs }),
+			await withSandboxSpan(sw, 'waitport', (time) =>
+				time(() => proc.waitForPort(MARIMO_PORT, { timeout: portWaitTimeoutMs })),
 			);
 		} catch (err) {
 			// Surface the kernel's own output so a startup crash isn't an opaque
@@ -649,11 +699,13 @@ export class SandboxProvisioner {
 		sw: Stopwatch,
 	): Promise<string> {
 		try {
-			const { url } = await sw.time('expose', () =>
-				sandbox.exposePort(MARIMO_PORT, {
-					hostname: options.hostname,
-					token: options.sandboxId,
-				}),
+			const { url } = await withSandboxSpan(sw, 'expose', (time) =>
+				time(() =>
+					sandbox.exposePort(MARIMO_PORT, {
+						hostname: options.hostname,
+						token: options.sandboxId,
+					}),
+				),
 			);
 			return url;
 		} catch (err) {
