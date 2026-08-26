@@ -62,5 +62,5 @@ Persistent edit sandboxes use a per-notebook editor claim. See
   replica).
 - Your **storage**, **compute**, and **identity** providers.
 
-See [Deploying](/deploying/) for platform-specific topologies, and
+See [Deploying](/deploying/README) for platform-specific topologies, and
 [Security](/security) for the isolation and trust model.

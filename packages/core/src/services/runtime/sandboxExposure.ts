@@ -8,12 +8,8 @@ import type {
 	ExposureResult,
 	SandboxExposure,
 } from '../../ports/sandboxExposure';
+import { joinUrlPath } from '../../url';
 import { signProxyToken } from './proxyToken';
-
-/** Strip any trailing slashes so we can join path segments cleanly (no `//proxy`). */
-function trimTrailingSlash(s: string): string {
-	return s.replace(/\/+$/, '');
-}
 
 /**
  * `subdomain` (default) — the compute adapter's `exposePort()` URL is used as-is;
@@ -58,7 +54,7 @@ export class ProxyExposure implements SandboxExposure {
 	async finalize(exposedUrl: string, ctx: ExposureContext): Promise<ExposureResult> {
 		const path = await this.pathFor(ctx);
 		return {
-			clientUrl: `${trimTrailingSlash(ctx.appBaseUrl)}${path}/`,
+			clientUrl: `${joinUrlPath(ctx.appBaseUrl, path)}/`,
 			originUrl: exposedUrl,
 		};
 	}

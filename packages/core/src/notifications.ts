@@ -11,6 +11,7 @@ import {
 	UserIdSchema,
 } from './schema';
 import type { Identity, Project, ProjectMember } from './schema';
+import { joinUrlPath } from './url';
 
 export const NotificationRecipientSchema = z.object({
 	userId: UserIdSchema.optional(),
@@ -191,7 +192,7 @@ export interface AlertTestNotificationInput {
 
 function hubLink(baseUrl: string | undefined, path: string): string | undefined {
 	if (!baseUrl) return undefined;
-	return new URL(path, baseUrl).toString();
+	return joinUrlPath(baseUrl, path);
 }
 
 function optionalLink(link: string | undefined): { link?: string } {

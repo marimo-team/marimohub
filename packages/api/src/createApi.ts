@@ -35,7 +35,7 @@ import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { sandboxProxyMiddleware } from './sandboxProxy';
-import { createApp, ErrorResponseSchema, fail } from './shared';
+import { createApp, ErrorResponseSchema, fail, resolvePublicBaseUrl } from './shared';
 import type { ErrorCode } from './shared';
 
 function internalErrorMessage(requestId: string | undefined): string {
@@ -406,15 +406,9 @@ export function createApi(rawDeps: ApiDeps) {
 			} catch {
 				sourceOrigin = null;
 			}
-			const requestUrl = new URL(c.req.url);
-			const destinationHost = c.req.header('host') ?? requestUrl.host;
-			const forwardedProtocol = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim();
-			const protocol = forwardedProtocol || requestUrl.protocol.slice(0, -1);
 			let destinationOrigin: string | null = null;
 			try {
-				destinationOrigin = deps.sandbox.appBaseUrl
-					? new URL(deps.sandbox.appBaseUrl).origin
-					: new URL(`${protocol}://${destinationHost}`).origin;
+				destinationOrigin = new URL(resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl)).origin;
 			} catch {
 				destinationOrigin = null;
 			}

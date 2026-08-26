@@ -9,6 +9,36 @@ export interface ParseHttpUrlOptions {
 	allowCredentials?: boolean;
 }
 
+export function normalizeBasePath(pathname: string): string {
+	return pathname.replace(/\/+$/, '') || '/';
+}
+
+export function basePathFromUrl(value: string | URL): string {
+	return normalizeBasePath(new URL(value).pathname);
+}
+
+export function baseHrefFromUrl(value: string | URL): string {
+	const pathname = basePathFromUrl(value);
+	return pathname === '/' ? '/' : `${pathname}/`;
+}
+
+export function normalizeBaseUrl(value: string | URL): string {
+	const url = new URL(value);
+	url.pathname = normalizeBasePath(url.pathname);
+	url.search = '';
+	url.hash = '';
+	return url.pathname === '/' ? url.href.slice(0, -1) : url.href;
+}
+
+export function joinUrlPath(baseUrl: string, path: string): string {
+	const url = new URL(baseUrl);
+	const basePath = normalizeBasePath(url.pathname);
+	url.pathname = `${basePath === '/' ? '' : basePath}/${path.replace(/^\/+/, '')}`;
+	url.search = '';
+	url.hash = '';
+	return url.toString();
+}
+
 export function parseHttpUrl(value: string, options: ParseHttpUrlOptions = {}): HttpUrlParseResult {
 	let url: URL;
 	try {

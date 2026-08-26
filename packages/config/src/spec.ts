@@ -737,13 +737,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'false',
 						required: true,
 					},
-					{
-						id: 'MARIMOHUB_APP_BASE_URL',
-						name: 'App base URL',
-						description:
-							'Public origin used to build `…/proxy/<token>` client URLs, e.g. when the app sits behind a proxy that rewrites the host. Omit to derive it from the inbound request origin.',
-						example: 'https://hub.example.com',
-					},
 				],
 			},
 		],
@@ -941,6 +934,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'HTTP port',
 						description: 'Port the HTTP server listens on.',
 						default: '3000',
+					},
+					{
+						id: 'MARIMOHUB_APP_BASE_URL',
+						name: 'App base URL',
+						description:
+							'Public URL for browser links and the Node SPA base path. When the app uses a path prefix, set this variable. If unset, links use the request origin and the SPA uses `/`.',
+						example: 'https://hub.example.com/marimohub',
 					},
 					{
 						id: 'MARIMOHUB_STATIC_ROOT',

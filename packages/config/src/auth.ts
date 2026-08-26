@@ -1,4 +1,5 @@
 import type { Authenticator } from '@marimo-hub/core';
+import { basePathFromUrl } from '@marimo-hub/core/url';
 import { createOidcAuth } from '@marimo-hub/auth-oidc';
 import type { EmailVerificationPolicy, OidcGroupPolicy } from '@marimo-hub/auth-oidc';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
@@ -102,6 +103,15 @@ function parseScopes(raw: string | undefined): string {
 		});
 	}
 	return scopes.join(' ');
+}
+
+function appRedirectPath(value: string | undefined): string | undefined {
+	if (!value?.trim()) return undefined;
+	try {
+		return basePathFromUrl(value);
+	} catch {
+		return undefined;
+	}
 }
 
 function checkedGroups(env: Env, key: string): string[] | undefined {
@@ -222,6 +232,7 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 				sessionTtlSeconds: Math.min(sessionTtlSeconds, groupSessionTtlSeconds),
 				allowedEmailDomains: parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS),
 				prompt: env.MARIMOHUB_AUTH_OIDC_PROMPT?.trim() || undefined,
+				postLoginRedirect: appRedirectPath(env.MARIMOHUB_APP_BASE_URL),
 				...(groups ? { groups } : {}),
 			});
 			return { authenticator, authRoutes: routes };

@@ -19,6 +19,7 @@
 		"@codemirror/state": "catalog:",
 		"@codemirror/view": "catalog:",
 		"@marimo-hub/client": "workspace:*",
+		"@marimo-hub/core": "workspace:*",
 		"@marimo-team/codemirror-sql": "catalog:",
 		"@pierre/diffs": "^1.2.11",
 		"@tailwindcss/vite": "catalog:",

@@ -22,7 +22,7 @@ export interface ExposureContext {
 	projectId: ProjectId;
 	notebookId: NotebookId;
 	sandboxId: SandboxId;
-	/** The app's public origin (e.g. `https://hub.example.com`), no trailing slash. */
+	/** The app's public base URL, which may include a path prefix. */
 	appBaseUrl: string;
 }
 

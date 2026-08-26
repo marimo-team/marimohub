@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { apiClient, apiData, ApiRequestError } from './index';
+import { apiClient, apiData, ApiRequestError, createApiClient } from './index';
 import type { components } from './schema';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -51,6 +51,15 @@ describe('apiData', () => {
 		expect(init?.method).toBe('POST');
 		expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
 		expect(init?.body).toBe(JSON.stringify({ name: 'Example', description: 'Typed request' }));
+	});
+
+	it('preserves a path prefix in a same-origin custom base URL', async () => {
+		const fn = stubFetch(async () => jsonResponse({ success: true, data: null }));
+		const client = createApiClient({ baseUrl: 'http://localhost/marimohub' });
+
+		await apiData(client.GET('/api/v1/me'));
+
+		expect(fn.mock.calls[0]?.[0]).toBe('/marimohub/api/v1/me');
 	});
 
 	it('forwards the body even when the Request.body getter is missing (Firefox)', async () => {

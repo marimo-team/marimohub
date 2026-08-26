@@ -55,7 +55,7 @@ describe('NotificationRouter', () => {
 			audience: 'personal',
 			title: 'You were invited to Forecasts',
 			body: 'Owner invited you to Forecasts as editor.',
-			link: `https://hub.example.com/projects/${project.id}`,
+			link: `https://hub.example.com/base/projects/${project.id}`,
 			recipients: [{ email: 'member@example.com' }],
 			context: { pid: project.id, role: 'editor' },
 			data: {

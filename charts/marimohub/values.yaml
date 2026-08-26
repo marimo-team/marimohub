@@ -54,7 +54,7 @@ maintenance:
 #   # `proxy` forwards kernel traffic through the app (authenticated, per-session
 #   # authorized) but serves untrusted code same-origin — trusted clusters only:
 #   MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: "true"   # required to enable proxy mode
-#   MARIMOHUB_APP_BASE_URL: https://hub.example.com # optional; else derived per-request
+#   MARIMOHUB_APP_BASE_URL: https://hub.example.com/marimohub # required for a path prefix
 config: {}
 #  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared # shared | exclusive
 

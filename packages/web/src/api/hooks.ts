@@ -11,6 +11,7 @@ import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from '.
 import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
+import { withBasePath } from '../lib/basePath';
 import {
 	userKeys,
 	projectKeys,
@@ -1207,7 +1208,9 @@ export function objectContentUrl(input: {
 	if (input.versionId) params.set('version_id', input.versionId);
 	if (input.etag) params.set('etag', input.etag);
 	if (input.inline) params.set('inline', 'true');
-	return `/api/v1/projects/${encodeURIComponent(input.projectId)}/integrations/${encodeURIComponent(input.integrationId)}/browse/objects/content?${params}`;
+	return withBasePath(
+		`/api/v1/projects/${encodeURIComponent(input.projectId)}/integrations/${encodeURIComponent(input.integrationId)}/browse/objects/content?${params}`,
+	);
 }
 
 // Notebooks

@@ -131,8 +131,11 @@ export async function bootstrap(
 	// so they take precedence; everything else falls through to static assets, with
 	// a single-page-app fallback to index.html.
 	const staticRoot = validatedEnv.MARIMOHUB_STATIC_ROOT ?? './public';
+	const spaFallback = serveSpaFallback(staticRoot, validatedEnv.MARIMOHUB_APP_BASE_URL);
+	app.get('/', spaFallback);
+	app.get('/index.html', spaFallback);
 	app.use('/*', serveStaticWithCache({ root: staticRoot }));
-	app.get('*', serveSpaFallback(staticRoot));
+	app.get('*', spaFallback);
 
 	// Maintenance + session-lifecycle loops — run on a single replica (the
 	// marimohub-maintenance Deployment). The bucket-CAS leases inside are

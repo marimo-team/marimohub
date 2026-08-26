@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useUserQuery } from '../api/hooks';
 import { userKeys } from '../api/queryKeys';
 import type { User } from '../types';
+import { withBasePath } from '../lib/basePath';
 
 interface AuthContextValue {
 	user: User | null;
@@ -32,13 +33,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		const returnTo = window.location.pathname + (search ? `?${search}` : '') + window.location.hash;
 		window.location.href =
 			returnTo === '/'
-				? '/api/auth/login'
-				: `/api/auth/login?redirect_url=${encodeURIComponent(returnTo)}`;
+				? withBasePath('/api/auth/login')
+				: withBasePath(`/api/auth/login?redirect_url=${encodeURIComponent(returnTo)}`);
 	}, []);
 
 	const signOut = useCallback(() => {
 		if (user?.logout_url) {
-			window.location.href = user.logout_url;
+			window.location.href = withBasePath(user.logout_url);
 		} else {
 			queryClient.setQueryData(userKeys.me(), null);
 		}

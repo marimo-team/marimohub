@@ -57,4 +57,13 @@ describe('ProxyExposure', () => {
 		const token = await signProxyToken(ctx.projectId, ctx.sessionId, SECRET);
 		expect(result.clientUrl).toBe(`https://hub.example.com/proxy/${token}/`);
 	});
+
+	it('preserves a path prefix in the app base url', async () => {
+		const result = await exposure.finalize('http://kernel:2718', {
+			...ctx,
+			appBaseUrl: 'https://hub.example.com/marimohub',
+		});
+		const token = await signProxyToken(ctx.projectId, ctx.sessionId, SECRET);
+		expect(result.clientUrl).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);
+	});
 });

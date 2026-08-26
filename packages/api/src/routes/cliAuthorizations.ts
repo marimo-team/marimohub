@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import {
 	BadRequestError,
 	createSlidingWindowBudget,
+	joinUrlPath,
 	parseCliAuthorizationCode,
 	ResourceExhaustedError,
 } from '@marimo-hub/core';
@@ -15,6 +16,7 @@ import {
 	errorResponses,
 	jsonBody,
 	jsonContent,
+	resolvePublicBaseUrl,
 	SESSION_ONLY_SECURITY,
 } from '../shared';
 import type { HonoEnv } from '../shared';
@@ -387,8 +389,8 @@ cliTokenApp.openapi(requestDeviceAuthorization, async (c) => {
 	const requested = await c
 		.get('deps')
 		.services.cliAuthorizations.requestDevice(c.req.valid('json').code_challenge);
-	const publicBaseUrl = c.get('deps').sandbox.appBaseUrl ?? new URL(c.req.url).origin;
-	const verification = new URL('/cli/device', publicBaseUrl);
+	const publicBaseUrl = resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl);
+	const verification = new URL(joinUrlPath(publicBaseUrl, '/cli/device'));
 	const complete = new URL(verification);
 	complete.searchParams.set('user_code', requested.userCode);
 	preventCaching(c);

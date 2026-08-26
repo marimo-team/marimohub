@@ -14,6 +14,7 @@ import { ErrorBoundary, Button } from '@/components/ui';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
 import { AdminLayout } from '@/components/Admin/AdminLayout';
+import { appBasePath, withBasePath } from '@/lib/basePath';
 
 const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
@@ -43,7 +44,7 @@ function NotFoundPage() {
 			<p className="text-sm text-muted-foreground">
 				The page may have moved, or you may not have access to it.
 			</p>
-			<Button variant="default" onPress={() => window.location.assign('/')}>
+			<Button variant="default" onPress={() => window.location.assign(withBasePath('/'))}>
 				Back to projects
 			</Button>
 		</div>
@@ -93,7 +94,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 					variant="unstyled"
 					className="rounded text-sm text-muted-foreground underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 					onPress={() => {
-						window.location.href = '/api/auth/logout';
+						window.location.href = withBasePath('/api/auth/logout');
 					}}
 				>
 					Sign out
@@ -172,7 +173,7 @@ function AppContent() {
 function App() {
 	return (
 		<AppErrorBoundary>
-			<BrowserRouter>
+			<BrowserRouter basename={appBasePath()}>
 				<ThemeProvider>
 					<AuthProvider>
 						<AuthGate>
