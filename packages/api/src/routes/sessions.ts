@@ -1070,6 +1070,8 @@ app.openapi(createSession, async (c) => {
 	const observer = logObserver({
 		event: 'session_provision',
 		sandbox_id: sandboxId,
+		image,
+		compute_profile: appliedComputeProfile.name,
 		project_id: pid,
 		notebook_id: nid,
 		user_id: user.id,
@@ -1092,6 +1094,7 @@ app.openapi(createSession, async (c) => {
 					editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
 					authorization_expires_at: authorizationExpiresAt,
 				});
+				observer.tag('session_id', session.session_id);
 			})
 			// The pre-flight cap check alone is raceable; re-rank now that this
 			// session is visible to every concurrent create.
