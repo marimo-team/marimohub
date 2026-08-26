@@ -8,11 +8,12 @@ App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
 
 ## How it works
 
-- **One app per notebook, shared by everyone.** "Run as app" provisions a
-  single app sandbox for that notebook. Everyone who opens the app attaches to
-  the same session; there is no per-user copy. The project page shows who
-  started it, how long it has been up, and an approximate count of connected
-  users.
+- **One shared app sandbox, with a separate view for each user.** "Run as app"
+  provisions a single app sandbox for that notebook. Every browser uses that
+  sandbox's files, credentials, and compute capacity, but gets its own marimo
+  session and UI state. One user's inputs and outputs are not mirrored to other
+  users. The project page shows who started the shared sandbox, how long it has
+  been up, and an approximate count of connected users.
 - **Apps serve a point-in-time copy.** The app loads the notebook's saved state
   at start and never writes anything back — no version, no snapshot, no
   workspace change. Interacting with an app cannot modify the notebook. One
