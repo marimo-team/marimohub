@@ -6,6 +6,7 @@
  */
 import type { AnyValue, AnyValueMap } from '@opentelemetry/api-logs';
 import { logs, SeverityNumber } from '@opentelemetry/api-logs';
+import { traceContext } from './tracing';
 
 const SEVERITY: Record<string, SeverityNumber> = {
 	debug: SeverityNumber.DEBUG,
@@ -17,6 +18,48 @@ const SEVERITY: Record<string, SeverityNumber> = {
 // The proxy binds to the real provider once registered, so caching before startup
 // is safe — and getLogger is not free per the api-logs docs.
 let cachedLogger: ReturnType<typeof logs.getLogger> | undefined;
+
+/**
+ * Wide-event logger: one JSON object per line (machine-parseable, no
+ * pino/winston — keeps Workers builds dependency-free) with the active trace
+ * ids merged in, mirrored to the OTEL logs pipeline via {@link emitLogRecord}.
+ * `channel: 'warn'` writes via `console.warn` for events that should stand out
+ * on a terminal; the OTLP severity comes from `fields.level` either way.
+ */
+export function logEvent(
+	fields: Record<string, unknown>,
+	options?: { channel?: 'log' | 'warn' },
+): void {
+	const record = { ts: new Date().toISOString(), ...traceContext(), ...fields };
+	// Same two-stage fallback as logOperationalError: a non-serializable field
+	// (circular error, BigInt) must still leave a line naming the lost event.
+	let line: string;
+	try {
+		// A `toJSON` field spread onto the record can make stringify return
+		// `undefined` or a scalar without throwing — that also loses the event.
+		const serialized: unknown = JSON.stringify(record);
+		if (typeof serialized !== 'string' || !serialized.startsWith('{')) {
+			throw new TypeError('record did not serialize to an object');
+		}
+		line = serialized;
+	} catch {
+		const attempted = fields.event;
+		try {
+			line = JSON.stringify({
+				ts: record.ts,
+				level: 'error',
+				event: 'log_event_serialization_failed',
+				attempted_event: typeof attempted === 'string' ? attempted.slice(0, 128) : 'unknown',
+			});
+		} catch {
+			line = '{"level":"error","event":"log_event_serialization_failed"}';
+		}
+	}
+	try {
+		(options?.channel === 'warn' ? console.warn : console.log)(line);
+	} catch {}
+	emitLogRecord(record);
+}
 
 /**
  * Mirror a `logEvent` record to the OTEL logs pipeline: `level` sets the

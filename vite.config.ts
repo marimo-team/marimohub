@@ -321,7 +321,7 @@ export default defineConfig({
 			},
 			{
 				// Entrypoints, examples, and dedicated logging modules write to stdout.
-				files: ['apps/server/**', 'examples/**', 'scripts/**', '**/log.ts'],
+				files: ['apps/server/**', 'examples/**', 'scripts/**', '**/log.ts', '**/logs.ts'],
 				rules: {
 					'eslint/no-console': 'off',
 				},

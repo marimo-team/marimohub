@@ -1707,8 +1707,12 @@ export interface components {
 			environment_setup_benchmark: components['schemas']['SandboxEnvironmentSetupBenchmark'];
 		};
 		SandboxStartupPhase: {
-			/** @enum {string} */
-			status: 'ok' | 'failed' | 'skipped';
+			/**
+			 * @description Known values: ok, failed, skipped. Unrecognized values normalize to unknown.
+			 * @example ok
+			 * @enum {string}
+			 */
+			status: 'ok' | 'failed' | 'skipped' | 'unknown';
 			duration_ms: number | null;
 			error?: {
 				[key: string]: unknown;
@@ -1719,8 +1723,12 @@ export interface components {
 			command: string;
 			stdout: string;
 			stderr: string;
-			/** @enum {string} */
-			failure_code?: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR';
+			/**
+			 * @description Known values: COMMAND_FAILED, SPAWN_FAILED, BACKEND_ERROR. Unrecognized values normalize to unknown.
+			 * @example COMMAND_FAILED
+			 * @enum {string}
+			 */
+			failure_code?: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR' | 'unknown';
 		};
 		/** @description The optional fixed-package benchmark, or null when it was not requested */
 		SandboxEnvironmentSetupBenchmark: {
@@ -4945,7 +4953,8 @@ export interface operations {
 			path?: never;
 			cookie?: never;
 		};
-		requestBody: {
+		/** @description Optional; omit to use the deployment defaults. */
+		requestBody?: {
 			content: {
 				'application/json': components['schemas']['SandboxStartupRequest'];
 			};

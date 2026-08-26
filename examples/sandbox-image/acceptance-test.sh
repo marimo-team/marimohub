@@ -119,7 +119,7 @@ TOML
 launch_kernel() { # $1 = container id
 	docker exec "$1" sh -lc '
 		cd /workspace
-		[ ! -s pyproject.toml ] || uv sync --inexact --no-compile-bytecode --no-build
+		[ ! -s pyproject.toml ] || uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build
 	'
 	docker exec -d "$1" sh -lc '
 		cd /workspace
@@ -174,27 +174,30 @@ got="$(docker run --rm "$IMAGE" sh -lc 'cd /workspace && uv run --no-sync python
 [ "$got" = "$mv" ] || fail "pre-installed marimo is ${got:-none}, expected pinned $mv"
 ok "marimo pinned to $mv (pre-installed; launch never upgrades it)"
 
-# --- 2c. a notebook may replace the warm env with a newer Python ------------
-echo "==> 2c. Python-version replacement"
+# --- 2c. a requires-python bump replaces the warm env; marimo is image-owned -
+# Mirrors the active setup steps in marimoLaunch.ts (`uv sync
+# --no-install-package marimo`, then script pins with `--prune marimo`): the
+# image must let uv replace the whole environment (writable env parent), and
+# marimo is never reinstalled into the replaced env — the launch flow keeps it
+# image-owned, so neither the sync nor the notebook's own `marimo!=` pin may
+# put a different marimo there.
+echo "==> 2c. Python-version replacement (marimo stays image-owned)"
 cid="$(run_detached "$IMAGE" sleep infinity)"
 provision_python314_notebook "$cid" "$mv"
 docker exec "$cid" sh -lc '
 	set -e
 	cd /workspace
-	marimohub_marimo_version="${MARIMO_VERSION:-$(python3 -c "import importlib.metadata as m;print(m.version(\"marimo\"))")}"
-	uv sync --inexact --no-compile-bytecode --no-build
-	installed_marimo="$(uv run --no-sync python -c "import importlib.metadata as m;print(m.version(\"marimo\"))" 2>/dev/null || true)"
-	[ "$installed_marimo" = "$marimohub_marimo_version" ] || \
-		uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
-			"marimo==$marimohub_marimo_version"
+	uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build
+	[ -d "$UV_PROJECT_ENVIRONMENT" ] || uv venv "$UV_PROJECT_ENVIRONMENT"
 	uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo \
 		-o "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
 	uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
 		-r "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
 	uv run --no-sync python -c \
-		"import click,marimo,os,sys; assert sys.version_info[:2] >= (3,14); assert marimo.__version__ == os.environ[\"MARIMO_VERSION\"]"
-' || fail "uv could not replace the warm environment with Python 3.14"
-ok "Python 3.14 replaces the warm environment and starts with script pins"
+		"import click,requests,sys; assert sys.version_info[:2] >= (3,14)"
+	! uv run --no-sync python -c "import marimo" 2>/dev/null
+' || fail "requires-python bump: env not replaced, script pins failed, or marimo leaked into the replaced env"
+ok "uv replaces the env for requires-python >= 3.14; marimo stays image-owned (never reinstalled)"
 docker rm -f "$cid" >/dev/null 2>&1
 
 # --- 3. provisioner flow: kernel serves HTTP 200 on 2718 ---------------------

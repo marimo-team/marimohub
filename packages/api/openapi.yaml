@@ -805,6 +805,10 @@ components:
             - ok
             - failed
             - skipped
+            - unknown
+          description: 'Known values: ok, failed, skipped. Unrecognized values normalize
+            to unknown.'
+          example: ok
         duration_ms:
           type:
             - number
@@ -834,6 +838,10 @@ components:
                 - COMMAND_FAILED
                 - SPAWN_FAILED
                 - BACKEND_ERROR
+                - unknown
+              description: 'Known values: COMMAND_FAILED, SPAWN_FAILED, BACKEND_ERROR.
+                Unrecognized values normalize to unknown.'
+              example: COMMAND_FAILED
           required:
             - command
             - stdout
@@ -5193,7 +5201,8 @@ paths:
         are returned as a partial report. Super-admin only and session-only.
       security: *a2
       requestBody:
-        required: true
+        required: false
+        description: Optional; omit to use the deployment defaults.
         content:
           application/json:
             schema:

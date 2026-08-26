@@ -9,12 +9,17 @@ import {
 	buildGitCloneCommand,
 	buildLaunchCommand,
 	classifyListFilesFailure,
+	LAUNCH_MARKER_GRACE_MS,
+	launchOutcomeResult,
+	launchTimeoutResult,
 	mapWithConcurrency,
 	parseLaunchOutput,
 	parseFindFilesOutput,
 	pollUntilReady,
 	removeUndefined,
+	setupCompleteMarker,
 	shellQuote,
+	transportFailureResult,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
@@ -51,7 +56,6 @@ const NAME_PREFIX = 'marimohub-sbx-';
 const DEFAULT_LABEL_KEY = 'marimohub.sandbox';
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
 const EXEC_TIMEOUT_GRACE_MS = 100;
-const LAUNCH_MARKER_GRACE_MS = 100;
 const EXEC_TIMEOUT_SUPERVISOR = `import os, signal, subprocess, sys
 process = subprocess.Popen(['sh', '-lc', sys.argv[2]], start_new_session=True)
 try:
@@ -419,13 +423,11 @@ class ContainerSandboxInstance implements SandboxInstance {
 				processId: options.processId,
 			});
 		} catch (error) {
-			return {
-				success: false,
-				reason: 'transport_failure',
-				stdout: '',
-				stderr: error instanceof Error ? error.message : String(error),
-				timings: { setup: 0, start: Math.max(0, Date.now() - launchStarted), waitport: 0 },
-			};
+			return transportFailureResult(error, {
+				setup: 0,
+				start: Math.max(0, Date.now() - launchStarted),
+				waitport: 0,
+			});
 		}
 
 		const start = Math.max(0, Date.now() - launchStarted);
@@ -439,13 +441,11 @@ class ContainerSandboxInstance implements SandboxInstance {
 			waited = await process.waitForLaunch(built.nonce, waitTimeout);
 		} catch (error) {
 			await process.kill().catch(() => {});
-			return {
-				success: false,
-				reason: 'transport_failure',
-				stdout: '',
-				stderr: error instanceof Error ? error.message : String(error),
-				timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
-			};
+			return transportFailureResult(error, {
+				setup: 0,
+				start,
+				waitport: Math.max(0, Date.now() - waitStarted),
+			});
 		}
 
 		const parsed = parseLaunchOutput({ stdout: waited.stdout, stderr: '' }, built.nonce);
@@ -468,14 +468,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 			};
 		}
 		if (terminal) {
-			return {
-				success: false,
-				reason: terminal.kind,
-				...(terminal.exitCode === undefined ? {} : { exitCode: terminal.exitCode }),
-				stdout: parsed.stdout,
-				stderr: parsed.stderr,
-				timings: { setup: terminal.setupMs, start, waitport: terminal.waitportMs },
-			};
+			return launchOutcomeResult(terminal.kind, terminal, parsed, start);
 		}
 
 		await process.kill().catch(() => {});
@@ -491,21 +484,14 @@ class ContainerSandboxInstance implements SandboxInstance {
 			};
 		}
 
-		const setupCompleted = waited.stdout.includes(
-			`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
-		);
-		const reason = options.setup && !setupCompleted ? 'setup_timeout' : 'readiness_timeout';
-		return {
-			success: false,
-			reason,
-			stdout: parsed.stdout,
-			stderr: parsed.stderr,
-			timings: {
-				setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0,
-				start,
-				waitport: Math.max(0, Date.now() - waitStarted),
-			},
-		};
+		return launchTimeoutResult({
+			setup: Boolean(options.setup),
+			setupCompleted: waited.stdout.includes(setupCompleteMarker(built.nonce)),
+			startupTimeout: options.startupTimeout,
+			output: parsed,
+			start,
+			waitport: Math.max(0, Date.now() - waitStarted),
+		});
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {

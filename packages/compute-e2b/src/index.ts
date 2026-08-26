@@ -22,9 +22,15 @@ import {
 	buildGitCloneCommand,
 	buildLaunchCommand,
 	classifyListFilesFailure,
+	errorMessage,
+	LAUNCH_MARKER_GRACE_MS,
+	launchOutcomeResult,
+	launchTimeoutResult,
 	parseLaunchOutput,
 	parseFindFilesOutput,
 	pollUntilReady,
+	setupCompleteMarker,
+	transportFailureResult,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import { SandboxId, Seconds } from '@marimo-hub/core';
@@ -60,7 +66,6 @@ const OWNER_META_KEY = 'mh-owner';
 const DEFAULT_OWNER_TAG = 'marimohub';
 const KERNEL_LOG_PATH = '/tmp/marimohub-kernel.log';
 const LAUNCH_POLL_INTERVAL_MS = 50;
-const LAUNCH_MARKER_GRACE_MS = 250;
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => {
@@ -345,13 +350,11 @@ class E2bSandboxInstance implements SandboxInstance {
 				processId: options.processId,
 			});
 		} catch (error) {
-			return {
-				success: false,
-				reason: 'transport_failure',
-				stdout: '',
-				stderr: error instanceof Error ? error.message : String(error),
-				timings: { setup: 0, start: Math.max(0, Date.now() - launchStarted), waitport: 0 },
-			};
+			return transportFailureResult(error, {
+				setup: 0,
+				start: Math.max(0, Date.now() - launchStarted),
+				waitport: 0,
+			});
 		}
 
 		const start = Math.max(0, Date.now() - launchStarted);
@@ -366,53 +369,40 @@ class E2bSandboxInstance implements SandboxInstance {
 				logs = await process.getLogs();
 			} catch (error) {
 				await process.kill().catch(() => {});
-				return {
-					success: false,
-					reason: 'transport_failure',
-					stdout: '',
-					stderr: error instanceof Error ? error.message : String(error),
-					timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
-				};
+				return transportFailureResult(error, {
+					setup: 0,
+					start,
+					waitport: Math.max(0, Date.now() - waitStarted),
+				});
 			}
 
 			setupCompleted ||= `${logs.stdout}\n${logs.stderr}`.includes(
-				`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
+				setupCompleteMarker(built.nonce),
 			);
 			const parsed = parseLaunchOutput(logs, built.nonce);
 			const outcome = parsed.outcome;
-			if (outcome?.kind === 'ready') {
-				return {
-					success: true,
-					process,
-					timings: { setup: outcome.setupMs, start, waitport: outcome.waitportMs },
-				};
-			}
 			if (outcome) {
-				return {
-					success: false,
-					reason: outcome.kind,
-					...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
-					stdout: parsed.stdout,
-					stderr: parsed.stderr,
-					timings: { setup: outcome.setupMs, start, waitport: outcome.waitportMs },
-				};
+				if (outcome.kind === 'ready') {
+					return {
+						success: true,
+						process,
+						timings: { setup: outcome.setupMs, start, waitport: outcome.waitportMs },
+					};
+				}
+				return launchOutcomeResult(outcome.kind, outcome, parsed, start);
 			}
 
 			const now = Date.now();
 			if (deadline !== undefined && now >= deadline + LAUNCH_MARKER_GRACE_MS) {
 				await process.kill().catch(() => {});
-				const reason = options.setup && !setupCompleted ? 'setup_timeout' : 'readiness_timeout';
-				return {
-					success: false,
-					reason,
-					stdout: parsed.stdout,
-					stderr: parsed.stderr,
-					timings: {
-						setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0,
-						start,
-						waitport: Math.max(0, now - waitStarted),
-					},
-				};
+				return launchTimeoutResult({
+					setup: Boolean(options.setup),
+					setupCompleted,
+					startupTimeout: options.startupTimeout,
+					output: parsed,
+					start,
+					waitport: Math.max(0, now - waitStarted),
+				});
 			}
 
 			const sleepFor =
@@ -633,7 +623,7 @@ async function defaultLoadSdk(): Promise<E2bSdk> {
 		throw new Error(
 			"MARIMOHUB_COMPUTE_BACKEND=e2b requires the 'e2b' SDK. Run `pnpm add e2b` and bake it into " +
 				"the server image, or inject it via createE2bClient's `loadSdk` on runtimes that can't " +
-				`dynamically import (e.g. Cloudflare Workers). (${err instanceof Error ? err.message : String(err)})`,
+				`dynamically import (e.g. Cloudflare Workers). (${errorMessage(err)})`,
 		);
 	}
 }

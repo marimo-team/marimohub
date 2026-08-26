@@ -16,6 +16,8 @@ import {
 	mapWithConcurrency,
 	NOT_A_DIRECTORY_EXIT_CODE,
 	NOT_A_DIRECTORY_MARKER,
+	LaunchProtocolTracker,
+	OutputTail,
 	parseFindFilesOutput,
 	parseLaunchOutput,
 	pollUntilReady,
@@ -525,6 +527,13 @@ describe('launch protocol', () => {
 		});
 	});
 
+	it('keeps a marker followed by a non-object payload as ordinary output', () => {
+		const marker = '__MARIMOHUB_LAUNCH_n1__';
+		const stdout = `${marker}null\n${marker}5\n${marker}"ready"\n${marker}[1]\n`;
+		const parsed = parseLaunchOutput({ stdout, stderr: '' }, 'n1');
+		expect(parsed).toEqual({ stdout, stderr: '', outcome: undefined });
+	});
+
 	it('preserves output before a protocol record in the same fragmented line', () => {
 		const marker = '__MARIMOHUB_LAUNCH_n1__';
 		const parsed = parseLaunchOutput(
@@ -594,6 +603,110 @@ describe('launch protocol', () => {
 		expect(timeout).toBe(Number.POSITIVE_INFINITY);
 	});
 
+	it('returns success with the supervisor timings once the port opens', async () => {
+		const result = await launchWithProcess({
+			setup: 'uv sync',
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 1000,
+			start: async (command) => {
+				const nonce = command.match(/'([a-f0-9]{32})'/)?.[1];
+				if (!nonce) throw new Error('missing launch nonce');
+				return {
+					waitForPort: async () => {},
+					getLogs: async () => ({
+						stdout: 'kernel output\n',
+						stderr:
+							`__MARIMOHUB_LAUNCH_${nonce}__{"event":"setup_complete","setupMs":11,"waitportMs":0}\n` +
+							`__MARIMOHUB_LAUNCH_${nonce}__{"event":"ready","setupMs":11,"waitportMs":22}\n`,
+					}),
+				};
+			},
+		});
+		expect(result).toMatchObject({
+			success: true,
+			timings: { setup: 11, start: expect.any(Number), waitport: 22 },
+		});
+	});
+
+	it('maps a getLogs failure after a readiness failure to transport_failure', async () => {
+		const result = await launchWithProcess({
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 1000,
+			start: async () => ({
+				waitForPort: async () => {
+					throw new Error('probe lost');
+				},
+				getLogs: async () => {
+					throw new Error('logs unavailable');
+				},
+			}),
+		});
+		expect(result).toMatchObject({
+			success: false,
+			reason: 'transport_failure',
+			stdout: '',
+			stderr: 'logs unavailable',
+		});
+	});
+
+	it('maps a getLogs failure after readiness to transport_failure', async () => {
+		const result = await launchWithProcess({
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 1000,
+			start: async () => ({
+				waitForPort: async () => {},
+				getLogs: async () => {
+					throw new Error('logs unavailable');
+				},
+			}),
+		});
+		expect(result).toMatchObject({
+			success: false,
+			reason: 'transport_failure',
+			stderr: 'logs unavailable',
+		});
+	});
+
+	it('blames an unfinished setup for an expired deadline (setup_timeout)', async () => {
+		let now = 0;
+		const result = await launchWithProcess({
+			setup: 'uv sync',
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 10,
+			now: () => now,
+			start: async () => ({
+				waitForPort: async () => {
+					now = 20;
+					throw new Error('timed out waiting for port 2718');
+				},
+				getLogs: async () => ({ stdout: '', stderr: '' }),
+			}),
+		});
+		expect(result).toMatchObject({ success: false, reason: 'setup_timeout' });
+		if (result.success) throw new Error('expected a launch failure');
+		// An unfinished setup is charged the whole remaining budget.
+		expect(result.timings.setup).toBe(10);
+	});
+
+	it('classifies an early process exit via the readiness error message as kernel_exit', async () => {
+		const result = await launchWithProcess({
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 60_000,
+			start: async () => ({
+				waitForPort: async () => {
+					throw new Error('process exited (code 9) before port 2718 was ready.\nboom');
+				},
+				getLogs: async () => ({ stdout: '', stderr: 'boom\n' }),
+			}),
+		});
+		expect(result).toMatchObject({ success: false, reason: 'kernel_exit', stderr: 'boom\n' });
+	});
+
 	it('preserves a setup failure and its output through the compatibility launcher', async () => {
 		const result = await launchWithProcess({
 			setup: 'uv sync',
@@ -641,5 +754,109 @@ describe('base64Encode', () => {
 	it('round-trips arbitrary bytes including a NUL and high bytes', () => {
 		const bytes = new Uint8Array([0x00, 0xff, 0xfe, 0x80, 0x7f]);
 		expect(base64Encode(bytes)).toBe(btoa('\x00\xff\xfe\x80\x7f'));
+	});
+});
+
+describe('OutputTail', () => {
+	const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+
+	it('keeps short output verbatim', () => {
+		const tail = new OutputTail(16);
+		tail.append('abc');
+		tail.append('def');
+		expect(tail.text).toBe('abcdef');
+	});
+
+	it('keeps only the trailing bytes once the cap is exceeded', () => {
+		const tail = new OutputTail(8);
+		tail.append('0123456789');
+		tail.append('abcdef');
+		expect(tail.text).toBe('89abcdef');
+	});
+
+	it('enforces the byte cap on multibyte output', () => {
+		const tail = new OutputTail(4);
+		tail.append('€€');
+		expect(tail.text).toBe('€');
+		expect(utf8Bytes(tail.text)).toBeLessThanOrEqual(4);
+	});
+
+	it('trims on a character boundary instead of splitting a multibyte sequence', () => {
+		const tail = new OutputTail(8);
+		tail.append('a€€€');
+		expect(tail.text).toBe('€€');
+		expect(utf8Bytes(tail.text)).toBeLessThanOrEqual(8);
+	});
+
+	it('stays within the cap across many multibyte appends', () => {
+		const tail = new OutputTail(64);
+		for (let i = 0; i < 100; i++) tail.append('данные-😀');
+		expect(utf8Bytes(tail.text)).toBeLessThanOrEqual(64);
+		expect(tail.text.endsWith('данные-😀')).toBe(true);
+	});
+});
+
+describe('LaunchProtocolTracker', () => {
+	const marker = '__MARIMOHUB_LAUNCH_n1__';
+	const readyLine = `${marker}{"event":"ready","setupMs":3,"waitportMs":4}\n`;
+
+	it('ignores a marker with a non-object payload without throwing', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stdout', `${marker}null\n${marker}5\n`);
+		expect(tracker.outcome).toBeUndefined();
+		expect(tracker.setupCompleted).toBe(false);
+		tracker.feed('stdout', readyLine);
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('parses a marker line split across two feed chunks', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', readyLine.slice(0, 20));
+		expect(tracker.outcome).toBeUndefined();
+		tracker.feed('stderr', readyLine.slice(20));
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('keeps setup_complete latched through more noise than any capped tail retains', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', `${marker}{"event":"setup_complete","setupMs":9,"waitportMs":0}\n`);
+		for (let i = 0; i < 80; i++) tracker.feed('stderr', `${'x'.repeat(1024)}\n`);
+		expect(tracker.setupCompleted).toBe(true);
+		expect(tracker.outcome).toBeUndefined();
+	});
+
+	it('sees a terminal marker buried at the start of one huge chunk', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', `${readyLine}${'noise\n'.repeat(20_000)}`);
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('the last terminal event wins, matching parseLaunchOutput', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', readyLine);
+		tracker.feed(
+			'stderr',
+			`${marker}{"event":"kernel_exit","setupMs":3,"waitportMs":8,"exitCode":2}\n`,
+		);
+		expect(tracker.outcome).toEqual({
+			kind: 'kernel_exit',
+			setupMs: 3,
+			waitportMs: 8,
+			exitCode: 2,
+		});
+	});
+
+	it('tracks streams independently and reads a mid-line marker after unterminated output', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stdout', 'partial stdout without newline');
+		tracker.feed('stderr', `unterminated setup output${readyLine}`);
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('the carry cap does not lose a marker straddling a chunk boundary after a long unterminated line', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', 'g'.repeat(100 * 1024) + readyLine.slice(0, 15));
+		tracker.feed('stderr', readyLine.slice(15));
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
 	});
 });

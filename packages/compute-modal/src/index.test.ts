@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
-import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
+import { expectExecResult, expectFileResult, expectLaunchResult } from '@marimo-hub/core/testing';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
+	CONTRACT_LAUNCH_SETUP_EXIT_CODE,
 	CONTRACT_VISIBLE_FILE,
+	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
 import { modalProfileResources, ModalCompute } from './index';
 import type {
@@ -471,6 +473,178 @@ describe('ModalCompute', () => {
 		pending.resolve(0);
 	});
 
+	describe('launchProcess failure paths', () => {
+		/** A process whose streams never emit and whose wait never resolves. */
+		function hangingProcess(): ModalProcessLike {
+			return {
+				stdout: new ReadableStream<string>({ start() {} }),
+				stderr: new ReadableStream<string>({ start() {} }),
+				wait: () => new Promise<number>(() => {}),
+			};
+		}
+
+		function worldWith(execImpl: FakeSandbox['execImpl']) {
+			const world = makeWorld();
+			const sandbox = new FakeSandbox();
+			sandbox.execImpl = execImpl;
+			world.existing.set(SANDBOX_ID, sandbox);
+			return { world, sandbox };
+		}
+
+		const isKillCommand = (command: string[]) => command[2]?.includes('read -r pid') ?? false;
+
+		it('maps a spawn failure to transport_failure', async () => {
+			const { world } = worldWith(() => {
+				throw new Error('spawn refused');
+			});
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				port: 2718,
+				startupTimeout: 1000,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('transport_failure');
+			expect(result.stderr).toBe('spawn refused');
+			expect(result.stdout).toBe('');
+		});
+
+		it('classifies a deadline with unfinished setup as setup_timeout and kills the process', async () => {
+			const { world, sandbox } = worldWith((command) =>
+				isKillCommand(command) ? processResult() : hangingProcess(),
+			);
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				setup: 'run setup',
+				port: 2718,
+				startupTimeout: 5,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('setup_timeout');
+			expect(sandbox.execCalls.some((call) => isKillCommand(call.command))).toBe(true);
+		});
+
+		it('classifies the deadline as readiness_timeout when completed setup was evicted from the capped tail', async () => {
+			const { world } = worldWith((command) => {
+				if (isKillCommand(command)) return processResult();
+				const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
+				if (!nonce) return processResult();
+				return {
+					stdout: new ReadableStream<string>({ start() {} }),
+					stderr: new ReadableStream<string>({
+						start(controller) {
+							controller.enqueue(
+								`__MARIMOHUB_LAUNCH_${nonce}__{"event":"setup_complete","setupMs":5,"waitportMs":0}\n`,
+							);
+							// Enough kernel noise to push the setup_complete marker out of the
+							// 64 KiB retained tail before the deadline expires.
+							controller.enqueue(`${'x'.repeat(70 * 1024)}\n`);
+						},
+					}),
+					wait: () => new Promise<number>(() => {}),
+				};
+			});
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				setup: 'run setup',
+				port: 2718,
+				startupTimeout: 5,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('readiness_timeout');
+		});
+
+		it('classifies a deadline with no setup as readiness_timeout and kills the process', async () => {
+			const { world, sandbox } = worldWith((command) =>
+				isKillCommand(command) ? processResult() : hangingProcess(),
+			);
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				port: 2718,
+				startupTimeout: 5,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('readiness_timeout');
+			expect(sandbox.execCalls.some((call) => isKillCommand(call.command))).toBe(true);
+		});
+
+		it('still succeeds when the ready marker lands within the post-deadline grace window', async () => {
+			const { world } = worldWith((command) => {
+				const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
+				if (!nonce) return processResult();
+				return {
+					stdout: new ReadableStream<string>({ start() {} }),
+					stderr: new ReadableStream<string>({
+						start(controller) {
+							// Past the 50ms deadline, but well inside LAUNCH_MARKER_GRACE_MS.
+							setTimeout(() => {
+								controller.enqueue(
+									`__MARIMOHUB_LAUNCH_${nonce}__{"event":"ready","setupMs":1,"waitportMs":2}\n`,
+								);
+							}, 100);
+						},
+					}),
+					wait: () => new Promise<number>(() => {}),
+				};
+			});
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				port: 2718,
+				startupTimeout: 50,
+			});
+
+			expectLaunchResult(result, { success: true });
+		});
+
+		it('maps a stream that ends before readiness to transport_failure with merged stderr', async () => {
+			const { world } = worldWith((command) =>
+				isKillCommand(command) ? processResult() : processResult(0, '', 'kernel-noise\n'),
+			);
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				port: 2718,
+				startupTimeout: 60_000,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('transport_failure');
+			expect(result.stderr).toContain('kernel-noise');
+			expect(result.stderr).toContain('Modal launch stream ended before reporting readiness');
+		});
+
+		it('carries the exit code of a non-ready terminal outcome (kernel_exit)', async () => {
+			const { world } = worldWith((command) => {
+				const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
+				if (!nonce) return processResult();
+				return processResult(
+					3,
+					'kernel stdout\n',
+					`__MARIMOHUB_LAUNCH_${nonce}__{"event":"kernel_exit","setupMs":4,"waitportMs":9,"exitCode":3}\n`,
+				);
+			});
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				port: 2718,
+				startupTimeout: 60_000,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('kernel_exit');
+			expect(result.exitCode).toBe(3);
+			expect(result.stdout).toBe('kernel stdout\n');
+			expect(result.timings).toEqual({ setup: 4, start: expect.any(Number), waitport: 9 });
+		});
+	});
+
 	it('treats destroy of an absent sandbox as idempotent', async () => {
 		const world = makeWorld();
 		await expect(makeCompute(world).create(SANDBOX_ID).destroy()).resolves.toBeUndefined();
@@ -523,6 +697,23 @@ function contractWorld() {
 	world.client.sandboxes.create = async (app, image, options) => {
 		const sandbox = (await create(app, image, options)) as FakeSandbox;
 		sandbox.execImpl = (command) => {
+			const launch = scriptContractLaunch(command[2]);
+			if (launch) {
+				if (launch.kind === 'ready') {
+					// A live kernel: the ready marker arrives on stderr and the process
+					// keeps running (wait never resolves).
+					return {
+						stdout: textStream(''),
+						stderr: textStream(launch.transcript),
+						wait: () => new Promise<number>(() => {}),
+					};
+				}
+				return processResult(
+					launch.kind === 'setup_exit' ? CONTRACT_LAUNCH_SETUP_EXIT_CODE : 124,
+					'',
+					launch.transcript,
+				);
+			}
 			return command[2]?.includes('mh-contract-fail')
 				? processResult(1, '', 'scripted failure')
 				: processResult();
@@ -536,6 +727,7 @@ computeContract('ModalCompute', () => makeCompute(contractWorld()), {
 	mountFallsBack: true,
 	semantics: {
 		failingCommand: 'mh-contract-fail',
+		launch: {},
 		// Modal maps every filesystem read exception to READ_FAILED.
 		absentFile: { path: '/workspace/contract-absent.txt', code: 'READ_FAILED' },
 		hiddenFiles: {

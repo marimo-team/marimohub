@@ -4,7 +4,12 @@ import { paths } from '../paths';
 import { AppClaimSchema } from '../schema';
 import type { NotebookId, ProjectId, SessionId } from '../ids';
 import type { Bucket } from '../ports/bucket';
-import type { ExecResult, ListFilesResult, ReadFileResult } from '../ports/sandbox';
+import type {
+	ExecResult,
+	ListFilesResult,
+	ReadFileResult,
+	SandboxLaunchResult,
+} from '../ports/sandbox';
 
 /** Assert that an async operation rejects with `NotFoundError`. */
 export async function expectNotFound(fn: () => Promise<unknown>): Promise<void> {
@@ -77,6 +82,37 @@ export function expectFileResult(
 		expect(['NOT_FOUND', 'READ_FAILED', 'BACKEND_ERROR']).toContain(received.error.code);
 	}
 	for (const key of Object.keys(expected) as (keyof ReadFileResult)[]) {
+		expect(received[key], key).toEqual(expected[key]);
+	}
+}
+
+/**
+ * Assert a `SandboxLaunchResult` envelope and match the given fields. Both arms
+ * carry timings; the failure arm additionally carries a typed reason and the
+ * captured output strings. Omitted fields aren't checked, so
+ * `expectLaunchResult(res, { success: false })` only pins the envelope shape.
+ */
+export function expectLaunchResult(
+	received: SandboxLaunchResult,
+	expected: Partial<SandboxLaunchResult> = {},
+): void {
+	expect(typeof received.success).toBe('boolean');
+	expect(typeof received.timings.setup).toBe('number');
+	expect(typeof received.timings.start).toBe('number');
+	expect(typeof received.timings.waitport).toBe('number');
+	if (!received.success) {
+		expect([
+			'setup_exit',
+			'setup_timeout',
+			'kernel_exit',
+			'readiness_timeout',
+			'transport_failure',
+		]).toContain(received.reason);
+		expect(typeof received.stdout).toBe('string');
+		expect(typeof received.stderr).toBe('string');
+		if (received.exitCode !== undefined) expect(typeof received.exitCode).toBe('number');
+	}
+	for (const key of Object.keys(expected) as (keyof SandboxLaunchResult)[]) {
 		expect(received[key], key).toEqual(expected[key]);
 	}
 }

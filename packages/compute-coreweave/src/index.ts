@@ -62,12 +62,17 @@ import {
 	buildGitCloneCommand,
 	buildLaunchCommand,
 	classifyListFilesFailure,
+	errorMessage,
 	iterableToStream,
+	launchOutcomeResult,
+	LaunchProtocolTracker,
+	OutputTail,
 	parseLaunchOutput,
 	parseFindFilesOutput,
 	portWaitCommand,
 	removeUndefined,
 	shellQuote,
+	transportFailureResult,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
@@ -78,7 +83,7 @@ import type {
 	Seconds,
 	Timings,
 } from '@marimo-hub/core';
-import { traceContext } from '@marimo-hub/core';
+import { logEvent } from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
 	ExecOptions,
@@ -356,10 +361,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			this.pendingBootstrap = this.createBootstrap();
 		}
 		this.lastEnsureTimings = { find: t1 - t0, create: t2 - t1, boot: t3 - t2 };
-		console.warn(
-			JSON.stringify({
-				ts: new Date().toISOString(),
-				...traceContext(),
+		logEvent(
+			{
 				event: 'coreweave_ensure',
 				sandbox_id: this.id,
 				reconnected: Boolean(existing),
@@ -369,7 +372,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
 				...(this.config.profileNames?.length ? { profile_names: this.config.profileNames } : {}),
 				...(this.userHome ? { user_home_attached: true } : {}),
-			}),
+			},
+			{ channel: 'warn' },
 		);
 		return this.sandbox;
 	}
@@ -594,18 +598,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				cwd: options.cwd,
 			});
 		} catch (error) {
-			return {
-				success: false,
-				reason: 'transport_failure',
-				stdout: '',
-				stderr: error instanceof Error ? error.message : String(error),
-				timings: { setup: 0, start: Math.max(0, Date.now() - startedAt), waitport: 0 },
-			};
+			return transportFailureResult(error, {
+				setup: 0,
+				start: Math.max(0, Date.now() - startedAt),
+				waitport: 0,
+			});
 		}
 		const start = Date.now() - startedAt;
 		const waitStartedAt = Date.now();
-		let stdout = '';
-		let stderr = '';
+		const stdoutTail = new OutputTail();
+		const stderrTail = new OutputTail();
 		let settled = false;
 		let resolveOutcome!: (outcome: LaunchProtocolOutcome) => void;
 		let rejectOutcome!: (error: unknown) => void;
@@ -613,18 +615,28 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			resolveOutcome = resolve;
 			rejectOutcome = reject;
 		});
+		const logs = () =>
+			parseLaunchOutput({ stdout: stdoutTail.text, stderr: stderrTail.text }, built.nonce);
+		// Fed raw chunks so a marker evicted from the capped tails (e.g. by a huge
+		// trailing burst in the same chunk) still classifies the launch.
+		const tracker = new LaunchProtocolTracker(built.nonce);
 		const inspect = () => {
 			if (settled) return;
-			const parsed = parseLaunchOutput({ stdout, stderr }, built.nonce).outcome;
-			if (parsed) {
+			const terminal = tracker.outcome;
+			if (terminal) {
 				settled = true;
-				resolveOutcome(parsed);
+				resolveOutcome(terminal);
 			}
 		};
-		const pump = async (stream: AsyncIterable<string>, sink: (chunk: string) => void) => {
+		const pump = async (
+			stream: AsyncIterable<string>,
+			name: 'stdout' | 'stderr',
+			sink: OutputTail,
+		) => {
 			try {
 				for await (const chunk of stream) {
-					sink(chunk);
+					tracker.feed(name, chunk);
+					sink.append(chunk);
 					inspect();
 				}
 			} catch (error) {
@@ -634,8 +646,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				}
 			}
 		};
-		const stdoutDone = pump(proc.stdout, (chunk) => (stdout += chunk));
-		const stderrDone = pump(proc.stderr, (chunk) => (stderr += chunk));
+		const stdoutDone = pump(proc.stdout, 'stdout', stdoutTail);
+		const stderrDone = pump(proc.stderr, 'stderr', stderrTail);
 		void Promise.allSettled([stdoutDone, stderrDone]).then(() => {
 			inspect();
 			if (!settled) {
@@ -644,19 +656,17 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			}
 		});
 
-		const logs = () => parseLaunchOutput({ stdout, stderr }, built.nonce);
 		let terminal: LaunchProtocolOutcome;
 		try {
 			terminal = await outcome;
 		} catch (error) {
 			await proc.cancel().catch(() => {});
 			const parsed = logs();
-			const transportMessage = error instanceof Error ? error.message : String(error);
 			return {
 				success: false,
 				reason: 'transport_failure',
 				stdout: parsed.stdout,
-				stderr: [parsed.stderr, transportMessage].filter(Boolean).join('\n'),
+				stderr: [parsed.stderr, errorMessage(error)].filter(Boolean).join('\n'),
 				timings: {
 					setup: 0,
 					start,
@@ -664,23 +674,14 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				},
 			};
 		}
-		const timings = { setup: terminal.setupMs, start, waitport: terminal.waitportMs };
 		if (terminal.kind !== 'ready') {
-			const parsed = logs();
-			return {
-				success: false,
-				reason: terminal.kind,
-				...(terminal.exitCode === undefined ? {} : { exitCode: terminal.exitCode }),
-				stdout: parsed.stdout,
-				stderr: parsed.stderr,
-				timings,
-			};
+			return launchOutcomeResult(terminal.kind, terminal, logs(), start);
 		}
 
 		const exec = this.exec.bind(this);
 		return {
 			success: true,
-			timings,
+			timings: { setup: terminal.setupMs, start, waitport: terminal.waitportMs },
 			process: {
 				id: `cw-proc-${++PROC_SEQ}`,
 				command: cmd,
@@ -710,17 +711,17 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// marimo runs as a streamed command (not the sandbox main process), so drain
 		// its output in the background to back getLogs() and to surface errors if the
 		// port never opens.
-		let stdout = '';
-		let stderr = '';
-		const pump = async (stream: AsyncIterable<string>, sink: (chunk: string) => void) => {
+		const stdoutTail = new OutputTail();
+		const stderrTail = new OutputTail();
+		const pump = async (stream: AsyncIterable<string>, sink: OutputTail) => {
 			try {
-				for await (const chunk of stream) sink(chunk);
+				for await (const chunk of stream) sink.append(chunk);
 			} catch {
 				// stream cancelled/ended — best effort.
 			}
 		};
-		void pump(proc.stdout, (c) => (stdout += c));
-		void pump(proc.stderr, (c) => (stderr += c));
+		void pump(proc.stdout, stdoutTail);
+		void pump(proc.stderr, stderrTail);
 
 		const exec = this.exec.bind(this);
 		return {
@@ -754,7 +755,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 					// would otherwise burn the whole timeout before reporting.
 					if (TERMINAL_PROCESS_STATUSES.has(proc.status)) {
 						throw new Error(
-							`process ${proc.status} before port ${port} opened.\n${stderr || stdout}`.trim(),
+							`process ${proc.status} before port ${port} opened.\n${stderrTail.text || stdoutTail.text}`.trim(),
 						);
 					}
 					const seconds = Math.max(1, Math.ceil(Math.min(chunkMs, deadline - Date.now()) / 1000));
@@ -762,11 +763,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 					if ((await exec(portWaitCommand(port, seconds))).success) return;
 				}
 				throw new Error(
-					`timed out waiting for port ${port} after ${timeout}ms.\n${stderr || stdout}`,
+					`timed out waiting for port ${port} after ${timeout}ms.\n${stderrTail.text || stdoutTail.text}`,
 				);
 			},
 			async getLogs(): Promise<{ stdout: string; stderr: string }> {
-				return { stdout, stderr };
+				return { stdout: stdoutTail.text, stderr: stderrTail.text };
 			},
 		};
 	}

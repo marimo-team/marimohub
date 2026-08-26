@@ -10,7 +10,7 @@ import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
-import { emitLogRecord } from '../../logs';
+import { logEvent } from '../../logs';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type {
@@ -24,7 +24,6 @@ import type {
 } from '../../ports/sandbox';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
-import { traceContext } from '../../tracing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
@@ -122,23 +121,20 @@ function logSlowSetup(
 	const timingFields = Object.fromEntries(
 		Object.entries(diagnostics.timings).map(([step, ms]) => [`provision_setup_${step}_ms`, ms]),
 	);
-	const record = {
-		ts: new Date().toISOString(),
-		...traceContext(),
-		level: 'warn',
-		event: 'sandbox_setup_slow',
-		sandbox_id: options.sandboxId,
-		project_id: options.projectId,
-		notebook_id: options.notebookId,
-		launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
-		provision_setup_ms: setupMs,
-		...timingFields,
-		setup_stderr_tail: utf8Tail(diagnostics.stderr, SETUP_OUTPUT_TAIL_BYTES),
-	};
-	try {
-		console.warn(JSON.stringify(record));
-	} catch {}
-	emitLogRecord(record);
+	logEvent(
+		{
+			level: 'warn',
+			event: 'sandbox_setup_slow',
+			sandbox_id: options.sandboxId,
+			project_id: options.projectId,
+			notebook_id: options.notebookId,
+			launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
+			provision_setup_ms: setupMs,
+			...timingFields,
+			setup_stderr_tail: utf8Tail(diagnostics.stderr, SETUP_OUTPUT_TAIL_BYTES),
+		},
+		{ channel: 'warn' },
+	);
 }
 
 function pythonEnvironmentSetupFailure(result: ExecResult): PythonEnvironmentSetupError {

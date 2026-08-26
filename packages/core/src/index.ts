@@ -43,7 +43,7 @@ export type { ArchiveFile, ParseWorkspaceArchiveOptions } from './integrations/w
 export { traceContext } from './tracing';
 
 // OTEL logs bridge — makes stdout wide-events durable when an entrypoint wires a provider
-export { emitLogRecord } from './logs';
+export { emitLogRecord, logEvent } from './logs';
 
 // Saga orchestrator (multi-step compensating operations)
 export * from './saga';

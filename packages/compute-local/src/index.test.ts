@@ -12,6 +12,8 @@ import { expectFileResult } from '@marimo-hub/core/testing';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
+	CONTRACT_LAUNCH_SETUP_EXIT_CODE,
+	CONTRACT_LAUNCH_SETUP_OUTPUT,
 	CONTRACT_SANDBOX_ID,
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
@@ -62,7 +64,14 @@ afterEach(async () => {
  * A tiny HTTP server that binds whatever `--port` is passed (stands in for the
  * `marimo edit … --port 2718` command, so the adapter's port rewrite applies).
  */
-const SERVER_CMD = `node -e "const i=process.argv.indexOf('--port');const p=+process.argv[i+1];require('http').createServer((_,r)=>r.end('ok')).listen(p,'127.0.0.1')" -- --port 2718`;
+const serverCmdOn = (port: number) =>
+	`node -e "const i=process.argv.indexOf('--port');const p=+process.argv[i+1];require('http').createServer((_,r)=>r.end('ok')).listen(p,'127.0.0.1')" -- --port ${port}`;
+const SERVER_CMD = serverCmdOn(2718);
+
+// An uncommon port for the contract launch cases: the never-ready probes hit the
+// logical port directly (no `--port` to rewrite), and a developer's live marimo
+// on 2718 would make them false-ready.
+const CONTRACT_LAUNCH_LOCAL_PORT = 43119;
 
 describe('prepareMarimoCommand (pure)', () => {
 	it('passes non-`uv run` commands through untouched', () => {
@@ -857,6 +866,16 @@ computeContract('LocalCompute', () => new LocalCompute(), {
 					{ path: `/workspace/${CONTRACT_VISIBLE_FILE}`, content: 'v' },
 					{ path: `/workspace/${CONTRACT_HIDDEN_FILE}`, content: 'h' },
 				]),
+		},
+		launch: {
+			port: CONTRACT_LAUNCH_LOCAL_PORT,
+			shortStartupTimeout: 100,
+			commands: {
+				ready: serverCmdOn(CONTRACT_LAUNCH_LOCAL_PORT),
+				neverReady: 'sleep 30',
+				failingSetup: `printf '%s' '${CONTRACT_LAUNCH_SETUP_OUTPUT}' >&2; exit ${CONTRACT_LAUNCH_SETUP_EXIT_CODE}`,
+				hangingSetup: 'sleep 30',
+			},
 		},
 		envProbe: (name) => `printenv ${name}`,
 		preexistingEnv: {

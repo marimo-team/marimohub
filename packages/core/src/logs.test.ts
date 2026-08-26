@@ -4,8 +4,8 @@ import {
 	LoggerProvider,
 	SimpleLogRecordProcessor,
 } from '@opentelemetry/sdk-logs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { emitLogRecord } from './logs';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { emitLogRecord, logEvent } from './logs';
 
 // Runs first, before the beforeAll below registers a provider (that registration
 // is a hook, so it fires in the run phase — not at collection time like a bare
@@ -78,5 +78,75 @@ describe('emitLogRecord with a registered provider', () => {
 	it('preserves nested attribute structure', () => {
 		emitLogRecord({ level: 'error', event: 'op_failed', error: { name: 'Err', code: 'E1' } });
 		expect(only().attributes.error).toMatchObject({ name: 'Err', code: 'E1' });
+	});
+});
+
+describe('logEvent', () => {
+	it('writes one JSON line with the event fields', () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			logEvent({ level: 'info', event: 'session.start', sid: 'sess-1' });
+			expect(log).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+				event: 'session.start',
+				sid: 'sess-1',
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('writes via console.warn on the warn channel', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			logEvent({ level: 'warn', event: 'slow' }, { channel: 'warn' });
+			expect(warn).toHaveBeenCalledTimes(1);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('still emits a line naming the event when fields are not serializable', () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const circular: Record<string, unknown> = { event: 'sandbox_setup_slow' };
+			circular.self = circular;
+			logEvent(circular);
+			expect(log).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+				level: 'error',
+				event: 'log_event_serialization_failed',
+				attempted_event: 'sandbox_setup_slow',
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('falls back when a toJSON field makes the record serialize to a non-object', () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			logEvent({ event: 'wide', toJSON: () => {} });
+			expect(log).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+				event: 'log_event_serialization_failed',
+				attempted_event: 'wide',
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('survives a BigInt field with a non-string event', () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			logEvent({ count: 1n });
+			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+				event: 'log_event_serialization_failed',
+				attempted_event: 'unknown',
+			});
+		} finally {
+			log.mockRestore();
+		}
 	});
 });

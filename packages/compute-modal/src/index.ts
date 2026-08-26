@@ -8,9 +8,16 @@ import {
 import {
 	buildLaunchCommand,
 	buildGitCloneCommand,
+	errorMessage,
+	LAUNCH_MARKER_GRACE_MS,
+	launchOutcomeResult,
+	LaunchProtocolTracker,
+	launchTimeoutResult,
 	mapWithConcurrency,
+	OutputTail,
 	parseLaunchOutput,
 	shellQuote,
+	transportFailureResult,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
@@ -203,7 +210,6 @@ function delay(ms: number): Promise<void> {
 }
 
 let processSequence = 0;
-const LAUNCH_MARKER_GRACE_MS = 100;
 
 class ModalLaunchTimeoutError extends Error {
 	override readonly name = 'ModalLaunchTimeoutError';
@@ -372,7 +378,9 @@ class ModalSandboxInstance implements SandboxInstance {
 	private async startProcessWithOutput(
 		cmd: string,
 		options?: StartProcessOptions,
-		onOutput?: (logs: { stdout: string; stderr: string }) => void,
+		// Raw per-stream chunks, observed BEFORE the capped-tail append so a caller
+		// can track protocol markers that later output would evict from the tail.
+		onOutput?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
 	): Promise<{ process: SandboxProcess; completed: Promise<void> }> {
 		const pidPath = `/tmp/marimohub-process-${randomUUID()}.pid`;
 		const trackedCommand = [
@@ -387,18 +395,18 @@ class ModalSandboxInstance implements SandboxInstance {
 			env: options?.env,
 			timeout: options?.timeout,
 		});
-		let stdout = '';
-		let stderr = '';
+		const stdoutTail = new OutputTail();
+		const stderrTail = new OutputTail();
 		let exitCode: number | undefined;
 		let settled = false;
 		const execInSandbox = (command: string) => this.exec(command);
 		const stdoutDone = consumeStream(modalProcess.stdout, (chunk) => {
-			stdout += chunk;
-			onOutput?.({ stdout, stderr });
+			onOutput?.({ stream: 'stdout', text: chunk });
+			stdoutTail.append(chunk);
 		});
 		const stderrDone = consumeStream(modalProcess.stderr, (chunk) => {
-			stderr += chunk;
-			onOutput?.({ stdout, stderr });
+			onOutput?.({ stream: 'stderr', text: chunk });
+			stderrTail.append(chunk);
 		});
 		const exited = modalProcess
 			.wait()
@@ -436,7 +444,7 @@ class ModalSandboxInstance implements SandboxInstance {
 					if (exitCode !== undefined) {
 						await Promise.allSettled([stdoutDone, stderrDone]);
 						throw new Error(
-							`process exited (code ${exitCode}) before port ${port} was ready.\n${stderr || stdout}`,
+							`process exited (code ${exitCode}) before port ${port} was ready.\n${stderrTail.text || stdoutTail.text}`,
 						);
 					}
 					const probe = await execInSandbox(
@@ -448,12 +456,12 @@ class ModalSandboxInstance implements SandboxInstance {
 					await delay(250);
 				}
 				throw new Error(
-					`timed out waiting for port ${port} after ${timeout}ms.\n${stderr || stdout}`,
+					`timed out waiting for port ${port} after ${timeout}ms.\n${stderrTail.text || stdoutTail.text}`,
 				);
 			},
 			async getLogs(): Promise<{ stdout: string; stderr: string }> {
 				if (exitCode !== undefined) await completed.catch(() => {});
-				return { stdout, stderr };
+				return { stdout: stdoutTail.text, stderr: stderrTail.text };
 			},
 		};
 		return { process: sandboxProcess, completed };
@@ -478,9 +486,12 @@ class ModalSandboxInstance implements SandboxInstance {
 			resolveOutcome = resolve;
 			rejectOutcome = reject;
 		});
-		const inspect = (logs: { stdout: string; stderr: string }) => {
+		// Fed raw chunks so protocol state survives eviction from the capped tails.
+		const tracker = new LaunchProtocolTracker(built.nonce);
+		const inspect = (chunk: { stream: 'stdout' | 'stderr'; text: string }) => {
+			tracker.feed(chunk.stream, chunk.text);
 			if (settled) return;
-			const terminal = parseLaunchOutput(logs, built.nonce).outcome;
+			const terminal = tracker.outcome;
 			if (terminal) {
 				settled = true;
 				resolveOutcome(terminal);
@@ -499,13 +510,11 @@ class ModalSandboxInstance implements SandboxInstance {
 				inspect,
 			);
 		} catch (error) {
-			return {
-				success: false,
-				reason: 'transport_failure',
-				stdout: '',
-				stderr: error instanceof Error ? error.message : String(error),
-				timings: { setup: 0, start: Math.max(0, Date.now() - launchStarted), waitport: 0 },
-			};
+			return transportFailureResult(error, {
+				setup: 0,
+				start: Math.max(0, Date.now() - launchStarted),
+				waitport: 0,
+			});
 		}
 
 		const start = Math.max(0, Date.now() - launchStarted);
@@ -552,29 +561,20 @@ class ModalSandboxInstance implements SandboxInstance {
 					success: false,
 					reason: 'transport_failure',
 					stdout: parsed.stdout,
-					stderr: [parsed.stderr, error instanceof Error ? error.message : String(error)]
-						.filter(Boolean)
-						.join('\n'),
+					stderr: [parsed.stderr, errorMessage(error)].filter(Boolean).join('\n'),
 					timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
 				};
 			}
 
 			await started.process.kill().catch(() => {});
-			const setupCompleted = `${logs.stdout}\n${logs.stderr}`.includes(
-				`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
-			);
-			const reason = options.setup && !setupCompleted ? 'setup_timeout' : 'readiness_timeout';
-			return {
-				success: false,
-				reason,
-				stdout: parsed.stdout,
-				stderr: parsed.stderr,
-				timings: {
-					setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0,
-					start,
-					waitport: Math.max(0, Date.now() - waitStarted),
-				},
-			};
+			return launchTimeoutResult({
+				setup: Boolean(options.setup),
+				setupCompleted: tracker.setupCompleted,
+				startupTimeout: options.startupTimeout,
+				output: parsed,
+				start,
+				waitport: Math.max(0, Date.now() - waitStarted),
+			});
 		} finally {
 			if (timer) clearTimeout(timer);
 		}
@@ -601,14 +601,7 @@ class ModalSandboxInstance implements SandboxInstance {
 
 		await started.completed.catch(() => {});
 		const parsed = parseLaunchOutput(await started.process.getLogs(), built.nonce);
-		return {
-			success: false,
-			reason: terminal.kind,
-			...(terminal.exitCode === undefined ? {} : { exitCode: terminal.exitCode }),
-			stdout: parsed.stdout,
-			stderr: parsed.stderr,
-			timings,
-		};
+		return launchOutcomeResult(terminal.kind, terminal, parsed, start);
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {
