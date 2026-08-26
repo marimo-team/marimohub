@@ -109,9 +109,8 @@ export interface SandboxConfig {
 	 */
 	exposure?: SandboxExposure;
 	/**
-	 * The app's public origin used to build `proxy`-mode client URLs
-	 * (config: MARIMOHUB_APP_BASE_URL). Falls back to the inbound request origin at
-	 * provision time when unset.
+	 * Public URL for browser links (MARIMOHUB_APP_BASE_URL). Can include a path prefix.
+	 * Falls back to the request origin when unset.
 	 */
 	appBaseUrl?: string;
 	/**

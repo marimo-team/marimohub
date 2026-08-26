@@ -57,7 +57,7 @@ and **refuses to start** without an explicit acknowledgement:
 ```bash
 MARIMOHUB_SANDBOX_EXPOSURE=proxy
 MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED=true   # required — acknowledges same-origin/XSS
-# optional: build proxy URLs from this origin instead of the request host
+# optional public URL for browser links
 MARIMOHUB_APP_BASE_URL=https://hub.example.com
 ```
 

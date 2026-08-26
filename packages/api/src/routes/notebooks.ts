@@ -8,6 +8,7 @@ import {
 	createGitSource,
 	DomainError,
 	ForbiddenError,
+	joinUrlPath,
 	NotebookId,
 	NotFoundError,
 	notificationRouter,
@@ -37,6 +38,7 @@ import {
 	NotebookIdParam,
 	NotebookMetaResponseSchema,
 	ProjectIdParam,
+	resolvePublicBaseUrl,
 	RuntimeResponseSchema,
 	NotebookVersionResponseSchema,
 	retireLiveApps,
@@ -561,7 +563,10 @@ const duplicateNotebook = createRoute({
 const app = createApp();
 
 function syncUrl(c: Context<HonoEnv>, pid: string, nid: string) {
-	return `${new URL(c.req.url).origin}/api/sync/git/v1/projects/${pid}/notebooks/${nid}`;
+	return joinUrlPath(
+		resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl),
+		`/api/sync/git/v1/projects/${pid}/notebooks/${nid}`,
+	);
 }
 
 app.openapi(listNotebooks, async (c) => {

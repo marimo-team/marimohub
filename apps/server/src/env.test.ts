@@ -16,6 +16,7 @@ describe('validateServerEnv', () => {
 	it('preserves known and unknown variables unchanged', () => {
 		const env = {
 			PORT: '4321',
+			MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/marimohub',
 			MARIMOHUB_STATIC_ROOT: './public',
 			MARIMOHUB_RUN_MAINTENANCE: 'false',
 			MARIMOHUB_STORAGE_BACKEND: 'memory',
@@ -29,6 +30,8 @@ describe('validateServerEnv', () => {
 		['PORT', 'abc', 'expected an integer from 1 to 65535'],
 		['PORT', '0', 'expected an integer from 1 to 65535'],
 		['PORT', '65536', 'expected an integer from 1 to 65535'],
+		['MARIMOHUB_APP_BASE_URL', 'hub.example.com/marimohub', 'expected an HTTP(S) URL'],
+		['MARIMOHUB_APP_BASE_URL', 'ftp://hub.example.com', 'expected an HTTP(S) URL'],
 		['MARIMOHUB_STATIC_ROOT', '   ', 'expected a non-empty path'],
 		['MARIMOHUB_RUN_MAINTENANCE', 'yes', 'expected true or false'],
 	] as const)('rejects invalid %s=%s', (variable, value, message) => {

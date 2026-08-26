@@ -142,13 +142,13 @@ const timeoutMiddleware: Middleware = {
 	},
 };
 
-const defaultBaseUrl =
+const defaultOrigin =
 	typeof globalThis.location === 'object' ? globalThis.location.origin : 'http://localhost';
+const defaultBaseUrl = defaultOrigin;
 
 async function dispatchRequest(request: Request): Promise<Response> {
 	const url = new URL(request.url);
-	const input =
-		url.origin === defaultBaseUrl ? `${url.pathname}${url.search}${url.hash}` : url.href;
+	const input = url.origin === defaultOrigin ? `${url.pathname}${url.search}${url.hash}` : url.href;
 	// Firefox has no Request.body getter (Bugzilla #1387483), so detect a
 	// payload by reading it; '' maps to undefined so a bodyless POST does not
 	// pick up a spurious text/plain content-type.

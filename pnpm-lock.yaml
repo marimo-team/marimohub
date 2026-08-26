@@ -1517,6 +1517,9 @@ importers:
       '@marimo-hub/client':
         specifier: workspace:*
         version: link:../client
+      '@marimo-hub/core':
+        specifier: workspace:*
+        version: link:../core
       '@marimo-team/codemirror-sql':
         specifier: 'catalog:'
         version: 0.3.0(@codemirror/autocomplete@6.20.3)(@codemirror/lint@6.9.7)(@codemirror/state@6.7.1)(@codemirror/view@6.43.7)

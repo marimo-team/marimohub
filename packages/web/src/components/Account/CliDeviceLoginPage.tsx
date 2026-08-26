@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useApproveCliDeviceAuthorization } from '@/api/hooks';
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
+import { withBasePath } from '@/lib/basePath';
 
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
 const TOKEN_LIFETIME_PRESETS = ['7', '30', '90'] as const;
@@ -141,7 +142,11 @@ export function CliDeviceLoginPage({
 						</div>
 
 						<div className="flex justify-end gap-2 border-t pt-5">
-							<Button type="button" isDisabled={approve.isPending} onPress={() => navigate('/')}>
+							<Button
+								type="button"
+								isDisabled={approve.isPending}
+								onPress={() => navigate(withBasePath('/'))}
+							>
 								Cancel
 							</Button>
 							<Button type="submit" variant="primary" isDisabled={approve.isPending}>

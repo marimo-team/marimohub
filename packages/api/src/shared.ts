@@ -11,6 +11,7 @@ import {
 	NotebookId,
 	NotFoundError,
 	NOTEBOOK_STATUSES,
+	normalizeBaseUrl,
 	PROJECT_ALERT_KINDS,
 	PROJECT_STATUSES,
 	ProjectId,
@@ -46,6 +47,19 @@ import { describeError, logEvent } from './log';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
+
+export function resolvePublicBaseUrl(c: Context<HonoEnv>, configured?: string): string {
+	const publicBaseUrl = configured?.trim();
+	if (publicBaseUrl) return normalizeBaseUrl(publicBaseUrl);
+	const requestUrl = new URL(c.req.url);
+	const forwardedProtocol = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+	const protocol =
+		forwardedProtocol === 'http' || forwardedProtocol === 'https'
+			? forwardedProtocol
+			: requestUrl.protocol.slice(0, -1);
+	const host = c.req.header('host') ?? requestUrl.host;
+	return new URL(`${protocol}://${host}`).origin;
+}
 
 export function extensibleResponseEnum<const Values extends readonly [string, ...string[]]>(
 	knownValues: Values,

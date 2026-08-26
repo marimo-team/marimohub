@@ -139,4 +139,21 @@ describe('CliDeviceLoginPage', () => {
 		expect(navigate).toHaveBeenCalledWith('/');
 		expect(calls.filter((call) => call.url.includes('cli-device'))).toEqual([]);
 	});
+
+	it('includes the deployment prefix in the hard-navigation cancel URL', async () => {
+		const base = document.createElement('base');
+		base.href = '/marimohub/';
+		document.head.append(base);
+		try {
+			const user = userEvent.setup();
+			const { navigate } = setup();
+			await screen.findByText(/dev@example.com/);
+
+			await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+			expect(navigate).toHaveBeenCalledWith('/marimohub/');
+		} finally {
+			base.remove();
+		}
+	});
 });

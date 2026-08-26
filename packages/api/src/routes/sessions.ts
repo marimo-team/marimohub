@@ -50,6 +50,7 @@ import {
 	TakeoverInProgressError,
 	TakeoverRetirementError,
 	kernelActiveConnections,
+	joinUrlPath,
 	ValidationError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
@@ -72,6 +73,7 @@ import {
 	loadVisibleProject,
 	NotebookIdParam,
 	ProjectIdParam,
+	resolvePublicBaseUrl,
 	SessionIdParam,
 	sessionGrantsFor,
 	SessionResponseSchema,
@@ -1050,8 +1052,7 @@ app.openapi(createSession, async (c) => {
 			};
 
 	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
-	// App origin for building proxy-mode client URLs; falls back to this request.
-	const appBaseUrl = sandbox.appBaseUrl ?? new URL(c.req.url).origin;
+	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
 
 	// Provision as a saga: if a later step fails, completed steps compensate in
 	// reverse — the session record is terminated (so it does not linger in
@@ -1192,7 +1193,7 @@ app.openapi(createSession, async (c) => {
 								);
 								contributors.push(
 									marimoAiContributor({
-										baseUrl: `${appBaseUrl}/api/ai/v1`,
+										baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
 										apiKey: token,
 										model: deps.ai.model,
 										enabled: true,

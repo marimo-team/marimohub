@@ -1,7 +1,8 @@
 import { ApiRequestError } from './client';
 import type { ApiRequestErrorCode } from './client';
+import { withBasePath } from '../lib/basePath';
 
-export const projectPath = (projectId: string) => `/api/v1/projects/${projectId}`;
+export const projectPath = (projectId: string) => withBasePath(`/api/v1/projects/${projectId}`);
 export const notebookPath = (projectId: string, notebookId: string) =>
 	`${projectPath(projectId)}/notebooks/${notebookId}`;
 

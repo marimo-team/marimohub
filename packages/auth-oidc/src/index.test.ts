@@ -225,10 +225,17 @@ describe('createOidcAuth configuration validation', () => {
 		expect(() => makeOidc(overrides)).toThrow(expected);
 	});
 
-	it.each(['https://evil.example.com', '//evil.example.com', '/api/auth/login', 'relative'])(
+	it.each(['https://evil.example.com', '//evil.example.com', 'relative'])(
 		'rejects an unsafe post-login redirect: %s',
 		(postLoginRedirect) => {
 			expect(() => makeOidc({ postLoginRedirect })).toThrow(/same-origin application path/);
+		},
+	);
+
+	it.each(['/api', '/api/marimohub'])(
+		'allows a configured post-login redirect under /api: %s',
+		(postLoginRedirect) => {
+			expect(() => makeOidc({ postLoginRedirect })).not.toThrow();
 		},
 	);
 
@@ -671,6 +678,21 @@ describe('OIDC routes', () => {
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe(deepLink);
 		expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
+	});
+
+	it('rejects a client redirect_url under /api and uses the configured redirect', async () => {
+		const { routes } = makeOidc({ postLoginRedirect: '/api/marimohub' });
+		const txn = await beginOidcTransaction(
+			routes,
+			`/api/auth/login?redirect_url=${encodeURIComponent('/api/auth/login')}`,
+		);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/api/marimohub');
 	});
 
 	it.each(['https://evil.com/phish', '//evil.com', '/\\evil.com', '/..//evil.com'])(

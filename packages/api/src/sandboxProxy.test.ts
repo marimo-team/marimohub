@@ -562,7 +562,7 @@ describe('create-session in proxy mode', () => {
 				workdir: '/workspace',
 				persistWorkspace: 'source',
 				exposure: new ProxyExposure(SECRET),
-				appBaseUrl: 'https://hub.example.com',
+				appBaseUrl: 'https://hub.example.com/marimohub',
 			},
 		});
 		const app = createApi(deps);
@@ -574,7 +574,7 @@ describe('create-session in proxy mode', () => {
 		const { data } = (await res.json()) as { data: { session_id: string; sandbox_url: string } };
 
 		const token = await signProxyToken(pid, data.session_id as never, SECRET);
-		expect(data.sandbox_url).toBe(`https://hub.example.com/proxy/${token}/`);
+		expect(data.sandbox_url).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);
 		// The server-reachable origin is persisted on the record but never in the response.
 		expect(data).not.toHaveProperty('sandbox_origin_url');
 		const stored = await services.sessions.getSession(pid, data.session_id as never);

@@ -1,5 +1,6 @@
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { ServeStaticOptions } from '@hono/node-server/serve-static';
+import { baseHrefFromUrl } from '@marimo-hub/core/url';
 import type { MiddlewareHandler } from 'hono';
 
 export const REVALIDATE_STATIC_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
@@ -7,6 +8,22 @@ export const IMMUTABLE_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutabl
 
 function isAssetPath(requestPath: string): boolean {
 	return requestPath === '/assets' || requestPath.startsWith('/assets/');
+}
+
+function escapeHtmlAttribute(value: string): string {
+	return value
+		.replaceAll('&', '&amp;')
+		.replaceAll('"', '&quot;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;');
+}
+
+export function injectAppBaseHref(html: string, baseHref: string): string {
+	const marker = /<base\s+href=["']\/["']\s*\/?>/gi;
+	if ([...html.matchAll(marker)].length !== 1) {
+		throw new Error('SPA index.html must contain exactly one <base href="/" /> marker');
+	}
+	return html.replace(marker, `<base href="${escapeHtmlAttribute(baseHref)}" />`);
 }
 
 /**
@@ -42,10 +59,29 @@ export function serveStaticWithCache(options: ServeStaticOptions): MiddlewareHan
 	};
 }
 
-export function serveSpaFallback(staticRoot: string): MiddlewareHandler {
+export function serveSpaFallback(staticRoot: string, appBaseUrl?: string): MiddlewareHandler {
 	const handler = serveStaticWithCache({ path: `${staticRoot}/index.html` });
+	const baseHref = appBaseUrl?.trim() ? baseHrefFromUrl(appBaseUrl) : '/';
 	return async (context, next) => {
 		if (isAssetPath(context.req.path)) return next();
-		return handler(context, next);
+		const response = await handler(context, next);
+		if (!(response instanceof Response) || response.status !== 200) {
+			return response;
+		}
+		if (baseHref === '/') return response;
+		const headers = new Headers(response.headers);
+		headers.delete('Content-Length');
+		if (context.req.method === 'HEAD') {
+			return new Response(null, {
+				status: response.status,
+				statusText: response.statusText,
+				headers,
+			});
+		}
+		return new Response(injectAppBaseHref(await response.text(), baseHref), {
+			status: response.status,
+			statusText: response.statusText,
+			headers,
+		});
 	};
 }

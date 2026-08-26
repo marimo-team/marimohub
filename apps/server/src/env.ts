@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ConfigError } from '@marimo-hub/config';
+import { parseHttpUrl } from '@marimo-hub/core';
 
 export type ServerEnv = Record<string, string | undefined>;
 
@@ -10,8 +11,13 @@ const port = z
 		'expected an integer from 1 to 65535',
 	);
 
+const appBaseUrl = z
+	.string()
+	.refine((value) => !value.trim() || parseHttpUrl(value).ok, 'expected an HTTP(S) URL');
+
 export const ServerEnvSchema = z.looseObject({
 	PORT: port.optional(),
+	MARIMOHUB_APP_BASE_URL: appBaseUrl.optional(),
 	MARIMOHUB_STATIC_ROOT: z
 		.string()
 		.refine((value) => value.trim().length > 0, 'expected a non-empty path')

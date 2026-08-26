@@ -11,6 +11,7 @@ const webPort = envPort(process.env.WEB_PORT, 5175);
 // pure consumer of the /api/* surface and is served as static assets by whatever
 // fronts the deployment (apps/server in Node, or Cloudflare in the reference).
 export default defineConfig({
+	base: './',
 	// lazyPlugins: only loaded for dev/build/preview, not for `vp lint`/`vp fmt`.
 	plugins: lazyPlugins(() => [react(), tailwindcss()]),
 	resolve: {

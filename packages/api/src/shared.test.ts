@@ -19,8 +19,46 @@ import {
 	jsonContent,
 	NotebookIdParam,
 	ProjectIdParam,
+	resolvePublicBaseUrl,
 	SessionIdParam,
 } from './shared';
+
+describe('resolvePublicBaseUrl', () => {
+	it('uses the public host and forwarded protocol behind a reverse proxy', async () => {
+		const app = createApp();
+		app.get('/base', (c) => c.text(resolvePublicBaseUrl(c)));
+
+		const response = await app.request('http://api.internal/base', {
+			headers: { host: 'hub.example.com', 'x-forwarded-proto': 'https, http' },
+		});
+
+		expect(await response.text()).toBe('https://hub.example.com');
+	});
+
+	it('treats a whitespace-only configured URL as unset', async () => {
+		const app = createApp();
+		app.get('/base', (c) => c.text(resolvePublicBaseUrl(c, '   ')));
+
+		const response = await app.request('http://api.internal/base', {
+			headers: { host: 'hub.example.com', 'x-forwarded-proto': 'https' },
+		});
+
+		expect(await response.text()).toBe('https://hub.example.com');
+	});
+
+	it.each([
+		['https://hub.example.com', 'https://hub.example.com'],
+		['https://hub.example.com/', 'https://hub.example.com'],
+		['https://hub.example.com/base', 'https://hub.example.com/base'],
+		['https://hub.example.com/base/', 'https://hub.example.com/base'],
+		['https://hub.example.com/base///?ignored=1#ignored', 'https://hub.example.com/base'],
+	] as const)('normalizes configured public URL %s', async (configured, expected) => {
+		const app = createApp();
+		app.get('/base', (c) => c.text(resolvePublicBaseUrl(c, configured)));
+
+		expect(await (await app.request('http://api.internal/base')).text()).toBe(expected);
+	});
+});
 
 describe('extensibleResponseEnum', () => {
 	const schema = z.object({

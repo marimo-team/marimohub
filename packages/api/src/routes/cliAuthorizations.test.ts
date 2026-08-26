@@ -152,7 +152,7 @@ describe('CLI authorization routes', () => {
 
 	it('uses the configured public app URL for device verification links', async () => {
 		const deps = makeTestDeps(bucket);
-		deps.sandbox.appBaseUrl = 'https://hub.example.com';
+		deps.sandbox.appBaseUrl = 'https://hub.example.com/marimohub';
 		const publicApp = createApi(deps);
 
 		const device = await expectOk<{
@@ -167,9 +167,9 @@ describe('CLI authorization routes', () => {
 			}),
 		);
 
-		expect(device.verification_uri).toBe('https://hub.example.com/cli/device');
+		expect(device.verification_uri).toBe('https://hub.example.com/marimohub/cli/device');
 		expect(device.verification_uri_complete).toBe(
-			`https://hub.example.com/cli/device?user_code=${device.user_code}`,
+			`https://hub.example.com/marimohub/cli/device?user_code=${device.user_code}`,
 		);
 	});
 

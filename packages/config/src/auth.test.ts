@@ -70,6 +70,30 @@ describe('makeAuth selector errors', () => {
 });
 
 describe('makeAuth oidc required vars', () => {
+	it.each([
+		['https://hub.example.com/marimohub', '/marimohub?auth_error=session_expired'],
+		['https://hub.example.com/marimohub/', '/marimohub?auth_error=session_expired'],
+		['https://hub.example.com/api', '/api?auth_error=session_expired'],
+		['https://hub.example.com/api/marimohub/', '/api/marimohub?auth_error=session_expired'],
+		[
+			'https://hub.example.com/marimohub///?ignored=1#ignored',
+			'/marimohub?auth_error=session_expired',
+		],
+		['https://hub.example.com', '/?auth_error=session_expired'],
+	] as const)(
+		'uses the path from app base URL %s for fallback redirects',
+		async (url, expected) => {
+			const { authRoutes } = makeAuth({
+				...oidcEnv,
+				MARIMOHUB_APP_BASE_URL: url,
+			});
+
+			const response = await authRoutes!.request('/api/auth/callback');
+
+			expect(response.headers.get('location')).toBe(expected);
+		},
+	);
+
 	it('throws when MARIMOHUB_AUTH_SESSION_SECRET is missing', () => {
 		const { MARIMOHUB_AUTH_SESSION_SECRET: _omit, ...env } = oidcEnv;
 		expect(() => makeAuth(env)).toThrow(/MARIMOHUB_AUTH_SESSION_SECRET/);

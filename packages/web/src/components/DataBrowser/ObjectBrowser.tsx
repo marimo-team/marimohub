@@ -16,6 +16,7 @@ import {
 	Search,
 	X,
 } from 'lucide-react';
+import { withBasePath } from '@/lib/basePath';
 import {
 	objectContentUrl,
 	useObjectBucketsQuery,
@@ -951,7 +952,7 @@ function PreviewResult({ value }: { value: IntegrationObjectPreview }) {
 	if (value.kind === 'image')
 		return (
 			<img
-				src={value.content_url}
+				src={withBasePath(value.content_url)}
 				alt="Object preview"
 				width={value.width ?? 1024}
 				height={value.height ?? 768}
