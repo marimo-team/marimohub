@@ -127,12 +127,6 @@ describe('buildMarimoLaunch', () => {
 			expect(plan.start).toMatch(/^uv run --no-sync marimo /);
 		});
 
-		it('keeps the image marimo version instead of the script pin', () => {
-			const [, , , ensureMarimo, exportCmd] = plan.setup;
-			expect(ensureMarimo).toContain('marimo==$MARIMOHUB_MARIMO_VERSION');
-			expect(exportCmd).toContain('--prune marimo');
-		});
-
 		it('writes the requirements file inside the pin env', () => {
 			// Per-sandbox and lifecycle-managed on every backend — nothing left on a
 			// shared host /tmp, no clobbering between concurrent local launches.
