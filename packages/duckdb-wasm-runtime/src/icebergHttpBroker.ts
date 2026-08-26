@@ -104,6 +104,7 @@ interface Session {
 
 interface AuthorizedRequest {
 	request: IcebergHttpBrokerRequest;
+	redirectState: IcebergHttpBrokerRequest;
 	routeKind: IcebergHttpBrokerRoute['kind'];
 }
 
@@ -280,7 +281,7 @@ export class IcebergHttpBroker {
 					session.metrics.increment('duckdb_http_broker.redirect', 1, {
 						outcome: 'followed',
 					});
-					current = redirectRequest(current, location, response.status);
+					current = redirectRequest(authorized.redirectState, location, response.status);
 				}
 			} finally {
 				session.controllers.delete(controller);
@@ -521,6 +522,7 @@ async function authorize(
 			...request,
 			headers: { ...workerHeaders, ...route.headers, ...preparedHeaders },
 		},
+		redirectState: { ...request, headers: workerHeaders },
 		routeKind: route.kind,
 	};
 }

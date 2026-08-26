@@ -460,6 +460,55 @@ describe('IcebergHttpBroker', () => {
 		expect(response).toMatchObject({ status: 200, headers: { etag: 'snapshot-1' } });
 	});
 
+	it('does not carry discarded or parent-owned headers into redirects', async () => {
+		const { broker, calls } = setup([
+			{
+				status: 307,
+				headers: {
+					Location: 'https://objects.example.test/warehouse/table/metadata.json',
+				},
+			},
+			{ status: 200, body: '{}' },
+		]);
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						headers: { Authorization: 'Bearer catalog-secret' },
+						discardRequestHeaders: ['authorization'],
+					},
+					{
+						kind: 'storage',
+						url: 'https://objects.example.test/warehouse',
+						match: 'prefix',
+						methods: ['GET'],
+						forwardRequestHeaders: ['authorization'],
+					},
+				],
+			}),
+		);
+
+		await broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/table',
+			method: 'GET',
+			headers: {
+				authorization: 'Bearer worker-placeholder',
+				range: 'bytes=0-99',
+			},
+		});
+
+		expect(calls).toHaveLength(2);
+		expect(calls[0].headers).toEqual({
+			range: 'bytes=0-99',
+			authorization: 'Bearer catalog-secret',
+		});
+		expect(calls[1].headers).toEqual({ range: 'bytes=0-99' });
+	});
+
 	it('emits low-cardinality policy, redirect, budget, byte, and latency metrics', async () => {
 		const metrics = {
 			increment: vi.fn(),
