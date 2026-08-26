@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { SqlReadinessChecklist } from './SqlReadinessChecklist';
 
@@ -12,7 +13,8 @@ const check = (label: string, field: string, ready = false) => ({
 });
 
 describe('SqlReadinessChecklist', () => {
-	it('renders the server-provided readiness result', () => {
+	it('collapses the server-provided checks behind their readiness summary', async () => {
+		const user = userEvent.setup();
 		render(
 			createElement(SqlReadinessChecklist, {
 				checks: [
@@ -26,16 +28,23 @@ describe('SqlReadinessChecklist', () => {
 
 		expect(
 			screen.getByText(
-				'1 of 2 configuration checks pass. Select a failing check to edit its field.',
+				'1 of 2 configuration checks pass. Expand to review and edit failing checks.',
 			),
 		).toBeTruthy();
+		const disclosure = screen.getByText('Run SQL readiness').closest('details');
+		expect(disclosure).not.toHaveAttribute('open');
+
+		await user.click(screen.getByText('Run SQL readiness').closest('summary')!);
+
+		expect(disclosure).toHaveAttribute('open');
 		expect(screen.getByRole('link', { name: /Set access delegation to none/ })).toHaveAttribute(
 			'href',
 			'#integration-field-access_delegation',
 		);
 	});
 
-	it('links header and extra-property blockers to separate fields', () => {
+	it('links header and extra-property blockers to separate fields', async () => {
+		const user = userEvent.setup();
 		render(
 			createElement(SqlReadinessChecklist, {
 				checks: [
@@ -46,6 +55,7 @@ describe('SqlReadinessChecklist', () => {
 				isError: false,
 			}),
 		);
+		await user.click(screen.getByText('Run SQL readiness').closest('summary')!);
 
 		expect(screen.getByRole('link', { name: /Remove custom headers/ })).toHaveAttribute(
 			'href',

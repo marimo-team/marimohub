@@ -21,6 +21,7 @@ const ACCESS = {
 		kind: 's3',
 		endpoint: 'https://objects.example.test',
 		region: 'us-east-1',
+		urlStyle: 'path',
 		credentials: {
 			method: 'static',
 			accessKeyId: 'AKIDEXAMPLE',
@@ -82,6 +83,49 @@ describe('createDuckDBHttpSessionFactory', () => {
 		).rejects.toMatchObject({ code: 'capability_unknown' });
 	});
 
+	it('authorizes virtual-hosted buckets without broadening their prefix routes', async () => {
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const transport = vi.fn(async (request: IcebergHttpBrokerTransportRequest) => {
+			calls.push(request);
+			return { status: 200, headers: {}, body: new Uint8Array([1]) };
+		});
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(
+			{
+				...ACCESS,
+				storage: { ...ACCESS.storage, urlStyle: 'vhost' },
+			},
+			{ expiresAtMs: NOW + 60_000 },
+		);
+
+		await session.fetch({
+			url: 'https://warehouse.objects.example.test/tables/data/file.parquet',
+			method: 'GET',
+		});
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0].headers).toMatchObject({
+			authorization: expect.stringContaining('Credential=AKIDEXAMPLE/'),
+		});
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/tables/data/file.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://other.objects.example.test/tables/data/file.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://warehouse.objects.example.test/private/file.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+	});
+
 	it('rejects endpoints that DuckDB cannot route through an S3 secret', () => {
 		const create = createDuckDBHttpSessionFactory({
 			transport: async () => ({ status: 200, headers: {}, body: new Uint8Array() }),
@@ -107,6 +151,19 @@ describe('createDuckDBHttpSessionFactory', () => {
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
 		).toThrow(/S3 read location is invalid/);
+		expect(() =>
+			create(
+				{
+					...ACCESS,
+					storage: {
+						...ACCESS.storage,
+						urlStyle: 'vhost',
+						locations: [{ bucket: 'warehouse_name', prefix: 'tables' }],
+					},
+				},
+				{ expiresAtMs: Date.now() + 60_000 },
+			),
+		).toThrow(/Virtual-hosted S3 read location is invalid/);
 		expect(() =>
 			create(
 				{

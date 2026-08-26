@@ -34,7 +34,7 @@ The Iceberg REST integration must use this configuration:
 - `access_delegation: none`
 - explicit S3 storage
 - an origin-only S3 endpoint
-- path-style S3 addresses
+- path-style or virtual-hosted S3 addresses
 - static S3 credentials or anonymous S3 access
 - one or more `storage.broker_read_locations` entries
 - system TLS without custom headers or extra properties

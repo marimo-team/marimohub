@@ -750,6 +750,7 @@ describe('kind renders (golden)', () => {
 		const programs = icebergPreviewPrograms(config, { namespace: ['sales"archive'] });
 
 		expect(programs?.duckdbWasm).toMatchObject({ requires: ['iceberg-http'] });
+		expect(programs?.duckdbWasm?.setup[2]?.text).toContain("URL_STYLE 'path'");
 		const attach = programs?.duckdbWasm?.setup.at(-1);
 		expect(attach?.text).toContain("ATTACH 'lake''house'");
 		expect(attach?.text).toContain('ENDPOINT ?');
@@ -765,6 +766,7 @@ describe('kind renders (golden)', () => {
 		expect(programs?.duckdbWasm?.httpAccess).toMatchObject({
 			catalog: { authorization: "Bearer tok'en" },
 			storage: {
+				urlStyle: 'path',
 				credentials: { method: 'static', accessKeyId: 'access-key', secretAccessKey: 'secret-key' },
 			},
 		});
@@ -778,6 +780,46 @@ describe('kind renders (golden)', () => {
 			namespace: ['sales"archive'],
 			table: 'orders',
 			limit: 20,
+		});
+	});
+
+	it('iceberg_rest plans virtual-hosted S3 through DuckDB and the guarded broker', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' },
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				force_virtual_addressing: true,
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+			access_delegation: 'none',
+		});
+		const programs = icebergPreviewPrograms(config);
+
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		expect(programs?.duckdbWasm?.setup[2]?.text).toContain("URL_STYLE 'vhost'");
+		expect(programs?.duckdbWasm?.httpAccess?.storage.urlStyle).toBe('vhost');
+	});
+
+	it('iceberg_rest rejects non-DNS bucket names for virtual-hosted Run SQL', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' },
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				force_virtual_addressing: true,
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse_name', prefix: 'tables' }],
+			},
+			access_delegation: 'none',
+		});
+
+		expect(icebergRest.query?.available(config)).toEqual({
+			ok: false,
+			reason: 'virtual-hosted S3 addressing requires DNS-compatible bucket names',
 		});
 	});
 
