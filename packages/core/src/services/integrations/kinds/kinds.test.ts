@@ -783,6 +783,254 @@ describe('kind renders (golden)', () => {
 		});
 	});
 
+	it('iceberg_rest supports R2 Data Catalog with a bearer token and vended credentials', () => {
+		const uri = 'https://catalog.cloudflarestorage.com/account-id/warehouse';
+		const config = icebergRest.configSchema.parse({
+			uri,
+			auth: { method: 'bearer_token', token: 'catalog-token' },
+			storage: { scheme: 'catalog' },
+		});
+		const checks = icebergRest.query?.readiness?.(config) ?? [];
+		const programs = icebergPreviewPrograms(config);
+		const integration = {
+			id: createIntegrationId(),
+			name: 'lake',
+			kind: 'iceberg_rest',
+			version: 1,
+		} as const;
+		const plan = icebergRest.query?.plan({ config, integration });
+
+		expect(checks.every((check) => check.ready)).toBe(true);
+		const ids = checks.map((check) => check.id);
+		for (const id of [
+			's3-endpoint',
+			's3-endpoint-origin',
+			's3-virtual-host-endpoint',
+			's3-basic-options',
+			's3-credentials',
+			's3-read-locations',
+			's3-virtual-host-buckets',
+		]) {
+			expect(ids).not.toContain(id);
+		}
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		expect(programs?.duckdbWasm?.setup).toHaveLength(3);
+		expect(programs?.duckdbWasm?.setup[2]).toEqual({
+			text: expect.stringContaining("ATTACH 'account-id_warehouse'"),
+			params: [uri, 'marimohub-parent-broker', 'vended_credentials'],
+		});
+		expect(programs?.duckdbWasm?.cleanup).toEqual([{ text: expect.stringMatching(/^DETACH /) }]);
+		expect(programs?.duckdbWasm?.httpAccess).toEqual({
+			kind: 'iceberg-rest',
+			catalog: { url: uri, authorization: 'Bearer catalog-token' },
+			storage: {
+				kind: 'r2-catalog',
+				endpoint: 'https://account-id.r2.cloudflarestorage.com',
+				bucket: 'warehouse',
+			},
+		});
+		expect(plan).toMatchObject({
+			setup: [
+				{ text: 'LOAD iceberg' },
+				{ text: 'LOAD httpfs' },
+				{ params: [uri, 'marimohub-parent-broker', 'vended_credentials'] },
+			],
+			cleanup: [{ text: 'DETACH "lake"' }],
+			httpAccess: programs?.duckdbWasm?.httpAccess,
+		});
+	});
+
+	it('iceberg_rest supports the bucket-scoped R2 catalog URL form', () => {
+		const uri = 'https://account-id.r2.cloudflarestorage.com/iceberg/warehouse';
+		const config = icebergRest.configSchema.parse({
+			uri,
+			auth: { method: 'bearer_token', token: 'catalog-token' },
+			storage: { scheme: 'catalog' },
+		});
+		const programs = icebergPreviewPrograms(config);
+
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		expect(programs?.duckdbWasm?.setup.at(-1)).toEqual({
+			text: expect.stringContaining("ATTACH 'warehouse'"),
+			params: [uri, 'marimohub-parent-broker', 'vended_credentials'],
+		});
+		expect(programs?.duckdbWasm?.httpAccess?.storage).toEqual({
+			kind: 'r2-catalog',
+			endpoint: 'https://account-id.r2.cloudflarestorage.com',
+			bucket: 'warehouse',
+		});
+	});
+
+	it('iceberg_rest rejects overlapping account-scoped R2 catalog and storage routes', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://account-id.r2.cloudflarestorage.com/iceberg/iceberg',
+			auth: { method: 'bearer_token', token: 'catalog-token' },
+			storage: { scheme: 'catalog' },
+		});
+		const checks = icebergRest.query?.readiness?.(config) ?? [];
+		const failed = checks.find((check) => check.id === 'r2-route-separation');
+
+		expect(failed).toMatchObject({
+			ready: false,
+			field: 'uri',
+			label: 'Use the catalog.cloudflarestorage.com R2 catalog URI',
+		});
+		expect(icebergRest.query?.available(config)).toEqual({ ok: false, reason: failed?.reason });
+		expect(icebergRest.preview?.available(config)).toEqual({
+			ok: true,
+			programs: { python: true },
+		});
+		expect(() =>
+			icebergRest.query?.plan({
+				config,
+				integration: {
+					id: createIntegrationId(),
+					name: 'lake',
+					kind: 'iceberg_rest',
+					version: 1,
+				},
+			}),
+		).toThrow(ValidationError);
+	});
+
+	it('iceberg_rest supports an iceberg bucket through the separate catalog host', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.cloudflarestorage.com/account-id/iceberg',
+			auth: { method: 'bearer_token', token: 'catalog-token' },
+			storage: { scheme: 'catalog' },
+		});
+		const programs = icebergPreviewPrograms(config);
+
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		expect(programs?.duckdbWasm?.httpAccess?.storage).toEqual({
+			kind: 'r2-catalog',
+			endpoint: 'https://account-id.r2.cloudflarestorage.com',
+			bucket: 'iceberg',
+		});
+	});
+
+	it.each([
+		['a non-R2 catalog', 'https://catalog.example.com/account-id/warehouse'],
+		['an insecure catalog', 'http://catalog.cloudflarestorage.com/account-id/warehouse'],
+		['a catalog with a port', 'https://catalog.cloudflarestorage.com:8443/account-id/warehouse'],
+		['a catalog with a query', 'https://catalog.cloudflarestorage.com/account-id/warehouse?x=1'],
+		['a catalog with a fragment', 'https://catalog.cloudflarestorage.com/account-id/warehouse#x'],
+		['a missing bucket', 'https://catalog.cloudflarestorage.com/account-id'],
+		['an extra path segment', 'https://catalog.cloudflarestorage.com/account-id/warehouse/extra'],
+		['a doubled path separator', 'https://catalog.cloudflarestorage.com/account-id//warehouse'],
+		[
+			'an encoded account separator',
+			'https://catalog.cloudflarestorage.com/account%2Fid/warehouse',
+		],
+		[
+			'an encoded bucket separator',
+			'https://catalog.cloudflarestorage.com/account-id/ware%5Chouse',
+		],
+		['an uppercase bucket', 'https://catalog.cloudflarestorage.com/account-id/Warehouse'],
+		[
+			'a bucket containing a space',
+			'https://catalog.cloudflarestorage.com/account-id/ware%20house',
+		],
+		[
+			'a bucket containing a question mark',
+			'https://catalog.cloudflarestorage.com/account-id/ware%3Fhouse',
+		],
+		[
+			'a bucket with a leading hyphen',
+			'https://catalog.cloudflarestorage.com/account-id/-warehouse',
+		],
+		[
+			'a bucket with a trailing hyphen',
+			'https://catalog.cloudflarestorage.com/account-id/warehouse-',
+		],
+		[
+			'a bucket shorter than three characters',
+			'https://catalog.cloudflarestorage.com/account-id/ab',
+		],
+		[
+			'a bucket longer than 63 characters',
+			`https://catalog.cloudflarestorage.com/account-id/${'a'.repeat(64)}`,
+		],
+		[
+			'an account hostname with a leading hyphen',
+			'https://-account.r2.cloudflarestorage.com/iceberg/warehouse',
+		],
+		[
+			'an account hostname with a trailing hyphen',
+			'https://account-.r2.cloudflarestorage.com/iceberg/warehouse',
+		],
+		['a lookalike host', 'https://catalog.cloudflarestorage.com.example.test/account-id/warehouse'],
+	])('iceberg_rest does not recognize %s as an R2 Data Catalog URL', (_case, uri) => {
+		const config = icebergRest.configSchema.parse({
+			uri,
+			auth: { method: 'bearer_token', token: 'catalog-token' },
+			storage: { scheme: 'catalog' },
+		});
+		const checks = icebergRest.query?.readiness?.(config) ?? [];
+
+		expect(checks).toContainEqual(
+			expect.objectContaining({ id: 's3-storage', ready: false, field: 'storage' }),
+		);
+		expect(icebergRest.query?.available(config).ok).toBe(false);
+	});
+
+	it('iceberg_rest rejects embedded catalog credentials at the schema boundary', () => {
+		expect(() =>
+			icebergRest.configSchema.parse({
+				uri: 'https://user@catalog.cloudflarestorage.com/account-id/warehouse',
+				auth: { method: 'bearer_token', token: 'catalog-token' },
+				storage: { scheme: 'catalog' },
+			}),
+		).toThrow(/without embedded credentials/);
+	});
+
+	it.each([
+		[
+			'no catalog bearer token',
+			{ method: 'none' } as const,
+			'vended_credentials' as const,
+			'catalog-auth',
+		],
+		[
+			'no vended credentials',
+			{ method: 'bearer_token', token: 'catalog-token' } as const,
+			'none' as const,
+			'no-access-delegation',
+		],
+		[
+			'remote signing',
+			{ method: 'bearer_token', token: 'catalog-token' } as const,
+			'remote_signing' as const,
+			'no-access-delegation',
+		],
+	])(
+		'iceberg_rest rejects R2 Data Catalog configuration with %s',
+		(_case, auth, accessDelegation, id) => {
+			const config = icebergRest.configSchema.parse({
+				uri: 'https://catalog.cloudflarestorage.com/account-id/warehouse',
+				auth,
+				storage: { scheme: 'catalog' },
+				access_delegation: accessDelegation,
+			});
+			const checks = icebergRest.query?.readiness?.(config) ?? [];
+			const failed = checks.find((check) => check.id === id);
+
+			expect(failed?.ready).toBe(false);
+			expect(icebergRest.query?.available(config)).toEqual({ ok: false, reason: failed?.reason });
+			expect(() =>
+				icebergRest.query?.plan({
+					config,
+					integration: {
+						id: createIntegrationId(),
+						name: 'lake',
+						kind: 'iceberg_rest',
+						version: 1,
+					},
+				}),
+			).toThrow(ValidationError);
+		},
+	);
+
 	it('iceberg_rest plans virtual-hosted S3 through DuckDB and the guarded broker', () => {
 		const config = icebergRest.configSchema.parse({
 			uri: 'https://catalog.example.com/api',
@@ -800,7 +1048,9 @@ describe('kind renders (golden)', () => {
 
 		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 		expect(programs?.duckdbWasm?.setup[2]?.text).toContain("URL_STYLE 'vhost'");
-		expect(programs?.duckdbWasm?.httpAccess?.storage.urlStyle).toBe('vhost');
+		const storage = programs?.duckdbWasm?.httpAccess?.storage;
+		expect(storage?.kind).toBe('s3');
+		expect(storage?.kind === 's3' ? storage.urlStyle : undefined).toBe('vhost');
 	});
 
 	it('iceberg_rest does not classify out-of-range dotted bucket names as IPv4', () => {

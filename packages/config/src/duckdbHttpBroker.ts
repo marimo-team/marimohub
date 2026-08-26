@@ -22,6 +22,12 @@ const DEFAULT_MAX_REQUESTS = 512;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
 const DEFAULT_MAX_REDIRECTS = 8;
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const VENDED_S3_REQUEST_HEADERS = [
+	'authorization',
+	'x-amz-content-sha256',
+	'x-amz-date',
+	'x-amz-security-token',
+] as const;
 
 export interface DuckDBHttpBrokerOptions {
 	allowPrivate?: boolean;
@@ -58,41 +64,82 @@ export function createDuckDBHttpSessionFactory(
 }
 
 function routesFor(access: Readonly<DuckDBHttpAccess>, now: () => number) {
-	if (access.kind !== 'iceberg-rest' || access.storage.kind !== 's3') {
+	if (access.kind !== 'iceberg-rest') {
 		throw new IcebergHttpBrokerError(
 			'invalid_capability',
 			'DuckDB HTTP access specification is unsupported.',
 		);
 	}
-	const endpoint = parseEndpoint(access.storage.endpoint);
-	const credentials = access.storage.credentials;
+	const catalog = {
+		kind: 'catalog' as const,
+		url: routePrefixUrl(access.catalog.url),
+		match: 'prefix' as const,
+		methods: ['GET', 'HEAD'] as const,
+		headers: access.catalog.authorization
+			? { authorization: access.catalog.authorization }
+			: undefined,
+		discardRequestHeaders: ['authorization'] as const,
+	};
+	const storage = access.storage;
+	if (storage.kind === 'r2-catalog') {
+		const endpoint = parseEndpoint(storage.endpoint);
+		const pathStorageUrl = storagePrefixUrl(endpoint, storage.bucket, '', 'path', true);
+		if (prefixRoutesOverlap(catalog.url, pathStorageUrl)) {
+			throw new IcebergHttpBrokerError(
+				'invalid_capability',
+				'R2 catalog and path-style storage routes overlap.',
+			);
+		}
+		return [
+			{
+				...catalog,
+				headers: {
+					...catalog.headers,
+					'x-iceberg-access-delegation': 'vended-credentials',
+				},
+			},
+			{
+				kind: 'storage' as const,
+				url: pathStorageUrl,
+				match: 'prefix' as const,
+				methods: ['GET', 'HEAD'] as const,
+				forwardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
+			},
+			...(isDnsCompatibleS3Bucket(storage.bucket) && !isIpAddressHost(endpoint.hostname)
+				? [
+						{
+							kind: 'storage' as const,
+							url: storagePrefixUrl(endpoint, storage.bucket, '', 'vhost', true),
+							match: 'prefix' as const,
+							methods: ['GET', 'HEAD'] as const,
+							forwardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
+						},
+					]
+				: []),
+		];
+	}
+	const endpoint = parseEndpoint(storage.endpoint);
+	const credentials = storage.credentials;
 	const prepareStorageHeaders =
 		credentials.method === 'static'
 			? (request: Readonly<IcebergHttpBrokerRequest>) =>
 					Promise.resolve(
 						signS3Request(request, {
 							...credentials,
-							region: access.storage.region,
+							region: storage.region,
 							now: now(),
 						}),
 					)
 			: undefined;
 	return [
-		{
-			kind: 'catalog' as const,
-			url: routePrefixUrl(access.catalog.url),
-			match: 'prefix' as const,
-			methods: ['GET', 'HEAD'] as const,
-			headers: access.catalog.authorization
-				? { authorization: access.catalog.authorization }
-				: undefined,
-		},
-		...access.storage.locations.map((location) => ({
+		catalog,
+		...storage.locations.map((location) => ({
 			kind: 'storage' as const,
-			url: storagePrefixUrl(endpoint, location.bucket, location.prefix, access.storage.urlStyle),
+			url: storagePrefixUrl(endpoint, location.bucket, location.prefix, storage.urlStyle),
 			match: 'prefix' as const,
 			methods: ['GET', 'HEAD'] as const,
 			prepareHeaders: prepareStorageHeaders,
+			discardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
 		})),
 	];
 }
@@ -271,17 +318,33 @@ function routePrefixUrl(value: string): string {
 	return url.toString();
 }
 
+function prefixRoutesOverlap(left: string, right: string): boolean {
+	const leftUrl = new URL(left);
+	const rightUrl = new URL(right);
+	if (leftUrl.origin !== rightUrl.origin) return false;
+	const leftPrefix = leftUrl.pathname.replace(/\/$/, '');
+	const rightPrefix = rightUrl.pathname.replace(/\/$/, '');
+	return (
+		leftPrefix === rightPrefix ||
+		leftPrefix.startsWith(`${rightPrefix}/`) ||
+		rightPrefix.startsWith(`${leftPrefix}/`)
+	);
+}
+
 function storagePrefixUrl(
 	endpoint: URL,
 	bucket: string,
 	prefix: string,
 	urlStyle: 'path' | 'vhost',
+	allowEmptyPrefix = false,
 ): string {
 	const normalizedPrefix = prefix.replaceAll(/^\/+|\/+$/g, '');
-	const segments = normalizedPrefix.split('/');
+	const segments = normalizedPrefix ? normalizedPrefix.split('/') : [];
 	if (
-		!normalizedPrefix ||
+		(!normalizedPrefix && !allowEmptyPrefix) ||
+		!bucket ||
 		bucket.includes('/') ||
+		bucket.includes('\\') ||
 		bucket === '.' ||
 		bucket === '..' ||
 		segments.some((segment) => segment === '.' || segment === '..')

@@ -291,9 +291,9 @@ export const icebergRest = defineIntegration({
 					setup: [
 						{ text: 'LOAD iceberg' },
 						{ text: 'LOAD httpfs' },
-						secret.create,
+						...(secret ? [secret.create] : []),
 						{
-							text: `ATTACH ${sqlLiteral(input.config.warehouse ?? input.integration.name)} AS ${sqlIdentifier(alias)} (${options.join(', ')})`,
+							text: `ATTACH ${sqlLiteral(duckdbWarehouse(input.config, input.integration.name))} AS ${sqlIdentifier(alias)} (${options.join(', ')})`,
 							params: attachParams,
 						},
 					],
@@ -301,7 +301,7 @@ export const icebergRest = defineIntegration({
 						text: `SELECT * FROM ${[alias, ...input.namespace, input.table].map(sqlIdentifier).join('.')} LIMIT ?`,
 						params: [input.limit],
 					},
-					cleanup: [secret.drop, { text: `DETACH ${sqlIdentifier(alias)}` }],
+					cleanup: [...(secret ? [secret.drop] : []), { text: `DETACH ${sqlIdentifier(alias)}` }],
 					requires: ['iceberg-http'],
 					httpAccess: duckdbHttpAccess(input.config),
 				},
@@ -334,13 +334,13 @@ export const icebergRest = defineIntegration({
 				setup: [
 					{ text: 'LOAD iceberg' },
 					{ text: 'LOAD httpfs' },
-					secret.create,
+					...(secret ? [secret.create] : []),
 					{
-						text: `ATTACH ${sqlLiteral(config.warehouse ?? integration.name)} AS ${alias} (${options.join(', ')})`,
+						text: `ATTACH ${sqlLiteral(duckdbWarehouse(config, integration.name))} AS ${alias} (${options.join(', ')})`,
 						params,
 					},
 				],
-				cleanup: [secret.drop, { text: `DETACH ${alias}` }],
+				cleanup: [...(secret ? [secret.drop] : []), { text: `DETACH ${alias}` }],
 				httpAccess: duckdbHttpAccess(config),
 			};
 		},
@@ -605,6 +605,79 @@ function isIpv4Address(value: string): boolean {
 	);
 }
 
+interface R2CatalogAccess {
+	endpoint: string;
+	bucket: string;
+	warehouse: string;
+}
+
+function r2CatalogAccess(config: IcebergRestConfig): R2CatalogAccess | undefined {
+	if (config.storage.scheme !== 'catalog') return undefined;
+	const url = parsedUrl(config.uri);
+	if (
+		url?.protocol !== 'https:' ||
+		url.username ||
+		url.password ||
+		url.port ||
+		url.search ||
+		url.hash
+	) {
+		return undefined;
+	}
+	let segments: string[];
+	try {
+		const pathSegments = url.pathname.split('/');
+		pathSegments.shift();
+		if (pathSegments.at(-1) === '') pathSegments.pop();
+		if (pathSegments.some((segment) => !segment)) return undefined;
+		segments = pathSegments.map((segment) => decodeURIComponent(segment));
+	} catch {
+		return undefined;
+	}
+	if (url.hostname === 'catalog.cloudflarestorage.com' && segments.length === 2) {
+		const [account, bucket] = segments;
+		if (!isR2CatalogPart(account) || !isR2Bucket(bucket)) return undefined;
+		return {
+			endpoint: `https://${account}.r2.cloudflarestorage.com`,
+			bucket,
+			warehouse: `${account}_${bucket}`,
+		};
+	}
+	const accountMatch = /^([a-z0-9-]+)\.r2\.cloudflarestorage\.com$/.exec(url.hostname);
+	if (
+		accountMatch &&
+		isR2CatalogPart(accountMatch[1]) &&
+		segments.length === 2 &&
+		segments[0] === 'iceberg'
+	) {
+		const bucket = segments[1];
+		if (!isR2Bucket(bucket)) return undefined;
+		return { endpoint: url.origin, bucket, warehouse: bucket };
+	}
+	return undefined;
+}
+
+function isR2CatalogPart(value: string): boolean {
+	return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value);
+}
+
+function isR2Bucket(value: string): boolean {
+	return value.length >= 3 && value.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/.test(value);
+}
+
+function r2CatalogRoutesOverlap(config: IcebergRestConfig, access: R2CatalogAccess): boolean {
+	const catalog = parsedUrl(config.uri);
+	const storage = parsedUrl(access.endpoint);
+	if (!catalog || !storage || catalog.origin !== storage.origin) return false;
+	const catalogPrefix = catalog.pathname.replace(/\/$/, '');
+	const storagePrefix = `/${encodeURIComponent(access.bucket)}`;
+	return (
+		catalogPrefix === storagePrefix ||
+		catalogPrefix.startsWith(`${storagePrefix}/`) ||
+		storagePrefix.startsWith(`${catalogPrefix}/`)
+	);
+}
+
 function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[] {
 	const config = asRecord(value) ?? {};
 	const auth = asRecord(config.auth) ?? {};
@@ -619,6 +692,8 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 	const endpoint = parsedUrl(storage.endpoint);
 	const hasEndpoint = typeof storage.endpoint === 'string' && storage.endpoint.length > 0;
 	const storageIsS3 = storage.scheme === 's3';
+	const r2Catalog = r2CatalogAccess(value);
+	const supportedStorage = storageIsS3 || r2Catalog !== undefined;
 	const endpointOriginOnly = endpoint
 		? endpoint.pathname === '/' && endpoint.search === '' && endpoint.hash === ''
 		: false;
@@ -660,8 +735,10 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 	return [
 		readinessCheck(
 			'catalog-auth',
-			'Use no catalog authentication or a bearer token',
-			authMethod === 'none' || authMethod === 'bearer_token',
+			r2Catalog ? 'Use a catalog bearer token' : 'Use no catalog authentication or a bearer token',
+			r2Catalog
+				? authMethod === 'bearer_token'
+				: authMethod === 'none' || authMethod === 'bearer_token',
 			'auth',
 			`${String(authMethod)} authentication is not supported by DuckDB-Wasm preview`,
 		),
@@ -702,76 +779,89 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 		),
 		readinessCheck(
 			'no-access-delegation',
-			'Set access delegation to none',
-			config.access_delegation === 'none',
+			r2Catalog ? 'Use catalog-vended credentials' : 'Set access delegation to none',
+			r2Catalog
+				? config.access_delegation === 'vended_credentials'
+				: config.access_delegation === 'none',
 			'access_delegation',
 			'catalog access delegation is not supported by DuckDB-Wasm preview',
 		),
 		readinessCheck(
 			's3-storage',
-			'Switch Storage to the s3 scheme',
-			storageIsS3,
+			'Use explicit S3 storage or a supported R2 Data Catalog',
+			supportedStorage,
 			'storage',
-			'DuckDB-Wasm preview requires explicit S3 storage configuration',
+			'DuckDB-Wasm preview requires explicit S3 storage or a supported R2 Data Catalog',
 		),
 		readinessCheck(
-			's3-endpoint',
-			'Set an explicit S3 endpoint',
-			storageIsS3 && hasEndpoint,
-			storageIsS3 ? 'storage.endpoint' : 'storage',
-			'DuckDB-Wasm preview requires an explicit S3 endpoint',
+			'r2-route-separation',
+			'Use the catalog.cloudflarestorage.com R2 catalog URI',
+			r2Catalog === undefined || !r2CatalogRoutesOverlap(value, r2Catalog),
+			'uri',
+			'account-scoped R2 catalog and path-style storage routes overlap; use the catalog.cloudflarestorage.com catalog URI',
 		),
-		readinessCheck(
-			's3-endpoint-origin',
-			'Use an origin-only S3 endpoint',
-			storageIsS3 && endpointOriginOnly,
-			storageIsS3 ? 'storage.endpoint' : 'storage',
-			'DuckDB-Wasm preview requires an origin-only S3 endpoint',
-		),
-		readinessCheck(
-			's3-virtual-host-endpoint',
-			'Use a DNS endpoint for virtual-hosted S3',
-			storageIsS3 &&
-				(storage.force_virtual_addressing !== true ||
-					(endpoint !== undefined && !isIpAddressHost(endpoint.hostname))),
-			storageIsS3 ? 'storage.endpoint' : 'storage',
-			'virtual-hosted S3 addressing requires a DNS endpoint',
-		),
-		readinessCheck(
-			's3-basic-options',
-			'Remove advanced S3 client options',
-			storageIsS3 && advancedField === undefined,
-			storageIsS3 && advancedField ? `storage.${advancedField}` : 'storage',
-			'advanced S3 client options are not supported by DuckDB-Wasm preview',
-		),
-		readinessCheck(
-			's3-credentials',
-			'Use static S3 credentials or anonymous access',
-			supportedCredentials,
-			storageIsS3 ? 'storage.credentials' : 'storage',
-			credentialsReason,
-		),
-		readinessCheck(
-			's3-read-locations',
-			'Add at least one guarded S3 read location',
-			storageIsS3 &&
-				Array.isArray(storage.broker_read_locations) &&
-				storage.broker_read_locations.length > 0,
-			storageIsS3 ? 'storage.broker_read_locations' : 'storage',
-			'DuckDB-Wasm preview requires at least one guarded S3 read location',
-		),
-		readinessCheck(
-			's3-virtual-host-buckets',
-			'Use DNS-compatible bucket names for virtual-hosted S3',
-			storageIsS3 &&
-				(storage.force_virtual_addressing !== true ||
-					(Array.isArray(storage.broker_read_locations) &&
-						storage.broker_read_locations.every((location) =>
-							isDnsCompatibleS3Bucket(asRecord(location)?.bucket),
-						))),
-			storageIsS3 ? 'storage.broker_read_locations' : 'storage',
-			'virtual-hosted S3 addressing requires DNS-compatible bucket names',
-		),
+		...(storageIsS3
+			? [
+					readinessCheck(
+						's3-endpoint',
+						'Set an explicit S3 endpoint',
+						storageIsS3 && hasEndpoint,
+						storageIsS3 ? 'storage.endpoint' : 'storage',
+						'DuckDB-Wasm preview requires an explicit S3 endpoint',
+					),
+					readinessCheck(
+						's3-endpoint-origin',
+						'Use an origin-only S3 endpoint',
+						storageIsS3 && endpointOriginOnly,
+						storageIsS3 ? 'storage.endpoint' : 'storage',
+						'DuckDB-Wasm preview requires an origin-only S3 endpoint',
+					),
+					readinessCheck(
+						's3-virtual-host-endpoint',
+						'Use a DNS endpoint for virtual-hosted S3',
+						storageIsS3 &&
+							(storage.force_virtual_addressing !== true ||
+								(endpoint !== undefined && !isIpAddressHost(endpoint.hostname))),
+						storageIsS3 ? 'storage.endpoint' : 'storage',
+						'virtual-hosted S3 addressing requires a DNS endpoint',
+					),
+					readinessCheck(
+						's3-basic-options',
+						'Remove advanced S3 client options',
+						storageIsS3 && advancedField === undefined,
+						storageIsS3 && advancedField ? `storage.${advancedField}` : 'storage',
+						'advanced S3 client options are not supported by DuckDB-Wasm preview',
+					),
+					readinessCheck(
+						's3-credentials',
+						'Use static S3 credentials or anonymous access',
+						supportedCredentials,
+						storageIsS3 ? 'storage.credentials' : 'storage',
+						credentialsReason,
+					),
+					readinessCheck(
+						's3-read-locations',
+						'Add at least one guarded S3 read location',
+						storageIsS3 &&
+							Array.isArray(storage.broker_read_locations) &&
+							storage.broker_read_locations.length > 0,
+						storageIsS3 ? 'storage.broker_read_locations' : 'storage',
+						'DuckDB-Wasm preview requires at least one guarded S3 read location',
+					),
+					readinessCheck(
+						's3-virtual-host-buckets',
+						'Use DNS-compatible bucket names for virtual-hosted S3',
+						storageIsS3 &&
+							(storage.force_virtual_addressing !== true ||
+								(Array.isArray(storage.broker_read_locations) &&
+									storage.broker_read_locations.every((location) =>
+										isDnsCompatibleS3Bucket(asRecord(location)?.bucket),
+									))),
+						storageIsS3 ? 'storage.broker_read_locations' : 'storage',
+						'virtual-hosted S3 addressing requires DNS-compatible bucket names',
+					),
+				]
+			: []),
 		readinessCheck(
 			'default-runtime-options',
 			'Keep PyIceberg runtime options at their defaults',
@@ -815,6 +905,7 @@ function duckdbAuthOptions(
 }
 
 function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
+	if (r2CatalogAccess(config)) return;
 	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
 		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
 	}
@@ -834,6 +925,23 @@ function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
 }
 
 function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
+	const r2Catalog = r2CatalogAccess(config);
+	if (r2Catalog) {
+		return {
+			kind: 'iceberg-rest',
+			catalog: {
+				url: config.uri,
+				...(config.auth.method === 'bearer_token'
+					? { authorization: `Bearer ${config.auth.token}` }
+					: {}),
+			},
+			storage: {
+				kind: 'r2-catalog',
+				endpoint: r2Catalog.endpoint,
+				bucket: r2Catalog.bucket,
+			},
+		};
+	}
 	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
 		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
 	}
@@ -865,6 +973,10 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 			locations: config.storage.broker_read_locations,
 		},
 	};
+}
+
+function duckdbWarehouse(config: IcebergRestConfig, fallback: string): string {
+	return config.warehouse ?? r2CatalogAccess(config)?.warehouse ?? fallback;
 }
 
 /**
