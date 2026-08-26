@@ -1,0 +1,150 @@
+import { SandboxClient } from '@coreweave/cwsandbox';
+import type { LogStream, SandboxStatus, SandboxTransport } from '@coreweave/cwsandbox';
+import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import {
+	BasicTracerProvider,
+	InMemorySpanExporter,
+	SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { fakeProcess, procResult } from './testWorld';
+import { instrumentCoreWeaveTransport } from './tracing';
+
+const exporter = new InMemorySpanExporter();
+const provider = new BasicTracerProvider({
+	spanProcessors: [new SimpleSpanProcessor(exporter)],
+});
+trace.setGlobalTracerProvider(provider);
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+
+afterEach(() => exporter.reset());
+afterAll(() => {
+	trace.disable();
+	context.disable();
+});
+
+function emptyLogStream(): LogStream {
+	return {
+		closed: false,
+		offset: undefined,
+		sessionId: undefined,
+		cancel: async () => {},
+		close: async () => {},
+		async *[Symbol.asyncIterator]() {},
+	};
+}
+
+function fakeTransport() {
+	return {
+		start: vi.fn(async () => ({ sandboxId: 'cw-1', status: 'creating' as const })),
+		get: vi.fn(async ({ sandboxId }) => ({ sandboxId, status: 'running' as SandboxStatus })),
+		list: vi.fn(async () => ({ sandboxes: [] })),
+		delete: vi.fn(async () => {}),
+		exec: vi.fn(async () => procResult()),
+		startCommand: vi.fn(async () => fakeProcess()),
+		streamLogs: vi.fn(async () => emptyLogStream()),
+		stop: vi.fn(async () => {}),
+		writeFile: vi.fn(async () => {}),
+		readFile: vi.fn(async () => ({ content: new Uint8Array() })),
+	} satisfies SandboxTransport;
+}
+
+const SANDBOX_ID = 'cw-1';
+const GATEWAY = 'coreweave.sandbox.v1beta2.GatewayService';
+const STREAMING = 'coreweave.sandbox.v1beta2.GatewayStreamingService';
+
+describe('instrumentCoreWeaveTransport', () => {
+	it('spans every transport request with RPC and endpoint attributes', async () => {
+		const transport = instrumentCoreWeaveTransport(
+			fakeTransport(),
+			'https://gateway.example:8443/api',
+		);
+
+		await transport.start({ command: ['sleep', 'infinity'] });
+		await transport.get({ sandboxId: SANDBOX_ID });
+		await transport.list({});
+		await transport.delete({ sandboxId: SANDBOX_ID });
+		await transport.exec({ sandboxId: SANDBOX_ID, command: ['true'] });
+		await transport.startCommand({ sandboxId: SANDBOX_ID, command: ['marimo'] });
+		await transport.streamLogs({ sandboxId: SANDBOX_ID, mode: 'lines' });
+		await transport.stop({ sandboxId: SANDBOX_ID });
+		await transport.writeFile({
+			sandboxId: SANDBOX_ID,
+			path: '/workspace/private.txt',
+			content: new Uint8Array([1]),
+		});
+		await transport.readFile({ sandboxId: SANDBOX_ID, path: '/workspace/private.txt' });
+
+		const spans = exporter.getFinishedSpans();
+		expect(spans.map((span) => span.name)).toEqual([
+			`${GATEWAY}/Start`,
+			`${GATEWAY}/Get`,
+			`${GATEWAY}/List`,
+			`${GATEWAY}/Delete`,
+			`${GATEWAY}/Exec`,
+			`${STREAMING}/StreamExec`,
+			`${STREAMING}/StreamLogs`,
+			`${GATEWAY}/Stop`,
+			`${GATEWAY}/AddFile`,
+			`${GATEWAY}/RetrieveFile`,
+		]);
+		for (const span of spans) {
+			expect(span.kind).toBe(SpanKind.CLIENT);
+			expect(span.attributes).toMatchObject({
+				'rpc.system.name': 'grpc',
+				'rpc.method': span.name,
+				'server.address': 'gateway.example',
+				'server.port': 8443,
+			});
+		}
+		expect(spans[0]?.attributes['coreweave.sandbox_id']).toBe(SANDBOX_ID);
+		expect(spans[2]?.attributes).not.toHaveProperty('coreweave.sandbox_id');
+		expect(JSON.stringify(spans.map((span) => span.attributes))).not.toContain('private.txt');
+		expect(JSON.stringify(spans.map((span) => span.attributes))).not.toContain('marimo');
+	});
+
+	it('captures the SDK request fan-out from boot polling and multi-file writes', async () => {
+		const raw = fakeTransport();
+		raw.get
+			.mockResolvedValueOnce({ sandboxId: SANDBOX_ID, status: 'creating' })
+			.mockResolvedValueOnce({ sandboxId: SANDBOX_ID, status: 'running' });
+		const client = new SandboxClient({
+			transport: instrumentCoreWeaveTransport(raw, 'https://gateway.example'),
+		});
+		const sandbox = await client.create({ waitUntilRunning: false });
+
+		await sandbox.wait({ intervalMs: 1 });
+		await sandbox.files.write([
+			{ path: '/workspace/a.txt', content: 'a' },
+			{ path: '/workspace/b.txt', content: 'b' },
+		]);
+
+		expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual([
+			`${GATEWAY}/Start`,
+			`${GATEWAY}/Get`,
+			`${GATEWAY}/Get`,
+			`${GATEWAY}/AddFile`,
+			`${GATEWAY}/AddFile`,
+		]);
+	});
+
+	it('inherits the active compute span and records request failures', async () => {
+		const raw = fakeTransport();
+		raw.get.mockRejectedValueOnce(new Error('gateway unavailable'));
+		const transport = instrumentCoreWeaveTransport(raw, 'https://gateway.example');
+		let parentSpanId = '';
+
+		await provider.getTracer('test').startActiveSpan('SandboxInstance.ready', async (parent) => {
+			parentSpanId = parent.spanContext().spanId;
+			await expect(transport.get({ sandboxId: SANDBOX_ID })).rejects.toThrow('gateway unavailable');
+			parent.end();
+		});
+
+		const requestSpan = exporter.getFinishedSpans().find((span) => span.name === `${GATEWAY}/Get`);
+		expect(requestSpan?.parentSpanContext?.spanId).toBe(parentSpanId);
+		expect(requestSpan?.status.code).toBe(SpanStatusCode.ERROR);
+		expect(requestSpan?.attributes['error.type']).toBe('Error');
+		expect(requestSpan?.events.some((event) => event.name === 'exception')).toBe(true);
+	});
+});
