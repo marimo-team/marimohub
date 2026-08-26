@@ -481,7 +481,7 @@ export class SandboxProvisioner {
 			workspacePrefix,
 			...(options.gitPrefix ? { excludeRelativeRoots: ['.git'] } : {}),
 		});
-		if (!options.gitPrefix) return await load;
+		if (!options.gitPrefix) return load;
 		const gitPrefix = options.gitPrefix;
 		const restoreGit = async (): Promise<WorkspaceRestoreStats> => {
 			try {
