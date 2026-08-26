@@ -224,6 +224,318 @@ export function portWaitCommand(port: number, seconds: number): string {
 	return `python3 -c ${shellQuote(script)}`;
 }
 
+export type LaunchProtocolFailure =
+	| 'setup_exit'
+	| 'setup_timeout'
+	| 'kernel_exit'
+	| 'readiness_timeout';
+
+export interface LaunchProtocolOutcome {
+	kind: 'ready' | LaunchProtocolFailure;
+	setupMs: number;
+	waitportMs: number;
+	exitCode?: number;
+}
+
+export interface LaunchCommand {
+	command: string;
+	nonce: string;
+}
+
+const LAUNCH_SUPERVISOR = `import json, os, signal, socket, subprocess, sys, time
+nonce, timeout_arg, setup, command, port_arg = sys.argv[1:]
+timeout = float(timeout_arg) / 1000
+port = int(port_arg)
+started = time.monotonic()
+deadline = None if timeout == 0 else started + timeout
+prefix = "__MARIMOHUB_LAUNCH_" + nonce + "__"
+current = None
+
+def elapsed(since):
+    return max(0, round((time.monotonic() - since) * 1000))
+
+def emit(event, **values):
+    print(prefix + json.dumps({"event": event, **values}, separators=(",", ":")), file=sys.stderr, flush=True)
+
+def remaining():
+    return None if deadline is None else max(0, deadline - time.monotonic())
+
+def stop_process(process, sig=signal.SIGTERM):
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return
+
+def forward(sig, _frame):
+    stop_process(current, sig)
+
+for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(sig, forward)
+
+setup_started = time.monotonic()
+if setup:
+    current = subprocess.Popen(["sh", "-lc", setup], start_new_session=True)
+    try:
+        setup_code = current.wait(timeout=remaining())
+    except subprocess.TimeoutExpired:
+        stop_process(current, signal.SIGKILL)
+        current.wait()
+        emit("setup_timeout", setupMs=elapsed(setup_started), waitportMs=0)
+        sys.exit(124)
+    if setup_code != 0:
+        emit("setup_exit", setupMs=elapsed(setup_started), waitportMs=0, exitCode=setup_code)
+        sys.exit(setup_code)
+setup_ms = elapsed(setup_started)
+emit("setup_complete", setupMs=setup_ms, waitportMs=0)
+
+kernel_started = time.monotonic()
+current = subprocess.Popen(["sh", "-lc", command], start_new_session=True)
+while True:
+    kernel_code = current.poll()
+    if kernel_code is not None:
+        emit("kernel_exit", setupMs=setup_ms, waitportMs=elapsed(kernel_started), exitCode=kernel_code)
+        sys.exit(kernel_code or 1)
+    probe = socket.socket()
+    probe.settimeout(0.2)
+    try:
+        ready = probe.connect_ex(("127.0.0.1", port)) == 0
+    finally:
+        probe.close()
+    if ready:
+        emit("ready", setupMs=setup_ms, waitportMs=elapsed(kernel_started))
+        sys.exit(current.wait())
+    if deadline is not None and time.monotonic() >= deadline:
+        emit("readiness_timeout", setupMs=setup_ms, waitportMs=elapsed(kernel_started))
+        stop_process(current, signal.SIGTERM)
+        try:
+            current.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            stop_process(current, signal.SIGKILL)
+            current.wait()
+        sys.exit(124)
+    time.sleep(0.05)`;
+
+export function buildLaunchCommand(options: {
+	setup?: string;
+	command: string;
+	port: number;
+	startupTimeout: number;
+	nonce?: string;
+}): LaunchCommand {
+	const nonce = options.nonce ?? crypto.randomUUID().replaceAll('-', '');
+	const args = [
+		nonce,
+		String(options.startupTimeout),
+		options.setup ?? '',
+		options.command,
+		String(options.port),
+	].map(shellQuote);
+	return {
+		nonce,
+		command: `exec python3 -c ${shellQuote(LAUNCH_SUPERVISOR)} ${args.join(' ')}`,
+	};
+}
+
+function parseProtocolText(
+	text: string,
+	nonce: string,
+): {
+	text: string;
+	events: LaunchProtocolOutcome[];
+} {
+	const marker = `__MARIMOHUB_LAUNCH_${nonce}__`;
+	const events: LaunchProtocolOutcome[] = [];
+	const kept: string[] = [];
+	for (const line of text.split(/(?<=\n)/)) {
+		const normalized = line.replace(/\r?\n$/, '');
+		const index = normalized.indexOf(marker);
+		if (index === -1) {
+			kept.push(line);
+			continue;
+		}
+		const json = normalized.slice(index + marker.length);
+		try {
+			const value = JSON.parse(json) as {
+				event?: string;
+				setupMs?: number;
+				waitportMs?: number;
+				exitCode?: number;
+			};
+			if (
+				value.event === 'ready' ||
+				value.event === 'setup_exit' ||
+				value.event === 'setup_timeout' ||
+				value.event === 'kernel_exit' ||
+				value.event === 'readiness_timeout'
+			) {
+				events.push({
+					kind: value.event,
+					setupMs: Math.max(0, value.setupMs ?? 0),
+					waitportMs: Math.max(0, value.waitportMs ?? 0),
+					...(value.exitCode === undefined ? {} : { exitCode: value.exitCode }),
+				});
+			}
+			const beforeMarker = normalized.slice(0, index);
+			if (beforeMarker) kept.push(beforeMarker);
+		} catch {
+			kept.push(line);
+		}
+	}
+	return { text: kept.join(''), events };
+}
+
+export function parseLaunchOutput(
+	logs: { stdout: string; stderr: string },
+	nonce: string,
+): { stdout: string; stderr: string; outcome?: LaunchProtocolOutcome } {
+	const stdout = parseProtocolText(logs.stdout, nonce);
+	const stderr = parseProtocolText(logs.stderr, nonce);
+	return {
+		stdout: stdout.text,
+		stderr: stderr.text,
+		outcome: [...stdout.events, ...stderr.events].at(-1),
+	};
+}
+
+export interface LaunchableProcess {
+	waitForPort(
+		port: number,
+		options?: { timeout?: number; mode?: 'http' | 'tcp'; path?: string },
+	): Promise<void>;
+	getLogs(): Promise<{ stdout: string; stderr: string }>;
+}
+
+export type ProcessLaunchResult<P extends LaunchableProcess> =
+	| {
+			success: true;
+			process: P;
+			timings: { setup: number; start: number; waitport: number };
+	  }
+	| {
+			success: false;
+			reason: LaunchProtocolFailure | 'transport_failure';
+			exitCode?: number;
+			stdout: string;
+			stderr: string;
+			timings: { setup: number; start: number; waitport: number };
+	  };
+
+/**
+ * Compatibility implementation for process APIs that expose readiness and logs
+ * but not their live output stream. The setup and kernel still share one remote
+ * command; the native waiter observes the same port as the supervisor.
+ */
+export async function launchWithProcess<P extends LaunchableProcess>(options: {
+	setup?: string;
+	command: string;
+	port: number;
+	startupTimeout: number;
+	waitForPort?: { mode?: 'http' | 'tcp'; path?: string };
+	start(command: string): Promise<P>;
+	now?: () => number;
+}): Promise<ProcessLaunchResult<P>> {
+	const now = options.now ?? Date.now;
+	const built = buildLaunchCommand(options);
+	const launchStarted = now();
+	let process: P;
+	try {
+		process = await options.start(built.command);
+	} catch (error) {
+		return {
+			success: false,
+			reason: 'transport_failure',
+			stdout: '',
+			stderr: error instanceof Error ? error.message : String(error),
+			timings: { setup: 0, start: Math.max(0, now() - launchStarted), waitport: 0 },
+		};
+	}
+	const start = now() - launchStarted;
+	const waitStarted = now();
+	const remaining =
+		options.startupTimeout === 0
+			? 2_147_483_647
+			: Math.max(0, options.startupTimeout - (now() - launchStarted));
+	try {
+		await process.waitForPort(options.port, {
+			...options.waitForPort,
+			timeout: remaining,
+		});
+	} catch (error) {
+		if (options.startupTimeout !== 0 && now() - launchStarted >= options.startupTimeout) {
+			await sleep(75);
+		}
+		let parsed: ReturnType<typeof parseLaunchOutput>;
+		let setupCompleted = false;
+		try {
+			const logs = await process.getLogs();
+			setupCompleted = `${logs.stdout}\n${logs.stderr}`.includes(
+				`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
+			);
+			parsed = parseLaunchOutput(logs, built.nonce);
+		} catch (logError) {
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: '',
+				stderr: logError instanceof Error ? logError.message : String(logError),
+				timings: {
+					setup: 0,
+					start,
+					waitport: Math.max(0, now() - waitStarted),
+				},
+			};
+		}
+		const outcome = parsed.outcome;
+		const deadlineExpired =
+			options.startupTimeout !== 0 && now() - launchStarted >= options.startupTimeout;
+		const reason =
+			outcome?.kind && outcome.kind !== 'ready'
+				? outcome.kind
+				: options.setup && deadlineExpired && !setupCompleted
+					? 'setup_timeout'
+					: /before port \d+/.test(error instanceof Error ? error.message.split('\n', 1)[0] : '')
+						? 'kernel_exit'
+						: 'readiness_timeout';
+		return {
+			success: false,
+			reason,
+			...(outcome?.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
+			stdout: parsed.stdout,
+			stderr: parsed.stderr,
+			timings: {
+				setup:
+					outcome?.setupMs ??
+					(reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0),
+				start,
+				waitport: outcome?.waitportMs ?? now() - waitStarted,
+			},
+		};
+	}
+	let parsed: ReturnType<typeof parseLaunchOutput>;
+	try {
+		parsed = parseLaunchOutput(await process.getLogs(), built.nonce);
+	} catch (error) {
+		return {
+			success: false,
+			reason: 'transport_failure',
+			stdout: '',
+			stderr: error instanceof Error ? error.message : String(error),
+			timings: { setup: 0, start, waitport: Math.max(0, now() - waitStarted) },
+		};
+	}
+	return {
+		success: true,
+		process,
+		timings: {
+			setup: parsed.outcome?.setupMs ?? 0,
+			start,
+			waitport: parsed.outcome?.waitportMs ?? now() - waitStarted,
+		},
+	};
+}
+
 export interface PollOptions {
 	/** Give up after this many ms. Default 30000. */
 	timeoutMs?: number;

@@ -547,6 +547,28 @@ describe('SandboxProvisioner', () => {
 		// A command round-trip is the dominant unit of startup cost on a remote
 		// backend (~220ms each on CoreWeave), so these lock in the count.
 		describe('command round-trips', () => {
+			it('prefers combined launch and keeps its phase timings', async () => {
+				const { instance, calls } = makeFakeSandbox();
+				instance.ready = async () => {};
+				instance.launchProcess = async (command, options) => ({
+					success: true,
+					process: await instance.startProcess(command, { cwd: options.cwd }),
+					timings: { setup: 41, start: 3, waitport: 17 },
+				});
+
+				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				});
+
+				expect(calls.exec).toHaveLength(0);
+				expect(calls.startProcess).toHaveLength(1);
+				expect(result.timings).toMatchObject({ setup: 41, start: 3, waitport: 17 });
+			});
+
 			it('a copy-path provision spends one checked setup exec', async () => {
 				const { instance, calls } = makeFakeSandbox({ failMount: true });
 				const bucketHandle = new MemoryBucket();
@@ -660,6 +682,7 @@ describe('SandboxProvisioner', () => {
 				code: 'PYTHON_ENV_SETUP_FAILED',
 				status: 503,
 			});
+
 			expect((failure as Error).message).toContain('does not allow replacing');
 			expect(calls.startProcess).toHaveLength(0);
 			expect(calls.destroy).toBe(1);
@@ -750,6 +773,32 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/my_app.py'");
 		});
 
+		it('classifies a combined-launch setup failure the same way', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.launchProcess = async () => ({
+				success: false,
+				reason: 'setup_exit',
+				exitCode: 2,
+				stdout: '',
+				stderr: 'TOMLDecodeError: Invalid value',
+				timings: { setup: 7, start: 2, waitport: 0 },
+			});
+
+			const failure = await new SandboxProvisioner(fakeComputeFrom(instance))
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				})
+				.catch((error: unknown) => error);
+
+			expect(failure).toMatchObject({ code: 'PYTHON_ENV_SETUP_FAILED', status: 503 });
+			expect((failure as Error).message).toContain('pyproject.toml could not be parsed');
+			expect(calls.destroy).toBe(1);
+		});
+
 		it('restores pull-source Git metadata into the workspace .git directory', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
@@ -777,6 +826,71 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`);
 			expect(result.counters).toMatchObject({ files_objects: 3 });
+		});
+
+		it('preserves Git metadata stored in an ordinary copied workspace', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.workspaceFile('.git/HEAD'), 'ref: refs/heads/main\n');
+
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+			});
+
+			expect(calls.writeFiles.flat().map((file) => file.path)).toEqual(
+				expect.arrayContaining([`${MOUNT_PATH}/app.py`, `${MOUNT_PATH}/.git/HEAD`]),
+			);
+		});
+
+		it('restores copied workspace and Git metadata concurrently', async () => {
+			const { instance: base, calls } = makeFakeSandbox();
+			const writeFiles = base.writeFiles.bind(base);
+			let inFlight = 0;
+			let maxInFlight = 0;
+			const instance: SandboxInstance = {
+				...base,
+				supportsBucketMount: false,
+				async writeFiles(files) {
+					inFlight++;
+					maxInFlight = Math.max(maxInFlight, inFlight);
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					await writeFiles(files);
+					inFlight--;
+				},
+			};
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.workspaceFile('.git/config'), 'stale');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+			});
+
+			expect(maxInFlight).toBe(2);
+			expect(calls.writeFiles.flat().map((file) => file.path)).toEqual(
+				expect.arrayContaining([`${MOUNT_PATH}/app.py`, `${MOUNT_PATH}/.git/HEAD`]),
+			);
+			expect(calls.writeFiles.flat().map((file) => file.path)).not.toContain(
+				`${MOUNT_PATH}/.git/config`,
+			);
 		});
 
 		it('restores Git metadata after a successful workspace mount', async () => {

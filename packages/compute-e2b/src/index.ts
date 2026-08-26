@@ -21,6 +21,7 @@ import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
+	launchWithProcess,
 	parseFindFilesOutput,
 	pollUntilReady,
 	withEnvPrefix,
@@ -35,6 +36,7 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
@@ -42,6 +44,7 @@ import type {
 	SandboxFileWrite,
 	SandboxInstance,
 	SandboxProcess,
+	SandboxLaunchResult,
 	SandboxProvider,
 	SetEnvVarsOptions,
 	StartProcessOptions,
@@ -306,6 +309,22 @@ class E2bSandboxInstance implements SandboxInstance {
 				return { stdout: logs.stdout, stderr: '' };
 			},
 		};
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		return launchWithProcess({
+			setup: options.setup,
+			command: cmd,
+			port: options.port,
+			startupTimeout: options.startupTimeout,
+			waitForPort: options.waitForPort,
+			start: (command) =>
+				this.startProcess(command, {
+					cwd: options.cwd,
+					env: options.env,
+					processId: options.processId,
+				}),
+		});
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {

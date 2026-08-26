@@ -43,6 +43,7 @@ import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
+	launchWithProcess,
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
@@ -68,11 +69,13 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -555,6 +558,22 @@ class KubernetesSandboxInstance implements SandboxInstance {
 				return { stdout: await readLog(), stderr: '' };
 			},
 		};
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		return launchWithProcess({
+			setup: options.setup,
+			command: cmd,
+			port: options.port,
+			startupTimeout: options.startupTimeout,
+			waitForPort: options.waitForPort,
+			start: (command) =>
+				this.startProcess(command, {
+					cwd: options.cwd,
+					env: options.env,
+					processId: options.processId,
+				}),
+		});
 	}
 
 	async exposePort(_port: number, options: ExposePortOptions): Promise<ExposePortResult> {

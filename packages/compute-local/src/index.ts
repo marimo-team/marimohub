@@ -26,6 +26,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import {
 	buildGitCloneCommand,
+	launchWithProcess,
 	mapWithConcurrency,
 	pollUntilReady,
 	withEnvPrefix,
@@ -42,11 +43,13 @@ import type {
 	ExposePortResult,
 	FileInfo,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -458,6 +461,9 @@ class LocalSandboxInstance implements SandboxInstance {
 			const real = await allocatePort(this.bindHost, this.ports);
 			this.portMap.set(logical, real);
 			command = command.replace(/--port\s+\d+/, `--port ${real}`);
+			if (command.includes('__MARIMOHUB_LAUNCH_')) {
+				command = command.replace(new RegExp(`'${logical}'$`), `'${real}'`);
+			}
 		}
 
 		const cwd = options?.cwd ? this.mapPath(options.cwd) : this.root;
@@ -515,6 +521,22 @@ class LocalSandboxInstance implements SandboxInstance {
 			},
 		};
 		return proc;
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		return launchWithProcess({
+			setup: options.setup,
+			command: this.prepareMarimoCmd(cmd),
+			port: options.port,
+			startupTimeout: options.startupTimeout,
+			waitForPort: options.waitForPort,
+			start: (command) =>
+				this.startProcess(command, {
+					cwd: options.cwd,
+					env: options.env,
+					processId: options.processId,
+				}),
+		});
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {

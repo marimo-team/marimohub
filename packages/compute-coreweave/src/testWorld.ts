@@ -86,6 +86,7 @@ function recordWrite(fake: FakeSandbox) {
 
 export function makeWorld(opts?: {
 	runImpl?: (cmd: readonly string[]) => Promise<ProcessResult>;
+	startImpl?: (cmd: readonly string[]) => Promise<CommandProcess>;
 	/** State for started processes; omit to leave them running. */
 	proc?: FakeProcessState;
 }) {
@@ -118,7 +119,7 @@ export function makeWorld(opts?: {
 				},
 				start: async (command: readonly string[]) => {
 					fake.startCalls.push([...command]);
-					return fakeProcess(opts?.proc);
+					return opts?.startImpl?.(command) ?? fakeProcess(opts?.proc);
 				},
 			},
 			files: {
@@ -181,7 +182,7 @@ export function makeWorld(opts?: {
 				},
 				start: async (command: readonly string[]) => {
 					entry.fake.startCalls.push([...command]);
-					return fakeProcess();
+					return opts?.startImpl?.(command) ?? fakeProcess();
 				},
 			},
 			files: {

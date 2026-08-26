@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, it, expect } from 'vitest';
 import {
 	base64Encode,
+	buildLaunchCommand,
 	buildDirectoryProbeCommand,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -16,11 +17,13 @@ import {
 	NOT_A_DIRECTORY_EXIT_CODE,
 	NOT_A_DIRECTORY_MARKER,
 	parseFindFilesOutput,
+	parseLaunchOutput,
 	pollUntilReady,
 	portWaitCommand,
 	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
+	launchWithProcess,
 } from './index';
 
 describe('shellQuote', () => {
@@ -483,6 +486,124 @@ describe('mapWithConcurrency', () => {
 		});
 		expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3]);
 		expect(results).toEqual([2, 4, 6]);
+	});
+});
+
+describe('launch protocol', () => {
+	it('quotes setup and kernel commands as supervisor arguments', () => {
+		const built = buildLaunchCommand({
+			setup: "printf '%s' setup",
+			command: "printf '%s' kernel",
+			port: 2718,
+			startupTimeout: 120_000,
+			nonce: 'abc123',
+		});
+		expect(built.nonce).toBe('abc123');
+		expect(built.command).toContain('python3 -c');
+		expect(built.command).toContain("'abc123'");
+		expect(built.command).toContain("'2718'");
+	});
+
+	it('removes protocol records and returns the terminal outcome', () => {
+		const marker = '__MARIMOHUB_LAUNCH_n1__';
+		const parsed = parseLaunchOutput(
+			{
+				stdout: 'setup output\nkernel output\n',
+				stderr:
+					`${marker}{"event":"setup_complete","setupMs":12,"waitportMs":0}\n` +
+					`${marker}{"event":"ready","setupMs":12,"waitportMs":34}\n`,
+			},
+			'n1',
+		);
+		expect(parsed).toEqual({
+			stdout: 'setup output\nkernel output\n',
+			stderr: '',
+			outcome: { kind: 'ready', setupMs: 12, waitportMs: 34 },
+		});
+	});
+
+	it('preserves output before a protocol record in the same fragmented line', () => {
+		const marker = '__MARIMOHUB_LAUNCH_n1__';
+		const parsed = parseLaunchOutput(
+			{
+				stdout: '',
+				stderr: `setup output${marker}{"event":"ready","setupMs":3,"waitportMs":4}\n`,
+			},
+			'n1',
+		);
+		expect(parsed).toEqual({
+			stdout: '',
+			stderr: 'setup output',
+			outcome: { kind: 'ready', setupMs: 3, waitportMs: 4 },
+		});
+	});
+
+	it('returns a structured transport failure when process start rejects', async () => {
+		const result = await launchWithProcess({
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 1000,
+			start: async () => {
+				throw new Error('stream unavailable');
+			},
+		});
+		expect(result).toEqual({
+			success: false,
+			reason: 'transport_failure',
+			stdout: '',
+			stderr: 'stream unavailable',
+			timings: { setup: 0, start: expect.any(Number), waitport: 0 },
+		});
+	});
+
+	it('classifies an expired no-setup launch as a readiness timeout', async () => {
+		let now = 0;
+		const result = await launchWithProcess({
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 10,
+			now: () => now,
+			start: async () => ({
+				waitForPort: async () => {
+					now = 20;
+					throw new Error('timed out waiting for port 2718');
+				},
+				getLogs: async () => ({ stdout: '', stderr: '' }),
+			}),
+		});
+		expect(result).toMatchObject({ success: false, reason: 'readiness_timeout' });
+	});
+
+	it('preserves a setup failure and its output through the compatibility launcher', async () => {
+		const result = await launchWithProcess({
+			setup: 'uv sync',
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 1000,
+			start: async (command) => {
+				const nonce = command.match(/'([a-f0-9]{32})'/)?.[1];
+				if (!nonce) throw new Error('missing launch nonce');
+				return {
+					waitForPort: async () => {
+						throw new Error('process exited before port 2718 opened');
+					},
+					getLogs: async () => ({
+						stdout: '',
+						stderr:
+							'permission denied\n' +
+							`__MARIMOHUB_LAUNCH_${nonce}__{"event":"setup_exit","setupMs":19,"waitportMs":0,"exitCode":2}\n`,
+					}),
+				};
+			},
+		});
+		expect(result).toEqual({
+			success: false,
+			reason: 'setup_exit',
+			exitCode: 2,
+			stdout: '',
+			stderr: 'permission denied\n',
+			timings: { setup: 19, start: expect.any(Number), waitport: 0 },
+		});
 	});
 });
 

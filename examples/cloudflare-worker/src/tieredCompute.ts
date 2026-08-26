@@ -27,11 +27,13 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -145,6 +147,12 @@ class TieredSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		return (await this.resolve()).startProcess(cmd, options);
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		const backend = await this.resolve();
+		if (backend.launchProcess) return backend.launchProcess(cmd, options);
+		throw new Error('selected compute backend does not support combined process launch');
 	}
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {

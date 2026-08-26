@@ -56,6 +56,22 @@ describe('restoreWorkspace', () => {
 		expect(stats.bytes).toBe(('import marimo' + '[project]\nname = "nb"' + 'a,b\n1,2\n').length);
 	});
 
+	it('can exclude a destination root owned by a separate restore', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('app.py'), 'print(1)');
+		await bucket.put(nb.workspaceFile('.git/HEAD'), 'poisoned');
+		const { instance, fs } = makeFsSandbox();
+
+		const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+			excludeRelativeRoots: ['.git'],
+		});
+
+		expect(stats.objectCount).toBe(1);
+		expect(fs.has('app.py')).toBe(true);
+		expect(fs.has('.git/HEAD')).toBe(false);
+	});
+
 	it('empty workspace: still creates the working dir marimo runs in', async () => {
 		const { nb } = nbCtx();
 		const { instance, calls } = makeFsSandbox();
