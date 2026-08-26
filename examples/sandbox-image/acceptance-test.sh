@@ -99,7 +99,7 @@ provision_python314_notebook() { # $1 = container id
 	docker exec -i "$1" sh -lc 'cd /workspace && cat > notebook.py' <<'PY'
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["click"]
+# dependencies = ["click", "marimo==0.23.11"]
 # ///
 
 import marimo
@@ -186,7 +186,7 @@ docker exec "$cid" sh -lc '
 	[ "$installed_marimo" = "$marimohub_marimo_version" ] || \
 		uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
 			"marimo==$marimohub_marimo_version"
-	uv export --script notebook.py --format requirements-txt --no-hashes \
+	uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo \
 		-o "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
 	uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
 		-r "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"

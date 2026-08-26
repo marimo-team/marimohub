@@ -412,9 +412,9 @@ then applies dependency sources from the synced workspace in this order:
   marimohub installs these dependencies with `uv export --script` and
   `uv pip install`. If uv cannot resolve them, the session fails.
 
-If both sources declare the same package, the inline metadata takes precedence.
-No configuration is necessary. marimohub selects the dependency strategy when
-the session starts.
+If both sources declare the same package, inline metadata takes precedence.
+`marimo` is the exception: marimohub keeps the image version and prunes dependencies
+used only by marimo. No configuration is necessary.
 
 ## Read-only sessions
 
