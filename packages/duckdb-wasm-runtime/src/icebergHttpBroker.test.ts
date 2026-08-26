@@ -95,6 +95,46 @@ describe('IcebergHttpBroker', () => {
 		expect(error).toMatchObject({ code: 'invalid_capability' });
 	});
 
+	it.each(['authorization', 'x-amz-content-sha256', 'x-amz-date', 'x-amz-security-token'])(
+		'does not allow %s to be forwarded across every route',
+		(header) => {
+			const { broker } = setup();
+
+			expect(() => broker.open(capability({ forwardRequestHeaders: ['range', header] }))).toThrow(
+				IcebergHttpBrokerError,
+			);
+		},
+	);
+
+	it.each([
+		['a non-array forwarded list', { forwardRequestHeaders: 'authorization' }],
+		['a non-string forwarded name', { forwardRequestHeaders: [42] }],
+		['an empty forwarded name', { forwardRequestHeaders: [''] }],
+		['a never-forwarded name', { forwardRequestHeaders: ['cookie'] }],
+		['a non-array discarded list', { discardRequestHeaders: 'authorization' }],
+		['a non-string discarded name', { discardRequestHeaders: [42] }],
+		['an empty discarded name', { discardRequestHeaders: [''] }],
+		['a never-forwarded discarded name', { discardRequestHeaders: ['host'] }],
+	])('rejects a route with %s', (_case, routeOptions) => {
+		const { broker } = setup();
+
+		expect(() =>
+			broker.open(
+				capability({
+					routes: [
+						{
+							kind: 'storage',
+							url: 'https://objects.example.test/warehouse',
+							match: 'prefix',
+							methods: ['GET'],
+							...routeOptions,
+						},
+					] as IcebergHttpBrokerCapability['routes'],
+				}),
+			),
+		).toThrow(IcebergHttpBrokerError);
+	});
+
 	it('keeps credentials in the parent and forwards only approved worker headers', async () => {
 		const { broker, calls } = setup([
 			{
@@ -123,6 +163,107 @@ describe('IcebergHttpBroker', () => {
 			maxResponseBytes: 4096,
 		});
 		expect(response.headers).toEqual({ 'content-range': 'bytes 0-1/20' });
+	});
+
+	it('discards worker placeholders before applying parent-owned credentials', async () => {
+		const { broker, calls } = setup();
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						headers: { Authorization: 'Bearer catalog-secret' },
+						discardRequestHeaders: ['authorization'],
+					},
+				],
+			}),
+		);
+
+		await broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET',
+			headers: { authorization: 'Bearer marimohub-parent-broker' },
+		});
+
+		expect(calls[0].headers).toEqual({ authorization: 'Bearer catalog-secret' });
+	});
+
+	it('rejects overlapping forwarded and discarded route headers', () => {
+		const { broker } = setup();
+		expect(() =>
+			broker.open(
+				capability({
+					routes: [
+						{
+							kind: 'storage',
+							url: 'https://objects.example.test/warehouse',
+							match: 'prefix',
+							methods: ['GET'],
+							forwardRequestHeaders: ['Authorization'],
+							discardRequestHeaders: ['authorization'],
+						},
+					],
+				}),
+			),
+		).toThrow(IcebergHttpBrokerError);
+	});
+
+	it('forwards vended signing headers only on the storage route that grants them', async () => {
+		const { broker, calls } = setup();
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						headers: { Authorization: 'Bearer catalog-secret' },
+					},
+					{
+						kind: 'storage',
+						url: 'https://objects.example.test/warehouse',
+						match: 'prefix',
+						methods: ['GET'],
+						forwardRequestHeaders: [
+							'authorization',
+							'x-amz-content-sha256',
+							'x-amz-date',
+							'x-amz-security-token',
+						],
+					},
+				],
+			}),
+		);
+
+		await broker.fetch(id, {
+			url: 'https://objects.example.test/warehouse/table/data.parquet',
+			method: 'GET',
+			headers: {
+				authorization: 'AWS4-HMAC-SHA256 Credential=vended',
+				'x-amz-content-sha256': 'payload-hash',
+				'x-amz-date': '20260814T120000Z',
+				'x-amz-security-token': 'session-token',
+			},
+		});
+
+		expect(calls[0].headers).toEqual({
+			authorization: 'AWS4-HMAC-SHA256 Credential=vended',
+			'x-amz-content-sha256': 'payload-hash',
+			'x-amz-date': '20260814T120000Z',
+			'x-amz-security-token': 'session-token',
+		});
+		await expectCode(
+			broker.fetch(id, {
+				url: 'https://catalog.example.test/iceberg/v1/config',
+				method: 'GET',
+				headers: { authorization: 'AWS4-HMAC-SHA256 Credential=vended' },
+			}),
+			'header_denied',
+		);
 	});
 
 	it('allows catalog HEAD and computes parent-owned headers after authorization', async () => {

@@ -20,21 +20,27 @@ export interface DuckDBHttpAccess {
 		url: string;
 		authorization?: string;
 	};
-	storage: {
-		kind: 's3';
-		endpoint: string;
-		region: string;
-		urlStyle: 'path' | 'vhost';
-		credentials:
-			| { method: 'anonymous' }
-			| {
-					method: 'static';
-					accessKeyId: string;
-					secretAccessKey: string;
-					sessionToken?: string;
-			  };
-		locations: readonly { bucket: string; prefix: string }[];
-	};
+	storage:
+		| {
+				kind: 's3';
+				endpoint: string;
+				region: string;
+				urlStyle: 'path' | 'vhost';
+				credentials:
+					| { method: 'anonymous' }
+					| {
+							method: 'static';
+							accessKeyId: string;
+							secretAccessKey: string;
+							sessionToken?: string;
+					  };
+				locations: readonly { bucket: string; prefix: string }[];
+		  }
+		| {
+				kind: 'r2-catalog';
+				endpoint: string;
+				bucket: string;
+		  };
 }
 
 export interface DuckDBPreviewProgram {

@@ -1,7 +1,11 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { DuckDBHttpAccess } from '@marimo-hub/core';
-import type { IcebergHttpBrokerTransportRequest } from '@marimo-hub/duckdb-wasm-runtime/node';
+import { createNodeDuckDBWasmRuntimeFactory } from '@marimo-hub/duckdb-wasm-runtime/node';
+import type {
+	IcebergHttpBrokerTransport,
+	IcebergHttpBrokerTransportRequest,
+} from '@marimo-hub/duckdb-wasm-runtime/node';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	createDuckDBHttpSessionFactory,
@@ -32,10 +36,23 @@ const ACCESS = {
 	},
 } as const satisfies DuckDBHttpAccess;
 
+const R2_ACCESS = {
+	kind: 'iceberg-rest',
+	catalog: {
+		url: 'https://catalog.cloudflarestorage.com/account-id/warehouse',
+		authorization: 'Bearer catalog-secret',
+	},
+	storage: {
+		kind: 'r2-catalog',
+		endpoint: 'https://account-id.r2.cloudflarestorage.com',
+		bucket: 'warehouse',
+	},
+} as const satisfies DuckDBHttpAccess;
+
 describe('createDuckDBHttpSessionFactory', () => {
 	it('injects route-specific credentials and denies sibling paths', async () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
-		const transport = vi.fn(async (request: IcebergHttpBrokerTransportRequest) => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
 			calls.push(request);
 			return { status: 200, headers: {}, body: new Uint8Array([1, 2, 3]) };
 		});
@@ -47,11 +64,17 @@ describe('createDuckDBHttpSessionFactory', () => {
 		await session.fetch({
 			url: 'https://catalog.example.test/iceberg/v1/config',
 			method: 'HEAD',
+			headers: { authorization: 'Bearer marimohub-parent-broker' },
 		});
 		await session.fetch({
 			url: 'https://objects.example.test/warehouse/tables/data/file.parquet',
 			method: 'GET',
-			headers: { range: 'bytes=0-127' },
+			headers: {
+				authorization: 'AWS4-HMAC-SHA256 Credential=marimohub-parent-broker',
+				range: 'bytes=0-127',
+				'x-amz-content-sha256': 'dummy-hash',
+				'x-amz-date': '20260814T120000Z',
+			},
 		});
 
 		expect(calls[0].headers).toEqual({ authorization: 'Bearer catalog-secret' });
@@ -134,6 +157,220 @@ describe('createDuckDBHttpSessionFactory', () => {
 		).rejects.toMatchObject({ code: 'target_denied' });
 	});
 
+	it('confines catalog-vended R2 signatures to the catalog bucket', async () => {
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const transport = vi.fn(async (request: IcebergHttpBrokerTransportRequest) => {
+			calls.push(request);
+			return { status: 200, headers: {}, body: new Uint8Array([1]) };
+		});
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(R2_ACCESS, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await session.fetch({
+			url: 'https://catalog.cloudflarestorage.com/account-id/warehouse/v1/config',
+			method: 'GET',
+			headers: { authorization: 'Bearer marimohub-parent-broker' },
+		});
+		await session.fetch({
+			url: 'https://account-id.r2.cloudflarestorage.com/warehouse/data/file.parquet',
+			method: 'GET',
+			headers: {
+				authorization: 'AWS4-HMAC-SHA256 Credential=vended',
+				'x-amz-content-sha256': 'payload-hash',
+				'x-amz-date': '20260814T120000Z',
+				'x-amz-security-token': 'session-token',
+			},
+		});
+		await session.fetch({
+			url: 'https://warehouse.account-id.r2.cloudflarestorage.com/data/file.parquet',
+			method: 'HEAD',
+			headers: {
+				authorization: 'AWS4-HMAC-SHA256 Credential=vended-vhost',
+				'x-amz-date': '20260814T120001Z',
+			},
+		});
+
+		expect(calls[0].headers).toEqual({
+			authorization: 'Bearer catalog-secret',
+			'x-iceberg-access-delegation': 'vended-credentials',
+		});
+		expect(calls[1].headers).toEqual({
+			authorization: 'AWS4-HMAC-SHA256 Credential=vended',
+			'x-amz-content-sha256': 'payload-hash',
+			'x-amz-date': '20260814T120000Z',
+			'x-amz-security-token': 'session-token',
+		});
+		expect(calls[2]).toMatchObject({
+			url: 'https://warehouse.account-id.r2.cloudflarestorage.com/data/file.parquet',
+			method: 'HEAD',
+			headers: {
+				authorization: 'AWS4-HMAC-SHA256 Credential=vended-vhost',
+				'x-amz-date': '20260814T120001Z',
+			},
+		});
+		await expect(
+			session.fetch({
+				url: 'https://account-id.r2.cloudflarestorage.com/private/data.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://private.account-id.r2.cloudflarestorage.com/data.parquet',
+				method: 'GET',
+				headers: { authorization: 'AWS4-HMAC-SHA256 Credential=vended' },
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://catalog.cloudflarestorage.com/account-id/warehouse/v1/config',
+				method: 'GET',
+				headers: { 'x-amz-date': '20260814T120000Z' },
+			}),
+		).rejects.toMatchObject({ code: 'header_denied' });
+		expect(calls).toHaveLength(3);
+	});
+
+	it('injects delegation into an actual DuckDB-Wasm catalog request', async () => {
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+			calls.push(request);
+			const url = new URL(request.url);
+			if (url.pathname.endsWith('/v1/config')) {
+				return {
+					status: 200,
+					headers: { 'content-type': 'application/json' },
+					body: new TextEncoder().encode(JSON.stringify({ defaults: {}, overrides: {} })),
+				};
+			}
+			return {
+				status: 404,
+				headers: {} as Record<string, string>,
+				body: new Uint8Array(),
+			};
+		});
+		const runtime = await createNodeDuckDBWasmRuntimeFactory(
+			'worker',
+			createDuckDBHttpSessionFactory({ transport }),
+		)();
+
+		try {
+			await runtime.initialize({ memoryLimitMb: 128 });
+			await expect(
+				runtime.execute({
+					setup: [
+						{ text: 'LOAD iceberg' },
+						{ text: 'LOAD httpfs' },
+						{
+							text:
+								`ATTACH 'account-id_warehouse' AS "r2_e2e" (` +
+								'TYPE iceberg, ENDPOINT ?, TOKEN ?, ACCESS_DELEGATION_MODE ?, READ_ONLY)',
+							params: [R2_ACCESS.catalog.url, 'marimohub-parent-broker', 'vended_credentials'],
+						},
+					],
+					query: { text: 'SELECT 1 AS value' },
+					cleanup: [{ text: 'DETACH "r2_e2e"' }],
+					requires: ['iceberg-http'],
+					httpAccess: R2_ACCESS,
+				}),
+			).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+		} finally {
+			await runtime.close();
+		}
+
+		const configRequest = calls.find((request) =>
+			new URL(request.url).pathname.endsWith('/v1/config'),
+		);
+		expect(configRequest?.headers).toMatchObject({
+			authorization: 'Bearer catalog-secret',
+			'x-iceberg-access-delegation': 'vended-credentials',
+		});
+	}, 30_000);
+
+	it('keeps non-DNS R2 bucket names on the path-style route', async () => {
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const transport = vi.fn(async (request: IcebergHttpBrokerTransportRequest) => {
+			calls.push(request);
+			return { status: 200, headers: {}, body: new Uint8Array([1]) };
+		});
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(
+			{
+				...R2_ACCESS,
+				storage: { ...R2_ACCESS.storage, bucket: 'warehouse_name' },
+			},
+			{ expiresAtMs: NOW + 60_000 },
+		);
+
+		await session.fetch({
+			url: 'https://account-id.r2.cloudflarestorage.com/warehouse_name/data.parquet',
+			method: 'GET',
+			headers: { authorization: 'AWS4-HMAC-SHA256 Credential=vended' },
+		});
+
+		expect(calls).toHaveLength(1);
+		await expect(
+			session.fetch({
+				url: 'https://warehouse_name.account-id.r2.cloudflarestorage.com/data.parquet',
+				method: 'GET',
+				headers: { authorization: 'AWS4-HMAC-SHA256 Credential=vended' },
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+	});
+
+	it('routes iceberg bucket objects through storage when the catalog uses a separate host', async () => {
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const transport = vi.fn(async (request: IcebergHttpBrokerTransportRequest) => {
+			calls.push(request);
+			return { status: 200, headers: {}, body: new Uint8Array([1]) };
+		});
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(
+			{
+				...R2_ACCESS,
+				catalog: {
+					...R2_ACCESS.catalog,
+					url: 'https://catalog.cloudflarestorage.com/account-id/iceberg',
+				},
+				storage: { ...R2_ACCESS.storage, bucket: 'iceberg' },
+			},
+			{ expiresAtMs: NOW + 60_000 },
+		);
+
+		await session.fetch({
+			url: 'https://account-id.r2.cloudflarestorage.com/iceberg/iceberg/data.parquet',
+			method: 'GET',
+			headers: {
+				authorization: 'AWS4-HMAC-SHA256 Credential=vended',
+				'x-amz-date': '20260814T120000Z',
+			},
+		});
+
+		expect(calls[0].headers).toEqual({
+			authorization: 'AWS4-HMAC-SHA256 Credential=vended',
+			'x-amz-date': '20260814T120000Z',
+		});
+	});
+
+	it('rejects overlapping account-scoped R2 catalog and storage routes', () => {
+		const create = createDuckDBHttpSessionFactory({
+			transport: async () => ({ status: 200, headers: {}, body: new Uint8Array() }),
+		});
+
+		expect(() =>
+			create(
+				{
+					...R2_ACCESS,
+					catalog: {
+						...R2_ACCESS.catalog,
+						url: 'https://account-id.r2.cloudflarestorage.com/iceberg/iceberg',
+					},
+					storage: { ...R2_ACCESS.storage, bucket: 'iceberg' },
+				},
+				{ expiresAtMs: NOW + 60_000 },
+			),
+		).toThrow(/catalog and path-style storage routes overlap/);
+	});
+
 	it('rejects endpoints that DuckDB cannot route through an S3 secret', () => {
 		const create = createDuckDBHttpSessionFactory({
 			transport: async () => ({ status: 200, headers: {}, body: new Uint8Array() }),
@@ -194,6 +431,36 @@ describe('createDuckDBHttpSessionFactory', () => {
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
 		).toThrow(/Catalog endpoint is invalid/);
+		expect(() =>
+			create(
+				{
+					...R2_ACCESS,
+					storage: { ...R2_ACCESS.storage, endpoint: `${R2_ACCESS.storage.endpoint}/base` },
+				},
+				{ expiresAtMs: Date.now() + 60_000 },
+			),
+		).toThrow(/S3 endpoint is invalid/);
+		expect(() =>
+			create(
+				{
+					...R2_ACCESS,
+					storage: { ...R2_ACCESS.storage, bucket: '../private' },
+				},
+				{ expiresAtMs: Date.now() + 60_000 },
+			),
+		).toThrow(/S3 read location is invalid/);
+		expect(() =>
+			create(
+				{
+					...ACCESS,
+					storage: {
+						...ACCESS.storage,
+						locations: [{ bucket: 'warehouse', prefix: '' }],
+					},
+				},
+				{ expiresAtMs: Date.now() + 60_000 },
+			),
+		).toThrow(/S3 read location is invalid/);
 	});
 });
 

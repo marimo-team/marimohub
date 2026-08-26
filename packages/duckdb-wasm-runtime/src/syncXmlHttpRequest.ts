@@ -9,12 +9,16 @@ import type { HttpBridgeRequestMessage } from './httpBridge.ts';
 
 const FORWARDED_HEADERS = new Set([
 	'accept',
+	'authorization',
 	'content-type',
 	'if-match',
 	'if-modified-since',
 	'if-none-match',
 	'if-unmodified-since',
 	'range',
+	'x-amz-content-sha256',
+	'x-amz-date',
+	'x-amz-security-token',
 ]);
 
 export interface SyncXmlHttpRequestOptions {

@@ -173,9 +173,11 @@ The configured runtime advertises `iceberg-http` and uses a parent-owned HTTP br
 The worker submits synchronous requests through fixed shared-memory buffers.
 The parent authorizes each target, injects credentials, checks DNS results, and pins the socket.
 
-The Iceberg integration supports a narrow configuration with explicit S3 read prefixes.
-Unsupported authentication, storage, TLS, delegation, and runtime options use the sandbox executor.
-See [the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the full boundary and test procedure.
+The Iceberg integration supports explicit S3 read prefixes and Cloudflare R2 Data Catalogs. R2 uses
+a bearer token and catalog-vended credentials. Unsupported authentication, storage, TLS, delegation,
+and runtime options use the sandbox executor. See
+[the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the security boundary and
+test procedure.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It

@@ -24,13 +24,15 @@ function setup() {
 }
 
 describe('synchronous DuckDB XMLHttpRequest', () => {
-	it('forwards only safe read headers and returns binary data', () => {
+	it('forwards read and vended S3 signing headers and returns binary data', () => {
 		const { XMLHttpRequest, requests } = setup();
 		const request = new XMLHttpRequest();
 		request.open('GET', 'https://objects.example.test/warehouse/data.parquet', false);
 		request.setRequestHeader('Range', 'bytes=0-1');
 		request.setRequestHeader('Authorization', 'Bearer worker-secret');
+		request.setRequestHeader('X-Amz-Content-Sha256', 'payload-hash');
 		request.setRequestHeader('X-Amz-Date', '20260814T120000Z');
+		request.setRequestHeader('X-Amz-Security-Token', 'session-token');
 		request.setRequestHeader('X-Iceberg-Access-Delegation', 'vended-credentials');
 		request.responseType = 'arraybuffer';
 		request.send(null);
@@ -38,7 +40,13 @@ describe('synchronous DuckDB XMLHttpRequest', () => {
 		expect(requests[0].request).toEqual({
 			url: 'https://objects.example.test/warehouse/data.parquet',
 			method: 'GET',
-			headers: { range: 'bytes=0-1' },
+			headers: {
+				authorization: 'Bearer worker-secret',
+				range: 'bytes=0-1',
+				'x-amz-content-sha256': 'payload-hash',
+				'x-amz-date': '20260814T120000Z',
+				'x-amz-security-token': 'session-token',
+			},
 		});
 		expect(requests[0].executionNonce).toBe('execution-nonce-1');
 		expect(request.status).toBe(206);

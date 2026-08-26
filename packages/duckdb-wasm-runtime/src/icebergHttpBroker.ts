@@ -14,6 +14,8 @@ export interface IcebergHttpBrokerRoute {
 	prepareHeaders?: (
 		request: Readonly<IcebergHttpBrokerRequest>,
 	) => Promise<Readonly<Record<string, string>>>;
+	forwardRequestHeaders?: readonly string[];
+	discardRequestHeaders?: readonly string[];
 }
 
 export interface IcebergHttpBrokerCapability {
@@ -81,6 +83,8 @@ interface NormalizedRoute {
 	methods: ReadonlySet<IcebergHttpBrokerMethod>;
 	headers: Readonly<Record<string, string>>;
 	prepareHeaders?: IcebergHttpBrokerRoute['prepareHeaders'];
+	forwardRequestHeaders: ReadonlySet<string>;
+	discardRequestHeaders: ReadonlySet<string>;
 }
 
 interface Session {
@@ -115,8 +119,7 @@ const DEFAULT_FORWARDED_REQUEST_HEADERS = [
 	'range',
 ] as const;
 
-const FORBIDDEN_WORKER_HEADERS = new Set([
-	'authorization',
+const NEVER_FORWARDED_WORKER_HEADERS = new Set([
 	'cookie',
 	'host',
 	'proxy-authorization',
@@ -124,6 +127,14 @@ const FORBIDDEN_WORKER_HEADERS = new Set([
 	'x-forwarded-for',
 	'x-forwarded-host',
 	'x-iceberg-access-delegation',
+]);
+
+const GLOBALLY_FORBIDDEN_WORKER_HEADERS = new Set([
+	...NEVER_FORWARDED_WORKER_HEADERS,
+	'authorization',
+	'x-amz-content-sha256',
+	'x-amz-date',
+	'x-amz-security-token',
 ]);
 
 const RESPONSE_HEADERS = new Set([
@@ -341,7 +352,7 @@ function normalizeCapability(
 		throw invalidCapability();
 	}
 	const forwarded = new Set(rawForwardedHeaders.map(normalizeHeaderName));
-	if ([...forwarded].some((header) => !header || FORBIDDEN_WORKER_HEADERS.has(header))) {
+	if ([...forwarded].some((header) => !header || GLOBALLY_FORBIDDEN_WORKER_HEADERS.has(header))) {
 		throw invalidCapability();
 	}
 	return {
@@ -382,6 +393,37 @@ function normalizeRoute(route: IcebergHttpBrokerRoute): NormalizedRoute {
 	if (route.prepareHeaders !== undefined && typeof route.prepareHeaders !== 'function') {
 		throw invalidCapability();
 	}
+	if (route.forwardRequestHeaders !== undefined && !Array.isArray(route.forwardRequestHeaders)) {
+		throw invalidCapability();
+	}
+	const rawForwardedHeaders: readonly unknown[] = route.forwardRequestHeaders ?? [];
+	if (!rawForwardedHeaders.every((header): header is string => typeof header === 'string')) {
+		throw invalidCapability();
+	}
+	const forwardRequestHeaders = new Set(rawForwardedHeaders.map(normalizeHeaderName));
+	if (
+		[...forwardRequestHeaders].some(
+			(header) => !header || NEVER_FORWARDED_WORKER_HEADERS.has(header),
+		)
+	) {
+		throw invalidCapability();
+	}
+	if (route.discardRequestHeaders !== undefined && !Array.isArray(route.discardRequestHeaders)) {
+		throw invalidCapability();
+	}
+	const rawDiscardedHeaders: readonly unknown[] = route.discardRequestHeaders ?? [];
+	if (!rawDiscardedHeaders.every((header): header is string => typeof header === 'string')) {
+		throw invalidCapability();
+	}
+	const discardRequestHeaders = new Set(rawDiscardedHeaders.map(normalizeHeaderName));
+	if (
+		[...discardRequestHeaders].some(
+			(header) => !header || NEVER_FORWARDED_WORKER_HEADERS.has(header),
+		) ||
+		[...discardRequestHeaders].some((header) => forwardRequestHeaders.has(header))
+	) {
+		throw invalidCapability();
+	}
 	if (Object.keys(headers).some((header) => header === 'host' || header === 'content-length')) {
 		throw invalidCapability();
 	}
@@ -392,6 +434,8 @@ function normalizeRoute(route: IcebergHttpBrokerRoute): NormalizedRoute {
 		methods,
 		headers,
 		prepareHeaders: route.prepareHeaders,
+		forwardRequestHeaders,
+		discardRequestHeaders,
 	};
 }
 
@@ -438,14 +482,20 @@ async function authorize(
 			'Iceberg HTTP broker method is not allowed for this target.',
 		);
 	}
-	const workerHeaders = normalizeHeaders(request.headers ?? {}, 'invalid_request');
-	for (const header of Object.keys(workerHeaders)) {
-		if (FORBIDDEN_WORKER_HEADERS.has(header) || !session.forwardRequestHeaders.has(header)) {
+	const submittedHeaders = normalizeHeaders(request.headers ?? {}, 'invalid_request');
+	const workerHeaders: Record<string, string> = {};
+	for (const [header, value] of Object.entries(submittedHeaders)) {
+		if (route.discardRequestHeaders.has(header)) continue;
+		if (
+			NEVER_FORWARDED_WORKER_HEADERS.has(header) ||
+			(!session.forwardRequestHeaders.has(header) && !route.forwardRequestHeaders.has(header))
+		) {
 			throw new IcebergHttpBrokerError(
 				'header_denied',
 				`Iceberg HTTP broker request header "${header}" is not allowed.`,
 			);
 		}
+		workerHeaders[header] = value;
 	}
 	const preparedHeaders = normalizeHeaders(
 		(await route.prepareHeaders?.(request)) ?? {},
