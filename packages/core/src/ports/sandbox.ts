@@ -52,7 +52,7 @@ export interface StartProcessOptions {
 	timeout?: number;
 }
 
-export interface LaunchProcessOptions extends StartProcessOptions {
+export interface LaunchProcessOptions extends Omit<StartProcessOptions, 'timeout'> {
 	setup?: string;
 	port: number;
 	/** Readiness mode; the shared launch supervisor currently uses TCP. */

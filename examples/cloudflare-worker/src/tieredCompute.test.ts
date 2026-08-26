@@ -5,16 +5,24 @@ import { TieredComputeProvider } from './tieredCompute';
 
 const SANDBOX_ID = 'sb-test' as SandboxId;
 
-function fakeInstance(supportsBucketMount: boolean): SandboxInstance {
+function fakeInstance(
+	supportsBucketMount: boolean,
+	launchProcess?: SandboxInstance['launchProcess'],
+): SandboxInstance {
 	return {
 		supportsBucketMount,
 		exec: async () => ({ success: true as const, stdout: '', stderr: '' }),
+		...(launchProcess ? { launchProcess } : {}),
 	} as unknown as SandboxInstance;
 }
 
-function fakeProvider(opts: { flag: boolean; reachable?: boolean }): SandboxProvider {
+function fakeProvider(opts: {
+	flag: boolean;
+	reachable?: boolean;
+	launchProcess?: SandboxInstance['launchProcess'];
+}): SandboxProvider {
 	return {
-		create: () => fakeInstance(opts.flag),
+		create: () => fakeInstance(opts.flag, opts.launchProcess),
 		proxy: async () => null,
 		listActive: async (): Promise<ActiveSandbox[]> => {
 			if (opts.reachable === false) throw new Error('unreachable');
@@ -56,5 +64,43 @@ describe('TieredSandboxInstance supportsBucketMount', () => {
 		await instance.exec('true');
 		expect(instance.supportsBucketMount).toBe(true);
 		vi.restoreAllMocks();
+	});
+});
+
+describe('TieredSandboxInstance launchProcess', () => {
+	it('leaves the capability absent when the pinned backend does not implement it', async () => {
+		const tiered = new TieredComputeProvider(
+			fakeProvider({ flag: false }),
+			fakeProvider({ flag: true }),
+		);
+		const instance = tiered.create(SANDBOX_ID);
+
+		await instance.exec('true');
+
+		expect(instance.launchProcess).toBeUndefined();
+	});
+
+	it('forwards the capability of the pinned backend', async () => {
+		const launchProcess = vi.fn<NonNullable<SandboxInstance['launchProcess']>>(async () => ({
+			success: false,
+			reason: 'readiness_timeout',
+			stdout: '',
+			stderr: '',
+			timings: { setup: 0, start: 1, waitport: 2 },
+		}));
+		const tiered = new TieredComputeProvider(
+			fakeProvider({ flag: false, launchProcess }),
+			fakeProvider({ flag: true }),
+		);
+		const instance = tiered.create(SANDBOX_ID);
+		await instance.exec('true');
+		const launch = instance.launchProcess;
+
+		expect(launch).toBeTypeOf('function');
+		await launch?.('kernel', { port: 2718, startupTimeout: 1_000 });
+		expect(launchProcess).toHaveBeenCalledWith('kernel', {
+			port: 2718,
+			startupTimeout: 1_000,
+		});
 	});
 });

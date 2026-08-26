@@ -12,6 +12,7 @@ import {
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
+	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
@@ -328,13 +329,14 @@ class ContainerSandboxInstance implements SandboxInstance {
 		// Run detached inside the container; redirect to a log file we can tail.
 		// `sh -lc` has no cwd flag, so cd into the working dir first when requested.
 		const prefix = options?.cwd ? `cd ${shellQuote(options.cwd)} && ` : '';
-		const res = await this.dexec(`${prefix}${cmd} > ${logPath} 2>&1 &`, ['-d']);
+		const processCommand = withEnvPrefix(cmd, removeUndefined(options?.env ?? {}));
+		const res = await this.dexec(`${prefix}${processCommand} > ${logPath} 2>&1 &`, ['-d']);
 		if (res.exitCode !== 0) {
 			throw new Error(`startProcess failed: ${res.stderr || res.stdout}`);
 		}
 		const probeInside = (port: number) => this.probePort(port);
 		const readLogs = () => this.dexec(`cat ${logPath} 2>/dev/null || true`);
-		const id = `${this.config.engine}-proc-${procSeq}`;
+		const id = options?.processId ?? `${this.config.engine}-proc-${procSeq}`;
 		const containerName = this.name;
 		const runner = this.runner;
 

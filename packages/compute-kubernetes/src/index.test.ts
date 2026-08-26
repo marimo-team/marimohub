@@ -555,7 +555,11 @@ describe('KubernetesCompute', () => {
 				},
 			});
 			const inst = makeCompute(world).create(SANDBOX_ID);
-			const proc = await inst.startProcess('uv run marimo edit --port 2718', { cwd: '/workspace' });
+			const proc = await inst.startProcess('uv run marimo edit --port 2718', {
+				cwd: '/workspace',
+				env: { SESSION_TOKEN: 'a b', OMITTED: undefined },
+				processId: 'kernel-process',
+			});
 			await proc.waitForPort(2718, { timeout: 5000 });
 			expect(chunks).toBe(2);
 
@@ -566,12 +570,15 @@ describe('KubernetesCompute', () => {
 
 			const launch = world.execCalls.find((c) => shCmd(c).includes('setsid'))!;
 			expect(shCmd(launch)).toContain("cd '/workspace'");
+			expect(shCmd(launch)).toContain('export SESSION_TOKEN=');
+			expect(shCmd(launch)).toContain('a b');
+			expect(shCmd(launch)).not.toContain('OMITTED');
 			expect(shCmd(launch)).toContain('uv run marimo edit --port 2718');
 			// Outer shell non-login (its stdout is the parsed PID); the detached
 			// inner shell is a login shell so profile env reaches the kernel.
 			expect(launch.command[1]).toBe('-c');
 			expect(shCmd(launch)).toContain('setsid sh -lc');
-			expect(proc.id).toContain('4242');
+			expect(proc.id).toBe('kernel-process');
 		});
 
 		it('honors a sub-second timeout in the chunk it hands to the pod', async () => {

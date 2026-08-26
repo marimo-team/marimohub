@@ -149,10 +149,13 @@ class TieredSandboxInstance implements SandboxInstance {
 		return (await this.resolve()).startProcess(cmd, options);
 	}
 
-	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
-		const backend = await this.resolve();
-		if (backend.launchProcess) return backend.launchProcess(cmd, options);
-		throw new Error('selected compute backend does not support combined process launch');
+	get launchProcess():
+		| ((cmd: string, options: LaunchProcessOptions) => Promise<SandboxLaunchResult>)
+		| undefined {
+		// A prototype method would make capability checks truthy for legacy backends.
+		const launchProcess = this.resolved?.launchProcess;
+		if (!launchProcess) return undefined;
+		return launchProcess.bind(this.resolved);
 	}
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {

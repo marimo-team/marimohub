@@ -502,6 +502,9 @@ describe('launch protocol', () => {
 		expect(built.command).toContain('python3 -c');
 		expect(built.command).toContain("'abc123'");
 		expect(built.command).toContain("'2718'");
+		expect(built.command.indexOf("'printf '\\''%s'\\'' kernel'")).toBeLessThan(
+			built.command.indexOf("'printf '\\''%s'\\'' setup'"),
+		);
 	});
 
 	it('removes protocol records and returns the terminal outcome', () => {
@@ -572,6 +575,23 @@ describe('launch protocol', () => {
 			}),
 		});
 		expect(result).toMatchObject({ success: false, reason: 'readiness_timeout' });
+	});
+
+	it('passes an explicit unbounded readiness timeout when startupTimeout is zero', async () => {
+		let timeout: number | undefined;
+		await launchWithProcess({
+			command: 'marimo edit',
+			port: 2718,
+			startupTimeout: 0,
+			start: async () => ({
+				waitForPort: async (_port, options) => {
+					timeout = options?.timeout;
+					throw new Error('test stop');
+				},
+				getLogs: async () => ({ stdout: '', stderr: '' }),
+			}),
+		});
+		expect(timeout).toBe(Number.POSITIVE_INFINITY);
 	});
 
 	it('preserves a setup failure and its output through the compatibility launcher', async () => {

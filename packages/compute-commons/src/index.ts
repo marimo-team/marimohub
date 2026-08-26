@@ -243,7 +243,7 @@ export interface LaunchCommand {
 }
 
 const LAUNCH_SUPERVISOR = `import json, os, signal, socket, subprocess, sys, time
-nonce, timeout_arg, setup, command, port_arg = sys.argv[1:]
+nonce, timeout_arg, command, setup, port_arg = sys.argv[1:]
 timeout = float(timeout_arg) / 1000
 port = int(port_arg)
 started = time.monotonic()
@@ -328,8 +328,8 @@ export function buildLaunchCommand(options: {
 	const args = [
 		nonce,
 		String(options.startupTimeout),
-		options.setup ?? '',
 		options.command,
+		options.setup ?? '',
 		String(options.port),
 	].map(shellQuote);
 	return {
@@ -455,7 +455,7 @@ export async function launchWithProcess<P extends LaunchableProcess>(options: {
 	const waitStarted = now();
 	const remaining =
 		options.startupTimeout === 0
-			? 2_147_483_647
+			? Number.POSITIVE_INFINITY
 			: Math.max(0, options.startupTimeout - (now() - launchStarted));
 	try {
 		await process.waitForPort(options.port, {

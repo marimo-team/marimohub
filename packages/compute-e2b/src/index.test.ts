@@ -493,6 +493,74 @@ describe('E2bCompute', () => {
 		await expect(proc.waitForPort(2718, { timeout: 2000 })).resolves.toBeUndefined();
 	});
 
+	it('launchProcess returns a supervisor failure without waiting for the startup deadline', async () => {
+		const state: { fake?: FakeE2b } = {};
+		const fake = new FakeE2b({
+			runResult: (cmd) => {
+				if (!cmd.startsWith('cat /tmp/marimohub-kernel.log')) return;
+				const launch = state.fake?.backgroundCalls[0]?.cmd ?? '';
+				const nonce = launch.match(/ '([0-9a-f]{32})' '\d+' /)?.[1];
+				if (!nonce) throw new Error('launch nonce not found');
+				return {
+					stdout:
+						`setup output\n__MARIMOHUB_LAUNCH_${nonce}__` +
+						'{"event":"setup_exit","setupMs":12,"waitportMs":0,"exitCode":7}\n',
+					stderr: '',
+					exitCode: 0,
+				};
+			},
+		});
+		state.fake = fake;
+
+		const result = await new E2bCompute(baseConfig, fake).create(SANDBOX_ID).launchProcess!(
+			'run kernel',
+			{ setup: 'run setup', port: 2718, startupTimeout: 60_000 },
+		);
+
+		expect(result).toEqual({
+			success: false,
+			reason: 'setup_exit',
+			exitCode: 7,
+			stdout: 'setup output\n',
+			stderr: '',
+			timings: { setup: 12, start: expect.any(Number), waitport: 0 },
+		});
+		expect(fake.runCalls.some((cmd) => cmd.includes('connect_ex'))).toBe(false);
+	});
+
+	it('merges defined launch environment variables into the background command', async () => {
+		const state: { fake?: FakeE2b } = {};
+		const fake = new FakeE2b({
+			runResult: (cmd) => {
+				if (!cmd.startsWith('cat /tmp/marimohub-kernel.log')) return;
+				const launch = state.fake?.backgroundCalls[0]?.cmd ?? '';
+				const nonce = launch.match(/ '([0-9a-f]{32})' '\d+' /)?.[1];
+				if (!nonce) throw new Error('launch nonce not found');
+				return {
+					stdout: `__MARIMOHUB_LAUNCH_${nonce}__{"event":"ready","setupMs":2,"waitportMs":3}\n`,
+					stderr: '',
+					exitCode: 0,
+				};
+			},
+		});
+		state.fake = fake;
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		await sb.setEnvVars({ TOKEN: 'sandbox', MODE: 'prod' });
+
+		const result = await sb.launchProcess!('run kernel', {
+			port: 2718,
+			startupTimeout: 60_000,
+			env: { TOKEN: 'launch', REQUEST_ID: 'request', OMITTED: undefined },
+		});
+
+		expect(result.success).toBe(true);
+		expect(fake.backgroundCalls[0]?.options?.envs).toEqual({
+			TOKEN: 'launch',
+			MODE: 'prod',
+			REQUEST_ID: 'request',
+		});
+	});
+
 	describe('listFiles()', () => {
 		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 

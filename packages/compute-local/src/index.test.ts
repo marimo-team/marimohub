@@ -425,7 +425,7 @@ describe('LocalCompute process lifecycle', () => {
 	it('runs checked setup and readiness through the combined launcher', async () => {
 		const sb = newSandbox();
 		const result = await sb.launchProcess!(`test -f setup.flag && ${SERVER_CMD}`, {
-			setup: 'printf setup-ok > setup.flag',
+			setup: `printf '%s' '--port 9999' > setup-port.txt && printf setup-ok > setup.flag`,
 			cwd: '/workspace',
 			port: 2718,
 			startupTimeout: 15_000,
@@ -441,6 +441,10 @@ describe('LocalCompute process lifecycle', () => {
 		});
 		const { url } = await sb.exposePort(2718, { hostname: 'ignored' });
 		expect(await (await fetch(url)).text()).toBe('ok');
+		expect(await sb.readFile('/workspace/setup-port.txt')).toMatchObject({
+			success: true,
+			content: '--port 9999',
+		});
 		const pid = Number(result.process.id);
 		await result.process.kill();
 		await expect.poll(() => processIsAlive(pid), { timeout: 5000, interval: 20 }).toBe(false);
@@ -677,6 +681,22 @@ describe('LocalCompute registry & teardown', () => {
 		// Port no longer served.
 		await expect(fetch(url)).rejects.toThrow();
 	});
+
+	it('destroy terminates a kernel started by the combined supervisor', async () => {
+		const id = `sb-launch-destroy-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		const sb = compute.create(id);
+		const result = await sb.launchProcess!(SERVER_CMD, {
+			cwd: '/workspace',
+			port: 2718,
+			startupTimeout: 15_000,
+		});
+		if (!result.success) throw new Error(JSON.stringify(result));
+		const { url } = await sb.exposePort(2718, { hostname: '' });
+
+		await sb.destroy();
+
+		await expect(fetch(url)).rejects.toThrow();
+	}, 15_000);
 
 	it('proxy is a no-op', async () => {
 		expect(await compute.proxy()).toBeNull();

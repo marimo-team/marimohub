@@ -124,6 +124,8 @@ describe('withServiceAddressCache', () => {
 		}));
 		await cache.get('cw-1', afterDelete);
 		expect(afterDelete).toHaveBeenCalledOnce();
+		await cache.get('cw-1', afterDelete);
+		expect(afterDelete).toHaveBeenCalledOnce();
 	});
 
 	it('falls back when the poll response has no address', async () => {

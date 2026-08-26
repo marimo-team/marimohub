@@ -82,6 +82,39 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 	}
 }
 
+function childIsRunning(child: ChildProcess): boolean {
+	return child.exitCode === null && child.signalCode === null;
+}
+
+async function waitForChildren(
+	children: readonly ChildProcess[],
+	timeoutMs: number,
+): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			Promise.all(
+				children.map(
+					(child) =>
+						new Promise<void>((resolve) => {
+							if (!childIsRunning(child)) {
+								resolve();
+								return;
+							}
+							child.once('exit', () => resolve());
+							child.once('error', () => resolve());
+						}),
+				),
+			),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 const WORKSPACE = '/workspace';
 
 export interface PortRange {
@@ -546,14 +579,20 @@ class LocalSandboxInstance implements SandboxInstance {
 
 	async destroy(): Promise<void> {
 		if (this.destroyPromise) return this.destroyPromise;
-		for (const child of this.children) killProcessGroup(child, 'SIGKILL');
-		this.children.clear();
-		this.portMap.clear();
-		this.destroyPromise = Promise.allSettled(this.pendingWrites)
-			.then(() => rm(this.root, { recursive: true, force: true }))
-			.then(() => {
-				this.onDestroyed?.();
-			});
+		const children = [...this.children];
+		this.destroyPromise = (async () => {
+			for (const child of children) killProcessGroup(child, 'SIGTERM');
+			await waitForChildren(children, 2_000);
+			for (const child of children) {
+				if (childIsRunning(child)) killProcessGroup(child, 'SIGKILL');
+			}
+			await waitForChildren(children, 500);
+			this.children.clear();
+			this.portMap.clear();
+			await Promise.allSettled(this.pendingWrites);
+			await rm(this.root, { recursive: true, force: true });
+			this.onDestroyed?.();
+		})();
 		return this.destroyPromise;
 	}
 }

@@ -48,6 +48,7 @@ import {
 	parseFindFilesOutput,
 	pollUntilReady,
 	portWaitCommand,
+	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
@@ -495,12 +496,13 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		await this.ensure();
 		const logFile = `/tmp/mh-proc-${++PROC_SEQ}.log`;
 		const cwd = options?.cwd ? `cd ${shellQuote(options.cwd)}; ` : '';
+		const processCommand = withEnvPrefix(cmd, removeUndefined(options?.env ?? {}));
 		// Launch marimo detached so it outlives this exec session (the kernel must keep
 		// serving after startProcess returns). setsid + redirect + background; echo PID.
 		// The OUTER shell is non-login (its stdout is the PID we parse); the inner
 		// detached shell is a login shell so profile-provided env reaches the kernel
 		// (its output goes to the log file, where profile noise is harmless).
-		const launch = `${cwd}setsid sh -lc ${shellQuote(this.withEnv(cmd))} >${logFile} 2>&1 </dev/null & echo $!`;
+		const launch = `${cwd}setsid sh -lc ${shellQuote(this.withEnv(processCommand))} >${logFile} 2>&1 </dev/null & echo $!`;
 		const started = await this.execInPod(launch);
 		const pid = started.stdout.trim();
 
@@ -509,7 +511,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		const readLog = async () => (await execIn(`cat ${logFile} 2>/dev/null || true`)).stdout;
 		const name = this.name;
 		return {
-			id: `k8s-proc-${pid || PROC_SEQ}`,
+			id: options?.processId ?? `k8s-proc-${pid || PROC_SEQ}`,
 			command: cmd,
 			async kill(signal?: string): Promise<void> {
 				if (!pid) return;

@@ -142,7 +142,9 @@ export function withServiceAddressCache(transport: SandboxTransport): {
 		async get(sandboxId, fallback) {
 			const result = results.get(sandboxId);
 			if (result?.serviceAddress) return result;
-			return fallback ? fallback() : cached.get({ sandboxId });
+			const fetched = await (fallback ? fallback() : cached.get({ sandboxId }));
+			results.set(fetched.sandboxId, fetched);
+			return fetched;
 		},
 	};
 }

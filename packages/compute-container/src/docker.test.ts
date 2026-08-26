@@ -388,14 +388,22 @@ describe('DockerCompute', () => {
 		});
 		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
 
-		const proc = await sb.startProcess('uv run marimo edit app.py', { cwd: '/workspace' });
+		const proc = await sb.startProcess('uv run marimo edit app.py', {
+			cwd: '/workspace',
+			env: { SESSION_TOKEN: 'a b', OMITTED: undefined },
+			processId: 'kernel-process',
+		});
 		const logs = await proc.getLogs();
 		await proc.kill();
 
+		expect(proc.id).toBe('kernel-process');
 		expect(proc.command).toBe('uv run marimo edit app.py');
 		expect(logs).toEqual({ stdout: 'kernel log', stderr: '' });
 		const launch = calls.find((c) => c.args[0] === 'exec' && c.args.includes('-d'))!;
-		expect(launch.args.at(-1)).toContain("cd '/workspace' && uv run marimo edit app.py >");
+		expect(launch.args.at(-1)).toContain(
+			"cd '/workspace' && export SESSION_TOKEN='a b'; uv run marimo edit app.py >",
+		);
+		expect(launch.args.at(-1)).not.toContain('OMITTED');
 		expect(calls.some((c) => c.args[0] === 'exec' && c.args.includes('pkill'))).toBe(true);
 	});
 
