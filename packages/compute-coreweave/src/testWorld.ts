@@ -87,6 +87,8 @@ function recordWrite(fake: FakeSandbox) {
 export function makeWorld(opts?: {
 	runImpl?: (cmd: readonly string[]) => Promise<ProcessResult>;
 	startImpl?: (cmd: readonly string[]) => Promise<CommandProcess>;
+	/** Runs inside the boot `wait()`; use it to simulate a slow boot. */
+	waitImpl?: () => Promise<void>;
 	/** State for started processes; omit to leave them running. */
 	proc?: FakeProcessState;
 }) {
@@ -96,6 +98,7 @@ export function makeWorld(opts?: {
 	const registry = new Map<string, { fake: FakeSandbox; tags: string[] }>();
 	let seq = 0;
 	const runImpl = opts?.runImpl ?? (async () => procResult());
+	const waitImpl = opts?.waitImpl ?? (async () => {});
 
 	function build(sandboxId: string) {
 		const fake: FakeSandbox = {
@@ -111,6 +114,7 @@ export function makeWorld(opts?: {
 			sandboxId,
 			wait: async (options?: { intervalMs?: number }) => {
 				fake.waitCalls.push(options ?? {});
+				await waitImpl();
 			},
 			commands: {
 				run: async (command: readonly string[]) => {

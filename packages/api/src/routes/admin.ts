@@ -103,6 +103,16 @@ const UV_BENCHMARK_SYNC_COMMAND = [
 	'exit "$status"',
 ].join('\n');
 
+/**
+ * A container start on a warm node is a few seconds. A `boot` timing above this
+ * is almost always the node pulling the sandbox image because the tag was not
+ * in its cache; the fix is operational (pre-pull the tags on the sandbox node
+ * pool), so the log line says so instead of leaving it to be rediscovered.
+ */
+const SLOW_BOOT_MS = 10_000;
+const SLOW_BOOT_HINT =
+	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
+
 const SandboxStartupPhaseSchema = z
 	.object({
 		status: z.enum(['ok', 'failed', 'skipped']),
@@ -670,6 +680,7 @@ app.openapi(testSandboxStartup, async (c) => {
 					},
 		startup_timings_ms: report.startup_timings_ms,
 		counters: report.counters,
+		...((report.startup_timings_ms.boot ?? 0) > SLOW_BOOT_MS ? { hint: SLOW_BOOT_HINT } : {}),
 	});
 	return c.json({ success: true, data: report }, 200);
 });

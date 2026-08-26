@@ -445,6 +445,58 @@ describe('Admin routes', () => {
 			});
 		});
 
+		it('flags a slow boot in the diagnostic log line as a probable cold image pull', async () => {
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			try {
+				const { instance } = makeFakeSandbox();
+				instance.drainTimings = vi
+					.fn()
+					.mockReturnValueOnce({ find: 4, create: 900, boot: 16_500 })
+					.mockReturnValue({});
+				const { compute } = computeFor(instance);
+				const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+				const report = await expectOk<any>(
+					await request('POST', '/admin/debug/sandbox-startup', {}),
+				);
+				expect(report.startup_timings_ms).toEqual({ find: 4, create: 900, boot: 16_500 });
+				expect(report).not.toHaveProperty('hint');
+
+				const event = log.mock.calls
+					.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+					.find((e) => e.event === 'sandbox_startup_diagnostic');
+				expect(event).toMatchObject({
+					ok: true,
+					hint: expect.stringContaining('cold-pulled the sandbox image'),
+				});
+			} finally {
+				log.mockRestore();
+			}
+		});
+
+		it('omits the slow-boot hint when boot is within the warm-node range', async () => {
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			try {
+				const { instance } = makeFakeSandbox();
+				instance.drainTimings = vi
+					.fn()
+					.mockReturnValueOnce({ find: 4, create: 900, boot: 4_000 })
+					.mockReturnValue({});
+				const { compute } = computeFor(instance);
+				const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+				await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup', {}));
+
+				const event = log.mock.calls
+					.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+					.find((e) => e.event === 'sandbox_startup_diagnostic');
+				expect(event).toBeDefined();
+				expect(event).not.toHaveProperty('hint');
+			} finally {
+				log.mockRestore();
+			}
+		});
+
 		it('uses deployment defaults when both selections are omitted', async () => {
 			const { instance } = makeFakeSandbox();
 			const { compute, create } = computeFor(instance);

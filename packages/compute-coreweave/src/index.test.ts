@@ -447,6 +447,43 @@ describe('CoreWeaveCompute', () => {
 			expect(waits[0].intervalMs).toBeLessThan(1000);
 		});
 
+		it('flags a boot over 10 s as a probable cold image pull', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const world = makeWorld({
+					waitImpl: async () => {
+						vi.setSystemTime(Date.now() + 16_500);
+					},
+				});
+				await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
+				const ensureEvent = warn.mock.calls
+					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+					.find((event) => event.event === 'coreweave_ensure');
+				expect(ensureEvent).toMatchObject({
+					boot_ms: 16_500,
+					slow_boot_hint: expect.stringContaining('cold-pulled the sandbox image'),
+				});
+			} finally {
+				warn.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not flag a warm-node boot', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await makeCompute(makeWorld()).create(SANDBOX_ID, { reuse: false }).exec('true');
+				const ensureEvent = warn.mock.calls
+					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+					.find((event) => event.event === 'coreweave_ensure');
+				expect(ensureEvent).toBeDefined();
+				expect(ensureEvent).not.toHaveProperty('slow_boot_hint');
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
 		it('does not re-wait when reconnecting to a live sandbox', async () => {
 			const world = makeWorld();
 			const compute = makeCompute(world);

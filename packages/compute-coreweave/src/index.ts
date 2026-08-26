@@ -124,6 +124,15 @@ const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
  * round-trip, so this trades a few extra polls for that rounding.
  */
 const BOOT_POLL_INTERVAL_MS = 100;
+/**
+ * A container start on a warm node is ~1–6 s. Above this, `boot` is almost
+ * always the node pulling the sandbox image because the tag was not in its
+ * cache (a cold registry pull of the ~650 MB image is 16–30 s), which the
+ * operator fixes by pre-pulling the configured tags on the sandbox node pool.
+ */
+const SLOW_BOOT_MS = 10_000;
+const SLOW_BOOT_HINT =
+	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
 
 /**
  * Process states a kernel never comes back from. `failed` is a stream fault (a
@@ -359,6 +368,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				find_ms: t1 - t0,
 				create_ms: t2 - t1,
 				boot_ms: t3 - t2,
+				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
 				...(this.config.profileNames?.length ? { profile_names: this.config.profileNames } : {}),
 				...(this.userHome ? { user_home_attached: true } : {}),
 			}),
