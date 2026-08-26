@@ -54,7 +54,7 @@ jobs:
       # Keep the package graphs sequential so their child processes cannot
       # exhaust the runner's process limit under a cold cache.
       - name: Test
-        run: vp run -r test --configLoader=runner --pool=threads
+        run: vp run -r --concurrency-limit 1 test --configLoader=runner --pool=threads
       - name: Build
         run: vp run -r build
 
