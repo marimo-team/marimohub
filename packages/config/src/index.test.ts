@@ -199,6 +199,74 @@ describe('createFromEnv auth backend selection', () => {
 		await deps.dataBrowser?.close?.();
 	});
 
+	it('keeps DuckDB OAuth2 and S3 object queries behind default-off rollout gates', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+		};
+		const s3Config = {
+			endpoint_url: 'https://objects.example.test',
+			path_style: true,
+			auth: { method: 'anonymous' },
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+		};
+		const oauthConfig = {
+			uri: 'https://catalog.example.test',
+			auth: {
+				method: 'oauth2_client_credentials',
+				token_endpoint: 'https://identity.example.test/token',
+				client_id: 'client',
+				client_secret: 'secret',
+				scope: 'catalog',
+			},
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.test',
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+			access_delegation: 'none',
+		};
+
+		const disabled = createFromEnv(env).integrations!;
+		expect(disabled.queryReadiness({ kind: 's3', config: s3Config })[0]).toMatchObject({
+			id: 'duckdb-object-queries',
+			ready: false,
+		});
+		expect(disabled.queryReadiness({ kind: 'iceberg_rest', config: oauthConfig })[0]).toMatchObject(
+			{ id: 'duckdb-oauth', ready: false },
+		);
+
+		const enabled = createFromEnv({
+			...env,
+			MARIMOHUB_DUCKDB_OAUTH: 'on',
+			MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'on',
+		}).integrations!;
+		expect(
+			enabled
+				.queryReadiness({ kind: 's3', config: s3Config })
+				.some(({ id }) => id === 'duckdb-object-queries'),
+		).toBe(false);
+		expect(
+			enabled
+				.queryReadiness({ kind: 'iceberg_rest', config: oauthConfig })
+				.some(({ id }) => id === 'duckdb-oauth'),
+		).toBe(false);
+	});
+
+	it('rejects invalid DuckDB rollout gate values', () => {
+		const env = { ...baseEnv, MARIMOHUB_AUTH_BACKEND: 'dev' };
+
+		expect(() => createFromEnv({ ...env, MARIMOHUB_DUCKDB_OAUTH: 'true' })).toThrow(
+			'Invalid MARIMOHUB_DUCKDB_OAUTH: true (expected on, off)',
+		);
+		expect(() => createFromEnv({ ...env, MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'enabled' })).toThrow(
+			'Invalid MARIMOHUB_DUCKDB_OBJECT_QUERIES: enabled (expected on, off)',
+		);
+	});
+
 	it('wires DuckDB-Wasm pool and idle lifecycle settings', () => {
 		const deps = createFromEnv({
 			...baseEnv,

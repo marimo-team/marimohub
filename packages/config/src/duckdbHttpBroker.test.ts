@@ -102,6 +102,35 @@ const OAUTH_ACCESS = {
 } as const satisfies DuckDBHttpAccess;
 
 describe('createDuckDBHttpSessionFactory', () => {
+	it('enforces OAuth2 and S3 object-query rollout gates at the broker boundary', () => {
+		const disabled = createDuckDBHttpSessionFactory({
+			transport: vi.fn(),
+			now: () => NOW,
+			rolloutFeatures: { oauth: false, objectQueries: false },
+		});
+		const sessionOptions = { expiresAtMs: NOW + 60_000 };
+
+		expect(() => disabled(OAUTH_ACCESS, sessionOptions)).toThrow(
+			'DuckDB OAuth2 catalog access is disabled. Ask a deployment administrator to set MARIMOHUB_DUCKDB_OAUTH=on.',
+		);
+		expect(() => disabled(S3_ACCESS, sessionOptions)).toThrow(
+			'DuckDB S3 object queries are disabled. Ask a deployment administrator to set MARIMOHUB_DUCKDB_OBJECT_QUERIES=on.',
+		);
+
+		const bearer = disabled(ACCESS, sessionOptions);
+		bearer.close();
+
+		const enabled = createDuckDBHttpSessionFactory({
+			transport: vi.fn(),
+			now: () => NOW,
+			rolloutFeatures: { oauth: true, objectQueries: true },
+		});
+		const oauth = enabled(OAUTH_ACCESS, sessionOptions);
+		const objectQuery = enabled(S3_ACCESS, sessionOptions);
+		oauth.close();
+		objectQuery.close();
+	});
+
 	it('lazily exchanges, reuses, and refreshes a parent-owned OAuth token', async () => {
 		let clock = NOW;
 		let nextToken = 1;

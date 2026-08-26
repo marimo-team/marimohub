@@ -2572,6 +2572,7 @@ describe('data browsing', () => {
 				configSchema: z.object({ token: zSecret() }),
 				render,
 				query: {
+					readiness: () => [],
 					available: () => ({ ok: true }),
 					plan: () => ({ setup: [] }),
 				},
@@ -2625,6 +2626,47 @@ describe('data browsing', () => {
 				'   ',
 			),
 		).rejects.toThrow('SQL must not be empty');
+		expect(resolve).not.toHaveBeenCalled();
+		expect(render).not.toHaveBeenCalled();
+
+		const deploymentGate = {
+			id: 'deployment-query-gate',
+			label: 'Enable this query integration',
+			ready: false,
+			field: '',
+			reason: 'This query integration is disabled on this deployment.',
+		} as const;
+		const gatedStore = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			resolvers: [{ ...vaultResolver, resolve }],
+			dataQuery,
+			queryGate: () => deploymentGate,
+		});
+		expect(
+			gatedStore.queryReadiness({
+				kind: 'query_source',
+				config: { token: 'placeholder' },
+			}),
+		).toEqual([deploymentGate]);
+		expect(await gatedStore.browseCapability(pid, created.id)).toMatchObject({
+			surfaces: {
+				query: {
+					available: false,
+					reason: 'This query integration is disabled on this deployment.',
+				},
+			},
+		});
+		await expect(
+			gatedStore.runDataQuery(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'SELECT 1',
+			),
+		).rejects.toThrow('This query integration is disabled on this deployment.');
 		expect(resolve).not.toHaveBeenCalled();
 		expect(render).not.toHaveBeenCalled();
 	});

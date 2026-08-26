@@ -181,6 +181,11 @@ TLS, delegation, and runtime options use the sandbox executor. See
 [the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the security boundary and
 test procedure.
 
+Parent-owned OAuth2 requires `MARIMOHUB_DUCKDB_OAUTH=on`. Guarded S3 object queries require
+`MARIMOHUB_DUCKDB_OBJECT_QUERIES=on`. Both gates default to off. The query gate is evaluated before
+secret resolution and again after resolved configuration is loaded, so a concurrent integration
+update cannot bypass it.
+
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It
 also injects applicable WIF credentials.

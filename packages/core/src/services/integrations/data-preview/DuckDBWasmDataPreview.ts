@@ -5,6 +5,7 @@ import { noopMetrics } from '../../../ports/metrics';
 import type { Metrics } from '../../../ports/metrics';
 import type { TablePreview } from '../../../ports/integrations';
 import type {
+	DuckDBHttpAccess,
 	DuckDBPreviewProgram,
 	DuckDBWasmRuntime,
 	DuckDBWasmRuntimeFactory,
@@ -19,6 +20,7 @@ export interface DuckDBWasmDataPreviewOptions {
 	maxPoolSize?: number;
 	idleTimeoutMs?: number;
 	metrics?: Metrics;
+	httpAccessAllowed?: (access: Readonly<DuckDBHttpAccess>) => boolean;
 }
 
 interface RuntimeSlot {
@@ -103,7 +105,11 @@ export class DuckDBWasmDataPreview {
 	}
 
 	supports(program: DuckDBPreviewProgram): boolean {
-		return this.supportsFeatures(program.requires ?? []);
+		return (
+			this.supportsFeatures(program.requires ?? []) &&
+			(program.httpAccess === undefined ||
+				this.options.httpAccessAllowed?.(program.httpAccess) !== false)
+		);
 	}
 
 	check(): Promise<void> {

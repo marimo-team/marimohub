@@ -1537,6 +1537,20 @@ See the [secret-source guide](./integration-secrets.md).`,
 						default: 'off',
 					},
 					{
+						id: 'MARIMOHUB_DUCKDB_OAUTH',
+						name: 'DuckDB OAuth2 catalog access',
+						description:
+							'Enables parent-owned OAuth2 client-credentials exchange for DuckDB Iceberg REST queries. Disabled by default. Set to `on` only after validating the catalog integration.',
+						default: 'off',
+					},
+					{
+						id: 'MARIMOHUB_DUCKDB_OBJECT_QUERIES',
+						name: 'DuckDB S3 object queries',
+						description:
+							'Enables guarded DuckDB queries for S3 object-store integrations. Disabled by default. Other Run SQL integrations remain available when this setting is off.',
+						default: 'off',
+					},
+					{
 						id: 'MARIMOHUB_DATA_PREVIEW_IMAGE',
 						name: 'Data-preview image',
 						description:

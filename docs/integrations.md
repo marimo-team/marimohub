@@ -241,6 +241,17 @@ browsing is selected:
 MARIMOHUB_DATA_BROWSER=full
 ```
 
+OAuth2 Iceberg catalogs and S3 object queries have separate rollout gates. Both are off by
+default. Enable only the capability that the deployment needs:
+
+```bash
+MARIMOHUB_DUCKDB_OAUTH=on
+MARIMOHUB_DUCKDB_OBJECT_QUERIES=on
+```
+
+When OAuth2 catalog access is off, table previews use the configured Python preview runtime when
+it is available. When S3 object queries are off, other Run SQL integrations remain available.
+
 Only project managers and administrators can run SQL. Each request receives a
 fresh DuckDB-Wasm worker, runs one statement in a read-only transaction, and is
 hard-terminated at its deadline. Direct remote callbacks, automatic extension

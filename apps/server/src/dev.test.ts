@@ -44,6 +44,8 @@ describe('local development setup', () => {
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_INTEGRATIONS_PROBE: 'private',
 			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_DUCKDB_OAUTH: 'on',
+			MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'on',
 			MARIMOHUB_DATA_PREVIEW_IMAGE: 'ghcr.io/marimo-team/marimo-sandbox:latest',
 			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 		});

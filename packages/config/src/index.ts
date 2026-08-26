@@ -59,6 +59,8 @@ import {
 } from './computeProfiles';
 import { integrationProbePolicy, integrationsEnabled, makeIntegrations } from './integrations';
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
+import { duckDBHttpAccessBlocker, duckDBRolloutFeatures } from './duckdbFeatures';
+import type { DuckDBRolloutFeatures } from './duckdbFeatures';
 import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
 import { makeSourceControl } from './sourceControl';
@@ -149,6 +151,7 @@ function dataPreviewFromEnv(
 	compute: SandboxProvider,
 	computeBackendValue: string,
 	experiments: ReadonlySet<Experiment>,
+	duckdbFeatures: Readonly<DuckDBRolloutFeatures>,
 	httpSessionFactory?: DuckDBHttpSessionFactory,
 	metrics?: Metrics,
 ): DataPreviewService | undefined {
@@ -222,6 +225,8 @@ function dataPreviewFromEnv(
 						},
 					),
 					metrics,
+					httpAccessAllowed: (access) =>
+						duckDBHttpAccessBlocker(access, duckdbFeatures) === undefined,
 				},
 			)
 		: undefined;
@@ -521,6 +526,7 @@ export function createFromEnv(
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 	});
+	const duckdbFeatures = duckDBRolloutFeatures(env);
 	const brokerPolicy =
 		integrationsEnabled(env) && env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
@@ -530,6 +536,7 @@ export function createFromEnv(
 			? createDuckDBHttpSessionFactory({
 					allowPrivate: brokerPolicy === 'private',
 					metrics,
+					rolloutFeatures: duckdbFeatures,
 				})
 			: undefined;
 	const dataPreview = dataPreviewFromEnv(
@@ -537,6 +544,7 @@ export function createFromEnv(
 		compute,
 		computeBackendValue,
 		experiments,
+		duckdbFeatures,
 		duckdbHttpSessionFactory,
 		metrics,
 	);
@@ -597,7 +605,7 @@ export function createFromEnv(
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
 		...makeSourceControl(env),
-		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
+		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery, duckdbFeatures),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +

@@ -18,6 +18,8 @@ import { AzureBlobObjectBrowser } from '@marimo-hub/object-browser-azure';
 import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import { duckDBQueryGate, duckDBRolloutFeatures } from './duckdbFeatures';
+import type { DuckDBRolloutFeatures } from './duckdbFeatures';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
 
@@ -37,6 +39,7 @@ export function makeIntegrations(
 	metrics?: Metrics,
 	dataPreview?: DataPreviewService,
 	dataQuery?: DataQueryService,
+	duckdbFeatures: Readonly<DuckDBRolloutFeatures> = duckDBRolloutFeatures(env),
 ): Pick<ApiDeps, 'integrations' | 'orgIntegrations' | 'dataBrowser'> {
 	const dataBrowser = dataBrowserSetting(env);
 	if (!integrationsEnabled(env)) {
@@ -93,6 +96,7 @@ export function makeIntegrations(
 		metrics,
 		dataPreview,
 		dataQuery: enabledDataQuery,
+		queryGate: duckDBQueryGate(duckdbFeatures),
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
