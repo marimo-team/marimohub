@@ -223,13 +223,13 @@ function EnvironmentSetupBenchmarkReport({ benchmark }: { benchmark: Environment
 		<div>
 			<h3 className="mb-1 text-sm font-semibold">Fresh sandbox uv sync benchmark</h3>
 			<p className="mb-3 text-xs text-muted-foreground">
-				Pinned boto3, botocore, moutils, and obstore against the image&apos;s configured environment
-				and cache. CPU counters bracket only the measured sync.
+				Pinned boto3 (absent from the base image, so the sync does real work) against the
+				image&apos;s configured environment and cache. CPU counters bracket only the measured sync.
 			</p>
 			<div className="grid gap-4">
 				<CommandResult label="Runtime and CPU limits" result={benchmark.runtime_probe} />
 				<CommandResult
-					label="Raw wheel download (botocore 1.43.36, 15.3 MB)"
+					label="Raw wheel download (botocore 1.43.80, 15.0 MB)"
 					result={benchmark.artifact_download}
 				/>
 				<CommandResult

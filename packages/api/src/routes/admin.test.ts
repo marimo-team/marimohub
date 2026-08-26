@@ -384,7 +384,7 @@ describe('Admin routes', () => {
 			);
 			expect(instance.exec).toHaveBeenNthCalledWith(
 				4,
-				expect.stringContaining('botocore-1.43.36-py3-none-any.whl'),
+				expect.stringContaining('botocore-1.43.80-py3-none-any.whl'),
 				{ timeout: 60_000 },
 			);
 			expect(instance.exec).toHaveBeenNthCalledWith(
