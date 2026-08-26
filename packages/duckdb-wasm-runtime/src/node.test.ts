@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, it, vi } from 'vitest';
+import type { TestContext } from 'vitest';
 import type {
 	DataQueryExecution,
 	DuckDBPreviewProgram,
@@ -15,15 +16,18 @@ import {
 import type { DuckDBHttpSessionFactory } from './node';
 import { createHttpBridgeBuffers } from './httpBridge';
 
-const open: DuckDBWasmRuntime[] = [];
+type OnTestFinished = TestContext['onTestFinished'];
 
-afterEach(async () => {
-	await Promise.all(open.splice(0).map((runtime) => runtime.close()));
-});
+function track(runtime: DuckDBWasmRuntime, onTestFinished: OnTestFinished): DuckDBWasmRuntime {
+	onTestFinished(() => runtime.close());
+	return runtime;
+}
 
-async function initialized(mode: 'worker' | 'inline'): Promise<DuckDBWasmRuntime> {
-	const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
-	open.push(runtime);
+async function initialized(
+	mode: 'worker' | 'inline',
+	onTestFinished: OnTestFinished,
+): Promise<DuckDBWasmRuntime> {
+	const runtime = track(await createNodeDuckDBWasmRuntimeFactory(mode)(), onTestFinished);
 	await runtime.initialize({ memoryLimitMb: 64 });
 	return runtime;
 }
@@ -49,8 +53,8 @@ function dataQuery(
 	};
 }
 
-describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
-	it('caps the worker V8 heap and stack', () => {
+describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
+	it('caps the worker V8 heap and stack', ({ expect }) => {
 		expect(DUCKDB_WORKER_RESOURCE_LIMITS).toEqual({
 			maxOldGenerationSizeMb: 256,
 			maxYoungGenerationSizeMb: 32,
@@ -59,13 +63,13 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(Object.isFrozen(DUCKDB_WORKER_RESOURCE_LIMITS)).toBe(true);
 	});
 
-	it('blocks inline execution before a preview runtime is created', async () => {
+	it('blocks inline execution before a preview runtime is created', async ({ expect }) => {
 		await expect(createNodeDuckDBWasmRuntimeFactory('inline')()).rejects.toThrow(
 			/cannot be preempted/,
 		);
 	});
 
-	it('reports why guarded Iceberg HTTP is unavailable', () => {
+	it('reports why guarded Iceberg HTTP is unavailable', ({ expect }) => {
 		const capabilities = nodeDuckDBWasmCapabilities();
 		expect(capabilities).toEqual({
 			features: [],
@@ -78,7 +82,10 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(Object.isFrozen(capabilities.unavailable)).toBe(true);
 	});
 
-	it('loads pinned HTTP extensions and creates only a dummy S3 secret in the worker', async () => {
+	it('loads pinned HTTP extensions and creates only a dummy S3 secret in the worker', async ({
+		expect,
+		onTestFinished,
+	}) => {
 		const close = vi.fn();
 		const fetch = vi.fn();
 		let expiresAtMs: number | undefined;
@@ -86,8 +93,10 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 			expiresAtMs = options.expiresAtMs;
 			return { fetch, close };
 		});
-		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker', createSession, 125_000)();
-		open.push(runtime);
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', createSession, 125_000)(),
+			onTestFinished,
+		);
 		expect(runtime.features).toEqual([]);
 		await runtime.initialize({ memoryLimitMb: 128 });
 
@@ -130,9 +139,11 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(close).toHaveBeenCalledOnce();
 	}, 30_000);
 
-	it('preserves request order while initialization is pending', async () => {
-		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker')();
-		open.push(runtime);
+	it('preserves request order while initialization is pending', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = track(await createNodeDuckDBWasmRuntimeFactory('worker')(), onTestFinished);
 
 		const initializing = runtime.initialize({ memoryLimitMb: 64 });
 		const executing = runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } });
@@ -143,12 +154,17 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		]);
 	}, 15_000);
 
-	it('blocks host filesystem enumeration when brokered HTTP is enabled', async () => {
-		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
-			fetch: vi.fn(),
-			close: vi.fn(),
-		}))();
-		open.push(runtime);
+	it('blocks host filesystem enumeration when brokered HTTP is enabled', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
+				fetch: vi.fn(),
+				close: vi.fn(),
+			}))(),
+			onTestFinished,
+		);
 		await runtime.initialize({ memoryLimitMb: 64 });
 
 		await expect(
@@ -159,8 +175,11 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
 	}, 15_000);
 
-	it('removes requests rejected synchronously by postMessage', async () => {
-		const runtime = await initialized('worker');
+	it('removes requests rejected synchronously by postMessage', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized('worker', onTestFinished);
 		const internals = runtime as unknown as { pending: Map<number, unknown> };
 		const invalidProgram = {
 			setup: [],
@@ -174,8 +193,8 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		).resolves.toEqual({ columns: ['value'], rows: [[2]] });
 	}, 15_000);
 
-	it('becomes closed when its worker fails', async () => {
-		const runtime = await initialized('worker');
+	it('becomes closed when its worker fails', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized('worker', onTestFinished);
 		const internals = runtime as unknown as {
 			worker: {
 				emit(event: 'error', error: Error): boolean;
@@ -196,8 +215,11 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		if (termination) await termination;
 	});
 
-	it('terminates cleanly when the worker sends a non-object response', async () => {
-		const runtime = await initialized('worker');
+	it('terminates cleanly when the worker sends a non-object response', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized('worker', onTestFinished);
 		const internals = runtime as unknown as {
 			worker: { emit(event: 'message', message: unknown): boolean };
 		};
@@ -206,19 +228,19 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		await expect(runtime.ping()).rejects.toThrow('closed');
 	});
 
-	it('terminates the worker when an HTTP bridge message has malformed buffers', async () => {
+	it('terminates the worker when an HTTP bridge message has malformed buffers', async ({
+		expect,
+		onTestFinished,
+	}) => {
 		const metrics = {
 			increment: vi.fn(),
 			gauge: vi.fn(),
 			histogram: vi.fn(),
 		} satisfies Metrics;
-		const runtime = await createNodeDuckDBWasmRuntimeFactory(
-			'worker',
-			undefined,
-			60_000,
-			metrics,
-		)();
-		open.push(runtime);
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', undefined, 60_000, metrics)(),
+			onTestFinished,
+		);
 		await runtime.initialize({ memoryLimitMb: 64 });
 		const internals = runtime as unknown as {
 			activeHttpSession?: {
@@ -254,8 +276,11 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		if (termination) await termination;
 	});
 
-	it('rejects a bridge request from a different execution and closes the session', async () => {
-		const runtime = await initialized('worker');
+	it('rejects a bridge request from a different execution and closes the session', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized('worker', onTestFinished);
 		const closeSession = vi.fn();
 		const fetch = vi.fn();
 		const internals = runtime as unknown as {
@@ -280,8 +305,8 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
-	it('hard-terminates an executing query when closed', async () => {
-		const runtime = await initialized('worker');
+	it('hard-terminates an executing query when closed', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized('worker', onTestFinished);
 		const executing = runtime.execute({
 			setup: [],
 			query: { text: 'SELECT sum(value) FROM range(1000000000) values(value)' },
@@ -292,9 +317,12 @@ describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 	}, 15_000);
 });
 
-describe('DuckDB-Wasm data-query executor', () => {
-	it('preserves rendered connection material for non-brokered plans', async () => {
-		const runtime = await initialized('worker');
+describe.concurrent('DuckDB-Wasm data-query executor', () => {
+	it('preserves rendered connection material for non-brokered plans', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized('worker', onTestFinished);
 		const internals = runtime as unknown as {
 			worker: { postMessage(message: unknown): void };
 			executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<unknown>;
@@ -325,13 +353,18 @@ describe('DuckDB-Wasm data-query executor', () => {
 		);
 	});
 
-	it('keeps rendered credentials in the parent for brokered plans', async () => {
+	it('keeps rendered credentials in the parent for brokered plans', async ({
+		expect,
+		onTestFinished,
+	}) => {
 		const close = vi.fn();
-		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
-			fetch: vi.fn(),
-			close,
-		}))();
-		open.push(runtime);
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
+				fetch: vi.fn(),
+				close,
+			}))(),
+			onTestFinished,
+		);
 		await runtime.initialize({ memoryLimitMb: 64 });
 		const internals = runtime as unknown as {
 			worker: { postMessage(message: unknown): void };
@@ -374,7 +407,7 @@ describe('DuckDB-Wasm data-query executor', () => {
 		expect(close).toHaveBeenCalledOnce();
 	}, 15_000);
 
-	it('uses a fresh worker and enforces the row cap while streaming', async () => {
+	it('uses a fresh worker and enforces the row cap while streaming', async ({ expect }) => {
 		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
 			new AbortController().signal,
 		);
@@ -394,7 +427,7 @@ describe('DuckDB-Wasm data-query executor', () => {
 		}
 	}, 15_000);
 
-	it('rejects multiple statements and ambient external access', async () => {
+	it('rejects multiple statements and ambient external access', async ({ expect }) => {
 		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
 			new AbortController().signal,
 		);
@@ -414,10 +447,13 @@ describe('DuckDB-Wasm data-query executor', () => {
 	}, 15_000);
 });
 
-describe('DuckDB-Wasm worker runtime', () => {
+describe.concurrent('DuckDB-Wasm worker runtime', () => {
 	const mode = 'worker' as const;
-	it('rejects remote-required programs before executing their setup', async () => {
-		const runtime = await initialized(mode);
+	it('rejects remote-required programs before executing their setup', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		expect(runtime.features).not.toContain('iceberg-http');
 		await expect(
 			runtime.execute({
@@ -438,9 +474,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).resolves.toEqual({ columns: ['count'], rows: [['0']] });
 	});
 
-	it('rejects work before initialization and after close', async () => {
-		const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
-		open.push(runtime);
+	it('rejects work before initialization and after close', async ({ expect, onTestFinished }) => {
+		const runtime = track(await createNodeDuckDBWasmRuntimeFactory(mode)(), onTestFinished);
 		await expect(runtime.execute({ setup: [], query: { text: 'SELECT 1' } })).rejects.toThrow(
 			/not initialized/i,
 		);
@@ -452,8 +487,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		await expect(runtime.close()).resolves.toBeUndefined();
 	});
 
-	it('allows repeated initialization without replacing the database', async () => {
-		const runtime = await initialized(mode);
+	it('allows repeated initialization without replacing the database', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await runtime.initialize({ memoryLimitMb: 128 });
 		await expect(runtime.ping()).resolves.toBeUndefined();
 		await expect(
@@ -461,9 +499,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).rejects.toThrow(/locked/i);
 	});
 
-	it('resets after failed initialization and can initialize cleanly later', async () => {
-		const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
-		open.push(runtime);
+	it('resets after failed initialization and can initialize cleanly later', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = track(await createNodeDuckDBWasmRuntimeFactory(mode)(), onTestFinished);
 
 		await expect(runtime.initialize({ memoryLimitMb: Number.NaN })).rejects.toThrow();
 		await expect(runtime.ping()).rejects.toThrow(/not initialized/i);
@@ -471,8 +511,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		await expect(runtime.ping()).resolves.toBeUndefined();
 	}, 15_000);
 
-	it('executes SQL and normalizes Arrow values', async () => {
-		const runtime = await initialized(mode);
+	it('executes SQL and normalizes Arrow values', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],
@@ -484,8 +524,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		});
 	});
 
-	it('normalizes nested, binary, null, and non-finite values to JSON-safe output', async () => {
-		const runtime = await initialized(mode);
+	it('normalizes nested, binary, null, and non-finite values to JSON-safe output', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],
@@ -505,8 +548,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		});
 	});
 
-	it('binds statement parameters instead of interpolating values', async () => {
-		const runtime = await initialized(mode);
+	it('binds statement parameters instead of interpolating values', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [
@@ -522,8 +568,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		});
 	});
 
-	it('binds every supported parameter type including null', async () => {
-		const runtime = await initialized(mode);
+	it('binds every supported parameter type including null', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],
@@ -542,21 +588,31 @@ describe('DuckDB-Wasm worker runtime', () => {
 		});
 	});
 
-	it.each([
-		['too few', []],
-		['too many', [1, 2]],
-	] as const)('rejects %s bound parameters and remains usable', async (_name, params) => {
-		const runtime = await initialized(mode);
+	async function rejectsInvalidParameterCount(
+		params: readonly number[],
+		expect: TestContext['expect'],
+		onTestFinished: OnTestFinished,
+	) {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({ setup: [], query: { text: 'SELECT ? AS value', params } }),
 		).rejects.toThrow();
 		await expect(
 			runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } }),
 		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
-	});
+	}
 
-	it('locks configuration, disables external access, and forces a read-only transaction', async () => {
-		const runtime = await initialized(mode);
+	it('rejects too few bound parameters and remains usable', async ({ expect, onTestFinished }) =>
+		rejectsInvalidParameterCount([], expect, onTestFinished));
+
+	it('rejects too many bound parameters and remains usable', async ({ expect, onTestFinished }) =>
+		rejectsInvalidParameterCount([1, 2], expect, onTestFinished));
+
+	it('locks configuration, disables external access, and forces a read-only transaction', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({ setup: [], query: { text: "SET memory_limit='128MB'" } }),
 		).rejects.toThrow(/locked/i);
@@ -571,8 +627,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).rejects.toThrow(/external access|disabled/i);
 	});
 
-	it('closes the failed connection before later work', async () => {
-		const runtime = await initialized(mode);
+	it('closes the failed connection before later work', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],
@@ -587,8 +643,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		});
 	});
 
-	it('runs cleanup when setup fails partway through', async () => {
-		const runtime = await initialized(mode);
+	it('runs cleanup when setup fails partway through', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [
@@ -611,8 +667,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).resolves.toEqual({ columns: ['count'], rows: [['0']] });
 	});
 
-	it('runs cleanup after the preview query fails', async () => {
-		const runtime = await initialized(mode);
+	it('runs cleanup after the preview query fails', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [{ text: 'CREATE TABLE cleanup_after_query_failure(value INTEGER)' }],
@@ -632,8 +688,8 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).resolves.toEqual({ columns: ['count'], rows: [['0']] });
 	});
 
-	it('runs cleanup statements in reverse dependency order', async () => {
-		const runtime = await initialized(mode);
+	it('runs cleanup statements in reverse dependency order', async ({ expect, onTestFinished }) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [
@@ -648,8 +704,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
 	});
 
-	it('returns the primary query error when cleanup also fails', async () => {
-		const runtime = await initialized(mode);
+	it('returns the primary query error when cleanup also fails', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],
@@ -659,8 +718,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).rejects.toThrow(/primary_missing/i);
 	});
 
-	it('returns a cleanup error after a successful query and remains usable', async () => {
-		const runtime = await initialized(mode);
+	it('returns a cleanup error after a successful query and remains usable', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],
@@ -673,8 +735,11 @@ describe('DuckDB-Wasm worker runtime', () => {
 		).resolves.toEqual({ columns: ['value'], rows: [[2]] });
 	});
 
-	it('rejects oversized results without making later work fail', async () => {
-		const runtime = await initialized(mode);
+	it('rejects oversized results without making later work fail', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized(mode, onTestFinished);
 		await expect(
 			runtime.execute({
 				setup: [],

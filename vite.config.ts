@@ -287,7 +287,13 @@ export default defineConfig({
 				// Tests and test helpers may use `any`, log freely, and stringify/spread
 				// mock objects (URLs, fake records) where these type-aware rules would
 				// otherwise false-positive.
-				files: ['**/*.test.ts', '**/*.test.tsx', '**/testing/**', '**/testWorld.ts'],
+				files: [
+					'**/*.test.ts',
+					'**/*.test.tsx',
+					'**/*.testWorld.tsx',
+					'**/testing/**',
+					'**/testWorld.ts',
+				],
 				rules: {
 					'anti-slop/no-chained-type-assertions': 'off',
 					'anti-slop/no-object-parameters': 'off',
@@ -351,6 +357,9 @@ export default defineConfig({
 	// test --coverage`.
 	test: {
 		exclude: ['**/node_modules/**', '**/dist/**', 'packages/web/**', 'apps/e2e/**'],
+		// Bound both Vitest file workers and the WASM runtimes spawned by concurrent tests.
+		maxWorkers: 2,
+		maxConcurrency: 2,
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'html'],

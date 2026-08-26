@@ -18,5 +18,7 @@ export default defineConfig({
 	},
 	test: {
 		include: ['src/**/*.test.ts'],
+		// Each concurrent node test owns a WASM worker, so bound peak memory.
+		maxConcurrency: 2,
 	},
 });

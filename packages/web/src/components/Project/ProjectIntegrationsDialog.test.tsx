@@ -399,11 +399,8 @@ describe('ProjectIntegrationsPanel — query failures', () => {
 
 	it('a failed list query shows an error instead of a permanent skeleton', async () => {
 		setup({}, { kinds: [postgresKind], entries: 'error' });
-		// The list query retries twice (only 404s skip retry) before surfacing.
-		expect(
-			await screen.findByText(/Could not load integrations/, undefined, { timeout: 8000 }),
-		).toBeInTheDocument();
-	}, 10_000);
+		expect(await screen.findByText(/Could not load integrations/)).toBeInTheDocument();
+	});
 });
 
 describe('ProjectIntegrationsPanel — kind catalog', () => {
