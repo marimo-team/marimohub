@@ -238,6 +238,13 @@ describe('Session routes', () => {
 			const synced = await createSyncedNotebook('import marimo');
 			const { sb, post } = await startSessionApi(synced);
 			await expectOk<ApiSession>(await post());
+			expect(
+				sb.calls.exec.some(
+					(command) =>
+						command.startsWith('python3 ') &&
+						command.includes('/workspace/.marimohub-packed-restore/extract.py'),
+				),
+			).toBe(true);
 			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(setup).not.toContain('uv export');
 		});

@@ -45,6 +45,19 @@ Each sync writes the repository files into a fresh
 notebook's source pointer. Concurrent syncs cannot combine files from different
 versions. The source pointer always references one complete version.
 
+Each synced version stores a best-effort packed copy of the final workspace for
+sandbox startup. Pull-mode archives include the credential-free Git directory
+under `.git/`. Startup transfers and extracts this single object when available.
+If the object is absent or extraction fails, provisioning restores the canonical
+per-file objects. Packing is limited to 32 MiB of combined workspace and Git
+input, and Git object files are stored without recompression.
+
+Provisioning counters describe the transferred representation. A packed restore
+reports `files_objects=1` and compressed archive bytes in `files_bytes`; a
+canonical restore reports its individual object count and stored byte total. The
+`files_archive_used`, `files_archive_missing`, and `files_archive_failed`
+counters identify the selected path.
+
 ## Create a synced notebook
 
 ```http

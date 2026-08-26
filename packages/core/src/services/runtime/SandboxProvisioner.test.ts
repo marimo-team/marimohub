@@ -774,6 +774,191 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/my_app.py'");
 		});
 
+		it('restores a packed synced workspace without listing or fetching individual files', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			const archive = new Uint8Array([80, 75, 3, 4]);
+			await bucketHandle.put(version.workspaceArchive, archive);
+			await bucketHandle.put(version.workspaceFile('app.py'), 'canonical');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+			const list = vi.spyOn(bucketHandle, 'list');
+			const get = vi.spyOn(bucketHandle, 'get');
+
+			const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+				workspaceArchive: version.workspaceArchive,
+			});
+
+			expect(list).not.toHaveBeenCalled();
+			expect(get).toHaveBeenCalledTimes(1);
+			expect(get).toHaveBeenCalledWith(version.workspaceArchive);
+			expect(calls.writeFiles).toHaveLength(1);
+			expect(calls.writeFiles[0]).toHaveLength(2);
+			expect(
+				calls.writeFiles[0].every(({ path }) =>
+					path.startsWith(`${MOUNT_PATH}/.marimohub-packed-restore/`),
+				),
+			).toBe(true);
+			expect(calls.writeFile.some((file) => file.path.endsWith('app.py'))).toBe(false);
+			expect(calls.exec.some((command) => command.startsWith('python3 '))).toBe(true);
+			expect(calls.exec.find((command) => command.startsWith('python3 '))).toMatch(/ 1$/);
+			expect(result.counters).toMatchObject({
+				files_objects: 1,
+				files_bytes: archive.byteLength,
+				files_archive_used: 1,
+				files_archive_missing: 0,
+				files_archive_failed: 0,
+				files_archive_bytes: archive.byteLength,
+			});
+		});
+
+		it('does not bypass the mount strategy when an archive is passed outside copy-only mode', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+			const get = vi.spyOn(bucketHandle, 'get');
+
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceArchive: version.workspaceArchive,
+			});
+
+			expect(get).not.toHaveBeenCalledWith(version.workspaceArchive);
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.exec.some((command) => command.startsWith('python3 '))).toBe(false);
+		});
+
+		it('falls back to canonical objects when the packed workspace is absent', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'canonical');
+
+			const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				workspaceArchive: version.workspaceArchive,
+			});
+
+			expect(calls.writeFile).toContainEqual({
+				path: `${MOUNT_PATH}/app.py`,
+				content: expect.anything(),
+			});
+			expect(result.counters).toMatchObject({
+				files_archive_used: 0,
+				files_archive_missing: 1,
+				files_archive_failed: 0,
+			});
+		});
+
+		it('cleans up and falls back when packed extraction fails', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const exec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				const result = await exec(command, options);
+				return command.startsWith('python3 ')
+					? {
+							success: false,
+							stdout: '',
+							stderr: 'invalid archive',
+							error: { code: 'COMMAND_FAILED' },
+						}
+					: result;
+			};
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceArchive, new Uint8Array([1, 2, 3]));
+			await bucketHandle.put(version.workspaceFile('app.py'), 'canonical');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			try {
+				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					workspaceArchive: version.workspaceArchive,
+				});
+
+				expect(calls.exec.some((command) => command.startsWith('rm -rf -- '))).toBe(true);
+				expect(calls.writeFile).toContainEqual({
+					path: `${MOUNT_PATH}/app.py`,
+					content: expect.anything(),
+				});
+				expect(result.counters).toMatchObject({
+					files_archive_used: 0,
+					files_archive_missing: 0,
+					files_archive_failed: 1,
+				});
+			} finally {
+				log.mockRestore();
+			}
+		});
+
+		it('falls back to canonical objects when fetching the packed archive fails', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'canonical');
+			const realGet = bucketHandle.get.bind(bucketHandle);
+			vi.spyOn(bucketHandle, 'get').mockImplementation((key) => {
+				if (key === version.workspaceArchive) throw new Error('archive read unavailable');
+				return realGet(key);
+			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			try {
+				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					workspaceArchive: version.workspaceArchive,
+				});
+
+				expect(calls.writeFile).toContainEqual({
+					path: `${MOUNT_PATH}/app.py`,
+					content: expect.anything(),
+				});
+				expect(result.counters).toMatchObject({
+					files_archive_used: 0,
+					files_archive_missing: 0,
+					files_archive_failed: 1,
+				});
+			} finally {
+				log.mockRestore();
+			}
+		});
+
 		it('classifies a combined-launch setup failure the same way', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			instance.launchProcess = async () => ({

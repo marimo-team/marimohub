@@ -34,6 +34,11 @@ import { listAllKeys } from '../catalog/storage';
 import type { GitSource, NotebookMeta, Source } from '../../schema';
 import { loadNotebookCatalogPatch } from './catalogProjection';
 import { toSyncedWorkspaceFileMap } from '../../integrations/remoteWorkspace';
+import {
+	createPackedWorkspaceArchive,
+	isPackedWorkspaceInputWithinLimit,
+	packedWorkspaceInputBytes,
+} from '../../integrations/packedWorkspace';
 
 interface SyncedNotebookServiceHooks {
 	getNotebook: (
@@ -125,7 +130,12 @@ export class SyncedNotebookService {
 			listAllKeys(this.bucket, versionPaths.workspacePrefix),
 			listAllKeys(this.bucket, versionPaths.gitPrefix),
 		]);
-		await this.bucket.delete([versionPaths.meta, ...workspaceKeys, ...gitKeys]);
+		await this.bucket.delete([
+			versionPaths.meta,
+			versionPaths.workspaceArchive,
+			...workspaceKeys,
+			...gitKeys,
+		]);
 	}
 
 	async rotateToken(projectId: ProjectId, notebookId: NotebookId): Promise<{ sync_token: string }> {
@@ -231,6 +241,35 @@ export class SyncedNotebookService {
 		const now = new Date().toISOString();
 		const versionId = createVersionId();
 		const versionPaths = nb.version(versionId);
+		let workspaceArchive: Uint8Array | undefined;
+		const archiveInput = {
+			workspace: prepared.files,
+			...(gitFiles ? { git: gitFiles } : {}),
+		};
+		this.metrics.gauge(
+			'sync.workspace_archive_input_bytes',
+			packedWorkspaceInputBytes(archiveInput),
+		);
+		if (isPackedWorkspaceInputWithinLimit(archiveInput)) {
+			try {
+				workspaceArchive = createPackedWorkspaceArchive(archiveInput);
+				this.metrics.gauge('sync.workspace_archive_bytes', workspaceArchive.byteLength);
+			} catch (error) {
+				this.metrics.increment('sync.workspace_archive_build_failed');
+				logOperationalError(
+					'sync_workspace_archive_build_failed',
+					{
+						operation: 'notebook.sync.workspace_archive.build',
+						project_id: projectId,
+						notebook_id: notebookId,
+						recovered: true,
+					},
+					error,
+				);
+			}
+		} else {
+			this.metrics.increment('sync.workspace_archive_skipped_input_limit');
+		}
 		const version = buildVersion({
 			versionId,
 			notebookId,
@@ -254,6 +293,31 @@ export class SyncedNotebookService {
 				compensableWrite(
 					[
 						() => this.bucket.put(versionPaths.meta, JSON.stringify(version)),
+						...(workspaceArchive
+							? [
+									async () => {
+										try {
+											await this.bucket.put(versionPaths.workspaceArchive, workspaceArchive, {
+												httpMetadata: { contentType: 'application/zip' },
+											});
+											this.metrics.increment('sync.workspace_archive_stored');
+										} catch (error) {
+											this.metrics.increment('sync.workspace_archive_write_failed');
+											logOperationalError(
+												'sync_workspace_archive_write_failed',
+												{
+													operation: 'notebook.sync.workspace_archive.write',
+													object: versionPaths.workspaceArchive,
+													project_id: projectId,
+													notebook_id: notebookId,
+													recovered: true,
+												},
+												error,
+											);
+										}
+									},
+								]
+							: []),
 						...[...prepared.files.entries()].map(
 							([path, bytes]) =>
 								() =>
