@@ -519,19 +519,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
 		const sandbox = await this.ensure();
-		// The gateway's AddFile `mkdir -p`s the parent itself (confirmed with
-		// CoreWeave), so no exec precedes the write: the provision's `files` and
-		// `inject` phases each cost one AddFile round-trip, and the armed bootstrap
-		// rides the first real command (`setup`) instead.
-		//
-		// The one ordering hazard: the bootstrap is what links the user home into
-		// place, and a write beneath that path before the link exists would
-		// materialize it as a plain directory — so flush the bootstrap first in that
-		// case. Nothing on the provision path writes there today.
+		// AddFile creates parent directories itself. The bootstrap links the user
+		// home into place, so a write beneath it must not race ahead of that.
 		if (this.pendingBootstrap && this.writesUnderUserHome(files)) {
 			await this.exec('true');
 		}
-		// The SDK's FileContent is `string | Uint8Array`, so bytes pass straight through.
+		// FileContent is `string | Uint8Array`, so bytes pass straight through.
 		await sandbox.files.write(files.map((f) => ({ path: f.path, content: f.content })));
 	}
 

@@ -384,7 +384,7 @@ describe('CoreWeaveCompute', () => {
 			]);
 
 			const fake = [...world.registry.values()][0].fake;
-			// AddFile creates parents itself, so a write costs no command round-trip.
+			// No mkdir round-trip: AddFile creates parents.
 			expect(fake.runCalls).toHaveLength(0);
 			expect(inst.drainCounters!()).toEqual({ execs: 0 });
 			// The whole set goes to the SDK in ONE write call, bytes passed through
@@ -412,7 +412,7 @@ describe('CoreWeaveCompute', () => {
 			await inst.writeFiles([{ path: '/workspace/notebook.py', content: 'x' }]);
 			const fake = world.registry.get('cw-1')!.fake;
 			expect(fake.runCalls).toHaveLength(0);
-			// The bootstrap still rides the first real command.
+			// Bootstrap rides the next command.
 			await inst.exec('true');
 			expect(fake.runCalls).toHaveLength(1);
 			expect(fake.runCalls[0][2]).toContain('addressing_style = virtual');
@@ -431,11 +431,11 @@ describe('CoreWeaveCompute', () => {
 				});
 				await inst.writeFiles([{ path: '/mnt/ada@example.com/notes.md', content: 'x' }]);
 				const fake = world.registry.get('cw-1')!.fake;
-				// The link must exist before AddFile can `mkdir -p` a plain dir in its place.
+				// Link first, or AddFile creates a plain dir in its place.
 				expect(fake.runCalls).toHaveLength(1);
 				expect(fake.runCalls[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
 				expect(fake.batchWrites).toHaveLength(1);
-				// Consumed: a later command carries no second bootstrap.
+				// Consumed once.
 				await inst.exec('true');
 				expect(fake.runCalls[1][2]).not.toContain('ln -s');
 			} finally {
@@ -936,7 +936,7 @@ describe('CoreWeaveCompute', () => {
 			const fake = [...world.registry.values()][0].fake;
 			// The bytes ride the SDK write API verbatim…
 			expect(fake.batchWrites.at(-1)![0].content).toBe(big);
-			// …and no exec argv carries them (there is none at all).
+			// …and no exec carries them.
 			expect(fake.runCalls).toHaveLength(0);
 		});
 
