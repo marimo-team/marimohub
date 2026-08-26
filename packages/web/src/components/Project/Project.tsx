@@ -38,6 +38,7 @@ import {
 	DropdownMenu,
 	IconButton,
 	IconLink,
+	LinkButton,
 	RowLink,
 	SearchField,
 	ConfirmDialog,
@@ -543,6 +544,12 @@ export function Project() {
 			<PageHeader
 				actions={
 					<div className="flex items-center gap-1.5">
+						{dataBrowserAvailable && dataIntegrations.length > 0 && (
+							<LinkButton to={`/projects/${pid}/data`} aria-label="Browse data">
+								<Database className="size-4" />
+								<span className="max-sm:hidden">Browse data</span>
+							</LinkButton>
+						)}
 						<Button variant="primary" onPress={uploadModal.open}>
 							<Plus className="size-4" />
 							New Notebook
@@ -600,11 +607,6 @@ export function Project() {
 							>
 								<Bell className="size-4" />
 							</IconButton>
-						)}
-						{dataBrowserAvailable && dataIntegrations.length > 0 && (
-							<IconLink to={`/projects/${pid}/data`} label="Browse data" tooltip="Browse data">
-								<Database className="size-4" />
-							</IconLink>
 						)}
 						<IconButton label="Edit project" tooltip="Edit project" onPress={editProjectModal.open}>
 							<Pencil className="size-4" />
