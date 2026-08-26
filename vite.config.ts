@@ -357,7 +357,8 @@ export default defineConfig({
 	// test --coverage`.
 	test: {
 		exclude: ['**/node_modules/**', '**/dist/**', 'packages/web/**', 'apps/e2e/**'],
-		// Root coverage also runs the memory-heavy DuckDB worker tests.
+		// Bound both Vitest file workers and the WASM runtimes spawned by concurrent tests.
+		maxWorkers: 2,
 		maxConcurrency: 2,
 		coverage: {
 			provider: 'v8',
