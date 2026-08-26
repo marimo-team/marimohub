@@ -131,19 +131,80 @@ describe('SandboxProvisioner', () => {
 				launchStrategy: 'uv-script-pins',
 			});
 
-			// Notebook pins apply last, except marimo remains at the image version.
+			// Notebook pins apply last; their export prunes marimo so the image owns it.
 			const cmd = calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			const order = [
 				cmd.indexOf('uv sync --inexact'),
-				cmd.indexOf('marimo==$MARIMOHUB_MARIMO_VERSION'),
 				cmd.indexOf("uv export --script 'apps/dash.py'"),
 				cmd.lastIndexOf('uv pip install'),
 			];
 			expect(Math.min(...order)).toBeGreaterThanOrEqual(0);
 			expect(order).toEqual([...order].sort((a, b) => a - b));
 			expect(cmd).toContain('--prune marimo');
+			expect(cmd).toContain('--no-install-package marimo');
+			expect(cmd).not.toContain('MARIMOHUB_MARIMO_VERSION');
+			expect(cmd).not.toContain('marimo==');
 			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/dash.py'");
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
+		});
+
+		it('records setup step timings and logs bounded uv output when setup is slow', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-08-26T13:47:00Z'));
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const { instance: base, calls } = makeFakeSandbox();
+				const instance: SandboxInstance = {
+					...base,
+					async exec(command, options) {
+						if (!command.includes('uv sync')) return base.exec(command, options);
+						calls.exec.push(command);
+						vi.setSystemTime(Date.now() + 2_100);
+						return {
+							success: true,
+							stdout: '',
+							stderr: [
+								'__MARIMOHUB_SETUP__ step pyproject_layer 1000000000',
+								'x'.repeat(5_000),
+								'Resolved 42 packages in 1.5s',
+								'Prepared 12 packages in 0.4s',
+								'Installed 12 packages in 0.1s',
+								'__MARIMOHUB_SETUP__ complete 3100000000',
+							].join('\n'),
+						};
+					},
+				};
+
+				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				});
+
+				expect(result.timings).toMatchObject({
+					setup_pyproject_layer: 2_100,
+				});
+				expect(calls.exec.find((command) => command.includes('uv sync'))).toContain(
+					'__MARIMOHUB_SETUP__ step pyproject_layer',
+				);
+
+				expect(warn).toHaveBeenCalledOnce();
+				const record = JSON.parse(String(warn.mock.calls[0][0])) as Record<string, unknown>;
+				expect(record).toMatchObject({
+					level: 'warn',
+					event: 'sandbox_setup_slow',
+					provision_setup_ms: 2_100,
+					provision_setup_pyproject_layer_ms: 2_100,
+				});
+				const stderrTail = String(record.setup_stderr_tail);
+				expect(new TextEncoder().encode(stderrTail).byteLength).toBeLessThanOrEqual(4_096);
+				expect(stderrTail).toContain('Installed 12 packages in 0.1s');
+			} finally {
+				vi.useRealTimers();
+				warn.mockRestore();
+			}
 		});
 
 		it('defaults to the project-managed env when no launch strategy is given', async () => {

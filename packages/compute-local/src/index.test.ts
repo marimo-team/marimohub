@@ -147,7 +147,7 @@ describe('prepareMarimoCommand (pure)', () => {
 			{ notebookFile: 'apps/dash.py', port: 2718, host: '0.0.0.0' },
 			'uv-script-pins',
 		);
-		const command = [...plan.setup, plan.start].join(' && ');
+		const command = [...plan.setup.map(({ command }) => command), plan.start].join(' && ');
 		const prepared = prepareMarimoCommand(command, '0.0.0.0');
 		expect(prepared.split(' && ').slice(0, -1)).toEqual(command.split(' && ').slice(0, -1));
 		expect(prepared).toContain('uv run --with marimo --no-sync marimo edit');
@@ -165,7 +165,9 @@ describe('uv-script-pins setup execution', () => {
 	const setup = buildMarimoLaunch(
 		{ notebookFile: 'app.py', port: 2718, host: '127.0.0.1' },
 		'uv-script-pins',
-	).setup.join(' && ');
+	)
+		.setup.map(({ command }) => command)
+		.join(' && ');
 
 	async function runSetup(extraEnv: NodeJS.ProcessEnv, pyproject?: string, parserExit?: number) {
 		const dir = await mkdtemp(path.join(os.tmpdir(), 'marimohub-uvstub-'));
@@ -177,15 +179,12 @@ describe('uv-script-pins setup execution', () => {
 			'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$UV_LOG"\nif [ "$1" = venv ]; then mkdir -p "$2"; fi\n',
 			{ mode: 0o755 },
 		);
-		await writeFile(
-			path.join(dir, 'python3'),
-			`#!/bin/sh\ncase "$2" in\n*importlib.metadata*) printf '\\n';;\n*) exit ${parserExit ?? 2};;\nesac\n`,
-			{ mode: 0o755 },
-		);
+		await writeFile(path.join(dir, 'python3'), `#!/bin/sh\nexit ${parserExit ?? 2}\n`, {
+			mode: 0o755,
+		});
 		if (pyproject !== undefined) await writeFile(path.join(workdir, 'pyproject.toml'), pyproject);
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
-			MARIMO_VERSION: '0.0-test',
 			PATH: `${dir}:${process.env.PATH}`,
 			UV_LOG: logFile,
 		};
@@ -222,8 +221,8 @@ describe('uv-script-pins setup execution', () => {
 		}
 	});
 
-	it('continues when neither MARIMO_VERSION nor installed marimo metadata provides a pin', async () => {
-		const { log } = await runSetup({ MARIMO_VERSION: undefined });
+	it('does not inspect or install marimo during setup', async () => {
+		const { log } = await runSetup({});
 		expect(log).not.toContain('marimo==');
 		expect(log).toContain('export --script app.py');
 	});

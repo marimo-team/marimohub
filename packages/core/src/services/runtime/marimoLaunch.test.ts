@@ -76,7 +76,7 @@ describe('buildMarimoLaunch', () => {
 	});
 
 	it('initializes only a pyproject with marimohub metadata', () => {
-		const [, setup] = buildMarimoLaunch(BASE).setup;
+		const [{ command: setup }] = buildMarimoLaunch(BASE).setup;
 		expect(setup).toContain('uv init');
 		expect(setup).toContain('--bare');
 		expect(setup).toContain('--no-package');
@@ -84,22 +84,24 @@ describe('buildMarimoLaunch', () => {
 		expect(setup).toContain('--description "Built in marimohub"');
 	});
 
-	it('restores the image marimo pin if project sync replaced the environment', () => {
-		const [capture, , ensure] = buildMarimoLaunch(BASE).setup;
-		expect(capture).toContain("${MARIMO_VERSION:-$(python3 -c 'import importlib.metadata as m;");
-		expect(capture).toContain('m.distributions()');
-		expect(ensure).toContain('uv pip install');
-		expect(ensure).toContain('marimo==$MARIMOHUB_MARIMO_VERSION');
+	it('names each setup layer for provision timing fields', () => {
+		expect(buildMarimoLaunch(BASE).setup.map(({ name }) => name)).toEqual(['pyproject_layer']);
 	});
 
-	it('continues without restoring marimo when the image provides no version', () => {
-		const [capture, , ensure] = buildMarimoLaunch(BASE).setup;
-		expect(capture).toContain('), ""))');
-		expect(ensure).toContain('[ -z "$MARIMOHUB_MARIMO_VERSION" ] ||');
+	it('leaves the image-owned marimo installation untouched', () => {
+		for (const strategy of ['uv-sync-edit', 'uv-script-pins'] as const) {
+			const setup = buildMarimoLaunch(BASE, strategy)
+				.setup.map(({ command }) => command)
+				.join('\n');
+			expect(setup).toContain('--no-install-package marimo');
+			expect(setup).not.toContain('MARIMOHUB_MARIMO_VERSION');
+			expect(setup).not.toContain('importlib.metadata');
+			expect(setup).not.toContain('marimo==');
+		}
 	});
 
 	it('reserves exit code 2 for no dependencies and propagates TOML parse failures', () => {
-		const [, pyproject] = buildMarimoLaunch(BASE).setup;
+		const [{ command: pyproject }] = buildMarimoLaunch(BASE).setup;
 		expect(pyproject).toContain('import pathlib,sys,tomllib');
 		expect(pyproject).not.toContain("find_spec('tomllib')");
 		expect(pyproject).toContain('else 2');
@@ -111,10 +113,14 @@ describe('buildMarimoLaunch', () => {
 		const plan = buildMarimoLaunch({ ...BASE, notebookFile: 'apps/my app.py' }, 'uv-script-pins');
 
 		it('layers pyproject first, then exports and installs the script pins', () => {
-			expect(plan.setup).toHaveLength(6);
-			const [, pyproject, ensureEnv, ensureMarimo, exportCmd, installCmd] = plan.setup;
+			expect(plan.setup).toHaveLength(4);
+			const [
+				{ command: pyproject },
+				{ command: ensureEnv },
+				{ command: exportCmd },
+				{ command: installCmd },
+			] = plan.setup;
 			expect(pyproject).toContain('uv sync --inexact');
-			expect(ensureMarimo).toContain('marimo==$MARIMOHUB_MARIMO_VERSION');
 			expect(ensureEnv).toContain('uv venv');
 			expect(exportCmd).toContain("uv export --script 'apps/my app.py'");
 			expect(exportCmd).toContain('--format requirements-txt');
@@ -130,7 +136,7 @@ describe('buildMarimoLaunch', () => {
 		it('writes the requirements file inside the pin env', () => {
 			// Per-sandbox and lifecycle-managed on every backend — nothing left on a
 			// shared host /tmp, no clobbering between concurrent local launches.
-			const [, , , , exportCmd, installCmd] = plan.setup;
+			const [, , { command: exportCmd }, { command: installCmd }] = plan.setup;
 			const [, exportTarget] = /-o (\S+)/.exec(exportCmd) ?? [];
 			expect(exportTarget).toBe(
 				'"${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"',
@@ -139,11 +145,11 @@ describe('buildMarimoLaunch', () => {
 		});
 
 		it('keeps every environment setup layer strict', () => {
-			for (const command of plan.setup) expect(command).not.toContain('|| true');
+			for (const { command } of plan.setup) expect(command).not.toContain('|| true');
 		});
 
 		it('reuses the exact uv-sync-edit pyproject layer', () => {
-			expect(plan.setup[1]).toBe(buildMarimoLaunch(BASE, 'uv-sync-edit').setup[1]);
+			expect(plan.setup[0].command).toBe(buildMarimoLaunch(BASE, 'uv-sync-edit').setup[0].command);
 		});
 
 		it('installs the pins in app mode too (setup is mode-invariant)', () => {
@@ -160,7 +166,7 @@ describe('buildMarimoLaunch', () => {
 				{ ...BASE, notebookFile: "apps/it's a && b.py" },
 				'uv-script-pins',
 			);
-			expect(hostile.setup[4]).toContain(`--script 'apps/it'\\''s a && b.py'`);
+			expect(hostile.setup[2].command).toContain(`--script 'apps/it'\\''s a && b.py'`);
 		});
 	});
 });
