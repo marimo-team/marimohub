@@ -172,7 +172,7 @@ describe('packed workspace extractor', () => {
 		expect(() => readFileSync(join(destination, 'app.py'))).toThrow();
 	});
 
-	it('rejects symlinks and incomplete pull-mode Git metadata', () => {
+	it('rejects symlinks, FIFOs, and incomplete pull-mode Git metadata', () => {
 		for (const attrs of [0o120777 * 65536, 0o010644 * 65536]) {
 			const special = zipSync({ link: [encode('target'), { os: 3, attrs }] });
 			expect(runExtractor(special, false).result.status).toBe(1);
@@ -183,6 +183,17 @@ describe('packed workspace extractor', () => {
 			git: new Map([['config', encode('config')]]),
 		});
 		expect(runExtractor(withoutHead, true).result.status).toBe(1);
+	});
+
+	it.each([
+		{ label: 'S_IFREG with 0o644 permissions', mode: 0o100644 },
+		{ label: 'permission-only 0o644', mode: 0o000644 },
+	])('restores a regular file encoded as $label', ({ mode }) => {
+		const archive = zipSync({ 'app.py': [encode('print(1)'), { os: 3, attrs: mode * 65536 }] });
+		const { destination, result } = runExtractor(archive, false);
+
+		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(readFileSync(join(destination, 'app.py'), 'utf8')).toBe('print(1)');
 	});
 
 	it('rejects a truncated archive', () => {

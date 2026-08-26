@@ -184,7 +184,10 @@ describe('Session routes', () => {
 		// Nested on purpose: catches a workspace-relative vs repo-relative join bug.
 		const ENTRY = 'apps/dash.py';
 
-		async function createSyncedNotebook(entryCode: string): Promise<NotebookId> {
+		async function createSyncedNotebook(
+			entryCode: string,
+			syncMode: 'push' | 'pull' = 'push',
+		): Promise<NotebookId> {
 			const services = createServices(bucket);
 			const { meta } = await services.notebooks.synced.create(
 				pid,
@@ -194,6 +197,7 @@ describe('Session routes', () => {
 					repo: 'org/repo',
 					branch: 'main',
 					entry_notebook: ENTRY,
+					sync_mode: syncMode,
 				},
 				ACTOR,
 			);
@@ -203,12 +207,17 @@ describe('Session routes', () => {
 				root_path: '',
 				commit: 'commit-aaaa',
 				files: [{ path: ENTRY, bytes: enc(entryCode) }],
+				...(syncMode === 'pull'
+					? { git_files: [{ path: 'HEAD', bytes: enc('ref: refs/heads/main\n') }] }
+					: {}),
 			});
 			return meta.id;
 		}
 
 		const entryReads = (spy: { mock: { calls: unknown[][] } }) =>
 			spy.mock.calls.filter(([key]) => String(key).endsWith(ENTRY)).length;
+		const archiveReads = (spy: { mock: { calls: unknown[][] } }) =>
+			spy.mock.calls.filter(([key]) => String(key).endsWith('/workspace.zip')).length;
 
 		async function startSessionApi(notebookId: NotebookId) {
 			const sb = makeFakeSandbox();
@@ -234,17 +243,20 @@ describe('Session routes', () => {
 			expect(cmd).toContain('uv sync --inexact');
 		});
 
-		it('uses the project-managed env for a git-synced notebook without inline metadata', async () => {
-			const synced = await createSyncedNotebook('import marimo');
+		it('uses a packed pull workspace and the project-managed env without inline metadata', async () => {
+			const synced = await createSyncedNotebook('import marimo', 'pull');
+			const get = vi.spyOn(bucket, 'get');
 			const { sb, post } = await startSessionApi(synced);
 			await expectOk<ApiSession>(await post());
-			expect(
-				sb.calls.exec.some(
-					(command) =>
-						command.startsWith('python3 ') &&
-						command.includes('/workspace/.marimohub-packed-restore/extract.py'),
-				),
-			).toBe(true);
+			const extract = sb.calls.exec.find(
+				(command) =>
+					command.startsWith('python3 ') &&
+					command.includes('/workspace/.marimohub-packed-restore/extract.py'),
+			)!;
+			expect(extract).toMatch(/ 1$/);
+			expect(archiveReads(get)).toBe(1);
+			// Launch-strategy detection reads the entry once; a canonical fallback would read it again.
+			expect(entryReads(get)).toBe(1);
 			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(setup).not.toContain('uv export');
 		});
