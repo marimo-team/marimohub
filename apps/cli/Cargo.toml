@@ -1,6 +1,6 @@
 [package]
 name = "mohub"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/marimo-team/marimohub"
