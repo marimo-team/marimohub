@@ -20,10 +20,31 @@ env:
   CHART_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
 
 jobs:
+  cli-assets:
+    name: Test and generate CLI assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test
+        working-directory: apps/cli
+        run: cargo test --locked
+      - name: Generate shell completions and man pages
+        working-directory: apps/cli
+        run: cargo run --locked --example generate-assets -- generated
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-generated-assets
+          path: apps/cli/generated
+          if-no-files-found: error
+
   cli:
     name: Build CLI (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    needs: cli-assets
     permissions:
       contents: read
     strategy:
@@ -32,14 +53,20 @@ jobs:
         include:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - os: macos-15-intel
+          - os: macos-15
             target: x86_64-apple-darwin
+            macos_deployment_target: '10.12'
           - os: macos-15
             target: aarch64-apple-darwin
+            macos_deployment_target: '11.0'
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cli-generated-assets
+          path: apps/cli/generated
       - name: Install Rust target
         shell: bash
         working-directory: apps/cli
@@ -51,20 +78,22 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
-      - name: Build and test
+      - name: Build archive
         shell: bash
         working-directory: apps/cli
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         run: |
-          cargo test --locked
-          cargo run --locked --example generate-assets -- generated
           dist build --artifacts=local --target "${{ matrix.target }}" \
             --tag "$GITHUB_REF_NAME" --allow-dirty
       - name: Build binary wheel
         shell: bash
         working-directory: apps/cli
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         run: |
           python -m pip install 'maturin==1.9.4'
-          python -m maturin build --release --locked \
+          python -m maturin build --profile dist --locked \
             --target "${{ matrix.target }}" \
             --out ../../wheelhouse
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -84,10 +113,15 @@ jobs:
     runs-on: ubuntu-latest
     container: quay.io/pypa/manylinux_2_28_x86_64:latest
     timeout-minutes: 25
+    needs: cli-assets
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cli-generated-assets
+          path: apps/cli/generated
       - name: Install build tools
         shell: bash
         run: |
@@ -99,12 +133,10 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
-      - name: Build and test
+      - name: Build archive
         shell: bash
         working-directory: apps/cli
         run: |
-          cargo test --locked
-          cargo run --locked --example generate-assets -- generated
           dist build --artifacts=local --target x86_64-unknown-linux-gnu \
             --tag "$GITHUB_REF_NAME" --allow-dirty
       - name: Build binary wheel
@@ -113,7 +145,7 @@ jobs:
         run: |
           /opt/python/cp39-cp39/bin/python -m pip install 'maturin==1.9.4'
           /opt/python/cp39-cp39/bin/python -m maturin build \
-            --release --locked --out ../../wheelhouse
+            --profile dist --locked --out ../../wheelhouse
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mohub-x86_64-unknown-linux-gnu
@@ -128,20 +160,22 @@ jobs:
     name: Build CLI installers
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [cli, cli-linux-x64]
+    needs: [cli-assets, cli, cli-linux-x64]
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cli-generated-assets
+          path: apps/cli/generated
       - name: Install dist
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
       - name: Build installers
         working-directory: apps/cli
-        run: |
-          cargo run --locked --example generate-assets -- generated
-          dist build --artifacts=global --tag "$GITHUB_REF_NAME" --allow-dirty
+        run: dist build --artifacts=global --tag "$GITHUB_REF_NAME" --allow-dirty
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mohub-installers
