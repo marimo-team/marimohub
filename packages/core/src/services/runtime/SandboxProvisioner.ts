@@ -225,6 +225,7 @@ export interface WorkspaceLoadContext {
 	bucketHandle?: Bucket;
 	mountPath: string;
 	workspacePrefix: string;
+	excludeRelativeRoots?: readonly string[];
 }
 
 export interface WorkspaceLoadResult {
@@ -249,6 +250,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		bucketHandle,
 		workspacePrefix,
 		mountPath,
+		excludeRelativeRoots,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -257,7 +259,13 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 			);
 		}
 		try {
-			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath);
+			const stats = await restoreWorkspace(
+				sandbox,
+				bucketHandle,
+				workspacePrefix,
+				mountPath,
+				excludeRelativeRoots ? { excludeRelativeRoots } : undefined,
+			);
 			return { usedFallback: true, stats };
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
@@ -421,7 +429,7 @@ export class SandboxProvisioner {
 			options.workspaceLoadMode === 'copy-only'
 				? this.workspaceLoadStrategies.copyOnly
 				: this.workspaceLoadStrategies.mountOrCopy;
-		const loaded = await strategy.load({
+		const load = strategy.load({
 			sandbox,
 			projectId: options.projectId,
 			notebookId: options.notebookId,
@@ -429,43 +437,51 @@ export class SandboxProvisioner {
 			bucketHandle: options.bucketHandle,
 			mountPath,
 			workspacePrefix,
+			...(options.gitPrefix ? { excludeRelativeRoots: ['.git'] } : {}),
 		});
-		if (!options.gitPrefix) return loaded;
-		try {
-			if (!options.bucketHandle) {
-				throw new Error('bucket handle is required for Git metadata restoration');
+		if (!options.gitPrefix) return await load;
+		const gitPrefix = options.gitPrefix;
+		const restoreGit = async (): Promise<WorkspaceRestoreStats> => {
+			try {
+				if (!options.bucketHandle) {
+					throw new Error('bucket handle is required for Git metadata restoration');
+				}
+				const stats = await restoreWorkspace(
+					sandbox,
+					options.bucketHandle,
+					gitPrefix,
+					`${mountPath}/.git`,
+					{ requireComplete: true },
+				);
+				if (stats.objectCount === 0) throw new Error('the stored Git directory is empty');
+				return stats;
+			} catch (error) {
+				logOperationalError(
+					'git_workspace_restore_failed',
+					{
+						operation: 'session.git.restore',
+						object: gitPrefix,
+						project_id: options.projectId,
+						notebook_id: options.notebookId,
+					},
+					error,
+				);
+				throw provisionFailure('restoring Git metadata into the sandbox', error);
 			}
-			const gitStats = await restoreWorkspace(
-				sandbox,
-				options.bucketHandle,
-				options.gitPrefix,
-				`${mountPath}/.git`,
-				{ requireComplete: true },
-			);
-			if (gitStats.objectCount === 0) {
-				throw new Error('the stored Git directory is empty');
-			}
-			if (!loaded.stats) return { ...loaded, stats: gitStats };
-			return {
-				...loaded,
-				stats: {
-					objectCount: loaded.stats.objectCount + gitStats.objectCount,
-					bytes: loaded.stats.bytes + gitStats.bytes,
-				},
-			};
-		} catch (error) {
-			logOperationalError(
-				'git_workspace_restore_failed',
-				{
-					operation: 'session.git.restore',
-					object: options.gitPrefix,
-					project_id: options.projectId,
-					notebook_id: options.notebookId,
-				},
-				error,
-			);
-			throw provisionFailure('restoring Git metadata into the sandbox', error);
-		}
+		};
+		const copyPath =
+			options.workspaceLoadMode === 'copy-only' || sandbox.supportsBucketMount === false;
+		const [loaded, gitStats] = copyPath
+			? await Promise.all([load, restoreGit()])
+			: [await load, await restoreGit()];
+		if (!loaded.stats) return { ...loaded, stats: gitStats };
+		return {
+			...loaded,
+			stats: {
+				objectCount: loaded.stats.objectCount + gitStats.objectCount,
+				bytes: loaded.stats.bytes + gitStats.bytes,
+			},
+		};
 	}
 
 	private async injectSessionEnv(
@@ -513,6 +529,47 @@ export class SandboxProvisioner {
 		);
 		const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
 		const startupStart = Date.now();
+		if (sandbox.launchProcess) {
+			let launched: Awaited<ReturnType<NonNullable<SandboxInstance['launchProcess']>>>;
+			try {
+				launched = await sandbox.launchProcess(launch.start, {
+					...(launch.setup.length > 0 ? { setup: launch.setup.join(' && ') } : {}),
+					cwd: mountPath,
+					port: MARIMO_PORT,
+					waitForPort: { mode: 'tcp' },
+					startupTimeout: startupTimeoutMs,
+				});
+			} catch (error) {
+				throw provisionFailure('starting the marimo kernel', error);
+			}
+			Object.assign(sw.timings, launched.timings);
+			if (launched.success) return;
+			if (launched.reason === 'setup_timeout') {
+				throw new PythonEnvironmentSetupError(
+					`Failed to prepare the notebook Python environment within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
+				);
+			}
+			if (launched.reason === 'setup_exit') {
+				throw pythonEnvironmentSetupFailure({
+					success: false,
+					stdout: launched.stdout,
+					stderr: launched.stderr,
+					error: { code: 'COMMAND_FAILED' },
+				});
+			}
+			const step =
+				launched.reason === 'readiness_timeout'
+					? `starting the marimo kernel: not ready within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`
+					: 'starting the marimo kernel';
+			const kernelLogs = [launched.stdout, launched.stderr]
+				.filter((value) => value.trim())
+				.join('\n')
+				.trim();
+			throw provisionFailure(
+				kernelLogs ? `${step}; kernel output:\n${kernelLogs}` : step,
+				new Error(launched.reason),
+			);
+		}
 		if (launch.setup.length > 0) {
 			const command = `cd ${shellQuote(mountPath)} && ${launch.setup.join(' && ')}`;
 			const setupTimeoutMs =

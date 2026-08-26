@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import type { GetSandboxResult, SandboxTransport } from '@coreweave/cwsandbox';
+import { describe, it, expect, vi } from 'vitest';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import { Seconds } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
@@ -8,7 +9,12 @@ import {
 } from '@marimo-hub/core/testing/compute-contract';
 import { expectExecResult } from '@marimo-hub/core/testing';
 import { CoreWeaveCompute } from './index';
-import { buildWandbMetadata, createWandbCompute, serviceAddressResolver } from './wandb';
+import {
+	buildWandbMetadata,
+	createWandbCompute,
+	serviceAddressResolver,
+	withServiceAddressCache,
+} from './wandb';
 import type { WandbConfig } from './wandb';
 import { makeWorld, procResult } from './testWorld';
 
@@ -67,6 +73,77 @@ describe('serviceAddressResolver', () => {
 	it('throws when no serviceAddress is assigned', async () => {
 		const resolve = serviceAddressResolver(async () => ({}));
 		await expect(resolve('cw-1', 2718)).rejects.toThrow(/no serviceAddress/);
+	});
+});
+
+describe('withServiceAddressCache', () => {
+	function transport(
+		get: SandboxTransport['get'] = vi.fn(
+			async ({ sandboxId }: { sandboxId: string }): Promise<GetSandboxResult> => ({
+				sandboxId,
+				status: 'running',
+				serviceAddress: '166.19.118.62',
+			}),
+		),
+	) {
+		return {
+			start: async () => ({ sandboxId: 'cw-1', status: 'creating' as const }),
+			get,
+			list: async () => ({ sandboxes: [] }),
+			delete: async () => {},
+			exec: async () => {
+				throw new Error('unused');
+			},
+			startCommand: async () => {
+				throw new Error('unused');
+			},
+			streamLogs: async () => {
+				throw new Error('unused');
+			},
+			stop: async () => {},
+			writeFile: async () => {},
+			readFile: async () => ({ content: new Uint8Array() }),
+		} satisfies SandboxTransport;
+	}
+
+	it('reuses the latest boot Get result for URL resolution', async () => {
+		const raw = transport();
+		const cache = withServiceAddressCache(raw);
+		await cache.transport.get({ sandboxId: 'cw-1' });
+		const fallback = vi.fn();
+		expect(await cache.get('cw-1', fallback)).toMatchObject({
+			serviceAddress: '166.19.118.62',
+		});
+		expect(vi.mocked(raw.get)).toHaveBeenCalledTimes(1);
+		expect(fallback).not.toHaveBeenCalled();
+		await cache.transport.delete({ sandboxId: 'cw-1' });
+		const afterDelete = vi.fn(async () => ({
+			sandboxId: 'cw-1',
+			status: 'running' as const,
+			serviceAddress: '10.0.0.3',
+		}));
+		await cache.get('cw-1', afterDelete);
+		expect(afterDelete).toHaveBeenCalledOnce();
+		await cache.get('cw-1', afterDelete);
+		expect(afterDelete).toHaveBeenCalledOnce();
+	});
+
+	it('falls back when the poll response has no address', async () => {
+		const raw = transport(
+			vi.fn(async ({ sandboxId }: { sandboxId: string }) => ({
+				sandboxId,
+				status: 'running' as const,
+			})),
+		);
+		const cache = withServiceAddressCache(raw);
+		await cache.transport.get({ sandboxId: 'cw-1' });
+		const fallback = vi.fn(async () => ({
+			sandboxId: 'cw-1',
+			status: 'running' as const,
+			serviceAddress: '10.0.0.2',
+		}));
+		expect(await cache.get('cw-1', fallback)).toMatchObject({ serviceAddress: '10.0.0.2' });
+		expect(fallback).toHaveBeenCalledOnce();
 	});
 });
 

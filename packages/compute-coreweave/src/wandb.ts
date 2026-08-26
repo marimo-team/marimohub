@@ -25,6 +25,7 @@
 import { SandboxClient } from '@coreweave/cwsandbox';
 import { DEFAULT_BASE_URL, GrpcSandboxTransport } from '@coreweave/cwsandbox/node';
 import { CoreWeaveCompute } from './index';
+import type { GetSandboxResult, SandboxTransport } from '@coreweave/cwsandbox';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { instrumentCoreWeaveTransport } from './tracing';
 
@@ -100,6 +101,54 @@ export function serviceAddressResolver(
 	};
 }
 
+export function withServiceAddressCache(transport: SandboxTransport): {
+	transport: SandboxTransport;
+	get(sandboxId: string, fallback?: () => Promise<GetSandboxResult>): Promise<GetSandboxResult>;
+} {
+	const results = new Map<string, GetSandboxResult>();
+	const cached = new Proxy(transport, {
+		get(target, property, receiver) {
+			if (property === 'get') {
+				return async (request: Parameters<SandboxTransport['get']>[0]) => {
+					const result = await target.get(request);
+					results.set(result.sandboxId, result);
+					return result;
+				};
+			}
+			if (property === 'delete') {
+				return async (request: Parameters<SandboxTransport['delete']>[0]) => {
+					try {
+						return await target.delete(request);
+					} finally {
+						results.delete(request.sandboxId);
+					}
+				};
+			}
+			if (property === 'stop') {
+				return async (request: Parameters<SandboxTransport['stop']>[0]) => {
+					try {
+						return await target.stop(request);
+					} finally {
+						results.delete(request.sandboxId);
+					}
+				};
+			}
+			const value = Reflect.get(target, property, receiver) as unknown;
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
+	return {
+		transport: cached,
+		async get(sandboxId, fallback) {
+			const result = results.get(sandboxId);
+			if (result?.serviceAddress) return result;
+			const fetched = await (fallback ? fallback() : cached.get({ sandboxId }));
+			results.set(fetched.sandboxId, fetched);
+			return fetched;
+		},
+	};
+}
+
 /**
  * A `SandboxProvider` for W&B sandboxes: `CoreWeaveCompute` composed with a
  * W&B-gateway-authenticated client and per-sandbox URL resolution. The optional
@@ -115,17 +164,19 @@ export function createWandbCompute(
 
 	// `||` (not `??`): a set-but-empty env var must also fall back.
 	const gatewayUrl = baseUrl?.trim() || DEFAULT_BASE_URL;
-	const transport = instrumentCoreWeaveTransport(
+	const addressCache = withServiceAddressCache(
 		new GrpcSandboxTransport({
 			baseUrl: gatewayUrl,
 			metadata: buildWandbMetadata({ apiKey, entity, project }),
 		}),
-		gatewayUrl,
 	);
+	const transport = instrumentCoreWeaveTransport(addressCache.transport, gatewayUrl);
 	return new CoreWeaveCompute(
 		{
 			...coreweave,
-			resolveExposedUrl: serviceAddressResolver((sandboxId) => transport.get({ sandboxId })),
+			resolveExposedUrl: serviceAddressResolver((sandboxId) =>
+				addressCache.get(sandboxId, () => transport.get({ sandboxId })),
+			),
 		},
 		// Same controlled cast as `CoreWeaveCompute.getClient()`: the SDK client
 		// exposes the CoreWeaveClient surface at runtime. Eager construction is

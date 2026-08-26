@@ -487,6 +487,61 @@ describe('CoreWeaveCompute', () => {
 		});
 	});
 
+	describe('launchProcess()', () => {
+		function streamedOutcome(event: 'ready' | 'setup_exit') {
+			return async (command: readonly string[]) => {
+				const nonce = command.join(' ').match(/'([a-f0-9]{32})'/)?.[1];
+				if (!nonce) throw new Error('launch nonce missing from supervisor command');
+				async function* stderr() {
+					yield `kernel diagnostics\n__MARIMOHUB_LAUNCH_${nonce}__${JSON.stringify({
+						event,
+						setupMs: 17,
+						waitportMs: event === 'ready' ? 23 : 0,
+						...(event === 'setup_exit' ? { exitCode: 2 } : {}),
+					})}\n`;
+				}
+				return { ...fakeProcess(), stderr: stderr() };
+			};
+		}
+
+		it('uses one stream for setup, kernel launch, and readiness', async () => {
+			const world = makeWorld({ startImpl: streamedOutcome('ready') });
+			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const result = await inst.launchProcess!('uv run marimo edit', {
+				setup: 'uv sync',
+				cwd: '/workspace',
+				port: 2718,
+				startupTimeout: 120_000,
+			});
+
+			expect(result).toMatchObject({
+				success: true,
+				timings: { setup: 17, start: expect.any(Number), waitport: 23 },
+			});
+			const fake = world.registry.get('cw-1')!.fake;
+			expect(fake.startCalls).toHaveLength(1);
+			expect(fake.startCalls[0].join(' ')).toContain('uv sync');
+			expect(fake.runCalls).toHaveLength(0);
+		});
+
+		it('returns a structured setup failure without a readiness Exec', async () => {
+			const world = makeWorld({ startImpl: streamedOutcome('setup_exit') });
+			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const result = await inst.launchProcess!('marimo edit', {
+				setup: 'uv sync',
+				port: 2718,
+				startupTimeout: 120_000,
+			});
+			expect(result).toMatchObject({
+				success: false,
+				reason: 'setup_exit',
+				exitCode: 2,
+				stderr: 'kernel diagnostics\n',
+			});
+			expect(world.registry.get('cw-1')!.fake.runCalls).toHaveLength(0);
+		});
+	});
+
 	describe('startProcess().waitForPort()', () => {
 		it('waits in ONE in-sandbox command rather than one round-trip per probe', async () => {
 			const world = makeWorld();

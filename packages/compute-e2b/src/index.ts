@@ -20,7 +20,9 @@
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	buildLaunchCommand,
 	classifyListFilesFailure,
+	parseLaunchOutput,
 	parseFindFilesOutput,
 	pollUntilReady,
 	withEnvPrefix,
@@ -35,6 +37,7 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
@@ -42,6 +45,7 @@ import type {
 	SandboxFileWrite,
 	SandboxInstance,
 	SandboxProcess,
+	SandboxLaunchResult,
 	SandboxProvider,
 	SetEnvVarsOptions,
 	StartProcessOptions,
@@ -54,6 +58,21 @@ const ID_META_KEY = 'mh-sandbox-id';
 /** Metadata key marking sandboxes this deployment owns (for discovery/cleanup). */
 const OWNER_META_KEY = 'mh-owner';
 const DEFAULT_OWNER_TAG = 'marimohub';
+const KERNEL_LOG_PATH = '/tmp/marimohub-kernel.log';
+const LAUNCH_POLL_INTERVAL_MS = 50;
+const LAUNCH_MARKER_GRACE_MS = 250;
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+}
+
+function definedEnv(env?: Record<string, string | undefined>): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined),
+	);
+}
 
 // --- Injection seam: the slice of the E2B SDK this adapter uses --------------
 
@@ -273,11 +292,13 @@ class E2bSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		const sb = await this.ensure();
-		const logPath = '/tmp/marimohub-kernel.log';
-		const handle = await sb.commands.runBackground(this.withDefaults(`${cmd} > ${logPath} 2>&1`), {
-			envs: this.env,
-			cwd: options?.cwd,
-		});
+		const handle = await sb.commands.runBackground(
+			this.withDefaults(`${cmd} > ${KERNEL_LOG_PATH} 2>&1`),
+			{
+				envs: { ...this.env, ...definedEnv(options?.env) },
+				cwd: options?.cwd,
+			},
+		);
 		const exec = (c: string) => this.exec(c);
 		const id = `e2b-proc-${sb.sandboxId}`;
 
@@ -298,14 +319,108 @@ class E2bSandboxInstance implements SandboxInstance {
 					timeoutMs: timeout,
 					intervalMs: 500,
 					timeoutMessage: async () =>
-						`timed out waiting for port ${port} after ${timeout}ms.\n${(await exec(`cat ${logPath} 2>/dev/null || true`)).stdout}`,
+						`timed out waiting for port ${port} after ${timeout}ms.\n${(await exec(`cat ${KERNEL_LOG_PATH} 2>/dev/null || true`)).stdout}`,
 				});
 			},
 			async getLogs(): Promise<{ stdout: string; stderr: string }> {
-				const logs = await exec(`cat ${logPath} 2>/dev/null || true`);
+				const logs = await exec(`cat ${KERNEL_LOG_PATH} 2>/dev/null || true`);
 				return { stdout: logs.stdout, stderr: '' };
 			},
 		};
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		const built = buildLaunchCommand({
+			setup: options.setup,
+			command: cmd,
+			port: options.port,
+			startupTimeout: options.startupTimeout,
+		});
+		const launchStarted = Date.now();
+		let process: SandboxProcess;
+		try {
+			process = await this.startProcess(built.command, {
+				cwd: options.cwd,
+				env: options.env,
+				processId: options.processId,
+			});
+		} catch (error) {
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: '',
+				stderr: error instanceof Error ? error.message : String(error),
+				timings: { setup: 0, start: Math.max(0, Date.now() - launchStarted), waitport: 0 },
+			};
+		}
+
+		const start = Math.max(0, Date.now() - launchStarted);
+		const waitStarted = Date.now();
+		const deadline =
+			options.startupTimeout === 0 ? undefined : launchStarted + options.startupTimeout;
+		let setupCompleted = false;
+
+		while (true) {
+			let logs: { stdout: string; stderr: string };
+			try {
+				logs = await process.getLogs();
+			} catch (error) {
+				await process.kill().catch(() => {});
+				return {
+					success: false,
+					reason: 'transport_failure',
+					stdout: '',
+					stderr: error instanceof Error ? error.message : String(error),
+					timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
+				};
+			}
+
+			setupCompleted ||= `${logs.stdout}\n${logs.stderr}`.includes(
+				`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
+			);
+			const parsed = parseLaunchOutput(logs, built.nonce);
+			const outcome = parsed.outcome;
+			if (outcome?.kind === 'ready') {
+				return {
+					success: true,
+					process,
+					timings: { setup: outcome.setupMs, start, waitport: outcome.waitportMs },
+				};
+			}
+			if (outcome) {
+				return {
+					success: false,
+					reason: outcome.kind,
+					...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
+					stdout: parsed.stdout,
+					stderr: parsed.stderr,
+					timings: { setup: outcome.setupMs, start, waitport: outcome.waitportMs },
+				};
+			}
+
+			const now = Date.now();
+			if (deadline !== undefined && now >= deadline + LAUNCH_MARKER_GRACE_MS) {
+				await process.kill().catch(() => {});
+				const reason = options.setup && !setupCompleted ? 'setup_timeout' : 'readiness_timeout';
+				return {
+					success: false,
+					reason,
+					stdout: parsed.stdout,
+					stderr: parsed.stderr,
+					timings: {
+						setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0,
+						start,
+						waitport: Math.max(0, now - waitStarted),
+					},
+				};
+			}
+
+			const sleepFor =
+				deadline === undefined
+					? LAUNCH_POLL_INTERVAL_MS
+					: Math.min(LAUNCH_POLL_INTERVAL_MS, Math.max(1, deadline + LAUNCH_MARKER_GRACE_MS - now));
+			await delay(sleepFor);
+		}
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {

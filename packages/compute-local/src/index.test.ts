@@ -422,6 +422,137 @@ describe('LocalCompute env propagation', () => {
 });
 
 describe('LocalCompute process lifecycle', () => {
+	it('runs checked setup and readiness through the combined launcher', async () => {
+		const sb = newSandbox();
+		const result = await sb.launchProcess!(`test -f setup.flag && ${SERVER_CMD}`, {
+			setup: `printf '%s' '--port 9999' > setup-port.txt && printf setup-ok > setup.flag`,
+			cwd: '/workspace',
+			port: 2718,
+			startupTimeout: 15_000,
+		});
+		if (!result.success) throw new Error(JSON.stringify(result));
+		expect(result).toMatchObject({
+			success: true,
+			timings: {
+				setup: expect.any(Number),
+				start: expect.any(Number),
+				waitport: expect.any(Number),
+			},
+		});
+		const { url } = await sb.exposePort(2718, { hostname: 'ignored' });
+		expect(await (await fetch(url)).text()).toBe('ok');
+		expect(await sb.readFile('/workspace/setup-port.txt')).toMatchObject({
+			success: true,
+			content: '--port 9999',
+		});
+		const pid = Number(result.process.id);
+		await result.process.kill();
+		await expect.poll(() => processIsAlive(pid), { timeout: 5000, interval: 20 }).toBe(false);
+	}, 15_000);
+
+	it('prepares a marimo launch before wrapping it in the supervisor', async () => {
+		const stubDir = await mkdtemp(path.join(os.tmpdir(), 'marimohub-launch-'));
+		const uvLog = path.join(stubDir, 'uv.log');
+		await writeFile(
+			path.join(stubDir, 'uv'),
+			`#!/bin/sh
+printf '%s\n' "$*" > "$UV_LOG"
+with_marimo=0
+port=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --with) [ "\${2:-}" = marimo ] && with_marimo=1; shift 2 ;;
+    --port) port="\${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ "$with_marimo" -eq 1 ] || exit 64
+[ -n "$port" ] || exit 65
+exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServer((_,r)=>r.end("ok")).listen(p,"127.0.0.1")' "$port"
+`,
+			{ mode: 0o755 },
+		);
+		const sb = newSandbox();
+		try {
+			const command = buildMarimoLaunch({
+				notebookFile: 'notebook.py',
+				port: 2718,
+				host: '127.0.0.1',
+			}).start;
+			const result = await sb.launchProcess!(command, {
+				cwd: '/workspace',
+				env: {
+					PATH: `${stubDir}:${process.env.PATH}`,
+					UV_LOG: uvLog,
+					NODE_BIN: process.execPath,
+				},
+				port: 2718,
+				startupTimeout: 15_000,
+			});
+			if (!result.success) throw new Error(JSON.stringify(result));
+			expect(await readFile(uvLog, 'utf8')).toContain('run --with marimo');
+			const { url } = await sb.exposePort(2718, { hostname: 'ignored' });
+			expect(await (await fetch(url)).text()).toBe('ok');
+			await result.process.kill();
+		} finally {
+			await rm(stubDir, { recursive: true, force: true });
+		}
+	}, 15_000);
+
+	it.each([
+		{
+			name: 'setup exit',
+			setup: 'printf setup-failed >&2; exit 7',
+			command: SERVER_CMD,
+			timeout: 5000,
+			reason: 'setup_exit',
+			output: 'setup-failed',
+		},
+		{
+			name: 'setup timeout',
+			setup: 'sleep 10',
+			command: SERVER_CMD,
+			timeout: 20,
+			reason: 'setup_timeout',
+			output: '',
+		},
+		{
+			name: 'early kernel exit',
+			command: 'printf kernel-failed >&2; exit 9',
+			timeout: 5000,
+			reason: 'kernel_exit',
+			output: 'kernel-failed',
+		},
+		{
+			name: 'readiness timeout',
+			command: 'sleep 10',
+			timeout: 20,
+			reason: 'readiness_timeout',
+			output: '',
+		},
+	] as const)('reports $name with filtered logs and timings', async (testCase) => {
+		const sb = newSandbox();
+		const result = await sb.launchProcess!(testCase.command, {
+			...(testCase.setup ? { setup: testCase.setup } : {}),
+			cwd: '/workspace',
+			port: 2718,
+			startupTimeout: testCase.timeout,
+		});
+		expect(result).toMatchObject({
+			success: false,
+			reason: testCase.reason,
+			timings: {
+				setup: expect.any(Number),
+				start: expect.any(Number),
+				waitport: expect.any(Number),
+			},
+		});
+		if (result.success) throw new Error('expected launch failure');
+		expect(result.stdout + result.stderr).toContain(testCase.output);
+		expect(result.stderr).not.toContain('__MARIMOHUB_LAUNCH_');
+		for (const timing of Object.values(result.timings)) expect(timing).toBeGreaterThanOrEqual(0);
+	});
+
 	it('maps the logical port to a real free port and serves there', async () => {
 		const sb = newSandbox();
 		const proc = await sb.startProcess(SERVER_CMD, { cwd: '/workspace' });
@@ -550,6 +681,22 @@ describe('LocalCompute registry & teardown', () => {
 		// Port no longer served.
 		await expect(fetch(url)).rejects.toThrow();
 	});
+
+	it('destroy terminates a kernel started by the combined supervisor', async () => {
+		const id = `sb-launch-destroy-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		const sb = compute.create(id);
+		const result = await sb.launchProcess!(SERVER_CMD, {
+			cwd: '/workspace',
+			port: 2718,
+			startupTimeout: 15_000,
+		});
+		if (!result.success) throw new Error(JSON.stringify(result));
+		const { url } = await sb.exposePort(2718, { hostname: '' });
+
+		await sb.destroy();
+
+		await expect(fetch(url)).rejects.toThrow();
+	}, 15_000);
 
 	it('proxy is a no-op', async () => {
 		expect(await compute.proxy()).toBeNull();

@@ -111,6 +111,8 @@ export interface WorkspaceRestoreStats {
 
 export interface WorkspaceRestoreOptions {
 	requireComplete?: boolean;
+	/** Relative path roots owned by another restore and therefore skipped. */
+	excludeRelativeRoots?: readonly string[];
 }
 
 /**
@@ -139,6 +141,9 @@ export async function restoreWorkspace(
 	for (const obj of objects) {
 		const rel = obj.key.slice(sourcePrefix.length);
 		if (!rel) continue;
+		if (options.excludeRelativeRoots?.some((root) => rel === root || rel.startsWith(`${root}/`))) {
+			continue;
+		}
 		// A poisoned key (e.g. from a compromised/synced source) whose relative path
 		// carries `..`/absolute/backslash segments would escape workingDir once
 		// concatenated. Reject or skip it — the sandbox working dir is a hard boundary.

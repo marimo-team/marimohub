@@ -52,6 +52,15 @@ export interface StartProcessOptions {
 	timeout?: number;
 }
 
+export interface LaunchProcessOptions extends Omit<StartProcessOptions, 'timeout'> {
+	setup?: string;
+	port: number;
+	/** Readiness mode; the shared launch supervisor currently uses TCP. */
+	waitForPort?: Omit<WaitForPortOptions, 'timeout'>;
+	/** One deadline shared by setup and readiness. Zero disables the deadline. */
+	startupTimeout: number;
+}
+
 export interface WaitForPortOptions {
 	mode?: 'http' | 'tcp';
 	path?: string;
@@ -65,6 +74,34 @@ export interface SandboxProcess {
 	waitForPort(port: number, options?: WaitForPortOptions): Promise<void>;
 	getLogs(): Promise<{ stdout: string; stderr: string }>;
 }
+
+export interface SandboxLaunchTimings {
+	setup: number;
+	start: number;
+	waitport: number;
+}
+
+export type SandboxLaunchFailureReason =
+	| 'setup_exit'
+	| 'setup_timeout'
+	| 'kernel_exit'
+	| 'readiness_timeout'
+	| 'transport_failure';
+
+export type SandboxLaunchResult =
+	| {
+			success: true;
+			process: SandboxProcess;
+			timings: SandboxLaunchTimings;
+	  }
+	| {
+			success: false;
+			reason: SandboxLaunchFailureReason;
+			exitCode?: number;
+			stdout: string;
+			stderr: string;
+			timings: SandboxLaunchTimings;
+	  };
 
 export type ReadFileResult =
 	| { success: true; content: string; encoding?: 'utf-8' | 'base64' }
@@ -175,6 +212,11 @@ export interface SandboxInstance {
 	mountBucket(options: MountBucketOptions): Promise<void>;
 	unmountBucket(mountPath: string): Promise<void>;
 	startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess>;
+	/**
+	 * Start a checked setup + long-running process and wait for readiness as one
+	 * adapter-owned operation. Optional for compatibility with external adapters.
+	 */
+	launchProcess?(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult>;
 	exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult>;
 	destroy(): Promise<void>;
 	/**

@@ -5,6 +5,7 @@ import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
+	launchWithProcess,
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	withEnvPrefix,
@@ -18,11 +19,13 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -179,6 +182,22 @@ class CloudflareSandboxInstance implements SandboxInstance {
 			waitForPort: (port, opts) => proc.waitForPort(port, opts),
 			getLogs: () => proc.getLogs(),
 		};
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		return launchWithProcess({
+			setup: options.setup,
+			command: cmd,
+			port: options.port,
+			startupTimeout: options.startupTimeout,
+			waitForPort: options.waitForPort,
+			start: (command) =>
+				this.startProcess(command, {
+					cwd: options.cwd,
+					env: options.env,
+					processId: options.processId,
+				}),
+		});
 	}
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {

@@ -19,7 +19,8 @@
  *    ingress at create so the later `exposePort` is reachable.
  *  - The sandbox MAIN process is the SDK keep-alive; marimo runs as a streamed
  *    COMMAND (`commands.start`), not the main process.
- *  - The SDK has no `waitForPort`, so we poll an in-sandbox TCP probe via `exec`.
+ *  - The SDK has no `waitForPort`. Combined launch detects readiness inside its
+ *    command stream; the compatibility `startProcess` path probes via `exec`.
  *
  * `listActive()` is intentionally NOT implemented. The SDK list response
  * (`SandboxInfo`) returns only CoreWeave's `sandboxId` + status — it does NOT echo
@@ -59,14 +60,17 @@ import {
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	buildLaunchCommand,
 	classifyListFilesFailure,
 	iterableToStream,
+	parseLaunchOutput,
 	parseFindFilesOutput,
 	portWaitCommand,
 	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
+import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import type {
 	ComputeResources,
 	SandboxId,
@@ -82,11 +86,13 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -563,6 +569,128 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	async unmountBucket(_mountPath: string): Promise<void> {
 		// no-op: nothing was mounted.
+	}
+
+	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
+		const built = buildLaunchCommand({
+			setup: options.setup,
+			command: cmd,
+			port: options.port,
+			startupTimeout: options.startupTimeout,
+		});
+		const startedAt = Date.now();
+		let proc: CommandProcess;
+		try {
+			const sandbox = await this.ensure();
+			proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(built.command)], {
+				cwd: options.cwd,
+			});
+		} catch (error) {
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: '',
+				stderr: error instanceof Error ? error.message : String(error),
+				timings: { setup: 0, start: Math.max(0, Date.now() - startedAt), waitport: 0 },
+			};
+		}
+		const start = Date.now() - startedAt;
+		const waitStartedAt = Date.now();
+		let stdout = '';
+		let stderr = '';
+		let settled = false;
+		let resolveOutcome!: (outcome: LaunchProtocolOutcome) => void;
+		let rejectOutcome!: (error: unknown) => void;
+		const outcome = new Promise<LaunchProtocolOutcome>((resolve, reject) => {
+			resolveOutcome = resolve;
+			rejectOutcome = reject;
+		});
+		const inspect = () => {
+			if (settled) return;
+			const parsed = parseLaunchOutput({ stdout, stderr }, built.nonce).outcome;
+			if (parsed) {
+				settled = true;
+				resolveOutcome(parsed);
+			}
+		};
+		const pump = async (stream: AsyncIterable<string>, sink: (chunk: string) => void) => {
+			try {
+				for await (const chunk of stream) {
+					sink(chunk);
+					inspect();
+				}
+			} catch (error) {
+				if (!settled) {
+					settled = true;
+					rejectOutcome(error);
+				}
+			}
+		};
+		const stdoutDone = pump(proc.stdout, (chunk) => (stdout += chunk));
+		const stderrDone = pump(proc.stderr, (chunk) => (stderr += chunk));
+		void Promise.allSettled([stdoutDone, stderrDone]).then(() => {
+			inspect();
+			if (!settled) {
+				settled = true;
+				rejectOutcome(new Error('CoreWeave launch stream ended before reporting readiness'));
+			}
+		});
+
+		const logs = () => parseLaunchOutput({ stdout, stderr }, built.nonce);
+		let terminal: LaunchProtocolOutcome;
+		try {
+			terminal = await outcome;
+		} catch (error) {
+			await proc.cancel().catch(() => {});
+			const parsed = logs();
+			const transportMessage = error instanceof Error ? error.message : String(error);
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: parsed.stdout,
+				stderr: [parsed.stderr, transportMessage].filter(Boolean).join('\n'),
+				timings: {
+					setup: 0,
+					start,
+					waitport: Math.max(0, Date.now() - waitStartedAt),
+				},
+			};
+		}
+		const timings = { setup: terminal.setupMs, start, waitport: terminal.waitportMs };
+		if (terminal.kind !== 'ready') {
+			const parsed = logs();
+			return {
+				success: false,
+				reason: terminal.kind,
+				...(terminal.exitCode === undefined ? {} : { exitCode: terminal.exitCode }),
+				stdout: parsed.stdout,
+				stderr: parsed.stderr,
+				timings,
+			};
+		}
+
+		const exec = this.exec.bind(this);
+		return {
+			success: true,
+			timings,
+			process: {
+				id: `cw-proc-${++PROC_SEQ}`,
+				command: cmd,
+				async kill(): Promise<void> {
+					await proc.cancel().catch(() => {});
+				},
+				async waitForPort(port: number, waitOptions?: WaitForPortOptions): Promise<void> {
+					if (port === options.port) return;
+					const timeout = waitOptions?.timeout ?? 30_000;
+					const result = await exec(portWaitCommand(port, Math.max(0.001, timeout / 1000)));
+					if (!result.success) throw new Error(`timed out waiting for port ${port}`);
+				},
+				async getLogs(): Promise<{ stdout: string; stderr: string }> {
+					const parsed = logs();
+					return { stdout: parsed.stdout, stderr: parsed.stderr };
+				},
+			},
+		};
 	}
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {

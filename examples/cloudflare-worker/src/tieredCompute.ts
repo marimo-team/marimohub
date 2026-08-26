@@ -27,11 +27,13 @@ import type {
 	ExposePortOptions,
 	ExposePortResult,
 	GitCheckoutOptions,
+	LaunchProcessOptions,
 	ListFilesOptions,
 	ListFilesResult,
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -145,6 +147,15 @@ class TieredSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		return (await this.resolve()).startProcess(cmd, options);
+	}
+
+	get launchProcess():
+		| ((cmd: string, options: LaunchProcessOptions) => Promise<SandboxLaunchResult>)
+		| undefined {
+		// A prototype method would make capability checks truthy for legacy backends.
+		const launchProcess = this.resolved?.launchProcess;
+		if (!launchProcess) return undefined;
+		return launchProcess.bind(this.resolved);
 	}
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {

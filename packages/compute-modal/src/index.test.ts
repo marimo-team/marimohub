@@ -437,6 +437,40 @@ describe('ModalCompute', () => {
 		expect(sandbox.execCalls).toHaveLength(2);
 	});
 
+	it('uses the launch stream for readiness without polling through exec', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		const pending = pendingProcessResult();
+		sandbox.execImpl = (command) => {
+			const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
+			if (!nonce) return processResult();
+			return {
+				stdout: textStream('kernel output\n'),
+				stderr: textStream(
+					`__MARIMOHUB_LAUNCH_${nonce}__{"event":"ready","setupMs":8,"waitportMs":13}\n`,
+				),
+				wait: pending.process.wait,
+			};
+		};
+		world.existing.set(SANDBOX_ID, sandbox);
+
+		const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+			setup: 'run setup',
+			port: 2718,
+			startupTimeout: 60_000,
+		});
+
+		expect(result).toMatchObject({
+			success: true,
+			timings: { setup: 8, start: expect.any(Number), waitport: 13 },
+		});
+		expect(sandbox.execCalls).toHaveLength(1);
+		expect(sandbox.execCalls[0].command[2]).not.toContain('socket.create_connection');
+		if (!result.success) throw new Error(JSON.stringify(result));
+		expect(await result.process.getLogs()).toEqual({ stdout: 'kernel output\n', stderr: '' });
+		pending.resolve(0);
+	});
+
 	it('treats destroy of an absent sandbox as idempotent', async () => {
 		const world = makeWorld();
 		await expect(makeCompute(world).create(SANDBOX_ID).destroy()).resolves.toBeUndefined();
