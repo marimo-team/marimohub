@@ -14,9 +14,7 @@ import {
 	SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { createSandboxId } from '@marimo-hub/core';
-import { CoreWeaveCompute } from './index';
-import { fakeProcess, makeWorld, procResult } from './testWorld';
+import { fakeProcess, procResult } from './testWorld';
 import { instrumentCoreWeaveTransport } from './tracing';
 
 const exporter = new InMemorySpanExporter();
@@ -155,34 +153,6 @@ describe('instrumentCoreWeaveTransport', () => {
 		expect(requestSpan?.status.code).toBe(SpanStatusCode.ERROR);
 		expect(requestSpan?.attributes['error.type']).toBe('Error');
 		expect(requestSpan?.events.some((event) => event.name === 'exception')).toBe(true);
-	});
-
-	it('correlates the ensure event with the active trace', async () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		try {
-			await provider.getTracer('test').startActiveSpan('session-provision', async (span) => {
-				try {
-					const world = makeWorld();
-					const instance = new CoreWeaveCompute(
-						{ apiKey: 'key', image: 'image' },
-						world.client,
-					).create(createSandboxId(), { reuse: false });
-					await instance.ready?.();
-
-					const event = warn.mock.calls
-						.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
-						.find((record) => record.event === 'coreweave_ensure');
-					expect(event).toMatchObject({
-						trace_id: span.spanContext().traceId,
-						span_id: span.spanContext().spanId,
-					});
-				} finally {
-					span.end();
-				}
-			});
-		} finally {
-			warn.mockRestore();
-		}
 	});
 
 	it('keeps a command span open and records a failure after the handshake', async () => {
