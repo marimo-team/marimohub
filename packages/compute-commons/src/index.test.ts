@@ -527,6 +527,13 @@ describe('launch protocol', () => {
 		});
 	});
 
+	it('keeps a marker followed by a non-object payload as ordinary output', () => {
+		const marker = '__MARIMOHUB_LAUNCH_n1__';
+		const stdout = `${marker}null\n${marker}5\n${marker}"ready"\n${marker}[1]\n`;
+		const parsed = parseLaunchOutput({ stdout, stderr: '' }, 'n1');
+		expect(parsed).toEqual({ stdout, stderr: '', outcome: undefined });
+	});
+
 	it('preserves output before a protocol record in the same fragmented line', () => {
 		const marker = '__MARIMOHUB_LAUNCH_n1__';
 		const parsed = parseLaunchOutput(
@@ -792,6 +799,15 @@ describe('OutputTail', () => {
 describe('LaunchProtocolTracker', () => {
 	const marker = '__MARIMOHUB_LAUNCH_n1__';
 	const readyLine = `${marker}{"event":"ready","setupMs":3,"waitportMs":4}\n`;
+
+	it('ignores a marker with a non-object payload without throwing', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stdout', `${marker}null\n${marker}5\n`);
+		expect(tracker.outcome).toBeUndefined();
+		expect(tracker.setupCompleted).toBe(false);
+		tracker.feed('stdout', readyLine);
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
 
 	it('parses a marker line split across two feed chunks', () => {
 		const tracker = new LaunchProtocolTracker('n1');

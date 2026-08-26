@@ -35,7 +35,13 @@ export function logEvent(
 	// (circular error, BigInt) must still leave a line naming the lost event.
 	let line: string;
 	try {
-		line = JSON.stringify(record);
+		// A `toJSON` field spread onto the record can make stringify return
+		// `undefined` or a scalar without throwing — that also loses the event.
+		const serialized: unknown = JSON.stringify(record);
+		if (typeof serialized !== 'string' || !serialized.startsWith('{')) {
+			throw new TypeError('record did not serialize to an object');
+		}
+		line = serialized;
 	} catch {
 		const attempted = fields.event;
 		try {

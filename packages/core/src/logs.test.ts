@@ -123,6 +123,20 @@ describe('logEvent', () => {
 		}
 	});
 
+	it('falls back when a toJSON field makes the record serialize to a non-object', () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			logEvent({ event: 'wide', toJSON: () => {} });
+			expect(log).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+				event: 'log_event_serialization_failed',
+				attempted_event: 'wide',
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it('survives a BigInt field with a non-string event', () => {
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		try {

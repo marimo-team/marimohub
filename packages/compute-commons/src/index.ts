@@ -351,17 +351,21 @@ function parseMarkerLine(
 ): { before: string; event?: string; outcome?: LaunchProtocolOutcome } | undefined {
 	const index = line.indexOf(marker);
 	if (index === -1) return undefined;
-	let value: { event?: string; setupMs?: number; waitportMs?: number; exitCode?: number };
+	let parsed: unknown;
 	try {
-		value = JSON.parse(line.slice(index + marker.length)) as {
-			event?: string;
-			setupMs?: number;
-			waitportMs?: number;
-			exitCode?: number;
-		};
+		parsed = JSON.parse(line.slice(index + marker.length));
 	} catch {
 		return undefined;
 	}
+	// A marker followed by a non-object payload (`null`, a scalar, an array) is
+	// not a supervisor event — keep it as ordinary output instead of throwing.
+	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+	const value = parsed as {
+		event?: string;
+		setupMs?: number;
+		waitportMs?: number;
+		exitCode?: number;
+	};
 	const event = value.event;
 	const outcome: LaunchProtocolOutcome | undefined =
 		event === 'ready' ||
