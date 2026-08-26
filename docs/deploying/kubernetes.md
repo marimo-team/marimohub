@@ -111,9 +111,13 @@ the image pull. If starts are slow:
    stale otherwise) and pays a registry round-trip on every start. Override
    with `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` if you know better.
 2. **Pre-pull the image on kernel nodes.** The first session on a new node
-   pays the full pull. Run a small DaemonSet with the sandbox image, or an
-   image-cache operator such as
-   [kube-fledged](https://github.com/senthilrch/kube-fledged).
+   pays the full pull. Run a DaemonSet on the kernel pool with one init
+   container per image tag — see the
+   [example on the CKS page](./cks.md#pre-pull-the-sandbox-image), swapping
+   the `nodeSelector` for your pool — or an image-cache operator such as
+   [kube-fledged](https://github.com/senthilrch/kube-fledged). Match the pull
+   policy to the kernel pods': `IfNotPresent` for a digest/pinned image,
+   `Always` for a tag you re-push.
 3. **Check scheduling.** Tight CPU/memory/GPU requests, taints, or a cold
    autoscaler show up as a large `schedule_ms` and `FailedScheduling` events.
 

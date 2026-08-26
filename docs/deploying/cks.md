@@ -572,6 +572,57 @@ sync + `kubectl rollout restart`.
 filesystem (venv, caches) on teardown and restores it next session. See
 [Configuration](../configuration.md#coreweave-sandbox) for the trade-offs.
 
+### Pre-pull the sandbox image
+
+Sandbox pods run on your sandbox node pool and pull `MARIMOHUB_COMPUTE_IMAGE`
+through the node's image cache. A node that does not have the tag yet pays a
+full registry pull on the session's critical path (≈20 s for a 650 MB image
+from ghcr.io), and a registry hiccup fails the start outright. This hits every
+new node in the pool and every tag you roll. The `coreweave_ensure` and
+`sandbox_startup_diagnostic` log events flag it: `boot_ms` over 10 s carries a
+`slow_boot_hint`.
+
+Keep every tag warm with a DaemonSet on the pool — one init container per
+image, then an idle holder:
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sandbox-image-prepuller
+spec:
+  selector:
+    matchLabels: { app: sandbox-image-prepuller }
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 100% } # warm every node at once
+  template:
+    metadata:
+      labels: { app: sandbox-image-prepuller }
+    spec:
+      nodeSelector:
+        compute.coreweave.com/node-pool: sandboxes # your sandbox pool
+      tolerations: [{ operator: Exists }]
+      imagePullSecrets: [{ name: ghcr-credentials }] # optional for a public image
+      initContainers:
+        # One per tag in MARIMOHUB_COMPUTE_IMAGE (and MARIMOHUB_DATA_PREVIEW_IMAGE).
+        - name: pull-py313
+          image: ghcr.io/marimo-team/marimo-sandbox:py3.13-marimo0.23.16
+          imagePullPolicy: Always
+          command: ['/bin/true']
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests: { cpu: 1m, memory: 8Mi }
+```
+
+Use `imagePullPolicy: Always` on the pull containers: sandbox pods pull with
+`Always`, so when you re-push a tag the prepuller must fetch the new digest
+rather than hold the old one. An unchanged tag costs one manifest check.
+Re-apply (with a changed pod annotation so the pods roll) whenever you change
+`MARIMOHUB_COMPUTE_IMAGE`, before rolling the hub.
+
 ## Production cautions
 
 - Pin the chart version; upgrade deliberately (`helm upgrade --version …`).
