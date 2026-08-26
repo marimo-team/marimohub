@@ -95,8 +95,16 @@ const TAKEOVER_DRAIN_STAGE_ORDER: Record<TakeoverDrainStage, number> = {
  * position from the same records, which is what lets the create route's cap
  * recheck pick one winner instead of every racer rejecting the others.
  */
-const byStartOrder = (a: Session, b: Session) =>
-	a.started_at.localeCompare(b.started_at) || a.session_id.localeCompare(b.session_id);
+const byCapOrder = (a: Session, b: Session) => {
+	// A running session already cleared the cap and cannot be displaced by a new
+	// starting record whose random id sorts first in the same millisecond.
+	const admissionOrder = Number(a.status !== 'running') - Number(b.status !== 'running');
+	return (
+		admissionOrder ||
+		a.started_at.localeCompare(b.started_at) ||
+		a.session_id.localeCompare(b.session_id)
+	);
+};
 
 export class SessionService {
 	constructor(
@@ -680,7 +688,7 @@ export class SessionService {
 					active.includes(s.status) &&
 					sessionModePolicy(s).capScope === capScope,
 			)
-			.sort(byStartOrder);
+			.sort(byCapOrder);
 	}
 
 	/**
@@ -700,7 +708,7 @@ export class SessionService {
 		const sessions = await this.scanProject(projectId, (session) => session);
 		return sessions
 			.filter((s) => active.includes(s.status) && sessionModePolicy(s).capScope === 'project')
-			.sort(byStartOrder);
+			.sort(byCapOrder);
 	}
 
 	/**

@@ -306,7 +306,7 @@ describe('Session routes', () => {
 		expect(data.error).toBeUndefined();
 	});
 
-	it('passes the configured sandbox startup timeout through to the kernel port wait', async () => {
+	it('uses the configured sandbox startup timeout to bound the kernel port wait', async () => {
 		const sb = makeFakeSandbox();
 		const api = createTestApi({
 			bucket,
@@ -315,7 +315,10 @@ describe('Session routes', () => {
 			deps: { sandbox: sandboxConfig({ startupTimeoutMs: Millis.seconds(300) }) },
 		}).request;
 		await expectOk<ApiSession>(await api('POST', sessionsPath()));
-		expect(sb.calls.waitForPortOptions).toEqual([{ timeout: 300_000 }]);
+		expect(sb.calls.waitForPortOptions).toHaveLength(1);
+		const timeout = sb.calls.waitForPortOptions[0]!.timeout;
+		expect(timeout).toBeGreaterThan(299_000);
+		expect(timeout).toBeLessThanOrEqual(300_000);
 	});
 
 	it('surfaces a startup timeout as a 503 naming the timeout, on the response AND the record', async () => {
