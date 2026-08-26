@@ -1,5 +1,7 @@
 import { Button as AriaButton } from 'react-aria-components';
 import type { ButtonProps as AriaButtonProps } from 'react-aria-components';
+import { Link } from 'react-router-dom';
+import type { LinkProps } from 'react-router-dom';
 import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
@@ -55,5 +57,29 @@ export function Button({
 		<AriaButton className={cn(buttonVariants({ variant, size }), className)} {...props}>
 			{children}
 		</AriaButton>
+	);
+}
+
+export interface LinkButtonProps extends Omit<LinkProps, 'className'> {
+	variant?: 'default' | 'primary' | 'ghost' | 'danger';
+	size?: 'sm' | 'md';
+	className?: string;
+}
+
+/**
+ * Like `Button`, but renders a react-router `<Link>` so cmd/ctrl/middle-click
+ * open the target in a new tab. Use for labeled navigation styled as a button.
+ */
+export function LinkButton({
+	variant = 'default',
+	size = 'md',
+	className = '',
+	children,
+	...props
+}: LinkButtonProps) {
+	return (
+		<Link className={cn(buttonVariants({ variant, size }), className)} {...props}>
+			{children}
+		</Link>
 	);
 }
