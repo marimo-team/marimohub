@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
 export function PageContainer({ children }: { children: ReactNode }) {
 	return (
 		<div className="flex flex-1 justify-center overflow-y-auto p-8 max-md:p-3">
-			<div className="w-full max-w-3xl">{children}</div>
+			<div className="w-full max-w-3xl pb-8 max-md:pb-5">{children}</div>
 		</div>
 	);
 }

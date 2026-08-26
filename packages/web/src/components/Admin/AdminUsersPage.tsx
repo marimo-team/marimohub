@@ -151,7 +151,12 @@ export default function AdminUsersPage() {
 									>
 										<Button
 											size="sm"
-											variant={user.suspended_at ? 'default' : 'danger'}
+											variant={user.suspended_at ? 'default' : 'ghost'}
+											className={
+												user.suspended_at
+													? undefined
+													: 'text-destructive hover:bg-destructive/10 hover:text-destructive'
+											}
 											isDisabled={isSelfSuspend}
 											onPress={() => suspensionDialog.open(user)}
 										>
