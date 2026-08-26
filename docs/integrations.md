@@ -202,7 +202,7 @@ The brokered runtime supports a narrow Iceberg REST configuration. It requires a
 
 - no authentication or bearer-token authentication
 - no access delegation
-- explicit path-style S3 storage with an origin-only endpoint
+- explicit S3 storage with an origin-only endpoint, using path-style or virtual-hosted addressing
 - static S3 credentials or anonymous access
 - one or more guarded S3 read locations
 - system TLS and default runtime options

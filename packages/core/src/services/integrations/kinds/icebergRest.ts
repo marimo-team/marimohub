@@ -582,6 +582,29 @@ function parsedUrl(value: unknown): URL | undefined {
 	}
 }
 
+function isDnsCompatibleS3Bucket(value: unknown): boolean {
+	return (
+		typeof value === 'string' &&
+		value.length >= 3 &&
+		value.length <= 63 &&
+		/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(value) &&
+		!value.includes('..') &&
+		!isIpv4Address(value)
+	);
+}
+
+function isIpAddressHost(hostname: string): boolean {
+	return hostname.includes(':') || isIpv4Address(hostname);
+}
+
+function isIpv4Address(value: string): boolean {
+	const octets = value.split('.');
+	return (
+		octets.length === 4 &&
+		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+	);
+}
+
 function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[] {
 	const config = asRecord(value) ?? {};
 	const auth = asRecord(config.auth) ?? {};
@@ -706,11 +729,13 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 			'DuckDB-Wasm preview requires an origin-only S3 endpoint',
 		),
 		readinessCheck(
-			's3-path-style',
-			'Use path-style S3 addressing',
-			storageIsS3 && storage.force_virtual_addressing !== true,
-			storageIsS3 ? 'storage.force_virtual_addressing' : 'storage',
-			'virtual-hosted S3 addressing is not supported by DuckDB-Wasm preview',
+			's3-virtual-host-endpoint',
+			'Use a DNS endpoint for virtual-hosted S3',
+			storageIsS3 &&
+				(storage.force_virtual_addressing !== true ||
+					(endpoint !== undefined && !isIpAddressHost(endpoint.hostname))),
+			storageIsS3 ? 'storage.endpoint' : 'storage',
+			'virtual-hosted S3 addressing requires a DNS endpoint',
 		),
 		readinessCheck(
 			's3-basic-options',
@@ -734,6 +759,18 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 				storage.broker_read_locations.length > 0,
 			storageIsS3 ? 'storage.broker_read_locations' : 'storage',
 			'DuckDB-Wasm preview requires at least one guarded S3 read location',
+		),
+		readinessCheck(
+			's3-virtual-host-buckets',
+			'Use DNS-compatible bucket names for virtual-hosted S3',
+			storageIsS3 &&
+				(storage.force_virtual_addressing !== true ||
+					(Array.isArray(storage.broker_read_locations) &&
+						storage.broker_read_locations.every((location) =>
+							isDnsCompatibleS3Bucket(asRecord(location)?.bucket),
+						))),
+			storageIsS3 ? 'storage.broker_read_locations' : 'storage',
+			'virtual-hosted S3 addressing requires DNS-compatible bucket names',
 		),
 		readinessCheck(
 			'default-runtime-options',
@@ -783,12 +820,13 @@ function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
 	}
 	const endpoint = new URL(config.storage.endpoint);
 	const name = sqlIdentifier(`marimohub_s3_${suffix}`);
+	const urlStyle = config.storage.force_virtual_addressing ? 'vhost' : 'path';
 	return {
 		create: {
 			text:
 				`CREATE TEMPORARY SECRET ${name} (` +
 				"TYPE S3, KEY_ID 'marimohub-parent-broker', SECRET 'marimohub-parent-broker', " +
-				"REGION ?, ENDPOINT ?, URL_STYLE 'path', USE_SSL ?)",
+				`REGION ?, ENDPOINT ?, URL_STYLE '${urlStyle}', USE_SSL ?)`,
 			params: [config.storage.region ?? 'us-east-1', endpoint.host, endpoint.protocol === 'https:'],
 		},
 		drop: { text: `DROP SECRET ${name}` },
@@ -822,6 +860,7 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 			kind: 's3',
 			endpoint: config.storage.endpoint,
 			region: config.storage.region ?? 'us-east-1',
+			urlStyle: config.storage.force_virtual_addressing ? 'vhost' : 'path',
 			credentials,
 			locations: config.storage.broker_read_locations,
 		},

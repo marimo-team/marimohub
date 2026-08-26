@@ -13,7 +13,7 @@ import {
 	DUCKDB_WORKER_RESOURCE_LIMITS,
 	nodeDuckDBWasmCapabilities,
 } from './node';
-import type { DuckDBHttpSessionFactory } from './node';
+import type { DuckDBHttpSessionFactory, IcebergHttpBrokerRequest } from './node';
 import { createHttpBridgeBuffers } from './httpBridge';
 
 type OnTestFinished = TestContext['onTestFinished'];
@@ -124,6 +124,7 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 						kind: 's3',
 						endpoint: 'https://objects.example.test',
 						region: 'us-east-1',
+						urlStyle: 'path',
 						credentials: { method: 'anonymous' },
 						locations: [{ bucket: 'warehouse', prefix: 'tables' }],
 					},
@@ -136,6 +137,57 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(expiresAtMs).toBeGreaterThanOrEqual(beforeExecute + 124_000);
 		expect(expiresAtMs).toBeLessThanOrEqual(Date.now() + 125_000);
 		expect(fetch).not.toHaveBeenCalled();
+		expect(close).toHaveBeenCalledOnce();
+	}, 30_000);
+
+	it('builds virtual-hosted S3 requests with the packaged HTTP extension', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const close = vi.fn();
+		const fetch = vi.fn(async (_request: IcebergHttpBrokerRequest) => ({
+			status: 404,
+			headers: {},
+			body: new Uint8Array(),
+		}));
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', () => ({ fetch, close }))(),
+			onTestFinished,
+		);
+		await runtime.initialize({ memoryLimitMb: 128 });
+
+		await expect(
+			runtime.execute({
+				setup: [
+					{ text: 'LOAD httpfs' },
+					{
+						text:
+							"CREATE TEMPORARY SECRET broker_test (TYPE S3, KEY_ID 'dummy', " +
+							"SECRET 'dummy', REGION ?, ENDPOINT ?, URL_STYLE 'vhost', USE_SSL ?)",
+						params: ['us-east-1', 'objects.example.test', true],
+					},
+				],
+				query: { text: "SELECT * FROM read_parquet('s3://warehouse/tables/file.parquet')" },
+				cleanup: [{ text: 'DROP SECRET broker_test' }],
+				requires: ['iceberg-http'],
+				httpAccess: {
+					kind: 'iceberg-rest',
+					catalog: { url: 'https://catalog.example.test' },
+					storage: {
+						kind: 's3',
+						endpoint: 'https://objects.example.test',
+						region: 'us-east-1',
+						urlStyle: 'vhost',
+						credentials: { method: 'anonymous' },
+						locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				},
+			}),
+		).rejects.toThrow();
+		expect(fetch).toHaveBeenCalled();
+		expect(fetch.mock.calls.map(([request]) => request.url)).toEqual(
+			expect.arrayContaining(['https://warehouse.objects.example.test/tables/file.parquet']),
+		);
 		expect(close).toHaveBeenCalledOnce();
 	}, 30_000);
 
@@ -385,6 +437,7 @@ describe.concurrent('DuckDB-Wasm data-query executor', () => {
 						kind: 's3',
 						endpoint: 'https://objects.example.test',
 						region: 'us-east-1',
+						urlStyle: 'path',
 						credentials: { method: 'anonymous' },
 						locations: [{ bucket: 'warehouse', prefix: 'tables' }],
 					},

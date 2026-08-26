@@ -21,10 +21,13 @@
 	"dependencies": {
 		"@coreweave/cwsandbox": "file:../../vendor/cwsandbox",
 		"@marimo-hub/compute-commons": "workspace:*",
-		"@marimo-hub/core": "workspace:*"
+		"@marimo-hub/core": "workspace:*",
+		"@opentelemetry/api": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@opentelemetry/context-async-hooks": "catalog:",
+		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

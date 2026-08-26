@@ -26,6 +26,7 @@ import { SandboxClient } from '@coreweave/cwsandbox';
 import { DEFAULT_BASE_URL, GrpcSandboxTransport } from '@coreweave/cwsandbox/node';
 import { CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
+import { instrumentCoreWeaveTransport } from './tracing';
 
 /**
  * Version reported in the gateway telemetry headers. The vendored SDK build's
@@ -112,11 +113,15 @@ export function createWandbCompute(
 	const { apiKey, entity, project, baseUrl, ...coreweave } = config;
 	if (client) return new CoreWeaveCompute(coreweave, client);
 
-	const transport = new GrpcSandboxTransport({
-		// `||` (not `??`): a set-but-empty env var must also fall back.
-		baseUrl: baseUrl?.trim() || DEFAULT_BASE_URL,
-		metadata: buildWandbMetadata({ apiKey, entity, project }),
-	});
+	// `||` (not `??`): a set-but-empty env var must also fall back.
+	const gatewayUrl = baseUrl?.trim() || DEFAULT_BASE_URL;
+	const transport = instrumentCoreWeaveTransport(
+		new GrpcSandboxTransport({
+			baseUrl: gatewayUrl,
+			metadata: buildWandbMetadata({ apiKey, entity, project }),
+		}),
+		gatewayUrl,
+	);
 	return new CoreWeaveCompute(
 		{
 			...coreweave,

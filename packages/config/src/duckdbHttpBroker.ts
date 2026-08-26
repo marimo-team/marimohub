@@ -89,7 +89,7 @@ function routesFor(access: Readonly<DuckDBHttpAccess>, now: () => number) {
 		},
 		...access.storage.locations.map((location) => ({
 			kind: 'storage' as const,
-			url: storagePrefixUrl(endpoint, location.bucket, location.prefix),
+			url: storagePrefixUrl(endpoint, location.bucket, location.prefix, access.storage.urlStyle),
 			match: 'prefix' as const,
 			methods: ['GET', 'HEAD'] as const,
 			prepareHeaders: prepareStorageHeaders,
@@ -271,7 +271,12 @@ function routePrefixUrl(value: string): string {
 	return url.toString();
 }
 
-function storagePrefixUrl(endpoint: URL, bucket: string, prefix: string): string {
+function storagePrefixUrl(
+	endpoint: URL,
+	bucket: string,
+	prefix: string,
+	urlStyle: 'path' | 'vhost',
+): string {
 	const normalizedPrefix = prefix.replaceAll(/^\/+|\/+$/g, '');
 	const segments = normalizedPrefix.split('/');
 	if (
@@ -284,12 +289,47 @@ function storagePrefixUrl(endpoint: URL, bucket: string, prefix: string): string
 		throw new IcebergHttpBrokerError('invalid_capability', 'S3 read location is invalid.');
 	}
 	const url = new URL(endpoint);
-	url.pathname = [
-		url.pathname.replace(/\/$/, ''),
-		encodeSegment(bucket),
-		...segments.map(encodeSegment),
-	].join('/');
+	if (urlStyle === 'vhost') {
+		if (!isDnsCompatibleS3Bucket(bucket) || isIpAddressHost(endpoint.hostname)) {
+			throw new IcebergHttpBrokerError(
+				'invalid_capability',
+				'Virtual-hosted S3 read location is invalid.',
+			);
+		}
+		url.hostname = `${bucket}.${endpoint.hostname}`;
+		url.pathname = [url.pathname.replace(/\/$/, ''), ...segments.map(encodeSegment)].join('/');
+	} else if (urlStyle === 'path') {
+		url.pathname = [
+			url.pathname.replace(/\/$/, ''),
+			encodeSegment(bucket),
+			...segments.map(encodeSegment),
+		].join('/');
+	} else {
+		throw new IcebergHttpBrokerError('invalid_capability', 'S3 URL style is invalid.');
+	}
 	return url.toString();
+}
+
+function isDnsCompatibleS3Bucket(bucket: string): boolean {
+	return (
+		bucket.length >= 3 &&
+		bucket.length <= 63 &&
+		/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(bucket) &&
+		!bucket.includes('..') &&
+		!isIpv4Address(bucket)
+	);
+}
+
+function isIpAddressHost(hostname: string): boolean {
+	return hostname.includes(':') || isIpv4Address(hostname);
+}
+
+function isIpv4Address(value: string): boolean {
+	const octets = value.split('.');
+	return (
+		octets.length === 4 &&
+		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+	);
 }
 
 function canonicalPath(url: URL): string {

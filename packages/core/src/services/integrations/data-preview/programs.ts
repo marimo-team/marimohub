@@ -24,6 +24,7 @@ export interface DuckDBHttpAccess {
 		kind: 's3';
 		endpoint: string;
 		region: string;
+		urlStyle: 'path' | 'vhost';
 		credentials:
 			| { method: 'anonymous' }
 			| {
