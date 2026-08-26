@@ -652,10 +652,8 @@ export class SessionService {
 	/**
 	 * Count a user's active sessions (`starting`/`running`) — `terminating` is
 	 * excluded so a stop immediately frees a slot. The create-session route uses
-	 * this to enforce a concurrent-session cap (a cost-DoS guard against a runaway
-	 * client) — as a pre-flight only, since count→create is not atomic; the route
-	 * re-ranks via `listActiveForUser` once the record exists. The per-notebook
-	 * reuse in `findReusable` is what stops a refresh loop from tripping it.
+	 * `listActiveForUser` to rank a new record for its concurrent-session cap; the
+	 * per-notebook reuse in `findReusable` keeps refresh loops from tripping it.
 	 */
 	async countActiveForUser(userId: UserId, capScope: 'user' | 'project' = 'user'): Promise<number> {
 		return (await this.listActiveForUser(userId, capScope)).length;
@@ -687,10 +685,9 @@ export class SessionService {
 
 	/**
 	 * Count a project's active app sessions, for the per-project app cap
-	 * (`MARIMOHUB_MAX_APPS_PER_PROJECT`). Pre-flight only, like
-	 * `countActiveForUser`; the user-blind reuse in `findReusable` keeps an
-	 * attach from ever tripping it. `terminating` is excluded (matching the
-	 * user cap): a stop frees the slot while teardown finishes, so the live
+	 * (`MARIMOHUB_MAX_APPS_PER_PROJECT`). The user-blind reuse in `findReusable`
+	 * keeps an attach from ever tripping it. `terminating` is excluded (matching
+	 * the user cap): a stop frees the slot while teardown finishes, so the live
 	 * sandbox count can briefly exceed the cap.
 	 */
 	async countActiveAppsForProject(projectId: ProjectId): Promise<number> {

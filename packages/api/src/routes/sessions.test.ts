@@ -1665,8 +1665,8 @@ describe('Session routes', () => {
 		// First session succeeds (running, counts toward the cap).
 		await expectOk(await capped('POST', sessionsPath()));
 
-		// A DIFFERENT notebook would be a second concurrent sandbox → rejected with 429
-		// before provisioning. (Re-POSTing the SAME notebook would RESUME, not be capped.)
+		// A DIFFERENT notebook would be a second concurrent sandbox → rejected with 429.
+		// (Re-POSTing the SAME notebook would RESUME, not be capped.)
 		const otherNb = await createServices(bucket).notebooks.createNotebook(
 			pid,
 			{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
@@ -1678,11 +1678,44 @@ describe('Session routes', () => {
 		// A 429 carries a backoff hint so the client doesn't have to guess.
 		expect(capRes.headers.get('Retry-After')).toBe('5');
 
-		// Only the first notebook has a session record.
+		// The authoritative cap check runs after record creation but before provisioning,
+		// and records the rejection for polling clients.
 		expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
+		const rejected = await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId);
+		expect(rejected).toHaveLength(1);
+		expect(rejected[0]).toMatchObject({
+			status: 'failed',
+			error: { code: 'RESOURCE_EXHAUSTED' },
+		});
+	});
+
+	it('scans deployment-wide sessions once when enforcing the per-user cap', async () => {
+		const services = createServices(bucket);
+		const unrelatedProject = createProjectId();
+		const unrelated = await services.sessions.createSession({
+			project_id: unrelatedProject,
+			notebook_id: createNotebookId(),
+			user_id: STRANGER,
+		});
+		const listSpy = vi.spyOn(bucket, 'list');
+		const getSpy = vi.spyOn(bucket, 'get');
+		const capped = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			maxConcurrentSessionsPerUser: 5,
+		}).request;
+
+		await expectOk(await capped('POST', sessionsPath()));
+
 		expect(
-			await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId),
-		).toHaveLength(0);
+			listSpy.mock.calls.filter(([options]) => options?.prefix === paths.sessionsPrefix),
+		).toHaveLength(1);
+		expect(
+			getSpy.mock.calls.filter(
+				([key]) => key === paths.session(unrelatedProject, unrelated.session_id),
+			),
+		).toHaveLength(1);
 	});
 
 	it('POST /sessions reuses an existing running session instead of provisioning anew', async () => {
