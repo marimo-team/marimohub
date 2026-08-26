@@ -89,7 +89,7 @@ describe('DataBrowserPage object detail', () => {
 		expect(screen.queryByText('hello object')).not.toBeInTheDocument();
 	});
 
-	it('reports rejected key and snippet clipboard writes', async () => {
+	it('reports rejected key and snippet clipboard writes', async ({ onTestFinished }) => {
 		const user = userEvent.setup();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
@@ -97,6 +97,7 @@ describe('DataBrowserPage object detail', () => {
 		});
 		await screen.findByText('s3://lake/events.jsonl');
 		const write = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
+		onTestFinished(() => write.mockRestore());
 
 		await user.click(screen.getByRole('button', { name: 'Copy key' }));
 		expect(await screen.findByText('Could not copy to clipboard')).toBeInTheDocument();
@@ -153,8 +154,8 @@ describe('DataBrowserPage object detail', () => {
 		expect(screen.getByText('analytics')).toBeInTheDocument();
 		expect(screen.getByText('production')).toBeInTheDocument();
 		await user.click(screen.getByRole('tab', { name: 'Versions' }));
-		expect(screen.getByRole('button', { name: /Delete marker/ })).toBeDisabled();
-		await user.click(screen.getByRole('button', { name: /v1/ }));
+		expect(await screen.findByRole('button', { name: /Delete marker/ })).toBeDisabled();
+		await user.click(await screen.findByRole('button', { name: /v1/ }));
 		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('version=v1'));
 	});
 

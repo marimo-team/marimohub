@@ -158,7 +158,10 @@ export async function chooseNotebookAction(
 export function installDownloadMocks() {
 	const createObjectURL = vi.fn(() => 'blob:download');
 	const revokeObjectURL = vi.fn();
-	vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL }));
+	const DownloadURL = class extends URL {};
+	DownloadURL.createObjectURL = createObjectURL;
+	DownloadURL.revokeObjectURL = revokeObjectURL;
+	vi.stubGlobal('URL', DownloadURL);
 	return { createObjectURL, revokeObjectURL };
 }
 

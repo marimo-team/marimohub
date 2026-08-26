@@ -17,7 +17,9 @@ describe('DataBrowserPage object actions', () => {
 		expect(await screen.findByText('second.csv')).toBeInTheDocument();
 	});
 
-	it('multi-selects object URIs and clears selection while navigating prefixes', async () => {
+	it('multi-selects object URIs and clears selection while navigating prefixes', async ({
+		onTestFinished,
+	}) => {
 		const user = userEvent.setup();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
@@ -35,6 +37,7 @@ describe('DataBrowserPage object actions', () => {
 		await user.keyboard('{/Control}');
 		const copy = screen.getByRole('button', { name: 'Copy 2 selected URIs' });
 		const write = vi.spyOn(navigator.clipboard, 'writeText');
+		onTestFinished(() => write.mockRestore());
 		await user.click(copy);
 		await waitFor(() =>
 			expect(write).toHaveBeenCalledWith('s3://lake/first.csv\ns3://lake/second.csv'),
