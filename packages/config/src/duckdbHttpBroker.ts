@@ -125,7 +125,7 @@ function routesFor(
 	if (access.kind !== 'iceberg-rest') {
 		throw new IcebergHttpBrokerError(
 			'invalid_capability',
-			'DuckDB HTTP access specification is unsupported.',
+			'DuckDB HTTP access is not supported. Use an S3 or Iceberg REST integration.',
 		);
 	}
 	if (
@@ -134,7 +134,7 @@ function routesFor(
 	) {
 		throw new IcebergHttpBrokerError(
 			'invalid_capability',
-			'DuckDB catalog authentication specification is invalid.',
+			'Catalog authentication is invalid. Configure either a bearer token or OAuth2 client credentials, not both.',
 		);
 	}
 	const catalogUrl = routePrefixUrl(access.catalog.url);
@@ -277,10 +277,10 @@ export function createGuardedOAuthTokenExchange(options: {
 				}).toString(),
 				signal,
 			});
-			if (!response.ok) throw new OAuthExchangeError('status');
+			if (!response.ok) throw oauthFailure('status', response.status);
 			const body = await response.json();
 			if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-				throw new OAuthExchangeError('response');
+				throw oauthFailure('response');
 			}
 			const token = (body as Record<string, unknown>).access_token;
 			const tokenType = (body as Record<string, unknown>).token_type;
@@ -296,13 +296,13 @@ export function createGuardedOAuthTokenExchange(options: {
 				expiresIn < 1 ||
 				expiresIn > OAUTH_MAX_EXPIRES_IN_SECONDS
 			) {
-				throw new OAuthExchangeError('response');
+				throw oauthFailure('response');
 			}
 			metrics.increment('duckdb_http_broker.oauth_exchange', 1, { outcome: 'success' });
 			return { accessToken: token, expiresInSeconds: expiresIn };
 		} catch (error) {
 			const reason =
-				error instanceof OAuthExchangeError
+				error instanceof OAuthTokenError
 					? error.reason
 					: signal?.aborted
 						? 'cancelled'
@@ -311,16 +311,28 @@ export function createGuardedOAuthTokenExchange(options: {
 				outcome: 'failure',
 				reason,
 			});
-			if (signal?.aborted) throw error;
-			throw oauthFailure();
+			if (error instanceof OAuthTokenError) throw error;
+			throw oauthFailure(signal?.aborted ? 'cancelled' : 'transport');
 		}
 	};
 }
 
-class OAuthExchangeError extends Error {
-	constructor(readonly reason: 'status' | 'response') {
-		super(reason);
-		this.name = 'OAuthExchangeError';
+type OAuthFailureReason =
+	| 'cancelled'
+	| 'endpoint'
+	| 'insecure_transport'
+	| 'response'
+	| 'session'
+	| 'status'
+	| 'transport';
+
+class OAuthTokenError extends IcebergHttpBrokerError {
+	constructor(
+		readonly reason: OAuthFailureReason,
+		message: string,
+	) {
+		super('credential_failed', message);
+		this.name = 'OAuthTokenError';
 	}
 }
 
@@ -345,7 +357,7 @@ function createOAuthTokenProvider(options: {
 
 	const exchange = async (signal?: AbortSignal): Promise<string> => {
 		const remainingMs = options.sessionExpiresAtMs - options.now();
-		if (closed || remainingMs <= 0) throw oauthFailure();
+		if (closed || remainingMs <= 0) throw oauthFailure('session');
 		const lifecycleSignal = signal
 			? AbortSignal.any([signal, controller.signal])
 			: controller.signal;
@@ -366,7 +378,7 @@ function createOAuthTokenProvider(options: {
 				},
 				combinedSignal,
 			);
-			if (closed || options.now() >= options.sessionExpiresAtMs) throw oauthFailure();
+			if (closed || options.now() >= options.sessionExpiresAtMs) throw oauthFailure('session');
 			const issuedAtMs = options.now();
 			cached = {
 				token: result.accessToken,
@@ -378,7 +390,7 @@ function createOAuthTokenProvider(options: {
 			retryAfterMs = 0;
 			metrics.increment('duckdb_http_broker.oauth_refresh', 1, { outcome: 'success' });
 			return cached.token;
-		} catch {
+		} catch (error) {
 			retryAfterMs = Math.min(
 				options.sessionExpiresAtMs,
 				options.now() + OAUTH_REFRESH_RETRY_BACKOFF_MS,
@@ -388,14 +400,18 @@ function createOAuthTokenProvider(options: {
 				metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'stale-cache' });
 				return cached.token;
 			}
-			throw oauthFailure();
+			if (error instanceof OAuthTokenError) throw error;
+			if (combinedSignal.aborted) {
+				throw oauthFailure(lifecycleSignal.aborted ? 'cancelled' : 'session');
+			}
+			throw oauthFailure('transport');
 		}
 	};
 
 	return {
 		async authorization(signal) {
 			const currentTime = options.now();
-			if (closed || currentTime >= options.sessionExpiresAtMs) throw oauthFailure();
+			if (closed || currentTime >= options.sessionExpiresAtMs) throw oauthFailure('session');
 			const refreshAtMs = (cached?.expiresAtMs ?? 0) - options.auth.refreshMarginSeconds * 1000;
 			if (cached && currentTime < refreshAtMs) {
 				metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'cache' });
@@ -406,7 +422,10 @@ function createOAuthTokenProvider(options: {
 					metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'stale-cache' });
 					return { authorization: `Bearer ${cached.token}` };
 				}
-				throw oauthFailure();
+				throw new OAuthTokenError(
+					'transport',
+					'OAuth2 token refresh failed recently. Retry the query in one second.',
+				);
 			}
 			refresh ??= exchange(signal).finally(() => {
 				refresh = undefined;
@@ -428,22 +447,70 @@ function parseOAuthEndpoint(value: string, allowInsecureTransport: boolean): URL
 	try {
 		url = new URL(value);
 	} catch {
-		throw oauthFailure();
+		throw oauthFailure('endpoint');
+	}
+	if (url.protocol === 'http:' && !allowInsecureTransport) {
+		throw oauthFailure('insecure_transport');
 	}
 	if (
 		(url.protocol !== 'http:' && url.protocol !== 'https:') ||
-		(url.protocol === 'http:' && !allowInsecureTransport) ||
 		url.username ||
 		url.password ||
 		url.hash
 	) {
-		throw oauthFailure();
+		throw oauthFailure('endpoint');
 	}
 	return url;
 }
 
-function oauthFailure(): Error {
-	return new Error('DuckDB OAuth token exchange failed.');
+function oauthFailure(reason: OAuthFailureReason, status?: number): OAuthTokenError {
+	switch (reason) {
+		case 'endpoint':
+			return new OAuthTokenError(
+				reason,
+				'OAuth2 token endpoint is invalid. Use an HTTP or HTTPS URL without embedded credentials or a fragment.',
+			);
+		case 'insecure_transport':
+			return new OAuthTokenError(
+				reason,
+				'OAuth2 token endpoint uses HTTP. Use HTTPS, or enable allow_insecure_transport for local development.',
+			);
+		case 'status':
+			return new OAuthTokenError(reason, oauthStatusMessage(status));
+		case 'response':
+			return new OAuthTokenError(
+				reason,
+				'OAuth2 token endpoint returned an invalid response. Make sure that access_token is non-empty and the expiry is between 1 and 86400 seconds.',
+			);
+		case 'cancelled':
+			return new OAuthTokenError(
+				reason,
+				'OAuth2 token request stopped because the DuckDB request ended or reached its deadline. Retry the query.',
+			);
+		case 'session':
+			return new OAuthTokenError(
+				reason,
+				'OAuth2 token request did not finish before the DuckDB session ended. Retry the query.',
+			);
+		case 'transport':
+			return new OAuthTokenError(
+				reason,
+				'OAuth2 token endpoint was not reachable. Make sure that DNS, TLS, and the integration egress policy are correct.',
+			);
+	}
+}
+
+function oauthStatusMessage(status: number | undefined): string {
+	if (status === 401 || status === 403) {
+		return `OAuth2 token endpoint returned HTTP ${status} for the credentials. Make sure that the client ID, client secret, and scope are correct.`;
+	}
+	if (status === 429) {
+		return 'OAuth2 token endpoint returned HTTP 429. The identity service limited requests. Retry the query later.';
+	}
+	if (status !== undefined && status >= 500) {
+		return `OAuth2 token endpoint returned HTTP ${status}. The identity service is unavailable. Retry the query later.`;
+	}
+	return `OAuth2 token endpoint returned HTTP ${status ?? 'error'}. Make sure that the endpoint and OAuth2 configuration are correct.`;
 }
 
 export function createGuardedBinaryTransport(options: {
@@ -586,7 +653,7 @@ function parseEndpoint(value: string): URL {
 	try {
 		url = new URL(value);
 	} catch {
-		throw new IcebergHttpBrokerError('invalid_capability', 'S3 endpoint is invalid.');
+		throw invalidS3Endpoint();
 	}
 	if (
 		(url.protocol !== 'http:' && url.protocol !== 'https:') ||
@@ -596,7 +663,7 @@ function parseEndpoint(value: string): URL {
 		url.search ||
 		url.hash
 	) {
-		throw new IcebergHttpBrokerError('invalid_capability', 'S3 endpoint is invalid.');
+		throw invalidS3Endpoint();
 	}
 	return url;
 }
@@ -606,7 +673,7 @@ function routePrefixUrl(value: string): string {
 	try {
 		url = new URL(value);
 	} catch {
-		throw new IcebergHttpBrokerError('invalid_capability', 'Catalog endpoint is invalid.');
+		throw invalidCatalogEndpoint();
 	}
 	if (
 		(url.protocol !== 'http:' && url.protocol !== 'https:') ||
@@ -614,7 +681,7 @@ function routePrefixUrl(value: string): string {
 		url.password ||
 		url.search
 	) {
-		throw new IcebergHttpBrokerError('invalid_capability', 'Catalog endpoint is invalid.');
+		throw invalidCatalogEndpoint();
 	}
 	url.hash = '';
 	return url.toString();
@@ -627,7 +694,7 @@ function catalogAndStorageRoutes(
 	if (storage.some((route) => prefixRoutesOverlap(catalog.url, route.url))) {
 		throw new IcebergHttpBrokerError(
 			'invalid_capability',
-			'DuckDB catalog and storage routes overlap.',
+			'Catalog and S3 routes overlap. Change the catalog path, S3 endpoint, bucket, or guarded read prefix.',
 		);
 	}
 	return [catalog, ...storage];
@@ -655,7 +722,7 @@ function assertCredentialTransport(
 	if (!authenticated || allowInsecureTransport || new URL(value).protocol === 'https:') return;
 	throw new IcebergHttpBrokerError(
 		'invalid_capability',
-		`${label} credentials require secure transport.`,
+		`${label} credentials require HTTPS. Use HTTPS, or enable allow_insecure_transport for local development.`,
 	);
 }
 
@@ -677,14 +744,17 @@ function storagePrefixUrl(
 		bucket === '..' ||
 		segments.some((segment) => segment === '.' || segment === '..')
 	) {
-		throw new IcebergHttpBrokerError('invalid_capability', 'S3 read location is invalid.');
+		throw new IcebergHttpBrokerError(
+			'invalid_capability',
+			'S3 read location is invalid. Use a valid bucket and a non-empty prefix without path traversal.',
+		);
 	}
 	const url = new URL(endpoint);
 	if (urlStyle === 'vhost') {
 		if (!isDnsCompatibleS3Bucket(bucket) || isIpAddressHost(endpoint.hostname)) {
 			throw new IcebergHttpBrokerError(
 				'invalid_capability',
-				'Virtual-hosted S3 read location is invalid.',
+				'Virtual-hosted S3 requires a DNS bucket and endpoint. Use path-style addressing for IP endpoints or non-DNS buckets.',
 			);
 		}
 		url.hostname = `${bucket}.${endpoint.hostname}`;
@@ -696,9 +766,26 @@ function storagePrefixUrl(
 			...segments.map(encodeSegment),
 		].join('/');
 	} else {
-		throw new IcebergHttpBrokerError('invalid_capability', 'S3 URL style is invalid.');
+		throw new IcebergHttpBrokerError(
+			'invalid_capability',
+			'S3 URL style is invalid. Use path or vhost.',
+		);
 	}
 	return url.toString();
+}
+
+function invalidS3Endpoint(): IcebergHttpBrokerError {
+	return new IcebergHttpBrokerError(
+		'invalid_capability',
+		'S3 endpoint is invalid. Use an HTTP or HTTPS origin without credentials, a path, query parameters, or a fragment.',
+	);
+}
+
+function invalidCatalogEndpoint(): IcebergHttpBrokerError {
+	return new IcebergHttpBrokerError(
+		'invalid_capability',
+		'Catalog endpoint is invalid. Use an HTTP or HTTPS URL without embedded credentials or query parameters.',
+	);
 }
 
 function isDnsCompatibleS3Bucket(bucket: string): boolean {

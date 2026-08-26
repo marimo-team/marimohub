@@ -290,7 +290,11 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 			const code = error instanceof IcebergHttpBrokerError ? error.code : 'transport_failed';
 			this.metrics.increment('duckdb_http_broker.bridge_failure', 1, { reason: code });
 			try {
-				rejectHttpBridge(message, `DuckDB HTTP broker request failed: ${code}.`);
+				const detail =
+					error instanceof IcebergHttpBrokerError
+						? error.message
+						: 'The approved remote endpoint was not reachable. Make sure that DNS, TLS, and network access are available.';
+				rejectHttpBridge(message, `DuckDB remote read failed [${code}]: ${detail}`);
 			} catch (bridgeError) {
 				this.fail(asError(bridgeError));
 			}

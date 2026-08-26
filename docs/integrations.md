@@ -249,6 +249,21 @@ Brokered Iceberg and S3 plans can load only pinned local extensions and approved
 Row, response-byte, concurrency, per-user, memory, and time limits apply.
 Successful queries create an audit event that records sizes and row counts, never SQL text.
 
+### DuckDB remote-read errors
+
+Remote-read errors include a stable code and a safe explanation. They do not include credentials,
+object paths, endpoint URLs, or OAuth2 response bodies.
+
+| Code                       | Action                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `credential_failed`        | Make sure that the OAuth2 configuration uses HTTPS and valid credentials.       |
+| `target_denied`            | Make sure that catalog redirects and `broker_read_locations` are correct.       |
+| `request_budget_exceeded`  | Narrow the query, or split it into smaller queries.                             |
+| `response_budget_exceeded` | Select fewer columns or rows.                                                   |
+| `redirect_budget_exceeded` | Make sure that the integration endpoint is correct.                             |
+| `capability_expired`       | Retry with a smaller query.                                                     |
+| `transport_failed`         | Make sure that DNS, TLS, and the integration egress policy permit the endpoint. |
+
 ### Scope and caching
 
 The browse API resolves an ID in the project tier before the organization tier.

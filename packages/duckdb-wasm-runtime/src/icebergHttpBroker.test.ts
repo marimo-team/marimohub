@@ -62,8 +62,12 @@ function setup(
 	return { broker, calls, transport };
 }
 
-async function expectCode(promise: Promise<unknown>, code: IcebergHttpBrokerError['code']) {
-	await expect(promise).rejects.toMatchObject({ code });
+async function expectCode(
+	promise: Promise<unknown>,
+	code: IcebergHttpBrokerError['code'],
+	message?: string,
+) {
+	await expect(promise).rejects.toMatchObject({ code, ...(message ? { message } : {}) });
 }
 
 describe('IcebergHttpBroker', () => {
@@ -577,6 +581,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'request_budget_exceeded',
+			'The query made too many remote requests. Narrow the query or split it into smaller queries.',
 		);
 
 		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.request', 1, {
@@ -661,6 +666,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'response_budget_exceeded',
+			'Remote data exceeded the query byte limit. Select fewer columns or rows.',
 		);
 
 		const redirectLimited = setup([{ status: 302, headers: { Location: '/iceberg/v1/config' } }]);
@@ -673,6 +679,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'redirect_budget_exceeded',
+			'The remote endpoint redirected too many times. Make sure that the integration endpoint is correct.',
 		);
 
 		let clock = NOW;
@@ -689,6 +696,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'capability_expired',
+			'The DuckDB remote-read session reached its deadline. Retry with a smaller query.',
 		);
 
 		const closed = setup();
@@ -700,6 +708,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'capability_unknown',
+			'The DuckDB remote-read session ended before the request completed. Retry the query.',
 		);
 	});
 

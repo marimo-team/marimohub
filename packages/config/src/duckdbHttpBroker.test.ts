@@ -20,6 +20,24 @@ import {
 import type { OAuthTokenExchange, OAuthTokenExchangeRequest } from './duckdbHttpBroker';
 
 const NOW = Date.parse('2026-08-13T12:00:00Z');
+const OAUTH_TRANSPORT_ERROR =
+	'OAuth2 token endpoint was not reachable. Make sure that DNS, TLS, and the integration egress policy are correct.';
+const OAUTH_SESSION_ERROR =
+	'OAuth2 token request did not finish before the DuckDB session ended. Retry the query.';
+const OAUTH_CANCELLED_ERROR =
+	'OAuth2 token request stopped because the DuckDB request ended or reached its deadline. Retry the query.';
+const OAUTH_RESPONSE_ERROR =
+	'OAuth2 token endpoint returned an invalid response. Make sure that access_token is non-empty and the expiry is between 1 and 86400 seconds.';
+const ROUTE_OVERLAP_ERROR =
+	'Catalog and S3 routes overlap. Change the catalog path, S3 endpoint, bucket, or guarded read prefix.';
+const INVALID_S3_ENDPOINT_ERROR =
+	'S3 endpoint is invalid. Use an HTTP or HTTPS origin without credentials, a path, query parameters, or a fragment.';
+const INVALID_CATALOG_ENDPOINT_ERROR =
+	'Catalog endpoint is invalid. Use an HTTP or HTTPS URL without embedded credentials or query parameters.';
+const INVALID_S3_LOCATION_ERROR =
+	'S3 read location is invalid. Use a valid bucket and a non-empty prefix without path traversal.';
+const INVALID_VHOST_LOCATION_ERROR =
+	'Virtual-hosted S3 requires a DNS bucket and endpoint. Use path-style addressing for IP endpoints or non-DNS buckets.';
 
 const ACCESS = {
 	kind: 'iceberg-rest',
@@ -210,9 +228,11 @@ describe('createDuckDBHttpSessionFactory', () => {
 			method: 'GET' as const,
 		};
 
-		await expect(session.fetch(request)).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		await expect(session.fetch(request)).rejects.toThrow(OAUTH_TRANSPORT_ERROR);
 		expect(transport).not.toHaveBeenCalled();
-		await expect(session.fetch(request)).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		await expect(session.fetch(request)).rejects.toThrow(
+			'OAuth2 token refresh failed recently. Retry the query in one second.',
+		);
 		expect(exchange).toHaveBeenCalledOnce();
 		clock += 1_001;
 		await expect(session.fetch(request)).resolves.toMatchObject({ status: 200 });
@@ -244,7 +264,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				url: 'https://catalog.example.test/iceberg/v1/config',
 				method: 'GET',
 			}),
-		).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		).rejects.toThrow(OAUTH_SESSION_ERROR);
 		expect(exchangeSignal?.aborted).toBe(true);
 		expect(transport).not.toHaveBeenCalled();
 	});
@@ -267,7 +287,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				url: 'https://catalog.example.test/iceberg/v1/config',
 				method: 'GET',
 			}),
-		).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		).rejects.toThrow(OAUTH_SESSION_ERROR);
 		expect(exchange).toHaveBeenCalledOnce();
 		expect(transport).not.toHaveBeenCalled();
 	});
@@ -295,7 +315,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 
 		await session.fetch(request);
 		clock += 101_000;
-		await expect(session.fetch(request)).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		await expect(session.fetch(request)).rejects.toThrow(OAUTH_TRANSPORT_ERROR);
 		expect(transport).toHaveBeenCalledOnce();
 	});
 
@@ -324,7 +344,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 
 		session.close();
 
-		await expect(pending).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		await expect(pending).rejects.toThrow(OAUTH_CANCELLED_ERROR);
 		expect(exchangeSignal?.aborted).toBe(true);
 		expect(transport).not.toHaveBeenCalled();
 	});
@@ -376,7 +396,9 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: NOW + 60_000 },
 			),
-		).toThrow('DuckDB OAuth token exchange failed.');
+		).toThrow(
+			'OAuth2 token endpoint is invalid. Use an HTTP or HTTPS URL without embedded credentials or a fragment.',
+		);
 	});
 
 	it('rejects plaintext OAuth and catalog credentials without an explicit override', () => {
@@ -399,7 +421,9 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: NOW + 60_000 },
 			),
-		).toThrow('DuckDB OAuth token exchange failed.');
+		).toThrow(
+			'OAuth2 token endpoint uses HTTP. Use HTTPS, or enable allow_insecure_transport for local development.',
+		);
 		expect(() =>
 			create(
 				{
@@ -408,7 +432,9 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: NOW + 60_000 },
 			),
-		).toThrow(/Catalog credentials require secure transport/);
+		).toThrow(
+			'Catalog credentials require HTTPS. Use HTTPS, or enable allow_insecure_transport for local development.',
+		);
 	});
 
 	it('rejects plaintext static S3 credentials and permits explicit or anonymous HTTP', () => {
@@ -416,7 +442,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 		const insecure = { ...S3_ACCESS, endpoint: 'http://objects.example.test' };
 
 		expect(() => create(insecure, { expiresAtMs: NOW + 60_000 })).toThrow(
-			/S3 credentials require secure transport/,
+			'S3 credentials require HTTPS. Use HTTPS, or enable allow_insecure_transport for local development.',
 		);
 		const optedIn = create(
 			{ ...insecure, allowInsecureTransport: true },
@@ -1067,7 +1093,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: NOW + 60_000 },
 			),
-		).toThrow(/catalog and storage routes overlap/);
+		).toThrow(ROUTE_OVERLAP_ERROR);
 	});
 
 	it.each([
@@ -1112,7 +1138,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: NOW + 60_000 },
 			),
-		).toThrow(/catalog and storage routes overlap/);
+		).toThrow(ROUTE_OVERLAP_ERROR);
 	});
 
 	it('allows same-origin catalog and storage routes with disjoint prefixes', () => {
@@ -1146,7 +1172,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/S3 endpoint is invalid/);
+		).toThrow(INVALID_S3_ENDPOINT_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1158,7 +1184,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/S3 read location is invalid/);
+		).toThrow(INVALID_S3_LOCATION_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1171,7 +1197,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/Virtual-hosted S3 read location is invalid/);
+		).toThrow(INVALID_VHOST_LOCATION_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1184,7 +1210,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/Virtual-hosted S3 read location is invalid/);
+		).toThrow(INVALID_VHOST_LOCATION_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1193,7 +1219,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/Catalog endpoint is invalid/);
+		).toThrow(INVALID_CATALOG_ENDPOINT_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1202,7 +1228,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/S3 endpoint is invalid/);
+		).toThrow(INVALID_S3_ENDPOINT_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1211,7 +1237,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/S3 read location is invalid/);
+		).toThrow(INVALID_S3_LOCATION_ERROR);
 		expect(() =>
 			create(
 				{
@@ -1223,7 +1249,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				},
 				{ expiresAtMs: Date.now() + 60_000 },
 			),
-		).toThrow(/S3 read location is invalid/);
+		).toThrow(INVALID_S3_LOCATION_ERROR);
 	});
 });
 
@@ -1330,7 +1356,9 @@ describe('createGuardedOAuthTokenExchange', () => {
 				...localTokenRequest(fixture.url),
 				allowInsecureTransport: false,
 			}),
-		).rejects.toEqual(new Error('DuckDB OAuth token exchange failed.'));
+		).rejects.toThrow(
+			'OAuth2 token endpoint uses HTTP. Use HTTPS, or enable allow_insecure_transport for local development.',
+		);
 		expect(fixture.received()).toBeUndefined();
 	});
 
@@ -1371,7 +1399,7 @@ describe('createGuardedOAuthTokenExchange', () => {
 			error = cause;
 		}
 
-		expect(error).toEqual(new Error('DuckDB OAuth token exchange failed.'));
+		expect(error).toMatchObject({ code: 'credential_failed', message: OAUTH_RESPONSE_ERROR });
 		expect(String(error)).not.toContain('do-not-echo');
 		expect(String(error)).not.toContain(JSON.stringify(body));
 		expect(increment).toHaveBeenCalledWith('duckdb_http_broker.oauth_exchange', 1, {
@@ -1381,21 +1409,47 @@ describe('createGuardedOAuthTokenExchange', () => {
 	});
 
 	it.each([
-		['an error status', 429, '{"error":"slow_down","secret":"response-secret"}', 'status'],
-		['invalid JSON', 200, '{"access_token":', 'response'],
+		[
+			'bad credentials',
+			401,
+			'{"error":"invalid_client","secret":"response-secret"}',
+			'status',
+			'OAuth2 token endpoint returned HTTP 401 for the credentials. Make sure that the client ID, client secret, and scope are correct.',
+		],
+		[
+			'throttling',
+			429,
+			'{"error":"slow_down","secret":"response-secret"}',
+			'status',
+			'OAuth2 token endpoint returned HTTP 429. The identity service limited requests. Retry the query later.',
+		],
+		[
+			'an identity-service outage',
+			503,
+			'{"error":"unavailable","secret":"response-secret"}',
+			'status',
+			'OAuth2 token endpoint returned HTTP 503. The identity service is unavailable. Retry the query later.',
+		],
+		['invalid JSON', 200, '{"access_token":', 'response', OAUTH_RESPONSE_ERROR],
 	] as const)(
 		'rejects %s with a fixed error and metric reason',
-		async (_case, status, body, reason) => {
+		async (_case, status, body, reason, expectedMessage) => {
 			const fixture = await serve({ status, body });
 			const increment = vi.fn();
 			const exchange = createGuardedOAuthTokenExchange({
 				allowPrivate: true,
 				metrics: { increment, gauge: vi.fn() },
 			});
+			let error: unknown;
 
-			await expect(
-				exchange(localTokenRequest(fixture.url, { clientSecret: 'client-secret' })),
-			).rejects.toEqual(new Error('DuckDB OAuth token exchange failed.'));
+			try {
+				await exchange(localTokenRequest(fixture.url, { clientSecret: 'client-secret' }));
+			} catch (cause) {
+				error = cause;
+			}
+			expect(error).toMatchObject({ code: 'credential_failed', message: expectedMessage });
+			expect(String(error)).not.toContain('client-secret');
+			expect(String(error)).not.toContain('response-secret');
 			expect(increment).toHaveBeenCalledWith('duckdb_http_broker.oauth_exchange', 1, {
 				outcome: 'failure',
 				reason,
@@ -1417,7 +1471,7 @@ describe('createGuardedOAuthTokenExchange', () => {
 
 		await expect(
 			exchange(localTokenRequest(fixture.url, { clientSecret: 'client-secret' })),
-		).rejects.toEqual(new Error('DuckDB OAuth token exchange failed.'));
+		).rejects.toMatchObject({ code: 'credential_failed', message: OAUTH_TRANSPORT_ERROR });
 		expect(increment).toHaveBeenCalledWith('duckdb_http_broker.oauth_exchange', 1, {
 			outcome: 'failure',
 			reason: 'transport',
@@ -1428,7 +1482,9 @@ describe('createGuardedOAuthTokenExchange', () => {
 		const redirect = await serve({ status: 302, body: '{}' });
 		const allowed = createGuardedOAuthTokenExchange({ allowPrivate: true });
 		const request = localTokenRequest(redirect.url);
-		await expect(allowed(request)).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		await expect(allowed(request)).rejects.toThrow(
+			'OAuth2 token endpoint returned HTTP 302. Make sure that the endpoint and OAuth2 configuration are correct.',
+		);
 
 		await new Promise<void>((resolve) => server?.close(() => resolve()));
 		server = undefined;
@@ -1436,20 +1492,20 @@ describe('createGuardedOAuthTokenExchange', () => {
 			body: JSON.stringify({ access_token: 'x'.repeat(70 * 1024), expires_in: 60 }),
 		});
 		await expect(allowed({ ...request, tokenEndpoint: oversized.url })).rejects.toThrow(
-			'DuckDB OAuth token exchange failed.',
+			OAUTH_RESPONSE_ERROR,
 		);
 
 		const aborted = new AbortController();
 		aborted.abort();
 		await expect(
 			allowed({ ...request, tokenEndpoint: oversized.url }, aborted.signal),
-		).rejects.toBeDefined();
+		).rejects.toThrow(OAUTH_CANCELLED_ERROR);
 		await expect(
 			createGuardedOAuthTokenExchange({ allowPrivate: false })({
 				...request,
 				tokenEndpoint: oversized.url,
 			}),
-		).rejects.toThrow('DuckDB OAuth token exchange failed.');
+		).rejects.toThrow(OAUTH_TRANSPORT_ERROR);
 	});
 });
 

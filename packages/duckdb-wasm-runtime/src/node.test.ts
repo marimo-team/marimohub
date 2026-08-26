@@ -11,10 +11,11 @@ import {
 	createNodeDataQueryExecutorFactory,
 	createNodeDuckDBWasmRuntimeFactory,
 	DUCKDB_WORKER_RESOURCE_LIMITS,
+	IcebergHttpBrokerError,
 	nodeDuckDBWasmCapabilities,
 } from './node';
 import type { DuckDBHttpSessionFactory, IcebergHttpBrokerRequest } from './node';
-import { createHttpBridgeBuffers } from './httpBridge';
+import { createHttpBridgeBuffers, waitForHttpBridge } from './httpBridge';
 
 type OnTestFinished = TestContext['onTestFinished'];
 
@@ -356,6 +357,62 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		await expect(runtime.ping()).rejects.toThrow('closed');
 		expect(closeSession).toHaveBeenCalledOnce();
 		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it('returns actionable broker errors without exposing transport details', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized('worker', onTestFinished);
+		const fetch = vi
+			.fn()
+			.mockRejectedValueOnce(
+				new IcebergHttpBrokerError(
+					'target_denied',
+					'The query tried to read outside the guarded locations. Make sure that catalog redirects and broker_read_locations are correct.',
+				),
+			)
+			.mockRejectedValueOnce(new Error('upstream response contained secret-token'));
+		const internals = runtime as unknown as {
+			activeHttpSession?: { fetch: typeof fetch; close(): void };
+			activeHttpNonce?: string;
+			onHttpRequest(message: {
+				type: 'http-request';
+				executionNonce: string;
+				request: IcebergHttpBrokerRequest;
+				control: SharedArrayBuffer;
+				response: SharedArrayBuffer;
+			}): Promise<void>;
+		};
+		internals.activeHttpSession = { fetch, close: vi.fn() };
+		internals.activeHttpNonce = 'current-execution-nonce';
+
+		const fetchError = async (): Promise<Error> => {
+			const buffers = createHttpBridgeBuffers();
+			await internals.onHttpRequest({
+				type: 'http-request',
+				executionNonce: 'current-execution-nonce',
+				request: { url: 'https://objects.example.test/warehouse/data.parquet', method: 'GET' },
+				...buffers,
+			});
+			try {
+				waitForHttpBridge(buffers.control, buffers.response, 1);
+			} catch (error) {
+				return error as Error;
+			}
+			throw new Error('Expected the HTTP bridge to return an error.');
+		};
+
+		await expect(fetchError()).resolves.toEqual(
+			new Error(
+				'DuckDB remote read failed [target_denied]: The query tried to read outside the guarded locations. Make sure that catalog redirects and broker_read_locations are correct.',
+			),
+		);
+		const transportError = await fetchError();
+		expect(transportError.message).toBe(
+			'DuckDB remote read failed [transport_failed]: The approved remote endpoint was not reachable. Make sure that DNS, TLS, and network access are available.',
+		);
+		expect(transportError.message).not.toContain('secret-token');
 	});
 
 	it('hard-terminates an executing query when closed', async ({ expect, onTestFinished }) => {

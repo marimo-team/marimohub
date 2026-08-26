@@ -58,6 +58,7 @@ export type IcebergHttpBrokerTransport = (
 export type IcebergHttpBrokerErrorCode =
 	| 'capability_expired'
 	| 'capability_unknown'
+	| 'credential_failed'
 	| 'header_denied'
 	| 'invalid_capability'
 	| 'invalid_request'
@@ -168,7 +169,7 @@ export class IcebergHttpBroker {
 		if (!id || this.sessions.has(id)) {
 			throw new IcebergHttpBrokerError(
 				'invalid_capability',
-				'Iceberg HTTP broker generated an invalid capability ID.',
+				'DuckDB HTTP broker could not create a session ID. Retry the query.',
 			);
 		}
 		this.sessions.set(id, session);
@@ -275,7 +276,7 @@ export class IcebergHttpBroker {
 						});
 						throw new IcebergHttpBrokerError(
 							'redirect_budget_exceeded',
-							'Iceberg HTTP broker redirect budget exceeded.',
+							'The remote endpoint redirected too many times. Make sure that the integration endpoint is correct.',
 						);
 					}
 					redirects += 1;
@@ -299,7 +300,7 @@ export class IcebergHttpBroker {
 			this.close(id);
 			throw new IcebergHttpBrokerError(
 				'capability_expired',
-				'Iceberg HTTP broker capability expired.',
+				'The DuckDB remote-read session reached its deadline. Retry with a smaller query.',
 			);
 		}
 		return session;
@@ -462,7 +463,7 @@ async function authorize(
 		});
 		throw new IcebergHttpBrokerError(
 			'request_budget_exceeded',
-			'Iceberg HTTP broker request budget exceeded.',
+			'The query made too many remote requests. Narrow the query or split it into smaller queries.',
 		);
 	}
 	const target = new URL(request.url);
@@ -476,13 +477,13 @@ async function authorize(
 	if (!route) {
 		throw new IcebergHttpBrokerError(
 			'target_denied',
-			'Iceberg HTTP broker target is outside the execution capability.',
+			'The query tried to read outside the guarded locations. Make sure that catalog redirects and broker_read_locations are correct.',
 		);
 	}
 	if (!route.methods.has(request.method)) {
 		throw new IcebergHttpBrokerError(
 			'method_denied',
-			'Iceberg HTTP broker method is not allowed for this target.',
+			'The query tried an unsupported remote operation. Guarded reads permit only GET and HEAD requests.',
 		);
 	}
 	const submittedHeaders = normalizeHeaders(request.headers ?? {}, 'invalid_request');
@@ -495,7 +496,7 @@ async function authorize(
 		) {
 			throw new IcebergHttpBrokerError(
 				'header_denied',
-				`Iceberg HTTP broker request header "${header}" is not allowed.`,
+				`The query sent the unsupported remote header "${header}". Remove this header or use the sandbox runtime.`,
 			);
 		}
 		workerHeaders[header] = value;
@@ -608,14 +609,16 @@ function assertResponse(response: IcebergHttpBrokerResponse): void {
 		response.status > 599 ||
 		!(response.body instanceof Uint8Array)
 	) {
-		throw invalidRequest('Iceberg HTTP broker transport returned an invalid response.');
+		throw invalidRequest(
+			'The DuckDB HTTP transport returned an invalid response. Retry the query.',
+		);
 	}
 }
 
 function invalidCapability(): IcebergHttpBrokerError {
 	return new IcebergHttpBrokerError(
 		'invalid_capability',
-		'Iceberg HTTP broker capability is invalid.',
+		'DuckDB HTTP access is invalid. Review the integration endpoint and guarded read locations.',
 	);
 }
 
@@ -626,7 +629,7 @@ function invalidRequest(message: string): IcebergHttpBrokerError {
 function unknownCapability(): IcebergHttpBrokerError {
 	return new IcebergHttpBrokerError(
 		'capability_unknown',
-		'Iceberg HTTP broker capability is unknown.',
+		'The DuckDB remote-read session ended before the request completed. Retry the query.',
 	);
 }
 
@@ -696,7 +699,7 @@ function responseBudgetExceeded(session: Session): IcebergHttpBrokerError {
 	});
 	return new IcebergHttpBrokerError(
 		'response_budget_exceeded',
-		'Iceberg HTTP broker response budget exceeded.',
+		'Remote data exceeded the query byte limit. Select fewer columns or rows.',
 	);
 }
 
@@ -715,7 +718,7 @@ function responseStatusClass(status: number): string {
 }
 
 function abortError(): Error {
-	return Object.assign(new Error('Iceberg HTTP broker request was cancelled.'), {
+	return Object.assign(new Error('The DuckDB remote-read request was canceled.'), {
 		name: 'AbortError',
 	});
 }
