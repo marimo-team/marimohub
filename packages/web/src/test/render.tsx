@@ -12,13 +12,13 @@ import { createQueryClient } from '@/api/queryClient';
 
 export function createTestQueryClient(): QueryClient {
 	const client = createQueryClient();
-	// Merge, don't replace: tests must keep every production default (staleTime,
-	// future additions) and override only retry.
+	// Explicit per-query retry policies still inherit retryDelay, so tests need both
+	// defaults to avoid waiting on production backoff.
 	const defaults = client.getDefaultOptions();
 	client.setDefaultOptions({
 		...defaults,
-		queries: { ...defaults.queries, retry: false },
-		mutations: { ...defaults.mutations, retry: false },
+		queries: { ...defaults.queries, retry: false, retryDelay: 0 },
+		mutations: { ...defaults.mutations, retry: false, retryDelay: 0 },
 	});
 	return client;
 }

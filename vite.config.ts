@@ -287,7 +287,13 @@ export default defineConfig({
 				// Tests and test helpers may use `any`, log freely, and stringify/spread
 				// mock objects (URLs, fake records) where these type-aware rules would
 				// otherwise false-positive.
-				files: ['**/*.test.ts', '**/*.test.tsx', '**/testing/**', '**/testWorld.ts'],
+				files: [
+					'**/*.test.ts',
+					'**/*.test.tsx',
+					'**/*.testWorld.tsx',
+					'**/testing/**',
+					'**/testWorld.ts',
+				],
 				rules: {
 					'anti-slop/no-chained-type-assertions': 'off',
 					'anti-slop/no-object-parameters': 'off',
