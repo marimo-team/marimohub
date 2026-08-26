@@ -36,7 +36,11 @@
  * hostname template (the SDK exposes no ingress-URL accessor); and the
  * `waitForPort` probe assumes `python3` is on the image PATH.
  */
-import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
+import {
+	CWSandboxConfigurationError,
+	CWSandboxNotFoundError,
+	SandboxClient,
+} from '@coreweave/cwsandbox';
 import type {
 	CommandProcess,
 	CommandProcessStatus,
@@ -47,7 +51,11 @@ import type {
 	SandboxInfo,
 	SandboxRunOptions,
 } from '@coreweave/cwsandbox';
-import { createSandboxClient, DEFAULT_CONTAINER_IMAGE } from '@coreweave/cwsandbox/node';
+import {
+	DEFAULT_BASE_URL,
+	DEFAULT_CONTAINER_IMAGE,
+	GrpcSandboxTransport,
+} from '@coreweave/cwsandbox/node';
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -87,6 +95,7 @@ import type {
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+import { instrumentCoreWeaveTransport } from './tracing';
 
 /** marimo's hardcoded kernel port (see `SandboxProvisioner`'s `MARIMO_PORT`). */
 const DEFAULT_KERNEL_PORT = 2718;
@@ -684,14 +693,18 @@ export class CoreWeaveCompute implements SandboxProvider {
 					'CoreWeaveCompute requires either an apiKey in its config or an injected client',
 				);
 			}
+			const apiKey = this.config.apiKey.trim();
+			if (!apiKey) throw new CWSandboxConfigurationError('CWSandbox API key is required.');
+			const baseUrl = this.config.baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_BASE_URL;
+			const transport = instrumentCoreWeaveTransport(
+				new GrpcSandboxTransport({ apiKey, baseUrl }),
+				baseUrl,
+			);
 			// The real SDK client exposes the CoreWeaveClient surface at runtime; one
 			// controlled cast at the construction boundary avoids overload-variance
 			// friction between the SDK's broad signatures and our narrow seam.
 			// oxlint-disable-next-line anti-slop/no-chained-type-assertions
-			this.client = createSandboxClient({
-				apiKey: this.config.apiKey,
-				...(this.config.baseUrl ? { baseUrl: this.config.baseUrl } : {}),
-			}) as unknown as CoreWeaveClient;
+			this.client = new SandboxClient({ transport }) as unknown as CoreWeaveClient;
 		}
 		return this.client;
 	}
