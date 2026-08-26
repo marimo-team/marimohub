@@ -40,8 +40,12 @@ const UV_BENCHMARK_TIMEOUT_MS =
 	UV_BENCHMARK_SYNC_TIMEOUT_MS;
 const CLEANUP_LEASE_HEADROOM_MS = 60_000;
 const UV_BENCHMARK_DIR = '/tmp/marimohub-uv-sync-benchmark';
+// boto3 (and its botocore dependency) is absent from the sandbox base image, so
+// `uv sync` below does real install work. A "popular" package that ships in the
+// image — e.g. pandas — would already be satisfied and the sync phase would
+// measure nothing.
 const BOTOCORE_WHEEL_URL =
-	'https://files.pythonhosted.org/packages/5c/19/934f81592527a3f7f9b943c893e334c721a4644948642bc33885d584e9ec/botocore-1.43.36-py3-none-any.whl';
+	'https://files.pythonhosted.org/packages/64/93/7bba357266450f7d3e3075ee4d2f1e1d96c1617e40d8065c558485baed78/botocore-1.43.80-py3-none-any.whl';
 
 const UV_BENCHMARK_RUNTIME_COMMAND = [
 	'set -eu',
@@ -75,7 +79,7 @@ const UV_BENCHMARK_LOCK_COMMAND = [
 	`benchmark_dir='${UV_BENCHMARK_DIR}'`,
 	'rm -rf "$benchmark_dir"',
 	'mkdir -p "$benchmark_dir"',
-	"printf '%s\\n' '[project]' 'name = \"marimohub-uv-benchmark\"' 'version = \"0.0.0\"' 'requires-python = \">=3.13\"' 'dependencies = [' '  \"boto3==1.43.36\",' '  \"botocore==1.43.36\",' '  \"moutils==0.4.4\",' '  \"obstore==0.11.0\",' ']' > \"$benchmark_dir/pyproject.toml\"",
+	"printf '%s\\n' '[project]' 'name = \"marimohub-uv-benchmark\"' 'version = \"0.0.0\"' 'requires-python = \">=3.13\"' 'dependencies = [' '  \"boto3==1.43.80\",' ']' > \"$benchmark_dir/pyproject.toml\"",
 	'cd "$benchmark_dir"',
 	'uv lock --no-cache',
 ].join('\n');

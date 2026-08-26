@@ -63,7 +63,7 @@ function environmentSetupBenchmark(): NonNullable<
 			status: 'ok',
 			duration_ms: 1250,
 			command: 'curl https://files.pythonhosted.org/botocore.whl',
-			stdout: 'size_download=15313630\ntime_total=1.25\n',
+			stdout: 'size_download=15728640\ntime_total=1.25\n',
 			stderr: '',
 		},
 		prepare: {
