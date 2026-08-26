@@ -19,7 +19,7 @@ import {
 	createApp,
 	DeploymentConfigResponseSchema,
 	errorResponses,
-	jsonBody,
+	extensibleResponseEnum,
 	jsonContent,
 	SESSION_ONLY_SECURITY,
 	toComputeResourcesResponse,
@@ -119,7 +119,7 @@ const SLOW_BOOT_HINT =
 
 const SandboxStartupPhaseSchema = z
 	.object({
-		status: z.enum(['ok', 'failed', 'skipped']),
+		status: extensibleResponseEnum(['ok', 'failed', 'skipped'], 'ok'),
 		duration_ms: z.number().nonnegative().nullable(),
 		error: z.record(z.string(), z.unknown()).optional(),
 	})
@@ -129,7 +129,10 @@ const SandboxStartupCommandSchema = SandboxStartupPhaseSchema.extend({
 	command: z.string().openapi({ example: ECHO_COMMAND }),
 	stdout: z.string(),
 	stderr: z.string(),
-	failure_code: z.enum(['COMMAND_FAILED', 'SPAWN_FAILED', 'BACKEND_ERROR']).optional(),
+	failure_code: extensibleResponseEnum(
+		['COMMAND_FAILED', 'SPAWN_FAILED', 'BACKEND_ERROR'],
+		'COMMAND_FAILED',
+	).optional(),
 }).openapi('SandboxStartupCommand');
 
 const SandboxStartupRequestSchema = z
@@ -372,7 +375,13 @@ const testSandboxStartup = createRoute({
 		'and CPU throttling counters. The sandbox is always destroyed. Runtime failures are returned ' +
 		'as a partial report. Super-admin only and session-only.',
 	security: SESSION_ONLY_SECURITY,
-	request: { body: jsonBody(SandboxStartupRequestSchema) },
+	request: {
+		body: {
+			content: { 'application/json': { schema: SandboxStartupRequestSchema } },
+			required: false,
+			description: 'Optional; omit to use the deployment defaults.',
+		},
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: SandboxStartupReportSchema }),
@@ -490,7 +499,7 @@ app.openapi(testSandboxStartup, async (c) => {
 	assertSessionAuthenticated(c, 'run sandbox startup diagnostics');
 	assertSuperAdmin(user, deps.policy);
 
-	const body = c.req.valid('json');
+	const body = c.req.valid('json') ?? {};
 	const image = selectedImage(deps.sandbox.images ?? [], body.image);
 	const profile = selectedComputeProfile(
 		deps.sandbox.computeProfiles ?? [],

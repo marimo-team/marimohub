@@ -514,6 +514,20 @@ describe('Admin routes', () => {
 			});
 		});
 
+		it('accepts a request with no body at all', async () => {
+			const { instance } = makeFakeSandbox();
+			const { compute, create } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup'));
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(report).toMatchObject({
+				image: 'registry.example/sandbox:default',
+				compute_profile: 'small',
+				environment_setup_benchmark: null,
+			});
+		});
+
 		it('rejects unknown configured selections before creating a sandbox', async () => {
 			const { instance } = makeFakeSandbox();
 			const { compute, create } = computeFor(instance);

@@ -6,6 +6,7 @@
  */
 import type { AnyValue, AnyValueMap } from '@opentelemetry/api-logs';
 import { logs, SeverityNumber } from '@opentelemetry/api-logs';
+import { traceContext } from './tracing';
 
 const SEVERITY: Record<string, SeverityNumber> = {
 	debug: SeverityNumber.DEBUG,
@@ -17,6 +18,24 @@ const SEVERITY: Record<string, SeverityNumber> = {
 // The proxy binds to the real provider once registered, so caching before startup
 // is safe — and getLogger is not free per the api-logs docs.
 let cachedLogger: ReturnType<typeof logs.getLogger> | undefined;
+
+/**
+ * Wide-event logger: one JSON object per line (machine-parseable, no
+ * pino/winston — keeps Workers builds dependency-free) with the active trace
+ * ids merged in, mirrored to the OTEL logs pipeline via {@link emitLogRecord}.
+ * `channel: 'warn'` writes via `console.warn` for events that should stand out
+ * on a terminal; the OTLP severity comes from `fields.level` either way.
+ */
+export function logEvent(
+	fields: Record<string, unknown>,
+	options?: { channel?: 'log' | 'warn' },
+): void {
+	const record = { ts: new Date().toISOString(), ...traceContext(), ...fields };
+	try {
+		(options?.channel === 'warn' ? console.warn : console.log)(JSON.stringify(record));
+	} catch {}
+	emitLogRecord(record);
+}
 
 /**
  * Mirror a `logEvent` record to the OTEL logs pipeline: `level` sets the

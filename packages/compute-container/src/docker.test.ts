@@ -10,6 +10,7 @@ import {
 import { DockerCompute, spawnDockerRunner } from './docker';
 import {
 	containerCliContract,
+	contractLaunchCliHandler,
 	createRecordingContainerRunner as fakeRunner,
 	defaultContainerCliHandler as defaultHandler,
 } from './testing';
@@ -550,10 +551,13 @@ describe('DockerCompute', () => {
 
 computeContract(
 	'DockerCompute',
-	() =>
-		new DockerCompute(
+	() => {
+		const launchHandler = contractLaunchCliHandler();
+		return new DockerCompute(
 			{},
 			fakeRunner((args) => {
+				const launch = launchHandler(args);
+				if (launch) return launch;
 				if (args.at(-1) === 'false') return { stdout: '', stderr: 'failed', exitCode: 1 };
 				if (isContractNonDirectoryFindCommand(args.at(-1))) {
 					return {
@@ -564,10 +568,11 @@ computeContract(
 				}
 				return defaultHandler(args);
 			}).runner,
-		),
+		);
+	},
 	{
 		mountFallsBack: true,
-		semantics: { failingCommand: 'false' },
+		semantics: { failingCommand: 'false', launch: {} },
 	},
 );
 

@@ -55,13 +55,13 @@ marimohub copies the notebook into the image and launches the kernel itself,
 reusing the image's pre-installed environment. With cwd `/workspace`:
 
 ```sh
-uv sync --inexact --no-compile-bytecode   # add the notebook's deps to the base env (skipped when it declares none)
+uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build   # add the notebook's deps (skipped when it declares none)
 uv run --no-sync marimo edit notebook.py --headless --no-token --host 0.0.0.0 --port 2718
 ```
 
-Before `uv sync`, marimohub records the pinned marimo version from
-`MARIMO_VERSION` or the installed package. If uv replaces the environment to
-change Python versions, marimohub reinstalls that version before the kernel starts.
+During the sync, `--no-install-package marimo` keeps the image's pinned marimo
+version even if the notebook declares another version. `--no-build` permits only
+wheels, so a source build cannot run arbitrary code or delay startup.
 
 If a git-synced notebook's entry file contains
 [PEP 723](https://peps.python.org/pep-0723/) inline metadata, marimohub runs three

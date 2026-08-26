@@ -108,6 +108,9 @@ this). See [Sandbox image](/sandbox-image).
 Pre-install marimo and common libraries into the image's project environment so
 the startup `uv sync --inexact` only adds notebook-specific dependencies. See
 [Sandbox image → Why pre-install (not just cache)](/sandbox-image#why-pre-install-not-just-cache).
+Super admins can use **Admin → Debug** to run the
+[sandbox startup diagnostic](/operations#sandbox-startup-diagnostic) and measure
+each startup phase.
 
 ### Kubernetes kernel stays Pending or reports Unschedulable
 

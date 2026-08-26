@@ -10,7 +10,9 @@ import { listFilesFailure } from '@marimo-hub/core/ports';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,
+	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
+import type { ContractLaunchScript } from '@marimo-hub/core/testing/compute-contract';
 import {
 	expectExecResult,
 	expectFileResult,
@@ -902,14 +904,35 @@ describe('KubernetesCompute', () => {
 
 computeContract(
 	'KubernetesCompute',
-	() =>
-		makeCompute(
+	() => {
+		// The adapter's launch rides startProcess: a detached in-pod supervisor plus
+		// an in-pod port waiter and a log-file `cat`. The fake plays the supervisor:
+		// it remembers the scripted transcript of the last contract launch, answers
+		// the port probe per its readiness, reports the supervisor dead for failed
+		// launches (so waitForPort aborts fast), and serves the transcript from the log.
+		let launch: ContractLaunchScript | undefined;
+		return makeCompute(
 			makeWorld({
 				execImpl: (command) => {
-					if (command.at(-1) === 'false') {
+					const cmd = command.at(-1) ?? '';
+					const scripted = scriptContractLaunch(cmd);
+					if (scripted) {
+						launch = scripted;
+						return { stdout: '123\n', stderr: '', exitCode: 0 };
+					}
+					if (cmd.includes('connect_ex(("127.0.0.1"')) {
+						return { stdout: '', stderr: '', exitCode: launch?.portOpen ? 0 : 1 };
+					}
+					if (cmd.startsWith('kill -0 ')) {
+						return { stdout: '', stderr: '', exitCode: launch?.portOpen ? 0 : 1 };
+					}
+					if (cmd.startsWith('cat /tmp/mh-proc-')) {
+						return { stdout: launch?.transcript ?? '', stderr: '', exitCode: 0 };
+					}
+					if (cmd === 'false') {
 						return { stdout: '', stderr: 'failed', exitCode: 1 };
 					}
-					if (isContractNonDirectoryFindCommand(command.at(-1))) {
+					if (isContractNonDirectoryFindCommand(cmd)) {
 						return {
 							stdout: '',
 							stderr: NOT_A_DIRECTORY_MARKER,
@@ -919,6 +942,7 @@ computeContract(
 					return;
 				},
 			}),
-		),
-	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
+		);
+	},
+	{ mountFallsBack: true, semantics: { failingCommand: 'false', launch: {} } },
 );

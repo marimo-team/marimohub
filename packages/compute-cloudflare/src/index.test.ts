@@ -5,6 +5,7 @@ import { listFilesFailure } from '@marimo-hub/core/ports';
 import {
 	computeContract,
 	CONTRACT_NON_DIRECTORY_PATH,
+	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
 
 /**
@@ -466,6 +467,20 @@ function primeContractFakes() {
 				: { success: true, stdout: '', stderr: '' },
 	);
 	fakeSandbox.execStream.mockImplementation(async () => new ReadableStream());
+	// The adapter's launch rides the SDK process API (launchWithProcess): script
+	// the supervisor transcript into getLogs and answer readiness per the script.
+	fakeSandbox.startProcess.mockImplementation(async (cmd: string) => {
+		const launch = scriptContractLaunch(cmd);
+		return {
+			id: 'contract-proc',
+			command: cmd,
+			kill: async () => {},
+			waitForPort: async (port: number) => {
+				if (!launch?.portOpen) throw new Error(`timed out waiting for port ${port}`);
+			},
+			getLogs: async () => ({ stdout: '', stderr: launch?.transcript ?? '' }),
+		};
+	});
 	fakeSandbox.readFile.mockImplementation(async () => ({ success: false }));
 	fakeSandbox.writeFile.mockResolvedValue(undefined);
 	fakeSandbox.listFiles.mockImplementation(async () => ({ success: true, files: [] }));
@@ -486,6 +501,7 @@ computeContract(
 	{
 		semantics: {
 			failingCommand: 'mh-contract-fail',
+			launch: {},
 			// The SDK failure shape does not distinguish an absent file.
 			absentFile: { path: '/contract-absent.txt', code: 'READ_FAILED' },
 		},

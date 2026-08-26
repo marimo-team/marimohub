@@ -1,18 +1,9 @@
-/**
- * Minimal structured logger. Emits one JSON object per event so lines are
- * machine-parseable in log aggregators (no pino/winston — keeps the Cloudflare
- * Workers build dependency-free; `traceContext` is the pure OTEL facade, so
- * that still holds).
- */
-import { emitLogRecord, traceContext } from '@marimo-hub/core';
+// `logEvent` lives in core (next to the OTEL logs bridge it mirrors into) so
+// core services and adapters can emit the same wide events; re-exported here
+// for the API's existing call sites.
+import { logEvent } from '@marimo-hub/core';
 
-export function logEvent(fields: Record<string, unknown>): void {
-	const record = { ts: new Date().toISOString(), ...traceContext(), ...fields };
-	console.log(JSON.stringify(record));
-	// Mirror to the OTEL logs pipeline (a no-op facade until an entrypoint wires a
-	// LoggerProvider — the Cloudflare Worker never does, so its build stays clean).
-	emitLogRecord(record);
-}
+export { logEvent };
 
 /**
  * An error's identity with no free-form text — enough to triage a provider

@@ -12,6 +12,7 @@ import type {
 	ProcessResult,
 	SandboxInfo,
 } from '@coreweave/cwsandbox';
+import { scriptContractLaunch } from '@marimo-hub/core/testing/compute-contract';
 import type { CoreWeaveClient } from './index';
 
 export function procResult(over: Partial<ProcessResult> = {}): ProcessResult {
@@ -58,6 +59,33 @@ export function fakeProcess(state?: FakeProcessState): CommandProcess {
 		cancel: async () => {},
 		poll: () => exitCode,
 		wait: async () => procResult({ exitCode }),
+	};
+}
+
+/**
+ * `startImpl` piece for the compute contract's `launchProcess` cases: the
+ * adapter watches the started command's live streams for supervisor markers, so
+ * the fake emits the scripted transcript on stderr and stays "running".
+ * Returns undefined for anything that is not a contract launch.
+ */
+export function contractLaunchProcess(command: readonly string[]): CommandProcess | undefined {
+	const launch = scriptContractLaunch(command.at(-1));
+	if (!launch) return undefined;
+	async function* transcript(): AsyncGenerator<string> {
+		yield launch!.transcript;
+	}
+	async function* empty(): AsyncGenerator<string> {
+		// no output
+	}
+	return {
+		command: ['sh'] as unknown as CommandProcess['command'],
+		exitCode: undefined,
+		status: 'running',
+		stdout: empty(),
+		stderr: transcript(),
+		cancel: async () => {},
+		poll: () => {},
+		wait: async () => procResult(),
 	};
 }
 

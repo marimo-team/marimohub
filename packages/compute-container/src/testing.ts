@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
 import type { SandboxProvider } from '@marimo-hub/core/ports';
+import { scriptContractLaunch } from '@marimo-hub/core/testing/compute-contract';
+import type { ContractLaunchScript } from '@marimo-hub/core/testing/compute-contract';
 import { containerResourceArgs } from './index';
 import type { ContainerConfig, ContainerRunner, ContainerRunResult } from './index';
 
@@ -32,6 +34,29 @@ export function defaultContainerCliHandler(args: string[]): ContainerRunResult |
 	if (args[0] === 'inspect') return { stdout: '', stderr: 'not found', exitCode: 1 };
 	if (args[0] === 'port') return { stdout: '127.0.0.1:49153\n', stderr: '', exitCode: 0 };
 	return undefined;
+}
+
+/**
+ * Stateful CLI handler for the compute contract's `launchProcess` cases. The
+ * adapter starts the supervisor detached, then polls its log file with an
+ * in-container waiter (identified by its `terminal_events` script); the handler
+ * remembers the scripted transcript of the last contract launch and serves it
+ * from the waiter.
+ */
+export function contractLaunchCliHandler(): (args: string[]) => ContainerRunResult | undefined {
+	let launch: ContractLaunchScript | undefined;
+	return (args) => {
+		const cmd = args.at(-1) ?? '';
+		if (cmd.includes('terminal_events')) {
+			return { stdout: launch?.transcript ?? '', stderr: '', exitCode: 0 };
+		}
+		const scripted = scriptContractLaunch(cmd);
+		if (scripted) {
+			launch = scripted;
+			return { stdout: '', stderr: '', exitCode: 0 };
+		}
+		return;
+	};
 }
 
 export function containerCliContract(

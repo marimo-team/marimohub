@@ -14,7 +14,7 @@ import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
 import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
-import { fakeProcess, makeWorld, procResult } from './testWorld';
+import { contractLaunchProcess, fakeProcess, makeWorld, procResult } from './testWorld';
 
 /**
  * Tests for the CoreWeave compute adapter.
@@ -1058,7 +1058,8 @@ computeContract(
 					}
 					return procResult();
 				},
+				startImpl: async (command) => contractLaunchProcess(command) ?? fakeProcess(),
 			}),
 		),
-	{ mountFallsBack: true, semantics: { failingCommand: 'mh-contract-fail' } },
+	{ mountFallsBack: true, semantics: { failingCommand: 'mh-contract-fail', launch: {} } },
 );

@@ -578,9 +578,9 @@ Sandbox pods run on your sandbox node pool and pull `MARIMOHUB_COMPUTE_IMAGE`
 through the node's image cache. A node that does not have the tag yet pays a
 full registry pull on the session's critical path (≈20 s for a 650 MB image
 from ghcr.io), and a registry hiccup fails the start outright. This hits every
-new node in the pool and every tag you roll. The `coreweave_ensure` and
-`sandbox_startup_diagnostic` log events flag it: `boot_ms` over 10 s carries a
-`slow_boot_hint`.
+new node in the pool and every tag you roll. Both `coreweave_ensure` and
+[`sandbox_startup_diagnostic`](../operations.md#sandbox-startup-diagnostic) flag
+this condition. A `boot_ms` value of more than 10 s includes a `slow_boot_hint`.
 
 Keep every tag warm with a DaemonSet on the pool — one init container per
 image, then an idle holder:

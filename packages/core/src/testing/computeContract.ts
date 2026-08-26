@@ -15,7 +15,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { SandboxId } from '../ids';
 import type { SandboxInstance, SandboxProvider } from '../ports/sandbox';
-import { expectExecResult, expectFileResult, expectListFilesResult } from './assertions';
+import {
+	expectExecResult,
+	expectFileResult,
+	expectLaunchResult,
+	expectListFilesResult,
+} from './assertions';
 
 export const CONTRACT_SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
 export const CONTRACT_VISIBLE_FILE = 'contract-visible.txt';
@@ -24,6 +29,109 @@ export const CONTRACT_NON_DIRECTORY_PATH = '/workspace/contract-file.txt';
 
 export function isContractNonDirectoryFindCommand(command: string | undefined): boolean {
 	return Boolean(command?.includes('find ') && command.includes(CONTRACT_NON_DIRECTORY_PATH));
+}
+
+export const CONTRACT_LAUNCH_PORT = 2718;
+export const CONTRACT_LAUNCH_READY_COMMAND = 'mh-contract-launch-ready';
+export const CONTRACT_LAUNCH_NEVER_READY_COMMAND = 'mh-contract-launch-never-ready';
+export const CONTRACT_LAUNCH_FAILING_SETUP = 'mh-contract-setup-fail';
+export const CONTRACT_LAUNCH_HANGING_SETUP = 'mh-contract-setup-hang';
+export const CONTRACT_LAUNCH_SETUP_EXIT_CODE = 7;
+export const CONTRACT_LAUNCH_SETUP_OUTPUT = 'contract setup failed';
+
+export interface ContractLaunchScript {
+	kind: 'ready' | 'setup_exit' | 'setup_timeout' | 'readiness_timeout';
+	/** Marker lines the fake supervisor emits over the adapter's log/stream channel. */
+	transcript: string;
+	/** Whether the kernel port answers (only the ready case). */
+	portOpen: boolean;
+}
+
+/**
+ * Script the launch-supervisor transcript a backend fake should surface for a
+ * contract launch, keyed off the sentinel setup/kernel commands embedded in the
+ * supervised command string. Returns undefined for anything that is not a
+ * contract launch, so fakes can call it on every command they see.
+ *
+ * The marker format duplicates the compute-commons launch protocol on purpose:
+ * `core` cannot depend on `@marimo-hub/compute-commons` (the dependency rule
+ * bans `compute-*` imports), and the wire format IS what this contract pins.
+ */
+export function scriptContractLaunch(
+	command: string | undefined,
+): ContractLaunchScript | undefined {
+	// The launch nonce is the only 32-hex run in a supervised command, however
+	// many times the adapter re-quotes or wraps it.
+	const nonce = command?.match(/[0-9a-f]{32}/)?.[0];
+	if (!command || !nonce) return undefined;
+	const line = (event: string, values: Record<string, number>) =>
+		`__MARIMOHUB_LAUNCH_${nonce}__${JSON.stringify({ event, ...values })}\n`;
+	if (command.includes(CONTRACT_LAUNCH_FAILING_SETUP)) {
+		return {
+			kind: 'setup_exit',
+			portOpen: false,
+			transcript: `${CONTRACT_LAUNCH_SETUP_OUTPUT}\n${line('setup_exit', {
+				setupMs: 5,
+				waitportMs: 0,
+				exitCode: CONTRACT_LAUNCH_SETUP_EXIT_CODE,
+			})}`,
+		};
+	}
+	if (command.includes(CONTRACT_LAUNCH_HANGING_SETUP)) {
+		return {
+			kind: 'setup_timeout',
+			portOpen: false,
+			transcript: line('setup_timeout', { setupMs: 10, waitportMs: 0 }),
+		};
+	}
+	if (command.includes(CONTRACT_LAUNCH_NEVER_READY_COMMAND)) {
+		return {
+			kind: 'readiness_timeout',
+			portOpen: false,
+			transcript:
+				line('setup_complete', { setupMs: 0, waitportMs: 0 }) +
+				line('readiness_timeout', { setupMs: 0, waitportMs: 10 }),
+		};
+	}
+	if (command.includes(CONTRACT_LAUNCH_READY_COMMAND)) {
+		return {
+			kind: 'ready',
+			portOpen: true,
+			transcript:
+				line('setup_complete', { setupMs: 0, waitportMs: 0 }) +
+				line('ready', { setupMs: 0, waitportMs: 3 }),
+		};
+	}
+	return undefined;
+}
+
+/**
+ * Opt-in `launchProcess` cases. A fake-backed adapter scripts the supervisor
+ * transcript with {@link scriptContractLaunch} and opts in with `launch: {}`;
+ * a backend that executes for real (local) overrides `commands` with runnable
+ * equivalents whose behavior matches each sentinel.
+ */
+export interface ComputeContractLaunchSemantics {
+	/** Port passed to `launchProcess` (a fake may ignore it). */
+	port?: number;
+	/** Deadline for the ready and setup-exit cases. */
+	startupTimeout?: number;
+	/** Tiny deadline for the timeout-classification cases. */
+	shortStartupTimeout?: number;
+	commands?: {
+		/** Kernel command that reaches readiness on `port`. */
+		ready?: string;
+		/** Kernel command that never opens the port. */
+		neverReady?: string;
+		/** Setup command that exits with `setupExitCode` after emitting `setupFailureOutput`. */
+		failingSetup?: string;
+		/** Setup command that never completes within `shortStartupTimeout`. */
+		hangingSetup?: string;
+	};
+	/** Substring expected in the captured setup-failure output. */
+	setupFailureOutput?: string;
+	/** Exit code the failing setup reports. */
+	setupExitCode?: number;
 }
 
 const CONTRACT_ID = CONTRACT_SANDBOX_ID;
@@ -84,6 +192,8 @@ export type ComputeContractSemantics = {
 	absentFile?: { path: string; code: 'NOT_FOUND' | 'READ_FAILED' };
 	/** Directory listing whose seed creates the contract's visible and hidden fixtures. */
 	hiddenFiles?: { dir: string; seed: (inst: SandboxInstance) => Promise<void> };
+	/** `launchProcess` cases; opt in with `{}` once the fake scripts the launch protocol. */
+	launch?: ComputeContractLaunchSemantics;
 } & EnvironmentSemantics;
 
 export function computeContract(
@@ -242,6 +352,66 @@ export function computeContract(
 				expect(defaultNames).not.toContain(CONTRACT_HIDDEN_FILE);
 				const withHidden = await inst.listFiles(hiddenFiles.dir, { includeHidden: true });
 				expect(withHidden.files.map((f) => f.name)).toContain(CONTRACT_HIDDEN_FILE);
+			});
+		}
+
+		if (semantics.launch !== undefined) {
+			const launch = semantics.launch;
+			const port = launch.port ?? CONTRACT_LAUNCH_PORT;
+			const startupTimeout = launch.startupTimeout ?? 15_000;
+			const shortStartupTimeout = launch.shortStartupTimeout ?? 100;
+			const commands = {
+				ready: launch.commands?.ready ?? CONTRACT_LAUNCH_READY_COMMAND,
+				neverReady: launch.commands?.neverReady ?? CONTRACT_LAUNCH_NEVER_READY_COMMAND,
+				failingSetup: launch.commands?.failingSetup ?? CONTRACT_LAUNCH_FAILING_SETUP,
+				hangingSetup: launch.commands?.hangingSetup ?? CONTRACT_LAUNCH_HANGING_SETUP,
+			};
+
+			describe('launchProcess', () => {
+				it('drives setup + readiness to a successful launch with timings', async () => {
+					const inst = provider.create(CONTRACT_ID);
+					expect(typeof inst.launchProcess).toBe('function');
+					const result = await inst.launchProcess!(commands.ready, { port, startupTimeout });
+					expectLaunchResult(result, { success: true });
+					if (!result.success) throw new Error(`launch failed: ${JSON.stringify(result)}`);
+					await result.process.kill().catch(() => {});
+				}, 20_000);
+
+				it('maps a non-zero setup exit to setup_exit with its output and exit code', async () => {
+					const result = await provider.create(CONTRACT_ID).launchProcess!(commands.ready, {
+						setup: commands.failingSetup,
+						port,
+						startupTimeout,
+					});
+					expectLaunchResult(result, { success: false });
+					if (result.success) throw new Error('expected a launch failure');
+					expect(result.reason).toBe('setup_exit');
+					expect(result.exitCode).toBe(launch.setupExitCode ?? CONTRACT_LAUNCH_SETUP_EXIT_CODE);
+					expect(result.stdout + result.stderr).toContain(
+						launch.setupFailureOutput ?? CONTRACT_LAUNCH_SETUP_OUTPUT,
+					);
+				}, 20_000);
+
+				it('classifies an expired deadline with no setup as readiness_timeout', async () => {
+					const result = await provider.create(CONTRACT_ID).launchProcess!(commands.neverReady, {
+						port,
+						startupTimeout: shortStartupTimeout,
+					});
+					expectLaunchResult(result, { success: false });
+					if (result.success) throw new Error('expected a launch failure');
+					expect(result.reason).toBe('readiness_timeout');
+				}, 20_000);
+
+				it('blames an unfinished setup for an expired deadline (setup_timeout)', async () => {
+					const result = await provider.create(CONTRACT_ID).launchProcess!(commands.neverReady, {
+						setup: commands.hangingSetup,
+						port,
+						startupTimeout: shortStartupTimeout,
+					});
+					expectLaunchResult(result, { success: false });
+					if (result.success) throw new Error('expected a launch failure');
+					expect(result.reason).toBe('setup_timeout');
+				}, 20_000);
 			});
 		}
 

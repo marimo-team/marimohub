@@ -3,10 +3,12 @@ import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/c
 import { Seconds } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
-import { expectListFilesResult } from '@marimo-hub/core/testing';
+import type { SandboxLaunchResult } from '@marimo-hub/core/ports';
+import { expectLaunchResult, expectListFilesResult } from '@marimo-hub/core/testing';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,
+	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
 import { createE2bClient, E2bCompute } from './index';
 import type {
@@ -60,6 +62,8 @@ class FakeE2b implements E2bClient {
 			runResult?: (cmd: string) => E2bExecResult | undefined;
 			beforeCreate?: () => Promise<void>;
 			beforeKill?: (sandbox: FakeSandbox) => Promise<void>;
+			/** When true, `commands.runBackground` rejects (a failed process start). */
+			failBackground?: boolean;
 		} = {},
 	) {}
 
@@ -78,6 +82,7 @@ class FakeE2b implements E2bClient {
 					return { stdout: '', stderr: '', exitCode: 0 };
 				},
 				runBackground: async (cmd, options) => {
+					if (this.opts.failBackground) throw new Error('background start refused');
 					this.backgroundCalls.push({ cmd, options });
 					return {
 						kill: async () => {
@@ -528,6 +533,69 @@ describe('E2bCompute', () => {
 		expect(fake.runCalls.some((cmd) => cmd.includes('connect_ex'))).toBe(false);
 	});
 
+	describe('launchProcess failure paths', () => {
+		const launch = (
+			fake: FakeE2b,
+			options: { setup?: string } = {},
+		): Promise<SandboxLaunchResult> =>
+			new E2bCompute(baseConfig, fake).create(SANDBOX_ID).launchProcess!('run kernel', {
+				...options,
+				port: 2718,
+				startupTimeout: 5,
+			});
+
+		it('classifies an expired deadline with unfinished setup as setup_timeout and kills the kernel', async () => {
+			const fake = new FakeE2b();
+
+			const result = await launch(fake, { setup: 'run setup' });
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('setup_timeout');
+			expect(fake.killedBackgroundCommands).toBe(1);
+		});
+
+		it('classifies an expired deadline with no setup as readiness_timeout and kills the kernel', async () => {
+			const fake = new FakeE2b();
+
+			const result = await launch(fake);
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('readiness_timeout');
+			expect(fake.killedBackgroundCommands).toBe(1);
+		});
+
+		it('maps a getLogs failure to transport_failure and kills the kernel', async () => {
+			const fake = new FakeE2b({
+				runResult: (cmd) => {
+					if (cmd.startsWith('cat /tmp/marimohub-kernel.log')) throw new Error('logs unavailable');
+					return;
+				},
+			});
+
+			const result = await launch(fake);
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('transport_failure');
+			expect(result.stderr).toBe('logs unavailable');
+			expect(fake.killedBackgroundCommands).toBe(1);
+		});
+
+		it('maps a startProcess failure to transport_failure', async () => {
+			const fake = new FakeE2b({ failBackground: true });
+
+			const result = await launch(fake);
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('transport_failure');
+			expect(result.stderr).toBe('background start refused');
+			expect(fake.killedBackgroundCommands).toBe(0);
+		});
+	});
+
 	it('merges defined launch environment variables into the background command', async () => {
 		const state: { fake?: FakeE2b } = {};
 		const fake = new FakeE2b({
@@ -810,25 +878,34 @@ describe('createE2bClient', () => {
 
 computeContract(
 	'E2bCompute',
-	() =>
-		new E2bCompute(
-			baseConfig,
-			new FakeE2b({
-				failOn: (cmd) => cmd.includes('mh-contract-fail'),
-				runResult: (cmd) =>
-					isContractNonDirectoryFindCommand(cmd)
-						? {
-								stdout: '',
-								stderr: NOT_A_DIRECTORY_MARKER,
-								exitCode: NOT_A_DIRECTORY_EXIT_CODE,
-							}
-						: undefined,
-			}),
-		),
+	() => {
+		// The adapter reads kernel output via `cat` of the log file, so the fake
+		// serves the scripted supervisor transcript for the last launched command.
+		const state: { fake?: FakeE2b } = {};
+		const fake = new FakeE2b({
+			failOn: (cmd) => cmd.includes('mh-contract-fail'),
+			runResult: (cmd) => {
+				if (cmd.startsWith('cat /tmp/marimohub-kernel.log')) {
+					const launch = scriptContractLaunch(state.fake?.backgroundCalls.at(-1)?.cmd);
+					if (launch) return { stdout: launch.transcript, stderr: '', exitCode: 0 };
+				}
+				return isContractNonDirectoryFindCommand(cmd)
+					? {
+							stdout: '',
+							stderr: NOT_A_DIRECTORY_MARKER,
+							exitCode: NOT_A_DIRECTORY_EXIT_CODE,
+						}
+					: undefined;
+			},
+		});
+		state.fake = fake;
+		return new E2bCompute(baseConfig, fake);
+	},
 	{
 		mountFallsBack: true,
 		semantics: {
 			failingCommand: 'mh-contract-fail',
+			launch: {},
 			// The SDK does not distinguish a missing file from other read failures.
 			absentFile: { path: '/contract-absent.txt', code: 'READ_FAILED' },
 		},

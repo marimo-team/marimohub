@@ -399,6 +399,128 @@ export function parseLaunchOutput(
 	};
 }
 
+/**
+ * How long after the startup deadline a terminal launch marker may still arrive
+ * over the adapter's log/stream channel before the launch is classified locally.
+ * Generous on purpose: it is only paid on timeout paths, and a too-short grace
+ * risks misclassifying a completed setup as `setup_timeout`.
+ */
+export const LAUNCH_MARKER_GRACE_MS = 250;
+
+export function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The sniff string proving the supervisor finished setup — checked on timeout
+ * paths to distinguish `setup_timeout` from `readiness_timeout` even when the
+ * marker line is interleaved with other output.
+ */
+export function setupCompleteMarker(nonce: string): string {
+	return `__MARIMOHUB_LAUNCH_${nonce}__{"event":"setup_complete"`;
+}
+
+export interface LaunchTimings {
+	setup: number;
+	start: number;
+	waitport: number;
+}
+
+/** The failure arm of the port's `SandboxLaunchResult` (structurally compatible). */
+export interface LaunchFailureResult {
+	success: false;
+	reason: LaunchProtocolFailure | 'transport_failure';
+	exitCode?: number;
+	stdout: string;
+	stderr: string;
+	timings: LaunchTimings;
+}
+
+/** Launch failed before/outside the supervised protocol: no output, only the error. */
+export function transportFailureResult(err: unknown, timings: LaunchTimings): LaunchFailureResult {
+	return {
+		success: false,
+		reason: 'transport_failure',
+		stdout: '',
+		stderr: errorMessage(err),
+		timings,
+	};
+}
+
+/** Map a terminal (non-`ready`) supervisor outcome onto the launch-result envelope. */
+export function launchOutcomeResult(
+	kind: LaunchProtocolFailure,
+	outcome: Pick<LaunchProtocolOutcome, 'setupMs' | 'waitportMs' | 'exitCode'>,
+	output: { stdout: string; stderr: string },
+	start: number,
+): LaunchFailureResult {
+	return {
+		success: false,
+		reason: kind,
+		...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
+		stdout: output.stdout,
+		stderr: output.stderr,
+		timings: { setup: outcome.setupMs, start, waitport: outcome.waitportMs },
+	};
+}
+
+/**
+ * The deadline passed with no terminal marker: blame setup if one was requested
+ * and never completed (charging it the whole remaining budget), else readiness.
+ */
+export function launchTimeoutResult(options: {
+	setup: boolean;
+	setupCompleted: boolean;
+	startupTimeout: number;
+	output: { stdout: string; stderr: string };
+	start: number;
+	waitport: number;
+}): LaunchFailureResult {
+	const reason = options.setup && !options.setupCompleted ? 'setup_timeout' : 'readiness_timeout';
+	return {
+		success: false,
+		reason,
+		stdout: options.output.stdout,
+		stderr: options.output.stderr,
+		timings: {
+			setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - options.start) : 0,
+			start: options.start,
+			waitport: options.waitport,
+		},
+	};
+}
+
+/** Default cap for retained kernel output — these buffers exist for error reporting only. */
+export const LAUNCH_OUTPUT_TAIL_BYTES = 64 * 1024;
+
+/**
+ * Capped accumulator keeping only the trailing `maxBytes` (UTF-8, cut on a
+ * character boundary) of appended text. Adapters that pump a kernel's live
+ * stdout/stderr into strings use this so retained output stays bounded for the
+ * sandbox's whole lifetime instead of growing with every chunk.
+ */
+export class OutputTail {
+	private value = '';
+
+	constructor(private readonly maxBytes: number = LAUNCH_OUTPUT_TAIL_BYTES) {}
+
+	append(chunk: string): void {
+		this.value += chunk;
+		// UTF-8 emits at most 3 bytes per UTF-16 code unit, so a short value
+		// cannot exceed the cap — skip the encode until that guarantee is gone.
+		if (this.value.length * 3 <= this.maxBytes) return;
+		const encoded = new TextEncoder().encode(this.value);
+		if (encoded.byteLength <= this.maxBytes) return;
+		let start = encoded.byteLength - this.maxBytes;
+		while ((encoded[start] & 0xc0) === 0x80) start++;
+		this.value = new TextDecoder().decode(encoded.subarray(start));
+	}
+
+	get text(): string {
+		return this.value;
+	}
+}
+
 export interface LaunchableProcess {
 	waitForPort(
 		port: number,
@@ -411,16 +533,9 @@ export type ProcessLaunchResult<P extends LaunchableProcess> =
 	| {
 			success: true;
 			process: P;
-			timings: { setup: number; start: number; waitport: number };
+			timings: LaunchTimings;
 	  }
-	| {
-			success: false;
-			reason: LaunchProtocolFailure | 'transport_failure';
-			exitCode?: number;
-			stdout: string;
-			stderr: string;
-			timings: { setup: number; start: number; waitport: number };
-	  };
+	| LaunchFailureResult;
 
 /**
  * Compatibility implementation for process APIs that expose readiness and logs
@@ -443,13 +558,11 @@ export async function launchWithProcess<P extends LaunchableProcess>(options: {
 	try {
 		process = await options.start(built.command);
 	} catch (error) {
-		return {
-			success: false,
-			reason: 'transport_failure',
-			stdout: '',
-			stderr: error instanceof Error ? error.message : String(error),
-			timings: { setup: 0, start: Math.max(0, now() - launchStarted), waitport: 0 },
-		};
+		return transportFailureResult(error, {
+			setup: 0,
+			start: Math.max(0, now() - launchStarted),
+			waitport: 0,
+		});
 	}
 	const start = now() - launchStarted;
 	const waitStarted = now();
@@ -470,34 +583,27 @@ export async function launchWithProcess<P extends LaunchableProcess>(options: {
 		let setupCompleted = false;
 		try {
 			const logs = await process.getLogs();
-			setupCompleted = `${logs.stdout}\n${logs.stderr}`.includes(
-				`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
-			);
+			setupCompleted = `${logs.stdout}\n${logs.stderr}`.includes(setupCompleteMarker(built.nonce));
 			parsed = parseLaunchOutput(logs, built.nonce);
 		} catch (logError) {
-			return {
-				success: false,
-				reason: 'transport_failure',
-				stdout: '',
-				stderr: logError instanceof Error ? logError.message : String(logError),
-				timings: {
-					setup: 0,
-					start,
-					waitport: Math.max(0, now() - waitStarted),
-				},
-			};
+			return transportFailureResult(logError, {
+				setup: 0,
+				start,
+				waitport: Math.max(0, now() - waitStarted),
+			});
 		}
 		const outcome = parsed.outcome;
+		if (outcome && outcome.kind !== 'ready') {
+			return launchOutcomeResult(outcome.kind, outcome, parsed, start);
+		}
 		const deadlineExpired =
 			options.startupTimeout !== 0 && now() - launchStarted >= options.startupTimeout;
 		const reason =
-			outcome?.kind && outcome.kind !== 'ready'
-				? outcome.kind
-				: options.setup && deadlineExpired && !setupCompleted
-					? 'setup_timeout'
-					: /before port \d+/.test(error instanceof Error ? error.message.split('\n', 1)[0] : '')
-						? 'kernel_exit'
-						: 'readiness_timeout';
+			options.setup && deadlineExpired && !setupCompleted
+				? 'setup_timeout'
+				: /before port \d+/.test(error instanceof Error ? error.message.split('\n', 1)[0] : '')
+					? 'kernel_exit'
+					: 'readiness_timeout';
 		return {
 			success: false,
 			reason,
@@ -517,13 +623,11 @@ export async function launchWithProcess<P extends LaunchableProcess>(options: {
 	try {
 		parsed = parseLaunchOutput(await process.getLogs(), built.nonce);
 	} catch (error) {
-		return {
-			success: false,
-			reason: 'transport_failure',
-			stdout: '',
-			stderr: error instanceof Error ? error.message : String(error),
-			timings: { setup: 0, start, waitport: Math.max(0, now() - waitStarted) },
-		};
+		return transportFailureResult(error, {
+			setup: 0,
+			start,
+			waitport: Math.max(0, now() - waitStarted),
+		});
 	}
 	return {
 		success: true,

@@ -143,8 +143,10 @@ kubectl -n marimo-kernels describe pod mh-<id>       # conditions + events
 
 Large `image_pull_ms` → steps 1–2. Large `schedule_ms` → step 3. Large
 `waitport_ms` with the others small → the kernel env itself is slow to boot
-(e.g. `uv` resolving packages on first run — see
-[Sandbox image](../sandbox-image.md)).
+(for example, `uv` resolving packages on the first run — see
+[Sandbox image](../sandbox-image.md)). Super admins can reproduce a cold start
+with the
+[sandbox startup diagnostic](../operations.md#sandbox-startup-diagnostic).
 
 ## Topology
 

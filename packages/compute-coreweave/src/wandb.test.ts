@@ -16,7 +16,7 @@ import {
 	withServiceAddressCache,
 } from './wandb';
 import type { WandbConfig } from './wandb';
-import { makeWorld, procResult } from './testWorld';
+import { contractLaunchProcess, fakeProcess, makeWorld, procResult } from './testWorld';
 
 const SANDBOX_ID = 'sb-abc' as SandboxId;
 
@@ -206,7 +206,8 @@ computeContract(
 					}
 					return procResult();
 				},
+				startImpl: async (command) => contractLaunchProcess(command) ?? fakeProcess(),
 			}).client,
 		),
-	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
+	{ mountFallsBack: true, semantics: { failingCommand: 'false', launch: {} } },
 );

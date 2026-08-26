@@ -172,11 +172,12 @@ It is the one grant that overrides the per-project role model. Only super admins
 can manage [organization-wide integrations](./integrations.md#organization-wide-integrations).
 Project roles never grant this access.
 
-The web application gives super admins deployment users, settings, and audit-log
-pages. From the users page they can suspend or reactivate anyone except
-themselves. The audit page uses `GET /api/v1/events`. This endpoint returns at
-most 30 UTC days per query. Project managers retain access to each project's
-daily audit log.
+The web application gives super admins access to the users, settings, audit-log,
+and debug pages. They can suspend or reactivate any other user from the users
+page. The audit page uses `GET /api/v1/events`, which returns at most 30 UTC days
+per query. The debug page runs the
+[sandbox startup diagnostic](./operations.md#sandbox-startup-diagnostic).
+Project managers retain access to each project's daily audit log.
 
 Existing non-owner Admin memberships remain valid and can be demoted or removed,
 but the API does not allow new Admin assignments. A deployment introducing

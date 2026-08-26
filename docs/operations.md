@@ -20,6 +20,25 @@ the image".
 - `GET /api/v1/version` → deploy version, image, backends, and process start time;
   handy for confirming what's running.
 
+### Sandbox startup diagnostic
+
+Super admins can measure sandbox startup from the **Admin → Debug** page. This
+session-only page calls `POST /api/v1/admin/debug/sandbox-startup` and rejects
+PATs.
+
+Each run creates a temporary sandbox with the selected image and compute
+profile. A fixed echo command checks readiness. A second echo measures
+steady-state exec latency. The diagnostic always destroys the sandbox. It
+reports create, readiness, exec, cleanup, and backend startup timings.
+
+An optional environment-setup benchmark runs a fresh `uv sync` for a pinned
+package that is not in the base image. It also measures a runtime and CPU-limit
+probe and wheel-download throughput.
+
+A bucket lease limits each admin to one active diagnostic. A concurrent request
+returns `429`. Each run emits a `sandbox_startup_diagnostic` wide log event with
+the same timings as the report.
+
 At boot the server runs the same preflight and logs each check. The two failure
 classes behave differently on purpose:
 
@@ -106,7 +125,9 @@ over inline literals so they stay out of `helm get values`. A secrets manager
 
 The server emits **structured wide-event logs** (one JSON line per request /
 maintenance cycle) carrying backend signals — catalog CAS contention, reaper
-activity, snapshot timing. Ship stdout to your log pipeline and alert on
+activity, snapshot timing. When a sandbox environment setup takes longer than
+2 s, a `sandbox_setup_slow` warning records per-step timings and up to 4 KiB of
+trailing stderr. Ship stdout to your log pipeline and alert on
 `level: error` events (e.g. `boot_failed`, `unhandled_rejection`). Set an OTLP
 endpoint (see [Logs](#logs-opentelemetry) below) to also ship these lines over
 OpenTelemetry, so they outlive the pod after a redeploy.
@@ -118,7 +139,12 @@ tracing: one SERVER span per request through the Hono server, honoring inbound
 W3C `traceparent` headers, with nested spans for every domain-service and
 storage call (`NotebookService.getNotebook`, `Bucket.get`, …). Span attributes
 are limited to resource identifiers and bucket keys — request payloads,
-tokens, and emails are never recorded. `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
+tokens, and emails are never recorded. Sandbox provisioning emits phase spans
+such as `sandbox.reachable`, `sandbox.files`, `sandbox.setup`, and
+`sandbox.waitport`. The CoreWeave compute adapter emits a CLIENT span for each
+gateway request. These spans contain only endpoint, method, timing, and sandbox
+ID attributes. They never contain request payloads or credentials.
+`OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
 `OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
 `OTEL_SDK_DISABLED` behave per the [OTEL spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/).
 Only the OTLP exporter (the spec default) is implemented; any other
