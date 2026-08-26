@@ -10,6 +10,7 @@ import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
+import { emitLogRecord } from '../../logs';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type {
@@ -23,6 +24,7 @@ import type {
 } from '../../ports/sandbox';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
+import { traceContext } from '../../tracing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
@@ -40,6 +42,11 @@ import { restorePackedWorkspace } from './packedWorkspaceRestore';
  * first boot). See marimoLaunch.ts.
  */
 export const DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS = Millis.minutes(2);
+export const SLOW_SANDBOX_SETUP_MS = Millis.seconds(2);
+const SETUP_OUTPUT_TAIL_BYTES = 4 * 1024;
+const SETUP_MARKER = '__MARIMOHUB_SETUP__';
+const SETUP_STEP_MARKER = /^__MARIMOHUB_SETUP__ step ([a-z0-9_]{1,64}) (\d{1,20})$/;
+const SETUP_COMPLETE_MARKER = /^__MARIMOHUB_SETUP__ complete (\d{1,20})$/;
 /**
  * Default sandbox working directory. Override per-deployment via the `workdir`
  * option (config: MARIMOHUB_COMPUTE_WORKDIR) when the sandbox image's user can't
@@ -47,6 +54,92 @@ export const DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS = Millis.minutes(2);
  * `/workspace`, so writes there fail with a permission/file-IO error.
  */
 const DEFAULT_WORKDIR = '/workspace';
+
+interface SetupDiagnostics {
+	stderr: string;
+	timings: Timings;
+}
+
+function instrumentSetup(steps: readonly { name: string; command: string }[]): string {
+	const commands = steps.flatMap(({ name, command }) => [
+		`printf '\\n${SETUP_MARKER} step ${name} %s\\n' "$(date +%s%N)" >&2`,
+		command,
+	]);
+	commands.push(`printf '\\n${SETUP_MARKER} complete %s\\n' "$(date +%s%N)" >&2`);
+	return commands.join(' && ');
+}
+
+function parseSetupDiagnostics(stderr: string): SetupDiagnostics {
+	const timings: Timings = {};
+	const markers: { name: string; at: bigint }[] = [];
+	const setupOutput: string[] = [];
+	let inSetup = false;
+
+	for (const line of stderr.split(/\r?\n/)) {
+		const step = SETUP_STEP_MARKER.exec(line);
+		if (step) {
+			inSetup = true;
+			markers.push({ name: step[1], at: BigInt(step[2]) });
+			continue;
+		}
+		const complete = SETUP_COMPLETE_MARKER.exec(line);
+		if (complete) {
+			markers.push({ name: 'complete', at: BigInt(complete[1]) });
+			inSetup = false;
+			continue;
+		}
+		if (inSetup) setupOutput.push(line);
+	}
+
+	for (let index = 0; index + 1 < markers.length; index++) {
+		const current = markers[index];
+		const next = markers[index + 1];
+		if (current.name === 'complete' || next.at < current.at) continue;
+		timings[current.name] = Math.round(Number(next.at - current.at) / 1_000_000);
+	}
+
+	return { stderr: setupOutput.join('\n').trim(), timings };
+}
+
+function setupDiagnostics(stdout: string, stderr: string): SetupDiagnostics {
+	return parseSetupDiagnostics(stderr.includes(SETUP_MARKER) ? stderr : stdout);
+}
+
+function utf8Tail(value: string, maxBytes: number): string {
+	const encoded = new TextEncoder().encode(value);
+	if (encoded.byteLength <= maxBytes) return value;
+	let start = encoded.byteLength - maxBytes;
+	while ((encoded[start] & 0xc0) === 0x80) start++;
+	return new TextDecoder().decode(encoded.slice(start));
+}
+
+function logSlowSetup(
+	options: ProvisionOptions,
+	setupMs: number,
+	diagnostics: SetupDiagnostics,
+): void {
+	if (setupMs <= SLOW_SANDBOX_SETUP_MS) return;
+	const timingFields = Object.fromEntries(
+		Object.entries(diagnostics.timings).map(([step, ms]) => [`provision_setup_${step}_ms`, ms]),
+	);
+	const record = {
+		ts: new Date().toISOString(),
+		...traceContext(),
+		level: 'warn',
+		event: 'sandbox_setup_slow',
+		sandbox_id: options.sandboxId,
+		project_id: options.projectId,
+		notebook_id: options.notebookId,
+		launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
+		provision_setup_ms: setupMs,
+		...timingFields,
+		setup_stderr_tail: utf8Tail(diagnostics.stderr, SETUP_OUTPUT_TAIL_BYTES),
+	};
+	try {
+		console.warn(JSON.stringify(record));
+	} catch {}
+	emitLogRecord(record);
+}
 
 function pythonEnvironmentSetupFailure(result: ExecResult): PythonEnvironmentSetupError {
 	const output = `${result.stdout}\n${result.stderr}`;
@@ -743,13 +836,18 @@ export class SandboxProvisioner {
 		};
 		if (startup.plan.setup.length === 0) return startup;
 
-		const command = `cd ${shellQuote(mountPath)} && ${startup.plan.setup.join(' && ')}`;
+		const command = `cd ${shellQuote(mountPath)} && ${instrumentSetup(startup.plan.setup)}`;
+		let diagnostics: SetupDiagnostics | undefined;
 		try {
 			await withSandboxSpan(
 				sw,
 				'setup',
 				async (time) => {
 					const result = await time(() => executeEnvironmentSetup(sandbox, command, startup));
+					diagnostics = setupDiagnostics(result.stdout, result.stderr);
+					for (const [step, ms] of Object.entries(diagnostics.timings)) {
+						sw.timings[`setup_${step}`] = ms;
+					}
 					if (!result.success) throw pythonEnvironmentSetupFailure(result);
 				},
 				{ launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
@@ -757,6 +855,8 @@ export class SandboxProvisioner {
 		} catch (error) {
 			if (error instanceof PythonEnvironmentSetupError) throw error;
 			throw provisionFailure('preparing the notebook Python environment', error);
+		} finally {
+			if (diagnostics) logSlowSetup(options, sw.timings.setup, diagnostics);
 		}
 		return startup;
 	}

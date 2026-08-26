@@ -5,7 +5,7 @@ import {
 	InMemorySpanExporter,
 	SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { fakeComputeFrom, makeFakeSandbox } from '../../testing';
 import { SandboxProvisioner } from './SandboxProvisioner';
@@ -114,5 +114,51 @@ describe('SandboxProvisioner tracing', () => {
 			.find((candidate) => candidate.name === 'sandbox.waitport');
 		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
 		expect(span?.events.some((event) => event.name === 'exception')).toBe(true);
+	});
+
+	it('includes the active trace context on slow setup logs', async () => {
+		const { instance } = makeFakeSandbox();
+		instance.ready = async () => {};
+		const exec = instance.exec.bind(instance);
+		instance.exec = async (command, options) => {
+			if (!command.includes('uv sync')) return exec(command, options);
+			vi.setSystemTime(Date.now() + 2_500);
+			return {
+				success: true,
+				stdout: '',
+				stderr: [
+					'__MARIMOHUB_SETUP__ step pyproject_layer 1000000000',
+					'__MARIMOHUB_SETUP__ complete 3500000000',
+				].join('\n'),
+			};
+		};
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-26T13:47:00Z'));
+		try {
+			let expectedTraceId = '';
+			let expectedSpanId = '';
+			await provider.getTracer('test').startActiveSpan('session.provision', async (span) => {
+				expectedTraceId = span.spanContext().traceId;
+				expectedSpanId = span.spanContext().spanId;
+				try {
+					await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						sandboxId,
+						projectId,
+						notebookId,
+						hostname: 'localhost',
+						bucket,
+					});
+				} finally {
+					span.end();
+				}
+			});
+
+			const record = JSON.parse(String(warn.mock.calls[0][0])) as Record<string, unknown>;
+			expect(record).toMatchObject({ trace_id: expectedTraceId, span_id: expectedSpanId });
+		} finally {
+			vi.useRealTimers();
+			warn.mockRestore();
+		}
 	});
 });
