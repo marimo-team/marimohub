@@ -95,11 +95,12 @@ dependencies = ["polars", "narwhals"]
 TOML
 }
 
-provision_python314_notebook() { # $1 = container id
-	docker exec -i "$1" sh -lc 'cd /workspace && cat > notebook.py' <<'PY'
+provision_python314_notebook() { # $1 = container id; $2 = image marimo version
+	local marimo_version="$2"
+	docker exec -i "$1" sh -lc 'cd /workspace && cat > notebook.py' <<PY
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["click"]
+# dependencies = ["click", "marimo!=${marimo_version}"]
 # ///
 
 import marimo
@@ -176,7 +177,7 @@ ok "marimo pinned to $mv (pre-installed; launch never upgrades it)"
 # --- 2c. a notebook may replace the warm env with a newer Python ------------
 echo "==> 2c. Python-version replacement"
 cid="$(run_detached "$IMAGE" sleep infinity)"
-provision_python314_notebook "$cid"
+provision_python314_notebook "$cid" "$mv"
 docker exec "$cid" sh -lc '
 	set -e
 	cd /workspace
@@ -186,7 +187,7 @@ docker exec "$cid" sh -lc '
 	[ "$installed_marimo" = "$marimohub_marimo_version" ] || \
 		uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
 			"marimo==$marimohub_marimo_version"
-	uv export --script notebook.py --format requirements-txt --no-hashes \
+	uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo \
 		-o "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
 	uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
 		-r "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"

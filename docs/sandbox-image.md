@@ -70,14 +70,13 @@ inline dependencies into the base environment:
 
 ```sh
 [ -d "${UV_PROJECT_ENVIRONMENT:-.venv}" ] || uv venv "${UV_PROJECT_ENVIRONMENT:-.venv}"
-uv export --script notebook.py --format requirements-txt --no-hashes -o "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
+uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo -o "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
 uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
 ```
 
 A setup failure stops the session with `PYTHON_ENV_SETUP_FAILED` before the kernel
-starts. A `marimo` pin in the metadata replaces the image version for that
-sandbox. This version can be incompatible with a frontend served through
-`--asset-url`.
+starts. The export keeps the image's bytecode-compiled `marimo` version and removes
+packages used only by marimo. Direct notebook dependencies remain in the export.
 
 So your image must provide:
 

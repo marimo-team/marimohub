@@ -118,6 +118,7 @@ describe('buildMarimoLaunch', () => {
 			expect(ensureEnv).toContain('uv venv');
 			expect(exportCmd).toContain("uv export --script 'apps/my app.py'");
 			expect(exportCmd).toContain('--format requirements-txt');
+			expect(exportCmd).toContain('--prune marimo');
 			expect(installCmd).toContain('uv pip install');
 			// The env `uv run --no-sync` resolves — never VIRTUAL_ENV, which uv run
 			// ignores and would leave the pins invisible to the kernel.

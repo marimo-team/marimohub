@@ -116,7 +116,7 @@ describe('SandboxProvisioner', () => {
 				launchStrategy: 'uv-script-pins',
 			});
 
-			// Pins apply last within the checked setup command, before marimo starts.
+			// Notebook pins apply last, except marimo remains at the image version.
 			const cmd = calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			const order = [
 				cmd.indexOf('uv sync --inexact'),
@@ -126,6 +126,7 @@ describe('SandboxProvisioner', () => {
 			];
 			expect(Math.min(...order)).toBeGreaterThanOrEqual(0);
 			expect(order).toEqual([...order].sort((a, b) => a - b));
+			expect(cmd).toContain('--prune marimo');
 			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/dash.py'");
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});

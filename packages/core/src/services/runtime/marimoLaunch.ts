@@ -118,15 +118,17 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 	}),
 
 	// Git-synced notebooks with PEP 723 inline metadata: the pyproject layer runs
-	// first, then the script's pins install into the same base env — last, so they
-	// win. --no-hashes because hash checking rejects the unhashed base env.
+	// first, then the script's pins install into the same base env. Prune marimo's
+	// dependency tree so a notebook's inline marimo pin cannot replace the
+	// bytecode-compiled image version. --no-hashes because hash checking rejects
+	// the unhashed base env.
 	'uv-script-pins': (p) => ({
 		setup: [
 			CAPTURE_MARIMO_VERSION,
 			PYPROJECT_LAYER_SETUP,
 			`{ [ -d ${PIN_ENV} ] || uv venv ${PIN_ENV}; }`,
 			ENSURE_MARIMO,
-			`uv export --script ${shellQuote(p.notebookFile)} --format requirements-txt --no-hashes -o ${SCRIPT_REQUIREMENTS}`,
+			`uv export --script ${shellQuote(p.notebookFile)} --format requirements-txt --no-hashes --prune marimo -o ${SCRIPT_REQUIREMENTS}`,
 			`uv pip install --python ${PIN_ENV} --no-build -r ${SCRIPT_REQUIREMENTS}`,
 		],
 		start: `uv run --no-sync ${marimoCommand(p)}`,
