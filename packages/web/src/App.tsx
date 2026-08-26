@@ -19,6 +19,7 @@ const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
 const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
+const AdminDebugPage = lazy(() => import('@/components/Admin/AdminDebugPage'));
 const CliLoginPage = lazy(() =>
 	import('@/components/Account/CliLoginPage').then((module) => ({ default: module.CliLoginPage })),
 );
@@ -132,6 +133,7 @@ function StandardLayout() {
 								<Route path="users" element={<AdminUsersPage />} />
 								<Route path="settings" element={<AdminSettingsPage />} />
 								<Route path="audit-logs" element={<AuditLogPage />} />
+								<Route path="debug" element={<AdminDebugPage />} />
 							</Route>
 							<Route path="*" element={<NotFoundPage />} />
 						</Routes>

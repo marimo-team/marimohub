@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 describe('App routes', () => {
-	it.each(['/admin/audit-logs', '/admin/users', '/admin/settings'])(
+	it.each(['/admin/audit-logs', '/admin/users', '/admin/settings', '/admin/debug'])(
 		'redirects a non-super-admin away from %s',
 		async (path) => {
 			installMatchMedia(false);
@@ -139,7 +139,44 @@ describe('App routes', () => {
 
 		expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument();
 		expect(screen.getByRole('navigation', { name: 'Admin' })).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Debug' })).toHaveAttribute('href', '/admin/debug');
 		expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
 		expect(window.location.pathname).toBe('/admin/users');
+	});
+
+	it('shows the lazy debug page to a super admin', async () => {
+		installMatchMedia(false);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url === '/api/v1/me') {
+					return jsonOk({
+						id: 'user-one',
+						email: 'admin@example.com',
+						logout_url: null,
+						is_super_admin: true,
+					});
+				}
+				if (url === '/api/v1/capabilities') {
+					return jsonOk({
+						sandbox_images: [],
+						sandbox_startup_timeout_seconds: 120,
+						compute_profiles: [],
+					});
+				}
+				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		window.history.replaceState({}, '', '/admin/debug');
+
+		renderWithClient(<App />, { toaster: false });
+
+		expect(
+			await screen.findByRole('heading', { name: 'Sandbox startup time' }),
+		).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Debug' })).toHaveAttribute('aria-current', 'page');
+		expect(window.location.pathname).toBe('/admin/debug');
 	});
 });

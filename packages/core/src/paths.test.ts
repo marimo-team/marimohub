@@ -100,6 +100,12 @@ describe('paths', () => {
 		expect(key.slice(paths.identitiesPrefix.length)).not.toContain('/');
 	});
 
+	it('sandboxDiagnosticLease() encodes the user id within its prefix', () => {
+		const key = paths.sandboxDiagnosticLease('../../evil' as UserId);
+		expect(key.startsWith(paths.sandboxDiagnosticLeasesPrefix)).toBe(true);
+		expect(key.slice(paths.sandboxDiagnosticLeasesPrefix.length)).not.toContain('/');
+	});
+
 	it('composability — intermediate objects are reusable', () => {
 		const proj = paths.project(pid);
 		const nb1 = proj.notebook('nb_01AAAA00000000000000000000' as NotebookId);

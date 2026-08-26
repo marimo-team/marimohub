@@ -58,6 +58,7 @@ export type AuditLogPage = components['schemas']['AuditLogPage'];
 export type AdminUser = components['schemas']['AdminUser'];
 /** Redacted deployment configuration from the super-admin `GET /api/v1/admin/config`. */
 export type DeploymentConfig = components['schemas']['DeploymentConfig'];
+export type SandboxStartupReport = components['schemas']['SandboxStartupReport'];
 
 export type ApiError = components['schemas']['ErrorResponse']['error'];
 export type ServerErrorCode = ApiError['code'];

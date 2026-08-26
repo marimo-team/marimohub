@@ -31,6 +31,7 @@ import type {
 	ResolvedUser,
 	ProjectFederation,
 	ProjectAlertKind,
+	SandboxStartupReport,
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -230,6 +231,23 @@ export function useDeploymentConfigQuery() {
 	return useSuspenseQuery({
 		queryKey: adminKeys.config(),
 		queryFn: () => apiData(apiClient.GET('/api/v1/admin/config')),
+	});
+}
+
+export interface SandboxStartupTestInput {
+	image?: string;
+	compute_profile?: string;
+}
+
+export function useRunSandboxStartupTest(startupTimeoutSeconds = 120) {
+	return useMutation({
+		mutationFn: (body: SandboxStartupTestInput): Promise<SandboxStartupReport> =>
+			apiData(
+				apiClient.POST('/api/v1/admin/debug/sandbox-startup', {
+					body,
+					timeout: startupTimeoutSeconds * 1000 + 60_000,
+				}),
+			),
 	});
 }
 

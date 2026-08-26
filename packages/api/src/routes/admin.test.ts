@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { composeAuthenticators, paths } from '@marimo-hub/core';
+import { composeAuthenticators, execResult, paths } from '@marimo-hub/core';
+import type { SandboxInstance, SandboxProvider } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
-import { ACTOR, uid } from '@marimo-hub/core/testing';
+import { ACTOR, makeFakeSandbox, uid } from '@marimo-hub/core/testing';
 import type { ConfigSummary } from '../context';
 import { createApi, generateOpenApiDocument } from '../createApi';
 import {
@@ -41,6 +42,15 @@ describe('Admin routes', () => {
 		for (const path of ['/api/v1/admin/users', '/api/v1/admin/config']) {
 			await expectError(await app.request(path), 401, 'UNAUTHORIZED');
 		}
+		await expectError(
+			await app.request('/api/v1/admin/debug/sandbox-startup', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: '{}',
+			}),
+			401,
+			'UNAUTHORIZED',
+		);
 	});
 
 	it('rejects non-super-admins with 403', async () => {
@@ -52,6 +62,7 @@ describe('Admin routes', () => {
 			403,
 			'FORBIDDEN',
 		);
+		await expectError(await request('POST', '/admin/debug/sandbox-startup', {}), 403, 'FORBIDDEN');
 	});
 
 	it('rejects a super admin PAT with 403 — admin endpoints are session-only', async () => {
@@ -71,10 +82,16 @@ describe('Admin routes', () => {
 			'/api/v1/admin/users',
 			'/api/v1/admin/config',
 			`/api/v1/admin/users/${uid('target')}/suspension`,
+			'/api/v1/admin/debug/sandbox-startup',
 		]) {
+			const debug = path.endsWith('/sandbox-startup');
 			const res = await composed.request(path, {
-				method: path.includes('/suspension') ? 'PUT' : 'GET',
-				headers: { authorization: `Bearer ${token}` },
+				method: debug ? 'POST' : path.includes('/suspension') ? 'PUT' : 'GET',
+				headers: {
+					authorization: `Bearer ${token}`,
+					...(debug ? { 'content-type': 'application/json' } : {}),
+				},
+				...(debug ? { body: '{}' } : {}),
 			});
 			await expectError(res, 403, 'FORBIDDEN');
 		}
@@ -97,6 +114,9 @@ describe('Admin routes', () => {
 		};
 		expect(doc.paths['/api/v1/admin/users'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/config'].get.security).toEqual([{ cookieAuth: [] }]);
+		expect(doc.paths['/api/v1/admin/debug/sandbox-startup'].post.security).toEqual([
+			{ cookieAuth: [] },
+		]);
 		expect(doc.paths['/api/v1/admin/users/{id}/suspension'].put.security).toEqual([
 			{ cookieAuth: [] },
 		]);
@@ -249,6 +269,222 @@ describe('Admin routes', () => {
 				404,
 				'NOT_FOUND',
 			);
+		});
+	});
+
+	describe('POST /admin/debug/sandbox-startup', () => {
+		const sandboxConfig = {
+			bucket: { name: 'test', endpoint: '' },
+			hostname: 'localhost',
+			workdir: '/workspace',
+			persistWorkspace: 'source' as const,
+			images: ['registry.example/sandbox:default', 'registry.example/sandbox:py313'],
+			computeProfile: 'small',
+			resources: { cpu: 1, memoryBytes: 2_147_483_648 },
+			computeProfiles: [
+				{ name: 'small', resources: { cpu: 1, memoryBytes: 2_147_483_648 } },
+				{ name: 'gpu', resources: { cpu: 8, memoryBytes: 34_359_738_368, gpu: 'A100' } },
+			],
+		};
+
+		function computeFor(instance: SandboxInstance) {
+			const create = vi.fn(() => instance);
+			const compute: SandboxProvider = { create, proxy: async () => null };
+			return { compute, create };
+		}
+
+		it('uses the selected image and profile, runs two echoes, reports timings, and destroys', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.exec = vi
+				.fn()
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''))
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''));
+			instance.drainTimings = vi
+				.fn()
+				.mockReturnValueOnce({ find: 4, create: 12, boot: 34 })
+				.mockReturnValue({});
+			instance.drainCounters = vi.fn(() => ({ execs: 2 }));
+			const { compute, create } = computeFor(instance);
+			const { request, deps } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(
+				await request('POST', '/admin/debug/sandbox-startup', {
+					image: 'registry.example/sandbox:py313',
+					compute_profile: 'gpu',
+				}),
+			);
+
+			expect(create).toHaveBeenCalledWith(expect.stringMatching(/^sb-/), {
+				reuse: false,
+				image: 'registry.example/sandbox:py313',
+				resources: { cpu: 8, memoryBytes: 34_359_738_368, gpu: 'A100' },
+			});
+			expect(instance.exec).toHaveBeenNthCalledWith(1, 'echo "Hello"', { timeout: 120_000 });
+			expect(instance.exec).toHaveBeenNthCalledWith(2, 'echo "Hello"', { timeout: 30_000 });
+			expect(calls.destroy).toBe(1);
+			expect(report).toMatchObject({
+				ok: true,
+				image: 'registry.example/sandbox:py313',
+				compute_profile: 'gpu',
+				compute_resources: { cpu: 8, memory_bytes: 34_359_738_368, gpu: 'A100' },
+				readiness: { status: 'ok', command: 'echo "Hello"', stdout: 'Hello\n', stderr: '' },
+				exec: { status: 'ok', command: 'echo "Hello"', stdout: 'Hello\n', stderr: '' },
+				cleanup: { status: 'ok' },
+				startup_timings_ms: { find: 4, create: 12, boot: 34 },
+				counters: { execs: 2 },
+			});
+			expect(report.handle.duration_ms).toEqual(expect.any(Number));
+			expect(report.total_ms).toEqual(expect.any(Number));
+			expect(await deps.services.sessions.countActiveForUser(ACTOR)).toBe(0);
+		});
+
+		it('uses deployment defaults when both selections are omitted', async () => {
+			const { instance } = makeFakeSandbox();
+			const { compute, create } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup', {}));
+			expect(create).toHaveBeenCalledWith(expect.any(String), {
+				reuse: false,
+				image: 'registry.example/sandbox:default',
+				resources: { cpu: 1, memoryBytes: 2_147_483_648 },
+			});
+			expect(report).toMatchObject({
+				image: 'registry.example/sandbox:default',
+				compute_profile: 'small',
+			});
+		});
+
+		it('rejects unknown configured selections before creating a sandbox', async () => {
+			const { instance } = makeFakeSandbox();
+			const { compute, create } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			await expectError(
+				await request('POST', '/admin/debug/sandbox-startup', { image: 'unknown' }),
+				400,
+				'BAD_REQUEST',
+			);
+			await expectError(
+				await request('POST', '/admin/debug/sandbox-startup', { compute_profile: 'huge' }),
+				400,
+				'BAD_REQUEST',
+			);
+			expect(create).not.toHaveBeenCalled();
+		});
+
+		it('returns a partial report and skips the second echo when readiness fails', async () => {
+			const { instance } = makeFakeSandbox();
+			instance.exec = vi.fn(async () => execResult(false, '', 'shell unavailable', 'SPAWN_FAILED'));
+			instance.destroy = vi.fn(async () => {
+				throw Object.assign(new Error('destroy failed'), { code: 'BACKEND_UNAVAILABLE' });
+			});
+			const { compute } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup', {}));
+			expect(instance.exec).toHaveBeenCalledTimes(1);
+			expect(instance.destroy).toHaveBeenCalledTimes(1);
+			expect(report).toMatchObject({
+				ok: false,
+				readiness: {
+					status: 'failed',
+					stderr: 'shell unavailable',
+					failure_code: 'SPAWN_FAILED',
+				},
+				exec: { status: 'skipped', duration_ms: null },
+				cleanup: {
+					status: 'failed',
+					error: { error_name: 'Error', error_code: 'BACKEND_UNAVAILABLE' },
+				},
+			});
+		});
+
+		it('reports a thrown steady-state exec error and still cleans up', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.exec = vi
+				.fn()
+				.mockResolvedValueOnce(execResult(true, 'Hello\n', ''))
+				.mockRejectedValueOnce(Object.assign(new Error('exec failed'), { code: 'TRANSPORT' }));
+			const { compute } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup', {}));
+			expect(calls.destroy).toBe(1);
+			expect(report).toMatchObject({
+				ok: false,
+				readiness: { status: 'ok' },
+				exec: {
+					status: 'failed',
+					error: { error_name: 'Error', error_code: 'TRANSPORT' },
+				},
+				cleanup: { status: 'ok' },
+			});
+		});
+
+		it('reports handle creation failures without attempting cleanup', async () => {
+			const create = vi.fn(() => {
+				throw Object.assign(new Error('create failed'), { code: 'NO_CAPACITY' });
+			});
+			const compute: SandboxProvider = { create, proxy: async () => null };
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup', {}));
+			expect(report).toMatchObject({
+				ok: false,
+				handle: {
+					status: 'failed',
+					error: { error_name: 'Error', error_code: 'NO_CAPACITY' },
+				},
+				readiness: { status: 'skipped' },
+				exec: { status: 'skipped' },
+				cleanup: { status: 'skipped' },
+			});
+			expect(await (await bucket.get(paths.sandboxDiagnosticLease(ACTOR)))!.json()).toEqual({
+				sandbox_id: null,
+				expires_at: null,
+			});
+		});
+
+		it('uses a shared lease to reject overlap across replicas and releases it afterward', async () => {
+			let release: (() => void) | undefined;
+			const blocked = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const { instance } = makeFakeSandbox();
+			instance.exec = vi
+				.fn()
+				.mockImplementationOnce(async () => {
+					await blocked;
+					return execResult(true, 'Hello\n', '');
+				})
+				.mockResolvedValue(execResult(true, 'Hello\n', ''));
+			const { compute, create } = computeFor(instance);
+			const longStartupConfig = { ...sandboxConfig, startupTimeoutMs: 20 * 60_000 };
+			const firstReplica = superAdminApi({ compute, sandbox: longStartupConfig });
+			const secondReplica = superAdminApi({ compute, sandbox: longStartupConfig });
+
+			const first = firstReplica.request('POST', '/admin/debug/sandbox-startup', {});
+			await vi.waitFor(() => expect(instance.exec).toHaveBeenCalledTimes(1));
+			const held = await (await bucket.get(paths.sandboxDiagnosticLease(ACTOR)))!.json<{
+				sandbox_id: string;
+				expires_at: string;
+			}>();
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(held.sandbox_id).toMatch(/^sb-/);
+			expect(Date.parse(held.expires_at) - Date.now()).toBeGreaterThan(20 * 60_000);
+			await expectError(
+				await secondReplica.request('POST', '/admin/debug/sandbox-startup', {}),
+				429,
+				'RESOURCE_EXHAUSTED',
+			);
+			release?.();
+			await expectOk(await first);
+			expect(await (await bucket.get(paths.sandboxDiagnosticLease(ACTOR)))!.json()).toEqual({
+				sandbox_id: null,
+				expires_at: null,
+			});
+			await expectOk(await secondReplica.request('POST', '/admin/debug/sandbox-startup', {}));
 		});
 	});
 

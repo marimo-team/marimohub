@@ -220,6 +220,9 @@ export const paths = {
 	reconcileOrphansPrefix: '_system/reconcile/orphans/',
 	reconcileOrphan: (sandboxId: SandboxId) =>
 		`_system/reconcile/orphans/${encodeURIComponent(sandboxId)}.json`,
+	sandboxDiagnosticLeasesPrefix: '_system/sandbox-diagnostics/',
+	sandboxDiagnosticLease: (userId: UserId) =>
+		`_system/sandbox-diagnostics/${encodeURIComponent(userId)}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops

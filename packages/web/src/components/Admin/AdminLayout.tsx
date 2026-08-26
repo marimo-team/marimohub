@@ -6,6 +6,7 @@ const TABS = [
 	{ to: '/admin/users', label: 'Users' },
 	{ to: '/admin/settings', label: 'Settings' },
 	{ to: '/admin/audit-logs', label: 'Audit logs' },
+	{ to: '/admin/debug', label: 'Debug' },
 ];
 
 /** Super-admin gate + tab bar shared by every `/admin/*` page. */

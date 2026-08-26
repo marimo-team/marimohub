@@ -15,6 +15,7 @@ import {
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
 import { ReconciliationService } from './ReconciliationService';
+import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { SessionService } from './SessionService';
 
 describe('ReconciliationService', () => {
@@ -295,6 +296,24 @@ describe('ReconciliationService', () => {
 
 		expect(result.orphansReaped).toBe(0);
 		expect(compute.destroyed).toEqual([]);
+	});
+
+	it('Rule 3: protects an active sandbox diagnostic beyond the orphan grace window', async () => {
+		compute.active = [
+			{ id: orphanId, createdAt: new Date(Date.now() - 60 * 60_000).toISOString() },
+		];
+		const leases = new SandboxDiagnosticLease(bucket);
+		await leases.acquire(ACTOR, orphanId, 2 * 60 * 60_000);
+
+		const protectedResult = await reconciler.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(protectedResult.orphansReaped).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+		await leases.release(ACTOR, orphanId);
+
+		const releasedResult = await reconciler.reconcile({ orphanGraceMs: 1_000 });
+		expect(releasedResult.orphansReaped).toBe(1);
+		expect(compute.destroyed).toEqual([orphanId]);
 	});
 
 	it('Rule 3: applies the grace window to an orphan with no createdAt', async () => {
