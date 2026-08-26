@@ -238,6 +238,7 @@ export function useDeploymentConfigQuery() {
 export interface SandboxStartupTestInput {
 	image?: string;
 	compute_profile?: string;
+	environment_setup_benchmark?: boolean;
 }
 
 export function useRunSandboxStartupTest(startupTimeoutSeconds = 120) {
@@ -246,7 +247,8 @@ export function useRunSandboxStartupTest(startupTimeoutSeconds = 120) {
 			apiData(
 				apiClient.POST('/api/v1/admin/debug/sandbox-startup', {
 					body,
-					timeout: startupTimeoutSeconds * 1000 + 60_000,
+					timeout:
+						startupTimeoutSeconds * 1000 + (body.environment_setup_benchmark ? 570_000 : 60_000),
 				}),
 			),
 		meta: { suppressErrorToast: true },

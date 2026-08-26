@@ -12,6 +12,7 @@ import type { SandboxStartupReport } from '@/types';
 
 type StartupCommand = SandboxStartupReport['readiness'];
 type StartupPhase = SandboxStartupReport['handle'];
+type EnvironmentSetupBenchmark = NonNullable<SandboxStartupReport['environment_setup_benchmark']>;
 
 const CONFIGURED_IMAGE_PREFIX = 'configured-image:';
 const durationFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
@@ -192,6 +193,10 @@ function StartupReport({ report }: { report: SandboxStartupReport }) {
 				<CommandResult label="Single exec (second echo)" result={report.exec} />
 			</div>
 
+			{report.environment_setup_benchmark ? (
+				<EnvironmentSetupBenchmarkReport benchmark={report.environment_setup_benchmark} />
+			) : null}
+
 			{report.cleanup.error && (
 				<div>
 					<h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-destructive">
@@ -210,6 +215,30 @@ function StartupReport({ report }: { report: SandboxStartupReport }) {
 				{' · '}counters <code>{JSON.stringify(report.counters)}</code>
 			</div>
 		</section>
+	);
+}
+
+function EnvironmentSetupBenchmarkReport({ benchmark }: { benchmark: EnvironmentSetupBenchmark }) {
+	return (
+		<div>
+			<h3 className="mb-1 text-sm font-semibold">Fresh sandbox uv sync benchmark</h3>
+			<p className="mb-3 text-xs text-muted-foreground">
+				Pinned boto3, botocore, moutils, and obstore against the image&apos;s configured environment
+				and cache. CPU counters bracket only the measured sync.
+			</p>
+			<div className="grid gap-4">
+				<CommandResult label="Runtime and CPU limits" result={benchmark.runtime_probe} />
+				<CommandResult
+					label="Raw wheel download (botocore 1.43.36, 15.3 MB)"
+					result={benchmark.artifact_download}
+				/>
+				<CommandResult
+					label="Create uv.lock (not part of sync timing)"
+					result={benchmark.prepare}
+				/>
+				<CommandResult label="uv sync (fresh sandbox)" result={benchmark.install} />
+			</div>
+		</div>
 	);
 }
 
@@ -234,6 +263,7 @@ export default function AdminDebugPage() {
 		defaultValues: {
 			image: DEFAULT_BASE_IMAGE,
 			computeProfile: DEFAULT_COMPUTE_PROFILE,
+			environmentSetupBenchmark: false,
 		},
 		onSubmit: async ({ value }) => {
 			const image = value.image.startsWith(CONFIGURED_IMAGE_PREFIX)
@@ -245,6 +275,7 @@ export default function AdminDebugPage() {
 					...(value.computeProfile === DEFAULT_COMPUTE_PROFILE
 						? {}
 						: { compute_profile: value.computeProfile }),
+					...(value.environmentSetupBenchmark ? { environment_setup_benchmark: true } : {}),
 				});
 			} catch {
 				return;
@@ -302,6 +333,25 @@ export default function AdminDebugPage() {
 								options={profileOptions}
 								isDisabled={unavailable || run.isPending}
 							/>
+						)}
+					</form.AppField>
+				</div>
+
+				<div className="mt-5 rounded-lg border bg-card px-4 py-3">
+					<form.AppField name="environmentSetupBenchmark">
+						{(field) => (
+							<field.SwitchField isDisabled={unavailable || run.isPending}>
+								{(selected) => (
+									<span className="flex flex-col text-left">
+										<span className="text-sm font-medium">
+											Fresh sandbox uv sync benchmark {selected ? 'enabled' : 'disabled'}
+										</span>
+										<span className="text-xs text-muted-foreground">
+											Adds a raw wheel download, runtime probe, and fixed four-package sync.
+										</span>
+									</span>
+								)}
+							</field.SwitchField>
 						)}
 					</form.AppField>
 				</div>

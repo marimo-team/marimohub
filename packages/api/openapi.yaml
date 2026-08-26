@@ -778,6 +778,8 @@ components:
           type: object
           additionalProperties:
             type: number
+        environment_setup_benchmark:
+          $ref: '#/components/schemas/SandboxEnvironmentSetupBenchmark'
       required:
         - ok
         - sandbox_id
@@ -793,6 +795,7 @@ components:
         - cleanup
         - startup_timings_ms
         - counters
+        - environment_setup_benchmark
     SandboxStartupPhase:
       type: object
       properties:
@@ -835,6 +838,30 @@ components:
             - command
             - stdout
             - stderr
+    SandboxEnvironmentSetupBenchmark:
+      type:
+        - object
+        - 'null'
+      properties:
+        tool:
+          type: string
+          minLength: 1
+          example: uv
+        runtime_probe:
+          $ref: '#/components/schemas/SandboxStartupCommand'
+        artifact_download:
+          $ref: '#/components/schemas/SandboxStartupCommand'
+        prepare:
+          $ref: '#/components/schemas/SandboxStartupCommand'
+        install:
+          $ref: '#/components/schemas/SandboxStartupCommand'
+      required:
+        - tool
+        - runtime_probe
+        - artifact_download
+        - prepare
+        - install
+      description: The optional fixed-package benchmark, or null when it was not requested
     SandboxStartupRequest:
       type: object
       properties:
@@ -844,6 +871,10 @@ components:
         compute_profile:
           type: string
           minLength: 1
+        environment_setup_benchmark:
+          type: boolean
+          description: Run the fixed-package uv, wheel-download, runtime, and
+            CPU-throttling benchmark
       additionalProperties: false
     DeploymentConfig:
       type: object
@@ -5155,9 +5186,11 @@ paths:
         - Admin
       summary: Measure sandbox startup and command latency
       description: Creates a fresh ephemeral sandbox, uses the first fixed echo
-        command as the readiness probe, measures a second fixed echo command,
-        and destroys the sandbox. Runtime failures are returned as a partial
-        report. Super-admin only and session-only.
+        command as the readiness probe, and measures a second fixed echo
+        command. An optional fresh-sandbox uv benchmark also records runtime and
+        CPU limits, files.pythonhosted.org throughput, uv phase timings, and CPU
+        throttling counters. The sandbox is always destroyed. Runtime failures
+        are returned as a partial report. Super-admin only and session-only.
       security: *a2
       requestBody:
         required: true
