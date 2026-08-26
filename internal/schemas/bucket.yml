@@ -14,7 +14,8 @@ info:
 
     Deliberately excluded (no zod schema; internal operational records or
     other non-JSON artifacts): idempotency records, integration name claims,
-    reconcile orphan markers, advisory locks, and version/workspace file
+    reconcile orphan markers, sandbox diagnostic leases, advisory locks, and
+    version/workspace file
     artifacts (notebook.py, pyproject.toml, notebook.html, session.json,
     README.md, workspace files). Pull-source Git metadata is included because
     its immutable version-scoped location is part of the sync contract.

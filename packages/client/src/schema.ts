@@ -340,6 +340,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/admin/debug/sandbox-startup': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Measure sandbox startup and command latency
+		 * @description Creates a fresh ephemeral sandbox, uses the first fixed echo command as the readiness probe, measures a second fixed echo command, and destroys the sandbox. Runtime failures are returned as a partial report. Super-admin only and session-only.
+		 */
+		post: operations['admin.debug.sandboxStartup'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/admin/config': {
 		parameters: {
 			query?: never;
@@ -1662,6 +1682,48 @@ export interface components {
 			/** Format: date-time */
 			suspended_at: string | null;
 			is_super_admin: boolean;
+		};
+		SandboxStartupReport: {
+			ok: boolean;
+			sandbox_id: string;
+			image: string | null;
+			compute_profile: string | null;
+			compute_resources: components['schemas']['ComputeResources'];
+			/** Format: date-time */
+			started_at: string;
+			/** Format: date-time */
+			finished_at: string;
+			total_ms: number;
+			handle: components['schemas']['SandboxStartupPhase'];
+			readiness: components['schemas']['SandboxStartupCommand'];
+			exec: components['schemas']['SandboxStartupCommand'];
+			cleanup: components['schemas']['SandboxStartupPhase'];
+			startup_timings_ms: {
+				[key: string]: number;
+			};
+			counters: {
+				[key: string]: number;
+			};
+		};
+		SandboxStartupPhase: {
+			/** @enum {string} */
+			status: 'ok' | 'failed' | 'skipped';
+			duration_ms: number | null;
+			error?: {
+				[key: string]: unknown;
+			};
+		};
+		SandboxStartupCommand: components['schemas']['SandboxStartupPhase'] & {
+			/** @example echo "Hello" */
+			command: string;
+			stdout: string;
+			stderr: string;
+			/** @enum {string} */
+			failure_code?: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR';
+		};
+		SandboxStartupRequest: {
+			image?: string;
+			compute_profile?: string;
 		};
 		DeploymentConfig: {
 			deployment: components['schemas']['AdminDeployment'];
@@ -4836,6 +4898,110 @@ export interface operations {
 			/** @description Validation error */
 			422: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.debug.sandboxStartup': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['SandboxStartupRequest'];
+			};
+		};
+		responses: {
+			/** @description The sandbox startup diagnostic report */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SandboxStartupReport'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {

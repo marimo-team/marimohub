@@ -735,6 +735,116 @@ components:
         - updated_at
         - suspended_at
         - is_super_admin
+    SandboxStartupReport:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        sandbox_id:
+          type: string
+        image:
+          type:
+            - string
+            - 'null'
+        compute_profile:
+          type:
+            - string
+            - 'null'
+        compute_resources:
+          $ref: '#/components/schemas/ComputeResources'
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        total_ms:
+          type: number
+          minimum: 0
+        handle:
+          $ref: '#/components/schemas/SandboxStartupPhase'
+        readiness:
+          $ref: '#/components/schemas/SandboxStartupCommand'
+        exec:
+          $ref: '#/components/schemas/SandboxStartupCommand'
+        cleanup:
+          $ref: '#/components/schemas/SandboxStartupPhase'
+        startup_timings_ms:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+        counters:
+          type: object
+          additionalProperties:
+            type: number
+      required:
+        - ok
+        - sandbox_id
+        - image
+        - compute_profile
+        - compute_resources
+        - started_at
+        - finished_at
+        - total_ms
+        - handle
+        - readiness
+        - exec
+        - cleanup
+        - startup_timings_ms
+        - counters
+    SandboxStartupPhase:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - failed
+            - skipped
+        duration_ms:
+          type:
+            - number
+            - 'null'
+          minimum: 0
+        error:
+          type: object
+          additionalProperties: {}
+      required:
+        - status
+        - duration_ms
+    SandboxStartupCommand:
+      allOf:
+        - $ref: '#/components/schemas/SandboxStartupPhase'
+        - type: object
+          properties:
+            command:
+              type: string
+              example: echo "Hello"
+            stdout:
+              type: string
+            stderr:
+              type: string
+            failure_code:
+              type: string
+              enum:
+                - COMMAND_FAILED
+                - SPAWN_FAILED
+                - BACKEND_ERROR
+          required:
+            - command
+            - stdout
+            - stderr
+    SandboxStartupRequest:
+      type: object
+      properties:
+        image:
+          type: string
+          minLength: 1
+        compute_profile:
+          type: string
+          minLength: 1
+      additionalProperties: false
     DeploymentConfig:
       type: object
       properties:
@@ -5013,6 +5123,105 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/debug/sandbox-startup:
+    post:
+      operationId: admin.debug.sandboxStartup
+      x-cli-hidden: true
+      tags:
+        - Admin
+      summary: Measure sandbox startup and command latency
+      description: Creates a fresh ephemeral sandbox, uses the first fixed echo
+        command as the readiness probe, measures a second fixed echo command,
+        and destroys the sandbox. Runtime failures are returned as a partial
+        report. Super-admin only and session-only.
+      security: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxStartupRequest'
+      responses:
+        '200':
+          description: The sandbox startup diagnostic report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/SandboxStartupReport'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
           content:
             application/json:
               schema:

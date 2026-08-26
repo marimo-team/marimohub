@@ -16,6 +16,7 @@ import {
 	useNotebookQuery,
 	useRestartApp,
 	useRestartSession,
+	useRunSandboxStartupTest,
 	useStartSession,
 	useStopSession,
 	useSyncNotebookNow,
@@ -441,6 +442,23 @@ describe('session mutation toast suppression', () => {
 			.getAll()
 			.map((mutation) => mutation.meta);
 		expect(metas).toEqual([{ suppressErrorToast: true }, undefined]);
+	});
+});
+
+describe('admin diagnostic mutation toast suppression', () => {
+	it('keeps startup-test failures inline instead of also showing a global toast', async () => {
+		stubFetch(async () => jsonError('RESOURCE_EXHAUSTED', 'already running', 429));
+
+		const { result, client } = renderHookWithClient(() => useRunSandboxStartupTest(), {
+			toaster: false,
+		});
+		await act(async () => {
+			await result.current.mutateAsync({}).catch(() => {});
+		});
+
+		expect(client.getMutationCache().getAll().at(-1)?.meta).toEqual({
+			suppressErrorToast: true,
+		});
 	});
 });
 

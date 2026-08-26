@@ -130,6 +130,8 @@ These CAS-managed records also have one writer each:
   `projects/{pid}/integrations/{iid}/integration.json`.
 - `OrgIntegrationsStore` owns each org integration head at
   `_system/integrations/{iid}/integration.json`.
+- `SandboxDiagnosticLease` owns each per-admin diagnostic lease at
+  `_system/sandbox-diagnostics/{user-id}.json`.
 
 Each integration store also owns its immutable `versions/{n}.json` history and
 its `integrations/_names/{name}.json` uniqueness claim. Version writes use

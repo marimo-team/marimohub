@@ -12,15 +12,17 @@ export interface RadioGroupFieldOption {
 export interface RadioGroupFieldProps {
 	label?: string;
 	options: RadioGroupFieldOption[];
+	isDisabled?: boolean;
 }
 
 /** A single-choice radio list bound to its enclosing `form.AppField`. */
-export function RadioGroupField({ label, options }: RadioGroupFieldProps) {
+export function RadioGroupField({ label, options, isDisabled }: RadioGroupFieldProps) {
 	const field = useFieldContext<string>();
 	return (
 		<RadioGroup
 			value={field.state.value}
 			onChange={field.handleChange}
+			isDisabled={isDisabled}
 			className="flex flex-col gap-1.5"
 		>
 			{label && <Label className="text-xs font-medium text-muted-foreground">{label}</Label>}

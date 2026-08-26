@@ -9,6 +9,7 @@ import { readStored } from '../../schema';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SessionRetirer } from './SessionRetirer';
+import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
 import { sessionPersistsEdits } from './sessionState';
 import { listAllKeys } from '../catalog/storage';
@@ -53,6 +54,7 @@ export interface ReconcileResult {
  */
 export class ReconciliationService {
 	private readonly retirer: SessionRetirer;
+	private readonly diagnosticLeases: SandboxDiagnosticLease;
 
 	constructor(
 		private sessions: SessionService,
@@ -65,6 +67,7 @@ export class ReconciliationService {
 		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
 	) {
+		this.diagnosticLeases = new SandboxDiagnosticLease(bucket);
 		this.retirer = new SessionRetirer({
 			sessions,
 			notebooks,
@@ -97,11 +100,12 @@ export class ReconciliationService {
 		// an orphan.
 		const active = await this.compute.listActive();
 		const sessions = await this.sessions.listSessions();
+		const diagnosticSandboxIds = await this.diagnosticLeases.activeSandboxIds(now);
 
 		const activeIds = new Set<string>(active.map((s) => s.id));
-		const recordedSandboxIds = new Set<string>();
+		const ownedSandboxIds = new Set<string>(diagnosticSandboxIds);
 		for (const s of sessions) {
-			if (s.sandbox_id) recordedSandboxIds.add(s.sandbox_id);
+			if (s.sandbox_id) ownedSandboxIds.add(s.sandbox_id);
 		}
 
 		// Notebooks that currently have a live PERSISTING session. An older
@@ -193,7 +197,7 @@ export class ReconciliationService {
 		const pendingUndated = new Set<string>();
 
 		for (const sandbox of active) {
-			if (recordedSandboxIds.has(sandbox.id)) continue; // owned by a record above
+			if (ownedSandboxIds.has(sandbox.id)) continue;
 
 			// Rule 3 — a live sandbox with no record at all is an invisible orphan that
 			// leaks billable compute forever. Reap it once past the grace window.

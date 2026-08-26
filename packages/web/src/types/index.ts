@@ -41,6 +41,7 @@ import type {
 	AuditLogPage as ClientAuditLogPage,
 	AdminUser as ClientAdminUser,
 	DeploymentConfig as ClientDeploymentConfig,
+	SandboxStartupReport as ClientSandboxStartupReport,
 	ApiResponse as ClientApiResponse,
 	ApiError as ClientApiError,
 } from '@marimo-hub/client';
@@ -108,6 +109,7 @@ export type AuditLogPage = ClientAuditLogPage;
 export type AdminUser = ClientAdminUser;
 /** Redacted deployment configuration for the super-admin settings page. */
 export type DeploymentConfig = ClientDeploymentConfig;
+export type SandboxStartupReport = ClientSandboxStartupReport;
 export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
 export type User = ClientUser;

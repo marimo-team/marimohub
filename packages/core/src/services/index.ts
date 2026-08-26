@@ -166,6 +166,7 @@ export {
 } from './integrations/kinds';
 export { ReconciliationService } from './runtime/ReconciliationService';
 export type { ReconcileResult } from './runtime/ReconciliationService';
+export { SandboxDiagnosticLease } from './runtime/SandboxDiagnosticLease';
 export { kernelActiveConnections, SessionLifecycleService } from './runtime/sessionLifecycle';
 export type {
 	ConnectionProbe,
