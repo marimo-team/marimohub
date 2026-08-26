@@ -803,7 +803,7 @@ describe('kind renders (golden)', () => {
 		expect(programs?.duckdbWasm?.httpAccess?.storage.urlStyle).toBe('vhost');
 	});
 
-	it('iceberg_rest rejects non-DNS bucket names for virtual-hosted Run SQL', () => {
+	it('iceberg_rest does not classify out-of-range dotted bucket names as IPv4', () => {
 		const config = icebergRest.configSchema.parse({
 			uri: 'https://catalog.example.com/api',
 			auth: { method: 'none' },
@@ -812,16 +812,36 @@ describe('kind renders (golden)', () => {
 				endpoint: 'https://objects.example.com',
 				force_virtual_addressing: true,
 				anonymous: true,
-				broker_read_locations: [{ bucket: 'warehouse_name', prefix: 'tables' }],
+				broker_read_locations: [{ bucket: '999.999.999.999', prefix: 'tables' }],
 			},
 			access_delegation: 'none',
 		});
 
-		expect(icebergRest.query?.available(config)).toEqual({
-			ok: false,
-			reason: 'virtual-hosted S3 addressing requires DNS-compatible bucket names',
-		});
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 	});
+
+	it.each(['warehouse_name', '192.168.0.1'])(
+		'iceberg_rest rejects invalid virtual-hosted bucket name %s',
+		(bucket) => {
+			const config = icebergRest.configSchema.parse({
+				uri: 'https://catalog.example.com/api',
+				auth: { method: 'none' },
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					force_virtual_addressing: true,
+					anonymous: true,
+					broker_read_locations: [{ bucket, prefix: 'tables' }],
+				},
+				access_delegation: 'none',
+			});
+
+			expect(icebergRest.query?.available(config)).toEqual({
+				ok: false,
+				reason: 'virtual-hosted S3 addressing requires DNS-compatible bucket names',
+			});
+		},
+	);
 
 	it('iceberg_rest derives query availability from its complete readiness result', () => {
 		const config = icebergRest.configSchema.parse({

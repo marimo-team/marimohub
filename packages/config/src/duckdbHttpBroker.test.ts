@@ -92,7 +92,11 @@ describe('createDuckDBHttpSessionFactory', () => {
 		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(
 			{
 				...ACCESS,
-				storage: { ...ACCESS.storage, urlStyle: 'vhost' },
+				storage: {
+					...ACCESS.storage,
+					urlStyle: 'vhost',
+					locations: [...ACCESS.storage.locations, { bucket: '999.999.999.999', prefix: 'tables' }],
+				},
 			},
 			{ expiresAtMs: NOW + 60_000 },
 		);
@@ -101,8 +105,12 @@ describe('createDuckDBHttpSessionFactory', () => {
 			url: 'https://warehouse.objects.example.test/tables/data/file.parquet',
 			method: 'GET',
 		});
+		await session.fetch({
+			url: 'https://999.999.999.999.objects.example.test/tables/data/file.parquet',
+			method: 'GET',
+		});
 
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 		expect(calls[0].headers).toMatchObject({
 			authorization: expect.stringContaining('Credential=AKIDEXAMPLE/'),
 		});
@@ -159,6 +167,19 @@ describe('createDuckDBHttpSessionFactory', () => {
 						...ACCESS.storage,
 						urlStyle: 'vhost',
 						locations: [{ bucket: 'warehouse_name', prefix: 'tables' }],
+					},
+				},
+				{ expiresAtMs: Date.now() + 60_000 },
+			),
+		).toThrow(/Virtual-hosted S3 read location is invalid/);
+		expect(() =>
+			create(
+				{
+					...ACCESS,
+					storage: {
+						...ACCESS.storage,
+						urlStyle: 'vhost',
+						locations: [{ bucket: '192.168.0.1', prefix: 'tables' }],
 					},
 				},
 				{ expiresAtMs: Date.now() + 60_000 },

@@ -316,12 +316,20 @@ function isDnsCompatibleS3Bucket(bucket: string): boolean {
 		bucket.length <= 63 &&
 		/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(bucket) &&
 		!bucket.includes('..') &&
-		!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(bucket)
+		!isIpv4Address(bucket)
 	);
 }
 
 function isIpAddressHost(hostname: string): boolean {
-	return hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+	return hostname.includes(':') || isIpv4Address(hostname);
+}
+
+function isIpv4Address(value: string): boolean {
+	const octets = value.split('.');
+	return (
+		octets.length === 4 &&
+		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+	);
 }
 
 function canonicalPath(url: URL): string {
