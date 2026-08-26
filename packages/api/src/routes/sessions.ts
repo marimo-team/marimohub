@@ -464,11 +464,13 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 				max: deps.policy.maxAppsPerProject,
 				message: CAP_REACHED.appsPerProject,
 				queue: () => sessions.listActiveAppsForProject(pid),
+				preflight: true,
 			},
 			{
 				max: maxSessions,
 				message: CAP_REACHED.appsPerUser,
 				queue: () => sessions.listActiveForUser(userId, 'project'),
+				preflight: false,
 			},
 		];
 	}
@@ -477,14 +479,16 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 			max: maxSessions,
 			message: CAP_REACHED.sessionsPerUser,
 			queue: () => sessions.listActiveForUser(userId),
+			preflight: false,
 		},
 	];
 }
 
 /**
  * Cost-DoS guards, checked after reuse so a reconnect/attach never trips them.
- * Cheap pre-flight: rejects before any record or sandbox exists. Not sufficient
- * on its own — see `assertCapAfterCreate`.
+ * The project-scoped app cap gets a cheap pre-flight before any record exists.
+ * User caps skip it because their queue scans every retained session in the
+ * deployment; `assertCapAfterCreate` is the authoritative guard for all caps.
  */
 async function enforceSessionCap(
 	deps: ApiDeps,
@@ -494,7 +498,7 @@ async function enforceSessionCap(
 	excludedSessionId?: SessionId,
 ): Promise<void> {
 	for (const cap of capsFor(deps, mode, pid, userId)) {
-		if (!cap.max || cap.max <= 0) continue;
+		if (!cap.preflight || !cap.max || cap.max <= 0) continue;
 		const queued = (await cap.queue()).filter(
 			(session) => session.session_id !== excludedSessionId,
 		);

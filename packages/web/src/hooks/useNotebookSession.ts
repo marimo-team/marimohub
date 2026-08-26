@@ -27,7 +27,7 @@ const STARTUP_TIMEOUT_GRACE_MS = 30_000;
  * How often a running page re-checks its session. This surfaces app stops and
  * exclusive-editor takeovers as terminal UI instead of leaving a dead iframe.
  */
-const RUN_WATCH_INTERVAL_MS = 10_000;
+const RUN_WATCH_INTERVAL_MS = 30_000;
 
 export interface SessionError {
 	message: string;

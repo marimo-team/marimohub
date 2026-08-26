@@ -36,7 +36,7 @@ import type {
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
-const SESSIONS_POLL_INTERVAL_MS = 5_000;
+const SESSIONS_POLL_INTERVAL_MS = 30_000;
 
 /**
  * Deployment-scoped facts (identity, version, capabilities): fixed for the life
@@ -1636,6 +1636,7 @@ export function useProjectSessionsQuery(projectId: string, enabled = true) {
 				)
 			).items,
 		refetchInterval: SESSIONS_POLL_INTERVAL_MS,
+		staleTime: SESSIONS_POLL_INTERVAL_MS,
 		enabled,
 	});
 }

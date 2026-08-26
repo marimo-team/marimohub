@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ACTOR, advanceTime, MemoryBucket, restoreClock, uid } from '../../testing';
-import { createNotebookId, createProjectId } from '../../ids';
+import { createNotebookId, createProjectId, SessionId } from '../../ids';
 import type { UserId } from '../../ids';
+import { paths } from '../../paths';
 import { SessionService } from './SessionService';
 
 /**
@@ -66,5 +67,34 @@ describe('SessionService.countActiveForUser', () => {
 
 		// Only the single live (running) session should be counted.
 		expect(await sessions.countActiveForUser(ACTOR)).toBe(1);
+	});
+
+	it('ranks a running incumbent before a same-millisecond starting candidate', async () => {
+		const incumbent = await sessions.createSession({
+			notebook_id: notebookId,
+			project_id: projectId,
+			user_id: ACTOR,
+			session_id: SessionId.parse('sess-zzzzzzzzzzzzzzzz'),
+		});
+		await sessions.setRunning(projectId, incumbent.session_id, 'https://sandbox.example');
+		const candidate = await sessions.createSession({
+			notebook_id: createNotebookId(),
+			project_id: projectId,
+			user_id: ACTOR,
+			session_id: SessionId.parse('sess-0000000000000000'),
+		});
+		const startedAt = '2026-08-26T17:54:00.135Z';
+		for (const session of [incumbent, candidate]) {
+			const stored = await sessions.getSession(projectId, session.session_id);
+			await bucket.put(
+				paths.session(projectId, session.session_id),
+				JSON.stringify({ ...stored, started_at: startedAt }),
+			);
+		}
+
+		expect((await sessions.listActiveForUser(ACTOR)).map((session) => session.session_id)).toEqual([
+			incumbent.session_id,
+			candidate.session_id,
+		]);
 	});
 });

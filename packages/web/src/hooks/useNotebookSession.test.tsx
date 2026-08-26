@@ -505,7 +505,7 @@ describe('useNotebookSession', () => {
 
 		// Run-watch tick adopts the starting replacement.
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 		await settleHook();
 		expect(result.current.session?.session_id).toBe('sess-2');
@@ -664,7 +664,7 @@ describe('useNotebookSession (app mode)', () => {
 
 		stopped = true;
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 
 		expect(result.current.ended).toBe('terminated');
@@ -696,7 +696,7 @@ describe('useNotebookSession (app mode)', () => {
 
 		reaped = true;
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 
 		expect(result.current.ended).toBe('gone');
@@ -729,7 +729,7 @@ describe('useNotebookSession (app mode)', () => {
 
 		revoked = true;
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 		await settleHook();
 
@@ -770,7 +770,7 @@ describe('useNotebookSession (app mode)', () => {
 
 		swapped = true;
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 		await settleHook();
 
@@ -838,7 +838,7 @@ describe('useNotebookSession (app mode)', () => {
 
 		swapped = true;
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 		await settleHook();
 
@@ -1004,7 +1004,7 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.session?.session_id).toBe('sess-1');
 
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
 
 		act(() => result.current.restart());

@@ -232,7 +232,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		? (users?.[endedByUserId]?.name ?? users?.[endedByUserId]?.email ?? endedByUserId)
 		: undefined;
 
-	// App pages watch the project's sessions (5s poll) to know whether the
+	// App pages watch the project's sessions to know whether the
 	// notebook is being edited: the periodic snapshotter commits a version every
 	// ~2 minutes mid-edit, so the staleness banner is suppressed until editing
 	// stops — otherwise it would flap (with a disconnect-everyone CTA) the whole
