@@ -372,7 +372,7 @@ describe('IcebergHttpBroker', () => {
 		}
 	});
 
-	it('does not consume request budget when parent header preparation fails', async () => {
+	it('consumes request budget when parent header preparation fails', async () => {
 		const { broker, transport } = setup();
 		const prepareHeaders = vi
 			.fn<NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>>()
@@ -398,10 +398,50 @@ describe('IcebergHttpBroker', () => {
 		};
 
 		await expect(broker.fetch(id, request)).rejects.toThrow('temporary signing failure');
-		await expect(broker.fetch(id, request)).resolves.toMatchObject({ status: 200 });
+		await expectCode(broker.fetch(id, request), 'request_budget_exceeded');
 
-		expect(prepareHeaders).toHaveBeenCalledTimes(2);
-		expect(transport).toHaveBeenCalledOnce();
+		expect(prepareHeaders).toHaveBeenCalledOnce();
+		expect(transport).not.toHaveBeenCalled();
+	});
+
+	it('aborts parent header preparation when its capability closes', async () => {
+		let preparationSignal: AbortSignal | undefined;
+		const { broker, transport } = setup();
+		const prepareHeaders = vi.fn<
+			NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>
+		>(
+			(_request, signal) =>
+				new Promise((_resolve, reject) => {
+					preparationSignal = signal;
+					signal?.addEventListener('abort', () => reject(new Error('preparation aborted')), {
+						once: true,
+					});
+				}),
+		);
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						prepareHeaders,
+					},
+				],
+			}),
+		);
+		const pending = broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET',
+		});
+		await vi.waitFor(() => expect(preparationSignal).toBeDefined());
+
+		broker.close(id);
+
+		expect(preparationSignal?.aborted).toBe(true);
+		await expect(pending).rejects.toThrow('preparation aborted');
+		expect(transport).not.toHaveBeenCalled();
 	});
 
 	it('uses an exact route before an equal-path prefix route', async () => {

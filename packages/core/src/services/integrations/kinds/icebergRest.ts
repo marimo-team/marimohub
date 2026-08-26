@@ -27,7 +27,7 @@ import {
 	storageProperties,
 	validateExtraProperties,
 } from './icebergShared';
-import { HTTP_HEADER_NAME_REGEX, httpUrlField } from './common';
+import { HTTP_HEADER_NAME_REGEX, httpUrlField, isInsecureHttpUrl } from './common';
 
 const httpUrl = httpUrlField;
 
@@ -65,8 +65,6 @@ const authSchema = z.discriminatedUnion('method', [
 	}),
 ]);
 
-const isInsecureUrl = (url: string) => url.startsWith('http://');
-
 const ICEBERG_REST_DEFAULTS = {
 	snapshot_loading_mode: 'all' as const,
 	metrics_reporting_enabled: true,
@@ -90,7 +88,7 @@ const icebergRestConfig = z.strictObject({
 	access_delegation: z
 		.enum(['none', 'vended_credentials', 'remote_signing', 'both'])
 		.default('vended_credentials')
-		.describe('Catalog delegation mode. Run SQL requires none.'),
+		.describe('Catalog delegation mode. Guarded Run SQL supports none or R2 vended credentials.'),
 	tls: z
 		.strictObject({
 			ca_bundle: z.string().min(1).optional(),
@@ -194,7 +192,7 @@ export const icebergRest = defineIntegration({
 			throw new ValidationError('TLS client certificate and client key must be provided together.');
 		}
 		if (!config.allow_insecure_transport) {
-			if (isInsecureUrl(config.uri) && config.auth.method !== 'none') {
+			if (isInsecureHttpUrl(config.uri) && config.auth.method !== 'none') {
 				throw new ValidationError(
 					'An authenticated REST catalog requires an https:// URI — bearer tokens, Basic ' +
 						'passwords, and OAuth2 tokens would cross the network in cleartext. Enable ' +
@@ -202,18 +200,24 @@ export const icebergRest = defineIntegration({
 				);
 			}
 			if (
-				isInsecureUrl(config.uri) &&
+				isInsecureHttpUrl(config.uri) &&
 				(config.tls.ca_bundle !== undefined || config.tls.client_certificate !== undefined)
 			) {
 				throw new ValidationError('TLS material has no effect on an http:// catalog URI.');
 			}
 			if (
 				config.auth.method === 'oauth2_client_credentials' &&
-				isInsecureUrl(config.auth.token_endpoint)
+				isInsecureHttpUrl(config.auth.token_endpoint)
 			) {
 				throw new ValidationError(
 					'The OAuth2 token endpoint must be https:// — the client secret is sent to it as ' +
 						'Basic auth. Enable allow_insecure_transport to override for local development.',
+				);
+			}
+			if (usesInsecureStaticS3(config)) {
+				throw new ValidationError(
+					'Authenticated S3 storage requires an https:// endpoint. Enable ' +
+						'allow_insecure_transport to override for local development.',
 				);
 			}
 		}
@@ -735,10 +739,14 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 	return [
 		readinessCheck(
 			'catalog-auth',
-			r2Catalog ? 'Use a catalog bearer token' : 'Use no catalog authentication or a bearer token',
+			r2Catalog
+				? 'Use a catalog bearer token'
+				: 'Use no catalog authentication, a bearer token, or parent-owned OAuth2',
 			r2Catalog
 				? authMethod === 'bearer_token'
-				: authMethod === 'none' || authMethod === 'bearer_token',
+				: authMethod === 'none' ||
+						authMethod === 'bearer_token' ||
+						authMethod === 'oauth2_client_credentials',
 			'auth',
 			`${String(authMethod)} authentication is not supported by DuckDB-Wasm preview`,
 		),
@@ -815,6 +823,13 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 						storageIsS3 && endpointOriginOnly,
 						storageIsS3 ? 'storage.endpoint' : 'storage',
 						'DuckDB-Wasm preview requires an origin-only S3 endpoint',
+					),
+					readinessCheck(
+						's3-secure-transport',
+						'Use HTTPS for authenticated S3',
+						!usesInsecureStaticS3(value),
+						'storage.endpoint',
+						'authenticated S3 requires HTTPS unless insecure transport is explicitly enabled',
 					),
 					readinessCheck(
 						's3-virtual-host-endpoint',
@@ -894,10 +909,12 @@ function duckdbAuthOptions(
 		case 'bearer_token':
 			params.push('marimohub-parent-broker');
 			return ['TOKEN ?'];
+		case 'oauth2_client_credentials':
+			params.push('marimohub-parent-broker');
+			return ['TOKEN ?'];
 		case 'basic':
 		case 'entra':
 		case 'google':
-		case 'oauth2_client_credentials':
 		case 'sigv4':
 		default:
 			throw new ValidationError('This authentication method requires the preview sandbox.');
@@ -929,6 +946,7 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 	if (r2Catalog) {
 		return {
 			kind: 'iceberg-rest',
+			...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),
 			catalog: {
 				url: config.uri,
 				...(config.auth.method === 'bearer_token'
@@ -958,10 +976,25 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 				};
 	return {
 		kind: 'iceberg-rest',
+		...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),
 		catalog: {
 			url: config.uri,
 			...(config.auth.method === 'bearer_token'
 				? { authorization: `Bearer ${config.auth.token}` }
+				: {}),
+			...(config.auth.method === 'oauth2_client_credentials'
+				? {
+						oauth2: {
+							tokenEndpoint: config.auth.token_endpoint,
+							clientId: config.auth.client_id,
+							clientSecret: config.auth.client_secret,
+							scope: config.auth.scope,
+							refreshMarginSeconds: config.auth.refresh_margin_seconds,
+							...(config.auth.expires_in_seconds
+								? { fallbackExpiresInSeconds: config.auth.expires_in_seconds }
+								: {}),
+						},
+					}
 				: {}),
 		},
 		storage: {
@@ -973,6 +1006,16 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 			locations: config.storage.broker_read_locations,
 		},
 	};
+}
+
+function usesInsecureStaticS3(config: IcebergRestConfig): boolean {
+	return (
+		config.storage.scheme === 's3' &&
+		config.storage.credentials.method === 'static' &&
+		!config.storage.anonymous &&
+		!config.allow_insecure_transport &&
+		isInsecureHttpUrl(config.storage.endpoint)
+	);
 }
 
 function duckdbWarehouse(config: IcebergRestConfig, fallback: string): string {

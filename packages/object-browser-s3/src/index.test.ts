@@ -966,6 +966,23 @@ describe('credential selection', () => {
 			credentialsFor(ambient, { ...context, allow_server_ambient: { s3: true } }),
 		).toBeUndefined();
 	});
+
+	it('keeps anonymous access independent from ambient and federated credentials', () => {
+		const anonymous = { ...source, auth: { method: 'anonymous' as const } };
+		expect(
+			credentialsFor(anonymous, {
+				...context,
+				federation: {
+					provider: 's3',
+					storage: { endpoint: source.endpoint },
+					credentials: {
+						accessKeyId: 'temporary',
+						secretAccessKey: 'temporary-secret',
+					},
+				},
+			}),
+		).toBeUndefined();
+	});
 });
 
 describe('capabilities and metadata-only mode', () => {

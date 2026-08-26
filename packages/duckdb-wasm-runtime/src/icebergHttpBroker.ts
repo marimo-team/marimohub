@@ -13,6 +13,7 @@ export interface IcebergHttpBrokerRoute {
 	headers?: Readonly<Record<string, string>>;
 	prepareHeaders?: (
 		request: Readonly<IcebergHttpBrokerRequest>,
+		signal?: AbortSignal,
 	) => Promise<Readonly<Record<string, string>>>;
 	forwardRequestHeaders?: readonly string[];
 	discardRequestHeaders?: readonly string[];
@@ -224,7 +225,7 @@ export class IcebergHttpBroker {
 					: controller.signal;
 				let redirects = 0;
 				for (;;) {
-					const authorized = await authorize(session, current);
+					const authorized = await authorize(session, current, transportSignal);
 					const reservation = await reserveResponseBudget(session, transportSignal);
 					let response: IcebergHttpBrokerResponse;
 					let statusClass = 'failed';
@@ -453,6 +454,7 @@ function normalizeRequest(request: IcebergHttpBrokerRequest): IcebergHttpBrokerR
 async function authorize(
 	session: Session,
 	request: IcebergHttpBrokerRequest,
+	signal?: AbortSignal,
 ): Promise<AuthorizedRequest> {
 	if (session.requests >= session.limits.maxRequests) {
 		session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
@@ -498,20 +500,12 @@ async function authorize(
 		}
 		workerHeaders[header] = value;
 	}
+	if (signal?.aborted) throw abortError();
+	session.requests += 1;
 	const preparedHeaders = normalizeHeaders(
-		(await route.prepareHeaders?.(request)) ?? {},
+		(await route.prepareHeaders?.(request, signal)) ?? {},
 		'invalid_request',
 	);
-	if (session.requests >= session.limits.maxRequests) {
-		session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
-			budget: 'request',
-		});
-		throw new IcebergHttpBrokerError(
-			'request_budget_exceeded',
-			'Iceberg HTTP broker request budget exceeded.',
-		);
-	}
-	session.requests += 1;
 	session.metrics.increment('duckdb_http_broker.request', 1, {
 		outcome: 'authorized',
 		route: route.kind,

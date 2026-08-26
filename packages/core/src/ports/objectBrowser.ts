@@ -18,7 +18,8 @@ export interface S3ObjectStoreSource {
 				secret_access_key: string;
 				session_token?: string;
 		  }
-		| { method: 'ambient' };
+		| { method: 'ambient' }
+		| { method: 'anonymous' };
 }
 
 export interface GcsObjectStoreSource {

@@ -62,11 +62,14 @@ export type DuckDBHttpSessionFactory = (
 
 const CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
 	features: Object.freeze([]),
-	unavailable: Object.freeze({ 'iceberg-http': ICEBERG_HTTP_UNAVAILABLE }),
+	unavailable: Object.freeze({
+		'guarded-http': ICEBERG_HTTP_UNAVAILABLE,
+		'iceberg-http': ICEBERG_HTTP_UNAVAILABLE,
+	}),
 });
 
 const HTTP_CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
-	features: Object.freeze(['iceberg-http'] as const),
+	features: Object.freeze(['guarded-http', 'iceberg-http'] as const),
 	unavailable: Object.freeze({}),
 });
 

@@ -479,7 +479,7 @@ describe('Data browser routes', () => {
 		});
 	});
 
-	it('advertises object-only instances with surface-specific capabilities', async () => {
+	it('advertises S3 object and query surfaces independently', async () => {
 		const pid = await createProject();
 		const created = await expectOk<{ id: string }>(
 			await request('POST', `/projects/${pid}/integrations`, {
@@ -511,6 +511,10 @@ describe('Data browser routes', () => {
 					search: 'bounded-key-name',
 					versions: true,
 					preview_formats: ['csv', 'text', 'png'],
+				},
+				query: {
+					available: false,
+					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},
 		});

@@ -2,6 +2,7 @@ import { createHmac, createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { noopMetrics } from '@marimo-hub/core';
 import type { DuckDBHttpAccess, Metrics } from '@marimo-hub/core';
 import {
 	HTTP_BRIDGE_BODY_BYTES,
@@ -11,17 +12,22 @@ import {
 import type {
 	DuckDBHttpSessionFactory,
 	IcebergHttpBrokerRequest,
+	IcebergHttpBrokerRoute,
 	IcebergHttpBrokerTransport,
 } from '@marimo-hub/duckdb-wasm-runtime/node';
 import { createPinnedLookup } from '@marimo-hub/object-browser-commons';
 import type { GuardedHostResolver } from '@marimo-hub/object-browser-commons';
-import { createGuardedHostResolver } from './integrationProbe';
+import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REQUESTS = 512;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
 const DEFAULT_MAX_REDIRECTS = 8;
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const DEFAULT_OAUTH_TOKEN_TIMEOUT_MS = 10_000;
+const OAUTH_MAX_RESPONSE_BYTES = 64 * 1024;
+const OAUTH_MAX_EXPIRES_IN_SECONDS = 24 * 60 * 60;
+const OAUTH_REFRESH_RETRY_BACKOFF_MS = 1_000;
 const VENDED_S3_REQUEST_HEADERS = [
 	'authorization',
 	'x-amz-content-sha256',
@@ -34,7 +40,27 @@ export interface DuckDBHttpBrokerOptions {
 	metrics?: Metrics;
 	now?: () => number;
 	transport?: IcebergHttpBrokerTransport;
+	oauthTokenExchange?: OAuthTokenExchange;
 }
+
+export interface OAuthTokenExchangeRequest {
+	tokenEndpoint: string;
+	clientId: string;
+	clientSecret: string;
+	scope: string;
+	fallbackExpiresInSeconds?: number;
+	allowInsecureTransport?: boolean;
+}
+
+export interface OAuthTokenExchangeResult {
+	accessToken: string;
+	expiresInSeconds: number;
+}
+
+export type OAuthTokenExchange = (
+	request: Readonly<OAuthTokenExchangeRequest>,
+	signal?: AbortSignal,
+) => Promise<OAuthTokenExchangeResult>;
 
 export function createDuckDBHttpSessionFactory(
 	options: DuckDBHttpBrokerOptions = {},
@@ -43,11 +69,28 @@ export function createDuckDBHttpSessionFactory(
 	const transport =
 		options.transport ??
 		createGuardedBinaryTransport({ allowPrivate: options.allowPrivate ?? false });
+	const oauthTokenExchange =
+		options.oauthTokenExchange ??
+		createGuardedOAuthTokenExchange({
+			allowPrivate: options.allowPrivate ?? false,
+			metrics: options.metrics,
+		});
 	return (access, sessionOptions) => {
+		const oauthProvider =
+			access.kind === 'iceberg-rest' && access.catalog.oauth2
+				? createOAuthTokenProvider({
+						auth: access.catalog.oauth2,
+						exchange: oauthTokenExchange,
+						metrics: options.metrics,
+						now,
+						sessionExpiresAtMs: sessionOptions.expiresAtMs,
+						allowInsecureTransport: access.allowInsecureTransport === true,
+					})
+				: undefined;
 		const broker = new IcebergHttpBroker(transport, now, undefined, options.metrics);
 		const id = broker.open({
 			expiresAtMs: sessionOptions.expiresAtMs,
-			routes: routesFor(access, now),
+			routes: routesFor(access, now, oauthProvider),
 			limits: {
 				maxRequests: DEFAULT_MAX_REQUESTS,
 				maxConcurrentRequests: DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -58,25 +101,60 @@ export function createDuckDBHttpSessionFactory(
 		});
 		return {
 			fetch: (request, signal) => broker.fetch(id, request, signal),
-			close: () => broker.close(id),
+			close: () => {
+				oauthProvider?.close();
+				broker.close(id);
+			},
 		};
 	};
 }
 
-function routesFor(access: Readonly<DuckDBHttpAccess>, now: () => number) {
+interface OAuthTokenProvider {
+	authorization(signal?: AbortSignal): Promise<Readonly<Record<string, string>>>;
+	close(): void;
+}
+
+function routesFor(
+	access: Readonly<DuckDBHttpAccess>,
+	now: () => number,
+	oauthProvider?: OAuthTokenProvider,
+) {
+	if (access.kind === 's3-object-store') {
+		return s3RoutesFor(access, now, access.allowInsecureTransport === true);
+	}
 	if (access.kind !== 'iceberg-rest') {
 		throw new IcebergHttpBrokerError(
 			'invalid_capability',
 			'DuckDB HTTP access specification is unsupported.',
 		);
 	}
-	const catalog = {
+	if (
+		(access.catalog.authorization !== undefined && access.catalog.oauth2 !== undefined) ||
+		(access.catalog.oauth2 !== undefined) !== (oauthProvider !== undefined)
+	) {
+		throw new IcebergHttpBrokerError(
+			'invalid_capability',
+			'DuckDB catalog authentication specification is invalid.',
+		);
+	}
+	const catalogUrl = routePrefixUrl(access.catalog.url);
+	assertCredentialTransport(
+		catalogUrl,
+		access.catalog.authorization !== undefined || access.catalog.oauth2 !== undefined,
+		access.allowInsecureTransport === true,
+		'Catalog',
+	);
+	const catalog: IcebergHttpBrokerRoute = {
 		kind: 'catalog' as const,
-		url: routePrefixUrl(access.catalog.url),
+		url: catalogUrl,
 		match: 'prefix' as const,
 		methods: ['GET', 'HEAD'] as const,
 		headers: access.catalog.authorization
 			? { authorization: access.catalog.authorization }
+			: undefined,
+		prepareHeaders: oauthProvider
+			? (_request: Readonly<IcebergHttpBrokerRequest>, signal?: AbortSignal) =>
+					oauthProvider.authorization(signal)
 			: undefined,
 		discardRequestHeaders: ['authorization'] as const,
 	};
@@ -84,20 +162,14 @@ function routesFor(access: Readonly<DuckDBHttpAccess>, now: () => number) {
 	if (storage.kind === 'r2-catalog') {
 		const endpoint = parseEndpoint(storage.endpoint);
 		const pathStorageUrl = storagePrefixUrl(endpoint, storage.bucket, '', 'path', true);
-		if (prefixRoutesOverlap(catalog.url, pathStorageUrl)) {
-			throw new IcebergHttpBrokerError(
-				'invalid_capability',
-				'R2 catalog and path-style storage routes overlap.',
-			);
-		}
-		return [
-			{
-				...catalog,
-				headers: {
-					...catalog.headers,
-					'x-iceberg-access-delegation': 'vended-credentials',
-				},
+		const r2Catalog: IcebergHttpBrokerRoute = {
+			...catalog,
+			headers: {
+				...catalog.headers,
+				'x-iceberg-access-delegation': 'vended-credentials',
 			},
+		};
+		const storageRoutes: IcebergHttpBrokerRoute[] = [
 			{
 				kind: 'storage' as const,
 				url: pathStorageUrl,
@@ -117,9 +189,42 @@ function routesFor(access: Readonly<DuckDBHttpAccess>, now: () => number) {
 					]
 				: []),
 		];
+		return catalogAndStorageRoutes(r2Catalog, storageRoutes);
 	}
+	return catalogAndStorageRoutes(
+		catalog,
+		s3RoutesFor(storage, now, access.allowInsecureTransport === true),
+	);
+}
+
+interface S3RouteAccess {
+	endpoint: string;
+	region: string;
+	urlStyle: 'path' | 'vhost';
+	credentials:
+		| { method: 'anonymous' }
+		| {
+				method: 'static';
+				accessKeyId: string;
+				secretAccessKey: string;
+				sessionToken?: string;
+		  };
+	locations: readonly { bucket: string; prefix: string }[];
+}
+
+function s3RoutesFor(
+	storage: Readonly<S3RouteAccess>,
+	now: () => number,
+	allowInsecureTransport: boolean,
+): IcebergHttpBrokerRoute[] {
 	const endpoint = parseEndpoint(storage.endpoint);
 	const credentials = storage.credentials;
+	assertCredentialTransport(
+		endpoint.toString(),
+		credentials.method === 'static',
+		allowInsecureTransport,
+		'S3',
+	);
 	const prepareStorageHeaders =
 		credentials.method === 'static'
 			? (request: Readonly<IcebergHttpBrokerRequest>) =>
@@ -131,17 +236,214 @@ function routesFor(access: Readonly<DuckDBHttpAccess>, now: () => number) {
 						}),
 					)
 			: undefined;
-	return [
-		catalog,
-		...storage.locations.map((location) => ({
-			kind: 'storage' as const,
-			url: storagePrefixUrl(endpoint, location.bucket, location.prefix, storage.urlStyle),
-			match: 'prefix' as const,
-			methods: ['GET', 'HEAD'] as const,
-			prepareHeaders: prepareStorageHeaders,
-			discardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
-		})),
-	];
+	return storage.locations.map((location) => ({
+		kind: 'storage' as const,
+		url: storagePrefixUrl(endpoint, location.bucket, location.prefix, storage.urlStyle),
+		match: 'prefix' as const,
+		methods: ['GET', 'HEAD'] as const,
+		prepareHeaders: prepareStorageHeaders,
+		discardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
+	}));
+}
+
+export function createGuardedOAuthTokenExchange(options: {
+	allowPrivate: boolean;
+	timeoutMs?: number;
+	metrics?: Metrics;
+}): OAuthTokenExchange {
+	const metrics = options.metrics ?? noopMetrics;
+	const probe = createGuardedProbe({
+		allowPrivate: options.allowPrivate,
+		timeoutMs: options.timeoutMs ?? DEFAULT_OAUTH_TOKEN_TIMEOUT_MS,
+		maxResponseBytes: OAUTH_MAX_RESPONSE_BYTES,
+		maxProbesPerMinute: DEFAULT_MAX_REQUESTS,
+	});
+	return async (request, signal) => {
+		try {
+			const endpoint = parseOAuthEndpoint(
+				request.tokenEndpoint,
+				request.allowInsecureTransport === true,
+			);
+			const response = await probe.fetch(endpoint.toString(), {
+				method: 'POST',
+				headers: {
+					accept: 'application/json',
+					authorization: `Basic ${Buffer.from(`${request.clientId}:${request.clientSecret}`).toString('base64')}`,
+					'content-type': 'application/x-www-form-urlencoded',
+				},
+				body: new URLSearchParams({
+					grant_type: 'client_credentials',
+					...(request.scope ? { scope: request.scope } : {}),
+				}).toString(),
+				signal,
+			});
+			if (!response.ok) throw new OAuthExchangeError('status');
+			const body = await response.json();
+			if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+				throw new OAuthExchangeError('response');
+			}
+			const token = (body as Record<string, unknown>).access_token;
+			const tokenType = (body as Record<string, unknown>).token_type;
+			const rawExpiresIn = (body as Record<string, unknown>).expires_in;
+			const expiresIn = rawExpiresIn ?? request.fallbackExpiresInSeconds;
+			if (
+				typeof token !== 'string' ||
+				token.length === 0 ||
+				(tokenType !== undefined &&
+					(typeof tokenType !== 'string' || tokenType.toLowerCase() !== 'bearer')) ||
+				typeof expiresIn !== 'number' ||
+				!Number.isFinite(expiresIn) ||
+				expiresIn < 1 ||
+				expiresIn > OAUTH_MAX_EXPIRES_IN_SECONDS
+			) {
+				throw new OAuthExchangeError('response');
+			}
+			metrics.increment('duckdb_http_broker.oauth_exchange', 1, { outcome: 'success' });
+			return { accessToken: token, expiresInSeconds: expiresIn };
+		} catch (error) {
+			const reason =
+				error instanceof OAuthExchangeError
+					? error.reason
+					: signal?.aborted
+						? 'cancelled'
+						: 'transport';
+			metrics.increment('duckdb_http_broker.oauth_exchange', 1, {
+				outcome: 'failure',
+				reason,
+			});
+			if (signal?.aborted) throw error;
+			throw oauthFailure();
+		}
+	};
+}
+
+class OAuthExchangeError extends Error {
+	constructor(readonly reason: 'status' | 'response') {
+		super(reason);
+		this.name = 'OAuthExchangeError';
+	}
+}
+
+function createOAuthTokenProvider(options: {
+	auth: NonNullable<Extract<DuckDBHttpAccess, { kind: 'iceberg-rest' }>['catalog']['oauth2']>;
+	exchange: OAuthTokenExchange;
+	metrics?: Metrics;
+	now: () => number;
+	sessionExpiresAtMs: number;
+	allowInsecureTransport: boolean;
+}): OAuthTokenProvider {
+	let cached: { token: string; expiresAtMs: number } | undefined;
+	let refresh: Promise<string> | undefined;
+	let retryAfterMs = 0;
+	let closed = false;
+	const controller = new AbortController();
+	const metrics = options.metrics ?? noopMetrics;
+	const tokenEndpoint = parseOAuthEndpoint(
+		options.auth.tokenEndpoint,
+		options.allowInsecureTransport,
+	).toString();
+
+	const exchange = async (signal?: AbortSignal): Promise<string> => {
+		const remainingMs = options.sessionExpiresAtMs - options.now();
+		if (closed || remainingMs <= 0) throw oauthFailure();
+		const lifecycleSignal = signal
+			? AbortSignal.any([signal, controller.signal])
+			: controller.signal;
+		const combinedSignal = deadlineSignal(
+			lifecycleSignal,
+			options.sessionExpiresAtMs,
+			options.now(),
+		);
+		try {
+			const result = await options.exchange(
+				{
+					tokenEndpoint,
+					clientId: options.auth.clientId,
+					clientSecret: options.auth.clientSecret,
+					scope: options.auth.scope,
+					fallbackExpiresInSeconds: options.auth.fallbackExpiresInSeconds,
+					allowInsecureTransport: options.allowInsecureTransport,
+				},
+				combinedSignal,
+			);
+			if (closed || options.now() >= options.sessionExpiresAtMs) throw oauthFailure();
+			const issuedAtMs = options.now();
+			cached = {
+				token: result.accessToken,
+				expiresAtMs: Math.min(
+					options.sessionExpiresAtMs,
+					issuedAtMs + result.expiresInSeconds * 1000,
+				),
+			};
+			retryAfterMs = 0;
+			metrics.increment('duckdb_http_broker.oauth_refresh', 1, { outcome: 'success' });
+			return cached.token;
+		} catch {
+			retryAfterMs = Math.min(
+				options.sessionExpiresAtMs,
+				options.now() + OAUTH_REFRESH_RETRY_BACKOFF_MS,
+			);
+			metrics.increment('duckdb_http_broker.oauth_refresh', 1, { outcome: 'failure' });
+			if (!closed && cached && options.now() < cached.expiresAtMs) {
+				metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'stale-cache' });
+				return cached.token;
+			}
+			throw oauthFailure();
+		}
+	};
+
+	return {
+		async authorization(signal) {
+			const currentTime = options.now();
+			if (closed || currentTime >= options.sessionExpiresAtMs) throw oauthFailure();
+			const refreshAtMs = (cached?.expiresAtMs ?? 0) - options.auth.refreshMarginSeconds * 1000;
+			if (cached && currentTime < refreshAtMs) {
+				metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'cache' });
+				return { authorization: `Bearer ${cached.token}` };
+			}
+			if (currentTime < retryAfterMs) {
+				if (cached && currentTime < cached.expiresAtMs) {
+					metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'stale-cache' });
+					return { authorization: `Bearer ${cached.token}` };
+				}
+				throw oauthFailure();
+			}
+			refresh ??= exchange(signal).finally(() => {
+				refresh = undefined;
+			});
+			const token = await refresh;
+			return { authorization: `Bearer ${token}` };
+		},
+		close() {
+			closed = true;
+			cached = undefined;
+			retryAfterMs = 0;
+			controller.abort();
+		},
+	};
+}
+
+function parseOAuthEndpoint(value: string, allowInsecureTransport: boolean): URL {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw oauthFailure();
+	}
+	if (
+		(url.protocol !== 'http:' && url.protocol !== 'https:') ||
+		(url.protocol === 'http:' && !allowInsecureTransport) ||
+		url.username ||
+		url.password ||
+		url.hash
+	) {
+		throw oauthFailure();
+	}
+	return url;
+}
+
+function oauthFailure(): Error {
+	return new Error('DuckDB OAuth token exchange failed.');
 }
 
 export function createGuardedBinaryTransport(options: {
@@ -318,6 +620,19 @@ function routePrefixUrl(value: string): string {
 	return url.toString();
 }
 
+function catalogAndStorageRoutes(
+	catalog: IcebergHttpBrokerRoute,
+	storage: readonly IcebergHttpBrokerRoute[],
+): IcebergHttpBrokerRoute[] {
+	if (storage.some((route) => prefixRoutesOverlap(catalog.url, route.url))) {
+		throw new IcebergHttpBrokerError(
+			'invalid_capability',
+			'DuckDB catalog and storage routes overlap.',
+		);
+	}
+	return [catalog, ...storage];
+}
+
 function prefixRoutesOverlap(left: string, right: string): boolean {
 	const leftUrl = new URL(left);
 	const rightUrl = new URL(right);
@@ -328,6 +643,19 @@ function prefixRoutesOverlap(left: string, right: string): boolean {
 		leftPrefix === rightPrefix ||
 		leftPrefix.startsWith(`${rightPrefix}/`) ||
 		rightPrefix.startsWith(`${leftPrefix}/`)
+	);
+}
+
+function assertCredentialTransport(
+	value: string,
+	authenticated: boolean,
+	allowInsecureTransport: boolean,
+	label: 'Catalog' | 'S3',
+): void {
+	if (!authenticated || allowInsecureTransport || new URL(value).protocol === 'https:') return;
+	throw new IcebergHttpBrokerError(
+		'invalid_capability',
+		`${label} credentials require secure transport.`,
 	);
 }
 
@@ -432,10 +760,14 @@ function responseTooLarge(): IcebergHttpBrokerError {
 	);
 }
 
-function deadlineSignal(signal: AbortSignal | undefined, deadlineMs: number): AbortSignal {
-	const remainingMs = deadlineMs - Date.now();
+function deadlineSignal(
+	signal: AbortSignal | undefined,
+	deadlineMs: number,
+	now = Date.now(),
+): AbortSignal {
+	const remainingMs = deadlineMs - now;
 	if (remainingMs <= 0)
 		return AbortSignal.abort(new Error('DuckDB HTTP broker request timed out.'));
-	const timeout = AbortSignal.timeout(remainingMs);
+	const timeout = AbortSignal.timeout(Math.min(remainingMs, 2_147_483_647));
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }

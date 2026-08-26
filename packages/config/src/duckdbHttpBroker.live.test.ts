@@ -3,6 +3,7 @@ import {
 	createProjectId,
 	createSessionId,
 	icebergRest,
+	s3,
 	UserId,
 } from '@marimo-hub/core';
 import type { IcebergHttpBrokerTransportRequest } from '@marimo-hub/duckdb-wasm-runtime/node';
@@ -26,8 +27,16 @@ const integration = {
 	version: 1,
 };
 
+const s3Integration = {
+	id: createIntegrationId(),
+	name: 'live_s3',
+	kind: 's3',
+	version: 1,
+};
+
 const config = icebergRest.configSchema.parse({
 	uri: liveCatalogUrl,
+	allow_insecure_transport: true,
 	auth: { method: 'none' },
 	access_delegation: 'none',
 	storage: {
@@ -104,6 +113,44 @@ describeLive('guarded DuckDB HTTP broker live', () => {
 			});
 		} finally {
 			executor.terminate();
+		}
+
+		const s3Config = s3.configSchema.parse({
+			endpoint_url: liveS3Endpoint,
+			allow_insecure_transport: true,
+			region: 'us-east-1',
+			path_style: true,
+			auth: {
+				method: 'static',
+				access_key_id: process.env.MARIMOHUB_TEST_ICEBERG_BROKER_S3_ACCESS_KEY ?? 'minioadmin',
+				secret_access_key: process.env.MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY ?? 'minioadmin',
+			},
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'broker-fixture' }],
+		});
+		const s3Plan = s3.query?.plan({ config: s3Config, integration: s3Integration });
+		if (!s3Plan) throw new Error('Expected a guarded S3 query plan.');
+		const s3Executor = await createNodeDataQueryExecutorFactory({
+			memoryLimitMb: 128,
+			httpSessionFactory,
+		}).create(new AbortController().signal);
+		try {
+			await expect(
+				s3Executor.execute(
+					{
+						sql: "SELECT count(*) AS object_count FROM read_parquet('s3://warehouse/broker-fixture/sample.parquet')",
+						connection: { files: [], vars: {}, integration: s3Integration, plan: s3Plan },
+						accessMode: 'read-only',
+						limits: { maxRows: 20, maxBytes: 1_048_576, deadlineMs: 20_000 },
+					},
+					new AbortController().signal,
+				),
+			).resolves.toEqual({
+				columns: ['object_count'],
+				rows: [['1']],
+				truncated: false,
+			});
+		} finally {
+			s3Executor.terminate();
 		}
 
 		const catalogOrigin = new URL(liveCatalogUrl).origin;

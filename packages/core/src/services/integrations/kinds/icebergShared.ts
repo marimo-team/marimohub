@@ -3,7 +3,7 @@ import { ValidationError } from '../../../errors';
 import type { RenderOutput } from '../sdk';
 import { zSecret } from '../secretFields';
 import { INTEGRATIONS_DIR } from '../bundle';
-import { awsStaticCredentials, httpUrlField } from './common';
+import { awsStaticCredentials, httpUrlField, s3BrokerReadLocationsSchema } from './common';
 
 export { HTTP_URL_REGEX } from './common';
 export const THRIFT_URL_REGEX = /^thrift:\/\/[^@\s]+$/;
@@ -55,30 +55,6 @@ export const icebergRuntimeSchema = z
 	})
 	.default(ICEBERG_RUNTIME_DEFAULTS);
 
-const brokerReadLocation = z
-	.strictObject({
-		bucket: z.string().min(1),
-		prefix: z.string().min(1),
-	})
-	.superRefine((location, context) => {
-		const normalizedPrefix = location.prefix.replaceAll(/^\/+|\/+$/g, '');
-		const segments = normalizedPrefix.split('/');
-		if (
-			!normalizedPrefix ||
-			location.bucket.includes('/') ||
-			location.bucket.includes('\\') ||
-			location.prefix.includes('\\') ||
-			location.bucket === '.' ||
-			location.bucket === '..' ||
-			segments.some((segment) => segment === '.' || segment === '..')
-		) {
-			context.addIssue({
-				code: 'custom',
-				message: 'S3 broker read locations require a bucket and a non-traversing prefix.',
-			});
-		}
-	});
-
 const s3Storage = z.strictObject({
 	scheme: z.literal('s3'),
 	region: z.string().min(1).optional(),
@@ -100,8 +76,7 @@ const s3Storage = z.strictObject({
 });
 
 const brokeredS3Storage = s3Storage.extend({
-	broker_read_locations: z
-		.array(brokerReadLocation)
+	broker_read_locations: s3BrokerReadLocationsSchema
 		.default([])
 		.describe('S3 bucket prefixes the guarded DuckDB broker may read'),
 });

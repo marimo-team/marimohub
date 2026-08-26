@@ -3030,7 +3030,8 @@ components:
           $ref: '#/components/schemas/IcebergRuntime'
         access_delegation:
           default: vended_credentials
-          description: Catalog delegation mode. Run SQL requires none.
+          description: Catalog delegation mode. Guarded Run SQL supports none or R2 vended
+            credentials.
           type: string
           enum:
             - none
@@ -3269,7 +3270,8 @@ components:
           $ref: '#/components/schemas/IcebergRuntimeStored'
         access_delegation:
           default: vended_credentials
-          description: Catalog delegation mode. Run SQL requires none.
+          description: Catalog delegation mode. Guarded Run SQL supports none or R2 vended
+            credentials.
           type: string
           enum:
             - none
@@ -4400,6 +4402,10 @@ components:
           pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+        allow_insecure_transport:
+          default: false
+          description: Allow http:// endpoints to carry credentials — local development only
+          type: boolean
         auth:
           default:
             method: ambient
@@ -4437,6 +4443,14 @@ components:
                 - access_key_id
                 - secret_access_key
               additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: anonymous
+              required:
+                - method
+              additionalProperties: false
           discriminator:
             propertyName: method
         path_style:
@@ -4444,6 +4458,24 @@ components:
           description: Address buckets as `endpoint/bucket`, which most S3-compatible
             stores require
           type: boolean
+        broker_read_locations:
+          default: []
+          description: S3 bucket prefixes the guarded DuckDB broker may read
+          type: array
+          items:
+            type: object
+            properties:
+              bucket:
+                type: string
+                minLength: 1
+                maxLength: 255
+              prefix:
+                type: string
+                minLength: 1
+            required:
+              - bucket
+              - prefix
+            additionalProperties: false
         ambient_env:
           default: true
           description: Also export the vendor-standard variables so libraries pick this up
@@ -4473,6 +4505,10 @@ components:
           pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+        allow_insecure_transport:
+          default: false
+          description: Allow http:// endpoints to carry credentials — local development only
+          type: boolean
         auth:
           default:
             method: ambient
@@ -4510,6 +4546,14 @@ components:
                 - access_key_id
                 - secret_access_key
               additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: anonymous
+              required:
+                - method
+              additionalProperties: false
           discriminator:
             propertyName: method
         path_style:
@@ -4517,6 +4561,24 @@ components:
           description: Address buckets as `endpoint/bucket`, which most S3-compatible
             stores require
           type: boolean
+        broker_read_locations:
+          default: []
+          description: S3 bucket prefixes the guarded DuckDB broker may read
+          type: array
+          items:
+            type: object
+            properties:
+              bucket:
+                type: string
+                minLength: 1
+                maxLength: 255
+              prefix:
+                type: string
+                minLength: 1
+            required:
+              - bucket
+              - prefix
+            additionalProperties: false
         ambient_env:
           default: true
           description: Also export the vendor-standard variables so libraries pick this up
@@ -4524,8 +4586,10 @@ components:
             them.
           type: boolean
       required:
+        - allow_insecure_transport
         - auth
         - path_style
+        - broker_read_locations
         - ambient_env
       additionalProperties: false
     snowflake:
@@ -6082,6 +6146,7 @@ components:
                   bucket:
                     type: string
                     minLength: 1
+                    maxLength: 255
                   prefix:
                     type: string
                     minLength: 1
@@ -6897,6 +6962,7 @@ components:
                   bucket:
                     type: string
                     minLength: 1
+                    maxLength: 255
                   prefix:
                     type: string
                     minLength: 1

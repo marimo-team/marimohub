@@ -128,10 +128,16 @@ describe('local development setup', () => {
 			]),
 		);
 		expect(listed).toHaveLength(3);
+		const minio = listed?.find((entry) => entry.name === 'local-minio');
 		const iceberg = listed?.find((entry) => entry.name === 'local-iceberg');
+		if (!minio) throw new Error('Expected the local MinIO integration.');
 		if (!iceberg) throw new Error('Expected the local Iceberg integration.');
+		expect(await deps.orgIntegrations?.get(minio.id)).toMatchObject({
+			config: { allow_insecure_transport: true },
+		});
 		expect(await deps.orgIntegrations?.get(iceberg.id)).toMatchObject({
 			config: {
+				allow_insecure_transport: true,
 				storage: {
 					broker_read_locations: [{ bucket: 'warehouse', prefix: 'demo' }],
 				},

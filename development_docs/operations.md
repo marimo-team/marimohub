@@ -225,11 +225,17 @@ Signals emitted today:
 | `data_preview.duckdb.initialize` / `.execution` / `.recycle`             | counter   | `DuckDBWasmDataPreview`         |
 | `data_preview.duckdb.pool_size` / `.active` / `.rows`                    | gauge     | `DuckDBWasmDataPreview`         |
 | `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms` | gauge     | `DuckDBWasmDataPreview`         |
+| `duckdb_http_broker.request` / `.redirect` / `.budget_exhausted`         | counter   | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.response_bytes` / `.bridge_failure`                  | counter   | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`        | histogram | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`  | counter   | guarded DuckDB OAuth2 provider  |
 | Per-cycle: `sessions_expired`, `snapshots_pruned`, …                     | fields    | the `maintenance_cycle` event   |
 
 Object-browser metric attributes are deliberately low-cardinality: operation,
 mode, outcome, and sanitized error code only. Never add bucket names, keys,
 queries, integration IDs, project IDs, or user IDs as metric attributes.
+DuckDB broker metrics also exclude URLs, endpoint hosts, buckets, object paths, credentials, and
+OAuth2 fields.
 
 What to watch / alert on:
 

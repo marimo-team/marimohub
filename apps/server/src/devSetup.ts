@@ -79,6 +79,7 @@ const DEV_SERVICE_INTEGRATIONS: readonly { healthUrl: string; input: CreateInteg
 				bucket: 'dev-data',
 				region: 'us-east-1',
 				endpoint_url: DEV_S3_ENDPOINT,
+				allow_insecure_transport: true,
 				path_style: true,
 				ambient_env: false,
 				auth: { method: 'static', ...DEV_SERVICE_CREDENTIALS },
