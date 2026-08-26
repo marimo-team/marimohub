@@ -78,6 +78,7 @@ import type {
 	Seconds,
 	Timings,
 } from '@marimo-hub/core';
+import { traceContext } from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
 	ExecOptions,
@@ -351,6 +352,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		console.warn(
 			JSON.stringify({
 				ts: new Date().toISOString(),
+				...traceContext(),
 				event: 'coreweave_ensure',
 				sandbox_id: this.id,
 				reconnected: Boolean(existing),

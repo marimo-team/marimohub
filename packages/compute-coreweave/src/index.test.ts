@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
 import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
@@ -134,6 +137,35 @@ describe('CoreWeaveCompute', () => {
 				expect(JSON.stringify(ensureEvent)).not.toContain('ada@example.com');
 			} finally {
 				warn.mockRestore();
+			}
+		});
+
+		it('correlates the ensure event with the active trace', async () => {
+			const provider = new BasicTracerProvider();
+			trace.setGlobalTracerProvider(provider);
+			context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await provider.getTracer('test').startActiveSpan('session-provision', async (span) => {
+					try {
+						const world = makeWorld();
+						await makeCompute(world).create(SANDBOX_ID).exec('true');
+
+						const event = warn.mock.calls
+							.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+							.find((record) => record.event === 'coreweave_ensure');
+						expect(event).toMatchObject({
+							trace_id: span.spanContext().traceId,
+							span_id: span.spanContext().spanId,
+						});
+					} finally {
+						span.end();
+					}
+				});
+			} finally {
+				warn.mockRestore();
+				trace.disable();
+				context.disable();
 			}
 		});
 

@@ -107,7 +107,7 @@ describe('Session routes', () => {
 		return data.session_id as string;
 	}
 
-	it('logs best-effort integration warnings when provisioning a session', async () => {
+	it('logs resolved provisioning context and best-effort integration warnings', async () => {
 		const warning =
 			'Integration "staging" uses its notebook snippet because "prod" owns automatic discovery.';
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -117,6 +117,10 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute: makeFakeCompute(),
 				deps: {
+					sandbox: sandboxConfig({
+						images: ['registry.example/marimo:py313'],
+						computeProfile: 'gpu',
+					}),
 					integrations: {
 						resolveForSession: async () => ({
 							files: [],
@@ -128,11 +132,14 @@ describe('Session routes', () => {
 				},
 			}).request;
 
-			await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 			const line = log.mock.calls.find((call) =>
 				String(call[0]).includes('session_provision'),
 			)?.[0];
 			expect(JSON.parse(String(line))).toMatchObject({
+				session_id: session.session_id,
+				image: 'registry.example/marimo:py313',
+				compute_profile: 'gpu',
 				integration_warning_count: 1,
 				integration_warnings: [warning],
 			});
