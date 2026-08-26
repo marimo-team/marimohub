@@ -77,7 +77,8 @@ describe('AdminDebugPage', () => {
 		expect(await screen.findByRole('heading', { name: 'Latest report' })).toBeInTheDocument();
 		expect(screen.getByText('sb-first')).toBeInTheDocument();
 		expect(screen.getByText('Backend startup breakdown')).toBeInTheDocument();
-		expect(screen.getByText('1,700 ms')).toBeInTheDocument();
+		const bootTiming = screen.getByText('boot').parentElement;
+		expect(bootTiming?.textContent?.replaceAll(/\D/g, '')).toBe('1700');
 		expect(screen.getByText('Readiness (first echo)')).toBeInTheDocument();
 		expect(screen.getByText('Single exec (second echo)')).toBeInTheDocument();
 		expect(screen.getAllByText('Hello')).toHaveLength(2);
@@ -115,6 +116,31 @@ describe('AdminDebugPage', () => {
 		await user.click(screen.getByRole('button', { name: 'Run startup test' }));
 		await screen.findByText('sb-first');
 		expect(submitted).toEqual({});
+	});
+
+	it('submits a configured image whose name matches the default sentinel', async () => {
+		let submitted: unknown;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = String(input);
+				if (url === '/api/v1/capabilities') {
+					return jsonOk({ ...CAPABILITIES, sandbox_images: ['default'] });
+				}
+				if (url === '/api/v1/admin/debug/sandbox-startup') {
+					submitted = JSON.parse(String(init?.body));
+					return jsonOk(report({ image: 'default' }));
+				}
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		const user = userEvent.setup();
+		renderWithClient(<AdminDebugPage />);
+
+		await user.click(await screen.findByRole('radio', { name: 'default' }));
+		await user.click(screen.getByRole('button', { name: 'Run startup test' }));
+		await screen.findByText('sb-first');
+		expect(submitted).toEqual({ image: 'default' });
 	});
 
 	it('disables controls while a run is pending', async () => {

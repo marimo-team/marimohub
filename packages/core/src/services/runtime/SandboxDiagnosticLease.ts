@@ -100,10 +100,12 @@ export class SandboxDiagnosticLease {
 				}
 			} catch (error) {
 				logOperationalError(
-					'corrupt_sandbox_diagnostic_lease_ignored',
+					'corrupt_sandbox_diagnostic_lease_blocked_reconciliation',
 					{ operation: 'sandbox_diagnostic_lease.list', object: key },
 					error,
 				);
+				// Without a trustworthy ownership set, reaping any recordless sandbox is unsafe.
+				throw error;
 			}
 		}
 		return active;

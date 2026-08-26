@@ -373,6 +373,24 @@ describe('Admin routes', () => {
 			expect(create).not.toHaveBeenCalled();
 		});
 
+		it('rejects an unbounded startup timeout before creating a sandbox', async () => {
+			const { instance } = makeFakeSandbox();
+			const { compute, create } = computeFor(instance);
+			const { request } = superAdminApi({
+				compute,
+				sandbox: { ...sandboxConfig, startupTimeoutMs: 0 },
+			});
+
+			const error = await expectError(
+				await request('POST', '/admin/debug/sandbox-startup', {}),
+				400,
+				'BAD_REQUEST',
+			);
+			expect(error.message).toContain('finite startup timeout');
+			expect(create).not.toHaveBeenCalled();
+			expect(await bucket.get(paths.sandboxDiagnosticLease(ACTOR))).toBeNull();
+		});
+
 		it('returns a partial report and skips the second echo when readiness fails', async () => {
 			const { instance } = makeFakeSandbox();
 			instance.exec = vi.fn(async () => execResult(false, '', 'shell unavailable', 'SPAWN_FAILED'));
@@ -420,6 +438,21 @@ describe('Admin routes', () => {
 				},
 				cleanup: { status: 'ok' },
 			});
+		});
+
+		it('collects counters when draining startup timings fails', async () => {
+			const { instance } = makeFakeSandbox();
+			instance.drainTimings = vi.fn(() => {
+				throw new Error('timings unavailable');
+			});
+			instance.drainCounters = vi.fn(() => ({ execs: 2, retries: 1 }));
+			const { compute } = computeFor(instance);
+			const { request } = superAdminApi({ compute, sandbox: sandboxConfig });
+
+			const report = await expectOk<any>(await request('POST', '/admin/debug/sandbox-startup', {}));
+
+			expect(instance.drainCounters).toHaveBeenCalledTimes(1);
+			expect(report.counters).toEqual({ execs: 2, retries: 1 });
 		});
 
 		it('reports handle creation failures without attempting cleanup', async () => {

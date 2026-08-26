@@ -13,6 +13,7 @@ import type { SandboxStartupReport } from '@/types';
 type StartupCommand = SandboxStartupReport['readiness'];
 type StartupPhase = SandboxStartupReport['handle'];
 
+const CONFIGURED_IMAGE_PREFIX = 'configured-image:';
 const durationFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
 function duration(value: number | null): string {
@@ -217,9 +218,13 @@ export default function AdminDebugPage() {
 	const images = capabilities.data?.sandbox_images ?? [];
 	const profiles = capabilities.data?.compute_profiles ?? [];
 	const run = useRunSandboxStartupTest(capabilities.data?.sandbox_startup_timeout_seconds);
-	const imageOptions = baseImageOptions(images);
-	if (images.length === 0)
-		imageOptions[0] = { value: DEFAULT_BASE_IMAGE, label: 'Adapter default' };
+	const imageOptions = baseImageOptions(images).map((option, index) =>
+		index === 0
+			? images.length === 0
+				? { ...option, label: 'Adapter default' }
+				: option
+			: { ...option, value: `${CONFIGURED_IMAGE_PREFIX}${encodeURIComponent(option.value)}` },
+	);
 	const configuredProfileOptions = computeProfileOptions(profiles);
 	const profileOptions =
 		configuredProfileOptions.length > 0
@@ -231,9 +236,12 @@ export default function AdminDebugPage() {
 			computeProfile: DEFAULT_COMPUTE_PROFILE,
 		},
 		onSubmit: async ({ value }) => {
+			const image = value.image.startsWith(CONFIGURED_IMAGE_PREFIX)
+				? decodeURIComponent(value.image.slice(CONFIGURED_IMAGE_PREFIX.length))
+				: undefined;
 			try {
 				await run.mutateAsync({
-					...(value.image === DEFAULT_BASE_IMAGE ? {} : { image: value.image }),
+					...(image === undefined ? {} : { image }),
 					...(value.computeProfile === DEFAULT_COMPUTE_PROFILE
 						? {}
 						: { compute_profile: value.computeProfile }),

@@ -316,6 +316,25 @@ describe('ReconciliationService', () => {
 		expect(compute.destroyed).toEqual([orphanId]);
 	});
 
+	it('Rule 3: fails closed when diagnostic lease ownership cannot be parsed', async () => {
+		compute.active = [
+			{ id: orphanId, createdAt: new Date(Date.now() - 60 * 60_000).toISOString() },
+		];
+		await bucket.put(
+			paths.sandboxDiagnosticLease(ACTOR),
+			JSON.stringify({ sandbox_id: orphanId, expires_at: 'not-a-date' }),
+		);
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await expect(reconciler.reconcile({ orphanGraceMs: 1_000 })).rejects.toThrow();
+
+		expect(compute.destroyed).toEqual([]);
+		const line = log.mock.calls.find((call) =>
+			String(call[0]).includes('corrupt_sandbox_diagnostic_lease_blocked_reconciliation'),
+		)?.[0] as string;
+		expect(line).not.toContain('not-a-date');
+	});
+
 	it('Rule 3: applies the grace window to an orphan with no createdAt', async () => {
 		// Provisioning writes the record before creating the sandbox, so a brand-new
 		// sandbox the provider has not yet timestamped is an in-flight provision, not

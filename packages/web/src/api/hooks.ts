@@ -248,6 +248,7 @@ export function useRunSandboxStartupTest(startupTimeoutSeconds = 120) {
 					timeout: startupTimeoutSeconds * 1000 + 60_000,
 				}),
 			),
+		meta: { suppressErrorToast: true },
 	});
 }
 

@@ -372,6 +372,9 @@ app.openapi(testSandboxStartup, async (c) => {
 	);
 	const sandboxId = createSandboxId();
 	const startupTimeoutMs = deps.sandbox.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
+	if (!Number.isFinite(startupTimeoutMs) || startupTimeoutMs <= 0) {
+		throw new BadRequestError('Sandbox startup diagnostics require a finite startup timeout');
+	}
 	const diagnosticLease = new SandboxDiagnosticLease(deps.bucket);
 	const acquired = await diagnosticLease.acquire(
 		user.id,
@@ -431,11 +434,22 @@ app.openapi(testSandboxStartup, async (c) => {
 						...startupTimings,
 						...sandbox.drainTimings?.(),
 					};
-					counters = sandbox.drainCounters?.() ?? {};
 				} catch (error) {
 					logEvent({
 						level: 'error',
 						event: 'sandbox_startup_diagnostic_drain_failed',
+						request_id: c.get('requestId') ?? null,
+						actor: user.id,
+						sandbox_id: sandboxId,
+						error: errorMetadataChain(error),
+					});
+				}
+				try {
+					counters = sandbox.drainCounters?.() ?? {};
+				} catch (error) {
+					logEvent({
+						level: 'error',
+						event: 'sandbox_startup_diagnostic_counter_drain_failed',
 						request_id: c.get('requestId') ?? null,
 						actor: user.id,
 						sandbox_id: sandboxId,
