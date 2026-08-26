@@ -111,6 +111,30 @@ describe('serveSpaFallback', () => {
 		expect(await response.text()).toContain(`<base href="${expected}" />`);
 	});
 
+	it.each([undefined, '', '   ', 'https://hub.example.com'] as const)(
+		'does not require a build-time marker without a path prefix for %j',
+		async (appBaseUrl) => {
+			const html = '<!doctype html><main>custom shell</main>';
+			const response = await staticApp(appBaseUrl, html).request('/projects/project-1');
+
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(html);
+		},
+	);
+
+	it('still requires the build-time marker for a path prefix', async () => {
+		const app = staticApp(
+			'https://hub.example.com/marimohub',
+			'<!doctype html><main>custom shell</main>',
+		);
+		app.onError((error, context) => context.text(error.message, 500));
+
+		const response = await app.request('/projects/project-1');
+
+		expect(response.status).toBe(500);
+		expect(await response.text()).toContain('exactly one <base href="/" /> marker');
+	});
+
 	it('returns 404 when the SPA shell is missing', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
 		temporaryRoots.push(root);

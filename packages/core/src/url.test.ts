@@ -13,8 +13,10 @@ describe('normalizeBasePath', () => {
 		['', '/'],
 		['/', '/'],
 		['///', '/'],
+		['marimohub/', '/marimohub'],
 		['/marimohub', '/marimohub'],
 		['/marimohub/', '/marimohub'],
+		['//marimohub/', '/marimohub'],
 		['/team/marimohub///', '/team/marimohub'],
 	] as const)('maps %j to %j', (pathname, expected) => {
 		expect(normalizeBasePath(pathname)).toBe(expected);
@@ -28,6 +30,7 @@ describe('basePathFromUrl', () => {
 		['https://hub.example.com/marimohub', '/marimohub'],
 		['https://hub.example.com/marimohub/', '/marimohub'],
 		['https://hub.example.com/marimohub///?ignored=1#ignored', '/marimohub'],
+		['https://hub.example.com//cdn.example/app/', '/cdn.example/app'],
 		['https://hub.example.com/team%20one/hub/', '/team%20one/hub'],
 	] as const)('reads %s as %s', (value, expected) => {
 		expect(basePathFromUrl(value)).toBe(expected);
@@ -49,6 +52,7 @@ describe('baseHrefFromUrl', () => {
 		['https://hub.example.com/marimohub', '/marimohub/'],
 		['https://hub.example.com/marimohub/', '/marimohub/'],
 		['https://hub.example.com/marimohub///', '/marimohub/'],
+		['https://hub.example.com//cdn.example/app/', '/cdn.example/app/'],
 	] as const)('maps %s to %s', (value, expected) => {
 		expect(baseHrefFromUrl(value)).toBe(expected);
 	});
@@ -62,6 +66,7 @@ describe('normalizeBaseUrl', () => {
 		['https://hub.example.com/marimohub', 'https://hub.example.com/marimohub'],
 		['https://hub.example.com/marimohub/', 'https://hub.example.com/marimohub'],
 		['https://hub.example.com/marimohub///?ignored=1#ignored', 'https://hub.example.com/marimohub'],
+		['https://hub.example.com//cdn.example/app/', 'https://hub.example.com/cdn.example/app'],
 		['https://hub.example.com/team%20one/hub/', 'https://hub.example.com/team%20one/hub'],
 	] as const)('maps %s to %s', (value, expected) => {
 		expect(normalizeBaseUrl(value)).toBe(expected);
@@ -85,6 +90,11 @@ describe('joinUrlPath', () => {
 			'https://hub.example.com/marimohub///',
 			'///projects/proj-1',
 			'https://hub.example.com/marimohub/projects/proj-1',
+		],
+		[
+			'https://hub.example.com//cdn.example/app/',
+			'/api/v1/me',
+			'https://hub.example.com/cdn.example/app/api/v1/me',
 		],
 	] as const)('joins %s and %s', (baseUrl, path, expected) => {
 		expect(joinUrlPath(baseUrl, path)).toBe(expected);

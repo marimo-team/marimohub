@@ -10,7 +10,8 @@ export interface ParseHttpUrlOptions {
 }
 
 export function normalizeBasePath(pathname: string): string {
-	return pathname.replace(/\/+$/, '') || '/';
+	const normalized = pathname.replaceAll(/^\/+|\/+$/g, '');
+	return normalized ? `/${normalized}` : '/';
 }
 
 export function basePathFromUrl(value: string | URL): string {

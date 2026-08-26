@@ -68,6 +68,7 @@ export function serveSpaFallback(staticRoot: string, appBaseUrl?: string): Middl
 		if (!(response instanceof Response) || response.status !== 200) {
 			return response;
 		}
+		if (baseHref === '/') return response;
 		const headers = new Headers(response.headers);
 		headers.delete('Content-Length');
 		if (context.req.method === 'HEAD') {

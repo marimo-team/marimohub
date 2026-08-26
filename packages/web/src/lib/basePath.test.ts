@@ -8,6 +8,7 @@ describe('appBasePath', () => {
 		['https://hub.example.com/marimohub', '/marimohub'],
 		['https://hub.example.com/marimohub/', '/marimohub'],
 		['https://hub.example.com/marimohub///?ignored=1#ignored', '/marimohub'],
+		['https://hub.example.com//cdn.example/app/', '/cdn.example/app'],
 		['https://hub.example.com/team%20one/hub/', '/team%20one/hub'],
 	] as const)('reads %s as %s', (baseUri, expected) => {
 		expect(appBasePath(baseUri)).toBe(expected);
@@ -45,6 +46,7 @@ describe('withBasePath', () => {
 		['/', '/marimohub', '/marimohub/'],
 		['/', '/marimohub///', '/marimohub/'],
 		['/api/v1/me', '/marimohub/', '/marimohub/api/v1/me'],
+		['/api/v1/me', '//cdn.example/app/', '/cdn.example/app/api/v1/me'],
 		['/api/v1/me', '/', '/api/v1/me'],
 		['/api/v1/me', '', '/api/v1/me'],
 		['/marimohub', '/marimohub/', '/marimohub'],

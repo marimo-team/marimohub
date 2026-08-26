@@ -254,25 +254,7 @@ function mappedEntitlements(groups: readonly string[], policy: OidcGroupPolicy):
 	return [...entitlements];
 }
 
-/**
- * Validate a client-supplied post-login destination (`?redirect_url=` on the
- * login route) down to a same-origin absolute path, or null if it is anything
- * else. This is the open-redirect guard: the value is attacker-controllable (a
- * phisher can send a victim a crafted /api/auth/login link), so it must never
- * be able to leave this origin. Rejected here:
- *
- * - absolute URLs and scheme-relative `//evil.com` (and `/\evil.com` — browsers
- *   normalize `\` to `/` in URLs, so a backslash anywhere is rejected outright)
- * - schemes like `javascript:`/`data:` (no leading `/`)
- * - control characters (header/URL smuggling)
- * - paths that URL-normalize back OUT to another origin (`/..//evil.com`
- *   dot-segment-normalizes to `//evil.com`)
- * - `/api/…` paths (would loop straight back into the auth routes, and there is
- *   no UI there)
- *
- * Exported for direct unit testing.
- */
-export function sanitizeReturnTo(value: string | null | undefined): string | null {
+function sanitizeApplicationPath(value: string | null | undefined): string | null {
 	if (!value || value.length > MAX_RETURN_TO_LENGTH) return null;
 	if (!value.startsWith('/') || value.startsWith('//')) return null;
 	// eslint-disable-next-line no-control-regex
@@ -288,6 +270,16 @@ export function sanitizeReturnTo(value: string | null | undefined): string | nul
 	// Dot-segment normalization can surface a scheme-relative `//` prefix that the
 	// prefix check above did not see (e.g. `/..//evil.com`).
 	if (!path.startsWith('/') || path.startsWith('//')) return null;
+	return path;
+}
+
+/**
+ * Validate an attacker-controlled `?redirect_url=`. API paths are excluded to
+ * avoid redirecting the browser back into an auth or data endpoint.
+ */
+export function sanitizeReturnTo(value: string | null | undefined): string | null {
+	const path = sanitizeApplicationPath(value);
+	if (!path) return null;
 	if (path === '/api' || path.startsWith('/api/')) return null;
 	return path;
 }
@@ -319,7 +311,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	const secret = secretBytes;
 	const scopes = config.scopes ?? 'openid email profile';
 	const configuredPostLoginRedirect = config.postLoginRedirect ?? '/';
-	const sanitizedPostLoginRedirect = sanitizeReturnTo(configuredPostLoginRedirect);
+	const sanitizedPostLoginRedirect = sanitizeApplicationPath(configuredPostLoginRedirect);
 	if (!sanitizedPostLoginRedirect) {
 		throw new Error('OIDC post-login redirect must be a same-origin application path');
 	}

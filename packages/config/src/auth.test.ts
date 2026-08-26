@@ -73,6 +73,8 @@ describe('makeAuth oidc required vars', () => {
 	it.each([
 		['https://hub.example.com/marimohub', '/marimohub?auth_error=session_expired'],
 		['https://hub.example.com/marimohub/', '/marimohub?auth_error=session_expired'],
+		['https://hub.example.com/api', '/api?auth_error=session_expired'],
+		['https://hub.example.com/api/marimohub/', '/api/marimohub?auth_error=session_expired'],
 		[
 			'https://hub.example.com/marimohub///?ignored=1#ignored',
 			'/marimohub?auth_error=session_expired',

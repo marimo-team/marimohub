@@ -49,7 +49,8 @@ import { describeError, logEvent } from './log';
 export type { ApiDeps, HonoEnv } from './context';
 
 export function resolvePublicBaseUrl(c: Context<HonoEnv>, configured?: string): string {
-	if (configured) return normalizeBaseUrl(configured);
+	const publicBaseUrl = configured?.trim();
+	if (publicBaseUrl) return normalizeBaseUrl(publicBaseUrl);
 	const requestUrl = new URL(c.req.url);
 	const forwardedProtocol = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
 	const protocol =
