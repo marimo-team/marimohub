@@ -206,4 +206,33 @@ describe('instrumentCoreWeaveTransport', () => {
 		expect(span?.attributes['error.type']).toBe('Error');
 		expect(span?.events.some((event) => event.name === 'exception')).toBe(true);
 	});
+
+	it('ends a log span and closes the iterator when consumption stops early', async () => {
+		let iteratorClosed = false;
+		const stream: LogStream = {
+			...emptyLogStream(),
+			async *[Symbol.asyncIterator]() {
+				try {
+					yield 'first';
+					yield 'second';
+				} finally {
+					iteratorClosed = true;
+				}
+			},
+		};
+		const raw = fakeTransport();
+		raw.streamLogs.mockResolvedValueOnce(stream);
+		const transport = instrumentCoreWeaveTransport(raw, 'https://gateway.example');
+
+		const observed = await transport.streamLogs({ sandboxId: SANDBOX_ID, mode: 'lines' });
+		for await (const line of observed) {
+			expect(line).toBe('first');
+			break;
+		}
+
+		expect(iteratorClosed).toBe(true);
+		const span = exporter.getFinishedSpans()[0];
+		expect(span?.name).toBe(`${STREAMING}/StreamLogs`);
+		expect(span?.status.code).toBe(SpanStatusCode.UNSET);
+	});
 });

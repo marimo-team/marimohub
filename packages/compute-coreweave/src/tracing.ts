@@ -149,6 +149,19 @@ function observeIterator(
 				throw error;
 			}
 		},
+		async return(value) {
+			try {
+				const result =
+					iterator.return === undefined
+						? { done: true as const, value }
+						: await iterator.return(value);
+				lifecycle.end();
+				return result;
+			} catch (error) {
+				lifecycle.fail(error);
+				throw error;
+			}
+		},
 		[Symbol.asyncIterator]() {
 			return this;
 		},
