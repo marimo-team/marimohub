@@ -14,6 +14,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      - name: Restore Vite Task cache
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        id: vite-task-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-test-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-test-${{ runner.os }}-${{ runner.arch }}-
+
+      # Keep the package graph sequential so child processes cannot exhaust the
+      # runner's process limit under a cold cache.
+      - name: Test
+        run: vp run -r --concurrency-limit 1 test --configLoader=runner --pool=threads
+
+      - name: Save Vite Task cache
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
+
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -37,12 +73,15 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: node_modules/.vite/task-cache
-          key: vite-task-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vite-task-verify-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vite-task-${{ runner.os }}-${{ runner.arch }}-
+            vite-task-verify-${{ runner.os }}-${{ runner.arch }}-
 
       - run: vp check
-      - run: vp run -r typecheck
+      - name: Typecheck and build
+        run: |
+          vp run -r typecheck
+          vp run -r build
       - run: vp run audit:prod
       - name: Test release shell helpers
         run: vp run test:release-scripts
@@ -50,13 +89,6 @@ jobs:
       - name: Audit all dependencies (non-blocking)
         continue-on-error: true
         run: vp pm audit -- --audit-level=high
-
-      # Keep the package graphs sequential so their child processes cannot
-      # exhaust the runner's process limit under a cold cache.
-      - name: Test
-        run: vp run -r test --configLoader=runner --pool=threads
-      - name: Build
-        run: vp run -r build
 
       # The build task restores dist/ when its cache hits.
       - run: node scripts/check-bundle-size.mjs
