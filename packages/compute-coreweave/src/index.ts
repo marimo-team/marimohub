@@ -311,8 +311,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
-	/** Directories already `mkdir -p`'d in this sandbox, so re-issuing is skipped. */
-	private readonly createdDirs = new Set<string>();
 	/** Blocking commands sent to this sandbox — one wide-event field per provision. */
 	private execCount = 0;
 
@@ -521,22 +519,27 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
 		const sandbox = await this.ensure();
-		// The SDK's files.write does not create parent dirs, so mkdir first — once for
-		// every parent, not per file. Its multi-file write is Promise.all over per-file
-		// RPCs, so collapsing these execs (not the writes) is what removes round-trips.
-		// Dirs already created in this sandbox are skipped, so a workspace restored in
-		// N byte-bounded batches pays one mkdir rather than N.
-		const dirs = new Set<string>();
-		for (const f of files) {
-			const dir = f.path.slice(0, f.path.lastIndexOf('/'));
-			if (dir && !this.createdDirs.has(dir)) dirs.add(dir);
-		}
-		if (dirs.size > 0) {
-			await this.exec(`mkdir -p ${[...dirs].map(shellQuote).join(' ')}`);
-			for (const dir of dirs) this.createdDirs.add(dir);
+		// The gateway's AddFile `mkdir -p`s the parent itself (confirmed with
+		// CoreWeave), so no exec precedes the write: the provision's `files` and
+		// `inject` phases each cost one AddFile round-trip, and the armed bootstrap
+		// rides the first real command (`setup`) instead.
+		//
+		// The one ordering hazard: the bootstrap is what links the user home into
+		// place, and a write beneath that path before the link exists would
+		// materialize it as a plain directory — so flush the bootstrap first in that
+		// case. Nothing on the provision path writes there today.
+		if (this.pendingBootstrap && this.writesUnderUserHome(files)) {
+			await this.exec('true');
 		}
 		// The SDK's FileContent is `string | Uint8Array`, so bytes pass straight through.
 		await sandbox.files.write(files.map((f) => ({ path: f.path, content: f.content })));
+	}
+
+	private writesUnderUserHome(files: readonly SandboxFileWrite[]): boolean {
+		const home = this.userHome?.path;
+		if (!home) return false;
+		const prefix = home.endsWith('/') ? home : `${home}/`;
+		return files.some((f) => f.path === home || f.path.startsWith(prefix));
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
