@@ -1,10 +1,10 @@
 /**
  * OpenAI-compatible AI proxy for managed-AI notebooks (`/api/ai/v1`).
  *
- * Notebook kernels run untrusted user code, so they never hold the real upstream
- * provider key — only a short-lived, session-scoped token marimohub mints at
+ * Notebook kernels run untrusted user code, so they never hold upstream
+ * credentials — only a short-lived, session-scoped token marimohub mints at
  * provision time (see `marimoAiContributor`). This route verifies that token,
- * then forwards the request to the configured upstream with the real key,
+ * then authenticates and forwards the request to the configured upstream,
  * streaming the response straight back. It authenticates by the token alone, so
  * it lives OUTSIDE the `/api/v1/*` cookie-auth + CSRF guards.
  *
@@ -45,8 +45,8 @@ function normalizeModel(model: unknown, provider: string): string | undefined {
 }
 
 /**
- * Forward a JSON request body to `<upstream>{path}` with the real key, streaming the
- * response back. Shared by the chat-completions and responses endpoints.
+ * Forward a JSON request body to `<upstream>{path}`, applying the configured
+ * authentication and streaming the response back.
  */
 async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 	const ai = c.get('deps').ai!;
@@ -69,16 +69,15 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 	try {
 		// `proxy` streams the upstream body back and drops hop-by-hop/encoding
 		// headers; we pass our own headers so the client's session token is never
-		// forwarded and the real upstream key is added server-side.
-		const headers: Record<string, string> = {
-			'content-type': 'application/json',
-			authorization: `Bearer ${ai.upstreamApiKey}`,
-		};
+		// forwarded. The configured key or request signer authenticates upstream.
+		const headers: Record<string, string> = { 'content-type': 'application/json' };
+		if (ai.upstreamApiKey) headers.authorization = `Bearer ${ai.upstreamApiKey}`;
 		if (ai.upstreamProject) headers['openai-project'] = ai.upstreamProject;
 		const res = await proxy(`${ai.upstreamBaseUrl}${path}`, {
 			method: 'POST',
 			headers,
 			body: JSON.stringify(payload),
+			customFetch: ai.upstreamFetch,
 		});
 		logEvent({
 			level: 'info',

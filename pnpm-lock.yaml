@@ -9,12 +9,18 @@ catalogs:
     '@ai-sdk/openai-compatible':
       specifier: ^3.0.17
       version: 3.0.17
+    '@aws-crypto/sha256-js':
+      specifier: ^5.2.0
+      version: 5.2.0
     '@aws-sdk/client-s3':
       specifier: ^3.1066.0
       version: 3.1066.0
     '@aws-sdk/client-secrets-manager':
       specifier: ^3.1066.0
       version: 3.1076.0
+    '@aws-sdk/credential-provider-node':
+      specifier: ^3.972.59
+      version: 3.972.59
     '@azure/core-auth':
       specifier: ^1.11.0
       version: 1.11.0
@@ -117,6 +123,12 @@ catalogs:
     '@smithy/node-http-handler':
       specifier: ^4.9.1
       version: 4.9.1
+    '@smithy/signature-v4':
+      specifier: ^5.6.0
+      version: 5.6.0
+    '@smithy/types':
+      specifier: ^4.15.0
+      version: 4.15.0
     '@tailwindcss/vite':
       specifier: ^4.3.0
       version: 4.3.0
@@ -1076,9 +1088,21 @@ importers:
 
   packages/credentials-aws:
     dependencies:
+      '@aws-crypto/sha256-js':
+        specifier: 'catalog:'
+        version: 5.2.0
+      '@aws-sdk/credential-provider-node':
+        specifier: 'catalog:'
+        version: 3.972.59
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core
+      '@smithy/signature-v4':
+        specifier: 'catalog:'
+        version: 5.6.0
+      '@smithy/types':
+        specifier: 'catalog:'
+        version: 4.15.0
       ofetch:
         specifier: 'catalog:'
         version: 1.5.1

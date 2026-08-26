@@ -262,6 +262,21 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(req.headers.get('openai-project')).toBeNull();
 	});
 
+	it('uses a request-authenticating fetch adapter without adding a bearer key', async () => {
+		const upstreamFetch = vi.fn(async (request: Request) => {
+			expect(request.headers.get('authorization')).toBeNull();
+			return new Response('ok', { status: 200 });
+		});
+		const res = await post(
+			await token(),
+			{ model: 'm', messages: [] },
+			{ ai: { ...AI, upstreamApiKey: undefined, upstreamFetch } },
+		);
+
+		expect(res.status).toBe(200);
+		expect(upstreamFetch).toHaveBeenCalledOnce();
+	});
+
 	it('falls back to the default model when off the allowlist', async () => {
 		const fetchMock = vi
 			.spyOn(globalThis, 'fetch')
