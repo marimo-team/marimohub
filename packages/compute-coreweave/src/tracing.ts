@@ -41,12 +41,34 @@ function errorType(error: unknown): string {
 	return typeof error;
 }
 
-async function rpcRequest<T>(
+interface SpanLifecycle {
+	end(): void;
+	fail(error: unknown): void;
+}
+
+function spanLifecycle(span: Span): SpanLifecycle {
+	let ended = false;
+	return {
+		end() {
+			if (ended) return;
+			ended = true;
+			span.end();
+		},
+		fail(error) {
+			if (ended) return;
+			span.recordException(error instanceof Error ? error : String(error));
+			span.setAttribute('error.type', errorType(error));
+			span.setStatus({ code: SpanStatusCode.ERROR });
+			this.end();
+		},
+	};
+}
+
+function startRpcSpan<T>(
 	method: string,
 	endpoint: Attributes,
-	request: () => Promise<T>,
-	attributes: Attributes = {},
-	onResult?: (span: Span, result: T) => void,
+	attributes: Attributes,
+	request: (span: Span) => Promise<T>,
 ): Promise<T> {
 	const tracer = trace.getTracer('@marimo-hub/compute-coreweave');
 	return tracer.startActiveSpan(
@@ -60,21 +82,112 @@ async function rpcRequest<T>(
 				...attributes,
 			},
 		},
-		async (span) => {
+		request,
+	);
+}
+
+async function rpcRequest<T>(
+	method: string,
+	endpoint: Attributes,
+	request: () => Promise<T>,
+	attributes: Attributes = {},
+	onResult?: (span: Span, result: T) => void,
+): Promise<T> {
+	return startRpcSpan(method, endpoint, attributes, async (span) => {
+		const lifecycle = spanLifecycle(span);
+		try {
+			const result = await request();
+			onResult?.(span, result);
+			return result;
+		} catch (error) {
+			lifecycle.fail(error);
+			throw error;
+		} finally {
+			lifecycle.end();
+		}
+	});
+}
+
+function streamingRpcRequest<T>(
+	method: string,
+	endpoint: Attributes,
+	request: () => Promise<T>,
+	attributes: Attributes,
+	observe: (result: T, lifecycle: SpanLifecycle) => T,
+): Promise<T> {
+	return startRpcSpan(method, endpoint, attributes, async (span) => {
+		const lifecycle = spanLifecycle(span);
+		try {
+			return observe(await request(), lifecycle);
+		} catch (error) {
+			lifecycle.fail(error);
+			throw error;
+		}
+	});
+}
+
+function observeCommandProcess(process: CommandProcess, lifecycle: SpanLifecycle): CommandProcess {
+	void process.wait().then(
+		() => lifecycle.end(),
+		(error: unknown) => lifecycle.fail(error),
+	);
+	return process;
+}
+
+function observeIterator(
+	iterator: AsyncIterator<unknown>,
+	lifecycle: SpanLifecycle,
+): AsyncIterator<unknown> & AsyncIterable<unknown> {
+	return {
+		async next() {
 			try {
-				const result = await request();
-				onResult?.(span, result);
+				const result = await iterator.next();
+				if (result.done) lifecycle.end();
 				return result;
 			} catch (error) {
-				span.recordException(error instanceof Error ? error : String(error));
-				span.setAttribute('error.type', errorType(error));
-				span.setStatus({ code: SpanStatusCode.ERROR });
+				lifecycle.fail(error);
 				throw error;
-			} finally {
-				span.end();
 			}
 		},
-	);
+		[Symbol.asyncIterator]() {
+			return this;
+		},
+	};
+}
+
+type CoreWeaveLogStream = LogEntryStream | LogRawStream | LogStream;
+
+function observeLogStream<T extends CoreWeaveLogStream>(stream: T, lifecycle: SpanLifecycle): T {
+	return new Proxy(stream, {
+		get(target, property) {
+			if (property === Symbol.asyncIterator) {
+				return () => observeIterator(target[Symbol.asyncIterator](), lifecycle);
+			}
+			const value: unknown = Reflect.get(target, property, target);
+			if ((property === 'cancel' || property === 'close') && typeof value === 'function') {
+				return (...args: unknown[]) => {
+					let pending: Promise<unknown>;
+					try {
+						pending = Reflect.apply(value, target, args);
+					} catch (error) {
+						lifecycle.fail(error);
+						throw error;
+					}
+					return pending.then(
+						(result) => {
+							lifecycle.end();
+							return result;
+						},
+						(error: unknown) => {
+							lifecycle.fail(error);
+							throw error;
+						},
+					);
+				};
+			}
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
 }
 
 function sandboxAttributes(sandboxId: string): Attributes {
@@ -127,19 +240,21 @@ export function instrumentCoreWeaveTransport(
 			);
 		},
 		startCommand(request: StartCommandRequest): Promise<CommandProcess> {
-			return rpcRequest(
+			return streamingRpcRequest(
 				streaming('StreamExec'),
 				endpoint,
 				() => transport.startCommand(request),
 				sandboxAttributes(request.sandboxId),
+				observeCommandProcess,
 			);
 		},
 		streamLogs(request: StreamLogsRequest): Promise<LogEntryStream | LogRawStream | LogStream> {
-			return rpcRequest(
+			return streamingRpcRequest(
 				streaming('StreamLogs'),
 				endpoint,
 				() => transport.streamLogs(request),
 				sandboxAttributes(request.sandboxId),
+				observeLogStream,
 			);
 		},
 		stop(request: StopSandboxRequest): Promise<void> {

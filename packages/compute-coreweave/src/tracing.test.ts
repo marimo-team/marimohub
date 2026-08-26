@@ -1,5 +1,11 @@
 import { SandboxClient } from '@coreweave/cwsandbox';
-import type { LogStream, SandboxStatus, SandboxTransport } from '@coreweave/cwsandbox';
+import type {
+	CommandProcess,
+	LogStream,
+	ProcessResult,
+	SandboxStatus,
+	SandboxTransport,
+} from '@coreweave/cwsandbox';
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import {
@@ -67,7 +73,8 @@ describe('instrumentCoreWeaveTransport', () => {
 		await transport.delete({ sandboxId: SANDBOX_ID });
 		await transport.exec({ sandboxId: SANDBOX_ID, command: ['true'] });
 		await transport.startCommand({ sandboxId: SANDBOX_ID, command: ['marimo'] });
-		await transport.streamLogs({ sandboxId: SANDBOX_ID, mode: 'lines' });
+		const logStream = await transport.streamLogs({ sandboxId: SANDBOX_ID, mode: 'lines' });
+		await logStream[Symbol.asyncIterator]().next();
 		await transport.stop({ sandboxId: SANDBOX_ID });
 		await transport.writeFile({
 			sandboxId: SANDBOX_ID,
@@ -146,5 +153,57 @@ describe('instrumentCoreWeaveTransport', () => {
 		expect(requestSpan?.status.code).toBe(SpanStatusCode.ERROR);
 		expect(requestSpan?.attributes['error.type']).toBe('Error');
 		expect(requestSpan?.events.some((event) => event.name === 'exception')).toBe(true);
+	});
+
+	it('keeps a command span open and records a failure after the handshake', async () => {
+		let rejectWait!: (error: Error) => void;
+		const wait = new Promise<ProcessResult>((_resolve, reject) => {
+			rejectWait = reject;
+		});
+		const process: CommandProcess = { ...fakeProcess(), wait: () => wait };
+		const raw = fakeTransport();
+		raw.startCommand.mockResolvedValueOnce(process);
+		const transport = instrumentCoreWeaveTransport(raw, 'https://gateway.example');
+
+		await expect(
+			transport.startCommand({ sandboxId: SANDBOX_ID, command: ['marimo'] }),
+		).resolves.toBe(process);
+		expect(exporter.getFinishedSpans()).toHaveLength(0);
+
+		rejectWait(new Error('stream reset'));
+		await vi.waitFor(() => expect(exporter.getFinishedSpans()).toHaveLength(1));
+
+		const span = exporter.getFinishedSpans()[0];
+		expect(span?.name).toBe(`${STREAMING}/StreamExec`);
+		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
+		expect(span?.attributes['error.type']).toBe('Error');
+		expect(span?.events.some((event) => event.name === 'exception')).toBe(true);
+	});
+
+	it('keeps a log span open and records an iterator failure after the handshake', async () => {
+		const failure = new Error('log stream reset');
+		const stream: LogStream = {
+			...emptyLogStream(),
+			async *[Symbol.asyncIterator]() {
+				yield 'ready';
+				throw failure;
+			},
+		};
+		const raw = fakeTransport();
+		raw.streamLogs.mockResolvedValueOnce(stream);
+		const transport = instrumentCoreWeaveTransport(raw, 'https://gateway.example');
+
+		const observed = await transport.streamLogs({ sandboxId: SANDBOX_ID, mode: 'lines' });
+		expect(exporter.getFinishedSpans()).toHaveLength(0);
+		const iterator = observed[Symbol.asyncIterator]();
+		await expect(iterator.next()).resolves.toEqual({ done: false, value: 'ready' });
+		expect(exporter.getFinishedSpans()).toHaveLength(0);
+		await expect(iterator.next()).rejects.toBe(failure);
+
+		const span = exporter.getFinishedSpans()[0];
+		expect(span?.name).toBe(`${STREAMING}/StreamLogs`);
+		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
+		expect(span?.attributes['error.type']).toBe('Error');
+		expect(span?.events.some((event) => event.name === 'exception')).toBe(true);
 	});
 });
