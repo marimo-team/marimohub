@@ -7,9 +7,10 @@ import { spawn } from 'node:child_process';
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	buildLaunchCommand,
 	classifyListFilesFailure,
-	launchWithProcess,
 	mapWithConcurrency,
+	parseLaunchOutput,
 	parseFindFilesOutput,
 	pollUntilReady,
 	removeUndefined,
@@ -50,6 +51,7 @@ const NAME_PREFIX = 'marimohub-sbx-';
 const DEFAULT_LABEL_KEY = 'marimohub.sandbox';
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
 const EXEC_TIMEOUT_GRACE_MS = 100;
+const LAUNCH_MARKER_GRACE_MS = 100;
 const EXEC_TIMEOUT_SUPERVISOR = `import os, signal, subprocess, sys
 process = subprocess.Popen(['sh', '-lc', sys.argv[2]], start_new_session=True)
 try:
@@ -59,11 +61,33 @@ except subprocess.TimeoutExpired:
 	process.wait()
 	code = 124
 sys.exit(code)`;
+const LAUNCH_LOG_WAITER = `import sys, time
+path, prefix, timeout_arg = sys.argv[1:]
+timeout = float(timeout_arg) / 1000
+deadline = None if timeout == 0 else time.monotonic() + timeout
+terminal_events = ("ready", "setup_exit", "setup_timeout", "kernel_exit", "readiness_timeout")
+while True:
+    try:
+        with open(path, errors="replace") as launch_log:
+            data = launch_log.read()
+    except FileNotFoundError:
+        data = ""
+    if any(prefix + '{"event":"' + event + '"' in data for event in terminal_events):
+        sys.stdout.write(data)
+        sys.exit(0)
+    if deadline is not None and time.monotonic() >= deadline:
+        sys.stdout.write(data)
+        sys.exit(124)
+    time.sleep(0.05)`;
 
 export interface ContainerRunResult {
 	stdout: string;
 	stderr: string;
 	exitCode: number;
+}
+
+interface ContainerSandboxProcess extends SandboxProcess {
+	waitForLaunch(nonce: string, timeoutMs: number): Promise<ContainerRunResult>;
 }
 
 /**
@@ -323,7 +347,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		return (await this.dexec(probe)).exitCode === 0;
 	}
 
-	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
+	async startProcess(cmd: string, options?: StartProcessOptions): Promise<ContainerSandboxProcess> {
 		await this.ensure();
 		const logPath = `/tmp/marimohub-proc-${++procSeq}.log`;
 		// Run detached inside the container; redirect to a log file we can tail.
@@ -336,6 +360,19 @@ class ContainerSandboxInstance implements SandboxInstance {
 		}
 		const probeInside = (port: number) => this.probePort(port);
 		const readLogs = () => this.dexec(`cat ${logPath} 2>/dev/null || true`);
+		const waitForLaunch = (nonce: string, timeoutMs: number) =>
+			this.dexec(
+				[
+					'python3',
+					'-c',
+					LAUNCH_LOG_WAITER,
+					logPath,
+					`__MARIMOHUB_LAUNCH_${nonce}__`,
+					String(timeoutMs),
+				]
+					.map(shellQuote)
+					.join(' '),
+			);
 		const id = options?.processId ?? `${this.config.engine}-proc-${procSeq}`;
 		const containerName = this.name;
 		const runner = this.runner;
@@ -362,23 +399,113 @@ class ContainerSandboxInstance implements SandboxInstance {
 				const logs = await readLogs();
 				return { stdout: logs.stdout, stderr: '' };
 			},
+			waitForLaunch,
 		};
 	}
 
 	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
-		return launchWithProcess({
+		const built = buildLaunchCommand({
 			setup: options.setup,
 			command: cmd,
 			port: options.port,
 			startupTimeout: options.startupTimeout,
-			waitForPort: options.waitForPort,
-			start: (command) =>
-				this.startProcess(command, {
-					cwd: options.cwd,
-					env: options.env,
-					processId: options.processId,
-				}),
 		});
+		const launchStarted = Date.now();
+		let process: ContainerSandboxProcess;
+		try {
+			process = await this.startProcess(built.command, {
+				cwd: options.cwd,
+				env: options.env,
+				processId: options.processId,
+			});
+		} catch (error) {
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: '',
+				stderr: error instanceof Error ? error.message : String(error),
+				timings: { setup: 0, start: Math.max(0, Date.now() - launchStarted), waitport: 0 },
+			};
+		}
+
+		const start = Math.max(0, Date.now() - launchStarted);
+		const waitStarted = Date.now();
+		const waitTimeout =
+			options.startupTimeout === 0
+				? 0
+				: Math.max(0, options.startupTimeout - start) + LAUNCH_MARKER_GRACE_MS;
+		let waited: ContainerRunResult;
+		try {
+			waited = await process.waitForLaunch(built.nonce, waitTimeout);
+		} catch (error) {
+			await process.kill().catch(() => {});
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: '',
+				stderr: error instanceof Error ? error.message : String(error),
+				timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
+			};
+		}
+
+		const parsed = parseLaunchOutput({ stdout: waited.stdout, stderr: '' }, built.nonce);
+		const terminal = parsed.outcome;
+		if (terminal?.kind === 'ready') {
+			return {
+				success: true,
+				timings: { setup: terminal.setupMs, start, waitport: terminal.waitportMs },
+				process: {
+					id: process.id,
+					command: cmd,
+					kill: (signal) => process.kill(signal),
+					waitForPort: (port, waitOptions) =>
+						port === options.port ? Promise.resolve() : process.waitForPort(port, waitOptions),
+					async getLogs() {
+						const logs = parseLaunchOutput(await process.getLogs(), built.nonce);
+						return { stdout: logs.stdout, stderr: logs.stderr };
+					},
+				},
+			};
+		}
+		if (terminal) {
+			return {
+				success: false,
+				reason: terminal.kind,
+				...(terminal.exitCode === undefined ? {} : { exitCode: terminal.exitCode }),
+				stdout: parsed.stdout,
+				stderr: parsed.stderr,
+				timings: { setup: terminal.setupMs, start, waitport: terminal.waitportMs },
+			};
+		}
+
+		await process.kill().catch(() => {});
+		if (waited.exitCode !== 124) {
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: parsed.stdout,
+				stderr: [parsed.stderr, waited.stderr || 'launch monitor exited without a terminal marker']
+					.filter(Boolean)
+					.join('\n'),
+				timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
+			};
+		}
+
+		const setupCompleted = waited.stdout.includes(
+			`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
+		);
+		const reason = options.setup && !setupCompleted ? 'setup_timeout' : 'readiness_timeout';
+		return {
+			success: false,
+			reason,
+			stdout: parsed.stdout,
+			stderr: parsed.stderr,
+			timings: {
+				setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0,
+				start,
+				waitport: Math.max(0, Date.now() - waitStarted),
+			},
+		};
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {

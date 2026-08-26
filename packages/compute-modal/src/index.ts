@@ -6,13 +6,15 @@ import {
 	SandboxFilesystemNotADirectoryError,
 } from 'modal';
 import {
+	buildLaunchCommand,
 	buildGitCloneCommand,
-	launchWithProcess,
 	mapWithConcurrency,
+	parseLaunchOutput,
 	shellQuote,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
+import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import { NotFoundError, SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
@@ -201,6 +203,11 @@ function delay(ms: number): Promise<void> {
 }
 
 let processSequence = 0;
+const LAUNCH_MARKER_GRACE_MS = 100;
+
+class ModalLaunchTimeoutError extends Error {
+	override readonly name = 'ModalLaunchTimeoutError';
+}
 
 class ModalSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
@@ -362,7 +369,11 @@ class ModalSandboxInstance implements SandboxInstance {
 
 	async unmountBucket(_mountPath: string): Promise<void> {}
 
-	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
+	private async startProcessWithOutput(
+		cmd: string,
+		options?: StartProcessOptions,
+		onOutput?: (logs: { stdout: string; stderr: string }) => void,
+	): Promise<{ process: SandboxProcess; completed: Promise<void> }> {
 		const pidPath = `/tmp/marimohub-process-${randomUUID()}.pid`;
 		const trackedCommand = [
 			'stat=$(cat /proc/$$/stat)',
@@ -371,7 +382,7 @@ class ModalSandboxInstance implements SandboxInstance {
 			`printf '%s %s\\n' "$$" "\${20}" > ${shellQuote(pidPath)}`,
 			`exec sh -lc ${shellQuote(cmd)}`,
 		].join('; ');
-		const process = await this.spawn(['sh', '-lc', this.withDefaults(trackedCommand)], {
+		const modalProcess = await this.spawn(['sh', '-lc', this.withDefaults(trackedCommand)], {
 			cwd: options?.cwd,
 			env: options?.env,
 			timeout: options?.timeout,
@@ -381,13 +392,15 @@ class ModalSandboxInstance implements SandboxInstance {
 		let exitCode: number | undefined;
 		let settled = false;
 		const execInSandbox = (command: string) => this.exec(command);
-		const stdoutDone = consumeStream(process.stdout, (chunk) => {
+		const stdoutDone = consumeStream(modalProcess.stdout, (chunk) => {
 			stdout += chunk;
+			onOutput?.({ stdout, stderr });
 		});
-		const stderrDone = consumeStream(process.stderr, (chunk) => {
+		const stderrDone = consumeStream(modalProcess.stderr, (chunk) => {
 			stderr += chunk;
+			onOutput?.({ stdout, stderr });
 		});
-		const exited = process
+		const exited = modalProcess
 			.wait()
 			.then((code) => {
 				exitCode = code;
@@ -397,8 +410,9 @@ class ModalSandboxInstance implements SandboxInstance {
 				settled = true;
 				void execInSandbox(`rm -f ${shellQuote(pidPath)}`).catch(() => {});
 			});
+		const completed = Promise.all([stdoutDone, stderrDone, exited]).then(() => {});
 
-		return {
+		const sandboxProcess: SandboxProcess = {
 			id: options?.processId ?? `modal-process-${++processSequence}`,
 			command: cmd,
 			async kill(signal?: string): Promise<void> {
@@ -438,26 +452,163 @@ class ModalSandboxInstance implements SandboxInstance {
 				);
 			},
 			async getLogs(): Promise<{ stdout: string; stderr: string }> {
-				if (exitCode !== undefined) await Promise.allSettled([stdoutDone, stderrDone, exited]);
+				if (exitCode !== undefined) await completed.catch(() => {});
 				return { stdout, stderr };
 			},
 		};
+		return { process: sandboxProcess, completed };
+	}
+
+	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
+		return (await this.startProcessWithOutput(cmd, options)).process;
 	}
 
 	async launchProcess(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult> {
-		return launchWithProcess({
+		const built = buildLaunchCommand({
 			setup: options.setup,
 			command: cmd,
 			port: options.port,
 			startupTimeout: options.startupTimeout,
-			waitForPort: options.waitForPort,
-			start: (command) =>
-				this.startProcess(command, {
+		});
+		const launchStarted = Date.now();
+		let settled = false;
+		let resolveOutcome!: (outcome: LaunchProtocolOutcome) => void;
+		let rejectOutcome!: (error: unknown) => void;
+		const outcome = new Promise<LaunchProtocolOutcome>((resolve, reject) => {
+			resolveOutcome = resolve;
+			rejectOutcome = reject;
+		});
+		const inspect = (logs: { stdout: string; stderr: string }) => {
+			if (settled) return;
+			const terminal = parseLaunchOutput(logs, built.nonce).outcome;
+			if (terminal) {
+				settled = true;
+				resolveOutcome(terminal);
+			}
+		};
+
+		let started: Awaited<ReturnType<ModalSandboxInstance['startProcessWithOutput']>>;
+		try {
+			started = await this.startProcessWithOutput(
+				built.command,
+				{
 					cwd: options.cwd,
 					env: options.env,
 					processId: options.processId,
-				}),
-		});
+				},
+				inspect,
+			);
+		} catch (error) {
+			return {
+				success: false,
+				reason: 'transport_failure',
+				stdout: '',
+				stderr: error instanceof Error ? error.message : String(error),
+				timings: { setup: 0, start: Math.max(0, Date.now() - launchStarted), waitport: 0 },
+			};
+		}
+
+		const start = Math.max(0, Date.now() - launchStarted);
+		const waitStarted = Date.now();
+		void started.completed.then(
+			() => {
+				if (!settled) {
+					settled = true;
+					rejectOutcome(new Error('Modal launch stream ended before reporting readiness'));
+				}
+			},
+			(error) => {
+				if (!settled) {
+					settled = true;
+					rejectOutcome(error);
+				}
+			},
+		);
+
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOutcome =
+			options.startupTimeout === 0
+				? outcome
+				: Promise.race([
+						outcome,
+						new Promise<LaunchProtocolOutcome>((_resolve, reject) => {
+							timer = setTimeout(
+								() => reject(new ModalLaunchTimeoutError()),
+								Math.max(0, options.startupTimeout - start) + LAUNCH_MARKER_GRACE_MS,
+							);
+						}),
+					]);
+
+		let terminal: LaunchProtocolOutcome;
+		try {
+			terminal = await timedOutcome;
+		} catch (error) {
+			settled = true;
+			const logs = await started.process.getLogs();
+			const parsed = parseLaunchOutput(logs, built.nonce);
+			if (!(error instanceof ModalLaunchTimeoutError)) {
+				await started.process.kill().catch(() => {});
+				return {
+					success: false,
+					reason: 'transport_failure',
+					stdout: parsed.stdout,
+					stderr: [parsed.stderr, error instanceof Error ? error.message : String(error)]
+						.filter(Boolean)
+						.join('\n'),
+					timings: { setup: 0, start, waitport: Math.max(0, Date.now() - waitStarted) },
+				};
+			}
+
+			await started.process.kill().catch(() => {});
+			const setupCompleted = `${logs.stdout}\n${logs.stderr}`.includes(
+				`__MARIMOHUB_LAUNCH_${built.nonce}__{"event":"setup_complete"`,
+			);
+			const reason = options.setup && !setupCompleted ? 'setup_timeout' : 'readiness_timeout';
+			return {
+				success: false,
+				reason,
+				stdout: parsed.stdout,
+				stderr: parsed.stderr,
+				timings: {
+					setup: reason === 'setup_timeout' ? Math.max(0, options.startupTimeout - start) : 0,
+					start,
+					waitport: Math.max(0, Date.now() - waitStarted),
+				},
+			};
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
+
+		const timings = { setup: terminal.setupMs, start, waitport: terminal.waitportMs };
+		if (terminal.kind === 'ready') {
+			const process = started.process;
+			return {
+				success: true,
+				timings,
+				process: {
+					id: process.id,
+					command: cmd,
+					kill: (signal) => process.kill(signal),
+					waitForPort: (port, waitOptions) =>
+						port === options.port ? Promise.resolve() : process.waitForPort(port, waitOptions),
+					async getLogs() {
+						const parsed = parseLaunchOutput(await process.getLogs(), built.nonce);
+						return { stdout: parsed.stdout, stderr: parsed.stderr };
+					},
+				},
+			};
+		}
+
+		await started.completed.catch(() => {});
+		const parsed = parseLaunchOutput(await started.process.getLogs(), built.nonce);
+		return {
+			success: false,
+			reason: terminal.kind,
+			...(terminal.exitCode === undefined ? {} : { exitCode: terminal.exitCode }),
+			stdout: parsed.stdout,
+			stderr: parsed.stderr,
+			timings,
+		};
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {

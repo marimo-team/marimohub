@@ -407,6 +407,50 @@ describe('DockerCompute', () => {
 		expect(calls.some((c) => c.args[0] === 'exec' && c.args.includes('pkill'))).toBe(true);
 	});
 
+	it('returns a launch failure from one log wait without probing the port', async () => {
+		const { runner, calls } = fakeRunner((args) => {
+			const base = defaultHandler(args);
+			if (base) return base;
+			const command = args.at(-1) ?? '';
+			if (!command.includes('terminal_events')) return;
+			const marker = command.match(/__MARIMOHUB_LAUNCH_[a-f0-9]{32}__/)?.[0];
+			if (!marker) throw new Error('missing launch marker');
+			return {
+				stdout:
+					`setup output\n${marker}` +
+					'{"event":"setup_exit","setupMs":12,"waitportMs":0,"exitCode":7}\n',
+				stderr: '',
+				exitCode: 0,
+			};
+		});
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+
+		const result = await sb.launchProcess!('run kernel', {
+			setup: 'run setup',
+			port: 2718,
+			startupTimeout: 60_000,
+		});
+
+		expect(result).toMatchObject({
+			success: false,
+			reason: 'setup_exit',
+			exitCode: 7,
+			stdout: 'setup output\n',
+			timings: { setup: 12, start: expect.any(Number), waitport: 0 },
+		});
+		const execCalls = calls.filter((call) => call.args[0] === 'exec');
+		expect(execCalls).toHaveLength(2);
+		expect(execCalls.filter((call) => call.args.includes('-d'))).toHaveLength(1);
+		expect(execCalls.filter((call) => call.args.at(-1)?.includes('terminal_events'))).toHaveLength(
+			1,
+		);
+		expect(
+			execCalls.some(
+				(call) => !call.args.includes('-d') && call.args.at(-1)?.includes('connect_ex'),
+			),
+		).toBe(false);
+	});
+
 	describe('listFiles()', () => {
 		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 		const onlyFind =
