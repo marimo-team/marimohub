@@ -68,7 +68,6 @@ const pysparkConfig = z.strictObject({
 });
 
 function pysparkDiscoveryReason(config: z.infer<typeof pysparkConfig>): string | undefined {
-	if (config.app_name) return 'marimo cannot carry the configured Spark application name';
 	if (Object.keys(config.spark_config).length > 0) {
 		return 'marimo cannot carry the configured Spark session properties';
 	}

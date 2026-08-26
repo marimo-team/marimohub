@@ -2072,7 +2072,7 @@ const DISCOVERY_CONTRACT = [
 		overrides: { ssl: { mode: 'disabled' } },
 	},
 	{ kind: 'trino', required: ['TRINO_HOST', 'TRINO_USER', 'TRINO_CATALOG'], overrides: {} },
-	{ kind: 'pyspark', required: ['SPARK_REMOTE'], overrides: { app_name: undefined } },
+	{ kind: 'pyspark', required: ['SPARK_REMOTE'], overrides: {} },
 	{ kind: 's3', required: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'], overrides: {} },
 ];
 
@@ -2140,6 +2140,29 @@ describe('marimo data-source discovery', () => {
 		expect(env.TRINO_PASSWORD).toBe('pw');
 	});
 
+	it('keeps discovery enabled when marimo omits optional connection settings', () => {
+		const trinoOutput = renderFixture(trino, {
+			ambient_env: true,
+			legacy_prepared_statements: false,
+		});
+		expect(trinoOutput.discoveryEnv?.TRINO_HOST).toBe('trino.internal');
+		expect(trinoOutput.warnings).toEqual([]);
+		expect(
+			new URL(trinoOutput.env?.MARIMOHUB_TRINO_PROD_URL ?? '').searchParams.get(
+				'legacy_prepared_statements',
+			),
+		).toBe('false');
+
+		const pysparkOutput = renderFixture(pyspark, { ambient_env: true, app_name: 'analytics' });
+		expect(pysparkOutput.discoveryEnv?.SPARK_REMOTE).toContain('spark.internal');
+		expect(pysparkOutput.warnings).toEqual([]);
+		const descriptor = JSON.parse(pysparkOutput.files?.[0]?.content ?? '') as Record<
+			string,
+			unknown
+		>;
+		expect(descriptor.app_name).toBe('analytics');
+	});
+
 	it.each([
 		[{ default_catalog: undefined }, /requires a default catalog/],
 		[{ auth: { method: 'jwt', token: 'jwt-token' } }, /Basic authentication over HTTPS/],
@@ -2164,7 +2187,6 @@ describe('marimo data-source discovery', () => {
 		[{ heartbeat_interval_seconds: 10 }, /heartbeat interval/],
 		[{ isolation_level: 'READ_COMMITTED' }, /isolation level/],
 		[{ legacy_primitive_types: true }, /legacy primitive types/],
-		[{ legacy_prepared_statements: false }, /legacy prepared statements/],
 	])('trino: falls back when discovery cannot express the config (%j)', (overrides, message) => {
 		const config = trino.configSchema.parse(fixtureFor(trino, { ambient_env: true, ...overrides }));
 		expect(() => trino.validate?.(config)).not.toThrow();
@@ -2174,7 +2196,6 @@ describe('marimo data-source discovery', () => {
 	});
 
 	it.each([
-		[{ app_name: 'analytics' }, /Spark application name/],
 		[{ spark_config: { 'spark.sql.session.timeZone': 'UTC' } }, /Spark session properties/],
 		[
 			{
@@ -2184,7 +2205,7 @@ describe('marimo data-source discovery', () => {
 		],
 	])('pyspark: falls back when discovery cannot express the config (%j)', (overrides, message) => {
 		const config = pyspark.configSchema.parse(
-			fixtureFor(pyspark, { ambient_env: true, app_name: undefined, ...overrides }),
+			fixtureFor(pyspark, { ambient_env: true, ...overrides }),
 		);
 		expect(() => pyspark.validate?.(config)).not.toThrow();
 		const output = renderDefinition(pyspark, config);

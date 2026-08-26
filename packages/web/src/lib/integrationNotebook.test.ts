@@ -37,6 +37,7 @@ describe('integrationNotebookInfo', () => {
 		expect(info?.snippet).toContain('.joinpath("pyspark", "analytics-prod.json")');
 		expect(info?.snippet).toContain('SparkSession.builder.remote');
 		expect(info?.snippet).toContain('descriptor["spark_config"]');
+		expect(info?.snippet).toContain('builder.appName(app_name)');
 	});
 
 	it('does not claim notebook guidance for unrelated integrations', () => {

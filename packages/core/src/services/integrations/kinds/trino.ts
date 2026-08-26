@@ -157,7 +157,6 @@ function trinoDiscoveryReason(config: z.infer<typeof trinoConfig>): string | und
 		[config.heartbeat_interval_seconds !== undefined, 'heartbeat interval'],
 		[config.isolation_level !== 'AUTOCOMMIT', 'isolation level'],
 		[config.legacy_primitive_types, 'legacy primitive types'],
-		[config.legacy_prepared_statements !== undefined, 'legacy prepared statements'],
 	] as const;
 	const unsupported = unsupportedOptions
 		.filter(([configured]) => configured)
