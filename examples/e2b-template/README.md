@@ -50,7 +50,7 @@ marimo + the base libraries are pre-installed into `/opt/venv`
 starts instantly for a notebook that only uses them:
 
 ```sh
-uv sync --inexact --no-compile-bytecode   # add the notebook's deps, keep the base
+uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build   # add the notebook's deps, keep the base
 uv run --no-sync marimo edit notebook.py …
 ```
 

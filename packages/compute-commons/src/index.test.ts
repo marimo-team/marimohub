@@ -16,6 +16,7 @@ import {
 	mapWithConcurrency,
 	NOT_A_DIRECTORY_EXIT_CODE,
 	NOT_A_DIRECTORY_MARKER,
+	LaunchProtocolTracker,
 	OutputTail,
 	parseFindFilesOutput,
 	parseLaunchOutput,
@@ -785,5 +786,61 @@ describe('OutputTail', () => {
 		for (let i = 0; i < 100; i++) tail.append('данные-😀');
 		expect(utf8Bytes(tail.text)).toBeLessThanOrEqual(64);
 		expect(tail.text.endsWith('данные-😀')).toBe(true);
+	});
+});
+
+describe('LaunchProtocolTracker', () => {
+	const marker = '__MARIMOHUB_LAUNCH_n1__';
+	const readyLine = `${marker}{"event":"ready","setupMs":3,"waitportMs":4}\n`;
+
+	it('parses a marker line split across two feed chunks', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', readyLine.slice(0, 20));
+		expect(tracker.outcome).toBeUndefined();
+		tracker.feed('stderr', readyLine.slice(20));
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('keeps setup_complete latched through more noise than any capped tail retains', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', `${marker}{"event":"setup_complete","setupMs":9,"waitportMs":0}\n`);
+		for (let i = 0; i < 80; i++) tracker.feed('stderr', `${'x'.repeat(1024)}\n`);
+		expect(tracker.setupCompleted).toBe(true);
+		expect(tracker.outcome).toBeUndefined();
+	});
+
+	it('sees a terminal marker buried at the start of one huge chunk', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', `${readyLine}${'noise\n'.repeat(20_000)}`);
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('the last terminal event wins, matching parseLaunchOutput', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', readyLine);
+		tracker.feed(
+			'stderr',
+			`${marker}{"event":"kernel_exit","setupMs":3,"waitportMs":8,"exitCode":2}\n`,
+		);
+		expect(tracker.outcome).toEqual({
+			kind: 'kernel_exit',
+			setupMs: 3,
+			waitportMs: 8,
+			exitCode: 2,
+		});
+	});
+
+	it('tracks streams independently and reads a mid-line marker after unterminated output', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stdout', 'partial stdout without newline');
+		tracker.feed('stderr', `unterminated setup output${readyLine}`);
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
+	});
+
+	it('the carry cap does not lose a marker straddling a chunk boundary after a long unterminated line', () => {
+		const tracker = new LaunchProtocolTracker('n1');
+		tracker.feed('stderr', 'g'.repeat(100 * 1024) + readyLine.slice(0, 15));
+		tracker.feed('stderr', readyLine.slice(15));
+		expect(tracker.outcome).toEqual({ kind: 'ready', setupMs: 3, waitportMs: 4 });
 	});
 });

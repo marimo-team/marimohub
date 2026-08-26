@@ -338,6 +338,47 @@ export function buildLaunchCommand(options: {
 	};
 }
 
+/**
+ * Parse one output line (trailing newline stripped) for a supervisor marker.
+ * Markers can appear mid-line after unterminated kernel output, so the match is
+ * an `indexOf`, not a prefix check. Returns `undefined` when the line carries no
+ * valid marker payload; otherwise the marker's event, the text preceding it, and
+ * the structured outcome when the event is terminal.
+ */
+function parseMarkerLine(
+	line: string,
+	marker: string,
+): { before: string; event?: string; outcome?: LaunchProtocolOutcome } | undefined {
+	const index = line.indexOf(marker);
+	if (index === -1) return undefined;
+	let value: { event?: string; setupMs?: number; waitportMs?: number; exitCode?: number };
+	try {
+		value = JSON.parse(line.slice(index + marker.length)) as {
+			event?: string;
+			setupMs?: number;
+			waitportMs?: number;
+			exitCode?: number;
+		};
+	} catch {
+		return undefined;
+	}
+	const event = value.event;
+	const outcome: LaunchProtocolOutcome | undefined =
+		event === 'ready' ||
+		event === 'setup_exit' ||
+		event === 'setup_timeout' ||
+		event === 'kernel_exit' ||
+		event === 'readiness_timeout'
+			? {
+					kind: event,
+					setupMs: Math.max(0, value.setupMs ?? 0),
+					waitportMs: Math.max(0, value.waitportMs ?? 0),
+					...(value.exitCode === undefined ? {} : { exitCode: value.exitCode }),
+				}
+			: undefined;
+	return { before: line.slice(0, index), event, ...(outcome ? { outcome } : {}) };
+}
+
 function parseProtocolText(
 	text: string,
 	nonce: string,
@@ -349,39 +390,13 @@ function parseProtocolText(
 	const events: LaunchProtocolOutcome[] = [];
 	const kept: string[] = [];
 	for (const line of text.split(/(?<=\n)/)) {
-		const normalized = line.replace(/\r?\n$/, '');
-		const index = normalized.indexOf(marker);
-		if (index === -1) {
+		const parsed = parseMarkerLine(line.replace(/\r?\n$/, ''), marker);
+		if (!parsed) {
 			kept.push(line);
 			continue;
 		}
-		const json = normalized.slice(index + marker.length);
-		try {
-			const value = JSON.parse(json) as {
-				event?: string;
-				setupMs?: number;
-				waitportMs?: number;
-				exitCode?: number;
-			};
-			if (
-				value.event === 'ready' ||
-				value.event === 'setup_exit' ||
-				value.event === 'setup_timeout' ||
-				value.event === 'kernel_exit' ||
-				value.event === 'readiness_timeout'
-			) {
-				events.push({
-					kind: value.event,
-					setupMs: Math.max(0, value.setupMs ?? 0),
-					waitportMs: Math.max(0, value.waitportMs ?? 0),
-					...(value.exitCode === undefined ? {} : { exitCode: value.exitCode }),
-				});
-			}
-			const beforeMarker = normalized.slice(0, index);
-			if (beforeMarker) kept.push(beforeMarker);
-		} catch {
-			kept.push(line);
-		}
+		if (parsed.outcome) events.push(parsed.outcome);
+		if (parsed.before) kept.push(parsed.before);
 	}
 	return { text: kept.join(''), events };
 }
@@ -418,6 +433,60 @@ export function errorMessage(err: unknown): string {
  */
 export function setupCompleteMarker(nonce: string): string {
 	return `__MARIMOHUB_LAUNCH_${nonce}__{"event":"setup_complete"`;
+}
+
+/**
+ * Cap on the tracker's per-stream carry of an unterminated line. A supervisor
+ * marker line is ~200 bytes, so any marker straddling a chunk boundary lies
+ * within the trailing 1 KiB — kernel garbage without newlines must not grow the
+ * carry unboundedly.
+ */
+const TRACKER_CARRY_MAX_CHARS = 1024;
+
+/**
+ * Latches launch-protocol state from RAW output chunks, before any truncation.
+ * Adapters that retain only a capped {@link OutputTail} of kernel output must
+ * derive `setupCompleted`/`outcome` from this instead of re-scanning the tail:
+ * a marker can be evicted from the tail by later output, misclassifying (e.g.)
+ * a `readiness_timeout` as `setup_timeout`. O(1) memory — only the latched
+ * state and a small per-stream carry for lines split across chunks.
+ */
+export class LaunchProtocolTracker {
+	private readonly marker: string;
+	private readonly carries = { stdout: '', stderr: '' };
+	private lastOutcome: LaunchProtocolOutcome | undefined;
+	private setupSeen = false;
+
+	constructor(nonce: string) {
+		this.marker = `__MARIMOHUB_LAUNCH_${nonce}__`;
+	}
+
+	feed(stream: 'stdout' | 'stderr', chunk: string): void {
+		const text = this.carries[stream] + chunk;
+		// The supervisor always terminates a marker line with a newline, so only
+		// complete lines are scanned; the unterminated remainder is carried.
+		const lastNewline = text.lastIndexOf('\n');
+		if (lastNewline !== -1) {
+			for (const line of text.slice(0, lastNewline).split('\n')) {
+				const parsed = parseMarkerLine(line.replace(/\r$/, ''), this.marker);
+				if (!parsed) continue;
+				if (parsed.event === 'setup_complete') this.setupSeen = true;
+				if (parsed.outcome) this.lastOutcome = parsed.outcome;
+			}
+		}
+		const carry = lastNewline === -1 ? text : text.slice(lastNewline + 1);
+		this.carries[stream] = carry.slice(-TRACKER_CARRY_MAX_CHARS);
+	}
+
+	/** Last terminal event seen (last one wins, matching {@link parseLaunchOutput}). */
+	get outcome(): LaunchProtocolOutcome | undefined {
+		return this.lastOutcome;
+	}
+
+	/** Latched once a `setup_complete` marker is seen. */
+	get setupCompleted(): boolean {
+		return this.setupSeen;
+	}
 }
 
 export interface LaunchTimings {

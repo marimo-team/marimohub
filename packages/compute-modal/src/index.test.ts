@@ -527,6 +527,38 @@ describe('ModalCompute', () => {
 			expect(sandbox.execCalls.some((call) => isKillCommand(call.command))).toBe(true);
 		});
 
+		it('classifies the deadline as readiness_timeout when completed setup was evicted from the capped tail', async () => {
+			const { world } = worldWith((command) => {
+				if (isKillCommand(command)) return processResult();
+				const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
+				if (!nonce) return processResult();
+				return {
+					stdout: new ReadableStream<string>({ start() {} }),
+					stderr: new ReadableStream<string>({
+						start(controller) {
+							controller.enqueue(
+								`__MARIMOHUB_LAUNCH_${nonce}__{"event":"setup_complete","setupMs":5,"waitportMs":0}\n`,
+							);
+							// Enough kernel noise to push the setup_complete marker out of the
+							// 64 KiB retained tail before the deadline expires.
+							controller.enqueue(`${'x'.repeat(70 * 1024)}\n`);
+						},
+					}),
+					wait: () => new Promise<number>(() => {}),
+				};
+			});
+
+			const result = await makeCompute(world).create(SANDBOX_ID).launchProcess!('run kernel', {
+				setup: 'run setup',
+				port: 2718,
+				startupTimeout: 5,
+			});
+
+			expectLaunchResult(result, { success: false });
+			if (result.success) throw new Error('expected a launch failure');
+			expect(result.reason).toBe('readiness_timeout');
+		});
+
 		it('classifies a deadline with no setup as readiness_timeout and kills the process', async () => {
 			const { world, sandbox } = worldWith((command) =>
 				isKillCommand(command) ? processResult() : hangingProcess(),

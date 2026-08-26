@@ -11,11 +11,11 @@ import {
 	errorMessage,
 	LAUNCH_MARKER_GRACE_MS,
 	launchOutcomeResult,
+	LaunchProtocolTracker,
 	launchTimeoutResult,
 	mapWithConcurrency,
 	OutputTail,
 	parseLaunchOutput,
-	setupCompleteMarker,
 	shellQuote,
 	transportFailureResult,
 	withEnvPrefix,
@@ -378,7 +378,9 @@ class ModalSandboxInstance implements SandboxInstance {
 	private async startProcessWithOutput(
 		cmd: string,
 		options?: StartProcessOptions,
-		onOutput?: (logs: { stdout: string; stderr: string }) => void,
+		// Raw per-stream chunks, observed BEFORE the capped-tail append so a caller
+		// can track protocol markers that later output would evict from the tail.
+		onOutput?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
 	): Promise<{ process: SandboxProcess; completed: Promise<void> }> {
 		const pidPath = `/tmp/marimohub-process-${randomUUID()}.pid`;
 		const trackedCommand = [
@@ -399,12 +401,12 @@ class ModalSandboxInstance implements SandboxInstance {
 		let settled = false;
 		const execInSandbox = (command: string) => this.exec(command);
 		const stdoutDone = consumeStream(modalProcess.stdout, (chunk) => {
+			onOutput?.({ stream: 'stdout', text: chunk });
 			stdoutTail.append(chunk);
-			onOutput?.({ stdout: stdoutTail.text, stderr: stderrTail.text });
 		});
 		const stderrDone = consumeStream(modalProcess.stderr, (chunk) => {
+			onOutput?.({ stream: 'stderr', text: chunk });
 			stderrTail.append(chunk);
-			onOutput?.({ stdout: stdoutTail.text, stderr: stderrTail.text });
 		});
 		const exited = modalProcess
 			.wait()
@@ -484,9 +486,12 @@ class ModalSandboxInstance implements SandboxInstance {
 			resolveOutcome = resolve;
 			rejectOutcome = reject;
 		});
-		const inspect = (logs: { stdout: string; stderr: string }) => {
+		// Fed raw chunks so protocol state survives eviction from the capped tails.
+		const tracker = new LaunchProtocolTracker(built.nonce);
+		const inspect = (chunk: { stream: 'stdout' | 'stderr'; text: string }) => {
+			tracker.feed(chunk.stream, chunk.text);
 			if (settled) return;
-			const terminal = parseLaunchOutput(logs, built.nonce).outcome;
+			const terminal = tracker.outcome;
 			if (terminal) {
 				settled = true;
 				resolveOutcome(terminal);
@@ -562,12 +567,9 @@ class ModalSandboxInstance implements SandboxInstance {
 			}
 
 			await started.process.kill().catch(() => {});
-			const setupCompleted = `${logs.stdout}\n${logs.stderr}`.includes(
-				setupCompleteMarker(built.nonce),
-			);
 			return launchTimeoutResult({
 				setup: Boolean(options.setup),
-				setupCompleted,
+				setupCompleted: tracker.setupCompleted,
 				startupTimeout: options.startupTimeout,
 				output: parsed,
 				start,

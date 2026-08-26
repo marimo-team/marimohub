@@ -65,6 +65,7 @@ import {
 	errorMessage,
 	iterableToStream,
 	launchOutcomeResult,
+	LaunchProtocolTracker,
 	OutputTail,
 	parseLaunchOutput,
 	parseFindFilesOutput,
@@ -616,17 +617,25 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		});
 		const logs = () =>
 			parseLaunchOutput({ stdout: stdoutTail.text, stderr: stderrTail.text }, built.nonce);
+		// Fed raw chunks so a marker evicted from the capped tails (e.g. by a huge
+		// trailing burst in the same chunk) still classifies the launch.
+		const tracker = new LaunchProtocolTracker(built.nonce);
 		const inspect = () => {
 			if (settled) return;
-			const parsed = logs().outcome;
-			if (parsed) {
+			const terminal = tracker.outcome;
+			if (terminal) {
 				settled = true;
-				resolveOutcome(parsed);
+				resolveOutcome(terminal);
 			}
 		};
-		const pump = async (stream: AsyncIterable<string>, sink: OutputTail) => {
+		const pump = async (
+			stream: AsyncIterable<string>,
+			name: 'stdout' | 'stderr',
+			sink: OutputTail,
+		) => {
 			try {
 				for await (const chunk of stream) {
+					tracker.feed(name, chunk);
 					sink.append(chunk);
 					inspect();
 				}
@@ -637,8 +646,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				}
 			}
 		};
-		const stdoutDone = pump(proc.stdout, stdoutTail);
-		const stderrDone = pump(proc.stderr, stderrTail);
+		const stdoutDone = pump(proc.stdout, 'stdout', stdoutTail);
+		const stderrDone = pump(proc.stderr, 'stderr', stderrTail);
 		void Promise.allSettled([stdoutDone, stderrDone]).then(() => {
 			inspect();
 			if (!settled) {

@@ -31,8 +31,26 @@ export function logEvent(
 	options?: { channel?: 'log' | 'warn' },
 ): void {
 	const record = { ts: new Date().toISOString(), ...traceContext(), ...fields };
+	// Same two-stage fallback as logOperationalError: a non-serializable field
+	// (circular error, BigInt) must still leave a line naming the lost event.
+	let line: string;
 	try {
-		(options?.channel === 'warn' ? console.warn : console.log)(JSON.stringify(record));
+		line = JSON.stringify(record);
+	} catch {
+		const attempted = fields.event;
+		try {
+			line = JSON.stringify({
+				ts: record.ts,
+				level: 'error',
+				event: 'log_event_serialization_failed',
+				attempted_event: typeof attempted === 'string' ? attempted.slice(0, 128) : 'unknown',
+			});
+		} catch {
+			line = '{"level":"error","event":"log_event_serialization_failed"}';
+		}
+	}
+	try {
+		(options?.channel === 'warn' ? console.warn : console.log)(line);
 	} catch {}
 	emitLogRecord(record);
 }

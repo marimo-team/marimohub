@@ -119,7 +119,7 @@ TOML
 launch_kernel() { # $1 = container id
 	docker exec "$1" sh -lc '
 		cd /workspace
-		[ ! -s pyproject.toml ] || uv sync --inexact --no-compile-bytecode --no-build
+		[ ! -s pyproject.toml ] || uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build
 	'
 	docker exec -d "$1" sh -lc '
 		cd /workspace

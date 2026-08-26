@@ -631,6 +631,30 @@ describe('CoreWeaveCompute', () => {
 			expect(fake.runCalls).toHaveLength(0);
 		});
 
+		it('succeeds when the ready marker and >64 KiB of trailing noise arrive in one chunk', async () => {
+			const world = makeWorld({
+				startImpl: async (command) => {
+					const nonce = command.join(' ').match(/'([a-f0-9]{32})'/)?.[1];
+					if (!nonce) throw new Error('launch nonce missing from supervisor command');
+					async function* stderr() {
+						// The noise evicts the marker from the capped tail before inspect()
+						// runs; classification must come from the raw chunk.
+						yield `__MARIMOHUB_LAUNCH_${nonce}__{"event":"ready","setupMs":6,"waitportMs":11}\n${'x'.repeat(70 * 1024)}\n`;
+					}
+					return { ...fakeProcess(), stderr: stderr() };
+				},
+			});
+			const result = await makeCompute(world).create(SANDBOX_ID, { reuse: false }).launchProcess!(
+				'marimo edit',
+				{ port: 2718, startupTimeout: 120_000 },
+			);
+
+			expect(result).toMatchObject({
+				success: true,
+				timings: { setup: 6, start: expect.any(Number), waitport: 11 },
+			});
+		});
+
 		it('returns a structured setup failure without a readiness Exec', async () => {
 			const world = makeWorld({ startImpl: streamedOutcome('setup_exit') });
 			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
