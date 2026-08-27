@@ -47,8 +47,10 @@ A storage adapter must implement atomic `onlyIfEtagMatches` and
 runtime.
 
 The storage adapter must implement `verifyConditionalWrites()` and set `casScope`
-to `global` or `process`. During development, run the contract for your port:
-`bucketContract` or `computeContract`.
+to `global` or `process`. The probe must use a unique temporary key and verify
+that exactly one of several writes using the same ETag succeeds. During
+development, run the contract for your port: `bucketContract` or
+`computeContract`.
 
 The server loads each module once. It does not sandbox, unload, or hot-reload
 modules. Only the Node server supports these modules. Load only trusted code. It

@@ -181,6 +181,7 @@ export function makeSandboxBucketConfig(env: Env): BucketConfig {
 	return {
 		name: env.MARIMOHUB_STORAGE_S3_BUCKET ?? '',
 		endpoint: env.MARIMOHUB_STORAGE_S3_ENDPOINT ?? '',
+		...(storageBackend(env) === 'library' ? { mountable: false } : {}),
 		credentials: s3Credentials(env),
 	};
 }

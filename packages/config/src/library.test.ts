@@ -2,12 +2,15 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { PreconditionFailedError } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
+import type { ExternalStorageAdapter, SandboxId } from '@marimo-hub/core';
 import { isConfigError } from './errors';
 import { loadAdapterLibraries, resolveAdapterSpecifier } from './library';
 
 const fixtures = fileURLToPath(new URL('./testdata/adapters/', import.meta.url));
 const fixture = (name: string) => path.join(fixtures, name);
+const exampleStorage = fileURLToPath(
+	new URL('../../../examples/external-adapter/storage.mjs', import.meta.url),
+);
 const storageEnv = (specifier: string) => ({
 	MARIMOHUB_STORAGE_BACKEND: 'library',
 	MARIMOHUB_STORAGE_LIBRARY: specifier,
@@ -69,6 +72,13 @@ describe('external adapter library loading', () => {
 		await expect(
 			loaded.bucket?.put('existing', 'second', { onlyIfNotExists: true }),
 		).rejects.toBeInstanceOf(PreconditionFailedError);
+		const unicode = await loaded.bucket?.put('unicode', 'héllo');
+		expect(unicode?.size).toBe(6);
+		const body = await loaded.bucket?.get('unicode');
+		expect(await body?.text()).toBe('héllo');
+		expect(await body?.bytes()).toEqual(new TextEncoder().encode('héllo'));
+		await loaded.bucket?.put('json', '{"value":"héllo"}');
+		expect(await (await loaded.bucket?.get('json'))?.json()).toEqual({ value: 'héllo' });
 	});
 
 	it('loads file URLs, async factories, and nested CommonJS defaults', async () => {
@@ -81,6 +91,31 @@ describe('external adapter library loading', () => {
 		await expect(
 			loadAdapterLibraries(storageEnv(fixture('valid-storage.cjs'))),
 		).resolves.toHaveProperty('bucket');
+	});
+
+	it('example storage probes atomic contention without touching a shared key', async () => {
+		const loaded = await loadAdapterLibraries(storageEnv(exampleStorage));
+		const bucket = loaded.bucket as ExternalStorageAdapter;
+		const oldProbeKey = '_system/.external-adapter-cas-probe';
+		await bucket.put(oldProbeKey, 'preserve');
+		await Promise.all([bucket.verifyConditionalWrites(), bucket.verifyConditionalWrites()]);
+		expect(await (await bucket.get(oldProbeKey))?.text()).toBe('preserve');
+
+		let nextWinner = 1;
+		const nonAtomic = {
+			async put(key: string, _value: string, options?: { onlyIfNotExists?: boolean }) {
+				return {
+					key,
+					etag: options?.onlyIfNotExists ? 'seed' : `winner-${nextWinner++}`,
+					size: 0,
+					uploaded: new Date(0),
+				};
+			},
+			async delete() {},
+		} as unknown as ExternalStorageAdapter;
+		await expect(bucket.verifyConditionalWrites.call(nonAtomic)).rejects.toThrow(
+			/does NOT enforce conditional writes atomically: 8 concurrent writes succeeded/,
+		);
 	});
 
 	it('passes session lifecycle hints to compute factories', async () => {
@@ -104,6 +139,7 @@ describe('external adapter library loading', () => {
 	it.each([
 		['no-manifest.mjs', /does not default-export.*manifest/],
 		['malformed-manifest.mjs', /does not default-export.*manifest/],
+		['throwing-manifest.mjs', /manifest.*could not be validated: manifest getter failed/],
 		['bad-api-version.mjs', /apiVersion 2; this server supports 1/],
 		['missing-method.mjs', /missing required Bucket method\(s\): put, list/],
 		['throwing-factory.mjs', /failed to initialize: fixture initialization failed/],
@@ -170,8 +206,11 @@ describe('external adapter library loading', () => {
 	});
 
 	it.each([
-		['invalid-instance.mjs', /missing required SandboxInstance method\(s\): execStream, readFile/],
-		['async-instance.mjs', /missing required SandboxInstance method\(s\): exec, execStream/],
+		['invalid-instance.mjs', /missing required SandboxInstance method\(s\): execStream, readFile$/],
+		[
+			'async-instance.mjs',
+			/missing required SandboxInstance method\(s\): exec, execStream, readFile, listFiles, writeFiles, gitCheckout, setEnvVars, mountBucket, unmountBucket, startProcess, exposePort, destroy$/,
+		],
 	] as const)(
 		'validates the first sandbox from %s without creating one at boot',
 		async (name, message) => {

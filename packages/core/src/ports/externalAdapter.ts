@@ -19,6 +19,7 @@ export interface AdapterFactoryContext {
 
 export interface ExternalStorageAdapter extends Bucket {
 	readonly casScope: 'global' | 'process';
+	/** Use a unique key to verify that concurrent writes from one ETag have exactly one winner. */
 	verifyConditionalWrites(): Promise<void>;
 }
 

@@ -7,7 +7,7 @@ Use a mounted ESM file:
 
 ```sh
 MARIMOHUB_STORAGE_BACKEND=library \
-MARIMOHUB_STORAGE_LIBRARY=./examples/external-adapter/storage.mjs \
+MARIMOHUB_STORAGE_LIBRARY=../../examples/external-adapter/storage.mjs \
 MARIMOHUB_COMPUTE_BACKEND=none \
 MARIMOHUB_AUTH_BACKEND=dev \
 pnpm --filter @marimo-hub/server exec vp run dev

@@ -274,7 +274,19 @@ async function loadLibrary(
 			},
 		);
 	}
-	const manifest = validateManifest(unwrapManifest(namespace), kind, specifier);
+	let manifest: AdapterModule;
+	try {
+		manifest = validateManifest(unwrapManifest(namespace), kind, specifier);
+	} catch (error) {
+		if (isConfigError(error)) throw error;
+		throw adapterConfigError(
+			kind,
+			`${LIBRARY_CONFIG[kind].label} adapter manifest from "${specifier}" could not be validated: ${errorMessage(error)}`,
+			{
+				remediation: 'Export a plain adapter manifest whose properties can be read safely.',
+			},
+		);
+	}
 	let adapter: unknown;
 	try {
 		adapter = await manifest.create(context);

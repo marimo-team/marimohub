@@ -191,4 +191,13 @@ describe('makeSandboxBucketConfig', () => {
 			makeSandboxBucketConfig({ MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: 'akid' }).credentials,
 		).toBeUndefined();
 	});
+
+	it('marks library storage as unavailable for direct sandbox mounts', () => {
+		expect(makeSandboxBucketConfig({ MARIMOHUB_STORAGE_BACKEND: 'library' })).toEqual({
+			name: '',
+			endpoint: '',
+			mountable: false,
+			credentials: undefined,
+		});
+	});
 });

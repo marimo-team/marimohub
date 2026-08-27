@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 const objects = new Map();
 let nextEtag = 1;
 
@@ -54,20 +56,25 @@ export default {
 				return metadata(key, object);
 			},
 			async verifyConditionalWrites() {
-				const key = '_system/.external-adapter-cas-probe';
-				const seed = await this.put(key, 'seed');
+				const key = `_system/.external-adapter-cas-probe-${randomUUID()}`;
+				const seed = await this.put(key, 'seed', { onlyIfNotExists: true });
 				try {
-					let rejected = false;
-					try {
-						await this.put(key, 'stale', { onlyIfEtagMatches: 'wrong-etag' });
-					} catch (error) {
-						if (error?.name !== 'PreconditionFailedError') throw error;
-						rejected = true;
+					const results = await Promise.allSettled(
+						Array.from({ length: 8 }, (_, index) =>
+							this.put(key, `contender-${index}`, { onlyIfEtagMatches: seed.etag }),
+						),
+					);
+					for (const result of results) {
+						if (result.status === 'rejected' && result.reason?.name !== 'PreconditionFailedError') {
+							throw result.reason;
+						}
 					}
-					if (!rejected) {
-						throw new Error('External storage does NOT enforce conditional writes');
+					const winners = results.filter((result) => result.status === 'fulfilled').length;
+					if (winners !== 1) {
+						throw new Error(
+							`External storage does NOT enforce conditional writes atomically: ${winners} concurrent writes succeeded; expected exactly 1`,
+						);
 					}
-					await this.put(key, 'updated', { onlyIfEtagMatches: seed.etag });
 				} finally {
 					await this.delete(key);
 				}

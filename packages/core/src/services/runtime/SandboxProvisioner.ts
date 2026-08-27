@@ -161,6 +161,8 @@ export interface BucketConfig {
 	name: string;
 	/** S3 endpoint; optional — omit for providers that mount a bucket without one. */
 	endpoint?: string;
+	/** False when this storage has no sandbox-compatible mount configuration. */
+	mountable?: boolean;
 	credentials?: {
 		accessKeyId: string;
 		secretAccessKey: string;
@@ -499,7 +501,9 @@ class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 	constructor(private copyFallback: WorkspaceLoadStrategy) {}
 
 	async load(ctx: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
-		if (ctx.sandbox.supportsBucketMount === false) return this.copyFallback.load(ctx);
+		if (ctx.bucket.mountable === false || ctx.sandbox.supportsBucketMount === false) {
+			return this.copyFallback.load(ctx);
+		}
 		try {
 			await ctx.sandbox.mountBucket({
 				bucketName: ctx.bucket.name,

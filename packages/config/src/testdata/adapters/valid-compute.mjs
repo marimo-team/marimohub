@@ -1,4 +1,4 @@
-function sandbox(invalidCapability) {
+export function sandbox(invalidCapability) {
 	const instance = {
 		async exec() {
 			return { success: true, stdout: '', stderr: '' };
