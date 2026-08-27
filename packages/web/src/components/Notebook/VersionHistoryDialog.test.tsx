@@ -20,8 +20,11 @@ vi.mock('./VersionDiffView', () => ({
 const PID = 'proj-1';
 const NID = 'nb-1';
 
-const notebook = (sourceType: 'local' | 'git' = 'local'): NotebookEntry =>
-	({ id: NID, title: 'my_analysis', source_type: sourceType }) as NotebookEntry;
+const notebook = (
+	sourceType: 'local' | 'git' = 'local',
+	status: NotebookEntry['status'] = 'active',
+): NotebookEntry =>
+	({ id: NID, title: 'my_analysis', source_type: sourceType, status }) as NotebookEntry;
 
 function version(id: string, savedAt: string, message: string): NotebookVersion {
 	return {
@@ -117,7 +120,12 @@ const GIT_SOURCE = {
 function renderDialog({
 	sourceType = 'local' as const,
 	canRestore = true,
-}: { sourceType?: 'local' | 'git'; canRestore?: boolean } = {}) {
+	status = 'active' as const,
+}: {
+	sourceType?: 'local' | 'git';
+	canRestore?: boolean;
+	status?: NotebookEntry['status'];
+} = {}) {
 	const client = createTestQueryClient();
 	const onClose = vi.fn();
 	const wrapper = ({ children }: { children: ReactNode }) => (
@@ -133,7 +141,7 @@ function renderDialog({
 			isOpen
 			onClose={onClose}
 			projectId={PID}
-			notebook={notebook(sourceType)}
+			notebook={notebook(sourceType, status)}
 			canRestore={canRestore}
 		/>,
 		{ wrapper },
@@ -288,6 +296,13 @@ describe('VersionHistoryDialog', () => {
 	it('hides Restore when the viewer cannot restore', async () => {
 		makeFetch();
 		renderDialog({ canRestore: false });
+		await screen.findAllByTestId('version-row');
+		expect(screen.queryByRole('button', { name: 'Restore' })).not.toBeInTheDocument();
+	});
+
+	it('hides Restore for deleted notebooks', async () => {
+		makeFetch();
+		renderDialog({ status: 'deleted' });
 		await screen.findAllByTestId('version-row');
 		expect(screen.queryByRole('button', { name: 'Restore' })).not.toBeInTheDocument();
 	});

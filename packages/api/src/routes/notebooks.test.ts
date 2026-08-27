@@ -62,6 +62,129 @@ describe('Notebook routes', () => {
 		expect(await expectPage(await request('GET', nb('')))).toEqual([]);
 	});
 
+	describe('list filters', () => {
+		const create = (title: string, description: string, tags: string[]) =>
+			request('POST', nb(''), { title, description, tags, code: 'import marimo' });
+
+		it('filters by status, exact tag, and case-insensitive title or description text', async () => {
+			const finance = await expectOk<any>(
+				await create('Revenue Review', 'Monthly totals', ['finance']),
+				201,
+			);
+			const operations = await expectOk<any>(
+				await create('Capacity', 'Quarterly PIPELINE forecast', ['finance-archive']),
+				201,
+			);
+			const deleted = await expectOk<any>(
+				await create('Retired Revenue', 'Historical totals', ['retired']),
+				201,
+			);
+			await expectOk(await request('DELETE', nb(`/${deleted.id}`)));
+
+			expect(
+				(await expectPage<any>(await request('GET', nb('?status=deleted')))).map((n) => n.id),
+			).toEqual([deleted.id]);
+			expect(
+				(await expectPage<any>(await request('GET', nb('?tag=finance')))).map((n) => n.id),
+			).toEqual([finance.id]);
+			expect(
+				(await expectPage<any>(await request('GET', nb('?q=pipeline')))).map((n) => n.id),
+			).toEqual([operations.id]);
+			expect(
+				(await expectPage<any>(await request('GET', nb('?q=REVENUE')))).map((n) => n.id),
+			).toEqual([finance.id]);
+			expect(
+				(await expectPage<any>(await request('GET', nb(''))))
+					.map((n) => n.id)
+					.sort((a, b) => a.localeCompare(b)),
+			).toEqual([finance.id, operations.id].sort((a, b) => a.localeCompare(b)));
+		});
+
+		it('ANDs filters and paginates the filtered set', async () => {
+			const matching: string[] = [];
+			for (let i = 0; i < 3; i++) {
+				const notebook = await expectOk<any>(
+					await create(`Match ${i}`, `Search target ${i}`, ['selected']),
+					201,
+				);
+				matching.push(notebook.id);
+			}
+			await create('Wrong tag', 'Search target', ['other']);
+			await create('Wrong text', 'Unrelated', ['selected']);
+
+			const first = await expectOk<any>(
+				await request('GET', nb('?status=active&tag=selected&q=TARGET&limit=2')),
+			);
+			expect(first.items).toHaveLength(2);
+			expect(first.next_cursor).toBeTruthy();
+
+			const second = await expectOk<any>(
+				await request(
+					'GET',
+					nb(
+						`?status=active&tag=selected&q=TARGET&limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+					),
+				),
+			);
+			expect(second.items).toHaveLength(1);
+			expect(second.next_cursor).toBeNull();
+			const ids = [...first.items, ...second.items].map((notebook: any) => notebook.id);
+			expect(ids.sort((a, b) => a.localeCompare(b))).toEqual(
+				matching.sort((a, b) => a.localeCompare(b)),
+			);
+		});
+
+		it('treats empty search as unfiltered and returns a terminal empty page for misses', async () => {
+			await create('Revenue', 'Monthly totals', ['finance']);
+			await create('Capacity', 'Quarterly forecast', ['operations']);
+
+			const unfiltered = await expectOk<any>(await request('GET', nb('')));
+			const emptySearch = await expectOk<any>(await request('GET', nb('?q=')));
+			expect(emptySearch).toEqual(unfiltered);
+
+			for (const query of ['tag=Finance', 'q=missing']) {
+				const page = await expectOk<any>(await request('GET', nb(`?${query}`)));
+				expect(page).toEqual({ items: [], next_cursor: null });
+			}
+		});
+
+		it('can combine status, tag, and text filters for deleted notebooks', async () => {
+			const live = await expectOk<any>(
+				await create('Live audit', 'Compliance records', ['audit']),
+				201,
+			);
+			const deleted = await expectOk<any>(
+				await create('Retired audit', 'Compliance records', ['audit']),
+				201,
+			);
+			await expectOk(await request('DELETE', nb(`/${deleted.id}`)));
+
+			const page = await expectOk<any>(
+				await request('GET', nb('?status=deleted&tag=audit&q=COMPLIANCE')),
+			);
+			expect(page).toEqual({
+				items: [expect.objectContaining({ id: deleted.id })],
+				next_cursor: null,
+			});
+			expect(page.items.map((item: any) => item.id)).not.toContain(live.id);
+		});
+
+		it.each(['status=unknown', 'limit=0', 'limit=-1', 'limit=1.5', 'limit=nope'])(
+			'rejects invalid query parameter %s',
+			async (query) => {
+				await expectError(await request('GET', nb(`?${query}`)), 422, 'VALIDATION_ERROR');
+			},
+		);
+
+		it('rejects a malformed cursor on a filtered request', async () => {
+			await expectError(
+				await request('GET', nb('?tag=finance&cursor=not~base64')),
+				400,
+				'BAD_REQUEST',
+			);
+		});
+	});
+
 	it('POST creates a notebook', async () => {
 		const data = await expectOk<any>(
 			await request('POST', nb(''), {

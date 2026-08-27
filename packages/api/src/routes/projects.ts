@@ -37,7 +37,7 @@ import {
 	SuccessResponseSchema,
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
-import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import { pageSchema, paginate, ProjectListQuery } from '../pagination';
 import {
 	assertNotificationMutationAllowed,
 	scheduleNotification,
@@ -139,7 +139,8 @@ const listProjects = createRoute({
 	operationId: 'projects.list',
 	tags: ['Projects'],
 	summary: 'List all projects',
-	request: { query: PaginationQuery },
+	description: 'When paging a filtered list, send the same filters with each cursor.',
+	request: { query: ProjectListQuery },
 	responses: {
 		200: jsonContent(
 			z.object({
@@ -297,11 +298,15 @@ const app = createApp();
 app.openapi(listProjects, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
+	const query = c.req.valid('query');
 	const all = await deps.services.projects.listProjects({
 		subject: user,
 		policy: deps.policy,
+		status: query.status,
+		tag: query.tag,
+		q: query.q,
 	});
-	const data = paginate(all, c.req.valid('query'), {
+	const data = paginate(all, query, {
 		key: (p) => p.created_at,
 		tiebreak: (p) => p.id,
 	});

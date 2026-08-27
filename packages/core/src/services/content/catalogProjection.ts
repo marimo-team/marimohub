@@ -42,6 +42,7 @@ export function projectCatalogPatch(
 		name: project.name,
 		description: project.description,
 		status: project.status,
+		tags: project.tags,
 		updated_at: entry.updated_at >= project.updated_at ? entry.updated_at : project.updated_at,
 		member_ids: project.members.flatMap((member) =>
 			member.user_id !== undefined ? [member.user_id] : [],

@@ -109,14 +109,13 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	});
 
 	// The project-list response drops the nested `notebooks` roster (unbounded,
-	// defeats the page cursor) and the denormalized `member_ids`/`member_emails`
-	// (server-side visibility-filter aids, not part of the public contract).
+	// defeats the page cursor) and the denormalized filtering aids.
 	// `notebook_count` stays for the summary; clients page
 	// `GET /projects/{pid}/notebooks`.
-	it('SnapshotProjectEntry omits `notebooks` and the member rosters from the core entry', () => {
+	it('SnapshotProjectEntry omits internal list-filter fields from the core entry', () => {
 		const coreKeys = shapeKeys(CoreSnapshotProjectEntrySchema);
 		const apiKeys = shapeKeys(SnapshotProjectEntrySchema);
-		const internal = ['notebooks', 'member_ids', 'member_emails'];
+		const internal = ['notebooks', 'tags', 'member_ids', 'member_emails'];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});

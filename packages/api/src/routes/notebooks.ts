@@ -49,7 +49,7 @@ import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
 import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
 import type { HonoEnv, SandboxConfig } from '../context';
-import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
 import { scheduleProjectAlert } from '../notifications';
 
 // --- Request body schemas ---
@@ -206,7 +206,8 @@ const listNotebooks = createRoute({
 	operationId: 'notebooks.list',
 	tags: ['Notebooks'],
 	summary: 'List notebooks in a project',
-	request: { params: ProjectIdParam, query: PaginationQuery },
+	description: 'When paging a filtered list, send the same filters with each cursor.',
+	request: { params: ProjectIdParam, query: NotebookListQuery },
 	responses: {
 		200: jsonContent(
 			z.object({
@@ -574,9 +575,14 @@ app.openapi(listNotebooks, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
+	const query = c.req.valid('query');
 	await assertProjectVisible(projects, pid, user, deps.policy);
-	const all = await notebooks.listNotebooks(pid);
-	const data = paginate(all, c.req.valid('query'), {
+	const all = await notebooks.listNotebooks(pid, {
+		status: query.status,
+		tag: query.tag,
+		q: query.q,
+	});
+	const data = paginate(all, query, {
 		key: (n) => n.created_at,
 		tiebreak: (n) => n.id,
 	});

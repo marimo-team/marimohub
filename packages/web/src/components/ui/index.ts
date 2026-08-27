@@ -21,6 +21,10 @@ export type { TextFieldProps } from './TextField';
 export { SearchField } from './SearchField';
 export type { SearchFieldProps } from './SearchField';
 
+export { ListFilters } from './ListFilters';
+
+export { ListResults } from './ListResults';
+
 export { ComboBox } from './ComboBox';
 export type { ComboBoxProps, ComboBoxOption } from './ComboBox';
 

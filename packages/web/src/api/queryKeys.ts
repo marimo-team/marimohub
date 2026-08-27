@@ -1,3 +1,9 @@
+interface ListQueryFilters {
+	q?: string;
+	status?: string;
+	tag?: string;
+}
+
 export const userKeys = {
 	all: ['user'] as const,
 	me: () => [...userKeys.all, 'me'] as const,
@@ -11,6 +17,7 @@ export const userKeys = {
 export const projectKeys = {
 	all: ['projects'] as const,
 	list: () => [...projectKeys.all, 'list'] as const,
+	filteredList: (filters: ListQueryFilters) => [...projectKeys.list(), filters] as const,
 	/** Full multi-page roster for pickers; distinct from the first-page `list`. */
 	pickerList: () => [...projectKeys.all, 'list', 'all'] as const,
 	detail: (projectId: string) => [...projectKeys.all, 'detail', projectId] as const,
@@ -90,6 +97,8 @@ export const integrationKeys = {
 export const notebookKeys = {
 	all: ['notebooks'] as const,
 	list: (projectId: string) => [...notebookKeys.all, 'list', { projectId }] as const,
+	filteredList: (projectId: string, filters: ListQueryFilters) =>
+		[...notebookKeys.list(projectId), filters] as const,
 	detail: (projectId: string, notebookId: string) =>
 		[...notebookKeys.all, 'detail', { projectId, notebookId }] as const,
 	sourceDrift: (projectId: string, notebookId: string) =>

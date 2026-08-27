@@ -16,6 +16,11 @@ function Harness() {
 }
 
 describe('SearchField', () => {
+	it('uses a visible label as its accessible name without requiring aria-label', () => {
+		render(<SearchField label="Search notebooks" />);
+		expect(screen.getByRole('searchbox', { name: 'Search notebooks' })).toBeInTheDocument();
+	});
+
 	it('is announced as a searchbox with its label and reports typing via onChange', async () => {
 		const user = userEvent.setup();
 		render(<Harness />);

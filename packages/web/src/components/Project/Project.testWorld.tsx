@@ -63,6 +63,7 @@ export function makeFetch(
 	const calls: { url: string; method: string; body: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
+		const parsedUrl = new URL(url, 'http://localhost');
 		const method = init?.method ?? 'GET';
 		const body = init?.body
 			? (JSON.parse(init.body as string) as Record<string, unknown>)
@@ -122,8 +123,18 @@ export function makeFetch(
 				headers: { 'content-type': 'text/html' },
 			});
 
-		if (url.includes(`/projects/${PID}/notebooks`))
-			return jsonOk({ items: notebooks, next_cursor: null });
+		if (method === 'GET' && parsedUrl.pathname.endsWith(`/projects/${PID}/notebooks`)) {
+			const q = parsedUrl.searchParams.get('q')?.toLocaleLowerCase();
+			const tag = parsedUrl.searchParams.get('tag');
+			const status = parsedUrl.searchParams.get('status');
+			const items = notebooks.filter(
+				(entry) =>
+					(status ? entry.status === status : entry.status !== 'deleted') &&
+					(!tag || entry.tags.includes(tag)) &&
+					(!q || `${entry.title} ${entry.description}`.toLocaleLowerCase().includes(q)),
+			);
+			return jsonOk({ items, next_cursor: null });
+		}
 		if (url.includes(`/projects/${PID}/sessions`))
 			return jsonOk({ items: sessions, next_cursor: null });
 		if (url.includes('/capabilities')) return jsonOk(capabilities);
@@ -135,23 +146,24 @@ export function makeFetch(
 	return calls;
 }
 
-export async function renderProject() {
+export async function renderProject(route = `/projects/${PID}`) {
 	renderWithClient(
 		<Routes>
 			<Route path="/projects/:pid" element={<Project />} />
 			<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<div>snapshot page</div>} />
 			<Route path="/" element={<div>home</div>} />
 		</Routes>,
-		{ route: `/projects/${PID}`, suspenseFallback: <div>loading</div> },
+		{ route, suspenseFallback: <div>loading</div> },
 	);
 	await waitFor(() => expect(screen.getByRole('heading', { name: 'Sales' })).toBeInTheDocument());
+	await waitFor(() => expect(screen.getByRole('status')).not.toHaveTextContent('Loading'));
 }
 
 export async function chooseNotebookAction(
 	user: ReturnType<typeof userEvent.setup>,
 	label: string,
 ) {
-	await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+	await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 	await user.click(await screen.findByText(label));
 }
 

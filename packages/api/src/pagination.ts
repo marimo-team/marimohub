@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import { BadRequestError } from '@marimo-hub/core';
+import { BadRequestError, NOTEBOOK_STATUSES, PROJECT_STATUSES } from '@marimo-hub/core';
 
 /**
  * Keyset (cursor) pagination for the list endpoints. List responses carry their
@@ -34,6 +34,49 @@ export const PaginationQuery = z.object({
 			param: { name: 'cursor', in: 'query' },
 			example: 'WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ',
 		}),
+});
+
+const ListFilterQuery = {
+	tag: z
+		.string()
+		.optional()
+		.openapi({
+			param: { name: 'tag', in: 'query' },
+			description: 'Exact tag to match.',
+			example: 'analytics',
+		}),
+	q: z
+		.string()
+		.optional()
+		.openapi({
+			param: { name: 'q', in: 'query' },
+			description: 'Case-insensitive substring to match against the name or title and description.',
+			example: 'revenue',
+		}),
+};
+
+export const ProjectListQuery = PaginationQuery.extend({
+	status: z
+		.enum(PROJECT_STATUSES)
+		.optional()
+		.openapi({
+			param: { name: 'status', in: 'query' },
+			description: 'Project status to match. Deleted projects are excluded when omitted.',
+			example: 'active',
+		}),
+	...ListFilterQuery,
+});
+
+export const NotebookListQuery = PaginationQuery.extend({
+	status: z
+		.enum(NOTEBOOK_STATUSES)
+		.optional()
+		.openapi({
+			param: { name: 'status', in: 'query' },
+			description: 'Notebook status to match. Deleted notebooks are excluded when omitted.',
+			example: 'active',
+		}),
+	...ListFilterQuery,
 });
 
 export interface Page<T> {

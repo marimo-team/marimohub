@@ -16,7 +16,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		makeFetch();
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		const menu = await screen.findByRole('menu');
 
 		expect(within(menu).getAllByRole('separator')).toHaveLength(4);
@@ -93,7 +93,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Rename')).toBeInTheDocument();
 		expect(screen.queryByText('Change base image')).not.toBeInTheDocument();
 	});
@@ -264,7 +264,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Rename')).toBeInTheDocument();
 		expect(screen.queryByText('Change compute…')).not.toBeInTheDocument();
 	});

@@ -25,7 +25,6 @@ import {
 	Plus,
 	Power,
 	RefreshCw,
-	SearchX,
 	Settings2,
 	Trash2,
 	Upload,
@@ -40,10 +39,10 @@ import {
 	IconLink,
 	LinkButton,
 	RowLink,
-	SearchField,
 	ConfirmDialog,
 	EmptyState,
-	ListContainer,
+	ListFilters,
+	ListResults,
 	PageContainer,
 	PageHeader,
 	SessionStatusDot,
@@ -98,26 +97,127 @@ import { SyncSettingsDialog } from '@/components/Notebook/SyncSettingsDialog';
 import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { useSearchField } from '@/hooks/useSearchField';
-import { filterBySearch } from '@/lib/search';
+import { useListFilters } from '@/hooks/useListFilters';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
 import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 import { canManageProject } from '@/lib/roles';
 import type { DropdownMenuOption } from '@/components/ui';
-import type { NotebookEntry, Session } from '@/types';
+import type { NotebookEntry, ResolvedUser, Session } from '@/types';
 
-/**
- * The tag/status chips for a notebook row: its tags if any, otherwise a
- * noteworthy lifecycle status. The unremarkable `active` (nearly every notebook)
- * is hidden, and a tagless `active` notebook shows nothing.
- */
+/** Keep non-active lifecycle state visible even when the notebook has user tags. */
 function notebookBadges(nb: NotebookEntry): string[] {
-	if (nb.tags.length > 0) return nb.tags;
-	return nb.status === 'active' ? [] : [nb.status];
+	const badges = [...nb.tags];
+	if (nb.status !== 'active' && !badges.includes(nb.status)) badges.push(nb.status);
+	return badges;
 }
 
 const MAX_UPLOAD_BYTES = 1_000_000;
+
+const NOTEBOOK_STATUS_FILTERS = [
+	{ value: 'active', label: 'Active' },
+	{ value: 'draft', label: 'Draft' },
+	{ value: 'archived', label: 'Archived' },
+	{ value: 'deleted', label: 'Deleted' },
+] as const;
+
+const NOTEBOOK_HISTORY_ACTIONS: DropdownMenuOption[] = [
+	{ id: 'view-snapshot', label: 'View static outputs', icon: <Camera className="size-4" /> },
+	{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
+];
+
+const NOTEBOOK_EXPORT_ACTIONS: DropdownMenuOption[] = [
+	{
+		id: 'download-file',
+		label: 'Download notebook file',
+		icon: <Download className="size-4" />,
+	},
+	{
+		id: 'download-outputs',
+		label: 'Download outputs (HTML)',
+		icon: <FileDown className="size-4" />,
+	},
+	{
+		id: 'download-workspace',
+		label: 'Download workspace',
+		icon: <FolderArchive className="size-4" />,
+	},
+];
+
+function groupedMenuOptions(groups: DropdownMenuOption[][]): DropdownMenuOption[] {
+	return groups
+		.filter((group) => group.length > 0)
+		.flatMap((group, index) =>
+			index === 0 ? group : [{ ...group[0], separatorBefore: true }, ...group.slice(1)],
+		);
+}
+
+const DELETED_NOTEBOOK_ACTIONS = groupedMenuOptions([
+	NOTEBOOK_HISTORY_ACTIONS,
+	NOTEBOOK_EXPORT_ACTIONS,
+]);
+
+interface DeletedNotebookRowProps {
+	notebook: NotebookEntry;
+	user: ResolvedUser | undefined;
+	usersLoading: boolean;
+	onAction: (key: string) => void;
+}
+
+function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedNotebookRowProps) {
+	return (
+		<div
+			data-testid="notebook-row"
+			className="flex items-center border-b border-l-2 border-l-transparent bg-muted/20 last:border-b-0"
+		>
+			<div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3.5">
+				<div className="flex min-w-0 items-center gap-3">
+					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+						{notebook.source_type === 'git' ? (
+							<GitBranch className="size-4" aria-hidden="true" />
+						) : (
+							<FileText className="size-4" aria-hidden="true" />
+						)}
+					</span>
+					<span className="truncate text-sm font-medium" title={notebook.title}>
+						{notebook.title}
+					</span>
+					{notebookBadges(notebook).map((badge) => (
+						<Chip key={badge} className={badge === 'deleted' ? undefined : 'max-md:hidden'}>
+							{badge}
+						</Chip>
+					))}
+				</div>
+				<div className="flex shrink-0 items-center gap-3">
+					<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
+						<span className="text-muted-foreground/70">by</span>
+						<UserLabel
+							user={user}
+							fallbackId={notebook.author}
+							loading={usersLoading}
+							className="max-w-[8rem]"
+						/>
+					</span>
+					<time
+						dateTime={notebook.updated_at}
+						title={new Date(notebook.updated_at).toLocaleString()}
+						className="text-xs tabular-nums text-muted-foreground"
+					>
+						{formatRelative(notebook.updated_at)}
+					</time>
+				</div>
+			</div>
+			<div className="relative flex shrink-0 items-center pr-2">
+				<DropdownMenu
+					label={`Historical actions for ${notebook.title}`}
+					icon={<MoreHorizontal className="size-4" />}
+					options={DELETED_NOTEBOOK_ACTIONS}
+					onAction={onAction}
+				/>
+			</div>
+		</div>
+	);
+}
 
 const projectSchema = z.object({
 	name: requiredText('Project name'),
@@ -137,7 +237,7 @@ const NEW_NOTEBOOK_CODE = (name: string) => {
 export function Project() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
-	const search = useSearchField();
+	const { filters, setFilters, filtersActive } = useListFilters(NOTEBOOK_STATUS_FILTERS);
 
 	// Dialogs acting on a row use useDialogTarget; plain ones use useDisclosure.
 	const uploadModal = useDisclosure();
@@ -166,7 +266,11 @@ export function Project() {
 	const membersModal = useDisclosure();
 	const alertsModal = useDisclosure();
 
-	const { data: notebooks } = useNotebooksQuery(pid!);
+	const {
+		data: notebooks = [],
+		isPending: notebooksLoading,
+		isFetching: notebooksFetching,
+	} = useNotebooksQuery(pid!, filters);
 	const { data: project } = useProjectQuery(pid!);
 	const { data: sessions, isLoading: sessionsLoading } = useProjectSessionsQuery(pid!);
 	const createNotebook = useCreateNotebook(pid!);
@@ -435,6 +539,32 @@ export function Project() {
 		}
 	};
 
+	const handleNotebookAction = (nb: NotebookEntry, key: string, stoppableEdit?: Session) => {
+		if (key === 'rename') renameModal.open(nb);
+		else if (key === 'duplicate') handleDuplicate(nb);
+		else if (key === 'stop-kernel' && stoppableEdit)
+			stopModal.open({ notebook: nb, session: stoppableEdit });
+		else if (key === 'run-app' || key === 'open-app')
+			void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
+				state: { title: nb.title },
+			});
+		else if (key === 'stop-app') {
+			const app = sessionByNotebook.get(nb.id)?.app;
+			if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
+		} else if (key === 'view-snapshot')
+			void navigate(`/projects/${pid}/notebooks/${nb.id}/snapshot`, {
+				state: { title: nb.title },
+			});
+		else if (key === 'change-image') baseImageModal.open(nb);
+		else if (key === 'change-compute') computeProfileModal.open(nb);
+		else if (key === 'history') historyModal.open(nb);
+		else if (key === 'sync-settings') syncSettings.open({ notebookId: nb.id, title: nb.title });
+		else if (key === 'download-file') handleDownloadFile(nb);
+		else if (key === 'download-outputs') handleDownloadOutputs(nb);
+		else if (key === 'download-workspace') handleDownloadWorkspace(nb);
+		else if (key === 'delete') deleteModal.open(nb);
+	};
+
 	const notebookActions = (nb: NotebookEntry): DropdownMenuOption[] => {
 		const live = sessionByNotebook.get(nb.id);
 		const app = live?.app;
@@ -506,37 +636,14 @@ export function Project() {
 							},
 						]
 					: []),
-				{ id: 'view-snapshot', label: 'View static outputs', icon: <Camera className="size-4" /> },
-				{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
+				...NOTEBOOK_HISTORY_ACTIONS,
 			],
-			[
-				{
-					id: 'download-file',
-					label: 'Download notebook file',
-					icon: <Download className="size-4" />,
-				},
-				{
-					id: 'download-outputs',
-					label: 'Download outputs (HTML)',
-					icon: <FileDown className="size-4" />,
-				},
-				{
-					id: 'download-workspace',
-					label: 'Download workspace',
-					icon: <FolderArchive className="size-4" />,
-				},
-			],
+			NOTEBOOK_EXPORT_ACTIONS,
 			[{ id: 'delete', label: 'Delete', icon: <Trash2 className="size-4" />, danger: true }],
 		];
 
-		return groups
-			.filter((group) => group.length > 0)
-			.flatMap((group, index) =>
-				index === 0 ? group : [{ ...group[0], separatorBefore: true }, ...group.slice(1)],
-			);
+		return groupedMenuOptions(groups);
 	};
-
-	const filteredNotebooks = filterBySearch(notebooks, search.query, (nb) => nb.title);
 
 	return (
 		<PageContainer>
@@ -628,24 +735,21 @@ export function Project() {
 				</div>
 			</PageHeader>
 
-			<div className="mb-4">
-				<SearchField
-					aria-label="Search notebooks"
-					placeholder="Search notebooks..."
-					value={search.query}
-					onChange={search.setQuery}
-					inputRef={search.inputRef}
-				/>
-			</div>
+			<ListFilters
+				label="Filter notebooks"
+				itemName="notebook"
+				values={filters}
+				statuses={NOTEBOOK_STATUS_FILTERS}
+				resultCount={notebooks.length}
+				resultsId="notebook-results"
+				isLoading={notebooksLoading}
+				isFetching={notebooksFetching}
+				onChange={setFilters}
+			/>
 
-			{filteredNotebooks.length === 0 ? (
-				search.query ? (
-					<EmptyState
-						icon={<SearchX />}
-						message={`No notebooks matching "${search.query}"`}
-						description="Try a different search term."
-					/>
-				) : (
+			<ListResults
+				count={notebooks.length}
+				emptyState={
 					<EmptyState
 						icon={<FileText />}
 						message="No notebooks yet"
@@ -657,146 +761,136 @@ export function Project() {
 							</Button>
 						}
 					/>
-				)
-			) : (
-				<ListContainer>
-					{filteredNotebooks.map((nb) => {
-						const badges = notebookBadges(nb);
-						const live = sessionByNotebook.get(nb.id);
-						const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
+				}
+				isFetching={notebooksFetching}
+				isFiltered={filtersActive}
+				isLoading={notebooksLoading}
+				itemName="notebook"
+				onReset={() => setFilters({})}
+				resultsId="notebook-results"
+			>
+				{notebooks.map((nb) => {
+					if (nb.status === 'deleted') {
 						return (
-							<RowLink
+							<DeletedNotebookRow
 								key={nb.id}
-								testId="notebook-row"
-								to={`/projects/${pid}/notebooks/${nb.id}`}
-								state={{ title: nb.title }}
-								label={nb.title}
-								contentClassName="items-center justify-between gap-3 py-3.5"
-								leading={
-									nb.source_type === 'git' ? (
-										<GitSourcePopover
-											projectId={pid!}
-											notebookId={nb.id}
-											canSync={project.your_role !== 'viewer'}
-											triggerClassName="shrink-0 cursor-pointer rounded-lg"
-											trigger={
-												<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
-													<GitBranch className="size-4" />
-												</span>
-											}
-										/>
-									) : undefined
-								}
-								actions={
-									<>
-										{/* Primary shutdown stays edit-only: the inline Power button
-										    never targets the shared app (dropdown/popover do). */}
-										{stoppableEdit && (
-											<IconButton
-												label="Shut down kernel"
-												tooltip="Shut down kernel"
-												tone="danger"
-												onPress={() => stopModal.open({ notebook: nb, session: stoppableEdit })}
-											>
-												<Power className="size-4" />
-											</IconButton>
-										)}
-										<DropdownMenu
-											label="Notebook actions"
-											icon={<MoreHorizontal className="size-4" />}
-											triggerClassName="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
-											options={notebookActions(nb)}
-											onAction={(key) => {
-												if (key === 'rename') renameModal.open(nb);
-												else if (key === 'duplicate') handleDuplicate(nb);
-												else if (key === 'stop-kernel' && stoppableEdit)
-													stopModal.open({ notebook: nb, session: stoppableEdit });
-												else if (key === 'run-app' || key === 'open-app')
-													void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
-														state: { title: nb.title },
-													});
-												else if (key === 'stop-app') {
-													const app = sessionByNotebook.get(nb.id)?.app;
-													if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
-												} else if (key === 'view-snapshot')
-													void navigate(`/projects/${pid}/notebooks/${nb.id}/snapshot`, {
-														state: { title: nb.title },
-													});
-												else if (key === 'change-image') baseImageModal.open(nb);
-												else if (key === 'change-compute') computeProfileModal.open(nb);
-												else if (key === 'history') historyModal.open(nb);
-												else if (key === 'sync-settings')
-													syncSettings.open({ notebookId: nb.id, title: nb.title });
-												else if (key === 'download-file') handleDownloadFile(nb);
-												else if (key === 'download-outputs') handleDownloadOutputs(nb);
-												else if (key === 'download-workspace') handleDownloadWorkspace(nb);
-												else if (key === 'delete') deleteModal.open(nb);
-											}}
-										/>
-									</>
-								}
-							>
-								<div className="flex min-w-0 items-center gap-3">
-									{nb.source_type !== 'git' && (
-										<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
-											<FileText className="size-4" />
-										</span>
-									)}
-									<span className="truncate text-sm font-medium">{nb.title}</span>
-									{badges.map((badge) => (
-										<Chip key={badge} className="max-md:hidden">
-											{badge}
-										</Chip>
-									))}
-								</div>
-								<div className="flex shrink-0 items-center gap-3">
-									{live?.app && (
-										<AppSessionIndicator
-											session={live.app}
-											canControl={!!live.app.can?.stop}
-											canOpen={!!live.app.can?.attach}
-											editActive={!!live.persistentEdit}
-											profiles={computeProfiles}
-											allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
-											selectedProfileName={nb.compute_profile}
-											onStop={() =>
-												appModal.open({ action: 'stop', notebook: nb, session: live.app! })
-											}
-											onRestart={() =>
-												appModal.open({ action: 'restart', notebook: nb, session: live.app! })
-											}
-										/>
-									)}
-									<SessionStatusDot
-										session={live?.edit}
-										loading={sessionsLoading}
-										profiles={computeProfiles}
-										selectedProfileName={
-											canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
+								notebook={nb}
+								user={users?.[nb.author]}
+								usersLoading={usersLoading}
+								onAction={(key) => handleNotebookAction(nb, key)}
+							/>
+						);
+					}
+
+					const badges = notebookBadges(nb);
+					const live = sessionByNotebook.get(nb.id);
+					const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
+					return (
+						<RowLink
+							key={nb.id}
+							testId="notebook-row"
+							to={`/projects/${pid}/notebooks/${nb.id}`}
+							state={{ title: nb.title }}
+							label={nb.title}
+							contentClassName="items-center justify-between gap-3 py-3.5"
+							leading={
+								nb.source_type === 'git' ? (
+									<GitSourcePopover
+										projectId={pid!}
+										notebookId={nb.id}
+										canSync={project.your_role !== 'viewer'}
+										triggerClassName="shrink-0 cursor-pointer rounded-lg"
+										trigger={
+											<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+												<GitBranch className="size-4" />
+											</span>
 										}
 									/>
-									<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
-										<span className="text-muted-foreground/70">by</span>
-										<UserLabel
-											user={users?.[nb.author]}
-											fallbackId={nb.author}
-											loading={usersLoading}
-											className="max-w-[8rem]"
-										/>
+								) : undefined
+							}
+							actions={
+								<>
+									{/* Inline shutdown is edit-only; app controls live in the menu. */}
+									{stoppableEdit && (
+										<IconButton
+											label="Shut down kernel"
+											tooltip="Shut down kernel"
+											tone="danger"
+											onPress={() => stopModal.open({ notebook: nb, session: stoppableEdit })}
+										>
+											<Power className="size-4" />
+										</IconButton>
+									)}
+									<DropdownMenu
+										label={`Notebook actions for ${nb.title}`}
+										icon={<MoreHorizontal className="size-4" />}
+										triggerClassName="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
+										options={notebookActions(nb)}
+										onAction={(key) => handleNotebookAction(nb, key, stoppableEdit)}
+									/>
+								</>
+							}
+						>
+							<div className="flex min-w-0 items-center gap-3">
+								{nb.source_type !== 'git' && (
+									<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+										<FileText className="size-4" />
 									</span>
-									<time
-										dateTime={nb.updated_at}
-										title={new Date(nb.updated_at).toLocaleString()}
-										className="text-xs tabular-nums text-muted-foreground"
-									>
-										{formatRelative(nb.updated_at)}
-									</time>
-								</div>
-							</RowLink>
-						);
-					})}
-				</ListContainer>
-			)}
+								)}
+								<span className="truncate text-sm font-medium">{nb.title}</span>
+								{badges.map((badge) => (
+									<Chip key={badge} className="max-md:hidden">
+										{badge}
+									</Chip>
+								))}
+							</div>
+							<div className="flex shrink-0 items-center gap-3">
+								{live?.app && (
+									<AppSessionIndicator
+										session={live.app}
+										canControl={!!live.app.can?.stop}
+										canOpen={!!live.app.can?.attach}
+										editActive={!!live.persistentEdit}
+										profiles={computeProfiles}
+										allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
+										selectedProfileName={nb.compute_profile}
+										onStop={() =>
+											appModal.open({ action: 'stop', notebook: nb, session: live.app! })
+										}
+										onRestart={() =>
+											appModal.open({ action: 'restart', notebook: nb, session: live.app! })
+										}
+									/>
+								)}
+								<SessionStatusDot
+									session={live?.edit}
+									loading={sessionsLoading}
+									profiles={computeProfiles}
+									selectedProfileName={
+										canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
+									}
+								/>
+								<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
+									<span className="text-muted-foreground/70">by</span>
+									<UserLabel
+										user={users?.[nb.author]}
+										fallbackId={nb.author}
+										loading={usersLoading}
+										className="max-w-[8rem]"
+									/>
+								</span>
+								<time
+									dateTime={nb.updated_at}
+									title={new Date(nb.updated_at).toLocaleString()}
+									className="text-xs tabular-nums text-muted-foreground"
+								>
+									{formatRelative(nb.updated_at)}
+								</time>
+							</div>
+						</RowLink>
+					);
+				})}
+			</ListResults>
 
 			<FormDialog
 				form={createNotebookForm}
