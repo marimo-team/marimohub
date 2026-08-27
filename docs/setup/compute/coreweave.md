@@ -19,7 +19,7 @@ option.
 :::
 
 ::: warning Ingress is runner-specific
-The public kernel URL scheme comes from the runner's default profile. If
+The public kernel URL scheme comes from the runner's default policy. If
 kernels don't connect, set `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` —
 see the [Configuration reference](/configuration#coreweave-sandbox).
 :::
@@ -27,8 +27,8 @@ see the [Configuration reference](/configuration#coreweave-sandbox).
 ::: warning Removed with CoreWeave Sandbox v1
 The former `…COREWEAVE_PROFILE`, `…_INGRESS_MODE`, `…_EGRESS_MODE`, and
 `…_USER_HOME_PROFILE` variables are rejected at boot: v1 has no per-create
-profile selection or network modes. A runner's **default** profile template
-decides network, mounts, and placement — pin one with
+profile selection or network modes. The runner's **default policy** decides
+network, mounts, and placement — pin a runner with
 `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`, and give personal storage its own
 runner via `…_USER_HOME_RUNNER_IDS`.
 :::

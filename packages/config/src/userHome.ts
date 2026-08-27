@@ -31,7 +31,7 @@ function canonicalEmail(email: string): string {
  *
  * CoreWeave Sandbox v1 removed per-create profile selection, so the feature now
  * rides a dedicated runner: editor sandboxes are pinned to the runner(s) named
- * here, whose DEFAULT profile template mounts the per-user PVC.
+ * here, whose default policy mounts the per-user PVC.
  */
 export function makeSandboxUserHome(
 	env: Env,
@@ -42,7 +42,7 @@ export function makeSandboxUserHome(
 			`${COREWEAVE_USER_HOME_PROFILE} is no longer supported: CoreWeave Sandbox v1 removed per-create profile selection`,
 			{
 				variable: COREWEAVE_USER_HOME_PROFILE,
-				remediation: `Bind the user-home profile template as the DEFAULT profile of a dedicated runner and set ${COREWEAVE_USER_HOME_RUNNERS} to that runner's id.`,
+				remediation: `Give a dedicated runner a default policy with the user-home mounts and set ${COREWEAVE_USER_HOME_RUNNERS} to that runner's id.`,
 				docs: 'docs/deploying/cks.md',
 			},
 		);

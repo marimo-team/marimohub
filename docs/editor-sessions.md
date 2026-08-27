@@ -61,7 +61,7 @@ project editors can still read the notebook, version history, and workspace.
 The mode does not create a private mount for each user.
 
 On CoreWeave, `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS` names a
-dedicated runner whose default profile mounts the per-user VAST directory.
+dedicated runner whose default policy mounts the per-user VAST directory.
 Persistent and temporary editor sandboxes then expose the authenticated
 user's directory at `/mnt/<lowercase-email>`; writes there outlive
 marimohub's notebook and workspace lifecycle. Apps and viewer sandboxes never

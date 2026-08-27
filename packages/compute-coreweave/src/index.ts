@@ -208,12 +208,12 @@ export interface CoreWeaveConfig {
 	ownerTag?: string;
 	/**
 	 * Runner IDs sandboxes may schedule on — v1's placement lever: pinning a
-	 * runner selects its DEFAULT profile template (network/mounts/placement).
+	 * runner selects its default policy (network/mounts/placement).
 	 * Omit to let the fleet schedule anywhere.
 	 */
 	runnerIds?: readonly string[];
 	/**
-	 * Runner(s) whose default profile template mounts the per-user VAST/PVC at
+	 * Runner(s) whose default policy mounts the per-user VAST/PVC at
 	 * `USER_HOME_MOUNT_PATH` (`subPathExpr` on the injected
 	 * `MARIMOHUB_USER_HOME_KEY` env var). Used only for editor sandboxes
 	 * carrying a `userHome`; must be disjoint from `runnerIds` so apps and

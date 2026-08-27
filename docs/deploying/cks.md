@@ -27,7 +27,7 @@ Before you start:
   in the [Cloud Console](https://console.coreweave.com); an alphanumeric ID like
   `ab12cd`) — it appears in every public hostname below, written as `<ORG-ID>`.
 - **IAM permissions**: the `SANDBOX_ADMIN` action (grantable on the Console's
-  Access Policies page) to manage sandbox profiles and runners.
+  Access Policies page) to manage sandbox runners and policies.
 - **A CoreWeave API access token** from the Console's Tokens page. Copy the
   Token Secret when it's shown — it's used both by the `cwic` CLI and as the
   hub's sandbox API key.
@@ -81,7 +81,7 @@ cert-manager (step 6) are unpinned and schedule onto whatever capacity exists.
 
 The pool names become values of the `compute.coreweave.com/node-pool` node
 label. Later steps pin the hub to `marimohub-prod` (Helm values, step 8) and
-kernels to `marimohub-sandboxes` (sandbox profile, step 5) — if you pick other
+kernels to `marimohub-sandboxes` (runner policy, step 5) — if you pick other
 names, update those two places.
 
 Node provisioning can take up to ~30 minutes. `kubectl get nodes` shows them as
@@ -106,58 +106,48 @@ your machine:
 cwic sandbox runner get marimohub
 ```
 
-The `INSTALL` and `CONN` columns should read `READY` and `CONNECTED`. The Console
-also binds your organization's first sandbox profile as the runner's default —
-you'll add a marimohub-specific one next.
+The `INSTALL` and `CONN` columns should read `READY` and `CONNECTED`. The
+runner comes with a default sandbox policy — you'll review it next.
 
 Details: [Get started with CoreWeave sandboxes](https://docs.coreweave.com/products/sandboxes/get-started).
 
-## 5. Create a sandbox profile and bind it
+## 5. Review the runner's default sandbox policy
 
-A **profile** is the reusable spec for kernel sandboxes: which namespace they
-run in, how their network is exposed, and how their pods are shaped. marimohub
-needs a profile whose ingress publishes each sandbox at a predictable per-sandbox
-hostname, because the browser connects to kernels **directly** (not proxied
-through the hub).
+Every sandbox runs under its runner's **default policy**: which namespace it
+uses, how its network is exposed, and how its pod is shaped. Runners ship with
+a sensible default, so there is nothing to create or bind — review it, and
+edit only if you want marimohub-specific settings:
 
-There are several ways to author profiles (guided wizard, REST API); this guide
-uses **file import**, which keeps the profile reviewable and re-appliable. Save
-this as `profile.yaml`, substituting `<ORG-ID>` (and the cluster/pool names if
-you changed them):
+```bash
+cwic sandbox runner policy edit marimohub --print-template   # review
+cwic sandbox runner policy edit marimohub                    # edit (optional)
+```
 
-<!-- prettier-ignore -->
+Two things to check in the printed template:
+
+- **Ingress.** The browser connects to kernels **directly** (not proxied
+  through the hub), so each sandbox must be published at a predictable
+  per-sandbox hostname. Note the ingress `template` suffix —
+  `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` (step 8) must match it, and the
+  wildcard DNS + TLS (steps 6 and 9) must cover it. To serve kernels through
+  the cluster's own Traefik on your domain, set:
+
+  ```yaml
+  ingress:
+    controllerName: traefik
+    template: '{{.SandboxID}}.sandbox.<ORG-ID>-marimohub.coreweave.app'
+  ```
+
+- **Egress.** Kernels need outbound internet (`pip`/`uv` installs, data APIs)
+  but should not reach the internal network. Verify the default allows the
+  public internet while the RFC1918/link-local ranges (node metadata
+  endpoint, pod/service network) stay unreachable; pin any internal host
+  kernels may still reach with its own /32.
+
+Recommended pod settings for notebook kernels (all optional):
+
 ```yaml
-display_name: marimohub
 spec:
-  namespace:
-    # One shared namespace for all kernels — simplest to operate and debug.
-    # Alternatives: per-user | per-profile | static.
-    strategy: per-org
-  network:
-    egress:
-      # Kernels get outbound internet (pip installs, data APIs) but NOT the
-      # internal network: the allowlist covers all public IPv4 and omits the
-      # RFC1918/link-local ranges (10/8, 172.16/12, 192.168/16, 169.254/16), so
-      # the node metadata endpoint and pod/service network stay unreachable. The
-      # lone /32 pins one internal host kernels may still reach (an in-cluster
-      # data service, say) — drop it for a pure public-internet allowlist.
-      default: internet
-      modes:
-        internet:
-          type: allowlist
-          cidrs: [10.2.3.4/32, 0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/3, 96.0.0.0/6, 100.0.0.0/10, 100.128.0.0/9, 101.0.0.0/8, 102.0.0.0/7, 104.0.0.0/5, 112.0.0.0/4, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/8, 169.0.0.0/9, 169.128.0.0/10, 169.192.0.0/11, 169.224.0.0/12, 169.240.0.0/13, 169.248.0.0/14, 169.252.0.0/15, 169.255.0.0/16, 170.0.0.0/7, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 224.0.0.0/3]
-    ingress:
-      # Expose each sandbox publicly through the cluster's Traefik (installed
-      # in step 6) at a per-sandbox hostname. The template's DNS + TLS are
-      # handled by CoreWeave DNS (step 6) + a wildcard cert (step 9).
-      public:
-        scope: any
-        expectsExternalAddress: true
-        service:
-          serviceType: ClusterIP
-        ingress:
-          controllerName: traefik
-          template: '{{.SandboxID}}.sandbox.<ORG-ID>-marimohub.coreweave.app'
   pod:
     spec:
       # Pin kernels to the sandbox pool from step 3.
@@ -167,7 +157,7 @@ spec:
       # Notebook code does not need access to the Kubernetes API.
       automountServiceAccountToken: false
       # Kubernetes defaults /dev/shm to 64Mi; data tools (DuckDB, PyTorch
-      # dataloaders, Arrow) want much more. Optional but recommended.
+      # dataloaders, Arrow) want much more.
       volumes:
         - name: dshm
           emptyDir:
@@ -182,44 +172,23 @@ spec:
               mountPath: /dev/shm
 ```
 
-Create it and note the ID the CLI prints:
+Sandbox v1 has no per-create profile selection — the default policy applies to
+every sandbox the runner places. Dedicate the runner (or cluster) to
+marimohub; if other runners share the org, pin placement with
+`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`.
 
-```bash
-cwic sandbox profile create -f profile.yaml
-```
-
-Then bind it to the runner. Two gotchas: profiles do nothing until bound, and
-editing `profile_bindings` **replaces the whole list** — include every binding
-you want to keep (the runner already has a default from step 4), with exactly
-one `is_default: true`.
-
-```bash
-cwic sandbox runner get marimohub -o json   # note the existing bindings
-cwic sandbox runner edit marimohub          # edit profile_bindings, e.g.:
-```
-
-```yaml
-profile_bindings:
-  - profile_template_id: <NEW-MARIMOHUB-PROFILE-ID>
-    is_default: true
-```
-
-Make the marimohub profile the runner's **default** binding — Sandbox v1 has
-no per-create profile selection, so the hub cannot pick a binding by name.
-Dedicate a runner (or cluster) to marimohub; if other runners share the org,
-pin it with `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`.
-
-Profile schema, egress allowlists, and binding overrides:
+Policy schema, egress allowlists, and examples:
 [Configure a sandbox profile](https://docs.coreweave.com/products/sandboxes/profiles/configure),
 [Profiles overview](https://docs.coreweave.com/products/sandboxes/profiles/profiles),
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
 ### Optional per-user VAST directories
 
-Copy the normal profile, including its network and placement settings, into a
-second profile for editor homes. Keep the normal profile without
-this volume: notebook apps are shared across users and must not inherit the
-starter's directory. The PVC must exist in the sandbox namespace, and each
+Personal storage uses a **second runner** whose default policy adds the
+per-user mount. Enable another runner (step 4 flow) and give its policy the
+same network and placement settings as the normal one, plus the fields below.
+Keep the normal runner's policy without this volume: notebook apps are shared
+across users and must not inherit the starter's directory. The PVC must exist in the sandbox namespace, and each
 selected directory must be writable by the sandbox image's user (`appuser`, UID
 1000 in the default image). The shared-vast `csi.vastdata.com` driver with NFSv3
 allows kubelet to create a missing `subPathExpr` directory automatically as
@@ -227,10 +196,9 @@ allows kubelet to create a missing `subPathExpr` directory automatically as
 the behavior with your CSI configuration. If your setup creates `root:root` mode
 `0755`, use a supported `fsGroup` or a root init container to grant UID 1000
 access. The excerpt below shows the additional Pod fields; retain the ingress
-and egress blocks from the normal profile.
+and egress settings from the normal policy.
 
 ```yaml
-display_name: marimohub-user-home
 spec:
   namespace:
     strategy: static
@@ -260,9 +228,8 @@ spec:
               mountPath: /mnt
 ```
 
-Bind this profile as the **default** of a second, dedicated runner (v1 cannot
-select a profile by name); marimohub pins personal-storage editor sandboxes to
-it by runner id:
+Apply it with `cwic sandbox runner policy edit <user-home-runner>`;
+marimohub pins personal-storage editor sandboxes to that runner by id:
 
 ```yaml
 MARIMOHUB_EDITOR_SANDBOX_SHARING: exclusive
@@ -427,7 +394,7 @@ secrets:
 Two values worth calling out:
 
 - `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` must match the hostname suffix in the
-  profile's ingress `template` (step 5). Kernels are on a **separate hostname
+  runner policy's ingress `template` (step 5). Kernels are on a **separate hostname
   from the app by design** — origin isolation between untrusted kernel code and
   the hub UI.
 - `MARIMOHUB_COMPUTE_IMAGE` is the kernel image. `ghcr.io/marimo-team/marimo:latest-sql`
@@ -452,7 +419,7 @@ every `MARIMOHUB_*` var is in
 ## 9. Wildcard TLS for sandbox kernels
 
 The app Ingress carries its own certificate, but the per-sandbox Ingresses are
-created by the CoreWeave runner from the profile's `ingress` block — which has
+created by the CoreWeave runner from the policy's `ingress` block — which has
 no TLS fields — so they can't reference a certificate themselves. The fix is a
 **Traefik default certificate**: one wildcard cert that Traefik serves as the
 SNI fallback for every certless Ingress, in any namespace.
@@ -532,8 +499,8 @@ Full setup and the alternative hub-minted federation flow:
 CoreWeave's **Pod Identity Webhook** can supply short-lived CAIOS credentials.
 It uses your cluster's OIDC issuer and an annotated ServiceAccount.
 
-Add the ServiceAccount to `spec.pod.spec.serviceAccountName` in the sandbox
-profile. The webhook can also supply credentials to the hub pods.
+Add the ServiceAccount to `spec.pod.spec.serviceAccountName` in the runner
+policy. The webhook can also supply credentials to the hub pods.
 
 Do not set the CoreWeave bucket list for this method. Set the endpoint and
 region:
@@ -548,10 +515,9 @@ For setup steps, access policies, and trade-offs, see
 
 ### GPU sandboxes
 
-Add a profile whose pod placement requests GPU instance types
-(`spec.pod.placement.instanceTypes`, e.g. `gd-8xh100ib-i128`) backed by a GPU
-node pool, and make it the default of a dedicated runner pinned via
-`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. See
+Give a dedicated runner a policy whose pod placement requests GPU instance
+types (`spec.pod.placement.instanceTypes`, e.g. `gd-8xh100ib-i128`) backed by
+a GPU node pool, and pin it via `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. See
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
 ### Custom domain
@@ -561,7 +527,7 @@ Traefik LoadBalancer (`kubectl -n traefik get svc`). You'll also need a
 certificate solver for that domain (the automatic DNS-01 solver only covers
 `*.coreweave.app`) and, for kernels, a wildcard on your own
 `*.sandbox.<your-domain>` plus matching `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`
-and profile ingress `template`.
+and the runner policy's ingress `template`.
 
 ### Secret management
 
@@ -645,9 +611,8 @@ Re-apply (with a changed pod annotation so the pods roll) whenever you change
   `0.0.0.0`, not `127.0.0.1` (Traefik connects to the pod IP). The provisioner
   already passes `--host 0.0.0.0`; check anything that overrides the kernel
   command.
-- **Kernels never become reachable** — verify the marimohub profile is the
-  runner's default binding, and that `…_SANDBOX_HOSTNAME` matches the
-  profile's ingress `template` suffix exactly.
+- **Kernels never become reachable** — verify `…_SANDBOX_HOSTNAME` matches
+  the runner policy's ingress `template` suffix exactly (step 5).
 - **Kernel TLS shows the Traefik default self-signed cert** — the
   `sandbox-wildcard-tls` Certificate isn't Ready, or the TLSStore was
   overwritten by a Traefik chart upgrade (step 9).

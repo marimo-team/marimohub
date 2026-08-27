@@ -394,9 +394,9 @@ applies unchanged.
 
 - **The identity belongs to the ServiceAccount.** Kernels from one profile share
   one CAIOS identity. Use hub-minted federation for per-project identities.
-- **Different tiers need different profiles.** To give one class of notebooks
-  more access, give a second profile its own ServiceAccount and make it the
-  default of a dedicated runner, pinned via
+- **Different tiers need different policies.** To give one class of notebooks
+  more access, give a dedicated runner a policy with its own ServiceAccount,
+  pinned via
   `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS` (v1 has no per-create profile
   selection).
 - **Use the `per-org` or `static` namespace strategy.** The `per-user` and

@@ -402,14 +402,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS',
 						name: 'CoreWeave runner ids',
 						description:
-							"Comma-separated runner id(s) sandboxes may schedule on (own-cluster/CKS runners); the runner's default profile template decides network, mounts, and placement. Omit to let the fleet schedule anywhere.",
+							"Comma-separated runner id(s) sandboxes may schedule on (own-cluster/CKS runners); the runner's default policy decides network, mounts, and placement. Omit to let the fleet schedule anywhere.",
 						example: 'runner-marimohub',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS',
 						name: 'CoreWeave user-home runner ids',
 						description:
-							"Comma-separated runner id(s) used only for editor-or-higher edit sandboxes; must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. The runner's default profile template must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes use the normal runners.",
+							"Comma-separated runner id(s) used only for editor-or-higher edit sandboxes; must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. The runner's default policy must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes use the normal runners.",
 						example: 'runner-marimohub-user-home',
 						optIn: true,
 					},
