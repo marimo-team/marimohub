@@ -207,7 +207,8 @@ profile_bindings:
 The marimohub profile must be the runner's **default** binding: CoreWeave
 Sandbox v1 removed per-create profile selection from the SDK, so the hub can
 no longer pick a binding by name. Use a runner (or cluster) dedicated to
-marimohub.
+marimohub, and pin sandboxes to it with
+`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS` if other runners share the org.
 
 Profile schema, egress allowlists, and binding overrides:
 [Configure a sandbox profile](https://docs.coreweave.com/products/sandboxes/profiles/configure),
@@ -217,7 +218,8 @@ Profile schema, egress allowlists, and binding overrides:
 ### Optional per-user VAST directories
 
 Copy the normal profile, including its network and placement settings, into a
-second, non-default profile for editor homes. Keep the normal profile without
+second profile for editor homes (bound as the default of a dedicated runner —
+see below). Keep the normal profile without
 this volume: notebook apps are shared across users and must not inherit the
 starter's directory. The PVC must exist in the sandbox namespace, and each
 selected directory must be writable by the sandbox image's user (`appuser`, UID
@@ -260,24 +262,23 @@ spec:
               mountPath: /mnt
 ```
 
-> **Currently unavailable.** This feature selected the user-home profile per
-> create via `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE`; CoreWeave
-> Sandbox v1 removed per-create profile selection, and marimohub rejects the
-> variable at boot. The section below documents how it worked and what a
-> runner-level replacement would need.
-
-Bind this profile under the `marimohub-user-home` name, then configure:
+CoreWeave Sandbox v1 removed per-create profile selection, so the user-home
+profile can no longer be selected by name. Instead, register a **second
+runner** in the cluster and bind this profile as that runner's **default**
+profile template; marimohub pins editor sandboxes with personal storage to it
+by runner id:
 
 ```yaml
 MARIMOHUB_EDITOR_SANDBOX_SHARING: exclusive
-MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: marimohub-user-home
+MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS: <NORMAL-RUNNER-ID>
+MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: <USER-HOME-RUNNER-ID>
 ```
 
 Kubernetes does not expand environment variables in `mountPath`, so marimohub
 creates `/mnt/<lowercase-email>` as a symlink to the isolated VAST mount. The
 `emptyDir` makes `/mnt` writable without running the sandbox as root. marimohub
-refuses to enable this profile unless editor sharing is `exclusive`, and refuses
-to start when the normal and user-home profile lists overlap. Because the
+refuses to enable user homes unless editor sharing is `exclusive`, and refuses
+to start when the normal and user-home runner lists overlap. Because the
 `emptyDir` is mounted at `/mnt`, it shadows anything the sandbox image placed
 there. A user whose email changes receives a different directory; migrate or
 alias that data before changing the identity-provider email.
@@ -554,7 +555,8 @@ For setup steps, access policies, and trade-offs, see
 Add a profile whose pod placement requests GPU instance types
 (`spec.pod.placement.instanceTypes`, e.g. `gd-8xh100ib-i128`) backed by a GPU
 node pool, and make it the default binding of a dedicated runner (CoreWeave
-Sandbox v1 removed per-create profile selection). See
+Sandbox v1 removed per-create profile selection; runners are pinned via
+`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`). See
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
 ### Custom domain

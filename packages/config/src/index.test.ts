@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { createProjectId, createSessionId } from '@marimo-hub/core';
+import { BadRequestError, createProjectId, createSessionId } from '@marimo-hub/core';
 import type { ProxyExposure, SandboxProvider } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
@@ -833,7 +833,7 @@ describe('createFromEnv default role', () => {
 	});
 
 	it('rejects the CoreWeave vars that Sandbox v1 removed', () => {
-		// Set on any backend for the user-home var (the feature itself is gone)…
+		// Set on any backend for the user-home var (its successor is runner-based)…
 		expect(() =>
 			createFromEnv({
 				...baseEnv,
@@ -855,6 +855,65 @@ describe('createFromEnv default role', () => {
 				}),
 			).toThrow(new RegExp(`${variable} is no longer supported`));
 		}
+	});
+
+	it('requires exclusive CoreWeave editors when a user-home runner is configured', () => {
+		const coreweave = {
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+		};
+		expect(() => createFromEnv(coreweave)).toThrow(
+			/requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive/,
+		);
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/requires the coreweave backend/);
+	});
+
+	it('requires normal and user-home CoreWeave runners to be disjoint', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS: 'runner-a, runner-shared',
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-shared, runner-user-home',
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/must not overlap.*runner-shared/);
+	});
+
+	it('resolves exclusive CoreWeave user homes from canonical email', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: ' CoreWeave ',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+		});
+		expect(
+			deps.sandbox.userHome?.resolve({ id: 'user-1' as never, email: ' Ada@Example.COM ' }),
+		).toEqual({ key: 'ada@example.com', path: '/mnt/ada@example.com' });
+	});
+
+	it('rejects an email that cannot be a CoreWeave subpath', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+		});
+		const resolve = () =>
+			deps.sandbox.userHome?.resolve({ id: 'user-1' as never, email: '../escape@example.com' });
+		expect(resolve).toThrow(BadRequestError);
+		expect(resolve).toThrow(/contact an administrator.*identity-provider email claim/);
 	});
 
 	it('defaults persistWorkspace to "source" when MARIMOHUB_PERSIST_WORKSPACE is unset', () => {

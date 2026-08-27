@@ -28,7 +28,9 @@ profile. If kernels don't connect, set
 ::: warning Removed with CoreWeave Sandbox v1
 The SDK's v1 API removed per-create profile selection and network modes, so
 the former `…COREWEAVE_PROFILE`, `…_INGRESS_MODE`, `…_EGRESS_MODE`, and
-`…_USER_HOME_PROFILE` variables are rejected at boot — remove them. Sandboxes
-use the runner's default profile, and profile-mounted personal storage (user
-homes) is unavailable on this backend.
+`…_USER_HOME_PROFILE` variables are rejected at boot — remove them. A
+runner's **default** profile template now decides network, mounts, and
+placement: pin a template by naming its runner(s) in
+`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`, and give personal storage its own
+runner via `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS`.
 :::

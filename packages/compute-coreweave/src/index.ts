@@ -32,17 +32,24 @@
  * set `maxLifetimeSeconds` so CoreWeave hard-caps sandbox lifetime.
  *
  * INTEGRATION SURFACE (validate against the live CoreWeave API before production,
- * same caveat the Modal adapter carries): the shape of the kernel `services`
- * declaration (public visibility + open HTTPS endpoint) is what v1 offers in
- * place of the removed `ingressMode`; the public kernel URL is CONSTRUCTED from a
- * hostname template (inspect's `serviceUrls` is assigned-not-edge-ready per the
- * SDK docs); and the `waitForPort` probe assumes `python3` is on the image PATH.
+ * same caveat the Modal adapter carries): the kernel `services` declaration
+ * (public visibility, no product endpoint — v1 Create rejects a set endpoint
+ * as unimplemented) is what v1 offers in place of the removed `ingressMode`;
+ * the public kernel URL is CONSTRUCTED from a hostname template (inspect's
+ * `serviceUrls` is assigned-not-edge-ready per the SDK docs); and the
+ * `waitForPort` probe assumes `python3` is on the image PATH.
  *
  * Sandbox v1 (SDK ≥0.2.0-beta.0) REMOVED create-time profile selection
  * (`profileNames`) along with `ports`/`ingressMode`/`egressMode` — the SDK
- * rejects them client-side. Profile-mounted personal storage (user homes) is
- * therefore unsupported on this backend until CoreWeave exposes an equivalent
- * (per-runner default profiles + `runnerIds` is the closest v1 mechanism).
+ * rejects them client-side. A runner's DEFAULT profile template now decides
+ * network, mounts, and placement, so per-create targeting happens by pinning
+ * `runnerIds` to runners bound to the wanted template (the SDK sets
+ * `mode: CKS` whenever runner ids are supplied — own-cluster runners only).
+ * User-home personal storage rides that mechanism: editor sandboxes with a
+ * `userHome` are pinned to `userHomeRunnerIds`, whose default profile must
+ * mount the per-user PVC. The v1 proto's direct successors —
+ * `CreateSandboxFromTemplate` and registered Volumes (`volume_id`) — are not
+ * exposed by the TS SDK yet; adopt them here when they land.
  */
 import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
@@ -75,11 +82,18 @@ import {
 	parseFindFilesOutput,
 	portWaitCommand,
 	removeUndefined,
+	shellQuote,
 	transportFailureResult,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
-import type { ComputeResources, SandboxId, Seconds, Timings } from '@marimo-hub/core';
+import type {
+	ComputeResources,
+	SandboxId,
+	SandboxUserHome,
+	Seconds,
+	Timings,
+} from '@marimo-hub/core';
 import { logEvent } from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
@@ -112,6 +126,9 @@ const DEFAULT_KERNEL_PORT = 2718;
 const DEFAULT_OWNER_TAG = 'marimohub';
 /** Prefix for the per-sandbox tag that encodes our `SandboxId`. */
 const ID_TAG_PREFIX = 'mh-sbx-';
+/** Fixed profile-template mount; a bootstrap symlink exposes it at `/mnt/<email>`. */
+const USER_HOME_MOUNT_PATH = '/var/run/marimohub/user-home';
+const USER_HOME_KEY_ENV = 'MARIMOHUB_USER_HOME_KEY';
 
 /** Longest a single in-sandbox port wait may block before we re-issue it. */
 const PORT_WAIT_CHUNK_MS = 30_000;
@@ -190,6 +207,21 @@ export interface CoreWeaveConfig {
 	kernelPort?: number;
 	/** Tag applied to every sandbox we own (manual discovery/cleanup). Default `marimohub`. */
 	ownerTag?: string;
+	/**
+	 * Runner IDs sandboxes may schedule on. This is v1's placement lever: a
+	 * runner's DEFAULT profile template decides network/mounts/placement, so a
+	 * deployment selects a profile template by pinning the runner(s) bound to
+	 * it. Omit to let the fleet schedule anywhere.
+	 */
+	runnerIds?: readonly string[];
+	/**
+	 * Runner(s) whose default profile template mounts the per-user VAST/PVC at
+	 * `USER_HOME_MOUNT_PATH` (`subPathExpr` on the injected
+	 * `MARIMOHUB_USER_HOME_KEY` env var). Used only for editor sandboxes
+	 * carrying a `userHome`; must be disjoint from `runnerIds` so apps and
+	 * viewer sandboxes can never land on the mount-bearing runner.
+	 */
+	userHomeRunnerIds?: readonly string[];
 	/**
 	 * Template for the public kernel URL. `{sandboxId}`, `{port}`, and `{host}` are
 	 * substituted. Default `https://{sandboxId}-{port}.{host}` where `{host}` is the
@@ -308,6 +340,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly client: CoreWeaveClient,
 		/** Reconnect-by-tag before creating. False on a fresh provision (skips a wasted list). */
 		private readonly reuse = true,
+		private readonly userHome?: SandboxUserHome,
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
@@ -351,6 +384,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				create_ms: t2 - t1,
 				boot_ms: t3 - t2,
 				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
+				...(this.config.runnerIds?.length ? { runner_ids: this.config.runnerIds } : {}),
+				...(this.userHome ? { user_home_attached: true } : {}),
 			},
 			{ channel: 'warn' },
 		);
@@ -382,26 +417,27 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	private createOptions(): SandboxRunOptions {
+		const objectStorage = this.objectStorageOptions();
+		const environmentVariables = {
+			...objectStorage.environmentVariables,
+			...(this.userHome ? { [USER_HOME_KEY_ENV]: this.userHome.key } : {}),
+		};
 		return {
 			containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
 			// v1's replacement for the removed `ports` + ingress mode: a public
-			// service with an open HTTPS endpoint on the kernel port. Egress follows
-			// the fleet policy default (the removed `egressMode` has no v1 analogue).
-			services: [
-				{
-					name: 'kernel',
-					port: this.kernelPort,
-					protocol: 'tcp',
-					visibility: 'public',
-					endpoint: { kind: 'https', auth: 'open' },
-				},
-			],
+			// service on the kernel port ("the platform chooses the mechanism").
+			// No `endpoint`: the v1 proto documents Create as rejecting a set
+			// endpoint as unimplemented. Egress follows the runner policy default
+			// (the removed `egressMode` has no v1 analogue).
+			services: [{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility: 'public' }],
 			tags: [this.config.ownerTag ?? DEFAULT_OWNER_TAG, this.idTag],
+			...(this.config.runnerIds?.length ? { runnerIds: this.config.runnerIds } : {}),
 			...(this.config.resources ? { resources: this.config.resources } : {}),
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
-			...this.objectStorageOptions(),
+			...objectStorage,
+			...(Object.keys(environmentVariables).length > 0 ? { environmentVariables } : {}),
 			// `ensure` runs the readiness wait itself so create and boot time are
 			// measured separately.
 			waitUntilRunning: false,
@@ -435,7 +471,23 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	private createBootstrap(): string | undefined {
-		return this.needsAwsConfigBootstrap() ? AWS_CONFIG_BOOTSTRAP : undefined;
+		const snippets: string[] = [];
+		if (this.needsAwsConfigBootstrap()) snippets.push(AWS_CONFIG_BOOTSTRAP);
+		if (this.userHome) {
+			const parent = this.userHome.path.slice(0, this.userHome.path.lastIndexOf('/')) || '/';
+			const mountMissing = `marimohub: user-home runner mount missing at ${USER_HOME_MOUNT_PATH}`;
+			const linkFailed = `marimohub: cannot prepare user home at ${this.userHome.path}`;
+			snippets.push(
+				`if [ ! -d ${shellQuote(USER_HOME_MOUNT_PATH)} ]; then ` +
+					`echo ${shellQuote(mountMissing)} >&2; exit 1; fi; ` +
+					`if ! mkdir -p ${shellQuote(parent)}; then ` +
+					`echo ${shellQuote(linkFailed)} >&2; exit 1; fi; ` +
+					`if [ ! -e ${shellQuote(this.userHome.path)} ] && ` +
+					`! ln -s ${shellQuote(USER_HOME_MOUNT_PATH)} ${shellQuote(this.userHome.path)}; then ` +
+					`echo ${shellQuote(linkFailed)} >&2; exit 1; fi;`,
+			);
+		}
+		return snippets.length > 0 ? snippets.join(' ') : undefined;
 	}
 
 	/**
@@ -483,9 +535,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
 		const sandbox = await this.ensure();
-		// AddFile creates parent directories itself, and FileContent is
-		// `string | Uint8Array`, so bytes pass straight through.
+		// AddFile creates parent directories itself. The bootstrap links the user
+		// home into place, so a write beneath it must not race ahead of that.
+		if (this.pendingBootstrap && this.writesUnderUserHome(files)) {
+			await this.exec('true');
+		}
+		// FileContent is `string | Uint8Array`, so bytes pass straight through.
 		await sandbox.files.write(files.map((f) => ({ path: f.path, content: f.content })));
+	}
+
+	private writesUnderUserHome(files: readonly SandboxFileWrite[]): boolean {
+		const home = this.userHome?.path;
+		if (!home) return false;
+		const prefix = home.endsWith('/') ? home : `${home}/`;
+		return files.some((f) => f.path === home || f.path.startsWith(prefix));
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
@@ -794,26 +857,30 @@ export class CoreWeaveCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		if (options?.userHome) {
-			// Personal storage rode per-create profile selection, which Sandbox v1
-			// removed from the SDK; failing here beats a sandbox with no mount.
-			throw new Error(
-				'Personal storage (user homes) is not supported on the CoreWeave backend: ' +
-					'CoreWeave Sandbox v1 removed per-create profile selection',
-			);
+		if (options?.userHome && !this.config.userHomeRunnerIds?.length) {
+			// Failing here beats provisioning an editor without its mount: the
+			// bootstrap would abort in-sandbox, after the boot wait.
+			throw new Error('A CoreWeave user-home runner is required for personal storage');
 		}
 		const resources = coreWeaveProfileResources(options?.resources);
 		const config =
-			options?.image || resources
+			options?.image || resources || options?.userHome
 				? {
 						...this.config,
 						...(options?.image ? { image: options.image } : {}),
+						...(options?.userHome ? { runnerIds: this.config.userHomeRunnerIds } : {}),
 						...(resources
 							? { resources: mergeCoreWeaveResources(this.config.resources, resources) }
 							: {}),
 					}
 				: this.config;
-		return new CoreWeaveSandboxInstance(id, config, this.getClient(), options?.reuse ?? true);
+		return new CoreWeaveSandboxInstance(
+			id,
+			config,
+			this.getClient(),
+			options?.reuse ?? true,
+			options?.userHome,
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

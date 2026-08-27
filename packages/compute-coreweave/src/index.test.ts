@@ -56,14 +56,9 @@ describe('CoreWeaveCompute', () => {
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			expect(world.created).toHaveLength(1);
 			const opts = world.created[0];
+			// No `endpoint`: v1 Create rejects a set product endpoint as unimplemented.
 			expect(opts.services).toEqual([
-				{
-					name: 'kernel',
-					port: 2718,
-					protocol: 'tcp',
-					visibility: 'public',
-					endpoint: { kind: 'https', auth: 'open' },
-				},
+				{ name: 'kernel', port: 2718, protocol: 'tcp', visibility: 'public' },
 			]);
 			expect(opts.tags).toEqual(['marimohub', ID_TAG]);
 			expect(opts.containerImage).toBe('my-image');
@@ -109,13 +104,84 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
-		it('rejects a user home (profile selection was removed in Sandbox v1)', () => {
+		it('passes configured runner ids at create time and omits them by default', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, runnerIds: ['runner-a', 'runner-b'] })
+				.create(SANDBOX_ID)
+				.exec('true');
+			expect(world.created[0].runnerIds).toEqual(['runner-a', 'runner-b']);
+
+			const bare = makeWorld();
+			await makeCompute(bare).create(SANDBOX_ID).exec('true');
+			expect(bare.created[0].runnerIds).toBeUndefined();
+		});
+
+		it('pins a user-home sandbox to the user-home runner and exposes the email path safely', async () => {
+			const world = makeWorld();
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await makeCompute(world, {
+					...baseConfig,
+					runnerIds: ['runner-marimohub'],
+					userHomeRunnerIds: ['runner-marimohub-user-home'],
+				})
+					.create(SANDBOX_ID, {
+						userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+					})
+					.exec('true');
+
+				expect(world.created[0].runnerIds).toEqual(['runner-marimohub-user-home']);
+				expect(world.created[0].environmentVariables).toMatchObject({
+					MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
+				});
+				const command = world.registry.get('cw-1')!.fake.runCalls[0][2];
+				expect(command).toContain("if [ ! -d '/var/run/marimohub/user-home' ]");
+				expect(command).toContain(
+					'marimohub: user-home runner mount missing at /var/run/marimohub/user-home',
+				);
+				expect(command).toContain("ln -s '/var/run/marimohub/user-home' '/mnt/ada@example.com'");
+				expect(command).toMatch(/; true$/);
+				const ensureEvent = warn.mock.calls
+					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+					.find((event) => event.event === 'coreweave_ensure');
+				expect(ensureEvent).toMatchObject({
+					runner_ids: ['runner-marimohub-user-home'],
+					user_home_attached: true,
+				});
+				expect(ensureEvent).not.toHaveProperty('user_home_key');
+				expect(JSON.stringify(ensureEvent)).not.toContain('ada@example.com');
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
+		it('merges user-home and object-storage environment variables', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				userHomeRunnerIds: ['runner-marimohub-user-home'],
+				objectStorageEndpoint: 'https://cwobject.com',
+				objectStorageRegion: 'us-east-04a',
+			})
+				.create(SANDBOX_ID, {
+					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+				})
+				.exec('true');
+
+			expect(world.created[0].environmentVariables).toEqual({
+				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
+				AWS_REGION: 'us-east-04a',
+				MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
+			});
+		});
+
+		it('rejects a user home without a configured CoreWeave user-home runner', () => {
 			const world = makeWorld();
 			expect(() =>
 				makeCompute(world).create(SANDBOX_ID, {
 					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
 				}),
-			).toThrow(/not supported on the CoreWeave backend/);
+			).toThrow(/user-home runner is required/);
 		});
 
 		it('a per-create image override replaces the configured containerImage', async () => {
@@ -336,6 +402,31 @@ describe('CoreWeaveCompute', () => {
 			await inst.exec('true');
 			expect(fake.runCalls).toHaveLength(1);
 			expect(fake.runCalls[0][2]).toContain('addressing_style = virtual');
+		});
+
+		it('flushes the armed bootstrap before a write beneath the user home', async () => {
+			const world = makeWorld();
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const inst = makeCompute(world, {
+					...baseConfig,
+					userHomeRunnerIds: ['runner-marimohub-user-home'],
+				}).create(SANDBOX_ID, {
+					reuse: false,
+					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+				});
+				await inst.writeFiles([{ path: '/mnt/ada@example.com/notes.md', content: 'x' }]);
+				const fake = world.registry.get('cw-1')!.fake;
+				// Link first, or AddFile creates a plain dir in its place.
+				expect(fake.runCalls).toHaveLength(1);
+				expect(fake.runCalls[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
+				expect(fake.batchWrites).toHaveLength(1);
+				// Consumed once.
+				await inst.exec('true');
+				expect(fake.runCalls[1][2]).not.toContain('ln -s');
+			} finally {
+				warn.mockRestore();
+			}
 		});
 	});
 

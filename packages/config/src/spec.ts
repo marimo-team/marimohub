@@ -399,6 +399,21 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'https://{sandboxId}-{port}.{host}',
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS',
+						name: 'CoreWeave runner ids',
+						description:
+							"Comma-separated runner id(s) sandboxes may schedule on (own-cluster/CKS runners). Sandbox v1's stand-in for the removed per-create profile selection: a runner's default profile template decides network, mounts, and placement. Omit to let the fleet schedule anywhere.",
+						example: 'runner-marimohub',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS',
+						name: 'CoreWeave user-home runner ids',
+						description:
+							"Comma-separated runner id(s) used only for editor-or-higher edit sandboxes. These ids must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. The runner's default profile template must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal runners.",
+						example: 'runner-marimohub-user-home',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
 						name: 'CoreWeave max lifetime (seconds)',
 						description:
