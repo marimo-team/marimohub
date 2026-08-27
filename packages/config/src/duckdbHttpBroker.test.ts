@@ -236,6 +236,50 @@ describe('createDuckDBHttpSessionFactory', () => {
 		expect(transport.mock.calls.at(-1)?.[0].headers?.authorization).toBe('Bearer token-2');
 	});
 
+	it('keeps a shared OAuth refresh running when one catalog request is canceled', async () => {
+		let resolveExchange!: (value: { accessToken: string; expiresInSeconds: number }) => void;
+		let exchangeSignal: AbortSignal | undefined;
+		const exchange = vi.fn<OAuthTokenExchange>(
+			(_request, signal) =>
+				new Promise((resolve, reject) => {
+					resolveExchange = resolve;
+					exchangeSignal = signal;
+					signal?.addEventListener('abort', () => reject(new Error('exchange aborted')), {
+						once: true,
+					});
+				}),
+		);
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: {},
+			body: new Uint8Array(),
+		}));
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			oauthTokenExchange: exchange,
+			now: () => NOW,
+		})(OAUTH_ACCESS, { expiresAtMs: NOW + 60_000 });
+		const request = {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET' as const,
+		};
+		const firstController = new AbortController();
+		const first = session.fetch(request, firstController.signal);
+		await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+		const second = session.fetch(request);
+		const firstResult = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+
+		firstController.abort();
+
+		await firstResult;
+		expect(exchangeSignal?.aborted).toBe(false);
+		resolveExchange({ accessToken: 'shared-token', expiresInSeconds: 100 });
+		await expect(second).resolves.toMatchObject({ status: 200 });
+		expect(exchange).toHaveBeenCalledOnce();
+		expect(transport).toHaveBeenCalledOnce();
+		expect(transport.mock.calls[0]?.[0].headers?.authorization).toBe('Bearer shared-token');
+	});
+
 	it('retries after an initial OAuth outage without sending an unauthenticated catalog request', async () => {
 		let clock = NOW;
 		const exchange = vi
@@ -373,7 +417,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 
 		session.close();
 
-		await expect(pending).rejects.toThrow(OAUTH_CANCELLED_ERROR);
+		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 		expect(exchangeSignal?.aborted).toBe(true);
 		expect(transport).not.toHaveBeenCalled();
 	});

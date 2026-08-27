@@ -239,7 +239,7 @@ function s3QueryReadiness(config: S3Config): QueryReadinessCheck[] {
 		readinessCheck(
 			's3-secure-transport',
 			'Use HTTPS for authenticated S3',
-			!usesInsecureStaticS3(config),
+			!usesInsecureAuthenticatedS3(config),
 			'endpoint_url',
 			'authenticated S3 requires HTTPS unless insecure transport is explicitly enabled',
 		),
@@ -315,16 +315,16 @@ function s3HttpAccess(config: S3Config): DuckDBHttpAccess {
 	};
 }
 
-function usesInsecureStaticS3(config: S3Config): boolean {
+function usesInsecureAuthenticatedS3(config: S3Config): boolean {
 	return (
-		config.auth.method === 'static' &&
+		config.auth.method !== 'anonymous' &&
 		!config.allow_insecure_transport &&
 		isInsecureHttpUrl(config.endpoint_url)
 	);
 }
 
 function assertSecureS3Transport(config: S3Config): void {
-	if (!usesInsecureStaticS3(config)) return;
+	if (!usesInsecureAuthenticatedS3(config)) return;
 	throw new ValidationError(
 		'Authenticated S3 requires an https:// endpoint. Enable allow_insecure_transport to override ' +
 			'for local development.',

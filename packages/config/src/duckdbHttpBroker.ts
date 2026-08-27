@@ -119,7 +119,7 @@ export function createDuckDBHttpSessionFactory(
 }
 
 interface OAuthTokenProvider {
-	authorization(signal?: AbortSignal): Promise<Readonly<Record<string, string>>>;
+	authorization(): Promise<Readonly<Record<string, string>>>;
 	close(): void;
 }
 
@@ -161,10 +161,7 @@ function routesFor(
 		headers: access.catalog.authorization
 			? { authorization: access.catalog.authorization }
 			: undefined,
-		prepareHeaders: oauthProvider
-			? (_request: Readonly<IcebergHttpBrokerRequest>, signal?: AbortSignal) =>
-					oauthProvider.authorization(signal)
-			: undefined,
+		prepareHeaders: oauthProvider ? () => oauthProvider.authorization() : undefined,
 		discardRequestHeaders: ['authorization'] as const,
 	};
 	const storage = access.storage;
@@ -364,14 +361,11 @@ function createOAuthTokenProvider(options: {
 		options.allowInsecureTransport,
 	).toString();
 
-	const exchange = async (signal?: AbortSignal): Promise<string> => {
+	const exchange = async (): Promise<string> => {
 		const remainingMs = options.sessionExpiresAtMs - options.now();
 		if (closed || remainingMs <= 0) throw oauthFailure('session');
-		const lifecycleSignal = signal
-			? AbortSignal.any([signal, controller.signal])
-			: controller.signal;
 		const combinedSignal = deadlineSignal(
-			lifecycleSignal,
+			controller.signal,
 			options.sessionExpiresAtMs,
 			options.now(),
 		);
@@ -411,14 +405,14 @@ function createOAuthTokenProvider(options: {
 			}
 			if (error instanceof OAuthTokenError) throw error;
 			if (combinedSignal.aborted) {
-				throw oauthFailure(lifecycleSignal.aborted ? 'cancelled' : 'session');
+				throw oauthFailure(controller.signal.aborted ? 'cancelled' : 'session');
 			}
 			throw oauthFailure('transport');
 		}
 	};
 
 	return {
-		async authorization(signal) {
+		async authorization() {
 			const currentTime = options.now();
 			if (closed || currentTime >= options.sessionExpiresAtMs) throw oauthFailure('session');
 			const refreshAtMs = (cached?.expiresAtMs ?? 0) - options.auth.refreshMarginSeconds * 1000;
@@ -436,7 +430,7 @@ function createOAuthTokenProvider(options: {
 					'OAuth2 token refresh failed recently. Retry the query in one second.',
 				);
 			}
-			refresh ??= exchange(signal).finally(() => {
+			refresh ??= exchange().finally(() => {
 				refresh = undefined;
 			});
 			const token = await refresh;

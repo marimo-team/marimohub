@@ -154,6 +154,14 @@ export const s3BrokerReadLocationSchema = z
 	})
 	.superRefine((location, context) => {
 		const prefix = normalizeBrokerPrefix(location.prefix);
+		if (hasUnpairedSurrogate(location.prefix)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['prefix'],
+				message: 'S3 broker read location prefixes must contain valid Unicode text.',
+			});
+			return;
+		}
 		const unsafeBucket =
 			!BROKER_BUCKET_REGEX.test(location.bucket) ||
 			location.bucket === '.' ||
@@ -197,6 +205,20 @@ function hasControlCharacter(value: string): boolean {
 	for (const character of value) {
 		const codePoint = character.codePointAt(0) ?? 0;
 		if (codePoint < 32 || codePoint === 127) return true;
+	}
+	return false;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const codeUnit = value.charCodeAt(index);
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const next = value.charCodeAt(index + 1);
+			if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+			index++;
+		} else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+			return true;
+		}
 	}
 	return false;
 }

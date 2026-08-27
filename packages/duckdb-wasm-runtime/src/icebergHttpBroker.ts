@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { noopMetrics } from '@marimo-hub/core';
+import { noopMetrics, withAbortSignal } from '@marimo-hub/core';
 import type { Metrics } from '@marimo-hub/core';
 
 export type IcebergHttpBrokerMethod = 'GET' | 'HEAD';
@@ -11,6 +11,7 @@ export interface IcebergHttpBrokerRoute {
 	methods: readonly IcebergHttpBrokerMethod[];
 	/** Parent-owned headers, including credentials. They are never sent by the worker. */
 	headers?: Readonly<Record<string, string>>;
+	/** The signal covers the capability lifetime; individual callers can stop waiting independently. */
 	prepareHeaders?: (
 		request: Readonly<IcebergHttpBrokerRequest>,
 		signal?: AbortSignal,
@@ -94,6 +95,7 @@ interface Session {
 	routes: readonly NormalizedRoute[];
 	limits: IcebergHttpBrokerCapability['limits'];
 	forwardRequestHeaders: ReadonlySet<string>;
+	lifecycleController: AbortController;
 	requests: number;
 	activeRequests: number;
 	responseBytes: number;
@@ -179,6 +181,7 @@ export class IcebergHttpBroker {
 	close(id: string): void {
 		const session = this.sessions.get(id);
 		this.sessions.delete(id);
+		session?.lifecycleController.abort();
 		for (const controller of session?.controllers ?? []) controller.abort();
 		wakeAll(session?.requestWaiters);
 		wakeAll(session?.responseWaiters);
@@ -363,6 +366,7 @@ function normalizeCapability(
 		routes: capability.routes.map(normalizeRoute),
 		limits: { ...limits },
 		forwardRequestHeaders: forwarded,
+		lifecycleController: new AbortController(),
 		requests: 0,
 		activeRequests: 0,
 		responseBytes: 0,
@@ -503,8 +507,9 @@ async function authorize(
 	}
 	if (signal?.aborted) throw abortError();
 	session.requests += 1;
+	const preparation = route.prepareHeaders?.(request, session.lifecycleController.signal);
 	const preparedHeaders = normalizeHeaders(
-		(await route.prepareHeaders?.(request, signal)) ?? {},
+		preparation ? await withAbortSignal(preparation, signal, abortError) : {},
 		'invalid_request',
 	);
 	session.metrics.increment('duckdb_http_broker.request', 1, {

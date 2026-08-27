@@ -214,7 +214,7 @@ export const icebergRest = defineIntegration({
 						'Basic auth. Enable allow_insecure_transport to override for local development.',
 				);
 			}
-			if (usesInsecureStaticS3(config)) {
+			if (usesInsecureAuthenticatedS3(config)) {
 				throw new ValidationError(
 					'Authenticated S3 storage requires an https:// endpoint. Enable ' +
 						'allow_insecure_transport to override for local development.',
@@ -827,7 +827,7 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 					readinessCheck(
 						's3-secure-transport',
 						'Use HTTPS for authenticated S3',
-						!usesInsecureStaticS3(value),
+						!usesInsecureAuthenticatedS3(value),
 						'storage.endpoint',
 						'authenticated S3 requires HTTPS unless insecure transport is explicitly enabled',
 					),
@@ -1008,10 +1008,9 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 	};
 }
 
-function usesInsecureStaticS3(config: IcebergRestConfig): boolean {
+function usesInsecureAuthenticatedS3(config: IcebergRestConfig): boolean {
 	return (
 		config.storage.scheme === 's3' &&
-		config.storage.credentials.method === 'static' &&
 		!config.storage.anonymous &&
 		!config.allow_insecure_transport &&
 		isInsecureHttpUrl(config.storage.endpoint)

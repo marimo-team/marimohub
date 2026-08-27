@@ -175,5 +175,7 @@ Run the live test with these commands:
 pnpm dev:services
 MARIMOHUB_TEST_ICEBERG_BROKER_URI=http://127.0.0.1:18181 \
 MARIMOHUB_TEST_ICEBERG_BROKER_S3_ENDPOINT=http://127.0.0.1:19000 \
+MARIMOHUB_TEST_ICEBERG_BROKER_S3_ACCESS_KEY=minioadmin \
+MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY=minioadmin \
 pnpm --filter @marimo-hub/config test -- --run src/duckdbHttpBroker.live.test.ts
 ```

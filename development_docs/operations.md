@@ -226,7 +226,8 @@ Signals emitted today:
 | `data_preview.duckdb.pool_size` / `.active` / `.rows`                    | gauge     | `DuckDBWasmDataPreview`         |
 | `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms` | gauge     | `DuckDBWasmDataPreview`         |
 | `duckdb_http_broker.request` / `.redirect` / `.budget_exhausted`         | counter   | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.response_bytes` / `.bridge_failure`                  | counter   | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.response_bytes`                                      | histogram | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.bridge_failure`                                      | counter   | guarded DuckDB HTTP broker      |
 | `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`        | histogram | guarded DuckDB HTTP broker      |
 | `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`  | counter   | guarded DuckDB OAuth2 provider  |
 | Per-cycle: `sessions_expired`, `snapshots_pruned`, …                     | fields    | the `maintenance_cycle` event   |

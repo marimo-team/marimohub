@@ -302,6 +302,57 @@ describe('IcebergHttpBroker', () => {
 		});
 	});
 
+	it('lets one caller cancel without aborting shared parent header preparation', async () => {
+		let resolvePreparation!: (headers: Readonly<Record<string, string>>) => void;
+		let preparationSignal: AbortSignal | undefined;
+		let sharedPreparation: Promise<Readonly<Record<string, string>>> | undefined;
+		const { broker, calls, transport } = setup();
+		const prepareHeaders = vi.fn<
+			NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>
+		>((_request, signal) => {
+			sharedPreparation ??= new Promise((resolve, reject) => {
+				resolvePreparation = resolve;
+				preparationSignal = signal;
+				signal?.addEventListener('abort', () => reject(new Error('preparation aborted')), {
+					once: true,
+				});
+			});
+			return sharedPreparation;
+		});
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						prepareHeaders,
+					},
+				],
+			}),
+		);
+		const request = {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET' as const,
+		};
+		const firstController = new AbortController();
+		const first = broker.fetch(id, request, firstController.signal);
+		await vi.waitFor(() => expect(prepareHeaders).toHaveBeenCalledOnce());
+		const second = broker.fetch(id, request);
+		await vi.waitFor(() => expect(prepareHeaders).toHaveBeenCalledTimes(2));
+		const firstResult = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+
+		firstController.abort();
+
+		await firstResult;
+		expect(preparationSignal?.aborted).toBe(false);
+		resolvePreparation({ authorization: 'Bearer shared-token' });
+		await expect(second).resolves.toMatchObject({ status: 200 });
+		expect(transport).toHaveBeenCalledOnce();
+		expect(calls[0]?.headers?.authorization).toBe('Bearer shared-token');
+	});
+
 	it('rejects targets outside the granted origins and path prefixes', async () => {
 		const { broker, transport } = setup();
 		const id = broker.open(capability());
@@ -354,7 +405,7 @@ describe('IcebergHttpBroker', () => {
 		expect(transport).not.toHaveBeenCalled();
 	});
 
-	it('does not retain an abort controller when request normalization fails', async () => {
+	it('does not retain a request abort controller when request normalization fails', async () => {
 		const { broker } = setup();
 		const abort = vi.spyOn(AbortController.prototype, 'abort');
 		const id = broker.open(capability());
@@ -370,7 +421,7 @@ describe('IcebergHttpBroker', () => {
 			);
 			broker.close(id);
 
-			expect(abort).not.toHaveBeenCalled();
+			expect(abort).toHaveBeenCalledOnce();
 		} finally {
 			abort.mockRestore();
 		}
