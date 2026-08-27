@@ -214,8 +214,7 @@ export function VersionHistoryDialog({
 	const { data: users, isLoading: usersLoading } = useUsersQuery(versions.map((v) => v.author));
 
 	const restoreVersion = useRestoreVersion(projectId, notebook.id);
-	// Git-synced content is owned by the sync; the API rejects restoring it.
-	const restorable = canRestore && notebook.source_type !== 'git';
+	const restorable = canRestore && notebook.status !== 'deleted' && notebook.source_type !== 'git';
 
 	const handleRestore = () => {
 		const target = confirmRestore.target;

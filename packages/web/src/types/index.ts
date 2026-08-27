@@ -49,6 +49,8 @@ import type {
 // Aliases onto the generated client types. Names kept stable so existing web
 // imports (`ProjectSummary`, `NotebookEntry`, ...) continue to work.
 export type ProjectSummary = SnapshotProjectEntry;
+type ProjectListQuery = NonNullable<paths['/api/v1/projects']['get']['parameters']['query']>;
+export type ProjectListFilters = Pick<ProjectListQuery, 'q' | 'status' | 'tag'>;
 /** The full project meta returned by `GET /api/v1/projects/:id` (includes `federation`). */
 export type ProjectDetail = ClientProject;
 /** Per-project workload-identity federation opt-in. */
@@ -65,6 +67,10 @@ type CreateProjectAlertDestinationBody =
 	paths['/api/v1/projects/{pid}/alert-destinations']['post']['requestBody']['content']['application/json'];
 export type ProjectAlertKind = NonNullable<CreateProjectAlertDestinationBody['kinds']>[number];
 export type NotebookEntry = SnapshotNotebookEntry;
+type NotebookListQuery = NonNullable<
+	paths['/api/v1/projects/{pid}/notebooks']['get']['parameters']['query']
+>;
+export type NotebookListFilters = Pick<NotebookListQuery, 'q' | 'status' | 'tag'>;
 export type NotebookMeta = ClientNotebookMeta;
 export type NotebookDetail = ClientNotebookDetail;
 /** A saved notebook revision from `GET .../versions`. */

@@ -25,6 +25,145 @@ describe('Project routes', () => {
 		expect(await expectPage(res)).toEqual([]);
 	});
 
+	describe('list filters', () => {
+		const create = (name: string, description: string, tags: string[]) =>
+			request('POST', '/projects', { name, description, tags });
+
+		it('filters by status, exact tag, and case-insensitive name or description text', async () => {
+			const finance = await expectOk<any>(
+				await create('Revenue Review', 'Monthly totals', ['finance']),
+				201,
+			);
+			const operations = await expectOk<any>(
+				await create('Capacity', 'Quarterly PIPELINE forecast', ['finance-archive']),
+				201,
+			);
+			const deleted = await expectOk<any>(
+				await create('Retired Revenue', 'Historical totals', ['retired']),
+				201,
+			);
+			await expectOk(await request('DELETE', `/projects/${deleted.id}`));
+
+			expect(
+				(await expectPage<any>(await request('GET', '/projects?status=deleted'))).map((p) => p.id),
+			).toEqual([deleted.id]);
+			const tagged = await expectPage<any>(await request('GET', '/projects?tag=finance'));
+			expect(tagged.map((p) => p.id)).toEqual([finance.id]);
+			expect(tagged[0]).not.toHaveProperty('tags');
+			expect(
+				(await expectPage<any>(await request('GET', '/projects?q=pipeline'))).map((p) => p.id),
+			).toEqual([operations.id]);
+			expect(
+				(await expectPage<any>(await request('GET', '/projects?q=REVENUE'))).map((p) => p.id),
+			).toEqual([finance.id]);
+			expect(
+				(await expectPage<any>(await request('GET', '/projects')))
+					.map((p) => p.id)
+					.sort((a, b) => a.localeCompare(b)),
+			).toEqual([finance.id, operations.id].sort((a, b) => a.localeCompare(b)));
+		});
+
+		it('ANDs filters and paginates the filtered set', async () => {
+			const matching: string[] = [];
+			for (let i = 0; i < 3; i++) {
+				const project = await expectOk<any>(
+					await create(`Match ${i}`, `Search target ${i}`, ['selected']),
+					201,
+				);
+				matching.push(project.id);
+			}
+			await create('Wrong tag', 'Search target', ['other']);
+			await create('Wrong text', 'Unrelated', ['selected']);
+
+			const first = await expectOk<any>(
+				await request('GET', '/projects?status=active&tag=selected&q=TARGET&limit=2'),
+			);
+			expect(first.items).toHaveLength(2);
+			expect(first.next_cursor).toBeTruthy();
+
+			const second = await expectOk<any>(
+				await request(
+					'GET',
+					`/projects?status=active&tag=selected&q=TARGET&limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+				),
+			);
+			expect(second.items).toHaveLength(1);
+			expect(second.next_cursor).toBeNull();
+			const ids = [...first.items, ...second.items].map((project: any) => project.id);
+			expect(ids.sort((a, b) => a.localeCompare(b))).toEqual(
+				matching.sort((a, b) => a.localeCompare(b)),
+			);
+		});
+
+		it('falls back to project metadata when a legacy snapshot entry has no tags', async () => {
+			const project = await expectOk<any>(
+				await create('Legacy', 'Predates snapshot tags', ['legacy']),
+				201,
+			);
+			await createServices(bucket).catalog.updateProjectEntry(
+				'test.strip',
+				ACTOR,
+				project.id,
+				() => ({
+					tags: undefined,
+				}),
+			);
+
+			const items = await expectPage<any>(await request('GET', '/projects?tag=legacy'));
+			expect(items.map((item) => item.id)).toEqual([project.id]);
+		});
+
+		it('treats empty search as unfiltered and returns a terminal empty page for misses', async () => {
+			await create('Revenue', 'Monthly totals', ['finance']);
+			await create('Capacity', 'Quarterly forecast', ['operations']);
+
+			const unfiltered = await expectOk<any>(await request('GET', '/projects'));
+			const emptySearch = await expectOk<any>(await request('GET', '/projects?q='));
+			expect(emptySearch).toEqual(unfiltered);
+
+			for (const query of ['tag=Finance', 'q=missing']) {
+				const page = await expectOk<any>(await request('GET', `/projects?${query}`));
+				expect(page).toEqual({ items: [], next_cursor: null });
+			}
+		});
+
+		it('can combine status, tag, and text filters for deleted projects', async () => {
+			const live = await expectOk<any>(
+				await create('Live audit', 'Compliance records', ['audit']),
+				201,
+			);
+			const deleted = await expectOk<any>(
+				await create('Retired audit', 'Compliance records', ['audit']),
+				201,
+			);
+			await expectOk(await request('DELETE', `/projects/${deleted.id}`));
+
+			const page = await expectOk<any>(
+				await request('GET', '/projects?status=deleted&tag=audit&q=COMPLIANCE'),
+			);
+			expect(page).toEqual({
+				items: [expect.objectContaining({ id: deleted.id })],
+				next_cursor: null,
+			});
+			expect(page.items.map((item: any) => item.id)).not.toContain(live.id);
+		});
+
+		it.each(['status=unknown', 'limit=0', 'limit=-1', 'limit=1.5', 'limit=nope'])(
+			'rejects invalid query parameter %s',
+			async (query) => {
+				await expectError(await request('GET', `/projects?${query}`), 422, 'VALIDATION_ERROR');
+			},
+		);
+
+		it('rejects a malformed cursor on a filtered request', async () => {
+			await expectError(
+				await request('GET', '/projects?tag=finance&cursor=not~base64'),
+				400,
+				'BAD_REQUEST',
+			);
+		});
+	});
+
 	it('POST /projects creates a project', async () => {
 		const res = await request('POST', '/projects', {
 			name: 'ML Pipeline',

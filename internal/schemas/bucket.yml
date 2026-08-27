@@ -1141,6 +1141,10 @@ components:
                     - last_run_at
                     - key_prefix
                   additionalProperties: {}
+              tags:
+                type: array
+                items:
+                  type: string
               member_ids:
                 type: array
                 items:

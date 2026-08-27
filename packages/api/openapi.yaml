@@ -3117,6 +3117,7 @@ paths:
       tags:
         - Projects
       summary: List all projects
+      description: When paging a filtered list, send the same filters with each cursor.
       parameters:
         - schema:
             type: integer
@@ -3130,6 +3131,36 @@ paths:
             example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: string
+            enum:
+              - active
+              - deleted
+            description: Project status to match. Deleted projects are excluded when
+              omitted.
+            example: active
+          required: false
+          description: Project status to match. Deleted projects are excluded when omitted.
+          name: status
+          in: query
+        - schema:
+            type: string
+            description: Exact tag to match.
+            example: analytics
+          required: false
+          description: Exact tag to match.
+          name: tag
+          in: query
+        - schema:
+            type: string
+            description: Case-insensitive substring to match against the name or title and
+              description.
+            example: revenue
+          required: false
+          description: Case-insensitive substring to match against the name or title and
+            description.
+          name: q
           in: query
       responses:
         '200':
@@ -5386,6 +5417,7 @@ paths:
       tags:
         - Notebooks
       summary: List notebooks in a project
+      description: When paging a filtered list, send the same filters with each cursor.
       parameters:
         - schema:
             type: string
@@ -5406,6 +5438,39 @@ paths:
             example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: string
+            enum:
+              - draft
+              - active
+              - archived
+              - deleted
+            description: Notebook status to match. Deleted notebooks are excluded when
+              omitted.
+            example: active
+          required: false
+          description: Notebook status to match. Deleted notebooks are excluded when
+            omitted.
+          name: status
+          in: query
+        - schema:
+            type: string
+            description: Exact tag to match.
+            example: analytics
+          required: false
+          description: Exact tag to match.
+          name: tag
+          in: query
+        - schema:
+            type: string
+            description: Case-insensitive substring to match against the name or title and
+              description.
+            example: revenue
+          required: false
+          description: Case-insensitive substring to match against the name or title and
+            description.
+          name: q
           in: query
       responses:
         '200':

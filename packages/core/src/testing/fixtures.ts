@@ -105,6 +105,7 @@ export function makeSnapshotProjectEntry(
 		updated_at: NOW,
 		notebook_count: 0,
 		notebooks: [],
+		tags: ['test'],
 		...overrides,
 	};
 }

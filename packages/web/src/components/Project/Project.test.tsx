@@ -1,7 +1,142 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { PID, makeFetch, renderProject } from './Project.testWorld';
+import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
+
+describe('notebook filters', () => {
+	it('provides labeled controls and announces the result count', async () => {
+		makeFetch();
+		await renderProject();
+
+		expect(screen.getByRole('search', { name: 'Filter notebooks' })).toBeInTheDocument();
+		expect(screen.getByRole('searchbox', { name: 'Search' })).toBeInTheDocument();
+		expect(screen.getByRole('textbox', { name: 'Tag (exact)' })).toBeInTheDocument();
+		const status = screen.getByRole('combobox', { name: 'Status' });
+		expect(status).toBeInTheDocument();
+		expect(within(status).getByRole('option', { name: 'Draft' })).toHaveValue('draft');
+		await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 notebook'));
+	});
+
+	it('ANDs text, exact-tag, and status filters through the API', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			notebooks: [
+				{ ...notebook(), title: 'Current forecast', tags: ['finance'] },
+				{
+					...notebook(),
+					id: 'nb-archived',
+					title: 'Archived forecast',
+					description: 'Annual planning',
+					tags: ['finance'],
+					status: 'archived',
+				},
+				{
+					...notebook(),
+					id: 'nb-marketing',
+					title: 'Archived campaign',
+					description: 'Annual planning',
+					tags: ['marketing'],
+					status: 'archived',
+				},
+			],
+		});
+		await renderProject();
+
+		await user.type(screen.getByRole('searchbox', { name: 'Search' }), 'annual');
+		await user.type(screen.getByRole('textbox', { name: 'Tag (exact)' }), 'finance');
+		await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'archived');
+		await user.click(screen.getByRole('button', { name: 'Apply Filters' }));
+
+		expect(await screen.findByText('Archived forecast')).toBeInTheDocument();
+		expect(screen.queryByText('Current forecast')).not.toBeInTheDocument();
+		expect(screen.queryByText('Archived campaign')).not.toBeInTheDocument();
+		const request = [...calls]
+			.reverse()
+			.find((call) => call.method === 'GET' && call.url.includes(`/projects/${PID}/notebooks?`));
+		const params = new URL(request?.url ?? '', 'http://localhost').searchParams;
+		expect(Object.fromEntries(params)).toEqual({ q: 'annual', tag: 'finance', status: 'archived' });
+	});
+
+	it('loads draft notebooks through the status picker', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			notebooks: [
+				notebook(),
+				{
+					...notebook(),
+					id: 'nb-draft',
+					title: 'Import retry',
+					status: 'draft',
+				},
+			],
+		});
+		await renderProject();
+
+		await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'draft');
+		await user.click(screen.getByRole('button', { name: 'Apply Filters' }));
+
+		expect(await screen.findByText('Import retry')).toBeInTheDocument();
+		expect(screen.queryByText('Forecast')).not.toBeInTheDocument();
+		const request = [...calls]
+			.reverse()
+			.find((call) => call.method === 'GET' && call.url.includes(`/projects/${PID}/notebooks?`));
+		expect(new URL(request?.url ?? '', 'http://localhost').searchParams.get('status')).toBe(
+			'draft',
+		);
+	});
+
+	it('offers a reset path when filters have no results', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderProject(`/projects/${PID}?q=missing`);
+
+		expect(await screen.findByText('No notebooks match these filters')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Reset filters' }));
+		expect(await screen.findByText('Forecast')).toBeInTheDocument();
+		expect(screen.getByRole('searchbox', { name: 'Search' })).toHaveValue('');
+	});
+});
+
+describe('deleted notebook tombstones', () => {
+	it('removes live actions and keeps only read-only history and exports', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			notebooks: [
+				{
+					...notebook(),
+					status: 'deleted',
+					source_type: 'git',
+				},
+			],
+			sessions: [stoppableSession()],
+		});
+		await renderProject(`/projects/${PID}?status=deleted`);
+
+		const row = await screen.findByTestId('notebook-row');
+		expect(within(row).getByText('Forecast')).toBeInTheDocument();
+		expect(within(row).getByText('deleted')).toBeInTheDocument();
+		expect(within(row).queryByRole('link', { name: 'Forecast' })).not.toBeInTheDocument();
+		expect(within(row).queryByRole('button', { name: 'Shut down kernel' })).not.toBeInTheDocument();
+
+		await user.click(within(row).getByRole('button', { name: 'Historical actions for Forecast' }));
+		const menu = await screen.findByRole('menu');
+		for (const label of [
+			'View static outputs',
+			'Version history',
+			'Download notebook file',
+			'Download outputs (HTML)',
+			'Download workspace',
+		]) {
+			expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument();
+		}
+		for (const label of ['Rename', 'Duplicate', 'Run as app', 'Sync settings', 'Delete']) {
+			expect(within(menu).queryByRole('menuitem', { name: label })).not.toBeInTheDocument();
+		}
+
+		await user.click(within(menu).getByRole('menuitem', { name: 'View static outputs' }));
+		expect(await screen.findByText('snapshot page')).toBeInTheDocument();
+	});
+});
 
 describe('environment and access', () => {
 	it('is always visible and opens the unified overview', async () => {

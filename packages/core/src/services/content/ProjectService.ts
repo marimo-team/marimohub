@@ -20,11 +20,14 @@ import type {
 	ProjectMember,
 	PublicProjectEntry,
 	Snapshot,
+	SnapshotProjectEntry,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
+import { createListFilter } from './listFilters';
+import type { ListFilters } from './listFilters';
 
 /** Grace period before a soft-deleted project's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_PROJECT_RETENTION_MS = Millis.days(30);
@@ -83,32 +86,55 @@ export class ProjectService {
 
 	/**
 	 * List projects, newest-first paging applied by the caller. Soft-deleted
-	 * projects are always hidden. When `filter` is passed with a null/undefined
-	 * `policy.defaultRole` (deployment `MARIMOHUB_DEFAULT_ROLE=none`), the list
+	 * projects are hidden unless explicitly requested by status. When `filter` is
+	 * passed with a null/undefined `policy.defaultRole` (deployment
+	 * `MARIMOHUB_DEFAULT_ROLE=none`), the list
 	 * is restricted to projects the caller can see (owner or member); with a
 	 * `defaultRole` set — or when the caller is a super admin — every project
 	 * is visible, so nothing is hidden.
 	 */
-	async listProjects(filter?: {
-		subject: AuthSubject;
-		policy?: AuthzPolicy;
-	}): Promise<PublicProjectEntry[]> {
+	async listProjects(
+		filter?: ListFilters<Project['status']> & {
+			subject: AuthSubject;
+			policy?: AuthzPolicy;
+		},
+	): Promise<PublicProjectEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
-		const live = snapshot.projects.filter((p) => p.status !== 'deleted');
+		let matching = snapshot.projects.filter(
+			createListFilter<SnapshotProjectEntry>(
+				filter,
+				(project) => [project.name, project.description],
+				{ allowUnknownTags: true },
+			),
+		);
+		if (filter?.tag !== undefined) {
+			const tag = filter.tag;
+			const tagMatches = await mapWithConcurrency(
+				matching,
+				BUCKET_SCAN_CONCURRENCY,
+				async (project) =>
+					project.tags !== undefined || (await this.getProject(project.id)).tags.includes(tag),
+			);
+			matching = matching.filter((_, index) => tagMatches[index]);
+		}
 		if (
 			!filter ||
 			subjectDefaultRole(filter.subject, filter.policy) != null ||
 			isSuperAdmin(filter.subject, filter.policy?.superAdmins)
 		) {
-			return live.map(toPublicProjectEntry);
+			return matching.map(toPublicProjectEntry);
 		}
-		const visibility = await mapWithConcurrency(live, BUCKET_SCAN_CONCURRENCY, async (entry) => {
-			const seen = canSeeProjectEntry(entry, filter.subject, filter.policy);
-			// `null` = the entry predates `member_ids`, so visibility can't be decided
-			// from the snapshot alone; fall back to the authoritative project.json.
-			return seen ?? (await this.canSeeProject(entry.id, filter.subject));
-		});
-		return live.filter((_, i) => visibility[i]).map(toPublicProjectEntry);
+		const visibility = await mapWithConcurrency(
+			matching,
+			BUCKET_SCAN_CONCURRENCY,
+			async (entry) => {
+				const seen = canSeeProjectEntry(entry, filter.subject, filter.policy);
+				// `null` = the entry predates `member_ids`, so visibility can't be decided
+				// from the snapshot alone; fall back to the authoritative project.json.
+				return seen ?? (await this.canSeeProject(entry.id, filter.subject));
+			},
+		);
+		return matching.filter((_, i) => visibility[i]).map(toPublicProjectEntry);
 	}
 
 	// Only reached when the fast path above didn't return, i.e. the caller is
@@ -170,6 +196,7 @@ export class ProjectService {
 								updated_at: now,
 								notebook_count: 0,
 								notebooks: [],
+								tags: project.tags,
 								member_ids: project.members.flatMap((m) =>
 									m.user_id !== undefined ? [m.user_id] : [],
 								),

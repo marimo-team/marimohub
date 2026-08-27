@@ -2371,6 +2371,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/notebooks",
 			"summary": "List notebooks in a project",
+			"description": "When paging a filtered list, send the same filters with each cursor.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -2394,6 +2395,33 @@
 					"in": "query",
 					"required": false,
 					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "q",
+					"cli_name": "q",
+					"in": "query",
+					"required": false,
+					"description": "Case-insensitive substring to match against the name or title and description.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "status",
+					"cli_name": "status",
+					"in": "query",
+					"required": false,
+					"description": "Notebook status to match. Deleted notebooks are excluded when omitted.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "tag",
+					"cli_name": "tag",
+					"in": "query",
+					"required": false,
+					"description": "Exact tag to match.",
+					"value_type": "string",
 					"repeatable": false
 				}
 			],
@@ -2981,6 +3009,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects",
 			"summary": "List all projects",
+			"description": "When paging a filtered list, send the same filters with each cursor.",
 			"parameters": [
 				{
 					"name": "cursor",
@@ -2996,6 +3025,33 @@
 					"in": "query",
 					"required": false,
 					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "q",
+					"cli_name": "q",
+					"in": "query",
+					"required": false,
+					"description": "Case-insensitive substring to match against the name or title and description.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "status",
+					"cli_name": "status",
+					"in": "query",
+					"required": false,
+					"description": "Project status to match. Deleted projects are excluded when omitted.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "tag",
+					"cli_name": "tag",
+					"in": "query",
+					"required": false,
+					"description": "Exact tag to match.",
+					"value_type": "string",
 					"repeatable": false
 				}
 			],

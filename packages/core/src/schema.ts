@@ -194,6 +194,9 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	updated_at: z.iso.datetime(),
 	notebook_count: z.number().int().nonnegative(),
 	notebooks: z.array(SnapshotNotebookEntrySchema),
+	// Filtering aid added after the v1 snapshot shape shipped. Legacy entries
+	// omit it; ProjectService falls back to project.json for those entries.
+	tags: z.array(z.string()).optional(),
 	// Denormalized roster (user ids of `owner` + every member) so the project
 	// list can be filtered to a caller's visible projects in-memory, without an
 	// extra `project.json` read per entry — see ProjectService.listProjects and
@@ -231,9 +234,9 @@ export type PublicNotebookEntry = Pick<
 // unbounded (a project can hold thousands of notebooks) and would let one row
 // blow up a page that is otherwise bounded by the cursor. Clients use
 // `notebook_count` for the summary and page `GET /projects/{pid}/notebooks` for
-// the list. `member_ids`/`member_emails` are server-side filtering aids, not
-// part of the public contract, so they are stripped too. The bytes stay in the
-// persisted snapshot — the GC sweep and the list filter read them.
+// the list. `tags`, `member_ids`, and `member_emails` are server-side filtering
+// aids, not part of the public contract, so they are stripped too. The bytes
+// stay in the persisted snapshot — the GC sweep and list filters read them.
 export type PublicProjectEntry = Pick<
 	SnapshotProjectEntry,
 	| 'id'

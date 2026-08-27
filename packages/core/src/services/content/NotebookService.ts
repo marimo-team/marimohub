@@ -27,6 +27,7 @@ import type {
 	PublicNotebookEntry,
 	Snapshot,
 	SnapshotDescriptor,
+	SnapshotNotebookEntry,
 	Source,
 	Version,
 } from '../../schema';
@@ -42,6 +43,8 @@ import {
 import { SyncedNotebookService } from './SyncedNotebookService';
 import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from '../catalog/storage';
 import { loadNotebookCatalogPatch } from './catalogProjection';
+import { createListFilter } from './listFilters';
+import type { ListFilters } from './listFilters';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -141,13 +144,23 @@ export class NotebookService {
 		});
 	}
 
-	async listNotebooks(projectId: ProjectId): Promise<PublicNotebookEntry[]> {
+	async listNotebooks(
+		projectId: ProjectId,
+		filter?: ListFilters<NotebookMeta['status']>,
+	): Promise<PublicNotebookEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const project = snapshot.projects.find((p) => p.id === projectId);
 		if (!project) {
 			throw new NotFoundError(`Project ${projectId} not found`);
 		}
-		return project.notebooks.filter((n) => n.status !== 'deleted').map(toPublicNotebookEntry);
+		return project.notebooks
+			.filter(
+				createListFilter<SnapshotNotebookEntry>(filter, (notebook) => [
+					notebook.title,
+					notebook.description,
+				]),
+			)
+			.map(toPublicNotebookEntry);
 	}
 
 	async getNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookDetail> {

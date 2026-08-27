@@ -71,7 +71,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Sync settings')).toBeInTheDocument();
 		expect(screen.queryByText('Sync keys')).not.toBeInTheDocument();
 		expect(screen.queryByText('Rotate sync token')).not.toBeInTheDocument();
@@ -176,7 +176,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		});
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Open app')).toBeInTheDocument();
 		expect(screen.queryByText('Stop app')).toBeNull();
 	});
@@ -193,7 +193,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		});
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Run as app')).toBeInTheDocument();
 	});
 
@@ -217,7 +217,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		});
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Rename')).toBeInTheDocument();
 		expect(screen.queryByText('Open app')).toBeNull();
 		expect(screen.queryByText('Run as app')).toBeNull();
@@ -239,7 +239,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		});
 		await renderProject();
 
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Open app')).toBeInTheDocument();
 		expect(screen.getByText('Stop app')).toBeInTheDocument();
 	});
@@ -284,7 +284,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		await renderProject();
 
 		expect(screen.queryByRole('button', { name: 'Shut down kernel' })).not.toBeInTheDocument();
-		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(screen.queryByRole('menuitem', { name: 'Shut down kernel' })).not.toBeInTheDocument();
 	});
 });

@@ -1,12 +1,13 @@
 import { toast } from 'sonner';
 import { z } from 'zod';
-import { ChevronRight, Folder, FolderPlus, Plus, SearchX } from 'lucide-react';
+import { ChevronRight, Folder, FolderPlus, Plus } from 'lucide-react';
 import {
 	Button,
-	SearchField,
+	Chip,
 	RowLink,
 	EmptyState,
-	ListContainer,
+	ListFilters,
+	ListResults,
 	PageContainer,
 	PageHeader,
 } from '@/components/ui';
@@ -20,8 +21,13 @@ import {
 } from '@/components/form';
 import { useProjectsQuery, useCreateProject } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { useSearchField } from '@/hooks/useSearchField';
-import { filterBySearch } from '@/lib/search';
+import { useListFilters } from '@/hooks/useListFilters';
+import type { ProjectSummary } from '@/types';
+
+const PROJECT_STATUS_FILTERS = [
+	{ value: 'active', label: 'Active' },
+	{ value: 'deleted', label: 'Deleted' },
+] as const;
 
 const projectSchema = z.object({
 	name: requiredText('Project name'),
@@ -31,10 +37,10 @@ const projectSchema = z.object({
 const EMPTY_PROJECT = { name: '', description: '' };
 
 export function ProjectList() {
-	const search = useSearchField();
+	const { filters, setFilters, filtersActive } = useListFilters(PROJECT_STATUS_FILTERS);
 	const createModal = useDisclosure();
 
-	const { data: projects } = useProjectsQuery();
+	const { data: projects = [], isPending, isFetching } = useProjectsQuery(filters);
 	const createProject = useCreateProject();
 
 	const createForm = useAppForm({
@@ -54,12 +60,6 @@ export function ProjectList() {
 	});
 	useSeedOnOpen(createForm, createModal.isOpen, EMPTY_PROJECT);
 
-	const filteredProjects = filterBySearch(
-		projects,
-		search.query,
-		(p) => `${p.name} ${p.description}`,
-	);
-
 	return (
 		<PageContainer>
 			<title>Projects · marimohub</title>
@@ -73,31 +73,25 @@ export function ProjectList() {
 			>
 				<div className="flex min-w-0 flex-col gap-0.5">
 					<h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-					<p className="text-sm text-muted-foreground">
-						{projects.length} project{projects.length !== 1 ? 's' : ''} · shared workspaces for your
-						notebooks
-					</p>
+					<p className="text-sm text-muted-foreground">Shared workspaces for your notebooks</p>
 				</div>
 			</PageHeader>
 
-			<div className="mb-4">
-				<SearchField
-					aria-label="Search projects"
-					placeholder="Search projects..."
-					value={search.query}
-					onChange={search.setQuery}
-					inputRef={search.inputRef}
-				/>
-			</div>
+			<ListFilters
+				label="Filter projects"
+				itemName="project"
+				values={filters}
+				statuses={PROJECT_STATUS_FILTERS}
+				resultCount={projects.length}
+				resultsId="project-results"
+				isLoading={isPending}
+				isFetching={isFetching}
+				onChange={setFilters}
+			/>
 
-			{filteredProjects.length === 0 ? (
-				search.query ? (
-					<EmptyState
-						icon={<SearchX />}
-						message={`No projects matching "${search.query}"`}
-						description="Try a different search term."
-					/>
-				) : (
+			<ListResults
+				count={projects.length}
+				emptyState={
 					<EmptyState
 						icon={<FolderPlus />}
 						message="No projects yet"
@@ -109,34 +103,18 @@ export function ProjectList() {
 							</Button>
 						}
 					/>
-				)
-			) : (
-				<ListContainer>
-					{filteredProjects.map((project) => (
-						<RowLink
-							key={project.id}
-							to={`/projects/${project.id}`}
-							testId="project-row"
-							contentClassName="items-center gap-3 py-3.5"
-						>
-							<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
-								<Folder className="size-4" />
-							</span>
-							<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-								<span className="truncate text-sm font-medium">{project.name}</span>
-								<span className="truncate text-xs text-muted-foreground">
-									{project.description}
-								</span>
-							</span>
-							<span className="shrink-0 rounded-full border bg-muted/60 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-								{project.notebook_count} notebook
-								{project.notebook_count !== 1 ? 's' : ''}
-							</span>
-							<ChevronRight className="size-4 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
-						</RowLink>
-					))}
-				</ListContainer>
-			)}
+				}
+				isFetching={isFetching}
+				isFiltered={filtersActive}
+				isLoading={isPending}
+				itemName="project"
+				onReset={() => setFilters({})}
+				resultsId="project-results"
+			>
+				{projects.map((project) => (
+					<ProjectRow key={project.id} project={project} />
+				))}
+			</ListResults>
 
 			<FormDialog
 				form={createForm}
@@ -155,5 +133,52 @@ export function ProjectList() {
 				</createForm.AppField>
 			</FormDialog>
 		</PageContainer>
+	);
+}
+
+function ProjectRow({ project }: { project: ProjectSummary }) {
+	const content = (
+		<>
+			<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
+				<Folder className="size-4" aria-hidden="true" />
+			</span>
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="truncate text-sm font-medium" title={project.name}>
+					{project.name}
+				</span>
+				<span className="truncate text-xs text-muted-foreground" title={project.description}>
+					{project.description}
+				</span>
+			</span>
+			{project.status === 'deleted' ? <Chip>Deleted</Chip> : null}
+			<span className="shrink-0 rounded-full border bg-muted/60 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+				{project.notebook_count} notebook{project.notebook_count !== 1 ? 's' : ''}
+			</span>
+		</>
+	);
+
+	if (project.status === 'deleted') {
+		return (
+			<div
+				data-testid="project-row"
+				className="flex items-center gap-3 border-b border-l-2 border-l-transparent bg-muted/20 px-4 py-3.5 last:border-b-0"
+			>
+				{content}
+			</div>
+		);
+	}
+
+	return (
+		<RowLink
+			to={`/projects/${project.id}`}
+			testId="project-row"
+			contentClassName="items-center gap-3 py-3.5"
+		>
+			{content}
+			<ChevronRight
+				className="size-4 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground"
+				aria-hidden="true"
+			/>
+		</RowLink>
 	);
 }

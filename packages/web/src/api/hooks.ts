@@ -32,6 +32,8 @@ import type {
 	ResolvedUser,
 	ProjectFederation,
 	ProjectAlertKind,
+	ProjectListFilters,
+	NotebookListFilters,
 	SandboxStartupReport,
 } from '../types';
 
@@ -256,10 +258,19 @@ export function useRunSandboxStartupTest(startupTimeoutSeconds = 120) {
 }
 
 // Projects
-export function useProjectsQuery() {
-	return useSuspenseQuery({
-		queryKey: projectKeys.list(),
-		queryFn: async () => (await apiData(apiClient.GET('/api/v1/projects'))).items,
+export function useProjectsQuery(filters: ProjectListFilters = {}) {
+	return useQuery({
+		queryKey: projectKeys.filteredList(filters),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects', {
+						params: { query: filters },
+					}),
+				)
+			).items,
+		placeholderData: keepPreviousData,
+		throwOnError: true,
 	});
 }
 
@@ -1241,17 +1252,19 @@ export function objectContentUrl(input: {
 
 // Notebooks
 
-export function useNotebooksQuery(projectId: string) {
-	return useSuspenseQuery({
-		queryKey: notebookKeys.list(projectId),
+export function useNotebooksQuery(projectId: string, filters: NotebookListFilters = {}) {
+	return useQuery({
+		queryKey: notebookKeys.filteredList(projectId, filters),
 		queryFn: async () =>
 			(
 				await apiData(
 					apiClient.GET('/api/v1/projects/{pid}/notebooks', {
-						params: { path: { pid: projectId } },
+						params: { path: { pid: projectId }, query: filters },
 					}),
 				)
 			).items,
+		placeholderData: keepPreviousData,
+		throwOnError: true,
 	});
 }
 

@@ -125,7 +125,10 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** List all projects */
+		/**
+		 * List all projects
+		 * @description When paging a filtered list, send the same filters with each cursor.
+		 */
 		get: operations['projects.list'];
 		put?: never;
 		/** Create a project */
@@ -387,7 +390,10 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** List notebooks in a project */
+		/**
+		 * List notebooks in a project
+		 * @description When paging a filtered list, send the same filters with each cursor.
+		 */
 		get: operations['notebooks.list'];
 		put?: never;
 		/** Create a notebook */
@@ -2909,6 +2915,12 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Project status to match. Deleted projects are excluded when omitted. */
+				status?: 'active' | 'deleted';
+				/** @description Exact tag to match. */
+				tag?: string;
+				/** @description Case-insensitive substring to match against the name or title and description. */
+				q?: string;
 			};
 			header?: never;
 			path?: never;
@@ -5142,6 +5154,12 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Notebook status to match. Deleted notebooks are excluded when omitted. */
+				status?: 'draft' | 'active' | 'archived' | 'deleted';
+				/** @description Exact tag to match. */
+				tag?: string;
+				/** @description Case-insensitive substring to match against the name or title and description. */
+				q?: string;
 			};
 			header?: never;
 			path: {
