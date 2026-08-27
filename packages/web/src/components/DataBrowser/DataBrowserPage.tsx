@@ -797,7 +797,15 @@ function TableRows({
 
 /** The first case-insensitive occurrence of `query` in `text`, marked. */
 function HighlightMatch({ text, query }: { text: string; query: string }) {
-	const start = query === '' ? -1 : text.toLowerCase().indexOf(query.toLowerCase());
+	const lowered = text.toLowerCase();
+	const loweredQuery = query.toLowerCase();
+	// Case folding can change string length (e.g. İ → i̇); offsets in the
+	// lowered strings then no longer map back, so render unmarked instead of
+	// marking the wrong characters.
+	if (query === '' || lowered.length !== text.length || loweredQuery.length !== query.length) {
+		return text;
+	}
+	const start = lowered.indexOf(loweredQuery);
 	if (start === -1) return text;
 	const end = start + query.length;
 	return (

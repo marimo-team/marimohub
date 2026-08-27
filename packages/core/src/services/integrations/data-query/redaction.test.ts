@@ -36,6 +36,22 @@ describe('redactConnectionSecrets', () => {
 		expect(result).toBe('both [redacted] and [redacted] appeared');
 	});
 
+	it('scrubs individual credentials quoted from inside file contents', () => {
+		const result = redactConnectionSecrets(
+			'auth failed for token inner-token-9 with cert line MIIEvQIBADANBgkq',
+			connection({
+				files: [
+					{ path: '/tmp/creds.json', content: '{"key":"k1","nested":{"token":"inner-token-9"}}' },
+					{
+						path: '/tmp/key.pem',
+						content: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY-----',
+					},
+				],
+			}),
+		);
+		expect(result).toBe('auth failed for token [redacted] with cert line [redacted]');
+	});
+
 	it('scrubs every string in the plan http access, including nested credentials', () => {
 		const result = redactConnectionSecrets(
 			'HTTP 403 from https://objects.example.test with key AKIAEXAMPLE token session-token-value',

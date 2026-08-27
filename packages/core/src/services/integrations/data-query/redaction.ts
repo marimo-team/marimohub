@@ -15,7 +15,7 @@ const MAX_MESSAGE_LENGTH = 500;
  */
 export function redactConnectionSecrets(message: string, connection: DataQueryConnection): string {
 	const secrets = new Set<string>(Object.values(connection.vars));
-	for (const file of connection.files) secrets.add(file.content);
+	for (const file of connection.files) collectFileSecrets(file.content, secrets);
 	if (connection.plan) {
 		for (const statement of [...connection.plan.setup, ...(connection.plan.cleanup ?? [])]) {
 			for (const param of statement.params ?? []) {
@@ -39,5 +39,23 @@ function collectStrings(value: unknown, into: Set<string>): void {
 	else if (Array.isArray(value)) for (const item of value) collectStrings(item, into);
 	else if (value && typeof value === 'object') {
 		for (const item of Object.values(value)) collectStrings(item, into);
+	}
+}
+
+/**
+ * An error may quote an individual credential from inside a file, not the
+ * whole blob — collect its JSON leaf values and its lines (PEM body lines)
+ * alongside the full content.
+ */
+function collectFileSecrets(content: string, into: Set<string>): void {
+	into.add(content);
+	try {
+		collectStrings(JSON.parse(content), into);
+	} catch {
+		// Not JSON; the per-line entries below still cover it.
+	}
+	for (const line of content.split('\n')) {
+		const trimmed = line.trim();
+		if (trimmed) into.add(trimmed);
 	}
 }

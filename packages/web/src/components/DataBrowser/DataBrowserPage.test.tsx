@@ -141,6 +141,18 @@ describe('DataBrowserPage catalog', () => {
 		expect(table.querySelector('mark')).toHaveTextContent('ord');
 	});
 
+	it('skips highlighting when case folding shifts offsets, instead of marking wrong characters', async () => {
+		const user = userEvent.setup();
+		// 'İSTANBUL'.toLowerCase() is 'i̇stanbul' (one char longer), so lowered
+		// offsets do not map back to the original name.
+		setup(`/projects/${PID}/data/${IID}?q=stanbul`, { tables: ['İSTANBUL'] });
+
+		await user.click(await screen.findByTestId('browse-namespace'));
+		const table = await screen.findByTestId('browse-table');
+		expect(table).toHaveTextContent('İSTANBUL');
+		expect(table.querySelector('mark')).toBeNull();
+	});
+
 	it('keeps the tree filter available and populated on the Query surface', async () => {
 		const user = userEvent.setup();
 		setup(`/projects/${PID}/data/${IID}?q=ord`, {

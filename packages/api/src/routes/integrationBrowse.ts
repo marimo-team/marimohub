@@ -893,6 +893,14 @@ async function collectQuerySchema(
 				JSON.stringify({
 					tables: candidate,
 					truncated: { tables: true, columns: true, bytes: true },
+					// Worst-case envelope so appending the real counts later cannot
+					// push the response past the byte limit.
+					counts: {
+						tables: Number.MAX_SAFE_INTEGER,
+						discovered_tables: Number.MAX_SAFE_INTEGER,
+						columns: Number.MAX_SAFE_INTEGER,
+						discovery_complete: false,
+					},
 				}),
 			) > QUERY_SCHEMA_MAX_BYTES
 		) {
