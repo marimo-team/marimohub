@@ -140,7 +140,7 @@ describe('CoreWeaveCompute', () => {
 			expect(options.waitUntilRunning).toBe(false);
 		});
 
-		it('rejects objectStorageBuckets on the template path (no overlay field)', async () => {
+		it('creates from a template with objectStorageBuckets set (the template carries the access)', async () => {
 			const world = makeWorld();
 			await expect(
 				makeCompute(world, {
@@ -150,7 +150,7 @@ describe('CoreWeaveCompute', () => {
 				})
 					.create(SANDBOX_ID)
 					.exec('true'),
-			).rejects.toThrow(/objectStorageBuckets cannot be combined with a sandbox template/);
+			).resolves.toMatchObject({ success: true });
 		});
 
 		it('provisions a user-home sandbox from the user-home template and exposes the email path safely', async () => {
@@ -173,10 +173,10 @@ describe('CoreWeaveCompute', () => {
 				expect(options.environmentVariables).toMatchObject({
 					MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
 				});
-				// No image/command overlay: `containerImage` would replace the
-				// template's container and drop its per-user mount.
-				expect(options.containerImage).toBeUndefined();
-				expect(options.command).toBeUndefined();
+				// The container overlay is what carries the env var `subPathExpr`
+				// resolves; the template's attachment mounts survive it.
+				expect(options.containerImage).toBe('my-image');
+				expect(options.command).toBeDefined();
 				const command = world.registry.get('cw-1')!.fake.runCalls[0][2];
 				expect(command).toContain("if [ ! -d '/var/run/marimohub/user-home' ]");
 				expect(command).toContain(

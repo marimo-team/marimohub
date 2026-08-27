@@ -121,16 +121,15 @@ changing it over templating):
 
 - **Ingress.** The browser connects to kernels **directly** (not proxied
   through the hub), so each sandbox must be published at a predictable
-  per-sandbox hostname. Note the ingress `template` suffix —
-  `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` (step 8) must match it, and the
-  wildcard DNS + TLS (steps 6 and 9) must cover it. To serve kernels through
-  the cluster's own Traefik on your domain, set:
-
-  ```yaml
-  ingress:
-    controllerName: traefik
-    template: '{{.SandboxID}}.sandbox.<ORG-ID>-marimohub.coreweave.app'
-  ```
+  per-sandbox hostname — `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` (step 8) with
+  wildcard DNS + TLS (steps 6 and 9). Sandbox v1 creates IGNORE the policy's
+  `ingress` block: on a CKS runner without HTTPS endpoint routes (this guide),
+  a kernel service gets only a ClusterIP Service, and the **hub publishes the
+  per-kernel Ingress itself**. Enable that in step 8 by setting the chart's
+  `sandboxIngress.namespace` and `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE`
+  to the sandbox namespace (`org-ns-<ORG-ID>` under the per-org strategy). The
+  policy (or template) `network` must still admit inbound traffic to the
+  kernel port's CUSTOM-visibility sources so Traefik can reach it.
 
 - **Egress.** Kernels need outbound internet (`pip`/`uv` installs, data APIs)
   but should not reach the internal network. Verify the default allows the
@@ -147,10 +146,20 @@ RUNNER_ID=marimohub
 cwic sandbox runner edit $RUNNER_ID --print-template
 ```
 
+::: warning Container mounts must live in template attachments
+The hub always overlays the template's container (image + keep-alive
+command), which REPLACES the template spec's container list — container-level
+`volumeMounts` declared in the spec do not survive. Declare mounts through the
+template's **attachments** instead (attachment mounts survive the overlay;
+verified on CKS). Pod-level spec fields — `nodeSelector`, `volumes`, DNS,
+`automountServiceAccountToken` — are inherited normally.
+:::
+
 ### Optional: a marimohub template
 
 Create a template for custom specs — GPU placement, denied egress, or pod
-tweaks like node-pool pinning and a larger `/dev/shm`:
+tweaks like node-pool pinning and a larger `/dev/shm` (the `/dev/shm`
+_mount_ goes in the template's attachments, per the warning above):
 
 ```yaml
 spec:
@@ -169,13 +178,8 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 8Gi
-      containers:
-        # An entry with an empty name patches the sandbox's main container.
-        - name: ''
-          resources: {}
-          volumeMounts:
-            - name: dshm
-              mountPath: /dev/shm
+      # No `containers` entry: the hub's image overlay replaces it. Attach the
+      # dshm mount (mountPath /dev/shm) via the template's attachments.
 ```
 
 Save it as `marimohub-template.yaml`, create the template (note the id the
@@ -208,7 +212,9 @@ missing `subPathExpr` directory automatically as `root:root` mode `0777`, so
 that setup needs no directory pre-provisioner. Verify the behavior with your
 CSI configuration. If your setup creates `root:root` mode `0755`, use a
 supported `fsGroup` or a root init container to grant UID 1000 access. The
-template's additional Pod fields:
+mounts below must be declared through the template's **attachments** (see the
+warning above — spec-container `volumeMounts` are replaced by the hub's image
+overlay); the pod-level `volumes` and namespace fields stay in the spec:
 
 ```yaml
 spec:
@@ -349,6 +355,11 @@ replicaCount: 2
 nodeSelector:
   compute.coreweave.com/node-pool: marimohub-prod
 
+# Let the hub publish per-kernel Ingresses in the sandbox namespace (step 5);
+# pairs with MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE below.
+sandboxIngress:
+  namespace: org-ns-<ORG-ID>
+
 # CoreWeave taints on reserved/interruptable capacity; harmless if your pool
 # has none.
 tolerations:
@@ -400,6 +411,9 @@ config:
   # Must name YOUR sandbox runner (`marimohub` in this guide); a create with no
   # runner id schedules on the managed serverless pool, not this cluster.
   MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID: marimohub
+  # v1 ignores the policy's ingress block, so the hub publishes each kernel's
+  # Ingress in the sandbox namespace (pair with sandboxIngress.namespace above).
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: org-ns-<ORG-ID>
 
   # Auth — your OIDC provider (see docs/auth.md)
   MARIMOHUB_AUTH_BACKEND: oidc

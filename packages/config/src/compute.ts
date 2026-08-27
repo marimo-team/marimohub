@@ -2,7 +2,7 @@ import { Millis, Seconds } from '@marimo-hub/core';
 import type { SandboxExposureMode, SandboxProvider } from '@marimo-hub/core';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
-import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import { CoreWeaveCompute, createKernelIngressPublisher } from '@marimo-hub/compute-coreweave';
 import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
@@ -305,6 +305,19 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID === undefined
 						? 'marimo-hub'
 						: env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID.trim() || undefined,
+				// CKS runners without endpoint routes reject a `public` kernel service
+				// and expose a `custom` one as a bare ClusterIP Service; the hub then
+				// publishes the Ingress itself. Both follow from the namespace being set.
+				...(env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()
+					? {
+							kernelVisibility: 'custom' as const,
+							kernelIngress: createKernelIngressPublisher({
+								namespace: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE.trim(),
+								ingressClassName:
+									env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS?.trim() || 'traefik',
+							}),
+						}
+					: {}),
 				// Sandbox templates are v1's replacement for profile selection; without
 				// one, sandboxes run under the runner's default policy.
 				templateId: env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID,

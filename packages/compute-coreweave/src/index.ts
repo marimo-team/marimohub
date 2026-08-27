@@ -70,6 +70,7 @@ import {
 	DEFAULT_CONTAINER_IMAGE,
 	DEFAULT_KEEP_ALIVE_COMMAND,
 } from '@coreweave/cwsandbox/node';
+import type { KernelIngressPublisher } from './kernelIngress';
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -215,6 +216,16 @@ export interface CoreWeaveConfig {
 	 * managed serverless pool.
 	 */
 	runnerId?: string;
+	/**
+	 * Visibility declared for the kernel service. `public` needs a runner with
+	 * HTTPS endpoint routes; a CKS runner without them rejects it and instead
+	 * exposes a `custom` service (reachable from the sources the sandbox
+	 * template's `network.ingress` declares) as a bare ClusterIP Service, which
+	 * `kernelIngress` then publishes. Default `public`.
+	 */
+	kernelVisibility?: 'public' | 'custom';
+	/** Publishes each kernel's hostname (an Ingress in the sandbox namespace). */
+	kernelIngress?: KernelIngressPublisher;
 	/**
 	 * Org-scoped sandbox template every sandbox is created from (custom specs:
 	 * GPU placement, egress rules, pod shape). Omit to use the runner's
@@ -449,7 +460,14 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 * `egressMode` has no v1 analogue).
 	 */
 	private kernelServices(): readonly Service[] {
-		return [{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility: 'public' }];
+		return [
+			{
+				name: 'kernel',
+				port: this.kernelPort,
+				protocol: 'tcp',
+				visibility: this.config.kernelVisibility ?? 'public',
+			},
+		];
 	}
 
 	private environmentVariables(): Record<string, string> {
@@ -486,29 +504,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 * reconnect), everything unspecified is inherited from the template.
 	 */
 	private templateOptions(): SandboxRunFromTemplateOptions {
-		if (this.config.objectStorageBuckets?.length) {
-			// The v1 template overlay has no object-storage field, so silently
-			// creating without the vended credentials would strand notebooks.
-			throw new Error(
-				'objectStorageBuckets cannot be combined with a sandbox template; ' +
-					'configure object-storage access in the template itself',
-			);
-		}
+		// The v1 template overlay has no object-storage field: with a template,
+		// `objectStorageBuckets` only drives the AWS env/bootstrap below, and the
+		// template itself must declare the matching `object_storage_access`.
 		const environmentVariables = this.environmentVariables();
 		return {
-			// `containerImage` REPLACES the template's container and drops its
-			// volume mounts — which would delete a user-home template's per-user
-			// mount. So the user-home path inherits the template's container
-			// (image, keep-alive command, mounts) and per-create image overrides
-			// do not apply there; the normal path keeps image selection and must
-			// re-supply the keep-alive (runFromTemplate injects no command).
-			...(this.userHome
-				? {}
-				: {
-						containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
-						command: DEFAULT_KEEP_ALIVE_COMMAND,
-						...(this.config.resources ? { resources: this.config.resources } : {}),
-					}),
+			// `containerImage` REPLACES the template's spec container, so the
+			// keep-alive must be re-supplied (runFromTemplate injects no command).
+			// Mounts declared in the template's admin `attachments` survive the
+			// replacement (verified on CKS 2026-08-27), and the user-home path
+			// depends on the overlay: `subPathExpr` needs MARIMOHUB_USER_HOME_KEY on
+			// the container, which only a container overlay delivers.
+			containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
+			command: DEFAULT_KEEP_ALIVE_COMMAND,
+			...(this.config.resources ? { resources: this.config.resources } : {}),
 			services: this.kernelServices(),
 			tags: [this.config.ownerTag ?? DEFAULT_OWNER_TAG, this.idTag],
 			...(this.config.runnerId ? { runnerIds: [this.config.runnerId] } : {}),
@@ -874,11 +883,19 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			.replaceAll('{port}', String(port))
 			.replaceAll('{host}', options.hostname)
 			.replaceAll('{token}', options.token ?? '');
+		if (this.config.kernelIngress) {
+			await this.config.kernelIngress.publish({
+				sandboxId: sandbox.sandboxId,
+				host: new URL(url).hostname,
+				port,
+			});
+		}
 		return { url };
 	}
 
 	async destroy(): Promise<void> {
 		if (this.sandbox) {
+			await this.removeIngress(this.sandbox.sandboxId);
 			await this.deleteTolerant(() => this.sandbox!.delete());
 			this.sandbox = undefined;
 			return;
@@ -887,7 +904,25 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// id. Tolerate "already gone" so teardown is idempotent.
 		const { sandboxes } = await this.client.list({ tags: [this.idTag] });
 		for (const info of sandboxes) {
+			await this.removeIngress(info.sandboxId);
 			await this.deleteTolerant(() => this.client.delete(info.sandboxId));
+		}
+	}
+
+	/** Best-effort: the Ingress is owner-referenced to the runner's Service anyway. */
+	private async removeIngress(sandboxId: string): Promise<void> {
+		if (!this.config.kernelIngress) return;
+		try {
+			await this.config.kernelIngress.remove(sandboxId);
+		} catch (err) {
+			logEvent(
+				{
+					event: 'coreweave_kernel_ingress_remove_failed',
+					sandbox_id: sandboxId,
+					error: String(err),
+				},
+				{ channel: 'warn' },
+			);
 		}
 	}
 
@@ -970,3 +1005,6 @@ export class CoreWeaveCompute implements SandboxProvider {
 	// back to our session's sandbox_id; the reconciler skips provider-truth
 	// reconciliation for providers without listActive.
 }
+
+export { createKernelIngressPublisher, inClusterKubernetesApi } from './kernelIngress';
+export type { KernelIngressPublisher, KubernetesApi } from './kernelIngress';

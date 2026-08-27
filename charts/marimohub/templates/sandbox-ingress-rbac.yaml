@@ -1,0 +1,35 @@
+{{- if .Values.sandboxIngress.namespace }}
+# Lets the hub publish each CoreWeave kernel at its hostname: it creates an
+# Ingress in the sandbox namespace (MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE)
+# next to the runner's per-sandbox Service, owner-referenced to that Service.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "marimohub.fullname" . }}-sandbox-ingress
+  namespace: {{ .Values.sandboxIngress.namespace }}
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ['']
+    resources: ['services']
+    verbs: ['get', 'list']
+  - apiGroups: ['networking.k8s.io']
+    resources: ['ingresses']
+    verbs: ['get', 'create', 'delete']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "marimohub.fullname" . }}-sandbox-ingress
+  namespace: {{ .Values.sandboxIngress.namespace }}
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "marimohub.fullname" . }}-sandbox-ingress
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "marimohub.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
