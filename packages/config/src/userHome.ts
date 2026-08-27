@@ -1,71 +1,30 @@
-import { BadRequestError } from '@marimo-hub/core';
 import type { EditorSandboxSharing } from '@marimo-hub/core';
 import type { SandboxUserHomeResolver } from '@marimo-hub/api';
-import { computeBackend } from './compute';
-import { parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
 export const COREWEAVE_USER_HOME_PROFILE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE';
 
-function canonicalEmail(email: string): string {
-	const value = email.trim().toLowerCase();
-	let unsafe = false;
-	for (let i = 0; i < value.length; i++) {
-		const codepoint = value.charCodeAt(i);
-		if (value[i] === '/' || codepoint < 32 || codepoint === 127) unsafe = true;
-	}
-	if (!value || value === '.' || value === '..' || value.length > 240 || unsafe) {
-		throw new BadRequestError(
-			'Your authenticated email cannot be used for personal storage; contact an administrator to correct the identity-provider email claim',
-		);
-	}
-	return value;
-}
-
 /**
- * Personal homes are composed behind a resolver so a future identity mapping can
- * replace email without changing session provisioning or compute adapters.
+ * Personal homes rode CoreWeave per-create profile selection, which Sandbox v1
+ * (`@coreweave/cwsandbox` ≥0.2.0-beta.0) removed from the SDK. Until CoreWeave
+ * exposes an equivalent (per-runner default profiles + `runnerIds` is the
+ * closest v1 mechanism), the feature is unavailable — reject the variable at
+ * boot instead of provisioning editors without their personal storage.
  */
 export function makeSandboxUserHome(
 	env: Env,
-	sharing: EditorSandboxSharing,
+	_sharing: EditorSandboxSharing,
 ): SandboxUserHomeResolver | undefined {
-	const profiles = parseList(env[COREWEAVE_USER_HOME_PROFILE]);
-	if (!profiles) return undefined;
-	if (computeBackend(env) !== 'coreweave') {
-		throw new ConfigError(`${COREWEAVE_USER_HOME_PROFILE} requires the coreweave backend`, {
-			variable: COREWEAVE_USER_HOME_PROFILE,
-			remediation: 'Set MARIMOHUB_COMPUTE_BACKEND=coreweave or remove the user-home profile.',
-			docs: 'docs/deploying/cks.md',
-		});
-	}
-	if (sharing !== 'exclusive') {
+	if (env[COREWEAVE_USER_HOME_PROFILE] !== undefined) {
 		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_PROFILE} requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`,
-			{
-				variable: 'MARIMOHUB_EDITOR_SANDBOX_SHARING',
-				remediation: 'Set MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive.',
-				docs: 'docs/editor-sessions.md',
-			},
-		);
-	}
-	const normalProfiles = parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE) ?? [];
-	const overlap = profiles.filter((profile) => normalProfiles.includes(profile));
-	if (overlap.length > 0) {
-		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_PROFILE} must not overlap MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: ${overlap.join(', ')}`,
+			`${COREWEAVE_USER_HOME_PROFILE} is no longer supported: CoreWeave Sandbox v1 removed per-create profile selection, so personal storage is unavailable`,
 			{
 				variable: COREWEAVE_USER_HOME_PROFILE,
-				remediation: 'Use a separate, non-default profile for editor personal storage.',
-				docs: 'docs/deploying/cks.md',
+				remediation: 'Remove the variable (editor sandboxes run without a personal home).',
+				docs: 'docs/setup/compute/coreweave.md',
 			},
 		);
 	}
-	return {
-		resolve(user) {
-			const email = canonicalEmail(user.email);
-			return { key: email, path: `/mnt/${email}` };
-		},
-	};
+	return undefined;
 }

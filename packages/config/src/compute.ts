@@ -203,6 +203,34 @@ export function usesSandboxNativeObjectStorage(env: Env): boolean {
 	);
 }
 
+/**
+ * CoreWeave Sandbox v1 (`@coreweave/cwsandbox` ≥0.2.0-beta.0) removed
+ * create-time profile selection and the ingress/egress mode knobs; the SDK
+ * rejects them client-side. Fail at boot with the reason rather than at the
+ * first provision with a cryptic validation error. (The user-home profile var
+ * is rejected in `userHome.ts`, next to the feature it configured.)
+ */
+function rejectRemovedCoreWeaveVars(env: Env): void {
+	const removed = [
+		'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
+		'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
+		'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
+	] as const;
+	for (const variable of removed) {
+		if (env[variable] !== undefined) {
+			throw new ConfigError(
+				`${variable} is no longer supported: CoreWeave Sandbox v1 removed per-create profile selection and network modes`,
+				{
+					variable,
+					remediation:
+						"Remove the variable. Sandboxes now use the runner's default profile; the kernel port is declared as a public service.",
+					docs: 'docs/setup/compute/coreweave.md',
+				},
+			);
+		}
+	}
+}
+
 function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
 	const raw = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION;
 	if (raw === undefined || raw === 'read' || raw === 'read-write') return raw;
@@ -259,24 +287,18 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			});
 		}
 		case 'coreweave':
-			// CoreWeave Sandboxes via the vendored @coreweave/cwsandbox SDK (Node gRPC).
-			// A marimo-capable image (marimo + uv + python) should be supplied via
-			// MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress URL,
-			// whose hostname scheme is CoreWeave backend/profile specific — set
+			// CoreWeave Sandboxes via the @coreweave/cwsandbox SDK (Sandbox v1, Node
+			// gRPC). A marimo-capable image (marimo + uv + python) should be supplied
+			// via MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress
+			// URL, whose hostname scheme is CoreWeave backend specific — set
 			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (and, if needed, a HOSTNAME_TEMPLATE).
+			rejectRemovedCoreWeaveVars(env);
 			return new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE,
-				// Profile + exposure modes are CoreWeave-side concepts; the profile names
-				// the exposure levels (`ingressMode`) and egress modes a sandbox selects.
-				// Defaults (`public`/`internet`) match the canonical CoreWeave profile.
-				profileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE),
-				userHomeProfileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE),
-				ingressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE,
-				egressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE,
 				maxLifetimeSeconds: resolveLifetimeBackstop(
 					env,
 					'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',

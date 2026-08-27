@@ -51,17 +51,20 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('lazy create()', () => {
-		it('declares our tags, the kernel port, and public ingress at create time', async () => {
+		it('declares our tags and a public kernel service at create time', async () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			expect(world.created).toHaveLength(1);
 			const opts = world.created[0];
-			expect(opts.ports).toEqual([2718]);
-			expect(opts.network).toMatchObject({
-				ingressMode: 'public',
-				egressMode: 'internet',
-				exposedPorts: [2718],
-			});
+			expect(opts.services).toEqual([
+				{
+					name: 'kernel',
+					port: 2718,
+					protocol: 'tcp',
+					visibility: 'public',
+					endpoint: { kind: 'https', auth: 'open' },
+				},
+			]);
 			expect(opts.tags).toEqual(['marimohub', ID_TAG]);
 			expect(opts.containerImage).toBe('my-image');
 			// The readiness wait is issued separately (see "boot wait"), so create
@@ -75,69 +78,6 @@ describe('CoreWeaveCompute', () => {
 			await inst.exec('a');
 			await inst.exec('b');
 			expect(world.created).toHaveLength(1);
-		});
-
-		it('passes configured profileNames and exposure modes at create time', async () => {
-			const world = makeWorld();
-			await makeCompute(world, {
-				...baseConfig,
-				profileNames: ['marimohub-sandbox'],
-				ingressMode: 'public-edge',
-				egressMode: 'restricted',
-			})
-				.create(SANDBOX_ID)
-				.exec('true');
-			const opts = world.created[0];
-			expect(opts.profileNames).toEqual(['marimohub-sandbox']);
-			expect(opts.network).toMatchObject({
-				ingressMode: 'public-edge',
-				egressMode: 'restricted',
-			});
-		});
-
-		it('omits profileNames when none are configured (use runner default)', async () => {
-			const world = makeWorld();
-			await makeCompute(world).create(SANDBOX_ID).exec('true');
-			expect(world.created[0].profileNames).toBeUndefined();
-		});
-
-		it('selects the user-home profile and exposes the email path safely', async () => {
-			const world = makeWorld();
-			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-			try {
-				await makeCompute(world, {
-					...baseConfig,
-					profileNames: ['marimohub'],
-					userHomeProfileNames: ['marimohub-user-home'],
-				})
-					.create(SANDBOX_ID, {
-						userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
-					})
-					.exec('true');
-
-				expect(world.created[0].profileNames).toEqual(['marimohub-user-home']);
-				expect(world.created[0].environmentVariables).toMatchObject({
-					MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
-				});
-				const command = world.registry.get('cw-1')!.fake.runCalls[0][2];
-				expect(command).toContain("if [ ! -d '/var/run/marimohub/user-home' ]");
-				expect(command).toContain(
-					'marimohub: user-home profile mount missing at /var/run/marimohub/user-home',
-				);
-				expect(command).toContain("ln -s '/var/run/marimohub/user-home' '/mnt/ada@example.com'");
-				expect(command).toMatch(/; true$/);
-				const ensureEvent = warn.mock.calls
-					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
-					.find((event) => event.event === 'coreweave_ensure');
-				expect(ensureEvent).toMatchObject({
-					profile_names: ['marimohub-user-home'],
-					user_home_attached: true,
-				});
-				expect(ensureEvent).not.toHaveProperty('user_home_key');
-				expect(JSON.stringify(ensureEvent)).not.toContain('ada@example.com');
-			} finally {
-				warn.mockRestore();
-			}
 		});
 
 		it('correlates the ensure event with the active trace', async () => {
@@ -169,33 +109,13 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
-		it('merges user-home and object-storage environment variables', async () => {
-			const world = makeWorld();
-			await makeCompute(world, {
-				...baseConfig,
-				userHomeProfileNames: ['marimohub-user-home'],
-				objectStorageEndpoint: 'https://cwobject.com',
-				objectStorageRegion: 'us-east-04a',
-			})
-				.create(SANDBOX_ID, {
-					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
-				})
-				.exec('true');
-
-			expect(world.created[0].environmentVariables).toEqual({
-				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
-				AWS_REGION: 'us-east-04a',
-				MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
-			});
-		});
-
-		it('rejects a user home without a configured CoreWeave profile', () => {
+		it('rejects a user home (profile selection was removed in Sandbox v1)', () => {
 			const world = makeWorld();
 			expect(() =>
 				makeCompute(world).create(SANDBOX_ID, {
 					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
 				}),
-			).toThrow(/user-home profile is required/);
+			).toThrow(/not supported on the CoreWeave backend/);
 		});
 
 		it('a per-create image override replaces the configured containerImage', async () => {
@@ -417,31 +337,6 @@ describe('CoreWeaveCompute', () => {
 			expect(fake.runCalls).toHaveLength(1);
 			expect(fake.runCalls[0][2]).toContain('addressing_style = virtual');
 		});
-
-		it('flushes the armed bootstrap before a write beneath the user home', async () => {
-			const world = makeWorld();
-			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-			try {
-				const inst = makeCompute(world, {
-					...baseConfig,
-					userHomeProfileNames: ['marimohub-user-home'],
-				}).create(SANDBOX_ID, {
-					reuse: false,
-					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
-				});
-				await inst.writeFiles([{ path: '/mnt/ada@example.com/notes.md', content: 'x' }]);
-				const fake = world.registry.get('cw-1')!.fake;
-				// Link first, or AddFile creates a plain dir in its place.
-				expect(fake.runCalls).toHaveLength(1);
-				expect(fake.runCalls[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
-				expect(fake.batchWrites).toHaveLength(1);
-				// Consumed once.
-				await inst.exec('true');
-				expect(fake.runCalls[1][2]).not.toContain('ln -s');
-			} finally {
-				warn.mockRestore();
-			}
-		});
 	});
 
 	describe('drainTimings()', () => {
@@ -473,16 +368,11 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('boot wait', () => {
-		it('waits explicitly with a tighter interval than the SDK default', async () => {
+		it('waits explicitly after create (boot measured apart from create)', async () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
-
-			// The SDK's built-in waitUntilRunning polls every 1s, rounding every boot
-			// up to the next second; we run the same wait on a tighter interval.
 			expect(world.created[0]).toMatchObject({ waitUntilRunning: false });
-			const waits = world.registry.get('cw-1')!.fake.waitCalls;
-			expect(waits).toHaveLength(1);
-			expect(waits[0].intervalMs).toBeLessThan(1000);
+			expect(world.registry.get('cw-1')!.fake.waitCalls).toBe(1);
 		});
 
 		it('flags a boot over 10 s as a probable cold image pull', async () => {
@@ -527,7 +417,7 @@ describe('CoreWeaveCompute', () => {
 			const compute = makeCompute(world);
 			await compute.create(SANDBOX_ID).exec('true');
 			await compute.create(SANDBOX_ID).exec('true'); // reconnects to cw-1
-			expect(world.registry.get('cw-1')!.fake.waitCalls).toHaveLength(1);
+			expect(world.registry.get('cw-1')!.fake.waitCalls).toBe(1);
 		});
 	});
 
@@ -555,7 +445,7 @@ describe('CoreWeaveCompute', () => {
 			const world = makeWorld();
 			const inst = makeCompute(world, {
 				...baseConfig,
-				resolveExposedUrl: async (sandboxId, port) => `http://10.0.0.9:${port}/${sandboxId}`,
+				resolveExposedUrl: async (sandbox, port) => `http://10.0.0.9:${port}/${sandbox.sandboxId}`,
 			}).create(SANDBOX_ID);
 			await inst.exec('true');
 			const { url } = await inst.exposePort(2718, { hostname: 'ignored.example.com' });

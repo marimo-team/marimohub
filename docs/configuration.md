@@ -130,7 +130,7 @@ Read regardless of the selected compute backend.
 
 `MARIMOHUB_COMPUTE_BACKEND=coreweave`
 
-CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.
+CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1).
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
@@ -138,10 +138,6 @@ CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.
 | `MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL` | Override the CoreWeave Sandbox API base URL. | — | `https://api.cwsandbox.com (SDK default)` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{sandboxId}`, `{port}`, `{host}`, `{token}`. | — | `https://{sandboxId}-{port}.{host}` | — |
-| `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE` | Comma-separated CoreWeave sandbox profile name(s) applied at create (the `profile_name` of a runner binding). Omit to use the runner's default profile. | — | — | `marimohub` |
-| `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE` | Comma-separated CoreWeave profile name(s) used only for editor-or-higher edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile. | — | — | `marimohub-user-home` |
-| `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE` | Network ingress mode (backend/profile specific). | — | `public` | — |
-| `MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE` | Network egress mode (backend/profile specific). | — | `internet` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS` | Hard provider-side sandbox lifetime cap (SIGKILL, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it. | — | `2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | `28800` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS` | Comma-separated CAIOS bucket names every sandbox gets automatic, auto-refreshing credentials for (vended in-sandbox by a CoreWeave sidecar). Requires the org wif-config on the Sandbox Gateway; creates fail with NOT_FOUND without it. Setting this disables hub-minted WIF. See docs/workload-identity-federation.md, "CoreWeave Object Storage (Automatic)". | — | — | `my-org-data,my-org-models` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION` | Access level for the buckets above: `read` or `read-write`. Capped by the org WIF config `max_permission`. | — | `read-write` | `read` |

@@ -18,9 +18,17 @@ with CAIOS storage. If you're already on CoreWeave, it's the lowest-friction
 option.
 :::
 
-::: warning Ingress is profile-specific
-The public kernel URL scheme (ingress/egress modes, hostname template) depends
-on your CoreWeave profile. If kernels don't connect, set
-`MARIMOHUB_COMPUTE_COREWEAVE_PROFILE` / `…_HOSTNAME_TEMPLATE` — see the
+::: warning Ingress is runner-specific
+The public kernel URL scheme depends on your CoreWeave runner's default
+profile. If kernels don't connect, set
+`MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` — see the
 [Configuration reference](/configuration#coreweave-sandbox).
+:::
+
+::: warning Removed with CoreWeave Sandbox v1
+The SDK's v1 API removed per-create profile selection and network modes, so
+the former `…COREWEAVE_PROFILE`, `…_INGRESS_MODE`, `…_EGRESS_MODE`, and
+`…_USER_HOME_PROFILE` variables are rejected at boot — remove them. Sandboxes
+use the runner's default profile, and profile-mounted personal storage (user
+homes) is unavailable on this backend.
 :::

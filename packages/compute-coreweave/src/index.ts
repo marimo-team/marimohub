@@ -1,7 +1,7 @@
 /**
  * CoreWeave Sandbox compute adapter — a `SandboxProvider` backed by CoreWeave
- * Sandboxes via the `@coreweave/cwsandbox` SDK (Node gRPC transport, vendored at
- * `vendor/cwsandbox`). Like the Modal adapter, this targets the Node/Kubernetes
+ * Sandboxes via the published `@coreweave/cwsandbox` SDK (Sandbox v1, Node gRPC
+ * transport). Like the Modal adapter, this targets the Node/Kubernetes
  * control plane (`apps/server`); the SDK transport is gRPC, so it is NOT usable
  * from a Workers runtime, and `proxy()` is a no-op (the SPA hits the kernel's
  * public-ingress URL directly).
@@ -15,8 +15,8 @@
  *    (`compute.create(id).destroy()`) and so file-copy teardown reconnects to the
  *    SAME sandbox before saving notebook files back.
  *  - Ports/network are CREATE-time options, but the provisioner exposes the kernel
- *    port (2718) only later. `ensure()` declares `ports:[kernelPort]` with public
- *    ingress at create so the later `exposePort` is reachable.
+ *    port (2718) only later. `ensure()` declares a public `services` entry for the
+ *    kernel port at create so the later `exposePort` is reachable.
  *  - The sandbox MAIN process is the SDK keep-alive; marimo runs as a streamed
  *    COMMAND (`commands.start`), not the main process.
  *  - The SDK has no `waitForPort`. Combined launch detects readiness inside its
@@ -32,16 +32,19 @@
  * set `maxLifetimeSeconds` so CoreWeave hard-caps sandbox lifetime.
  *
  * INTEGRATION SURFACE (validate against the live CoreWeave API before production,
- * same caveat the Modal adapter carries): the network `ingressMode`/`egressMode`
- * names are backend/profile specific; the public kernel URL is CONSTRUCTED from a
- * hostname template (the SDK exposes no ingress-URL accessor); and the
- * `waitForPort` probe assumes `python3` is on the image PATH.
+ * same caveat the Modal adapter carries): the shape of the kernel `services`
+ * declaration (public visibility + open HTTPS endpoint) is what v1 offers in
+ * place of the removed `ingressMode`; the public kernel URL is CONSTRUCTED from a
+ * hostname template (inspect's `serviceUrls` is assigned-not-edge-ready per the
+ * SDK docs); and the `waitForPort` probe assumes `python3` is on the image PATH.
+ *
+ * Sandbox v1 (SDK ≥0.2.0-beta.0) REMOVED create-time profile selection
+ * (`profileNames`) along with `ports`/`ingressMode`/`egressMode` — the SDK
+ * rejects them client-side. Profile-mounted personal storage (user homes) is
+ * therefore unsupported on this backend until CoreWeave exposes an equivalent
+ * (per-runner default profiles + `runnerIds` is the closest v1 mechanism).
  */
-import {
-	CWSandboxConfigurationError,
-	CWSandboxNotFoundError,
-	SandboxClient,
-} from '@coreweave/cwsandbox';
+import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
 	CommandProcess,
 	CommandProcessStatus,
@@ -51,11 +54,12 @@ import type {
 	ResourceOptions,
 	SandboxInfo,
 	SandboxRunOptions,
+	ServiceUrl,
 } from '@coreweave/cwsandbox';
 import {
+	createSandboxClient,
 	DEFAULT_BASE_URL,
 	DEFAULT_CONTAINER_IMAGE,
-	GrpcSandboxTransport,
 } from '@coreweave/cwsandbox/node';
 import {
 	buildFindFilesCommand,
@@ -71,18 +75,11 @@ import {
 	parseFindFilesOutput,
 	portWaitCommand,
 	removeUndefined,
-	shellQuote,
 	transportFailureResult,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
-import type {
-	ComputeResources,
-	SandboxId,
-	SandboxUserHome,
-	Seconds,
-	Timings,
-} from '@marimo-hub/core';
+import type { ComputeResources, SandboxId, Seconds, Timings } from '@marimo-hub/core';
 import { logEvent } from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
@@ -107,7 +104,7 @@ import type {
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
-import { instrumentCoreWeaveTransport } from './tracing';
+import { instrumentCoreWeaveClient } from './tracing';
 
 /** marimo's hardcoded kernel port (see `SandboxProvisioner`'s `MARIMO_PORT`). */
 const DEFAULT_KERNEL_PORT = 2718;
@@ -115,20 +112,11 @@ const DEFAULT_KERNEL_PORT = 2718;
 const DEFAULT_OWNER_TAG = 'marimohub';
 /** Prefix for the per-sandbox tag that encodes our `SandboxId`. */
 const ID_TAG_PREFIX = 'mh-sbx-';
-/** Fixed profile mount; a bootstrap symlink exposes it at `/mnt/<email>`. */
-const USER_HOME_MOUNT_PATH = '/var/run/marimohub/user-home';
-const USER_HOME_KEY_ENV = 'MARIMOHUB_USER_HOME_KEY';
 
 /** Longest a single in-sandbox port wait may block before we re-issue it. */
 const PORT_WAIT_CHUNK_MS = 30_000;
 /** First such chunk, kept short so a kernel that dies on launch is caught quickly. */
 const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
-/**
- * How often to poll a fresh sandbox for `running`. The SDK's own default is 1s,
- * which rounds every boot up to the next second; each poll is one control-plane
- * round-trip, so this trades a few extra polls for that rounding.
- */
-const BOOT_POLL_INTERVAL_MS = 100;
 /**
  * A container start on a warm node is ~1–6 s. Above this, `boot` is almost
  * always the node pulling the sandbox image because the tag was not in its
@@ -202,18 +190,6 @@ export interface CoreWeaveConfig {
 	kernelPort?: number;
 	/** Tag applied to every sandbox we own (manual discovery/cleanup). Default `marimohub`. */
 	ownerTag?: string;
-	/** CoreWeave network ingress mode (backend/profile specific). Default `public`. */
-	ingressMode?: string;
-	/** CoreWeave network egress mode (backend/profile specific). Default `internet`. */
-	egressMode?: string;
-	/**
-	 * Sandbox profile name(s) to apply at create. The profile defines the named
-	 * exposure levels (`ingressMode`) and egress modes the sandbox selects from.
-	 * Omit to use the runner's default profile.
-	 */
-	profileNames?: readonly string[];
-	/** Profile containing the per-user VAST/PVC mount. */
-	userHomeProfileNames?: readonly string[];
 	/**
 	 * Template for the public kernel URL. `{sandboxId}`, `{port}`, and `{host}` are
 	 * substituted. Default `https://{sandboxId}-{port}.{host}` where `{host}` is the
@@ -223,10 +199,11 @@ export interface CoreWeaveConfig {
 	/**
 	 * Resolve the public kernel URL for a sandbox at expose time, for runners
 	 * that assign per-sandbox addresses instead of a static hostname scheme
-	 * (the W&B gateway vends a per-sandbox public IP). Wins over
-	 * `hostnameTemplate` when set.
+	 * (the W&B gateway vends a per-sandbox URL). Wins over `hostnameTemplate`
+	 * when set. Receives the live sandbox handle so a resolver can read
+	 * `serviceUrls` off it without a Get round-trip.
 	 */
-	resolveExposedUrl?: (sandboxId: string, port: number) => Promise<string>;
+	resolveExposedUrl?: (sandbox: CoreWeaveSandbox, port: number) => Promise<string>;
 	/** Optional CPU/memory request (and limit) for each sandbox. */
 	resources?: ResourceOptions;
 	/**
@@ -236,9 +213,9 @@ export interface CoreWeaveConfig {
 	maxLifetimeSeconds?: Seconds;
 	/**
 	 * Enable CoreWeave-native filesystem snapshots (full-env restore on the next
-	 * session). Off by default. Currently INERT: the capture/restore implementation
-	 * lands once the vendored `@coreweave/cwsandbox` is refreshed to a version
-	 * exposing the snapshot API (see `vendor/cwsandbox/UPSTREAM.md`).
+	 * session). Off by default. Currently INERT: the SDK now exposes the
+	 * snapshot API (`fileSystemSnapshot`/`snapshot()`), but the capture/restore
+	 * implementation has not landed yet.
 	 */
 	filesystemSnapshot?: boolean;
 	/**
@@ -272,7 +249,7 @@ export interface CoreWeaveClient {
 	fromId(sandboxId: string): Promise<CoreWeaveSandbox>;
 	list(options?: {
 		tags?: readonly string[];
-		includeStopped?: boolean;
+		showTerminated?: boolean;
 		pageSize?: number;
 		pageToken?: string;
 	}): Promise<ListSandboxesResult>;
@@ -282,8 +259,14 @@ export interface CoreWeaveClient {
 /** The slice of the SDK's `Sandbox` handle this adapter uses. */
 export interface CoreWeaveSandbox {
 	readonly sandboxId: string;
-	/** Block until the sandbox reaches `running`; see `BOOT_POLL_INTERVAL_MS`. */
-	wait(options?: { intervalMs?: number }): Promise<unknown>;
+	/**
+	 * Per-service public URLs from the handle's last metadata refresh (create,
+	 * `wait()` polls, and reconnect Gets all update it) — readable without an
+	 * extra round-trip by `resolveExposedUrl` implementations.
+	 */
+	readonly serviceUrls?: readonly ServiceUrl[] | undefined;
+	/** Block until the sandbox reaches `running` (the SDK polls with backoff). */
+	wait(): Promise<unknown>;
 	readonly commands: {
 		run(
 			command: readonly string[],
@@ -325,7 +308,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly client: CoreWeaveClient,
 		/** Reconnect-by-tag before creating. False on a fresh provision (skips a wasted list). */
 		private readonly reuse = true,
-		private readonly userHome?: SandboxUserHome,
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
@@ -346,14 +328,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const t0 = Date.now();
 		const existing = this.reuse ? await this.findByOurId() : undefined;
 		const t1 = Date.now();
-		// Create-then-wait is what the SDK does internally for
-		// `waitUntilRunning: true`, except its wait takes the default 1s poll
-		// interval — which rounds every boot up to the next whole second.
+		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
+		// and boot phases separately measurable for the wide event below.
 		this.sandbox = existing
 			? await this.client.fromId(existing.sandboxId)
 			: await this.client.create(this.createOptions());
 		const t2 = Date.now();
-		if (!existing) await this.sandbox.wait({ intervalMs: BOOT_POLL_INTERVAL_MS });
+		if (!existing) await this.sandbox.wait();
 		const t3 = Date.now();
 		// Armed, not run: the snippet is spliced onto the first command we were going
 		// to send anyway, so it costs no round-trip of its own.
@@ -370,8 +351,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				create_ms: t2 - t1,
 				boot_ms: t3 - t2,
 				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
-				...(this.config.profileNames?.length ? { profile_names: this.config.profileNames } : {}),
-				...(this.userHome ? { user_home_attached: true } : {}),
 			},
 			{ channel: 'warn' },
 		);
@@ -397,37 +376,34 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	/** Find a live sandbox tagged with our id (tags are a request-side filter only). */
 	private async findByOurId(): Promise<SandboxInfo | undefined> {
-		const { sandboxes } = await this.client.list({
-			tags: [this.idTag],
-			includeStopped: false,
-		});
+		// Listing is active-only by default (`showTerminated` opts in to more).
+		const { sandboxes } = await this.client.list({ tags: [this.idTag] });
 		return sandboxes.find((s) => !isDeadStatus(s.status));
 	}
 
 	private createOptions(): SandboxRunOptions {
-		const objectStorage = this.objectStorageOptions();
-		const environmentVariables = {
-			...objectStorage.environmentVariables,
-			...(this.userHome ? { [USER_HOME_KEY_ENV]: this.userHome.key } : {}),
-		};
 		return {
 			containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
-			ports: [this.kernelPort],
-			network: {
-				ingressMode: this.config.ingressMode ?? 'public',
-				egressMode: this.config.egressMode ?? 'internet',
-				exposedPorts: [this.kernelPort],
-			},
+			// v1's replacement for the removed `ports` + ingress mode: a public
+			// service with an open HTTPS endpoint on the kernel port. Egress follows
+			// the fleet policy default (the removed `egressMode` has no v1 analogue).
+			services: [
+				{
+					name: 'kernel',
+					port: this.kernelPort,
+					protocol: 'tcp',
+					visibility: 'public',
+					endpoint: { kind: 'https', auth: 'open' },
+				},
+			],
 			tags: [this.config.ownerTag ?? DEFAULT_OWNER_TAG, this.idTag],
-			...(this.config.profileNames?.length ? { profileNames: this.config.profileNames } : {}),
 			...(this.config.resources ? { resources: this.config.resources } : {}),
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
-			...objectStorage,
-			...(Object.keys(environmentVariables).length > 0 ? { environmentVariables } : {}),
-			// `ensure` runs the readiness wait itself, on a tighter poll interval than
-			// the SDK's built-in one.
+			...this.objectStorageOptions(),
+			// `ensure` runs the readiness wait itself so create and boot time are
+			// measured separately.
 			waitUntilRunning: false,
 		};
 	}
@@ -459,23 +435,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	private createBootstrap(): string | undefined {
-		const snippets: string[] = [];
-		if (this.needsAwsConfigBootstrap()) snippets.push(AWS_CONFIG_BOOTSTRAP);
-		if (this.userHome) {
-			const parent = this.userHome.path.slice(0, this.userHome.path.lastIndexOf('/')) || '/';
-			const mountMissing = `marimohub: user-home profile mount missing at ${USER_HOME_MOUNT_PATH}`;
-			const linkFailed = `marimohub: cannot prepare user home at ${this.userHome.path}`;
-			snippets.push(
-				`if [ ! -d ${shellQuote(USER_HOME_MOUNT_PATH)} ]; then ` +
-					`echo ${shellQuote(mountMissing)} >&2; exit 1; fi; ` +
-					`if ! mkdir -p ${shellQuote(parent)}; then ` +
-					`echo ${shellQuote(linkFailed)} >&2; exit 1; fi; ` +
-					`if [ ! -e ${shellQuote(this.userHome.path)} ] && ` +
-					`! ln -s ${shellQuote(USER_HOME_MOUNT_PATH)} ${shellQuote(this.userHome.path)}; then ` +
-					`echo ${shellQuote(linkFailed)} >&2; exit 1; fi;`,
-			);
-		}
-		return snippets.length > 0 ? snippets.join(' ') : undefined;
+		return this.needsAwsConfigBootstrap() ? AWS_CONFIG_BOOTSTRAP : undefined;
 	}
 
 	/**
@@ -523,20 +483,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
 		const sandbox = await this.ensure();
-		// AddFile creates parent directories itself. The bootstrap links the user
-		// home into place, so a write beneath it must not race ahead of that.
-		if (this.pendingBootstrap && this.writesUnderUserHome(files)) {
-			await this.exec('true');
-		}
-		// FileContent is `string | Uint8Array`, so bytes pass straight through.
+		// AddFile creates parent directories itself, and FileContent is
+		// `string | Uint8Array`, so bytes pass straight through.
 		await sandbox.files.write(files.map((f) => ({ path: f.path, content: f.content })));
-	}
-
-	private writesUnderUserHome(files: readonly SandboxFileWrite[]): boolean {
-		const home = this.userHome?.path;
-		if (!home) return false;
-		const prefix = home.endsWith('/') ? home : `${home}/`;
-		return files.some((f) => f.path === home || f.path.startsWith(prefix));
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
@@ -775,7 +724,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
 		const sandbox = await this.ensure();
 		if (this.config.resolveExposedUrl) {
-			return { url: await this.config.resolveExposedUrl(sandbox.sandboxId, port) };
+			return { url: await this.config.resolveExposedUrl(sandbox, port) };
 		}
 		// Without a resolver, construct the public URL from a template (the kernel
 		// port was declared `public` at create). Integration surface — the exact
@@ -797,7 +746,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		}
 		// Re-resolved instance (no cached handle): delete every sandbox tagged with our
 		// id. Tolerate "already gone" so teardown is idempotent.
-		const { sandboxes } = await this.client.list({ tags: [this.idTag], includeStopped: false });
+		const { sandboxes } = await this.client.list({ tags: [this.idTag] });
 		for (const info of sandboxes) {
 			await this.deleteTolerant(() => this.client.delete(info.sandboxId));
 		}
@@ -834,42 +783,37 @@ export class CoreWeaveCompute implements SandboxProvider {
 			const apiKey = this.config.apiKey.trim();
 			if (!apiKey) throw new CWSandboxConfigurationError('CWSandbox API key is required.');
 			const baseUrl = this.config.baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_BASE_URL;
-			const transport = instrumentCoreWeaveTransport(
-				new GrpcSandboxTransport({ apiKey, baseUrl }),
-				baseUrl,
-			);
 			// The real SDK client exposes the CoreWeaveClient surface at runtime; one
 			// controlled cast at the construction boundary avoids overload-variance
 			// friction between the SDK's broad signatures and our narrow seam.
 			// oxlint-disable-next-line anti-slop/no-chained-type-assertions
-			this.client = new SandboxClient({ transport }) as unknown as CoreWeaveClient;
+			const sdk = createSandboxClient({ apiKey, baseUrl }) as unknown as CoreWeaveClient;
+			this.client = instrumentCoreWeaveClient(sdk, baseUrl);
 		}
 		return this.client;
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		if (options?.userHome && !this.config.userHomeProfileNames?.length) {
-			throw new Error('A CoreWeave user-home profile is required for personal storage');
+		if (options?.userHome) {
+			// Personal storage rode per-create profile selection, which Sandbox v1
+			// removed from the SDK; failing here beats a sandbox with no mount.
+			throw new Error(
+				'Personal storage (user homes) is not supported on the CoreWeave backend: ' +
+					'CoreWeave Sandbox v1 removed per-create profile selection',
+			);
 		}
 		const resources = coreWeaveProfileResources(options?.resources);
 		const config =
-			options?.image || resources || options?.userHome
+			options?.image || resources
 				? {
 						...this.config,
 						...(options?.image ? { image: options.image } : {}),
-						...(options?.userHome ? { profileNames: this.config.userHomeProfileNames } : {}),
 						...(resources
 							? { resources: mergeCoreWeaveResources(this.config.resources, resources) }
 							: {}),
 					}
 				: this.config;
-		return new CoreWeaveSandboxInstance(
-			id,
-			config,
-			this.getClient(),
-			options?.reuse ?? true,
-			options?.userHome,
-		);
+		return new CoreWeaveSandboxInstance(id, config, this.getClient(), options?.reuse ?? true);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

@@ -370,7 +370,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'CoreWeave Sandbox',
 				selectorValue: 'coreweave',
 				supportsComputeProfiles: true,
-				description: 'CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.',
+				description: 'CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1).',
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY',
@@ -397,33 +397,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Template for the public kernel URL. Substitutes `{sandboxId}`, `{port}`, `{host}`, `{token}`.',
 						default: 'https://{sandboxId}-{port}.{host}',
-					},
-					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
-						name: 'CoreWeave profile names',
-						description:
-							"Comma-separated CoreWeave sandbox profile name(s) applied at create (the `profile_name` of a runner binding). Omit to use the runner's default profile.",
-						example: 'marimohub',
-					},
-					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE',
-						name: 'CoreWeave user-home profile names',
-						description:
-							'Comma-separated CoreWeave profile name(s) used only for editor-or-higher edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile.',
-						example: 'marimohub-user-home',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
-						name: 'CoreWeave ingress mode',
-						description: 'Network ingress mode (backend/profile specific).',
-						default: 'public',
-					},
-					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
-						name: 'CoreWeave egress mode',
-						description: 'Network egress mode (backend/profile specific).',
-						default: 'internet',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',

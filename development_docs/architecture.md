@@ -155,7 +155,7 @@ the Compute port.
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Port**          | `SandboxProvider` — `create(id)` → `SandboxInstance`, plus `proxy(request)` for forwarding traffic to a running kernel                                                                                                                                                                                                                                                                                                                            |
 |                   | `SandboxInstance` — the kernel control surface: `exec`, `startProcess`, `writeFile`/`readFile`, `mountBucket`, `exposePort`, `destroy`, …                                                                                                                                                                                                                                                                                                         |
-| **Adapters**      | **Cloudflare Containers** (Durable Object-backed) · **Modal** · **CoreWeave** (CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK, Node/gRPC) · **Kubernetes** (a Pod + Service and optional Ingress per session via the cluster API) · **Docker** / **Podman** (a container per kernel through the engine CLI) · **E2B** (E2B sandboxes; bring-your-own `e2b` SDK) · **local** (host subprocess via `uv run marimo edit`, dev only) |
+| **Adapters**      | **Cloudflare Containers** (Durable Object-backed) · **Modal** · **CoreWeave** (CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK, Node/gRPC) · **Kubernetes** (a Pod + Service and optional Ingress per session via the cluster API) · **Docker** / **Podman** (a container per kernel through the engine CLI) · **E2B** (E2B sandboxes; bring-your-own `e2b` SDK) · **local** (host subprocess via `uv run marimo edit`, dev only) |
 | **Orchestration** | `SandboxProvisioner` is provider-agnostic: it creates a sandbox, makes notebook files available (mount the bucket, or fall back to copying files in), starts marimo, waits for the port, and exposes a URL. Teardown reverses it.                                                                                                                                                                                                                 |
 
 An edit sandbox can also expose secondary **surfaces**. `SurfaceRegistry` owns
@@ -567,7 +567,7 @@ packages/
   storage-fs/             local filesystem adapter (single process)
   compute-cloudflare/     Cloudflare Containers adapter
   compute-modal/          Modal adapter
-  compute-coreweave/      CoreWeave Sandboxes adapter (vendored cwsandbox SDK)
+  compute-coreweave/      CoreWeave Sandboxes adapter (cwsandbox SDK)
   compute-kubernetes/     Kubernetes adapter (Pod + Service, optional Ingress)
   compute-container/      Docker and Podman adapters (a container per kernel)
   compute-e2b/            E2B sandboxes adapter (bring-your-own e2b SDK)

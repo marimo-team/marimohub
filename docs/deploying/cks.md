@@ -200,16 +200,14 @@ cwic sandbox runner edit marimohub          # edit profile_bindings, e.g.:
 
 ```yaml
 profile_bindings:
-  - profile_template_id: <EXISTING-DEFAULT-PROFILE-ID>
-    is_default: true
   - profile_template_id: <NEW-MARIMOHUB-PROFILE-ID>
-    profile_name: marimohub
+    is_default: true
 ```
 
-The `profile_name: marimohub` alias is how the hub selects this binding
-(`MARIMOHUB_COMPUTE_COREWEAVE_PROFILE=marimohub` in step 8). If this cluster is
-dedicated to marimohub you can instead make it the default binding and skip the
-env var.
+The marimohub profile must be the runner's **default** binding: CoreWeave
+Sandbox v1 removed per-create profile selection from the SDK, so the hub can
+no longer pick a binding by name. Use a runner (or cluster) dedicated to
+marimohub.
 
 Profile schema, egress allowlists, and binding overrides:
 [Configure a sandbox profile](https://docs.coreweave.com/products/sandboxes/profiles/configure),
@@ -262,11 +260,16 @@ spec:
               mountPath: /mnt
 ```
 
+> **Currently unavailable.** This feature selected the user-home profile per
+> create via `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE`; CoreWeave
+> Sandbox v1 removed per-create profile selection, and marimohub rejects the
+> variable at boot. The section below documents how it worked and what a
+> runner-level replacement would need.
+
 Bind this profile under the `marimohub-user-home` name, then configure:
 
 ```yaml
 MARIMOHUB_EDITOR_SANDBOX_SHARING: exclusive
-MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: marimohub
 MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: marimohub-user-home
 ```
 
@@ -410,7 +413,6 @@ config:
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandbox.<ORG-ID>-marimohub.coreweave.app
   # No {port}: Traefik routes the hostname to the kernel port.
   MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE: https://{sandboxId}.{host}
-  MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: marimohub
 
   # Auth — your OIDC provider (see docs/auth.md)
   MARIMOHUB_AUTH_BACKEND: oidc
@@ -549,10 +551,10 @@ For setup steps, access policies, and trade-offs, see
 
 ### GPU sandboxes
 
-Add a second profile whose pod placement requests GPU instance types
+Add a profile whose pod placement requests GPU instance types
 (`spec.pod.placement.instanceTypes`, e.g. `gd-8xh100ib-i128`) backed by a GPU
-node pool, bind it to the runner under a distinct `profile_name`, and select it
-via `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. See
+node pool, and make it the default binding of a dedicated runner (CoreWeave
+Sandbox v1 removed per-create profile selection). See
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
 ### Custom domain
@@ -646,9 +648,9 @@ Re-apply (with a changed pod annotation so the pods roll) whenever you change
   `0.0.0.0`, not `127.0.0.1` (Traefik connects to the pod IP). The provisioner
   already passes `--host 0.0.0.0`; check anything that overrides the kernel
   command.
-- **Kernels never become reachable** — verify the profile binding name matches
-  `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`, and that `…_SANDBOX_HOSTNAME` matches
-  the profile's ingress `template` suffix exactly.
+- **Kernels never become reachable** — verify the marimohub profile is the
+  runner's default binding, and that `…_SANDBOX_HOSTNAME` matches the
+  profile's ingress `template` suffix exactly.
 - **Kernel TLS shows the Traefik default self-signed cert** — the
   `sandbox-wildcard-tls` Certificate isn't Ready, or the TLSStore was
   overwritten by a Traefik chart upgrade (step 9).
