@@ -208,6 +208,9 @@ spec:
     staticNamespace: marimohub-sandboxes
   pod:
     spec:
+      # ... include the marimohub template's pod settings here (node-pool
+      # pinning, automountServiceAccountToken, /dev/shm) — templates do not
+      # inherit from each other.
       volumes:
         - name: user-homes
           persistentVolumeClaim:
