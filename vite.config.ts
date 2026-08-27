@@ -352,6 +352,8 @@ export default defineConfig({
 				files: ['packages/**', 'apps/**', 'examples/**'],
 				excludeFiles: [
 					'packages/config/**',
+					'packages/core/**',
+					'packages/api/**',
 					'packages/postgres-runtime/**',
 					'apps/server/src/postgresWorker.ts',
 				],

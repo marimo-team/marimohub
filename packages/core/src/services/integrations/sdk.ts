@@ -288,9 +288,53 @@ export function defineIntegration<S extends z.ZodType>(
 				}
 			: {}),
 		...(def.browse ? { browse: guardedBrowse(def.browse, pathsOf) } : {}),
+		...(def.databaseBrowse
+			? { databaseBrowse: guardedDatabaseBrowse(def.databaseBrowse, pathsOf) }
+			: {}),
 		...(def.objectBrowse ? { objectBrowse: guardedObjectBrowse(def.objectBrowse, pathsOf) } : {}),
 		...(def.preview ? { preview: guardedPreview(def.preview, pathsOf) } : {}),
 		...(def.query ? { query: guardedQuery(def.query, pathsOf) } : {}),
+	};
+}
+
+function guardedDatabaseBrowse<C>(
+	databaseBrowse: DatabaseBrowseDefinition<C>,
+	pathsOf: () => SecretPath[],
+): DatabaseBrowseDefinition<C> {
+	const available = databaseBrowse.available.bind(databaseBrowse);
+	return {
+		provider: databaseBrowse.provider,
+		available(config) {
+			let verdict: ReturnType<typeof available>;
+			try {
+				verdict = available(config);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				return { ok: false, reason: 'this instance cannot be browsed from the hub' };
+			}
+			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
+				return { ok: false, reason: 'this instance cannot be browsed from the hub' };
+			}
+			return verdict;
+		},
+		source(config) {
+			try {
+				const source = databaseBrowse.source(config);
+				if (source.provider !== databaseBrowse.provider) throw new ProviderMismatchError();
+				return source;
+			} catch (err) {
+				if (err instanceof ProviderMismatchError) {
+					throw new UnavailableError('The database provider does not match its integration.');
+				}
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				throw new UnavailableError('The database request failed.');
+			}
+		},
+		snippet: databaseBrowse.snippet.bind(databaseBrowse),
 	};
 }
 

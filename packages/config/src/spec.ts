@@ -959,7 +959,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Experiments',
 						description:
 							'Comma-separated experimental feature IDs. Unknown or graduated IDs (such as the removed `duckdb-wasm-preview`) are ignored with a startup warning. No experiment currently gates behavior.',
-						example: 'some-experiment-id',
 					},
 					{
 						id: 'PORT',
@@ -1567,6 +1566,13 @@ See the [secret-source guide](./integration-secrets.md).`,
 						description:
 							'Controls read-only data browsing for editors and higher roles. `metadata` (default) enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. `off` disables browsing. The default yields silently when integrations or the probe are off; an explicit `metadata` or `full` setting then fails at startup instead.',
 						default: 'metadata',
+					},
+					{
+						id: 'MARIMOHUB_POSTGRES_DATA_ACCESS',
+						name: 'PostgreSQL data access',
+						description:
+							'Enables PostgreSQL schema browsing. In full data-browser mode, it also enables row previews and Run SQL for every enabled compatible PostgreSQL integration. Disabled by default.',
+						default: 'off',
 					},
 					{
 						id: 'MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT',

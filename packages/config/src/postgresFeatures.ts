@@ -1,15 +1,22 @@
 import type { IntegrationQueryGate, QueryReadinessCheck } from '@marimo-hub/core';
+import { parseOnOff } from './env';
 import type { Env } from './env';
-import { ConfigError } from './errors';
 
 export interface PostgresDataAccessFeatures {
+	enabled: boolean;
 	allowInsecureTransport: boolean;
 }
 
 export function postgresDataAccessFeatures(env: Env): PostgresDataAccessFeatures {
-	// Security decision, not a rollout gate: stays off by default.
 	return {
-		allowInsecureTransport: featureSwitch(env, 'MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT'),
+		enabled: parseOnOff(env, 'MARIMOHUB_POSTGRES_DATA_ACCESS', {
+			fallback: false,
+			docs: 'docs/integrations.md',
+		}),
+		allowInsecureTransport: parseOnOff(env, 'MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT', {
+			fallback: false,
+			docs: 'docs/integrations.md',
+		}),
 	};
 }
 
@@ -18,6 +25,13 @@ export function postgresDataAccessGate(
 ): IntegrationQueryGate {
 	return ({ kind, config }) => {
 		if (kind !== 'postgres') return;
+		if (!features.enabled) {
+			return blocked(
+				'postgres-data-access',
+				'Enable PostgreSQL data access',
+				'MARIMOHUB_POSTGRES_DATA_ACCESS is not on',
+			);
+		}
 		const mode = (config as { ssl?: { mode?: unknown } } | null)?.ssl?.mode;
 		if (
 			(mode === 'disable' || mode === 'prefer' || mode === 'require') &&
@@ -32,16 +46,6 @@ export function postgresDataAccessGate(
 		}
 		return;
 	};
-}
-
-function featureSwitch(env: Env, key: string): boolean {
-	const value = env[key]?.trim().toLowerCase();
-	if (value === undefined || value === '' || value === 'off') return false;
-	if (value === 'on') return true;
-	throw new ConfigError(`Unknown ${key}: ${env[key]} (supported: on, off).`, {
-		variable: key,
-		docs: 'docs/integrations.md',
-	});
 }
 
 function blocked(id: string, label: string, reason: string, field = ''): QueryReadinessCheck {

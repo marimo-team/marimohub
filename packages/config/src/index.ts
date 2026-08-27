@@ -76,6 +76,7 @@ import { ConfigError } from './errors';
 import { checkSandboxHostIsolation } from './hostIsolation';
 import { buildPreflightChecks } from './preflightChecks';
 import { parseExperiments } from './experiments';
+import { postgresDataAccessFeatures } from './postgresFeatures';
 
 export { ConfigError, isConfigError } from './errors';
 export type { ConfigErrorOptions } from './errors';
@@ -276,6 +277,7 @@ function dataQueryFromEnv(
 		max: MAX_NODE_TIMER_SECONDS,
 	});
 	const policy = integrationProbePolicy(env);
+	const postgresFeatures = postgresDataAccessFeatures(env);
 	return new DataQueryService({
 		executorFactories: {
 			'duckdb-wasm': createNodeDataQueryExecutorFactory({
@@ -287,7 +289,7 @@ function dataQueryFromEnv(
 				httpSessionFactory,
 				metrics,
 			}),
-			...(policy !== 'off'
+			...(policy !== 'off' && postgresFeatures.enabled
 				? {
 						postgres: createPostgresDataQueryExecutorFactory({
 							resolveHost: createGuardedHostResolver({

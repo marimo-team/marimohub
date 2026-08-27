@@ -409,9 +409,14 @@ Set one or the other, not both.
 
 ### Hub data browser
 
-Direct PostgreSQL browsing follows the data browser and is on in the default
-`metadata` mode, which lists user schemas, selectable relations, and columns.
-Full mode also enables row previews and PostgreSQL-native Run SQL:
+Direct PostgreSQL browsing is off by default. Enable it for all compatible PostgreSQL integrations:
+
+```bash
+MARIMOHUB_POSTGRES_DATA_ACCESS=on
+```
+
+The default `metadata` mode lists user schemas, selectable relations, and columns. Full mode also
+enables row previews and PostgreSQL-native Run SQL:
 
 ```bash
 MARIMOHUB_DATA_BROWSER=full
@@ -447,9 +452,9 @@ function. Create a dedicated role with only the required `CONNECT`, schema `USAG
 view `SELECT` privileges. Do not grant write privileges or broad function execution rights to the
 production browser role.
 
-To turn hub browsing off, set `MARIMOHUB_DATA_BROWSER=off` and restart the server, or disable the
-integration. Existing notebook PostgreSQL connections continue to use the rendered sandbox
-configuration.
+For an emergency rollback, set `MARIMOHUB_POSTGRES_DATA_ACCESS=off`. Then restart the server.
+This change does not disable other data browsers. Existing notebook PostgreSQL connections remain
+available.
 
 The runtime emits `postgres_runtime.operation` counters and `postgres_runtime.duration_ms`
 histograms. Labels contain only the operation and fixed outcome. Target policy, authentication,

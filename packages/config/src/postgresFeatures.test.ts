@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { postgresDataAccessFeatures, postgresDataAccessGate } from './postgresFeatures';
 
 describe('PostgreSQL data-access features', () => {
-	it('defaults insecure transport off and accepts only on or off', () => {
-		expect(postgresDataAccessFeatures({})).toEqual({ allowInsecureTransport: false });
+	it('defaults data access and insecure transport off and accepts only on or off', () => {
+		expect(postgresDataAccessFeatures({})).toEqual({
+			enabled: false,
+			allowInsecureTransport: false,
+		});
 		expect(
-			postgresDataAccessFeatures({ MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT: ' ON ' }),
-		).toEqual({ allowInsecureTransport: true });
+			postgresDataAccessFeatures({
+				MARIMOHUB_POSTGRES_DATA_ACCESS: ' ON ',
+				MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT: ' ON ',
+			}),
+		).toEqual({ enabled: true, allowInsecureTransport: true });
 		expect(() =>
 			postgresDataAccessFeatures({
 				MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT: 'enabled',
@@ -14,16 +20,22 @@ describe('PostgreSQL data-access features', () => {
 		).toThrow('Unknown MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT');
 	});
 
+	it('rejects invalid data-access flag values', () => {
+		expect(() => postgresDataAccessFeatures({ MARIMOHUB_POSTGRES_DATA_ACCESS: 'enabled' })).toThrow(
+			'Unknown MARIMOHUB_POSTGRES_DATA_ACCESS',
+		);
+	});
+
 	it('permits verified TLS without the transport override', () => {
-		const gate = postgresDataAccessGate({ allowInsecureTransport: false });
+		const gate = postgresDataAccessGate({ enabled: true, allowInsecureTransport: false });
 
 		expect(gate({ kind: 'postgres', config: { ssl: { mode: 'verify-ca' } } })).toBeUndefined();
 		expect(gate({ kind: 'postgres', config: { ssl: { mode: 'verify-full' } } })).toBeUndefined();
 	});
 
 	it.each(['disable', 'prefer', 'require'])('requires the transport override for %s', (mode) => {
-		const blocked = postgresDataAccessGate({ allowInsecureTransport: false });
-		const allowed = postgresDataAccessGate({ allowInsecureTransport: true });
+		const blocked = postgresDataAccessGate({ enabled: true, allowInsecureTransport: false });
+		const allowed = postgresDataAccessGate({ enabled: true, allowInsecureTransport: true });
 
 		expect(blocked({ kind: 'postgres', config: { ssl: { mode } } })).toMatchObject({
 			id: 'postgres-insecure-transport',
@@ -34,14 +46,22 @@ describe('PostgreSQL data-access features', () => {
 	});
 
 	it('leaves other integration kinds unchanged', () => {
-		const gate = postgresDataAccessGate({ allowInsecureTransport: false });
+		const gate = postgresDataAccessGate({ enabled: false, allowInsecureTransport: false });
 
 		expect(gate({ kind: 's3', config: {} })).toBeUndefined();
 	});
 });
 
 describe('PostgreSQL gate hardening', () => {
-	const gate = postgresDataAccessGate({ allowInsecureTransport: false });
+	const gate = postgresDataAccessGate({ enabled: true, allowInsecureTransport: false });
+
+	it('blocks PostgreSQL access unless the rollout flag is enabled', () => {
+		const disabled = postgresDataAccessGate({ enabled: false, allowInsecureTransport: true });
+		expect(disabled({ kind: 'postgres', config: {} })).toMatchObject({
+			id: 'postgres-data-access',
+			ready: false,
+		});
+	});
 
 	it.each([
 		null,

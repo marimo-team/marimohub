@@ -188,7 +188,7 @@ export const postgres = defineIntegration({
 		source: connectionCapability,
 		snippet(instanceName, namespace, table) {
 			const relation = `${quotePgIdentifier(namespace[0] ?? '')}.${quotePgIdentifier(table)}`;
-			const query = JSON.stringify(`SELECT * FROM ${relation}`);
+			const query = JSON.stringify(`SELECT * FROM ${relation} LIMIT 100`);
 			return (
 				'import os\nimport polars as pl\n\n' +
 				`df = pl.read_database_uri(${query}, ` +

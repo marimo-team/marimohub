@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PostgresConnectionCapability } from '@marimo-hub/core';
-import { PostgresDatabaseBrowser } from './node';
+import type { DataQueryExecution, PostgresConnectionCapability } from '@marimo-hub/core';
+import { createPostgresDataQueryExecutorFactory, PostgresDatabaseBrowser } from './node';
 
 const source: PostgresConnectionCapability = {
 	provider: 'postgres',
@@ -36,14 +36,15 @@ describe('PostgresDatabaseBrowser', () => {
 	});
 
 	it('includes DNS resolution in the metadata deadline', async () => {
-		const resolveHost = vi.fn(async () => {
-			await new Promise((resolve) => setTimeout(resolve, 15));
-			return [{ address: '203.0.113.10', family: 4 }];
+		let resolverSignal: AbortSignal | undefined;
+		const resolveHost = vi.fn(async (_host: string, signal?: AbortSignal) => {
+			resolverSignal = signal;
+			return new Promise<never>(() => {});
 		});
 		const runtime = new PostgresDatabaseBrowser({
 			resolveHost,
 			mode: 'metadata',
-			metadataTimeoutMs: 5,
+			metadataTimeoutMs: 10,
 			previewTimeoutMs: 100,
 			previewMaxBytes: 1024,
 		});
@@ -51,6 +52,79 @@ describe('PostgresDatabaseBrowser', () => {
 		await expect(runtime.listNamespaces(source, { limit: 10 })).rejects.toMatchObject({
 			message: 'The PostgreSQL request timed out.',
 		});
+		expect(resolverSignal?.aborted).toBe(true);
+	});
+
+	it('cancels DNS resolution with the caller signal', async () => {
+		let resolverSignal: AbortSignal | undefined;
+		const resolveHost = vi.fn(async (_host: string, signal?: AbortSignal) => {
+			resolverSignal = signal;
+			return new Promise<never>(() => {});
+		});
+		const runtime = new PostgresDatabaseBrowser({
+			resolveHost,
+			mode: 'metadata',
+			metadataTimeoutMs: 1_000,
+			previewTimeoutMs: 1_000,
+			previewMaxBytes: 1024,
+		});
+		const controller = new AbortController();
+		const pending = runtime.listNamespaces(source, { limit: 10, signal: controller.signal });
+		controller.abort();
+
+		await expect(pending).rejects.toMatchObject({
+			name: 'AbortError',
+			message: 'The PostgreSQL request was cancelled.',
+		});
+		expect(resolverSignal?.aborted).toBe(true);
+	});
+
+	it('rejects direct mutation before DNS resolution', async () => {
+		const resolveHost = vi.fn(async () => [{ address: '203.0.113.10', family: 4 }]);
+		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });
+		const executor = await factory.create(new AbortController().signal);
+		const request: DataQueryExecution = {
+			sql: 'UPDATE things SET id = 2',
+			connection: {
+				files: [],
+				vars: {},
+				integration: { id: 'test' as never, name: 'test', kind: 'postgres', version: 1 },
+				plan: { engine: 'postgres', connection: source },
+			},
+			accessMode: 'read-only',
+			limits: { maxRows: 10, maxBytes: 1024, deadlineMs: 100 },
+		};
+
+		await expect(executor.execute(request, new AbortController().signal)).rejects.toThrow(
+			'accepts only SELECT or WITH',
+		);
+		expect(resolveHost).not.toHaveBeenCalled();
+	});
+
+	it('includes DNS resolution in the query deadline', async () => {
+		let resolverSignal: AbortSignal | undefined;
+		const resolveHost = vi.fn(async (_host: string, signal?: AbortSignal) => {
+			resolverSignal = signal;
+			return new Promise<never>(() => {});
+		});
+		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });
+		const executor = await factory.create(new AbortController().signal);
+		const request: DataQueryExecution = {
+			sql: 'SELECT 1',
+			connection: {
+				files: [],
+				vars: {},
+				integration: { id: 'test' as never, name: 'test', kind: 'postgres', version: 1 },
+				plan: { engine: 'postgres', connection: source },
+			},
+			accessMode: 'read-only',
+			limits: { maxRows: 10, maxBytes: 1024, deadlineMs: 10 },
+		};
+
+		await expect(executor.execute(request, new AbortController().signal)).rejects.toThrow(
+			'The PostgreSQL request timed out.',
+		);
+		expect(resolverSignal?.aborted).toBe(true);
 	});
 
 	it.each(['bad', 'name:', 'name:%E0%A4%A'])(

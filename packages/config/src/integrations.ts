@@ -16,7 +16,7 @@ import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/o
 import { GcsObjectBrowser } from '@marimo-hub/object-browser-gcs';
 import { AzureBlobObjectBrowser } from '@marimo-hub/object-browser-azure';
 import { PostgresDatabaseBrowser } from '@marimo-hub/postgres-runtime/node';
-import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
+import { parseBool, parseIntEnv, parseOnOff, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
@@ -24,13 +24,10 @@ import { makeSecretSources } from './secrets';
 import { postgresDataAccessFeatures, postgresDataAccessGate } from './postgresFeatures';
 
 export function integrationsEnabled(env: Env): boolean {
-	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
-	if (setting === undefined || setting === '' || setting === 'on') return true;
-	if (setting === 'off') return false;
-	throw new ConfigError(
-		`Unknown MARIMOHUB_INTEGRATIONS: ${env.MARIMOHUB_INTEGRATIONS} (supported: on, off).`,
-		{ variable: 'MARIMOHUB_INTEGRATIONS', docs: 'docs/integrations.md' },
-	);
+	return parseOnOff(env, 'MARIMOHUB_INTEGRATIONS', {
+		fallback: true,
+		docs: 'docs/integrations.md',
+	});
 }
 
 export function makeIntegrations(
@@ -91,7 +88,7 @@ export function makeIntegrations(
 	// dataBrowser !== 'off' implies policy !== 'off': the default degrades above
 	// and an explicit setting fails fast in makeBrowseProbe.
 	const databaseBrowsers =
-		dataBrowser === 'off'
+		dataBrowser === 'off' || !postgresFeatures.enabled
 			? undefined
 			: (() => {
 					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);

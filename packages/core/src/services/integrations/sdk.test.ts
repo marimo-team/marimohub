@@ -491,4 +491,71 @@ describe('defineIntegration available-reason guard', () => {
 			'invalid query configuration',
 		);
 	});
+
+	it('guards database browse availability and source errors from secret echoes', () => {
+		const guarded = defineIntegration({
+			kind: 'database_guard',
+			title: 'Database guard',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			databaseBrowse: {
+				provider: 'postgres',
+				available: (config) => ({ ok: false, reason: `failed with ${config.token}` }),
+				source: (config) => {
+					throw new ValidationError(`failed with ${config.token}`);
+				},
+				snippet: () => '',
+			},
+		});
+
+		expect(guarded.databaseBrowse!.available({ token: 'database-secret' })).toEqual({
+			ok: false,
+			reason: 'this instance cannot be browsed from the hub',
+		});
+		expect(() => guarded.databaseBrowse!.source({ token: 'database-secret' })).toThrow(
+			'The database request failed.',
+		);
+	});
+
+	it('preserves safe database browse errors and successful internal credentials', () => {
+		const source = {
+			provider: 'postgres' as const,
+			host: 'database.internal',
+			port: 5432,
+			database: 'app',
+			username: 'reader',
+			password: 'database-secret',
+			tls: { mode: 'disable' as const },
+		};
+		const guarded = defineIntegration({
+			kind: 'database_guard_success',
+			title: 'Database guard',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret(), reject: z.boolean() }),
+			render: () => ({}),
+			databaseBrowse: {
+				provider: 'postgres',
+				available: () => ({ ok: true }),
+				source: (config) => {
+					if (config.reject) throw new ValidationError('unsupported database configuration');
+					return { ...source, password: config.token };
+				},
+				snippet: () => '',
+			},
+		});
+
+		expect(guarded.databaseBrowse!.source({ token: 'database-secret', reject: false })).toEqual(
+			source,
+		);
+		expect(() =>
+			guarded.databaseBrowse!.source({ token: 'database-secret', reject: true }),
+		).toThrow('unsupported database configuration');
+	});
 });

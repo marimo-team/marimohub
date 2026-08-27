@@ -18,6 +18,7 @@ const wrongCaPath = process.env.MARIMOHUB_TEST_POSTGRES_WRONG_CA_PATH;
 const caBundle = caPath ? readFileSync(caPath, 'utf8') : undefined;
 const wrongCaBundle = wrongCaPath ? readFileSync(wrongCaPath, 'utf8') : undefined;
 const tlsIt = caBundle && wrongCaBundle ? it : it.skip;
+const plainFallbackIt = Number.isInteger(plainPort) && plainPort > 0 ? it : it.skip;
 
 live('PostgreSQL live conformance', () => {
 	const { Client } = pg;
@@ -199,8 +200,7 @@ live('PostgreSQL live conformance', () => {
 		).rejects.toMatchObject({ message: 'PostgreSQL authentication failed.' });
 	});
 
-	tlsIt('falls back from prefer only when TLS is unavailable', async () => {
-		expect(Number.isInteger(plainPort) && plainPort > 0).toBe(true);
+	plainFallbackIt('falls back from prefer only when TLS is unavailable', async () => {
 		await expect(
 			browser.listNamespaces(
 				{ ...connection, port: plainPort, tls: { mode: 'prefer' } },
@@ -282,6 +282,20 @@ live('PostgreSQL live conformance', () => {
 		executor.terminate();
 	});
 
+	it('rejects an oversized wire row before the worker heap buffers it', async () => {
+		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });
+		const executor = await factory.create(new AbortController().signal);
+		const request = queryRequest(connection, "SELECT repeat('x', 80 * 1024 * 1024) AS value");
+
+		await expect(
+			executor.execute(
+				{ ...request, limits: { ...request.limits, maxBytes: 64 * 1024 } },
+				new AbortController().signal,
+			),
+		).resolves.toEqual({ columns: ['value'], rows: [], truncated: true });
+		executor.terminate();
+	});
+
 	it('returns SQLSTATE and adjusted character position without provider text', async () => {
 		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });
 		const executor = await factory.create(new AbortController().signal);
@@ -291,6 +305,32 @@ live('PostgreSQL live conformance', () => {
 			/PostgreSQL rejected this read-only query \(SQLSTATE 42601 at character [0-9]+\)\./,
 		);
 		executor.terminate();
+	});
+
+	it('adjusts PostgreSQL error positions back to the original SQL', async () => {
+		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });
+		const executor = await factory.create(new AbortController().signal);
+
+		await expect(
+			executor.execute(
+				queryRequest(connection, '   SELECT 1 + FROM sales.orders'),
+				new AbortController().signal,
+			),
+		).rejects.toThrow('SQLSTATE 42601 at character 15');
+		executor.terminate();
+	});
+
+	it('requires schema USAGE even when table SELECT was granted directly', async () => {
+		await expect(browser.listNamespaces(connection, { limit: 20 })).resolves.not.toMatchObject({
+			items: expect.arrayContaining([['hidden']]),
+		});
+		await expect(browser.listTables(connection, ['hidden'], { limit: 20 })).resolves.toEqual({
+			items: [],
+			next_cursor: null,
+		});
+		await expect(browser.getTableSchema(connection, ['hidden'], 'orders')).rejects.toThrow(
+			'PostgreSQL rejected',
+		);
 	});
 
 	it('blocks data-modifying CTEs for a role that otherwise has write access', async () => {

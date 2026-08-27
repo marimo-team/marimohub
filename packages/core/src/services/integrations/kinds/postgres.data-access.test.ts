@@ -55,6 +55,6 @@ describe('PostgreSQL hub data access', () => {
 	it('quotes PostgreSQL and Python string delimiters in notebook snippets', () => {
 		const snippet = postgres.databaseBrowse?.snippet('analytics', ["team's"], 'Odd " table');
 
-		expect(snippet).toContain('SELECT * FROM \\"team\'s\\".\\"Odd \\"\\" table\\"');
+		expect(snippet).toContain('SELECT * FROM \\"team\'s\\".\\"Odd \\"\\" table\\" LIMIT 100');
 	});
 });

@@ -1210,12 +1210,19 @@ describe('createFromEnv data-browser lockdown', () => {
 		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');
 	});
 
-	it('registers both query engines in full mode', () => {
+	it('registers PostgreSQL query execution only with its rollout flag', () => {
 		const deps = createFromEnv({ ...env, MARIMOHUB_DATA_BROWSER: 'full' });
+		const enabled = createFromEnv({
+			...env,
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+		});
 		const stores = deps.integrations as unknown as {
 			store: { dataQuery: { options: { executorFactories: Record<string, unknown> } } };
 		};
-		expect(Object.keys(stores.store.dataQuery.options.executorFactories).sort()).toEqual([
+		const enabledStores = enabled.integrations as unknown as typeof stores;
+		expect(Object.keys(stores.store.dataQuery.options.executorFactories)).toEqual(['duckdb-wasm']);
+		expect(Object.keys(enabledStores.store.dataQuery.options.executorFactories).sort()).toEqual([
 			'duckdb-wasm',
 			'postgres',
 		]);

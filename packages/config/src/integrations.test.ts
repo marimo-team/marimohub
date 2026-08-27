@@ -306,7 +306,7 @@ describe('makeIntegrations data browser', () => {
 		await wired.dataBrowser?.close?.();
 	});
 
-	it('advertises PostgreSQL browsing whenever the data browser is on', () => {
+	it('advertises PostgreSQL browsing only when its rollout flag is on', () => {
 		const dark = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'off' },
 			new MemoryBucket(),
@@ -319,12 +319,27 @@ describe('makeIntegrations data browser', () => {
 			},
 			new MemoryBucket(),
 		);
+		const enabled = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_DATA_BROWSER: 'metadata',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'private',
+				MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+			},
+			new MemoryBucket(),
+		);
 
 		expect(dark.integrations?.listKinds().find((kind) => kind.kind === 'postgres')).toMatchObject({
 			supports_browse: false,
 			browse_surfaces: [],
 		});
 		expect(wired.integrations?.listKinds().find((kind) => kind.kind === 'postgres')).toMatchObject({
+			supports_browse: false,
+			browse_surfaces: [],
+		});
+		expect(
+			enabled.integrations?.listKinds().find((kind) => kind.kind === 'postgres'),
+		).toMatchObject({
 			supports_browse: true,
 			browse_surfaces: ['tables'],
 		});
@@ -576,7 +591,11 @@ describe('makeIntegrations data-browser lockdown', () => {
 		const browsers = (mode: string) =>
 			(
 				makeIntegrations(
-					{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: mode },
+					{
+						MARIMOHUB_INTEGRATIONS: 'on',
+						MARIMOHUB_DATA_BROWSER: mode,
+						MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+					},
 					new MemoryBucket(),
 				).integrations as unknown as {
 					store: { databaseBrowsers?: { postgres?: { preview: boolean } } };
@@ -612,7 +631,10 @@ describe('makeIntegrations data-browser lockdown', () => {
 
 describe('PostgreSQL transport lockdown through the store', () => {
 	const wire = (env: Record<string, string> = {}) =>
-		makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on', ...env }, new MemoryBucket()).integrations!;
+		makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_POSTGRES_DATA_ACCESS: 'on', ...env },
+			new MemoryBucket(),
+		).integrations!;
 
 	it.each(['disable', 'prefer', 'require'])(
 		'reports %s blocked in query readiness without the transport override',
@@ -665,6 +687,7 @@ describe('PostgreSQL transport lockdown through the store', () => {
 			{
 				MARIMOHUB_INTEGRATIONS: 'on',
 				MARIMOHUB_DATA_BROWSER: 'full',
+				MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
 				MARIMOHUB_SECRETS_KEK: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=',
 			},
 			bucket,

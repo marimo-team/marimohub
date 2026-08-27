@@ -1,9 +1,11 @@
 import { connect as netConnect } from 'node:net';
 import type { LookupFunction, Socket } from 'node:net';
+import { Transform } from 'node:stream';
+import type { Duplex } from 'node:stream';
 import { connect as tlsConnect } from 'node:tls';
 import { parentPort } from 'node:worker_threads';
 import pg from 'pg';
-import type { Client as PgClient, FieldDef, QueryResult } from 'pg';
+import type { Client as PgClient, CustomTypesConfig, FieldDef, QueryResult } from 'pg';
 import Cursor from 'pg-cursor';
 import type {
 	PostgresOperation,
@@ -11,13 +13,18 @@ import type {
 	PostgresWorkerRequest,
 	PostgresWorkerResponse,
 } from './protocol';
-import { postgresQuerySql, QUERY_WRAPPER_PREFIX } from './query.ts';
+import { postgresQuery, PostgresStatementTypeError, QUERY_WRAPPER_PREFIX } from './query.ts';
 import { postgresSslOptions, postgresTlsUnavailable } from './tls.ts';
 
-const { Client } = pg;
+const { Client, Connection } = pg;
 const SSL_REQUEST_CODE = 80_877_103;
 const CANCEL_REQUEST_CODE = 80_877_102;
 const CURSOR_BATCH_ROWS = 1;
+// pg-protocol buffers a complete DataRow before pg-cursor can inspect it. These
+// caps keep raw frames, parsed values, and the serialized result inside the worker heap.
+const MAX_DATA_ROW_FRAME_BYTES = 2 * 1024 * 1024;
+const MAX_WORKER_RESULT_BYTES = 16 * 1024 * 1024;
+const MAX_METADATA_DATA_ROW_FRAME_BYTES = 1024 * 1024;
 
 let activeSocket: Socket | undefined;
 let activeCancel:
@@ -78,15 +85,8 @@ async function connect(
 		else callback(null, request.pinned[0].address, request.pinned[0].family);
 	};
 	let stream: ReturnType<typeof netConnect> | undefined;
-	const client = new Client({
-		host: request.connection.host,
-		port: request.connection.port,
-		database: request.connection.database,
-		user: request.connection.username,
-		password: request.connection.password,
-		application_name: 'marimohub-data-browser',
-		connectionTimeoutMillis: 10_000,
-		keepAlive: false,
+	const ssl = postgresSslOptions(request.connection.tls, mode);
+	const connection = new BoundedConnection({
 		stream: () => {
 			stream ??= netConnect({
 				host: request.connection.host,
@@ -96,8 +96,21 @@ async function connect(
 			activeSocket = stream;
 			return stream;
 		},
-		ssl: postgresSslOptions(request.connection.tls, mode),
+		ssl,
+		keepAlive: false,
 	});
+	const client = new Client({
+		host: request.connection.host,
+		port: request.connection.port,
+		database: request.connection.database,
+		user: request.connection.username,
+		password: request.connection.password,
+		application_name: 'marimohub-data-browser',
+		connectionTimeoutMillis: 10_000,
+		keepAlive: false,
+		ssl,
+		connection,
+	} as ConstructorParameters<typeof Client>[0] & { connection: BoundedConnection });
 	try {
 		await client.connect();
 		const backend = client as PgClient & { processID: number; secretKey: number };
@@ -228,14 +241,10 @@ async function runOperation(client: PgClient, operation: PostgresOperation) {
 					operation.maxBytes,
 					false,
 				);
-			case 'query':
-				return await streamRows(
-					client,
-					postgresQuerySql(operation.sql, operation.maxRows),
-					operation.maxRows,
-					operation.maxBytes,
-					true,
-				);
+			case 'query': {
+				const query = postgresQuery(operation.sql, operation.maxRows);
+				return await streamRows(client, query.sql, operation.maxRows, operation.maxBytes, true);
+			}
 		}
 	} finally {
 		await client.query('ROLLBACK').catch(() => {});
@@ -246,6 +255,8 @@ async function listNamespaces(
 	client: PgClient,
 	operation: Extract<PostgresOperation, { type: 'namespaces' }>,
 ) {
+	const connection = boundedConnection(client);
+	connection.setMaxDataRowBytes(MAX_METADATA_DATA_ROW_FRAME_BYTES);
 	const result = await client.query({
 		text: `
 			SELECT n.nspname
@@ -259,6 +270,7 @@ async function listNamespaces(
 		values: [operation.after ?? null, operation.limit + 1],
 		rowMode: 'array',
 	});
+	if (connection.consumeOversizedDataRow()) throw malformed();
 	const names = result.rows.map((row) => String(row[0]));
 	return page(names, operation.limit, (name) => [name]);
 }
@@ -267,12 +279,15 @@ async function listTables(
 	client: PgClient,
 	operation: Extract<PostgresOperation, { type: 'tables' }>,
 ) {
+	const connection = boundedConnection(client);
+	connection.setMaxDataRowBytes(MAX_METADATA_DATA_ROW_FRAME_BYTES);
 	const result = await client.query({
 		text: `
 			SELECT c.relname
 			FROM pg_catalog.pg_class AS c
 			JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 			WHERE n.nspname = $1
+				AND has_schema_privilege(n.oid, 'USAGE')
 				AND c.relkind = ANY (ARRAY['r', 'p', 'v', 'm', 'f']::"char"[])
 				AND has_table_privilege(c.oid, 'SELECT')
 				AND ($2::text IS NULL OR c.relname > $2)
@@ -281,6 +296,7 @@ async function listTables(
 		values: [operation.schema, operation.after ?? null, operation.limit + 1],
 		rowMode: 'array',
 	});
+	if (connection.consumeOversizedDataRow()) throw malformed();
 	const names = result.rows.map((row) => String(row[0]));
 	return page(names, operation.limit, (name) => name);
 }
@@ -289,6 +305,8 @@ async function describeTable(
 	client: PgClient,
 	operation: Extract<PostgresOperation, { type: 'schema' }>,
 ) {
+	const connection = boundedConnection(client);
+	connection.setMaxDataRowBytes(MAX_METADATA_DATA_ROW_FRAME_BYTES);
 	const result = await client.query({
 		text: `
 			SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod),
@@ -297,6 +315,7 @@ async function describeTable(
 			JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid
 			JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 			WHERE n.nspname = $1 AND c.relname = $2
+				AND has_schema_privilege(n.oid, 'USAGE')
 				AND c.relkind = ANY (ARRAY['r', 'p', 'v', 'm', 'f']::"char"[])
 				AND has_table_privilege(c.oid, 'SELECT')
 				AND a.attnum > 0 AND NOT a.attisdropped
@@ -304,6 +323,7 @@ async function describeTable(
 		values: [operation.schema, operation.table],
 		rowMode: 'array',
 	});
+	if (connection.consumeOversizedDataRow()) throw malformed();
 	if (result.rows.length === 0) throw rejected();
 	return {
 		columns: result.rows.map((row) => ({
@@ -322,7 +342,12 @@ async function streamRows(
 	maxBytes: number,
 	includeTruncated: boolean,
 ) {
-	const cursor = client.query(new Cursor<unknown[]>(sql, [], { rowMode: 'array' }));
+	const resultMaxBytes = Math.min(maxBytes, MAX_WORKER_RESULT_BYTES);
+	const connection = boundedConnection(client);
+	connection.setMaxDataRowBytes(Math.min(MAX_DATA_ROW_FRAME_BYTES, resultMaxBytes));
+	const cursor = client.query(
+		new Cursor<unknown[]>(sql, [], { rowMode: 'array', types: RAW_TEXT_TYPES }),
+	);
 	let closed = false;
 	try {
 		const rows: unknown[][] = [];
@@ -345,9 +370,18 @@ async function streamRows(
 					break read;
 				}
 				if (!Array.isArray(raw)) throw malformed();
-				const row = raw.map(normalizeValue);
+				if (connection.consumeOversizedDataRow()) {
+					truncated = true;
+					break read;
+				}
+				const remaining = resultMaxBytes - bytes;
+				if (rawTextBytes(raw) > remaining) {
+					truncated = true;
+					break read;
+				}
+				const row = raw.map((value, index) => parseAndNormalizeValue(value, fields[index]));
 				const rowBytes = Buffer.byteLength(JSON.stringify(row)) + (rows.length === 0 ? 0 : 1);
-				if (bytes + rowBytes > maxBytes) {
+				if (bytes + rowBytes > resultMaxBytes) {
 					truncated = true;
 					break read;
 				}
@@ -355,6 +389,9 @@ async function streamRows(
 				bytes += rowBytes;
 			}
 			if (rawRows.length < requested) break;
+			connection.setMaxDataRowBytes(
+				Math.min(MAX_DATA_ROW_FRAME_BYTES, Math.max(5, resultMaxBytes - bytes)),
+			);
 		}
 		await cursor.close();
 		closed = true;
@@ -362,6 +399,139 @@ async function streamRows(
 		return includeTruncated ? { columns, rows, truncated } : { columns, rows };
 	} finally {
 		if (!closed) await cursor.close().catch(() => {});
+	}
+}
+
+const RAW_TEXT_TYPES: CustomTypesConfig = {
+	getTypeParser: () => (value: string) => value,
+};
+
+function rawTextBytes(row: unknown[]): number {
+	let bytes = 0;
+	for (const value of row) {
+		if (value === null) continue;
+		if (typeof value !== 'string') throw malformed();
+		bytes += Buffer.byteLength(value);
+	}
+	return bytes;
+}
+
+function parseAndNormalizeValue(value: unknown, field: FieldDef | undefined): unknown {
+	if (value === null) return null;
+	if (typeof value !== 'string' || field === undefined) throw malformed();
+	try {
+		return normalizeValue(pg.types.getTypeParser(field.dataTypeID, 'text')(value));
+	} catch (error) {
+		if ((error as { marimohubCode?: unknown } | null)?.marimohubCode === 'malformed_result') {
+			throw error;
+		}
+		throw malformed();
+	}
+}
+
+class BoundedConnection extends Connection {
+	private maxDataRowBytes = Number.MAX_SAFE_INTEGER;
+	private oversizedDataRow = false;
+
+	setMaxDataRowBytes(value: number): void {
+		this.maxDataRowBytes = value;
+	}
+
+	consumeOversizedDataRow(): boolean {
+		const oversized = this.oversizedDataRow;
+		this.oversizedDataRow = false;
+		return oversized;
+	}
+
+	attachListeners(stream: Duplex): void {
+		const guarded = new PostgresFrameGuard(
+			() => this.maxDataRowBytes,
+			() => {
+				this.oversizedDataRow = true;
+			},
+		);
+		stream.pipe(guarded);
+		const attach = Reflect.get(Connection.prototype, 'attachListeners');
+		if (typeof attach !== 'function')
+			throw new Error('PostgreSQL protocol listener is unavailable.');
+		Reflect.apply(attach, this, [guarded]);
+	}
+}
+
+function boundedConnection(client: PgClient): BoundedConnection {
+	return client.connection as BoundedConnection;
+}
+
+export class PostgresFrameGuard extends Transform {
+	private readonly maxDataRowBytes: () => number;
+	private readonly onOversizedDataRow: () => void;
+	private readonly header = Buffer.allocUnsafe(5);
+	private headerBytes = 0;
+	private bodyBytes = 0;
+	private droppingDataRow = false;
+	private readonly fieldCount = Buffer.allocUnsafe(2);
+	private fieldCountBytes = 0;
+
+	constructor(maxDataRowBytes: () => number, onOversizedDataRow: () => void) {
+		super();
+		this.maxDataRowBytes = maxDataRowBytes;
+		this.onOversizedDataRow = onOversizedDataRow;
+	}
+
+	override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error) => void) {
+		try {
+			let offset = 0;
+			while (offset < chunk.length) {
+				if (this.bodyBytes === 0) {
+					const headerTake = Math.min(5 - this.headerBytes, chunk.length - offset);
+					chunk.copy(this.header, this.headerBytes, offset, offset + headerTake);
+					this.headerBytes += headerTake;
+					offset += headerTake;
+					if (this.headerBytes < 5) continue;
+					const length = this.header.readUInt32BE(1);
+					if (length < 4) throw new Error('Invalid PostgreSQL frame.');
+					this.bodyBytes = length - 4;
+					this.droppingDataRow = this.header[0] === 0x44 && length + 1 > this.maxDataRowBytes();
+					if (!this.droppingDataRow) this.push(Buffer.from(this.header));
+					this.headerBytes = 0;
+					if (this.bodyBytes === 0) this.finishFrame();
+					continue;
+				}
+
+				const bodyTake = Math.min(this.bodyBytes, chunk.length - offset);
+				if (this.droppingDataRow) {
+					const fieldTake = Math.min(2 - this.fieldCountBytes, bodyTake);
+					if (fieldTake > 0) {
+						chunk.copy(this.fieldCount, this.fieldCountBytes, offset, offset + fieldTake);
+						this.fieldCountBytes += fieldTake;
+					}
+				} else {
+					this.push(chunk.subarray(offset, offset + bodyTake));
+				}
+				offset += bodyTake;
+				this.bodyBytes -= bodyTake;
+				if (this.bodyBytes === 0) this.finishFrame();
+			}
+			callback();
+		} catch (error) {
+			callback(error instanceof Error ? error : new Error('Invalid PostgreSQL frame.'));
+		}
+	}
+
+	private finishFrame(): void {
+		if (this.droppingDataRow) {
+			if (this.fieldCountBytes !== 2) throw new Error('Invalid PostgreSQL data row.');
+			const columns = this.fieldCount.readUInt16BE(0);
+			const replacement = Buffer.allocUnsafe(7 + columns * 4);
+			replacement[0] = 0x44;
+			replacement.writeUInt32BE(6 + columns * 4, 1);
+			replacement.writeUInt16BE(columns, 5);
+			for (let index = 0; index < columns; index++) replacement.writeInt32BE(-1, 7 + index * 4);
+			this.onOversizedDataRow();
+			this.push(replacement);
+		}
+		this.droppingDataRow = false;
+		this.fieldCountBytes = 0;
 	}
 }
 
@@ -423,6 +593,9 @@ function tlsUnavailable(): Error {
 }
 
 function classifyFailure(error: unknown, operation: PostgresOperation): PostgresWorkerFailure {
+	if (error instanceof PostgresStatementTypeError) {
+		return { code: 'query_rejected', reason: 'statement_type' };
+	}
 	const own = (error as { marimohubCode?: unknown } | null)?.marimohubCode;
 	if (own === 'query_rejected' || own === 'malformed_result') return { code: own };
 	const code = (error as { code?: unknown } | null)?.code;
@@ -452,7 +625,9 @@ function queryFailure(
 			: undefined;
 	const position =
 		operation.type === 'query' && parsed !== undefined && parsed > QUERY_WRAPPER_PREFIX.length
-			? parsed - QUERY_WRAPPER_PREFIX.length
+			? parsed -
+				QUERY_WRAPPER_PREFIX.length +
+				postgresQuery(operation.sql, operation.maxRows).leadingOffset
 			: undefined;
 	return { code: 'query_rejected', sqlState, ...(position === undefined ? {} : { position }) };
 }

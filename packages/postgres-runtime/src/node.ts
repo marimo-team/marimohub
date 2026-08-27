@@ -32,6 +32,7 @@ import type {
 	PostgresWorkerResponse,
 	PostgresWorkerValue,
 } from './protocol';
+import { postgresQuery, PostgresStatementTypeError } from './query';
 
 export type PostgresHostResolver = (
 	hostname: string,
@@ -141,7 +142,7 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 		const deadline = started + this.timeoutMs(kind);
 		let outcome = 'success';
 		try {
-			const pinned = await resolvePinned(this.options.resolveHost, source.host, signal);
+			const pinned = await resolvePinned(this.options.resolveHost, source.host, deadline, signal);
 			const timeoutMs = remainingTimeoutMs(deadline);
 			return await runWorker<T>({ connection: source, pinned, operation }, timeoutMs, signal);
 		} catch (error) {
@@ -176,6 +177,16 @@ export function createPostgresDataQueryExecutorFactory(options: {
 					if (plan?.engine !== 'postgres') {
 						throw new ValidationError('The PostgreSQL runtime received an invalid query plan.');
 					}
+					try {
+						postgresQuery(request.sql, request.limits.maxRows);
+					} catch (error) {
+						if (error instanceof PostgresStatementTypeError) {
+							throw new DataQueryUserError(
+								'PostgreSQL Run SQL accepts only SELECT or WITH statements.',
+							);
+						}
+						throw error;
+					}
 					const started = performance.now();
 					const deadline = started + request.limits.deadlineMs;
 					let outcome = 'success';
@@ -183,6 +194,7 @@ export function createPostgresDataQueryExecutorFactory(options: {
 						const pinned = await resolvePinned(
 							options.resolveHost,
 							plan.connection.host,
+							deadline,
 							executionSignal,
 						);
 						const timeoutMs = remainingTimeoutMs(deadline);
@@ -286,10 +298,29 @@ function oneNamespace(namespace: string[]): string {
 async function resolvePinned(
 	resolveHost: PostgresHostResolver,
 	host: string,
+	deadline: number,
 	signal?: AbortSignal,
 ): Promise<PinnedAddress[]> {
+	if (signal?.aborted) throw aborted();
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
 	try {
-		const pinned = await resolveHost(host, signal);
+		const resolution = resolveHost(host, controller.signal);
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				controller.abort();
+				reject(new ResolutionDeadlineError());
+			}, remainingTimeoutMs(deadline));
+		});
+		const cancellation = new Promise<never>((_, reject) => {
+			onAbort = () => {
+				controller.abort();
+				reject(new ResolutionAbortError());
+			};
+			signal?.addEventListener('abort', onAbort, { once: true });
+		});
+		const pinned = await Promise.race([resolution, timeout, cancellation]);
 		if (
 			pinned.length === 0 ||
 			pinned.some(
@@ -303,9 +334,23 @@ async function resolvePinned(
 		}
 		return pinned;
 	} catch (error) {
-		if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw aborted();
+		if (error instanceof ResolutionDeadlineError) {
+			throw new UnavailableError('The PostgreSQL request timed out.');
+		}
+		if (error instanceof ResolutionAbortError || signal?.aborted) throw aborted();
 		throw new UnavailableError('The PostgreSQL target is not permitted.');
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (onAbort) signal?.removeEventListener('abort', onAbort);
+		controller.abort();
 	}
+}
+
+class ResolutionDeadlineError extends Error {
+	override readonly name = 'ResolutionDeadlineError';
+}
+class ResolutionAbortError extends Error {
+	override readonly name = 'ResolutionAbortError';
 }
 
 function decodeNameCursor(cursor: string | undefined): string | undefined {
@@ -324,6 +369,9 @@ function mappedFailure(failure: PostgresWorkerFailure | PostgresFailureCode): Er
 	const details = typeof failure === 'string' ? { code: failure } : failure;
 	const { code } = details;
 	if (code === 'query_rejected') {
+		if (details.reason === 'statement_type') {
+			return new DataQueryUserError('PostgreSQL Run SQL accepts only SELECT or WITH statements.');
+		}
 		const location =
 			details.sqlState === undefined
 				? ''

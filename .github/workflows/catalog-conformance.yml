@@ -122,6 +122,7 @@ jobs:
             "CREATE ROLE hub_reader LOGIN PASSWORD 'readerpass';
              CREATE ROLE hub_writer LOGIN PASSWORD 'writerpass';
              CREATE SCHEMA sales;
+             CREATE SCHEMA hidden;
              CREATE TABLE sales.orders (id bigint PRIMARY KEY, amount numeric(20,4), created_at timestamptz, payload bytea, meta jsonb, tags text[], special double precision);
              COMMENT ON COLUMN sales.orders.amount IS 'Exact total';
              INSERT INTO sales.orders VALUES (1, 1234567890123456.7890, '2026-01-02T03:04:05Z', decode('00ff','hex'), '{\"ok\":true}', ARRAY['one','two'], 'Infinity');
@@ -134,9 +135,11 @@ jobs:
              CREATE EXTENSION file_fdw;
              CREATE SERVER hub_file FOREIGN DATA WRAPPER file_fdw;
              CREATE FOREIGN TABLE sales.foreign_orders (id bigint) SERVER hub_file OPTIONS (filename '/tmp/foreign-orders.csv', format 'csv');
+             CREATE TABLE hidden.orders (id bigint);
              GRANT CONNECT ON DATABASE hubtest TO hub_reader, hub_writer;
              GRANT USAGE ON SCHEMA sales TO hub_reader, hub_writer;
              GRANT SELECT ON ALL TABLES IN SCHEMA sales TO hub_reader;
+             GRANT SELECT ON hidden.orders TO hub_reader;
              GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA sales TO hub_writer;"
           docker exec postgres-plain psql -U postgres -d hubtest -v ON_ERROR_STOP=1 -c \
             "CREATE ROLE hub_reader LOGIN PASSWORD 'readerpass';

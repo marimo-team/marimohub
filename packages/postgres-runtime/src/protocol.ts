@@ -56,6 +56,7 @@ export type PostgresFailureCode =
 
 export interface PostgresWorkerFailure {
 	code: PostgresFailureCode;
+	reason?: 'statement_type';
 	sqlState?: string;
 	position?: number;
 }
