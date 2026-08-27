@@ -200,19 +200,28 @@ The unbrokered runtime disables external access and rejects remote Node file cal
 
 The brokered runtime supports a narrow Iceberg REST configuration. It requires all these values:
 
-- no authentication or bearer-token authentication
+- no authentication, bearer-token authentication, or OAuth2 client credentials
 - no access delegation
 - explicit S3 storage with an origin-only endpoint, using path-style or virtual-hosted addressing
 - static S3 credentials or anonymous access
 - one or more guarded S3 read locations
 - system TLS and default runtime options
 
-Switch **Storage** from the default `catalog` scheme to `s3` before configuring the brokered
+Switch **Storage** from the default `catalog` scheme to `s3` before you configure the brokered
 profile. The `storage.broker_read_locations` field only appears on that `s3` branch; set it to
-the bucket prefixes that DuckDB can read. Set **Access delegation** to `none` because the default
-`vended_credentials` mode is not supported by Run SQL.
+the bucket prefixes that DuckDB can read. Set **Access delegation** to `none`.
 The worker receives no real catalog or S3 credentials.
 The parent broker authorizes each request, injects credentials, checks DNS results, and pins the target socket.
+Authenticated catalog, OAuth2, and S3 endpoints require HTTPS by default. Enable
+`allow_insecure_transport` only for local development.
+
+> **Upgrade note:** Stored authenticated HTTP S3 configurations keep their current behavior.
+> The schema migration enables `allow_insecure_transport` for those configurations.
+> New configurations must enable this option explicitly.
+
+For OAuth2, the parent owns the client secret and refreshes the access token. The token endpoint
+uses the configured integration egress policy. Access tokens stay in one broker session. The worker
+receives only the dummy token from the generated `ATTACH` statement.
 
 Other Iceberg configurations continue to use the sandbox executor.
 
@@ -236,13 +245,45 @@ browsing is selected:
 MARIMOHUB_DATA_BROWSER=full
 ```
 
+OAuth2 Iceberg catalogs and S3 object queries have separate rollout gates. Both are off by
+default. Enable only the capability that the deployment needs:
+
+```bash
+MARIMOHUB_DUCKDB_OAUTH=on
+MARIMOHUB_DUCKDB_OBJECT_QUERIES=on
+```
+
+When OAuth2 catalog access is off, table previews use the configured Python preview runtime when
+it is available. When S3 object queries are off, other Run SQL integrations remain available.
+
 Only project managers and administrators can run SQL. Each request receives a
 fresh DuckDB-Wasm worker, runs one statement in a read-only transaction, and is
 hard-terminated at its deadline. Direct remote callbacks, automatic extension
 installation, automatic extension loading, and configuration changes are disabled.
-Brokered Iceberg plans can load only the pinned local extensions and approved URLs.
+Brokered Iceberg and S3 plans can load only pinned local extensions and approved URLs.
 Row, response-byte, concurrency, per-user, memory, and time limits apply.
 Successful queries create an audit event that records sizes and row counts, never SQL text.
+
+### DuckDB remote-read errors
+
+Remote-read errors include a stable code and a safe explanation. They do not include credentials,
+object paths, endpoint URLs, or OAuth2 response bodies. This table lists every code returned to Run
+SQL callers.
+
+| Code                       | Action                                                                           |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `capability_expired`       | Retry with a smaller query.                                                      |
+| `capability_unknown`       | Retry the query. Reopen the integration if the error continues.                  |
+| `credential_failed`        | Make sure that authenticated endpoints use HTTPS and credentials are valid.      |
+| `header_denied`            | Remove the unsupported header, or use the sandbox runtime.                       |
+| `invalid_capability`       | Edit and re-save the integration. Contact an administrator if the error repeats. |
+| `invalid_request`          | Make sure that the remote URL and headers are valid.                             |
+| `method_denied`            | Use a GET or HEAD read, or use the sandbox runtime.                              |
+| `redirect_budget_exceeded` | Make sure that the integration endpoint is correct.                              |
+| `request_budget_exceeded`  | Narrow the query, or split it into smaller queries.                              |
+| `response_budget_exceeded` | Select fewer columns or rows.                                                    |
+| `target_denied`            | Make sure that catalog redirects and `broker_read_locations` are correct.        |
+| `transport_failed`         | Make sure that DNS, TLS, and the integration egress policy permit the endpoint.  |
 
 ### Scope and caching
 
@@ -663,6 +704,19 @@ file the image ships.
 
 Works with MinIO, Cloudflare R2, Ceph, and other S3-compatible stores: set the
 endpoint and, for most of them, path-style addressing.
+
+Run SQL requires an explicit endpoint, static credentials or anonymous access, and a guarded read
+location. Each location grants one bucket prefix. The default bucket does not grant access.
+Static credentials require HTTPS by default. Enable `allow_insecure_transport` only for local
+development. Anonymous endpoints can use HTTP without this option.
+
+> **Upgrade note:** Stored authenticated HTTP S3 configurations keep their current behavior.
+> The schema migration enables `allow_insecure_transport` for those configurations.
+> New configurations must enable this option explicitly.
+
+Use exact Parquet or CSV object paths. Globs are unavailable because they require a broader S3 list
+request. JSON is unavailable until the DuckDB-Wasm package includes the signed `json` extension.
+The broker permits only `GET` and `HEAD`, so queries cannot write objects.
 
 <!--@include: ./partials/integrations/s3.md-->
 

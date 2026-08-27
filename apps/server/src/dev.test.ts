@@ -44,6 +44,8 @@ describe('local development setup', () => {
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_INTEGRATIONS_PROBE: 'private',
 			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_DUCKDB_OAUTH: 'on',
+			MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'on',
 			MARIMOHUB_DATA_PREVIEW_IMAGE: 'ghcr.io/marimo-team/marimo-sandbox:latest',
 			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 		});
@@ -128,10 +130,16 @@ describe('local development setup', () => {
 			]),
 		);
 		expect(listed).toHaveLength(3);
+		const minio = listed?.find((entry) => entry.name === 'local-minio');
 		const iceberg = listed?.find((entry) => entry.name === 'local-iceberg');
+		if (!minio) throw new Error('Expected the local MinIO integration.');
 		if (!iceberg) throw new Error('Expected the local Iceberg integration.');
+		expect(await deps.orgIntegrations?.get(minio.id)).toMatchObject({
+			config: { allow_insecure_transport: true },
+		});
 		expect(await deps.orgIntegrations?.get(iceberg.id)).toMatchObject({
 			config: {
+				allow_insecure_transport: true,
 				storage: {
 					broker_read_locations: [{ bucket: 'warehouse', prefix: 'demo' }],
 				},

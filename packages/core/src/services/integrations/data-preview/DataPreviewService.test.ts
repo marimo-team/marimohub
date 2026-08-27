@@ -112,6 +112,47 @@ describe('DataPreviewService', () => {
 		expect(sandboxPreview).toHaveBeenCalledOnce();
 	});
 
+	it('uses Python when deployment policy rejects brokered DuckDB access', async () => {
+		const duckdb = new DuckDBWasmDataPreview(async () => duckdbRuntime(), {
+			memoryLimitMb: 64,
+			startupTimeoutMs: 100,
+			executionTimeoutMs: 100,
+			httpAccessAllowed: () => false,
+		});
+		await duckdb.check();
+		const sandboxPreview = vi.fn(async () => ({ columns: ['runtime'], rows: [['sandbox']] }));
+		const service = new DataPreviewService({
+			duckdbWasm: duckdb,
+			sandbox: {
+				available: () => true,
+				check: async () => {},
+				preview: sandboxPreview,
+				close: async () => {},
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+		});
+
+		await expect(
+			service.preview(user, {
+				duckdbWasm: {
+					setup: [],
+					query: { text: 'SELECT 1' },
+					httpAccess: {
+						kind: 's3-object-store',
+						endpoint: 'https://objects.example.test',
+						region: 'us-east-1',
+						urlStyle: 'path',
+						credentials: { method: 'anonymous' },
+						locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				},
+				python: {} as never,
+			}),
+		).resolves.toEqual({ columns: ['runtime'], rows: [['sandbox']] });
+		expect(sandboxPreview).toHaveBeenCalledOnce();
+	});
+
 	it('records executor selection without request-specific metric tags', async () => {
 		const increment = vi.fn();
 		const service = new DataPreviewService({

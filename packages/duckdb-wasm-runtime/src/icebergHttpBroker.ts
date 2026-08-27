@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { noopMetrics } from '@marimo-hub/core';
+import { noopMetrics, withAbortSignal } from '@marimo-hub/core';
 import type { Metrics } from '@marimo-hub/core';
 
 export type IcebergHttpBrokerMethod = 'GET' | 'HEAD';
@@ -11,8 +11,10 @@ export interface IcebergHttpBrokerRoute {
 	methods: readonly IcebergHttpBrokerMethod[];
 	/** Parent-owned headers, including credentials. They are never sent by the worker. */
 	headers?: Readonly<Record<string, string>>;
+	/** The signal covers the capability lifetime; individual callers can stop waiting independently. */
 	prepareHeaders?: (
 		request: Readonly<IcebergHttpBrokerRequest>,
+		signal?: AbortSignal,
 	) => Promise<Readonly<Record<string, string>>>;
 	forwardRequestHeaders?: readonly string[];
 	discardRequestHeaders?: readonly string[];
@@ -57,6 +59,7 @@ export type IcebergHttpBrokerTransport = (
 export type IcebergHttpBrokerErrorCode =
 	| 'capability_expired'
 	| 'capability_unknown'
+	| 'credential_failed'
 	| 'header_denied'
 	| 'invalid_capability'
 	| 'invalid_request'
@@ -92,6 +95,7 @@ interface Session {
 	routes: readonly NormalizedRoute[];
 	limits: IcebergHttpBrokerCapability['limits'];
 	forwardRequestHeaders: ReadonlySet<string>;
+	lifecycleController: AbortController;
 	requests: number;
 	activeRequests: number;
 	responseBytes: number;
@@ -167,7 +171,7 @@ export class IcebergHttpBroker {
 		if (!id || this.sessions.has(id)) {
 			throw new IcebergHttpBrokerError(
 				'invalid_capability',
-				'Iceberg HTTP broker generated an invalid capability ID.',
+				'DuckDB HTTP broker could not create a session ID. Retry the query.',
 			);
 		}
 		this.sessions.set(id, session);
@@ -177,6 +181,7 @@ export class IcebergHttpBroker {
 	close(id: string): void {
 		const session = this.sessions.get(id);
 		this.sessions.delete(id);
+		session?.lifecycleController.abort();
 		for (const controller of session?.controllers ?? []) controller.abort();
 		wakeAll(session?.requestWaiters);
 		wakeAll(session?.responseWaiters);
@@ -224,7 +229,7 @@ export class IcebergHttpBroker {
 					: controller.signal;
 				let redirects = 0;
 				for (;;) {
-					const authorized = await authorize(session, current);
+					const authorized = await authorize(session, current, transportSignal);
 					const reservation = await reserveResponseBudget(session, transportSignal);
 					let response: IcebergHttpBrokerResponse;
 					let statusClass = 'failed';
@@ -274,7 +279,7 @@ export class IcebergHttpBroker {
 						});
 						throw new IcebergHttpBrokerError(
 							'redirect_budget_exceeded',
-							'Iceberg HTTP broker redirect budget exceeded.',
+							'The remote endpoint redirected too many times. Make sure that the integration endpoint is correct.',
 						);
 					}
 					redirects += 1;
@@ -298,7 +303,7 @@ export class IcebergHttpBroker {
 			this.close(id);
 			throw new IcebergHttpBrokerError(
 				'capability_expired',
-				'Iceberg HTTP broker capability expired.',
+				'The DuckDB remote-read session reached its deadline. Retry with a smaller query.',
 			);
 		}
 		return session;
@@ -361,6 +366,7 @@ function normalizeCapability(
 		routes: capability.routes.map(normalizeRoute),
 		limits: { ...limits },
 		forwardRequestHeaders: forwarded,
+		lifecycleController: new AbortController(),
 		requests: 0,
 		activeRequests: 0,
 		responseBytes: 0,
@@ -453,6 +459,7 @@ function normalizeRequest(request: IcebergHttpBrokerRequest): IcebergHttpBrokerR
 async function authorize(
 	session: Session,
 	request: IcebergHttpBrokerRequest,
+	signal?: AbortSignal,
 ): Promise<AuthorizedRequest> {
 	if (session.requests >= session.limits.maxRequests) {
 		session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
@@ -460,7 +467,7 @@ async function authorize(
 		});
 		throw new IcebergHttpBrokerError(
 			'request_budget_exceeded',
-			'Iceberg HTTP broker request budget exceeded.',
+			'The query made too many remote requests. Narrow the query or split it into smaller queries.',
 		);
 	}
 	const target = new URL(request.url);
@@ -474,13 +481,13 @@ async function authorize(
 	if (!route) {
 		throw new IcebergHttpBrokerError(
 			'target_denied',
-			'Iceberg HTTP broker target is outside the execution capability.',
+			'The query tried to read outside the guarded locations. Make sure that catalog redirects and broker_read_locations are correct.',
 		);
 	}
 	if (!route.methods.has(request.method)) {
 		throw new IcebergHttpBrokerError(
 			'method_denied',
-			'Iceberg HTTP broker method is not allowed for this target.',
+			'The query tried an unsupported remote operation. Guarded reads permit only GET and HEAD requests.',
 		);
 	}
 	const submittedHeaders = normalizeHeaders(request.headers ?? {}, 'invalid_request');
@@ -493,25 +500,18 @@ async function authorize(
 		) {
 			throw new IcebergHttpBrokerError(
 				'header_denied',
-				`Iceberg HTTP broker request header "${header}" is not allowed.`,
+				`The query sent the unsupported remote header "${header}". Remove this header or use the sandbox runtime.`,
 			);
 		}
 		workerHeaders[header] = value;
 	}
+	if (signal?.aborted) throw abortError();
+	session.requests += 1;
+	const preparation = route.prepareHeaders?.(request, session.lifecycleController.signal);
 	const preparedHeaders = normalizeHeaders(
-		(await route.prepareHeaders?.(request)) ?? {},
+		preparation ? await withAbortSignal(preparation, signal, abortError) : {},
 		'invalid_request',
 	);
-	if (session.requests >= session.limits.maxRequests) {
-		session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
-			budget: 'request',
-		});
-		throw new IcebergHttpBrokerError(
-			'request_budget_exceeded',
-			'Iceberg HTTP broker request budget exceeded.',
-		);
-	}
-	session.requests += 1;
 	session.metrics.increment('duckdb_http_broker.request', 1, {
 		outcome: 'authorized',
 		route: route.kind,
@@ -614,14 +614,16 @@ function assertResponse(response: IcebergHttpBrokerResponse): void {
 		response.status > 599 ||
 		!(response.body instanceof Uint8Array)
 	) {
-		throw invalidRequest('Iceberg HTTP broker transport returned an invalid response.');
+		throw invalidRequest(
+			'The DuckDB HTTP transport returned an invalid response. Retry the query.',
+		);
 	}
 }
 
 function invalidCapability(): IcebergHttpBrokerError {
 	return new IcebergHttpBrokerError(
 		'invalid_capability',
-		'Iceberg HTTP broker capability is invalid.',
+		'DuckDB HTTP access is invalid. Review the integration endpoint and guarded read locations.',
 	);
 }
 
@@ -632,7 +634,7 @@ function invalidRequest(message: string): IcebergHttpBrokerError {
 function unknownCapability(): IcebergHttpBrokerError {
 	return new IcebergHttpBrokerError(
 		'capability_unknown',
-		'Iceberg HTTP broker capability is unknown.',
+		'The DuckDB remote-read session ended before the request completed. Retry the query.',
 	);
 }
 
@@ -702,7 +704,7 @@ function responseBudgetExceeded(session: Session): IcebergHttpBrokerError {
 	});
 	return new IcebergHttpBrokerError(
 		'response_budget_exceeded',
-		'Iceberg HTTP broker response budget exceeded.',
+		'Remote data exceeded the query byte limit. Select fewer columns or rows.',
 	);
 }
 
@@ -721,7 +723,7 @@ function responseStatusClass(status: number): string {
 }
 
 function abortError(): Error {
-	return Object.assign(new Error('Iceberg HTTP broker request was cancelled.'), {
+	return Object.assign(new Error('The DuckDB remote-read request was canceled.'), {
 		name: 'AbortError',
 	});
 }

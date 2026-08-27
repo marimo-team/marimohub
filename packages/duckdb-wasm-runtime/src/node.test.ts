@@ -11,10 +11,11 @@ import {
 	createNodeDataQueryExecutorFactory,
 	createNodeDuckDBWasmRuntimeFactory,
 	DUCKDB_WORKER_RESOURCE_LIMITS,
+	IcebergHttpBrokerError,
 	nodeDuckDBWasmCapabilities,
 } from './node';
 import type { DuckDBHttpSessionFactory, IcebergHttpBrokerRequest } from './node';
-import { createHttpBridgeBuffers } from './httpBridge';
+import { createHttpBridgeBuffers, waitForHttpBridge } from './httpBridge';
 
 type OnTestFinished = TestContext['onTestFinished'];
 
@@ -69,11 +70,12 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		);
 	});
 
-	it('reports why guarded Iceberg HTTP is unavailable', ({ expect }) => {
+	it('reports why guarded HTTP is unavailable', ({ expect }) => {
 		const capabilities = nodeDuckDBWasmCapabilities();
 		expect(capabilities).toEqual({
 			features: [],
 			unavailable: {
+				'guarded-http': expect.stringMatching(/configured parent broker session/i),
 				'iceberg-http': expect.stringMatching(/configured parent broker session/i),
 			},
 		});
@@ -100,7 +102,7 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(runtime.features).toEqual([]);
 		await runtime.initialize({ memoryLimitMb: 128 });
 
-		expect(runtime.features).toEqual(['iceberg-http']);
+		expect(runtime.features).toEqual(['guarded-http', 'iceberg-http']);
 		const beforeExecute = Date.now();
 		await expect(
 			runtime.execute({
@@ -357,6 +359,62 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
+	it('returns actionable broker errors without exposing transport details', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const runtime = await initialized('worker', onTestFinished);
+		const fetch = vi
+			.fn()
+			.mockRejectedValueOnce(
+				new IcebergHttpBrokerError(
+					'target_denied',
+					'The query tried to read outside the guarded locations. Make sure that catalog redirects and broker_read_locations are correct.',
+				),
+			)
+			.mockRejectedValueOnce(new Error('upstream response contained secret-token'));
+		const internals = runtime as unknown as {
+			activeHttpSession?: { fetch: typeof fetch; close(): void };
+			activeHttpNonce?: string;
+			onHttpRequest(message: {
+				type: 'http-request';
+				executionNonce: string;
+				request: IcebergHttpBrokerRequest;
+				control: SharedArrayBuffer;
+				response: SharedArrayBuffer;
+			}): Promise<void>;
+		};
+		internals.activeHttpSession = { fetch, close: vi.fn() };
+		internals.activeHttpNonce = 'current-execution-nonce';
+
+		const fetchError = async (): Promise<Error> => {
+			const buffers = createHttpBridgeBuffers();
+			await internals.onHttpRequest({
+				type: 'http-request',
+				executionNonce: 'current-execution-nonce',
+				request: { url: 'https://objects.example.test/warehouse/data.parquet', method: 'GET' },
+				...buffers,
+			});
+			try {
+				waitForHttpBridge(buffers.control, buffers.response, 1);
+			} catch (error) {
+				return error as Error;
+			}
+			throw new Error('Expected the HTTP bridge to return an error.');
+		};
+
+		await expect(fetchError()).resolves.toEqual(
+			new Error(
+				'DuckDB remote read failed [target_denied]: The query tried to read outside the guarded locations. Make sure that catalog redirects and broker_read_locations are correct.',
+			),
+		);
+		const transportError = await fetchError();
+		expect(transportError.message).toBe(
+			'DuckDB remote read failed [transport_failed]: The approved remote endpoint was not reachable. Make sure that DNS, TLS, and network access are available.',
+		);
+		expect(transportError.message).not.toContain('secret-token');
+	});
+
 	it('hard-terminates an executing query when closed', async ({ expect, onTestFinished }) => {
 		const runtime = await initialized('worker', onTestFinished);
 		const executing = runtime.execute({
@@ -410,11 +468,14 @@ describe.concurrent('DuckDB-Wasm data-query executor', () => {
 		onTestFinished,
 	}) => {
 		const close = vi.fn();
+		const createSession = vi.fn<
+			NonNullable<Parameters<typeof createNodeDuckDBWasmRuntimeFactory>[1]>
+		>(() => ({
+			fetch: vi.fn(),
+			close,
+		}));
 		const runtime = track(
-			await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
-				fetch: vi.fn(),
-				close,
-			}))(),
+			await createNodeDuckDBWasmRuntimeFactory('worker', createSession)(),
 			onTestFinished,
 		);
 		await runtime.initialize({ memoryLimitMb: 64 });
@@ -432,7 +493,16 @@ describe.concurrent('DuckDB-Wasm data-query executor', () => {
 				setup: [],
 				httpAccess: {
 					kind: 'iceberg-rest',
-					catalog: { url: 'https://catalog.example.test' },
+					catalog: {
+						url: 'https://catalog.example.test',
+						oauth2: {
+							tokenEndpoint: 'https://identity.example.test/oauth/token',
+							clientId: 'parent-client-id',
+							clientSecret: 'parent-client-secret',
+							scope: 'catalog',
+							refreshMarginSeconds: 60,
+						},
+					},
 					storage: {
 						kind: 's3',
 						endpoint: 'https://objects.example.test',
@@ -456,6 +526,17 @@ describe.concurrent('DuckDB-Wasm data-query executor', () => {
 					connection: expect.objectContaining({ files: [], vars: {}, plan: { setup: [] } }),
 				}),
 			}),
+		);
+		const workerMessages = JSON.stringify(postMessage.mock.calls);
+		expect(workerMessages).not.toContain('parent-client-id');
+		expect(workerMessages).not.toContain('parent-client-secret');
+		expect(createSession).toHaveBeenCalledWith(
+			expect.objectContaining({
+				catalog: expect.objectContaining({
+					oauth2: expect.objectContaining({ clientSecret: 'parent-client-secret' }),
+				}),
+			}),
+			expect.anything(),
 		);
 		expect(close).toHaveBeenCalledOnce();
 	}, 15_000);
@@ -507,6 +588,7 @@ describe.concurrent('DuckDB-Wasm worker runtime', () => {
 		onTestFinished,
 	}) => {
 		const runtime = await initialized(mode, onTestFinished);
+		expect(runtime.features).not.toContain('guarded-http');
 		expect(runtime.features).not.toContain('iceberg-http');
 		await expect(
 			runtime.execute({

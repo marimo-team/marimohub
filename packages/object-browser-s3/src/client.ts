@@ -54,7 +54,18 @@ export function createS3ClientFactory(options: {
 			forcePathStyle: source.path_style,
 			maxAttempts: 3,
 			requestHandler,
-			...(credentials ? { credentials } : {}),
+			...(source.auth.method === 'anonymous'
+				? {
+						credentials: { accessKeyId: 'anonymous', secretAccessKey: 'anonymous' },
+						signer: {
+							async sign(request) {
+								return request;
+							},
+						},
+					}
+				: credentials
+					? { credentials }
+					: {}),
 		}) as S3ClientLike;
 		const endpointAllowed = guardEndpoint(source.endpoint, options.resolveHost, context.signal);
 		return {
@@ -217,6 +228,7 @@ export function credentialsFor(source: S3ObjectStoreSource, context: ObjectBrows
 			sessionToken: source.auth.session_token,
 		};
 	}
+	if (source.auth.method === 'anonymous') return;
 	if (context.federation?.provider === 's3') {
 		if (!endpointsMatch(source.endpoint, context.federation.storage.endpoint)) {
 			throw new ObjectBrowseError(

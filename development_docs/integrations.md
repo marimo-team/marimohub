@@ -169,15 +169,22 @@ The DuckDB SDK lives in `packages/duckdb-wasm-runtime`. Core owns only the runti
 The Node implementation locks its configuration and runs each result query in a read-only transaction.
 
 The unbrokered runtime disables external access. Its Node file callbacks reject all remote protocols.
-The configured runtime advertises `iceberg-http` and uses a parent-owned HTTP broker.
+The configured runtime advertises `guarded-http` and uses a parent-owned HTTP broker.
+It keeps `iceberg-http` as a compatibility alias.
 The worker submits synchronous requests through fixed shared-memory buffers.
 The parent authorizes each target, injects credentials, checks DNS results, and pins the socket.
 
-The Iceberg integration supports explicit S3 read prefixes and Cloudflare R2 Data Catalogs. R2 uses
-a bearer token and catalog-vended credentials. Unsupported authentication, storage, TLS, delegation,
-and runtime options use the sandbox executor. See
+The Iceberg integration supports explicit S3 read prefixes, parent-owned OAuth2, and Cloudflare R2
+Data Catalogs. R2 uses a bearer token and catalog-vended credentials. The S3 integration supports
+exact Parquet and CSV object reads from configured prefixes. Unsupported authentication, storage,
+TLS, delegation, and runtime options use the sandbox executor. See
 [the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the security boundary and
 test procedure.
+
+Parent-owned OAuth2 requires `MARIMOHUB_DUCKDB_OAUTH=on`. Guarded S3 object queries require
+`MARIMOHUB_DUCKDB_OBJECT_QUERIES=on`. Both gates default to off. The query gate is evaluated before
+secret resolution and again after resolved configuration is loaded, so a concurrent integration
+update cannot bypass it.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It

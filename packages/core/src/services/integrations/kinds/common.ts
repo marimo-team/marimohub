@@ -77,6 +77,15 @@ export const httpUrlField = () =>
 			'x-marimohub-refinement': 'A valid http(s) URL with an authority, no userinfo, and no port 0',
 		});
 
+export function isInsecureHttpUrl(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	try {
+		return new URL(value).protocol === 'http:';
+	} catch {
+		return false;
+	}
+}
+
 export const serviceUrlField = () =>
 	z
 		.string()
@@ -134,6 +143,84 @@ export function isValidGcsBucket(value: string): boolean {
 		value.split('.').every((part) => part.length <= 63) &&
 		!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)
 	);
+}
+
+const BROKER_BUCKET_REGEX = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?$/;
+
+export const s3BrokerReadLocationSchema = z
+	.strictObject({
+		bucket: z.string().min(1).max(255),
+		prefix: z.string().min(1),
+	})
+	.superRefine((location, context) => {
+		const prefix = normalizeBrokerPrefix(location.prefix);
+		if (hasUnpairedSurrogate(location.prefix)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['prefix'],
+				message: 'S3 broker read location prefixes must contain valid Unicode text.',
+			});
+			return;
+		}
+		const unsafeBucket =
+			!BROKER_BUCKET_REGEX.test(location.bucket) ||
+			location.bucket === '.' ||
+			location.bucket === '..';
+		const unsafePrefix =
+			!prefix ||
+			location.prefix.includes('\\') ||
+			/%2f|%5c/i.test(location.prefix) ||
+			hasControlCharacter(location.prefix) ||
+			prefix.split('/').some((segment) => segment === '.' || segment === '..');
+		if (unsafeBucket || unsafePrefix) {
+			context.addIssue({
+				code: 'custom',
+				message: 'S3 broker read locations require a valid bucket and non-traversing prefix.',
+			});
+		}
+	});
+
+export const s3BrokerReadLocationsSchema = z
+	.array(s3BrokerReadLocationSchema)
+	.superRefine((locations, context) => {
+		const seen = new Set<string>();
+		for (const [index, location] of locations.entries()) {
+			const key = `${location.bucket}\0${normalizeBrokerPrefix(location.prefix)}`;
+			if (seen.has(key)) {
+				context.addIssue({
+					code: 'custom',
+					path: [index],
+					message: 'S3 broker read locations must not contain duplicate bucket prefixes.',
+				});
+			}
+			seen.add(key);
+		}
+	});
+
+function normalizeBrokerPrefix(prefix: string): string {
+	return prefix.replaceAll(/^\/+|\/+$/g, '');
+}
+
+function hasControlCharacter(value: string): boolean {
+	for (const character of value) {
+		const codePoint = character.codePointAt(0) ?? 0;
+		if (codePoint < 32 || codePoint === 127) return true;
+	}
+	return false;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const codeUnit = value.charCodeAt(index);
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const next = value.charCodeAt(index + 1);
+			if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+			index++;
+		} else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**

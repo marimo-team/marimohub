@@ -1,6 +1,6 @@
 <!-- GENERATED from internal/schemas/integrations.yml — do not edit; run `pnpm schemas:generate`. -->
 
-<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#0969DA;vertical-align:-1px"></span> `iceberg_rest` · catalog · config schema v2 · connection test supported
+<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#0969DA;vertical-align:-1px"></span> `iceberg_rest` · catalog · config schema v3 · connection test supported
 
 **Notebook packages:** `pyiceberg[pyarrow,s3fs,gcsfs,adlfs,hf,rest-sigv4,gcp-auth,entra-auth]>=0.11`
 
@@ -16,7 +16,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `auth.method` | `none`, `bearer_token`, `basic`, `oauth2_client_credentials`, `sigv4`, `google`, `entra` | Yes |  |  |
 | `storage` |  |  |  |  |
 | `runtime` |  |  |  |  |
-| `access_delegation` | `none`, `vended_credentials`, `remote_signing`, `both` |  | `vended_credentials` | Catalog delegation mode. Run SQL requires none. |
+| `access_delegation` | `none`, `vended_credentials`, `remote_signing`, `both` |  | `vended_credentials` | Catalog delegation mode. Guarded Run SQL supports none or R2 vended credentials. |
 | `tls.ca_bundle` | string |  |  |  |
 | `tls.client_certificate` | string |  |  |  |
 | `tls.client_key` 🔒 | string |  |  |  |

@@ -62,8 +62,12 @@ function setup(
 	return { broker, calls, transport };
 }
 
-async function expectCode(promise: Promise<unknown>, code: IcebergHttpBrokerError['code']) {
-	await expect(promise).rejects.toMatchObject({ code });
+async function expectCode(
+	promise: Promise<unknown>,
+	code: IcebergHttpBrokerError['code'],
+	message?: string,
+) {
+	await expect(promise).rejects.toMatchObject({ code, ...(message ? { message } : {}) });
 }
 
 describe('IcebergHttpBroker', () => {
@@ -298,6 +302,57 @@ describe('IcebergHttpBroker', () => {
 		});
 	});
 
+	it('lets one caller cancel without aborting shared parent header preparation', async () => {
+		let resolvePreparation!: (headers: Readonly<Record<string, string>>) => void;
+		let preparationSignal: AbortSignal | undefined;
+		let sharedPreparation: Promise<Readonly<Record<string, string>>> | undefined;
+		const { broker, calls, transport } = setup();
+		const prepareHeaders = vi.fn<
+			NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>
+		>((_request, signal) => {
+			sharedPreparation ??= new Promise((resolve, reject) => {
+				resolvePreparation = resolve;
+				preparationSignal = signal;
+				signal?.addEventListener('abort', () => reject(new Error('preparation aborted')), {
+					once: true,
+				});
+			});
+			return sharedPreparation;
+		});
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						prepareHeaders,
+					},
+				],
+			}),
+		);
+		const request = {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET' as const,
+		};
+		const firstController = new AbortController();
+		const first = broker.fetch(id, request, firstController.signal);
+		await vi.waitFor(() => expect(prepareHeaders).toHaveBeenCalledOnce());
+		const second = broker.fetch(id, request);
+		await vi.waitFor(() => expect(prepareHeaders).toHaveBeenCalledTimes(2));
+		const firstResult = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+
+		firstController.abort();
+
+		await firstResult;
+		expect(preparationSignal?.aborted).toBe(false);
+		resolvePreparation({ authorization: 'Bearer shared-token' });
+		await expect(second).resolves.toMatchObject({ status: 200 });
+		expect(transport).toHaveBeenCalledOnce();
+		expect(calls[0]?.headers?.authorization).toBe('Bearer shared-token');
+	});
+
 	it('rejects targets outside the granted origins and path prefixes', async () => {
 		const { broker, transport } = setup();
 		const id = broker.open(capability());
@@ -350,7 +405,7 @@ describe('IcebergHttpBroker', () => {
 		expect(transport).not.toHaveBeenCalled();
 	});
 
-	it('does not retain an abort controller when request normalization fails', async () => {
+	it('does not retain a request abort controller when request normalization fails', async () => {
 		const { broker } = setup();
 		const abort = vi.spyOn(AbortController.prototype, 'abort');
 		const id = broker.open(capability());
@@ -366,13 +421,13 @@ describe('IcebergHttpBroker', () => {
 			);
 			broker.close(id);
 
-			expect(abort).not.toHaveBeenCalled();
+			expect(abort).toHaveBeenCalledOnce();
 		} finally {
 			abort.mockRestore();
 		}
 	});
 
-	it('does not consume request budget when parent header preparation fails', async () => {
+	it('consumes request budget when parent header preparation fails', async () => {
 		const { broker, transport } = setup();
 		const prepareHeaders = vi
 			.fn<NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>>()
@@ -398,10 +453,50 @@ describe('IcebergHttpBroker', () => {
 		};
 
 		await expect(broker.fetch(id, request)).rejects.toThrow('temporary signing failure');
-		await expect(broker.fetch(id, request)).resolves.toMatchObject({ status: 200 });
+		await expectCode(broker.fetch(id, request), 'request_budget_exceeded');
 
-		expect(prepareHeaders).toHaveBeenCalledTimes(2);
-		expect(transport).toHaveBeenCalledOnce();
+		expect(prepareHeaders).toHaveBeenCalledOnce();
+		expect(transport).not.toHaveBeenCalled();
+	});
+
+	it('aborts parent header preparation when its capability closes', async () => {
+		let preparationSignal: AbortSignal | undefined;
+		const { broker, transport } = setup();
+		const prepareHeaders = vi.fn<
+			NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>
+		>(
+			(_request, signal) =>
+				new Promise((_resolve, reject) => {
+					preparationSignal = signal;
+					signal?.addEventListener('abort', () => reject(new Error('preparation aborted')), {
+						once: true,
+					});
+				}),
+		);
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						prepareHeaders,
+					},
+				],
+			}),
+		);
+		const pending = broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET',
+		});
+		await vi.waitFor(() => expect(preparationSignal).toBeDefined());
+
+		broker.close(id);
+
+		expect(preparationSignal?.aborted).toBe(true);
+		await expect(pending).rejects.toThrow('preparation aborted');
+		expect(transport).not.toHaveBeenCalled();
 	});
 
 	it('uses an exact route before an equal-path prefix route', async () => {
@@ -537,6 +632,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'request_budget_exceeded',
+			'The query made too many remote requests. Narrow the query or split it into smaller queries.',
 		);
 
 		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.request', 1, {
@@ -621,6 +717,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'response_budget_exceeded',
+			'Remote data exceeded the query byte limit. Select fewer columns or rows.',
 		);
 
 		const redirectLimited = setup([{ status: 302, headers: { Location: '/iceberg/v1/config' } }]);
@@ -633,6 +730,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'redirect_budget_exceeded',
+			'The remote endpoint redirected too many times. Make sure that the integration endpoint is correct.',
 		);
 
 		let clock = NOW;
@@ -649,6 +747,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'capability_expired',
+			'The DuckDB remote-read session reached its deadline. Retry with a smaller query.',
 		);
 
 		const closed = setup();
@@ -660,6 +759,7 @@ describe('IcebergHttpBroker', () => {
 				method: 'GET',
 			}),
 			'capability_unknown',
+			'The DuckDB remote-read session ended before the request completed. Retry the query.',
 		);
 	});
 

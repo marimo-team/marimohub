@@ -864,6 +864,70 @@ describe('ProjectIntegrationsStore', () => {
 			});
 		});
 
+		it('migrates legacy authenticated HTTP S3 configs before stored validation', async () => {
+			const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
+			const cases = [
+				{
+					kind: 's3',
+					name: 'legacy-s3',
+					fromVersion: 1,
+					config: {
+						endpoint_url: 'http://objects.example.com',
+						allow_insecure_transport: true,
+						path_style: true,
+						auth: {
+							method: 'static',
+							access_key_id: 'access-key',
+							secret_access_key: 'secret-key',
+						},
+					},
+				},
+				{
+					kind: 'iceberg_rest',
+					name: 'legacy-iceberg',
+					fromVersion: 2,
+					config: {
+						uri: 'https://catalog.example.com',
+						allow_insecure_transport: true,
+						auth: { method: 'none' },
+						access_delegation: 'none',
+						storage: {
+							scheme: 's3',
+							endpoint: 'http://objects.example.com',
+							credentials: {
+								method: 'static',
+								access_key_id: 'access-key',
+								secret_access_key: 'secret-key',
+							},
+						},
+					},
+				},
+			] as const;
+
+			for (const legacy of cases) {
+				const created = await store.create(
+					pid,
+					{ kind: legacy.kind, name: legacy.name, config: legacy.config },
+					ACTOR,
+				);
+				const key = paths.project(pid).integration(created.id).version(1);
+				const record = await (await bucket.get(key))!.json<Record<string, unknown>>();
+				const config = record.config as Record<string, unknown>;
+				await bucket.put(
+					key,
+					JSON.stringify({
+						...record,
+						kind_schema_version: legacy.fromVersion,
+						config: { ...config, allow_insecure_transport: false },
+					}),
+				);
+
+				await expect(store.get(pid, created.id)).resolves.toMatchObject({
+					config: { allow_insecure_transport: true },
+				});
+			}
+		});
+
 		it('merge-keep resolves against the migrated previous config', async () => {
 			const created = await createV1();
 			const store = v2store();
@@ -2572,6 +2636,7 @@ describe('data browsing', () => {
 				configSchema: z.object({ token: zSecret() }),
 				render,
 				query: {
+					readiness: () => [],
 					available: () => ({ ok: true }),
 					plan: () => ({ setup: [] }),
 				},
@@ -2625,6 +2690,47 @@ describe('data browsing', () => {
 				'   ',
 			),
 		).rejects.toThrow('SQL must not be empty');
+		expect(resolve).not.toHaveBeenCalled();
+		expect(render).not.toHaveBeenCalled();
+
+		const deploymentGate = {
+			id: 'deployment-query-gate',
+			label: 'Enable this query integration',
+			ready: false,
+			field: '',
+			reason: 'This query integration is disabled on this deployment.',
+		} as const;
+		const gatedStore = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			resolvers: [{ ...vaultResolver, resolve }],
+			dataQuery,
+			queryGate: () => deploymentGate,
+		});
+		expect(
+			gatedStore.queryReadiness({
+				kind: 'query_source',
+				config: { token: 'placeholder' },
+			}),
+		).toEqual([deploymentGate]);
+		expect(await gatedStore.browseCapability(pid, created.id)).toMatchObject({
+			surfaces: {
+				query: {
+					available: false,
+					reason: 'This query integration is disabled on this deployment.',
+				},
+			},
+		});
+		await expect(
+			gatedStore.runDataQuery(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'SELECT 1',
+			),
+		).rejects.toThrow('This query integration is disabled on this deployment.');
 		expect(resolve).not.toHaveBeenCalled();
 		expect(render).not.toHaveBeenCalled();
 	});

@@ -2,7 +2,7 @@ import type { ProjectId, SessionId, UserId } from '../../../ids';
 import type { IntegrationVersionPin, TablePreview } from '../../../ports/integrations';
 import type { RenderOutput } from '../sdk';
 
-export type PreviewRuntimeFeature = 'iceberg-http';
+export type PreviewRuntimeFeature = 'guarded-http' | 'iceberg-http';
 export type PreviewCredentialVars =
 	| Record<string, string>
 	| (() => Promise<Record<string, string> | undefined>);
@@ -14,11 +14,41 @@ export interface DuckDBPreviewStatement {
 
 export type DuckDBPreviewParameter = string | number | boolean | null;
 
-export interface DuckDBHttpAccess {
+export type DuckDBS3Credentials =
+	| { method: 'anonymous' }
+	| {
+			method: 'static';
+			accessKeyId: string;
+			secretAccessKey: string;
+			sessionToken?: string;
+	  };
+
+interface DuckDBHttpTransportPolicy {
+	allowInsecureTransport?: boolean;
+}
+
+export interface DuckDBS3HttpAccess extends DuckDBHttpTransportPolicy {
+	kind: 's3-object-store';
+	endpoint: string;
+	region: string;
+	urlStyle: 'path' | 'vhost';
+	credentials: DuckDBS3Credentials;
+	locations: readonly { bucket: string; prefix: string }[];
+}
+
+export interface DuckDBIcebergRestHttpAccess extends DuckDBHttpTransportPolicy {
 	kind: 'iceberg-rest';
 	catalog: {
 		url: string;
 		authorization?: string;
+		oauth2?: {
+			tokenEndpoint: string;
+			clientId: string;
+			clientSecret: string;
+			scope: string;
+			refreshMarginSeconds: number;
+			fallbackExpiresInSeconds?: number;
+		};
 	};
 	storage:
 		| {
@@ -26,14 +56,7 @@ export interface DuckDBHttpAccess {
 				endpoint: string;
 				region: string;
 				urlStyle: 'path' | 'vhost';
-				credentials:
-					| { method: 'anonymous' }
-					| {
-							method: 'static';
-							accessKeyId: string;
-							secretAccessKey: string;
-							sessionToken?: string;
-					  };
+				credentials: DuckDBS3Credentials;
 				locations: readonly { bucket: string; prefix: string }[];
 		  }
 		| {
@@ -42,6 +65,8 @@ export interface DuckDBHttpAccess {
 				bucket: string;
 		  };
 }
+
+export type DuckDBHttpAccess = DuckDBIcebergRestHttpAccess | DuckDBS3HttpAccess;
 
 export interface DuckDBPreviewProgram {
 	setup: readonly DuckDBPreviewStatement[];

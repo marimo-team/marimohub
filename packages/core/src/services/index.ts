@@ -87,7 +87,10 @@ export {
 	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 } from './integrations/ProjectIntegrationsStore';
-export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
+export type {
+	IntegrationQueryGate,
+	IntegrationsStoreOptions,
+} from './integrations/ProjectIntegrationsStore';
 export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
 export {
 	assertValidDataQuerySql,

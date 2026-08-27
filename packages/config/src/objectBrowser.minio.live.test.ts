@@ -104,6 +104,7 @@ if (endpoint) {
 						bucket,
 						region: 'us-east-1',
 						endpoint_url: endpoint,
+						allow_insecure_transport: true,
 						path_style: true,
 						ambient_env: false,
 						auth: {

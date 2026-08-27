@@ -62,11 +62,14 @@ export type DuckDBHttpSessionFactory = (
 
 const CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
 	features: Object.freeze([]),
-	unavailable: Object.freeze({ 'iceberg-http': ICEBERG_HTTP_UNAVAILABLE }),
+	unavailable: Object.freeze({
+		'guarded-http': ICEBERG_HTTP_UNAVAILABLE,
+		'iceberg-http': ICEBERG_HTTP_UNAVAILABLE,
+	}),
 });
 
 const HTTP_CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
-	features: Object.freeze(['iceberg-http'] as const),
+	features: Object.freeze(['guarded-http', 'iceberg-http'] as const),
 	unavailable: Object.freeze({}),
 });
 
@@ -287,7 +290,11 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 			const code = error instanceof IcebergHttpBrokerError ? error.code : 'transport_failed';
 			this.metrics.increment('duckdb_http_broker.bridge_failure', 1, { reason: code });
 			try {
-				rejectHttpBridge(message, `DuckDB HTTP broker request failed: ${code}.`);
+				const detail =
+					error instanceof IcebergHttpBrokerError
+						? error.message
+						: 'The approved remote endpoint was not reachable. Make sure that DNS, TLS, and network access are available.';
+				rejectHttpBridge(message, `DuckDB remote read failed [${code}]: ${detail}`);
 			} catch (bridgeError) {
 				this.fail(asError(bridgeError));
 			}

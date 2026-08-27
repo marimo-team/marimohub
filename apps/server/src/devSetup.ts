@@ -79,6 +79,7 @@ const DEV_SERVICE_INTEGRATIONS: readonly { healthUrl: string; input: CreateInteg
 				bucket: 'dev-data',
 				region: 'us-east-1',
 				endpoint_url: DEV_S3_ENDPOINT,
+				allow_insecure_transport: true,
 				path_style: true,
 				ambient_env: false,
 				auth: { method: 'static', ...DEV_SERVICE_CREDENTIALS },
@@ -321,6 +322,8 @@ export function localDevEnv(
 		MARIMOHUB_INTEGRATIONS: 'on',
 		MARIMOHUB_INTEGRATIONS_PROBE: 'private',
 		MARIMOHUB_DATA_BROWSER: 'full',
+		MARIMOHUB_DUCKDB_OAUTH: 'on',
+		MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'on',
 		// Inert with the local compute backend (no per-sandbox image overrides),
 		// but keeps the config honest for anyone pointing dev at a real backend.
 		MARIMOHUB_DATA_PREVIEW_IMAGE:

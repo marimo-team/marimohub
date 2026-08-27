@@ -240,7 +240,13 @@ export interface IntegrationsStoreOptions {
 	metrics?: Metrics;
 	dataPreview?: DataPreviewService;
 	dataQuery?: DataQueryService;
+	queryGate?: IntegrationQueryGate;
 }
+
+export type IntegrationQueryGate = (input: {
+	kind: string;
+	config: unknown;
+}) => QueryReadinessCheck | undefined;
 
 /**
  * Scope-generic machinery shared by the project and org tiers. Not exported:
@@ -258,6 +264,7 @@ class ScopedIntegrationsStore {
 	private readonly metrics: Metrics;
 	private readonly dataPreview?: DataPreviewService;
 	private readonly dataQuery?: DataQueryService;
+	private readonly queryGate?: IntegrationQueryGate;
 
 	constructor(options: IntegrationsStoreOptions) {
 		this.bucket = options.bucket;
@@ -273,6 +280,12 @@ class ScopedIntegrationsStore {
 		this.metrics = options.metrics ?? noopMetrics;
 		this.dataPreview = options.dataPreview;
 		this.dataQuery = options.dataQuery;
+		this.queryGate = options.queryGate;
+	}
+
+	private queryGateBlocker(kind: string, config: unknown): QueryReadinessCheck | undefined {
+		const check = this.queryGate?.({ kind, config });
+		return check?.ready === false ? check : undefined;
 	}
 
 	listKinds(): KindDescriptor[] {
@@ -838,7 +851,8 @@ class ScopedIntegrationsStore {
 			authoring: request.config,
 			check: def.validate?.bind(def),
 		});
-		return readiness(parsed);
+		const gate = this.queryGateBlocker(request.kind, parsed);
+		return [...(gate ? [gate] : []), ...readiness(parsed)];
 	}
 
 	/**
@@ -928,10 +942,15 @@ class ScopedIntegrationsStore {
 			}
 		}
 		if (def.query && this.dataQuery) {
-			const verdict = def.query.available(parsed);
-			surfaces.query = verdict.ok
-				? { available: true }
-				: { available: false, reason: verdict.reason };
+			const gate = this.queryGateBlocker(head.kind, parsed);
+			if (gate) {
+				surfaces.query = { available: false, reason: gate.reason };
+			} else {
+				const verdict = def.query.available(parsed);
+				surfaces.query = verdict.ok
+					? { available: true }
+					: { available: false, reason: verdict.reason };
+			}
 		}
 		const anySurfaceAvailable =
 			(surfaces.tables?.available ?? false) ||
@@ -1043,6 +1062,21 @@ class ScopedIntegrationsStore {
 		const head = await this.getHead(scope, id);
 		assertValidDataQuerySql(sql, head.kind);
 		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
+		if (this.queryGate) {
+			const { config } = await this.loadCurrent(scope, head);
+			const parsed = parseStoredWithPlaceholders({
+				schema: this.registry.get(head.kind).configSchema,
+				paths: this.registry.secretPathsOf(head.kind),
+				stored: config,
+			});
+			if (parsed === undefined) {
+				throw new ValidationError(
+					`The stored config no longer matches kind "${head.kind}" — edit and re-save it.`,
+				);
+			}
+			const gate = this.queryGateBlocker(head.kind, parsed);
+			if (gate) throw new ValidationError(gate.reason);
+		}
 		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });
 		const bundled = bundleIntegrations([rendered], sessionId);
 		const opened = await this.openResolvedBrowse(scope, id);
@@ -1050,6 +1084,8 @@ class ScopedIntegrationsStore {
 		if (!query) {
 			throw new ValidationError(`Integration kind "${head.kind}" does not support SQL queries.`);
 		}
+		const resolvedGate = this.queryGateBlocker(head.kind, opened.config);
+		if (resolvedGate) throw new ValidationError(resolvedGate.reason);
 		const verdict = query.available(opened.config);
 		if (!verdict.ok) {
 			throw new ValidationError(`Integration "${head.name}" cannot run SQL: ${verdict.reason}.`);

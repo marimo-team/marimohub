@@ -1,6 +1,9 @@
 import { Readable } from 'node:stream';
 import { ALL, V4MAPPED } from 'node:dns';
-import { describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import { ListBucketsCommand } from '@aws-sdk/client-s3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ObjectBrowseError, UserId, createProjectId } from '@marimo-hub/core';
 import {
 	assertBucket,
@@ -163,6 +166,47 @@ describe('format and identity validation', () => {
 });
 
 describe('guarded DNS lookup', () => {
+	let server: Server | undefined;
+
+	afterEach(async () => {
+		await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+		server = undefined;
+	});
+
+	it('sends no authorization header for anonymous sources', async () => {
+		let authorization: string | undefined;
+		server = createServer((request, response) => {
+			authorization = request.headers.authorization;
+			response.writeHead(200, { 'content-type': 'application/xml' });
+			response.end(
+				'<?xml version="1.0" encoding="UTF-8"?>' +
+					'<ListAllMyBucketsResult><Buckets></Buckets></ListAllMyBucketsResult>',
+			);
+		});
+		await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+		const address = server.address();
+		if (address === null || typeof address === 'string') throw new Error('Expected a server port.');
+		const factory = createS3ClientFactory({
+			resolveHost: async () => [{ address: '127.0.0.1', family: 4 }],
+		});
+		const client = factory(
+			{
+				provider: 's3',
+				endpoint: `http://anonymous.example.test:${address.port}`,
+				path_style: true,
+				auth: { method: 'anonymous' },
+			},
+			browseContext(),
+		);
+
+		try {
+			await client.send(new ListBucketsCommand({}));
+			expect(authorization).toBeUndefined();
+		} finally {
+			client.destroy();
+		}
+	});
+
 	it('uses separate response caps for list and metadata operations and does not cap HEAD', () => {
 		const request = (method: string, query: Record<string, string>) =>
 			({ method, query }) as Parameters<typeof s3ResponseLimit>[0];

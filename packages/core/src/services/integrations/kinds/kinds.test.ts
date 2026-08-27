@@ -783,6 +783,68 @@ describe('kind renders (golden)', () => {
 		});
 	});
 
+	it('iceberg_rest keeps OAuth2 client credentials in the parent broker capability', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			warehouse: 'lake',
+			auth: {
+				method: 'oauth2_client_credentials',
+				token_endpoint: 'https://identity.example.com/oauth/token',
+				client_id: 'client-id',
+				client_secret: 'client-secret',
+				scope: 'PRINCIPAL_ROLE:ALL table.read',
+				refresh_margin_seconds: 30,
+				expires_in_seconds: 300,
+			},
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				credentials: {
+					method: 'static',
+					access_key_id: 'access-key',
+					secret_access_key: 'storage-secret',
+				},
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+			access_delegation: 'none',
+		});
+		const programs = icebergPreviewPrograms(config);
+		const plan = icebergRest.query?.plan({
+			config,
+			integration: {
+				id: createIntegrationId(),
+				name: 'lake',
+				kind: 'iceberg_rest',
+				version: 1,
+			},
+		});
+
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		expect(programs?.duckdbWasm?.setup.at(-1)?.params).toEqual([
+			'https://catalog.example.com/api',
+			'lake',
+			'marimohub-parent-broker',
+			'none',
+		]);
+		expect(programs?.duckdbWasm?.httpAccess).toMatchObject({
+			kind: 'iceberg-rest',
+			catalog: {
+				url: 'https://catalog.example.com/api',
+				oauth2: {
+					tokenEndpoint: 'https://identity.example.com/oauth/token',
+					clientId: 'client-id',
+					clientSecret: 'client-secret',
+					scope: 'PRINCIPAL_ROLE:ALL table.read',
+					refreshMarginSeconds: 30,
+					fallbackExpiresInSeconds: 300,
+				},
+			},
+		});
+		expect(JSON.stringify(programs?.duckdbWasm?.setup)).not.toContain('client-id');
+		expect(JSON.stringify(programs?.duckdbWasm?.setup)).not.toContain('client-secret');
+		expect(plan?.httpAccess).toEqual(programs?.duckdbWasm?.httpAccess);
+	});
+
 	it('iceberg_rest supports R2 Data Catalog with a bearer token and vended credentials', () => {
 		const uri = 'https://catalog.cloudflarestorage.com/account-id/warehouse';
 		const config = icebergRest.configSchema.parse({
@@ -854,7 +916,9 @@ describe('kind renders (golden)', () => {
 			text: expect.stringContaining("ATTACH 'warehouse'"),
 			params: [uri, 'marimohub-parent-broker', 'vended_credentials'],
 		});
-		expect(programs?.duckdbWasm?.httpAccess?.storage).toEqual({
+		const access = programs?.duckdbWasm?.httpAccess;
+		expect(access?.kind).toBe('iceberg-rest');
+		expect(access?.kind === 'iceberg-rest' ? access.storage : undefined).toEqual({
 			kind: 'r2-catalog',
 			endpoint: 'https://account-id.r2.cloudflarestorage.com',
 			bucket: 'warehouse',
@@ -902,7 +966,9 @@ describe('kind renders (golden)', () => {
 		const programs = icebergPreviewPrograms(config);
 
 		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
-		expect(programs?.duckdbWasm?.httpAccess?.storage).toEqual({
+		const access = programs?.duckdbWasm?.httpAccess;
+		expect(access?.kind).toBe('iceberg-rest');
+		expect(access?.kind === 'iceberg-rest' ? access.storage : undefined).toEqual({
 			kind: 'r2-catalog',
 			endpoint: 'https://account-id.r2.cloudflarestorage.com',
 			bucket: 'iceberg',
@@ -1048,7 +1114,8 @@ describe('kind renders (golden)', () => {
 
 		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 		expect(programs?.duckdbWasm?.setup[2]?.text).toContain("URL_STYLE 'vhost'");
-		const storage = programs?.duckdbWasm?.httpAccess?.storage;
+		const access = programs?.duckdbWasm?.httpAccess;
+		const storage = access?.kind === 'iceberg-rest' ? access.storage : undefined;
 		expect(storage?.kind).toBe('s3');
 		expect(storage?.kind === 's3' ? storage.urlStyle : undefined).toBe('vhost');
 	});
@@ -1170,7 +1237,14 @@ describe('kind renders (golden)', () => {
 	it.each([
 		{ bucket: 'warehouse/private', prefix: 'tables' },
 		{ bucket: 'warehouse\\private', prefix: 'tables' },
+		{ bucket: '-warehouse', prefix: 'tables' },
+		{ bucket: 'warehouse-', prefix: 'tables' },
+		{ bucket: 'warehouse?', prefix: 'tables' },
 		{ bucket: 'warehouse', prefix: 'allowed\\private' },
+		{ bucket: 'warehouse', prefix: 'allowed%2Fprivate' },
+		{ bucket: 'warehouse', prefix: 'allowed\u0000private' },
+		{ bucket: 'warehouse', prefix: 'allowed\ud800private' },
+		{ bucket: 'warehouse', prefix: 'allowed\udfffprivate' },
 		{ bucket: '.', prefix: 'tables' },
 		{ bucket: 'warehouse', prefix: '/' },
 		{ bucket: 'warehouse', prefix: 'allowed/../private' },
@@ -1187,6 +1261,162 @@ describe('kind renders (golden)', () => {
 				},
 			}).success,
 		).toBe(false);
+	});
+
+	it('iceberg_rest accepts valid astral Unicode in a broker read prefix', () => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				...(FIXTURES.iceberg_rest as object),
+				access_delegation: 'none',
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					anonymous: true,
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables/\ud83d\ude80' }],
+				},
+			}).success,
+		).toBe(true);
+	});
+
+	it('iceberg_rest explains malformed Unicode in a broker read prefix', () => {
+		const result = icebergRest.configSchema.safeParse({
+			...(FIXTURES.iceberg_rest as object),
+			access_delegation: 'none',
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables/\ud800' }],
+			},
+		});
+
+		expect(result.error?.issues).toContainEqual(
+			expect.objectContaining({
+				path: ['storage', 'broker_read_locations', 0, 'prefix'],
+				message: 'S3 broker read location prefixes must contain valid Unicode text.',
+			}),
+		);
+	});
+
+	it('iceberg_rest rejects duplicate normalized broker read locations', () => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				...(FIXTURES.iceberg_rest as object),
+				access_delegation: 'none',
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					anonymous: true,
+					broker_read_locations: [
+						{ bucket: 'warehouse', prefix: '/tables/' },
+						{ bucket: 'warehouse', prefix: 'tables' },
+					],
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it('iceberg_rest blocks static S3 credentials over HTTP unless explicitly allowed', () => {
+		const base = {
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' as const },
+			access_delegation: 'none' as const,
+			storage: {
+				scheme: 's3' as const,
+				endpoint: 'http://objects.example.com',
+				credentials: {
+					method: 'static' as const,
+					access_key_id: 'access-key',
+					secret_access_key: 'secret-key',
+				},
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+		};
+		const insecure = icebergRest.configSchema.parse(base);
+
+		expect(() => icebergRest.validate?.(insecure)).toThrow(/requires an https:\/\/ endpoint/);
+		expect(icebergRest.query?.readiness?.(insecure)).toContainEqual(
+			expect.objectContaining({ id: 's3-secure-transport', ready: false }),
+		);
+		expect(icebergRest.query?.available(insecure).ok).toBe(false);
+
+		const allowed = icebergRest.configSchema.parse({
+			...base,
+			allow_insecure_transport: true,
+		});
+		expect(() => icebergRest.validate?.(allowed)).not.toThrow();
+		expect(icebergRest.query?.available(allowed)).toEqual({ ok: true });
+		expect(icebergPreviewPrograms(allowed)?.duckdbWasm?.httpAccess).toMatchObject({
+			allowInsecureTransport: true,
+		});
+	});
+
+	it.each([
+		['ambient', { method: 'ambient' as const }],
+		['profile', { method: 'profile' as const, profile_name: 'development' }],
+	])(
+		'iceberg_rest blocks %s S3 credentials over HTTP unless explicitly allowed',
+		(_method, credentials) => {
+			const base = {
+				uri: 'https://catalog.example.com/api',
+				auth: { method: 'none' as const },
+				access_delegation: 'none' as const,
+				storage: {
+					scheme: 's3' as const,
+					endpoint: 'http://objects.example.com',
+					credentials,
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+				},
+			};
+			const insecure = icebergRest.configSchema.parse(base);
+
+			expect(() => icebergRest.validate?.(insecure)).toThrow(/requires an https:\/\/ endpoint/);
+			expect(icebergRest.query?.readiness?.(insecure)).toContainEqual(
+				expect.objectContaining({ id: 's3-secure-transport', ready: false }),
+			);
+
+			const allowed = icebergRest.configSchema.parse({
+				...base,
+				allow_insecure_transport: true,
+			});
+			expect(() => icebergRest.validate?.(allowed)).not.toThrow();
+			expect(icebergRest.query?.readiness?.(allowed)).toContainEqual(
+				expect.objectContaining({ id: 's3-secure-transport', ready: true }),
+			);
+			expect(icebergRest.query?.available(allowed).ok).toBe(false);
+
+			const secure = icebergRest.configSchema.parse({
+				...base,
+				storage: { ...base.storage, endpoint: 'https://objects.example.com' },
+			});
+			expect(() => icebergRest.validate?.(secure)).not.toThrow();
+		},
+	);
+
+	it.each([
+		{ method: 'ambient' as const },
+		{ method: 'profile' as const, profile_name: 'development' },
+		{
+			method: 'static' as const,
+			access_key_id: 'unused-access-key',
+			secret_access_key: 'unused-secret-key',
+		},
+	])('iceberg_rest permits anonymous S3 over HTTP with $method credentials', (credentials) => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' },
+			access_delegation: 'none',
+			storage: {
+				scheme: 's3',
+				endpoint: 'http://objects.example.com',
+				credentials,
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+		});
+
+		expect(() => icebergRest.validate?.(config)).not.toThrow();
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 	});
 
 	it.each([icebergSql, icebergHive, icebergGlue, icebergDynamoDb, icebergBigQuery])(
@@ -1260,17 +1490,6 @@ describe('kind renders (golden)', () => {
 
 	it.each([
 		['basic auth', { auth: { method: 'basic', username: 'user', password: 'password' } }],
-		[
-			'OAuth2 auth',
-			{
-				auth: {
-					method: 'oauth2_client_credentials',
-					token_endpoint: 'https://identity.example.com/token',
-					client_id: 'client',
-					client_secret: 'secret',
-				},
-			},
-		],
 		['SigV4 auth', { auth: { method: 'sigv4', region: 'us-east-1' } }],
 		['Google auth', { auth: { method: 'google' } }],
 		['Entra auth', { auth: { method: 'entra' } }],
@@ -1427,7 +1646,7 @@ describe('kind renders (golden)', () => {
 	});
 
 	it('iceberg_rest migrates the v1 delegation and obsolete S3 path-style fields', () => {
-		const migrated = icebergRest.migrate?.(
+		const v2 = icebergRest.migrate?.(
 			{
 				...(FIXTURES.iceberg_rest as Record<string, unknown>),
 				vended_credentials: false,
@@ -1439,11 +1658,64 @@ describe('kind renders (golden)', () => {
 			},
 			1,
 		) as Record<string, unknown>;
+		const migrated = icebergRest.migrate?.(v2, 2) as Record<string, unknown>;
 		expect(migrated.access_delegation).toBe('none');
 		expect(migrated).not.toHaveProperty('vended_credentials');
 		expect(migrated.storage).not.toHaveProperty('path_style_access');
 		expect(() => icebergRest.configSchema.parse(migrated)).not.toThrow();
 	});
+
+	it.each([
+		['ambient', { method: 'ambient' as const }],
+		['profile', { method: 'profile' as const, profile_name: 'legacy' }],
+		[
+			'static',
+			{
+				method: 'static' as const,
+				access_key_id: 'access-key',
+				secret_access_key: 'secret-key',
+			},
+		],
+	])(
+		'iceberg_rest preserves legacy authenticated HTTP S3 storage for %s auth',
+		(_case, credentials) => {
+			const migrated = icebergRest.migrate?.(
+				{
+					...(FIXTURES.iceberg_rest as Record<string, unknown>),
+					access_delegation: 'none',
+					storage: {
+						scheme: 's3',
+						endpoint: 'http://objects.example.com',
+						credentials,
+						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				},
+				2,
+			) as Record<string, unknown>;
+			const config = icebergRest.configSchema.parse(migrated);
+
+			expect(config.allow_insecure_transport).toBe(true);
+			expect(() => icebergRest.validate?.(config)).not.toThrow();
+		},
+	);
+
+	it.each([
+		['HTTPS storage', 'https://objects.example.com', false],
+		['anonymous HTTP storage', 'http://objects.example.com', true],
+	] as const)(
+		'iceberg_rest does not add an insecure override for legacy %s',
+		(_case, endpoint, anonymous) => {
+			const migrated = icebergRest.migrate?.(
+				{
+					...(FIXTURES.iceberg_rest as Record<string, unknown>),
+					storage: { scheme: 's3', endpoint, anonymous },
+				},
+				2,
+			) as Record<string, unknown>;
+
+			expect(migrated.allow_insecure_transport).not.toBe(true);
+		},
+	);
 
 	it.each([
 		['bearer_token', { method: 'bearer_token', token: 'token' }, { token: 'token' }],
@@ -1869,6 +2141,329 @@ describe('kind renders (golden)', () => {
 			path_style: false,
 			auth: { method: 'ambient' },
 		});
+		const anonymous = s3.objectBrowse!.source(
+			s3.configSchema.parse({ auth: { method: 'anonymous' } }),
+		);
+		expect(anonymous.auth).toEqual({ method: 'anonymous' });
+	});
+
+	it('s3 creates a parent-signed Run SQL plan for guarded path-style locations', () => {
+		const config = s3.configSchema.parse({
+			...(FIXTURES.s3 as object),
+			broker_read_locations: [
+				{ bucket: 'warehouse_name', prefix: '/analytics/events/' },
+				{ bucket: 'archive', prefix: 'snapshots' },
+			],
+		});
+		const checks = s3.query?.readiness?.(config) ?? [];
+		const integration = {
+			id: createIntegrationId(),
+			name: 'lake',
+			kind: 's3',
+			version: 1,
+		} as const;
+		const plan = s3.query?.plan({ config, integration });
+
+		expect(checks.every((check) => check.ready)).toBe(true);
+		expect(s3.query?.available(config)).toEqual({ ok: true });
+		expect(plan?.setup).toEqual([
+			{ text: 'LOAD httpfs' },
+			{ text: 'LOAD parquet' },
+			{
+				text: expect.stringContaining("URL_STYLE 'path'"),
+				params: ['us-east-1', 'minio.internal:9000', true],
+			},
+		]);
+		expect(plan?.httpAccess).toEqual({
+			kind: 's3-object-store',
+			endpoint: 'https://minio.internal:9000',
+			region: 'us-east-1',
+			urlStyle: 'path',
+			credentials: {
+				method: 'static',
+				accessKeyId: 'AKIAEXAMPLE',
+				secretAccessKey: 's3-secret',
+			},
+			locations: [
+				{ bucket: 'warehouse_name', prefix: 'analytics/events' },
+				{ bucket: 'archive', prefix: 'snapshots' },
+			],
+		});
+		expect(JSON.stringify(plan?.setup)).not.toContain('AKIAEXAMPLE');
+		expect(JSON.stringify(plan?.setup)).not.toContain('s3-secret');
+		expect(plan?.cleanup).toEqual([{ text: expect.stringMatching(/^DROP SECRET /) }]);
+	});
+
+	it('s3 does not infer a guarded Run SQL location from the default bucket', () => {
+		const config = s3.configSchema.parse(FIXTURES.s3);
+		const checks = s3.query?.readiness?.(config) ?? [];
+
+		expect(checks).toContainEqual(
+			expect.objectContaining({
+				id: 's3-read-locations',
+				field: 'broker_read_locations',
+				ready: false,
+			}),
+		);
+		expect(s3.query?.available(config)).toEqual({
+			ok: false,
+			reason: 'DuckDB-Wasm Run SQL requires at least one guarded S3 read location',
+		});
+	});
+
+	it('s3 creates an unsigned Run SQL capability for anonymous access', () => {
+		const config = s3.configSchema.parse({
+			endpoint_url: 'https://objects.example.com',
+			path_style: true,
+			auth: { method: 'anonymous' },
+			broker_read_locations: [{ bucket: 'public-data', prefix: 'releases' }],
+		});
+		const plan = s3.query?.plan({
+			config,
+			integration: {
+				id: createIntegrationId(),
+				name: 'public',
+				kind: 's3',
+				version: 1,
+			},
+		});
+
+		expect(s3.query?.available(config)).toEqual({ ok: true });
+		expect(plan?.httpAccess).toMatchObject({
+			kind: 's3-object-store',
+			credentials: { method: 'anonymous' },
+		});
+		expect(JSON.stringify(plan?.setup)).not.toContain('anonymous');
+	});
+
+	it('s3 keeps a static session token in the parent-only capability', () => {
+		const config = s3.configSchema.parse({
+			endpoint_url: 'https://objects.example.com',
+			path_style: true,
+			auth: {
+				method: 'static',
+				access_key_id: 'access-key',
+				secret_access_key: 'secret-key',
+				session_token: 'session-token',
+			},
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'data' }],
+		});
+		const plan = s3.query?.plan({
+			config,
+			integration: {
+				id: createIntegrationId(),
+				name: 'temporary',
+				kind: 's3',
+				version: 1,
+			},
+		});
+
+		expect(plan?.httpAccess).toMatchObject({
+			credentials: {
+				method: 'static',
+				accessKeyId: 'access-key',
+				secretAccessKey: 'secret-key',
+				sessionToken: 'session-token',
+			},
+		});
+		expect(JSON.stringify(plan?.setup)).not.toContain('access-key');
+		expect(JSON.stringify(plan?.setup)).not.toContain('secret-key');
+		expect(JSON.stringify(plan?.setup)).not.toContain('session-token');
+	});
+
+	it('s3 blocks static credentials over HTTP unless explicitly allowed', () => {
+		const base = {
+			...(FIXTURES.s3 as object),
+			endpoint_url: 'http://objects.example.com',
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'data' }],
+		};
+		const insecure = s3.configSchema.parse(base);
+
+		expect(() => s3.validate?.(insecure)).toThrow(/requires an https:\/\/ endpoint/);
+		expect(s3.query?.readiness?.(insecure)).toContainEqual(
+			expect.objectContaining({ id: 's3-secure-transport', ready: false }),
+		);
+		expect(s3.query?.available(insecure).ok).toBe(false);
+
+		const allowed = s3.configSchema.parse({ ...base, allow_insecure_transport: true });
+		expect(() => s3.validate?.(allowed)).not.toThrow();
+		expect(s3.query?.available(allowed)).toEqual({ ok: true });
+		expect(
+			s3.query?.plan({
+				config: allowed,
+				integration: {
+					id: createIntegrationId(),
+					name: 'local',
+					kind: 's3',
+					version: 1,
+				},
+			})?.httpAccess,
+		).toMatchObject({ allowInsecureTransport: true });
+
+		const anonymous = s3.configSchema.parse({
+			...base,
+			auth: { method: 'anonymous' },
+		});
+		expect(() => s3.validate?.(anonymous)).not.toThrow();
+		expect(s3.query?.available(anonymous)).toEqual({ ok: true });
+	});
+
+	it('s3 blocks ambient credentials over HTTP unless explicitly allowed', () => {
+		const base = {
+			endpoint_url: 'http://objects.example.com',
+			path_style: true,
+			auth: { method: 'ambient' as const },
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'data' }],
+		};
+		const insecure = s3.configSchema.parse(base);
+
+		expect(() => s3.validate?.(insecure)).toThrow(/requires an https:\/\/ endpoint/);
+		expect(s3.query?.readiness?.(insecure)).toContainEqual(
+			expect.objectContaining({ id: 's3-secure-transport', ready: false }),
+		);
+
+		const allowed = s3.configSchema.parse({ ...base, allow_insecure_transport: true });
+		expect(() => s3.validate?.(allowed)).not.toThrow();
+		expect(s3.query?.readiness?.(allowed)).toContainEqual(
+			expect.objectContaining({ id: 's3-secure-transport', ready: true }),
+		);
+		expect(s3.query?.available(allowed)).toEqual({
+			ok: false,
+			reason: 'DuckDB-Wasm Run SQL requires static S3 credentials or anonymous access',
+		});
+	});
+
+	it.each([
+		['ambient', { method: 'ambient' as const }],
+		[
+			'static',
+			{
+				method: 'static' as const,
+				access_key_id: 'access-key',
+				secret_access_key: 'secret-key',
+			},
+		],
+	])('s3 preserves a legacy authenticated HTTP endpoint for %s auth', (_case, auth) => {
+		const migrated = s3.migrate?.(
+			{
+				...(FIXTURES.s3 as Record<string, unknown>),
+				endpoint_url: 'http://objects.example.com',
+				auth,
+			},
+			1,
+		) as Record<string, unknown>;
+		const config = s3.configSchema.parse(migrated);
+
+		expect(config.allow_insecure_transport).toBe(true);
+		expect(() => s3.validate?.(config)).not.toThrow();
+	});
+
+	it.each([
+		['HTTPS authentication', 'https://objects.example.com', { method: 'ambient' as const }],
+		['anonymous HTTP', 'http://objects.example.com', { method: 'anonymous' as const }],
+	] as const)('s3 does not add an insecure override for legacy %s', (_case, endpoint_url, auth) => {
+		const migrated = s3.migrate?.(
+			{ ...(FIXTURES.s3 as Record<string, unknown>), endpoint_url, auth },
+			1,
+		) as Record<string, unknown>;
+
+		expect(migrated.allow_insecure_transport).not.toBe(true);
+	});
+
+	it.each([
+		['an absent endpoint', { endpoint_url: undefined }, 's3-endpoint'],
+		['an endpoint path', { endpoint_url: 'https://objects.example.com/api' }, 's3-endpoint-origin'],
+		[
+			'an endpoint query',
+			{ endpoint_url: 'https://objects.example.com?tenant=one' },
+			's3-endpoint-origin',
+		],
+		[
+			'an endpoint fragment',
+			{ endpoint_url: 'https://objects.example.com/#section' },
+			's3-endpoint-origin',
+		],
+		['ambient credentials', { auth: { method: 'ambient' } }, 's3-credentials'],
+		[
+			'an IP virtual host',
+			{ endpoint_url: 'https://192.0.2.10', path_style: false },
+			's3-virtual-host-endpoint',
+		],
+		[
+			'a non-DNS virtual bucket',
+			{ path_style: false, broker_read_locations: [{ bucket: 'warehouse_name', prefix: 'data' }] },
+			's3-virtual-host-buckets',
+		],
+		[
+			'an adjacent-dot virtual bucket',
+			{ path_style: false, broker_read_locations: [{ bucket: 'warehouse..data', prefix: 'data' }] },
+			's3-virtual-host-buckets',
+		],
+	] as const)('s3 blocks Run SQL for %s', (_case, overrides, failedId) => {
+		const config = s3.configSchema.parse({
+			...(FIXTURES.s3 as object),
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'data' }],
+			...overrides,
+		});
+		const checks = s3.query?.readiness?.(config) ?? [];
+		const failed = checks.find((check) => check.id === failedId);
+
+		expect(failed?.ready).toBe(false);
+		expect(s3.query?.available(config)).toEqual({ ok: false, reason: failed?.reason });
+		expect(() =>
+			s3.query?.plan({
+				config,
+				integration: {
+					id: createIntegrationId(),
+					name: 'lake',
+					kind: 's3',
+					version: 1,
+				},
+			}),
+		).toThrow(ValidationError);
+	});
+
+	it.each([
+		{ bucket: '../private', prefix: 'data' },
+		{ bucket: '-warehouse', prefix: 'data' },
+		{ bucket: 'warehouse-', prefix: 'data' },
+		{ bucket: 'warehouse?', prefix: 'data' },
+		{ bucket: 'warehouse/name', prefix: 'data' },
+		{ bucket: 'warehouse', prefix: '/' },
+		{ bucket: 'warehouse', prefix: 'data/../private' },
+		{ bucket: 'warehouse', prefix: 'data\\private' },
+		{ bucket: 'warehouse', prefix: 'data%2Fprivate' },
+		{ bucket: 'warehouse', prefix: 'data\u0000private' },
+		{ bucket: 'warehouse', prefix: 'data\ud800private' },
+		{ bucket: 'warehouse', prefix: 'data\udfffprivate' },
+	])('s3 rejects an unsafe broker location $bucket/$prefix', (location) => {
+		expect(
+			s3.configSchema.safeParse({
+				...(FIXTURES.s3 as object),
+				broker_read_locations: [location],
+			}).success,
+		).toBe(false);
+	});
+
+	it('s3 accepts valid astral Unicode in a broker read prefix', () => {
+		expect(
+			s3.configSchema.safeParse({
+				...(FIXTURES.s3 as object),
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'data/\ud83d\ude80' }],
+			}).success,
+		).toBe(true);
+	});
+
+	it('s3 rejects duplicate normalized broker read locations', () => {
+		expect(
+			s3.configSchema.safeParse({
+				...(FIXTURES.s3 as object),
+				broker_read_locations: [
+					{ bucket: 'warehouse', prefix: '/data/' },
+					{ bucket: 'warehouse', prefix: 'data' },
+				],
+			}).success,
+		).toBe(false);
 	});
 
 	it.each([
