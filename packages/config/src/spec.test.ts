@@ -54,9 +54,25 @@ describe('config registry drift', () => {
 });
 
 describe('config registry sanity', () => {
-	it('has no duplicate variable ids', () => {
-		const ids = CONFIG_SPEC.flatMap((g) => g.backends.flatMap((b) => b.vars.map((v) => v.id)));
-		expect(sorted(ids)).toEqual(sorted(CONFIG_VAR_IDS));
+	it('has no duplicate variable ids within a backend', () => {
+		for (const group of CONFIG_SPEC) {
+			for (const backend of group.backends) {
+				const ids = backend.vars.map((variable) => variable.id);
+				expect(new Set(ids).size, `${group.name}/${backend.name}`).toBe(ids.length);
+			}
+		}
+	});
+
+	it('reuses one definition when a variable applies to multiple backends', () => {
+		const definitions = new Map<string, object>();
+		for (const variable of CONFIG_SPEC.flatMap((group) =>
+			group.backends.flatMap((backend) => backend.vars),
+		)) {
+			const existing = definitions.get(variable.id);
+			if (existing) expect(variable, variable.id).toBe(existing);
+			else definitions.set(variable.id, variable);
+		}
+		expect(sorted(definitions.keys())).toEqual(sorted(CONFIG_VAR_IDS));
 	});
 
 	it('every variable has a name and a non-empty description', () => {
@@ -87,6 +103,18 @@ describe('config registry sanity', () => {
 			.find((variable) => variable.id === 'MARIMOHUB_EXPERIMENTS');
 
 		expect(experiments?.example).toBeUndefined();
+	});
+
+	it('documents proxy header defaults as mode-specific guidance', () => {
+		const auth = CONFIG_SPEC.find((group) => group.selector === 'MARIMOHUB_AUTH_BACKEND');
+		const oidc = auth?.backends.find((backend) => backend.selectorValue === 'oidc');
+		const proxy = auth?.backends.find((backend) => backend.selectorValue === 'proxy-header');
+		const header = proxy?.vars.find((variable) => variable.id === 'MARIMOHUB_AUTH_PROXY_HEADER');
+
+		expect(oidc?.description).toContain('`hd` hint');
+		expect(header?.default).toBeUndefined();
+		expect(header?.description).toContain('X-Forwarded-Email,X-Forwarded-User');
+		expect(header?.description).toContain('X-Goog-IAP-JWT-Assertion');
 	});
 
 	it('selector values are unique within a group, and only appear where a group has a selector', () => {

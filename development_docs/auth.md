@@ -21,11 +21,12 @@ email }`) or `null` → `401`.
 `MARIMOHUB_AUTH_BACKEND` selects the adapter and **must be set explicitly**
 (unset throws on boot).
 
-| Backend             | Identity source                                         | Wired in            |
-| ------------------- | ------------------------------------------------------- | ------------------- |
-| `oidc`              | App-native OpenID Connect (Auth Code + PKCE)            | `packages/config`   |
-| `cloudflare-access` | `CF-Access-JWT-Assertion` header from Cloudflare Access | `cloudflare-worker` |
-| `dev`               | A fixed local user — **no real identity**               | both                |
+| Backend             | Identity source                                            | Wired in            |
+| ------------------- | ---------------------------------------------------------- | ------------------- |
+| `oidc`              | App-native OpenID Connect (Auth Code + PKCE)               | `packages/config`   |
+| `proxy-header`      | Trusted proxy identity headers or a verified IAP assertion | `packages/config`   |
+| `cloudflare-access` | `CF-Access-JWT-Assertion` header from Cloudflare Access    | `cloudflare-worker` |
+| `dev`               | A fixed local user — **no real identity**                  | both                |
 
 `oidc` is the recommended choice for self-hosting: it runs the OAuth2 redirect
 dance itself (no reverse proxy) and issues a signed, httpOnly session cookie, so
@@ -126,6 +127,20 @@ A hosted OIDC gateway in front of the app: the adapter verifies the
 `examples/cloudflare-worker` with `AUTH_MODE=access`, `ACCESS_TEAM` (e.g.
 `myteam` → `myteam.cloudflareaccess.com`), and `ACCESS_AUD` (the application's
 Audience tag). `logoutUrl()` → `https://<team>.cloudflareaccess.com/cdn-cgi/access/logout`.
+
+## Trusted proxy headers (`MARIMOHUB_AUTH_BACKEND=proxy-header`)
+
+This backend has no login routes. The proxy owns the login flow.
+
+Header mode defaults to `X-Forwarded-Email,X-Forwarded-User`. One configured header supplies both identity values.
+
+CAUTION: Block direct access to marimohub in header mode. The proxy must remove
+client-supplied identity headers.
+
+Any nonempty `MARIMOHUB_AUTH_PROXY_JWT_*` variable enables JWT mode. This mode requires the audience.
+The IAP defaults require ES256 and verify the issuer, audience, lifetime, subject, and email.
+
+Both modes require `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Set `*` to allow all domains.
 
 ## Dev (`MARIMOHUB_AUTH_BACKEND=dev`)
 

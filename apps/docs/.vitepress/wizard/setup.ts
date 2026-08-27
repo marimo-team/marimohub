@@ -26,6 +26,7 @@ for (const [path, content] of Object.entries(RAW)) {
  */
 const DOC_HREFS: Record<string, string> = {
 	'auth/oidc': '/auth#oidc-production',
+	'auth/proxy-header': '/auth#trusted-proxy-headers',
 	'auth/dev': '/auth#dev-bypass',
 	'storage/s3': '/storage#s3-compatible-setup',
 	'storage/gcs': '/storage#google-cloud-storage',

@@ -105,12 +105,10 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | ------ | ------------------------------------------------ | ------------------------ | ------------------------------------------------------- |
 | ✅     | OIDC (Google / Auth0 / Okta / Keycloak / WorkOS) | `auth-oidc`              | Verified end-to-end with Google OIDC                    |
 | ✅     | Cloudflare Access                                | `auth-cloudflare-access` | Workers-only. Verifies `CF-Access-JWT-Assertion`        |
+| 🟡     | Trusted proxy headers / Google IAP               | `auth-proxy-header`      | oauth2-proxy, IAP, Tailscale, or another trusted proxy  |
 | ✅     | Dev bypass                                       | `auth-dev`               | Dev only (fixed local user)                             |
-| ⬜     | Reverse-proxy header trust                       | —                        | oauth2-proxy / Pomerium (`X-Forwarded-Email`)           |
-| ⬜     | Google IAP                                       | —                        | Verify signed `X-Goog-IAP-JWT-Assertion`                |
 | ✅     | Personal access tokens                           | built into `core`        | `mhub_pat_…` bearer → user, for CLI/programmatic access |
 | ⬜     | GitHub OAuth (native)                            | —                        | Partly covered by `auth-oidc` today                     |
-| ⬜     | Tailscale identity                               | —                        | `Tailscale-User-Login` via tsnet/serve                  |
 | ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC          |
 
 ## Object browsing (`ObjectBrowser`)

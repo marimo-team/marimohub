@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import {
 	generateCompose,
 	generateEnv,
@@ -7,6 +8,24 @@ import {
 	validateSelection,
 } from './generate';
 import type { WizardSelection } from './generate';
+import { AUTH_WIRING } from './spec';
+
+class StubProxyHeaderAuthenticator {
+	constructor(readonly config: Record<string, unknown>) {}
+}
+
+function proxyHeaderLibraryConfig(
+	env: Record<string, string | undefined>,
+): Record<string, unknown> {
+	const source = AUTH_WIRING['proxy-header']?.rhs(() => '');
+	if (!source) throw new Error('Missing proxy-header Library wiring.');
+	const authenticator = runInNewContext(`(${source})`, {
+		process: { env },
+		ProxyHeaderAuthenticator: StubProxyHeaderAuthenticator,
+		URL,
+	}) as StubProxyHeaderAuthenticator;
+	return authenticator.config;
+}
 
 /** Representative backend combinations covering every adapter at least once. */
 const CASES: Record<string, WizardSelection> = {
@@ -64,6 +83,12 @@ const CASES: Record<string, WizardSelection> = {
 		values: { MARIMOHUB_COMPUTE_WANDB_ENTITY: 'my-team' },
 	},
 	's3 + docker + dev': { storage: 's3', compute: 'docker', auth: 'dev', ai: 'none' },
+	's3 + docker + proxy-header': {
+		storage: 's3',
+		compute: 'docker',
+		auth: 'proxy-header',
+		ai: 'none',
+	},
 	's3 + e2b + oidc': { storage: 's3', compute: 'e2b', auth: 'oidc', ai: 'none' },
 	's3 + none + dev': { storage: 's3', compute: 'none', auth: 'dev', ai: 'none' },
 	's3 + modal + oidc, managed ai': {
@@ -104,6 +129,125 @@ describe('config -> code generators', () => {
 		);
 		expect(env).toContain('MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret');
 		expect(env).not.toContain('MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub');
+	});
+
+	it('includes required proxy-header configuration and library wiring', () => {
+		const selection = CASES['s3 + docker + proxy-header'];
+		expect(generateEnv(selection)).toContain(
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org',
+		);
+		expect(generateHelm(selection)).toContain(
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org',
+		);
+		expect(generateCompose(selection)).toContain(
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org',
+		);
+
+		const library = generateLibrary(selection);
+		expect(library).toContain(
+			`import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';`,
+		);
+		expect(library).toContain(`mode: 'headers'`);
+		expect(library).toContain(
+			`throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is required.');`,
+		);
+		expect(library).toContain('const authRoutes = undefined;');
+	});
+
+	it('uses proxy header defaults for an unset or blank Library setting', () => {
+		for (const header of [undefined, '', '   ']) {
+			const config = proxyHeaderLibraryConfig({
+				MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+				MARIMOHUB_AUTH_PROXY_HEADER: header,
+			});
+			expect(config.mode).toBe('headers');
+			expect(config.allowedEmailDomains).toEqual(['example.com']);
+			expect(config).not.toHaveProperty('headers');
+		}
+	});
+
+	it('validates custom proxy headers in generated Library wiring', () => {
+		expect(
+			proxyHeaderLibraryConfig({
+				MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+				MARIMOHUB_AUTH_PROXY_HEADER: ' X-Auth-Email , X-Auth-Subject ',
+			}),
+		).toMatchObject({ mode: 'headers', headers: ['X-Auth-Email', 'X-Auth-Subject'] });
+
+		for (const header of ['X-One,X-Two,X-Three', 'X-One,', 'Bad Header']) {
+			expect(() =>
+				proxyHeaderLibraryConfig({
+					MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+					MARIMOHUB_AUTH_PROXY_HEADER: header,
+				}),
+			).toThrow('must contain one or two valid header names');
+		}
+	});
+
+	it('rejects an empty domain list in generated Library wiring', () => {
+		for (const domains of [undefined, '', '   ', ',,,', ' , , ']) {
+			expect(() =>
+				proxyHeaderLibraryConfig({
+					MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: domains,
+				}),
+			).toThrow(/MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS/);
+		}
+	});
+
+	it('generates JWT Library configuration from IAP settings', () => {
+		const config = proxyHeaderLibraryConfig({
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+			MARIMOHUB_AUTH_PROXY_HEADER: ' X-Verified-Assertion ',
+			MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: ' audience ',
+			MARIMOHUB_AUTH_PROXY_JWT_ISSUER: ' https://issuer.example.com ',
+			MARIMOHUB_AUTH_PROXY_JWKS_URL: ' https://issuer.example.com/jwks ',
+		});
+		expect(config).toEqual({
+			mode: 'jwt',
+			audience: 'audience',
+			allowedEmailDomains: undefined,
+			header: 'X-Verified-Assertion',
+			issuer: 'https://issuer.example.com',
+			jwksUrl: 'https://issuer.example.com/jwks',
+		});
+	});
+
+	it('requires a JWT audience when another JWT setting enables JWT mode', () => {
+		for (const jwtEnv of [
+			{ MARIMOHUB_AUTH_PROXY_JWT_ISSUER: 'https://issuer.example.com' },
+			{ MARIMOHUB_AUTH_PROXY_JWKS_URL: 'https://issuer.example.com/jwks' },
+		]) {
+			expect(() =>
+				proxyHeaderLibraryConfig({
+					MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+					...jwtEnv,
+				}),
+			).toThrow('MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE is required');
+		}
+	});
+
+	it('rejects invalid JWT headers and JWKS URLs in generated Library wiring', () => {
+		expect(() =>
+			proxyHeaderLibraryConfig({
+				MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+				MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: 'audience',
+				MARIMOHUB_AUTH_PROXY_HEADER: 'X-Assertion,X-Other',
+			}),
+		).toThrow('must contain one valid JWT assertion header name');
+
+		for (const jwksUrl of [
+			'not-a-url',
+			'http://issuer.example.com/jwks',
+			'https://user:password@issuer.example.com/jwks',
+		]) {
+			expect(() =>
+				proxyHeaderLibraryConfig({
+					MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+					MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: 'audience',
+					MARIMOHUB_AUTH_PROXY_JWKS_URL: jwksUrl,
+				}),
+			).toThrow('must be an HTTPS URL without credentials');
+		}
 	});
 
 	it('leaves compute profiles unset unless explicitly configured', () => {

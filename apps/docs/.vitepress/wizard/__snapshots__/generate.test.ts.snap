@@ -1296,6 +1296,226 @@ const app = createApi({
 });"
 `;
 
+exports[`config -> code generators > s3 + docker + proxy-header > .env 1`] = `
+"# --- Storage ---
+MARIMOHUB_STORAGE_BACKEND=s3
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
+MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
+MARIMOHUB_STORAGE_S3_REGION=us-east-1
+MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
+MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
+
+# --- Compute ---
+MARIMOHUB_COMPUTE_BACKEND=docker
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
+MARIMOHUB_COMPUTE_WORKDIR=/workspace
+MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
+MARIMOHUB_COMPUTE_DOCKER_HOST=localhost
+MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1
+MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimohub
+
+# --- Auth ---
+MARIMOHUB_AUTH_BACKEND=proxy-header
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
+
+# --- Managed AI ---
+MARIMOHUB_AI_BACKEND=none
+
+# --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
+MARIMOHUB_PERSIST_WORKSPACE=source"
+`;
+
+exports[`config -> code generators > s3 + docker + proxy-header > compose 1`] = `
+"services:
+  marimohub:
+    image: ghcr.io/marimo-team/marimohub:latest
+    ports:
+      - '3000:3000'
+    environment:
+      MARIMOHUB_STORAGE_BACKEND: s3
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
+      MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
+      MARIMOHUB_STORAGE_S3_REGION: us-east-1
+      MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
+      MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
+      MARIMOHUB_COMPUTE_BACKEND: docker
+      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+      MARIMOHUB_COMPUTE_WORKDIR: /workspace
+      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+      MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
+      MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
+      MARIMOHUB_COMPUTE_DOCKER_NETWORK: marimohub
+      MARIMOHUB_AUTH_BACKEND: proxy-header
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+      MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
+      MARIMOHUB_PERSIST_WORKSPACE: source"
+`;
+
+exports[`config -> code generators > s3 + docker + proxy-header > helm 1`] = `
+"# Non-secret MARIMOHUB_* config -> ConfigMap.
+config:
+  MARIMOHUB_STORAGE_BACKEND: s3
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
+  MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
+  MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
+  MARIMOHUB_COMPUTE_BACKEND: docker
+  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+  MARIMOHUB_COMPUTE_WORKDIR: /workspace
+  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+  MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
+  MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
+  MARIMOHUB_COMPUTE_DOCKER_NETWORK: marimohub
+  MARIMOHUB_AUTH_BACKEND: proxy-header
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+  MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
+  MARIMOHUB_PERSIST_WORKSPACE: source
+
+# Secret values -> Secret (prefer secrets.existingSecret in production).
+secrets:
+  data:
+    MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
+    MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: """
+`;
+
+exports[`config -> code generators > s3 + docker + proxy-header > library 1`] = `
+"import { createApi } from '@marimo-hub/api';
+import { createServices } from '@marimo-hub/core';
+import { S3Storage } from '@marimo-hub/storage-s3';
+import { DockerCompute } from '@marimo-hub/compute-container/docker';
+import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';
+
+const bucket = new S3Storage({
+	bucket: process.env.MARIMOHUB_STORAGE_S3_BUCKET!,
+	endpoint: "https://s3.us-east-1.amazonaws.com",
+	region: "us-east-1",
+	forcePathStyle: true,
+});
+
+const compute = new DockerCompute({
+	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
+	host: "localhost",
+	bindHost: "127.0.0.1",
+});
+
+const authenticator = (() => {
+	const domainsValue = process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS?.trim();
+	if (!domainsValue) {
+		throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is required.');
+	}
+	const allowedEmailDomains =
+		domainsValue === '*'
+			? undefined
+			: domainsValue
+				.split(',')
+				.map((domain) => domain.trim())
+				.filter(Boolean);
+	if (allowedEmailDomains?.length === 0) {
+		throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS lists no domains.');
+	}
+
+	const jwtConfigured = [
+		process.env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER,
+		process.env.MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE,
+		process.env.MARIMOHUB_AUTH_PROXY_JWKS_URL,
+	].some((value) => Boolean(value?.trim()));
+	const parseHeaders = () => {
+		const raw = process.env.MARIMOHUB_AUTH_PROXY_HEADER;
+		if (raw === undefined || raw.trim() === '') return undefined;
+		const headers = raw.split(',').map((header) => header.trim());
+		const maximum = jwtConfigured ? 1 : 2;
+		const headerName = new RegExp("^[!#$%&'*+\\\\-.^_\`|~0-9A-Za-z]+$");
+		if (headers.length > maximum || headers.some((header) => !headerName.test(header))) {
+			throw new Error(
+				jwtConfigured
+					? 'MARIMOHUB_AUTH_PROXY_HEADER must contain one valid JWT assertion header name.'
+					: 'MARIMOHUB_AUTH_PROXY_HEADER must contain one or two valid header names.',
+			);
+		}
+		return headers;
+	};
+
+	if (jwtConfigured) {
+		const audience = process.env.MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE?.trim();
+		if (!audience) {
+			throw new Error(
+				'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE is required when proxy JWT verification is configured.',
+			);
+		}
+		const headers = parseHeaders();
+		const issuer = process.env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER?.trim() || undefined;
+		const jwksValue = process.env.MARIMOHUB_AUTH_PROXY_JWKS_URL?.trim();
+		const jwksUrl = (() => {
+			if (!jwksValue) return undefined;
+			try {
+				const url = new URL(jwksValue);
+				if (url.protocol === 'https:' && !url.username && !url.password) {
+					return url.toString();
+				}
+			} catch {}
+			throw new Error(
+				'MARIMOHUB_AUTH_PROXY_JWKS_URL must be an HTTPS URL without credentials.',
+			);
+		})();
+		return new ProxyHeaderAuthenticator({
+			mode: 'jwt',
+			audience,
+			allowedEmailDomains,
+			...(headers ? { header: headers[0] } : {}),
+			...(issuer ? { issuer } : {}),
+			...(jwksUrl ? { jwksUrl } : {}),
+		});
+	}
+
+	const headers = parseHeaders();
+	if (!headers) {
+		return new ProxyHeaderAuthenticator({ mode: 'headers', allowedEmailDomains });
+	}
+	if (headers.length === 1) {
+		return new ProxyHeaderAuthenticator({
+			mode: 'headers',
+			headers: [headers[0]],
+			allowedEmailDomains,
+		});
+	}
+	return new ProxyHeaderAuthenticator({
+		mode: 'headers',
+		headers: [headers[0], headers[1]],
+		allowedEmailDomains,
+	});
+})();
+const authRoutes = undefined;
+
+const app = createApi({
+	services: createServices(bucket),
+	bucket,
+	compute,
+	authenticator,
+	authRoutes,
+	sandbox: {
+		bucket: {
+			name: process.env.MARIMOHUB_STORAGE_S3_BUCKET ?? '',
+			endpoint: process.env.MARIMOHUB_STORAGE_S3_ENDPOINT ?? '',
+		},
+		hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
+		workdir: process.env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
+		persistWorkspace: "source",
+	},
+	policy: {},
+});"
+`;
+
 exports[`config -> code generators > s3 + e2b + oidc > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3

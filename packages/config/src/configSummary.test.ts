@@ -92,6 +92,18 @@ describe('buildConfigSummary', () => {
 		expect(auth.settings.map((s) => s.key)).toContain('MARIMOHUB_AUTH_OIDC_ISSUER');
 	});
 
+	it('shows proxy-header settings for the proxy-header backend', () => {
+		const auth = group(buildConfigSummary({ MARIMOHUB_AUTH_BACKEND: 'proxy-header' }), 'Auth');
+		expect(auth.backend).toBe('proxy-header');
+		expect(auth.settings.map((setting) => setting.key)).toEqual([
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
+			'MARIMOHUB_AUTH_PROXY_HEADER',
+			'MARIMOHUB_AUTH_PROXY_JWT_ISSUER',
+			'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE',
+			'MARIMOHUB_AUTH_PROXY_JWKS_URL',
+		]);
+	});
+
 	it('treats an explicitly-empty env var as set, with its empty value', () => {
 		const summary = buildConfigSummary({
 			MARIMOHUB_AUTH_BACKEND: 'oidc',

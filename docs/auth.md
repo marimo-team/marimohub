@@ -1,5 +1,5 @@
 ---
-description: Configure OIDC, Cloudflare Access, or local authentication and understand project authorization.
+description: Configure authentication and project authorization with OIDC, trusted proxies, Cloudflare Access, or local users.
 ---
 
 # Auth
@@ -17,17 +17,22 @@ editors share one live sandbox or use exclusive ownership.
 
 ## Choose a backend
 
-| Backend           | Selector            | Use for                             |
-| ----------------- | ------------------- | ----------------------------------- |
-| OIDC              | `oidc`              | Production with Google, Okta, Auth0 |
-| Cloudflare Access | `cloudflare-access` | Workers deployments behind Access   |
-| Dev bypass        | `dev`               | Local development only              |
+| Backend               | Selector            | Use for                                   |
+| --------------------- | ------------------- | ----------------------------------------- |
+| OIDC                  | `oidc`              | Production with Google, Okta, Auth0       |
+| Trusted proxy headers | `proxy-header`      | oauth2-proxy, Google IAP, Tailscale Serve |
+| Cloudflare Access     | `cloudflare-access` | Workers deployments behind Access         |
+| Dev bypass            | `dev`               | Local development only                    |
 
 ## Configure it
 
 ### OIDC (production)
 
 <!--@include: ./setup/auth/oidc.md-->
+
+### Trusted proxy headers
+
+<!--@include: ./setup/auth/proxy-header.md-->
 
 ### Cloudflare Access
 
@@ -39,21 +44,21 @@ environment. See [Deploying on Cloudflare](./deploying/cloudflare.md).
 
 <!--@include: ./setup/auth/dev.md-->
 
-## Validate it
+## Verify it
 
-After deploy:
+After deployment:
 
-1. Start the server and check that auth configuration does not fail closed.
+1. Start the server without an authentication configuration error.
 2. Sign in through the configured provider.
 3. Create a project.
 4. Add a second user with a lower role.
-5. Confirm that user can do only what the role allows.
+5. Verify that the second user has only the permitted access.
 
 ## Production cautions
 
 - Do not use `dev` auth for any deployment that serves real users.
-- Set `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` for OIDC unless you intentionally
-  accept any authenticated domain.
+- Set `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` for OIDC and proxy-header. Use `*` only to allow all domains.
+- In proxy-header mode, block proxy bypasses and remove client-supplied identity headers.
 - Review `MARIMOHUB_DEFAULT_ROLE` before launch. The default is permissive for a
   trusted single-tenant deployment.
 - Treat auth errors as fail-closed until configuration proves otherwise.
