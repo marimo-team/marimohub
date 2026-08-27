@@ -100,7 +100,9 @@ export function createWandbCompute(
 	return new CoreWeaveCompute(
 		{
 			...coreweave,
-			resolveExposedUrl: serviceUrlResolver((sandboxId) => sdk.get(sandboxId)),
+			// The fallback lookup rides the instrumented client (`fromId` = one
+			// traced Get) so no gateway request escapes tracing.
+			resolveExposedUrl: serviceUrlResolver((sandboxId) => instrumented.fromId(sandboxId)),
 		},
 		instrumented,
 	);

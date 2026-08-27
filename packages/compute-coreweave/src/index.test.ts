@@ -1008,6 +1008,20 @@ describe('CoreWeaveCompute', () => {
 			delete: async () => {},
 		});
 
+		it('fails the provision when the sandbox completes during boot', async () => {
+			// v1's wait() reports `completed` as a satisfied running-wait; the
+			// adapter must turn that into a boot failure, not a working sandbox.
+			const client: CoreWeaveClient = {
+				create: async () => ({ ...bareSandbox('cw-done'), status: 'completed' as const }),
+				fromId: async (id) => bareSandbox(id),
+				list: async () => ({ sandboxes: [] }),
+				delete: async () => {},
+			};
+			await expect(
+				new CoreWeaveCompute(baseConfig, client).create(SANDBOX_ID).exec('true'),
+			).rejects.toThrow(/completed before running/);
+		});
+
 		it('skips a dead (terminated) tagged sandbox and creates a fresh one', async () => {
 			let created = 0;
 			const client: CoreWeaveClient = {

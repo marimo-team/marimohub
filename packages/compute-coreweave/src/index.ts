@@ -59,6 +59,7 @@ import type {
 	ResourceOptions,
 	SandboxInfo,
 	SandboxRunOptions,
+	SandboxStatus,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
 import {
@@ -294,6 +295,8 @@ export interface CoreWeaveSandbox {
 	 * extra round-trip by `resolveExposedUrl` implementations.
 	 */
 	readonly serviceUrls?: readonly ServiceUrl[] | undefined;
+	/** Last observed status, from the same metadata refresh as `serviceUrls`. */
+	readonly status?: SandboxStatus | undefined;
 	/** Block until the sandbox reaches `running` (the SDK polls with backoff). */
 	wait(): Promise<unknown>;
 	readonly commands: {
@@ -364,7 +367,18 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			? await this.client.fromId(existing.sandboxId)
 			: await this.client.create(this.createOptions());
 		const t2 = Date.now();
-		if (!existing) await this.sandbox.wait();
+		if (!existing) {
+			await this.sandbox.wait();
+			// v1's wait() reports a `completed` sandbox as a satisfied running-wait
+			// (the vendored SDK threw). For us the keep-alive exiting during boot is
+			// a failed provision — surface it here with the real cause rather than
+			// as NOT_FOUND on the first command.
+			if (this.sandbox.status === 'completed') {
+				throw new Error(
+					`CoreWeave sandbox ${this.sandbox.sandboxId} completed before running (main process exited during boot)`,
+				);
+			}
+		}
 		const t3 = Date.now();
 		// Armed, not run: the snippet is spliced onto the first command we were going
 		// to send anyway, so it costs no round-trip of its own.

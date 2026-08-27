@@ -123,6 +123,9 @@ function instrumentSandbox(sandbox: CoreWeaveSandbox, endpoint: Attributes): Cor
 		get serviceUrls() {
 			return sandbox.serviceUrls;
 		},
+		get status() {
+			return sandbox.status;
+		},
 		wait: () => opRequest(op('wait'), attributes, () => sandbox.wait()),
 		commands: {
 			run: (command, options) =>
