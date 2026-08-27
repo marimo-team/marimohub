@@ -91,7 +91,7 @@ export function makeIntegrations(
 		codec: secretSources.codec,
 		resolvers: secretSources.resolvers,
 		probe: makeProbe(policy),
-		browseProbe: makeBrowseProbe(policy, dataBrowser),
+		browseProbe: makeBrowseProbe(env, policy, dataBrowser),
 		...(objectBrowsers ? { objectBrowsers } : {}),
 		metrics,
 		dataPreview,
@@ -291,6 +291,7 @@ function dataBrowserSetting(env: Env): 'off' | 'metadata' | 'full' {
  * allowance. Other kinds use fewer requests per operation.
  */
 function makeBrowseProbe(
+	env: Env,
 	policy: ProbePolicy,
 	dataBrowser: 'off' | 'metadata' | 'full',
 ): IntegrationProbe | undefined {
@@ -301,8 +302,17 @@ function makeBrowseProbe(
 			{ variable: 'MARIMOHUB_DATA_BROWSER', docs: 'docs/integrations.md' },
 		);
 	}
+	// Catalog listings share the object-metadata deadline: both are one upstream
+	// round trip per page, and the probe's 10 s connection-test default is too
+	// tight for catalogs reached over slow links.
+	const timeoutMs = objectBrowserTimeoutFromEnv(
+		env,
+		'MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS',
+		DEFAULT_S3_OBJECT_BROWSER_LIMITS.metadataTimeoutMs,
+	);
 	return createGuardedProbe({
 		allowPrivate: policy === 'private',
+		timeoutMs,
 		maxResponseBytes: 1024 * 1024,
 		maxProbesPerMinute: 360,
 	});
