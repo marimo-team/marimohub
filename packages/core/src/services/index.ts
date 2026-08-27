@@ -353,7 +353,7 @@ export function createServices(
 	});
 	const projects = wrap(
 		'ProjectService',
-		new ProjectService(bucket, catalog, metrics, (email) => identities.getByEmail(email)),
+		new ProjectService(bucket, catalog, metrics, (emails) => identities.getUniqueByEmails(emails)),
 		{
 			getProject: project,
 			updateProject: project,

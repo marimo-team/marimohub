@@ -481,6 +481,11 @@ describe('Project member routes', () => {
 		expect((await expectOk<any>(await inviteeRequest('GET', `/projects/${pid}`))).your_role).toBe(
 			'editor',
 		);
+		const pendingMembers = await expectOk<any[]>(
+			await ownerRequest('GET', `/projects/${pid}/members`),
+		);
+		expect(pendingMembers).toContainEqual({ email, role: 'editor' });
+		expect(pendingMembers.some((member) => member.user_id === inviteeId)).toBe(false);
 
 		await expectOk(
 			await ownerRequest('POST', `/projects/${pid}/members`, {

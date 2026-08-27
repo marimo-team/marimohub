@@ -26,6 +26,7 @@ import type {
 	ProjectMember,
 	PublicProjectEntry,
 	Snapshot,
+	SnapshotProjectEntry,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
@@ -76,7 +77,9 @@ export interface ProjectDeleteMutationResult {
 	mutationId: SnapshotId;
 }
 
-export type InviteIdentityResolver = (email: string) => Promise<{ id: UserId } | null>;
+export type InviteIdentityResolver = (
+	emails: readonly string[],
+) => Promise<ReadonlyMap<string, { id: UserId }>>;
 
 export interface ClaimedInviteRows {
 	members: readonly ProjectMember[];
@@ -104,9 +107,15 @@ function selectorAfterClaims(member: ProjectMember, claimed: ClaimedInviteRows):
 	return claimed.userIdsByEmail.get(normalizeEmail(email)) ?? email;
 }
 
+function sameValues(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined || a.length !== b.length) return false;
+	return a.every((value, index) => value === b[index]);
+}
+
 async function resolveInviteRows(
 	members: readonly ProjectMember[],
-	resolveByEmail: InviteIdentityResolver,
+	resolveIdentitiesByEmail: InviteIdentityResolver,
 ): Promise<ClaimedInviteRows> {
 	const emails = [
 		...new Set(
@@ -115,12 +124,11 @@ async function resolveInviteRows(
 			),
 		),
 	];
-	const resolved = await Promise.all(
-		emails.map(async (email) => [email, await resolveByEmail(email)] as const),
-	);
+	const resolved = await resolveIdentitiesByEmail(emails);
 	const userIdsByEmail = new Map<string, UserId>();
-	for (const [email, identity] of resolved) {
-		if (identity) userIdsByEmail.set(email, identity.id);
+	for (const email of emails) {
+		const identity = resolved.get(email);
+		if (identity !== undefined) userIdsByEmail.set(email, identity.id);
 	}
 
 	const directUserIds = new Set(
@@ -170,10 +178,10 @@ async function resolveInviteRows(
 
 export async function claimInviteRows(
 	members: readonly ProjectMember[],
-	resolveByEmail: InviteIdentityResolver,
+	resolveIdentitiesByEmail: InviteIdentityResolver,
 ): Promise<ClaimedInviteRows> {
 	return hasInviteRows(members)
-		? resolveInviteRows(members, resolveByEmail)
+		? resolveInviteRows(members, resolveIdentitiesByEmail)
 		: noInviteClaims(members);
 }
 
@@ -190,7 +198,7 @@ export class ProjectService {
 		private bucket: Bucket,
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
-		private resolveIdentityByEmail: InviteIdentityResolver = async () => null,
+		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 	) {}
 
 	/**
@@ -359,9 +367,11 @@ export class ProjectService {
 		const { project, mutationId } = await this.writeMembers(
 			id,
 			(_current, claimed) => {
+				const claimedUserId =
+					userId ?? (email === undefined ? undefined : claimed.userIdsByEmail.get(email));
 				const duplicate = claimed.members.some(
 					(m) =>
-						(userId !== undefined && m.user_id === userId) ||
+						(claimedUserId !== undefined && m.user_id === claimedUserId) ||
 						(email !== undefined && m.email === email),
 				);
 				if (duplicate) {
@@ -472,7 +482,10 @@ export class ProjectService {
 	private async mutateMemberObject(
 		id: ProjectId,
 		deriveMembers: (current: Project, claimed: ClaimedInviteRows) => ProjectMember[],
-		options: { skipIfNoClaims?: boolean } = {},
+		options: {
+			skipIfNoClaims?: boolean;
+			resolveIdentitiesByEmail?: InviteIdentityResolver;
+		} = {},
 	): Promise<{ project: Project; claimedRows: number; written: boolean }> {
 		const key = paths.project(id).meta;
 		return withCasRetry(this.bucket, async (cas) => {
@@ -481,7 +494,10 @@ export class ProjectService {
 			const current = await readStored(ProjectSchema, object, key);
 			if (current.status === 'deleted') throw new NotFoundError(`Project ${id} not found`);
 			const claimed = hasInviteRows(current.members)
-				? await resolveInviteRows(current.members, this.resolveIdentityByEmail)
+				? await resolveInviteRows(
+						current.members,
+						options.resolveIdentitiesByEmail ?? this.resolveIdentitiesByEmail,
+					)
 				: noInviteClaims(current.members);
 			if (options.skipIfNoClaims && claimed.claimedRows === 0) {
 				return { project: current, claimedRows: 0, written: false };
@@ -496,18 +512,29 @@ export class ProjectService {
 		});
 	}
 
-	private async claimProjectInvites(id: ProjectId): Promise<number> {
+	private async claimProjectInvites(
+		candidate: SnapshotProjectEntry,
+		resolveIdentitiesByEmail: InviteIdentityResolver,
+	): Promise<number> {
 		try {
 			const result = await this.mutateMemberObject(
-				id,
+				candidate.id,
 				(_current, claimed) => [...claimed.members],
 				{
 					skipIfNoClaims: true,
+					resolveIdentitiesByEmail,
 				},
 			);
-			if (!result.written) return 0;
-			await this.catalog.updateProjectEntry('project.members.claim', SYSTEM_ACTOR, id, (entry) =>
-				loadProjectCatalogPatch(this.bucket, id, entry),
+			const projection = projectCatalogPatch(result.project, candidate);
+			const projectionIsCurrent =
+				sameValues(candidate.member_ids, projection.member_ids) &&
+				sameValues(candidate.member_emails, projection.member_emails);
+			if (!result.written && projectionIsCurrent) return 0;
+			await this.catalog.updateProjectEntry(
+				result.written ? 'project.members.claim' : 'project.members.repair',
+				SYSTEM_ACTOR,
+				candidate.id,
+				(entry) => loadProjectCatalogPatch(this.bucket, candidate.id, entry),
 			);
 			return result.claimedRows;
 		} catch (error) {
@@ -521,8 +548,14 @@ export class ProjectService {
 		const candidates = snapshot.projects.filter(
 			(project) => project.status !== 'deleted' && (project.member_emails?.length ?? 0) > 0,
 		);
+		if (candidates.length === 0) return 0;
+		const candidateEmails = [
+			...new Set(candidates.flatMap((project) => project.member_emails ?? []).map(normalizeEmail)),
+		];
+		const resolved = await this.resolveIdentitiesByEmail(candidateEmails);
+		const resolveFromSweep: InviteIdentityResolver = async () => resolved;
 		const claimed = await mapWithConcurrency(candidates, BUCKET_SCAN_CONCURRENCY, (project) =>
-			this.claimProjectInvites(project.id),
+			this.claimProjectInvites(project, resolveFromSweep),
 		);
 		return claimed.reduce((total, count) => total + count, 0);
 	}

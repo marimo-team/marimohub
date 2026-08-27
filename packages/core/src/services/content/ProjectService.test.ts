@@ -228,7 +228,7 @@ describe('ProjectService', () => {
 				{ user_id: ACTOR, role: 'admin' as const },
 				{ user_id: MEMBER, role: 'viewer' as const },
 			];
-			const resolveByEmail = vi.fn(async () => null);
+			const resolveByEmail = vi.fn(async () => new Map());
 
 			const result = await claimInviteRows(members, resolveByEmail);
 
@@ -328,6 +328,33 @@ describe('ProjectService', () => {
 			expect(snapshot.projects[0].member_emails).toEqual([]);
 		});
 
+		it('keeps an invite by email when multiple identities match it', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'shared@example.com' }, 'editor', ACTOR);
+			await identities.upsert({
+				id: UserId.parse('user_old'),
+				email: 'shared@example.com',
+				name: 'Old',
+			});
+			await identities.upsert({
+				id: UserId.parse('user_new'),
+				email: 'shared@example.com',
+				name: 'New',
+			});
+
+			const updated = await projects.addMember(
+				p.id,
+				{ user_id: UserId.parse('user_other') },
+				'viewer',
+				ACTOR,
+			);
+
+			expect(updated.members).toContainEqual({ email: 'shared@example.com', role: 'editor' });
+			expect(updated.members.some((member) => member.user_id === UserId.parse('user_new'))).toBe(
+				false,
+			);
+		});
+
 		it('leaves unknown invite emails pending on later membership writes', async () => {
 			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			await projects.addMember(p.id, { email: 'unknown@example.com' }, 'viewer', ACTOR);
@@ -357,7 +384,7 @@ describe('ProjectService', () => {
 				failingProjects.addMember(p.id, { user_id: UserId.parse('user_other') }, 'editor', ACTOR),
 			).rejects.toBe(unavailable);
 
-			expect(resolveByEmail).toHaveBeenCalledWith('invitee@example.com');
+			expect(resolveByEmail).toHaveBeenCalledWith(['invitee@example.com']);
 			expect(await projects.getProject(p.id)).toEqual(projectBefore);
 			expect(await catalog.getCurrentSnapshot()).toEqual(snapshotBefore);
 		});
@@ -423,9 +450,14 @@ describe('ProjectService', () => {
 			await projects.addMember(known.id, { email: 'known@example.com' }, 'viewer', ACTOR);
 			await projects.addMember(unknown.id, { email: 'unknown@example.com' }, 'editor', ACTOR);
 			await identities.upsert({ id: MEMBER, email: 'known@example.com', name: 'Known' });
+			const resolve = vi.spyOn(identities, 'getUniqueByEmails');
 
 			expect(await projects.claimPendingInvites()).toBe(1);
+			expect(resolve).toHaveBeenCalledOnce();
+			expect(resolve).toHaveBeenCalledWith(['known@example.com', 'unknown@example.com']);
+			const snapshotAfterClaim = await catalog.getCurrentSnapshot();
 			expect(await projects.claimPendingInvites()).toBe(0);
+			expect((await catalog.getCurrentSnapshot()).snapshot_id).toBe(snapshotAfterClaim.snapshot_id);
 			expect((await projects.getProject(known.id)).members).toContainEqual({
 				user_id: MEMBER,
 				role: 'viewer',
@@ -458,6 +490,28 @@ describe('ProjectService', () => {
 			});
 		});
 
+		it('repairs the catalog after a claim commits only to project metadata', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'invitee@example.com' }, 'editor', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'invitee@example.com', name: 'Invitee' });
+			const projectionFailure = new Error('catalog unavailable');
+			vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(projectionFailure);
+
+			await expect(projects.claimPendingInvites()).rejects.toBe(projectionFailure);
+			expect((await projects.getProject(p.id)).members).toContainEqual({
+				user_id: MEMBER,
+				role: 'editor',
+			});
+			expect((await catalog.getCurrentSnapshot()).projects[0].member_emails).toEqual([
+				'invitee@example.com',
+			]);
+
+			expect(await projects.claimPendingInvites()).toBe(0);
+			const repaired = (await catalog.getCurrentSnapshot()).projects[0];
+			expect(repaired.member_ids).toContain(MEMBER);
+			expect(repaired.member_emails).toEqual([]);
+		});
+
 		it('rejects an id add carrying an email that matches a pending invite (409)', async () => {
 			// One person must never hold both an invite row and an id row — removing
 			// one would silently leave the other granting access.
@@ -479,6 +533,16 @@ describe('ProjectService', () => {
 			);
 			await expect(
 				projects.addMember(p.id, { email: 'DUP@example.com' }, 'editor', ACTOR),
+			).rejects.toThrow(/already a member/);
+		});
+
+		it('rejects an email re-add when the existing invite is claimed during the write', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'invitee@example.com' }, 'viewer', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'invitee@example.com', name: 'Invitee' });
+
+			await expect(
+				projects.addMember(p.id, { email: 'invitee@example.com' }, 'editor', ACTOR),
 			).rejects.toThrow(/already a member/);
 		});
 
