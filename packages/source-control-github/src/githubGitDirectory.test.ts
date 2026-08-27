@@ -97,7 +97,8 @@ afterEach(async () => {
 	);
 });
 
-describe('materializeGitDirectory', () => {
+// Git subprocess tests; need headroom when the whole suite shares the CPU.
+describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 	it('caps the combined bytes from all smart-HTTP responses', () => {
 		const limit = new GitFetchByteLimit('owner/repo');
 		limit.record(Math.ceil(MAX_GIT_FETCH_BYTES / 2));

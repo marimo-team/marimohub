@@ -1,4 +1,5 @@
 import { parentPort } from 'node:worker_threads';
+import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';
 import { BlockingDuckDBEngine } from './engine.ts';
 import type { RuntimeRequest, RuntimeResponse } from './protocol';
 import { createSyncXmlHttpRequest } from './syncXmlHttpRequest.ts';
@@ -59,6 +60,7 @@ async function handle(request: RuntimeRequest): Promise<void> {
 			id: request.id,
 			ok: false,
 			error: error instanceof Error ? error.message : 'DuckDB-Wasm worker failed.',
+			...(error instanceof DataQueryUserError ? { kind: 'user-sql' as const } : {}),
 		};
 	}
 	port.postMessage(response);

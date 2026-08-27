@@ -2365,6 +2365,12 @@ export interface components {
 				columns: boolean;
 				bytes: boolean;
 			};
+			counts: {
+				tables: number;
+				discovered_tables: number;
+				columns: number;
+				discovery_complete: boolean;
+			};
 		};
 		IntegrationObjectBucket: {
 			name: string;

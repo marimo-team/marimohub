@@ -9,7 +9,7 @@ export type RuntimeRequest =
 
 export type RuntimeResponse =
 	| { id: number; ok: true; value?: unknown }
-	| { id: number; ok: false; error: string };
+	| { id: number; ok: false; error: string; kind?: 'user-sql' };
 
 export type WorkerMessage = RuntimeResponse | HttpBridgeRequestMessage;
 
@@ -24,5 +24,9 @@ export function isRuntimeResponse(value: unknown): value is RuntimeResponse {
 	const candidate = value as Partial<RuntimeResponse>;
 	if (!Number.isSafeInteger(candidate.id) || (candidate.id ?? 0) < 1) return false;
 	if (candidate.ok === true) return !('error' in candidate);
-	return candidate.ok === false && typeof candidate.error === 'string';
+	return (
+		candidate.ok === false &&
+		typeof candidate.error === 'string' &&
+		(candidate.kind === undefined || candidate.kind === 'user-sql')
+	);
 }

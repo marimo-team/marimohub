@@ -3,6 +3,7 @@ import { EditorSelection, EditorState } from '@codemirror/state';
 import {
 	allSqlStatements,
 	applySqlTarget,
+	completionSchemaSummary,
 	csvCell,
 	selectedOrCurrentStatement,
 	sqlTargetAtState,
@@ -79,5 +80,40 @@ describe('CSV serialization', () => {
 		['say "hi"', '"say ""hi"""'],
 	])('serializes %j safely', (value, expected) => {
 		expect(csvCell(value)).toBe(expected);
+	});
+});
+
+describe('completionSchemaSummary', () => {
+	it('reports an exact total when discovery completed', () => {
+		expect(
+			completionSchemaSummary({
+				tables: 12,
+				discovered_tables: 12,
+				columns: 40,
+				discovery_complete: true,
+			}),
+		).toMatch(/^Loaded 12 of 12 tables \(40 columns\) for autocomplete\./);
+	});
+
+	it('marks the total as a lower bound when discovery was cut short', () => {
+		expect(
+			completionSchemaSummary({
+				tables: 5,
+				discovered_tables: 12,
+				columns: 40,
+				discovery_complete: false,
+			}),
+		).toMatch(/^Loaded 5 of 12\+ tables/);
+	});
+
+	it('uses singular nouns for a fully discovered single table', () => {
+		expect(
+			completionSchemaSummary({
+				tables: 1,
+				discovered_tables: 1,
+				columns: 1,
+				discovery_complete: true,
+			}),
+		).toMatch(/^Loaded 1 of 1 table \(1 column\)/);
 	});
 });

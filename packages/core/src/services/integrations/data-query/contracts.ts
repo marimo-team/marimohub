@@ -27,6 +27,18 @@ export interface DataQueryConnection {
 	readonly plan?: Readonly<DataQueryPlan>;
 }
 
+/**
+ * A query failure attributable to the user's SQL (parse, bind, catalog, or
+ * result-limit). Executors throw it only for messages vetted as safe to
+ * surface; the service still redacts connection secrets before doing so.
+ */
+export class DataQueryUserError extends Error {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = 'DataQueryUserError';
+	}
+}
+
 export interface DataQueryExecution {
 	sql: string;
 	connection: DataQueryConnection;

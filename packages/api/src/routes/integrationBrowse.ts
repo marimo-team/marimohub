@@ -210,6 +210,13 @@ const QuerySchemaSchema = z
 			}),
 		),
 		truncated: z.object({ tables: z.boolean(), columns: z.boolean(), bytes: z.boolean() }),
+		counts: z.object({
+			tables: z.number().int().nonnegative(),
+			// Lower bound on catalog size: tables discovered before a limit tripped.
+			discovered_tables: z.number().int().nonnegative(),
+			columns: z.number().int().nonnegative(),
+			discovery_complete: z.boolean(),
+		}),
 	})
 	.openapi('IntegrationQuerySchema');
 
@@ -886,6 +893,14 @@ async function collectQuerySchema(
 				JSON.stringify({
 					tables: candidate,
 					truncated: { tables: true, columns: true, bytes: true },
+					// Worst-case envelope so appending the real counts later cannot
+					// push the response past the byte limit.
+					counts: {
+						tables: Number.MAX_SAFE_INTEGER,
+						discovered_tables: Number.MAX_SAFE_INTEGER,
+						columns: Number.MAX_SAFE_INTEGER,
+						discovery_complete: false,
+					},
 				}),
 			) > QUERY_SCHEMA_MAX_BYTES
 		) {
@@ -896,17 +911,24 @@ async function collectQuerySchema(
 		columnCount += columns.length;
 		if (columnCount >= QUERY_SCHEMA_MAX_COLUMNS) break;
 	}
+	const discoveryComplete = !(
+		workLimitReached ||
+		namespaceLimitReached ||
+		tableLimitReached ||
+		Date.now() >= deadline
+	);
 	return {
 		tables,
 		truncated: {
-			tables:
-				workLimitReached ||
-				namespaceLimitReached ||
-				tableLimitReached ||
-				tables.length < tableRefs.length ||
-				Date.now() >= deadline,
+			tables: !discoveryComplete || tables.length < tableRefs.length,
 			columns: columnLimitReached,
 			bytes: byteLimitReached,
+		},
+		counts: {
+			tables: tables.length,
+			discovered_tables: tableRefs.length,
+			columns: columnCount,
+			discovery_complete: discoveryComplete,
 		},
 	};
 }

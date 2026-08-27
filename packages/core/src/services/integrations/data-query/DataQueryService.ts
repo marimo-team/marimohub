@@ -9,6 +9,8 @@ import type {
 	DataQueryResult,
 	DisposableDataQueryExecutor,
 } from './contracts';
+import { DataQueryUserError } from './contracts';
+import { redactConnectionSecrets } from './redaction';
 import { validateTableData } from '../data-preview/previewResult';
 import { DrainableService } from '../DrainableService';
 import { singleDataQueryStatement } from './sql';
@@ -116,29 +118,41 @@ export class DataQueryService extends DrainableService {
 			() => active.stop(new UnavailableError('The data query timed out.')),
 			this.options.executionTimeoutMs,
 		);
+		// Executor rejections may quote connection secrets; classify and redact
+		// them at the boundary. The service's own errors are fixed safe strings.
+		const guarded = async <T>(operation: () => Promise<T>): Promise<T> => {
+			try {
+				return await operation();
+			} catch (error) {
+				throw toSafeExecutorError(error, input.connection);
+			}
+		};
 		try {
 			const started = performance.now();
 			const work = (async () => {
-				executor = await this.options.executorFactory.create(controller.signal);
+				const created = await guarded(() => this.options.executorFactory.create(controller.signal));
+				executor = created;
 				if (controller.signal.aborted) {
 					terminate();
 					throw new UnavailableError('The data query was cancelled.');
 				}
-				if (executor.runtime !== 'worker' && executor.runtime !== 'process') {
+				if (created.runtime !== 'worker' && created.runtime !== 'process') {
 					throw new UnavailableError('The data-query executor is not isolated.');
 				}
-				const result = await executor.execute(
-					{
-						sql: input.sql,
-						connection: input.connection,
-						accessMode: 'read-only',
-						limits: {
-							maxRows: this.options.maxRows,
-							maxBytes: this.options.maxBytes,
-							deadlineMs: Math.max(1, deadlineAtMs - Date.now()),
+				const result = await guarded(() =>
+					created.execute(
+						{
+							sql: input.sql,
+							connection: input.connection,
+							accessMode: 'read-only',
+							limits: {
+								maxRows: this.options.maxRows,
+								maxBytes: this.options.maxBytes,
+								deadlineMs: Math.max(1, deadlineAtMs - Date.now()),
+							},
 						},
-					},
-					controller.signal,
+						controller.signal,
+					),
 				);
 				return this.validateResult({
 					...result,
@@ -147,8 +161,10 @@ export class DataQueryService extends DrainableService {
 			})();
 			return await Promise.race([work, stopped]);
 		} catch (error) {
-			if (error === stopError) throw error;
-			throw new UnavailableError('The data-query runtime could not execute this query.');
+			// A requested stop (cancel/timeout/close) wins over whatever the doomed
+			// executor rejected with.
+			if (stopError !== undefined) throw stopError;
+			throw error;
 		} finally {
 			clearTimeout(timer);
 			externalSignal?.removeEventListener('abort', onAbort);
@@ -185,6 +201,28 @@ export class DataQueryService extends DrainableService {
 		}
 		return validated;
 	}
+}
+
+/**
+ * Executor failures may quote credentials the connection injected into the
+ * runtime, so only adapter-vetted user-SQL errors surface — redacted — while
+ * everything else collapses to a generic message with the redacted detail kept
+ * on `cause` for server-side logging.
+ */
+function toSafeExecutorError(error: unknown, connection: DataQueryConnection): Error {
+	const message = redactConnectionSecrets(
+		error instanceof Error ? error.message : String(error),
+		connection,
+	);
+	// The name fallback keeps classification working when the adapter holds a
+	// bundled copy of the class.
+	const isUserError =
+		error instanceof DataQueryUserError ||
+		(error instanceof Error && error.name === 'DataQueryUserError');
+	if (isUserError) return new ValidationError(message);
+	return new UnavailableError('The data-query runtime could not execute this query.', {
+		cause: new Error(message),
+	});
 }
 
 export function assertValidDataQuerySql(sql: string, integrationKind?: string): void {

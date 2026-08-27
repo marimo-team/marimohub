@@ -13,7 +13,7 @@ import type {
 	Metrics,
 	TablePreview,
 } from '@marimo-hub/core';
-import { noopMetrics } from '@marimo-hub/core';
+import { DataQueryUserError, noopMetrics } from '@marimo-hub/core';
 import { ICEBERG_HTTP_UNAVAILABLE } from './networkPolicy';
 import { isHttpBridgeRequestMessage, rejectHttpBridge, resolveHttpBridge } from './httpBridge';
 import type { HttpBridgeRequestMessage } from './httpBridge';
@@ -270,6 +270,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (!pending) return;
 		this.pending.delete(response.id);
 		if (response.ok) pending.resolve(response.value);
+		else if (response.kind === 'user-sql') pending.reject(new DataQueryUserError(response.error));
 		else pending.reject(new Error(response.error));
 	}
 

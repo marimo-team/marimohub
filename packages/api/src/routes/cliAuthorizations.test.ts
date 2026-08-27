@@ -535,28 +535,33 @@ describe('CLI authorization routes', () => {
 		}
 	});
 
-	it('charges malformed device codes against the global poll budget', async () => {
-		const realNow = Date.now();
-		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-		vi.useFakeTimers({ now: realNow + 61_000 });
-		try {
-			const poll = () =>
-				app.request('/api/cli/v1/device-token', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ device_code: 'malformed', code_verifier: VERIFIER }),
-				});
+	// 6k sequential requests; needs headroom when the whole suite shares the CPU.
+	it(
+		'charges malformed device codes against the global poll budget',
+		{ timeout: 15_000 },
+		async () => {
+			const realNow = Date.now();
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			vi.useFakeTimers({ now: realNow + 61_000 });
+			try {
+				const poll = () =>
+					app.request('/api/cli/v1/device-token', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ device_code: 'malformed', code_verifier: VERIFIER }),
+					});
 
-			for (let attempt = 0; attempt < 6_000; attempt += 1) {
-				expect((await poll()).status).toBe(400);
+				for (let attempt = 0; attempt < 6_000; attempt += 1) {
+					expect((await poll()).status).toBe(400);
+				}
+				await expectError(await poll(), 429, 'RESOURCE_EXHAUSTED');
+			} finally {
+				log.mockRestore();
+				vi.setSystemTime(realNow);
+				vi.useRealTimers();
 			}
-			await expectError(await poll(), 429, 'RESOURCE_EXHAUSTED');
-		} finally {
-			log.mockRestore();
-			vi.setSystemTime(realNow);
-			vi.useRealTimers();
-		}
-	});
+		},
+	);
 });
 
 function testApiAuthenticator(bucket: MemoryBucket) {

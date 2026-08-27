@@ -1021,6 +1021,7 @@ export function useDataQuerySchemaQuery(
 		),
 		enabled,
 		staleTime: BROWSE_SCHEMA_STALE_MS,
+		placeholderData: keepPreviousData,
 		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/query/schema', {
@@ -1041,6 +1042,8 @@ export function useDataQuerySchemaQuery(
 
 export function useRunDataQuery(projectId: string, integrationId: string) {
 	return useMutation({
+		// SqlWorkspace renders failures inline next to the results.
+		meta: { suppressErrorToast: true },
 		mutationFn: ({ sql, signal }: { sql: string; signal?: AbortSignal }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/query', {
@@ -1054,6 +1057,8 @@ export function useRunDataQuery(projectId: string, integrationId: string) {
 
 export function useGenerateDataQuerySql(projectId: string, integrationId: string) {
 	return useMutation({
+		// SqlWorkspace renders failures inline next to the results.
+		meta: { suppressErrorToast: true },
 		mutationFn: (body: { mode: 'generate' | 'revise'; instruction: string; sql?: string }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/query/generate', {

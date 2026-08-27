@@ -86,7 +86,7 @@ const browsyKind = defineIntegration({
 					next_cursor: null,
 				};
 			}
-			if (config.token === 'repeated-table-cursor') {
+			if (config.token === 'repeated-table-cursor' || config.token === 'small-catalog') {
 				return { items: request.parent ? [] : [['sales']], next_cursor: null };
 			}
 			return {
@@ -969,7 +969,12 @@ describe('Data browser routes', () => {
 		const url = `/projects/${pid}/integrations/${created.id}/browse/query/schema`;
 
 		const [first, coalesced] = await Promise.all([query('GET', url), query('GET', url)]);
-		await expectOk(first);
+		const schema = await expectOk<{
+			tables: unknown[];
+			counts: { tables: number; discovered_tables: number };
+		}>(first);
+		expect(schema.counts.tables).toBe(schema.tables.length);
+		expect(schema.counts.discovered_tables).toBeGreaterThanOrEqual(schema.tables.length);
 		await expectOk(coalesced);
 		const callsAfterMiss = browseNamespaces.mock.calls.length;
 		expect(callsAfterMiss).toBeGreaterThan(0);
@@ -1014,12 +1019,15 @@ describe('Data browser routes', () => {
 		const browseTableSchema = vi.spyOn(queryDeps.integrations, 'browseTableSchema');
 		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
 
-		const schema = await expectOk<{ tables: unknown[]; truncated: { tables: boolean } }>(
-			await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`),
-		);
+		const schema = await expectOk<{
+			tables: unknown[];
+			truncated: { tables: boolean };
+			counts: { tables: number; columns: number; discovery_complete: boolean };
+		}>(await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`));
 
 		expect(schema.tables).toEqual([]);
 		expect(schema.truncated.tables).toBe(true);
+		expect(schema.counts).toMatchObject({ tables: 0, columns: 0, discovery_complete: false });
 		expect(browseNamespaces.mock.calls.length + browseTables.mock.calls.length).toBe(512);
 		expect(browseTableSchema).not.toHaveBeenCalled();
 	});
@@ -1038,12 +1046,51 @@ describe('Data browser routes', () => {
 		queryDeps.dataBrowser.query = true;
 		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
 
-		const schema = await expectOk<{ tables: unknown[]; truncated: { tables: boolean } }>(
-			await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`),
-		);
+		const schema = await expectOk<{
+			tables: unknown[];
+			truncated: { tables: boolean };
+			counts: { tables: number; discovered_tables: number; discovery_complete: boolean };
+		}>(await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`));
 
 		expect(schema.tables).toHaveLength(128);
 		expect(schema.truncated.tables).toBe(true);
+		expect(schema.counts.tables).toBe(128);
+		expect(schema.counts.discovered_tables).toBeGreaterThanOrEqual(128);
+		expect(schema.counts.discovery_complete).toBe(false);
+	});
+
+	it('reports complete discovery counts when the catalog fits the schema bounds', async () => {
+		const pid = await createProject();
+		const created = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'browsy',
+				name: 'small',
+				config: { token: 'small-catalog' },
+			}),
+			201,
+		);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+
+		const schema = await expectOk<{
+			tables: { columns: unknown[] }[];
+			truncated: { tables: boolean; columns: boolean; bytes: boolean };
+			counts: {
+				tables: number;
+				discovered_tables: number;
+				columns: number;
+				discovery_complete: boolean;
+			};
+		}>(await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`));
+
+		expect(schema.truncated).toEqual({ tables: false, columns: false, bytes: false });
+		expect(schema.counts).toEqual({
+			tables: schema.tables.length,
+			discovered_tables: schema.tables.length,
+			columns: schema.tables.reduce((total, table) => total + table.columns.length, 0),
+			discovery_complete: true,
+		});
 	});
 
 	it('rejects byte-oversized revise input before invoking managed AI', async () => {

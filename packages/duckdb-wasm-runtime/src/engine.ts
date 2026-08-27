@@ -6,6 +6,9 @@ import type {
 	DuckDBPreviewProgram,
 	TablePreview,
 } from '@marimo-hub/core';
+// The worker loads TS via Node type-stripping, so only self-contained core
+// subpaths are importable here — never the root index.
+import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';
 import { singleDataQueryStatement } from '@marimo-hub/core/data-query-sql';
 import { createFailClosedNodeRuntime } from './networkPolicy.ts';
 
@@ -141,10 +144,12 @@ export class BlockingDuckDBEngine {
 				process.env[name] = value;
 			}
 			const connection = db.connect();
+			let userStatementStarted = false;
 			try {
 				for (const setup of plan?.setup ?? []) runStatement(connection, setup);
 				connection.query('BEGIN TRANSACTION READ ONLY');
 				transactionOpen = true;
+				userStatementStarted = true;
 				const result = await connection.send(
 					`SELECT * FROM (${statement}\n) AS "__marimohub_query" LIMIT ${maxRows + 1}`,
 					true,
@@ -152,7 +157,9 @@ export class BlockingDuckDBEngine {
 				result.open();
 				queryResult = normalizeQueryResultStream(result, maxRows, request.limits.maxBytes);
 			} catch (error) {
-				primaryError = error;
+				// Setup statements are server-generated and may quote secrets; only
+				// failures of the user's own statement are classified as user errors.
+				primaryError = userStatementStarted ? classifyUserStatementError(error) : error;
 			} finally {
 				try {
 					if (transactionOpen) connection.query('ROLLBACK');
@@ -259,6 +266,33 @@ function asError(value: unknown): Error {
 	return value instanceof Error ? value : new Error('DuckDB-Wasm execution failed.');
 }
 
+/**
+ * DuckDB error classes that only echo the user's SQL and catalog identifiers.
+ * IO/HTTP errors are deliberately excluded — they can quote signed URLs.
+ */
+const USER_SQL_ERROR_PREFIXES = [
+	'Parser Error',
+	'Syntax Error',
+	'Catalog Error',
+	'Binder Error',
+	'Conversion Error',
+	'Invalid Input Error',
+	'Out of Range Error',
+	'Constraint Error',
+	'Not implemented Error',
+];
+
+function classifyUserStatementError(error: unknown): unknown {
+	if (error instanceof DataQueryUserError) return error;
+	if (
+		error instanceof Error &&
+		USER_SQL_ERROR_PREFIXES.some((prefix) => error.message.startsWith(prefix))
+	) {
+		return new DataQueryUserError(error.message);
+	}
+	return error;
+}
+
 function normalizeResult(
 	result: ReturnType<ReturnType<Database['connect']>['query']>,
 ): TablePreview {
@@ -288,7 +322,9 @@ function normalizeQueryResultStream(
 	let responseBytes = queryResponseBaseBytes(columns);
 	if (responseBytes > maxBytes) {
 		result.cancel();
-		throw new Error('DuckDB-Wasm result exceeded the response limit.');
+		throw new DataQueryUserError(
+			'The query result exceeded the response limit before any rows were read. Select fewer columns.',
+		);
 	}
 	for (const batch of result) {
 		for (const row of batch) {
