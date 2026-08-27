@@ -2,6 +2,7 @@ import { afterEach, vi } from 'vitest';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import DataBrowserPage from './DataBrowserPage';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
+import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, renderWithClient } from '@/test/render';
 
 export const PID = 'p_1';
@@ -267,6 +268,22 @@ function makeFetch({
 				? ok({ items: ['refunds'], next_cursor: null })
 				: ok({ items: ['orders'], next_cursor: 'p2' });
 		}
+		if (url.includes('/api/v1/me')) {
+			return ok({ id: 'user_1', email: 'u@example.test', name: 'U', role: 'member' });
+		}
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/query/schema`)) {
+			return ok({
+				tables: [
+					{
+						namespace: ['sales'],
+						name: 'orders',
+						columns: [{ name: 'id', type: 'long', nullable: false }],
+					},
+				],
+				truncated: { tables: false, columns: false, bytes: false },
+				counts: { tables: 1, discovered_tables: 1, columns: 1, discovery_complete: true },
+			});
+		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/schema`)) {
 			return ok({
 				columns: [
@@ -359,7 +376,7 @@ export function setup(route: string | string[], fetchOpts?: Parameters<typeof ma
 	installMatchMedia();
 	const fetchImpl = makeFetch(fetchOpts);
 	renderWithClient(
-		<>
+		<ThemeProvider>
 			<Routes>
 				<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
 				<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
@@ -367,7 +384,7 @@ export function setup(route: string | string[], fetchOpts?: Parameters<typeof ma
 			<LocationProbe />
 			<DeepLink to={`/projects/${PID}/data/${IID}?ns=sales&table=orders`} />
 			<HistoryControls />
-		</>,
+		</ThemeProvider>,
 		{ route },
 	);
 	return fetchImpl;

@@ -233,7 +233,8 @@ export default function DataBrowserPage() {
 				: ['bucket', 'prefix', 'key', 'version']) {
 				next.delete(name);
 			}
-			next.delete('q');
+			// Tables and Query share the tree filter; only Objects has no use for it.
+			if (surface === 'objects') next.delete('q');
 			return next;
 		});
 	};
@@ -336,7 +337,7 @@ export default function DataBrowserPage() {
 			) : (
 				<div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,1fr)_minmax(0,2fr)] gap-4 text-sm max-lg:grid-cols-1 max-lg:overflow-y-auto">
 					<div className="flex min-h-0 flex-col gap-2 overflow-hidden rounded-xl border bg-card p-3 max-lg:max-h-[50vh]">
-						{selectedSurface === 'tables' && (
+						{(selectedSurface === 'tables' || selectedSurface === 'query') && (
 							<SearchField
 								aria-label="Filter tables"
 								placeholder="Filter tables..."
@@ -777,7 +778,9 @@ function TableRows({
 						style={{ paddingLeft: `${depth * 16 + 26}px` }}
 					>
 						<Table2 className="size-4 shrink-0" aria-hidden />
-						<span className="truncate">{table}</span>
+						<span className="truncate">
+							<HighlightMatch text={table} query={query} />
+						</span>
 					</button>
 				);
 			})}
@@ -789,6 +792,22 @@ function TableRows({
 				/>
 			)}
 		</div>
+	);
+}
+
+/** The first case-insensitive occurrence of `query` in `text`, marked. */
+function HighlightMatch({ text, query }: { text: string; query: string }) {
+	const start = query === '' ? -1 : text.toLowerCase().indexOf(query.toLowerCase());
+	if (start === -1) return text;
+	const end = start + query.length;
+	return (
+		<>
+			{text.slice(0, start)}
+			<mark className="rounded-sm bg-amber-200/80 text-inherit dark:bg-amber-500/40">
+				{text.slice(start, end)}
+			</mark>
+			{text.slice(end)}
+		</>
 	);
 }
 

@@ -10,17 +10,13 @@ import {
 } from 'react';
 import type { Ref } from 'react';
 import { basicSetup } from 'codemirror';
-import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language';
+import { indentWithTab } from '@codemirror/commands';
 import { lintGutter } from '@codemirror/lint';
-import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import type { EditorState } from '@codemirror/state';
-import { Compartment, EditorSelection } from '@codemirror/state';
-import { drawSelection, EditorView, highlightActiveLine, keymap } from '@codemirror/view';
+import { Compartment, EditorSelection, Prec } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 import { sql } from '@codemirror/lang-sql';
 import {
-	defaultSqlHoverTheme,
 	NodeSqlParser,
 	QueryContextAnalyzer,
 	sqlCompletion,
@@ -34,12 +30,15 @@ import {
 	Download,
 	Eraser,
 	History as HistoryIcon,
+	Info,
+	Maximize2,
+	Minimize2,
 	Play,
 	Sparkles,
 	Square,
 	WandSparkles,
 } from 'lucide-react';
-import { Button, EmptyState, Skeleton } from '@/components/ui';
+import { Button, EmptyState, Skeleton, Tooltip } from '@/components/ui';
 import {
 	useDataQuerySchemaQuery,
 	useGenerateDataQuerySql,
@@ -130,9 +129,22 @@ function SqlWorkspaceSession({
 	const [instruction, setInstruction] = useState('');
 	const [showHistory, setShowHistory] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [lastLoadedSchema, setLastLoadedSchema] = useState<typeof schemaQuery.data>(undefined);
+	const [fullscreen, setFullscreen] = useState(false);
 	const { copy, copied } = useCopyToClipboard();
 
 	useEffect(() => () => abortRef.current?.abort(), []);
+
+	useEffect(() => {
+		if (!fullscreen) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			// defaultPrevented: Escape was consumed inside the editor (e.g. closing
+			// the completion popup) and should not also exit fullscreen.
+			if (event.key === 'Escape' && !event.defaultPrevented) setFullscreen(false);
+		};
+		window.addEventListener('keydown', onKeyDown);
+		return () => window.removeEventListener('keydown', onKeyDown);
+	}, [fullscreen]);
 
 	const persistDraft = useCallback(
 		(sqlText: string) =>
@@ -208,20 +220,31 @@ function SqlWorkspaceSession({
 		}
 	};
 
-	if (schemaQuery.isPending) return <Skeleton className="h-full min-h-96 w-full" />;
-	if (schemaQuery.isError) {
-		return (
-			<EmptyState
-				icon={<Bot />}
-				message="SQL schema unavailable"
-				description={errorMessage(schemaQuery.error)}
-			/>
-		);
+	// Retain the last loaded schema so table clicks (new query key) and refresh
+	// failures never unmount the editor and discard the user's draft.
+	if (schemaQuery.data !== undefined && schemaQuery.data !== lastLoadedSchema) {
+		setLastLoadedSchema(schemaQuery.data);
 	}
-
-	const schema = schemaQuery.data;
+	const schema = schemaQuery.data ?? lastLoadedSchema;
+	if (schema === undefined) {
+		if (schemaQuery.isError) {
+			return (
+				<EmptyState
+					icon={<Bot />}
+					message="SQL schema unavailable"
+					description={errorMessage(schemaQuery.error)}
+				/>
+			);
+		}
+		return <Skeleton className="h-full min-h-96 w-full" />;
+	}
 	return (
-		<div className="flex min-h-[34rem] flex-col overflow-hidden rounded-xl border bg-card">
+		<div
+			className={cn(
+				'flex min-h-[34rem] flex-col overflow-hidden border bg-card',
+				fullscreen ? 'fixed inset-0 z-50 rounded-none' : 'rounded-xl',
+			)}
+		>
 			<div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
 				<Button
 					size="sm"
@@ -258,6 +281,14 @@ function SqlWorkspaceSession({
 				<span className="ml-auto text-xs text-muted-foreground">
 					⌘/Ctrl+Enter runs the selection or current statement
 				</span>
+				<Button
+					size="sm"
+					variant="ghost"
+					aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+					onPress={() => setFullscreen((value) => !value)}
+				>
+					{fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+				</Button>
 			</div>
 			{aiAvailable ? (
 				<div className="flex gap-2 border-b bg-muted/20 p-3">
@@ -306,15 +337,35 @@ function SqlWorkspaceSession({
 				onRun={() => void run(false)}
 				onChange={persistDraft}
 			/>
-			{schema.truncated.tables || schema.truncated.columns || schema.truncated.bytes ? (
+			{schemaQuery.isFetching ? (
+				<output className="block border-t px-3 py-2 text-xs text-muted-foreground">
+					Updating completions…
+				</output>
+			) : schemaQuery.isError ? (
 				<p className="border-t bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+					Couldn’t refresh completions; showing the last loaded schema.
+				</p>
+			) : null}
+			{schema.truncated.tables || schema.truncated.columns || schema.truncated.bytes ? (
+				<p className="flex items-center gap-1.5 border-t bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
 					Completion schema is bounded; some tables or columns were omitted.
+					<Tooltip content={completionSchemaSummary(schema.counts)}>
+						<button
+							type="button"
+							aria-label="Completion schema details"
+							className="inline-flex rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						>
+							<Info className="size-3.5" />
+						</button>
+					</Tooltip>
 				</p>
 			) : null}
 			<div className="min-h-56 flex-1 overflow-auto border-t p-3">
 				{error ? <p className="mb-3 text-sm text-destructive">{error}</p> : null}
 				{query.isPending ? (
-					<Skeleton className="h-32 w-full" />
+					<output aria-label="Running query" className="block">
+						<Skeleton className="h-32 w-full" />
+					</output>
 				) : executions.length > 0 ? (
 					<QueryExecutionResults
 						executions={executions}
@@ -347,6 +398,9 @@ const SqlEditor = forwardRef(function SqlEditor(
 ) {
 	const parentRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView>(null);
+	const analyzersRef = useRef<{ parser: NodeSqlParser; contextAnalyzer: QueryContextAnalyzer }>(
+		null,
+	);
 	const onRunRef = useRef(onRun);
 	const onChangeRef = useRef(onChange);
 	const schemaCompartment = useRef(new Compartment()).current;
@@ -408,34 +462,26 @@ const SqlEditor = forwardRef(function SqlEditor(
 			getParserOptions: () => ({ database: 'DuckDB' }),
 		});
 		const contextAnalyzer = new QueryContextAnalyzer(parser);
+		analyzersRef.current = { parser, contextAnalyzer };
 		const view = new EditorView({
 			parent: parentRef.current,
 			doc: initialSql,
 			extensions: [
 				basicSetup,
-				history(),
-				foldGutter(),
 				lintGutter(),
-				drawSelection(),
-				indentOnInput(),
-				bracketMatching(),
-				closeBrackets(),
-				autocompletion({ activateOnTyping: true }),
-				highlightActiveLine(),
-				highlightSelectionMatches(),
-				keymap.of([
-					{
-						key: 'Mod-Enter',
-						run: () => {
-							onRunRef.current();
-							return true;
+				// basicSetup's defaultKeymap binds Mod-Enter to insertBlankLine; Prec.high keeps Run first.
+				Prec.high(
+					keymap.of([
+						{
+							key: 'Mod-Enter',
+							run: () => {
+								onRunRef.current();
+								return true;
+							},
 						},
-					},
-					indentWithTab,
-					...defaultKeymap,
-					...historyKeymap,
-					...searchKeymap,
-				]),
+						indentWithTab,
+					]),
+				),
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) onChangeRef.current(update.state.doc.toString());
 				}),
@@ -452,7 +498,13 @@ const SqlEditor = forwardRef(function SqlEditor(
 
 	useEffect(() => {
 		viewRef.current?.dispatch({
-			effects: schemaCompartment.reconfigure(schemaExtensions(schema, undefined, undefined)),
+			effects: schemaCompartment.reconfigure(
+				schemaExtensions(
+					schema,
+					analyzersRef.current?.parser,
+					analyzersRef.current?.contextAnalyzer,
+				),
+			),
 		});
 	}, [schema, schemaCompartment]);
 
@@ -488,7 +540,6 @@ function schemaExtensions(
 			enableNavigation: true,
 			navigationConfig: { keymap: true },
 		}),
-		defaultSqlHoverTheme(),
 	];
 }
 
@@ -506,6 +557,24 @@ function editorTheme(theme: 'light' | 'dark') {
 			},
 		},
 		{ dark: theme === 'dark' },
+	);
+}
+
+export function completionSchemaSummary(counts: {
+	tables: number;
+	discovered_tables: number;
+	columns: number;
+	discovery_complete: boolean;
+}): string {
+	// discovered_tables is a lower bound when discovery was cut short.
+	const discovered = counts.discovery_complete
+		? `${counts.discovered_tables}`
+		: `${counts.discovered_tables}+`;
+	const tables = counts.discovered_tables === 1 && counts.discovery_complete ? 'table' : 'tables';
+	const columns = counts.columns === 1 ? 'column' : 'columns';
+	return (
+		`Loaded ${counts.tables} of ${discovered} ${tables} (${counts.columns} ${columns}) for autocomplete. ` +
+		'The selected table is always included, and queries against omitted tables still run.'
 	);
 }
 

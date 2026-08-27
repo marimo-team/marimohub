@@ -9,6 +9,7 @@ import type {
 	DataQueryResult,
 	DisposableDataQueryExecutor,
 } from './contracts';
+import { DataQueryUserError } from './contracts';
 
 const user = 'user-1' as UserId;
 const connection = {
@@ -248,7 +249,7 @@ describe('DataQueryService', () => {
 		);
 
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toThrow(
-			'not execute',
+			'not isolated',
 		);
 		expect(terminate).toHaveBeenCalledOnce();
 	});
@@ -265,6 +266,48 @@ describe('DataQueryService', () => {
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toMatchObject({
 			message: 'The data-query runtime could not execute this query.',
 		});
+	});
+
+	it('surfaces adapter-vetted user SQL errors as redacted validation errors', async () => {
+		const secretConnection = { ...connection, vars: { TOKEN: 'hunter2-secret' } };
+		const { service } = setup(async () => {
+			throw new DataQueryUserError('Binder Error: column "foo" not found near hunter2-secret');
+		});
+
+		await expect(
+			service.query(user, { sql: 'select 1', connection: secretConnection }),
+		).rejects.toMatchObject({
+			name: 'ValidationError',
+			message: 'Binder Error: column "foo" not found near [redacted]',
+		});
+	});
+
+	it('classifies a user error by name when the adapter holds a bundled copy of the class', async () => {
+		const foreignCopy = Object.assign(new Error('Parser Error: syntax error at or near "selct"'), {
+			name: 'DataQueryUserError',
+		});
+		const { service } = setup(async () => {
+			throw foreignCopy;
+		});
+
+		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toMatchObject({
+			name: 'ValidationError',
+			message: 'Parser Error: syntax error at or near "selct"',
+		});
+	});
+
+	it('keeps a redacted cause on the generic runtime error for server-side logging', async () => {
+		const secretConnection = { ...connection, vars: { TOKEN: 'hunter2-secret' } };
+		const { service } = setup(async () => {
+			throw new Error('worker exploded with token hunter2-secret');
+		});
+
+		const error = await service.query(user, { sql: 'select 1', connection: secretConnection }).then(
+			() => {},
+			(cause: unknown) => cause as Error & { cause?: Error },
+		);
+		expect(error?.message).toBe('The data-query runtime could not execute this query.');
+		expect(error?.cause?.message).toBe('worker exploded with token [redacted]');
 	});
 
 	it('ignores synchronous termination errors after preserving the query outcome', async () => {
@@ -302,7 +345,7 @@ describe('DataQueryService', () => {
 		const { service } = setup(async () => result as never);
 
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toThrow(
-			'could not execute',
+			'invalid result',
 		);
 	});
 
@@ -316,7 +359,7 @@ describe('DataQueryService', () => {
 		}));
 
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toThrow(
-			'could not execute',
+			'invalid result',
 		);
 	});
 
@@ -339,7 +382,7 @@ describe('DataQueryService', () => {
 			'exactly one statement',
 		);
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toThrow(
-			'could not execute',
+			'invalid result',
 		);
 
 		const oversized = setup(
@@ -347,7 +390,7 @@ describe('DataQueryService', () => {
 			{ maxBytes: 10 },
 		).service;
 		await expect(oversized.query(user, { sql: 'select 1', connection })).rejects.toThrow(
-			'could not execute',
+			'exceeded its byte limit',
 		);
 
 		const exactBytes = 'é'.repeat(MAX_DATA_QUERY_SQL_BYTES / 2);

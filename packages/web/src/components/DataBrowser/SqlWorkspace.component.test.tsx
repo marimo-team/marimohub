@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, renderWithClient } from '@/test/render';
@@ -53,8 +53,8 @@ function useRunDataQueryMock() {
 	};
 }
 
-function renderWorkspace() {
-	return renderWithClient(
+function workspaceElement() {
+	return (
 		<ThemeProvider>
 			<SqlWorkspace
 				projectId="project-1"
@@ -63,9 +63,12 @@ function renderWorkspace() {
 				selection={null}
 				aiAvailable={false}
 			/>
-		</ThemeProvider>,
-		{ toaster: false },
+		</ThemeProvider>
 	);
+}
+
+function renderWorkspace() {
+	return renderWithClient(workspaceElement(), { toaster: false });
 }
 
 function storeDraft(draft: string) {
@@ -158,6 +161,156 @@ describe('SqlWorkspace', () => {
 		);
 		expect(screen.queryByRole('columnheader', { name: 'value' })).not.toBeInTheDocument();
 		expect(screen.getByText('Run a query to see results.')).toBeInTheDocument();
+	});
+
+	it('renders a single fold gutter', async () => {
+		const { container } = renderWorkspace();
+
+		await waitFor(() => expect(container.querySelector('.cm-content')).toBeInTheDocument());
+		expect(container.querySelectorAll('.cm-foldGutter')).toHaveLength(1);
+	});
+
+	it('runs the current statement on Mod-Enter despite basicSetup keybindings', async () => {
+		storeDraft('SELECT 1 AS value;');
+		hookMocks.executeQuery.mockResolvedValue(RESULT);
+		const { container } = renderWorkspace();
+
+		const content = await waitFor(() => {
+			const element = container.querySelector('.cm-content');
+			expect(element).toBeInTheDocument();
+			return element as HTMLElement;
+		});
+		fireEvent.keyDown(content, { key: 'Enter', ctrlKey: true });
+
+		await waitFor(() => expect(hookMocks.executeQuery).toHaveBeenCalledOnce());
+		expect(hookMocks.executeQuery.mock.calls[0]?.[0].sql).toBe('SELECT 1 AS value');
+	});
+
+	it('keeps the editor mounted while completions refresh', async () => {
+		storeDraft('SELECT 1 AS value;');
+		hookMocks.useDataQuerySchemaQuery.mockReturnValue({
+			isPending: false,
+			isFetching: true,
+			isError: false,
+			data: { tables: [], truncated: { tables: false, columns: false, bytes: false } },
+		});
+		const { container } = renderWorkspace();
+
+		await waitFor(() => expect(container.querySelector('.cm-content')).toBeInTheDocument());
+		expect(screen.getByText('Updating completions…')).toBeInTheDocument();
+	});
+
+	it('preserves the editor instance when a table click refetches the schema', async () => {
+		storeDraft('SELECT 1 AS value;');
+		const view = renderWorkspace();
+		const content = await waitFor(() => {
+			const element = view.container.querySelector('.cm-content');
+			expect(element).toBeInTheDocument();
+			return element as HTMLElement;
+		});
+
+		hookMocks.useDataQuerySchemaQuery.mockReturnValue({
+			isPending: false,
+			isFetching: true,
+			isError: false,
+			data: {
+				tables: [{ namespace: ['sales'], name: 'orders', columns: [{ name: 'id', type: 'long' }] }],
+				truncated: { tables: false, columns: false, bytes: false },
+			},
+		});
+		view.rerender(workspaceElement());
+
+		await screen.findByText('Updating completions…');
+		expect(view.container.querySelector('.cm-content')).toBe(content);
+		expect(content).toHaveTextContent('SELECT 1 AS value;');
+	});
+
+	it('toggles fullscreen and exits on Escape', async () => {
+		const user = userEvent.setup();
+		renderWorkspace();
+
+		await user.click(await screen.findByRole('button', { name: 'Fullscreen' }));
+		expect(screen.getByRole('button', { name: 'Exit fullscreen' })).toBeInTheDocument();
+
+		fireEvent.keyDown(window, { key: 'Escape' });
+
+		expect(await screen.findByRole('button', { name: 'Fullscreen' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Exit fullscreen' })).not.toBeInTheDocument();
+	});
+
+	it('falls back to the last loaded schema when a refetch errors with no data', async () => {
+		storeDraft('SELECT 1 AS value;');
+		const view = renderWorkspace();
+		const content = await waitFor(() => {
+			const element = view.container.querySelector('.cm-content');
+			expect(element).toBeInTheDocument();
+			return element as HTMLElement;
+		});
+
+		hookMocks.useDataQuerySchemaQuery.mockReturnValue({
+			isPending: false,
+			isFetching: false,
+			isError: true,
+			error: new Error('schema fetch failed'),
+			data: undefined,
+		});
+		view.rerender(workspaceElement());
+
+		expect(view.container.querySelector('.cm-content')).toBe(content);
+		expect(screen.getByText(/Couldn’t refresh completions/)).toBeInTheDocument();
+		expect(screen.queryByText('SQL schema unavailable')).not.toBeInTheDocument();
+	});
+
+	it('keeps the editor mounted when a completions refresh fails', async () => {
+		storeDraft('SELECT 1 AS value;');
+		hookMocks.useDataQuerySchemaQuery.mockReturnValue({
+			isPending: false,
+			isFetching: false,
+			isError: true,
+			error: new Error('boom'),
+			data: { tables: [], truncated: { tables: false, columns: false, bytes: false } },
+		});
+		const { container } = renderWorkspace();
+
+		await waitFor(() => expect(container.querySelector('.cm-content')).toBeInTheDocument());
+		expect(screen.getByText(/Couldn’t refresh completions/)).toBeInTheDocument();
+		expect(screen.queryByText('SQL schema unavailable')).not.toBeInTheDocument();
+	});
+
+	it('blocks on the schema only for the very first load', () => {
+		hookMocks.useDataQuerySchemaQuery.mockReturnValue({
+			isPending: true,
+			isFetching: true,
+			isError: false,
+			data: undefined,
+		});
+		const { container } = renderWorkspace();
+
+		expect(container.querySelector('.cm-content')).not.toBeInTheDocument();
+	});
+
+	it('explains what a bounded completion schema loaded', async () => {
+		hookMocks.useDataQuerySchemaQuery.mockReturnValue({
+			isPending: false,
+			isFetching: false,
+			isError: false,
+			data: {
+				tables: [],
+				truncated: { tables: true, columns: false, bytes: false },
+				counts: { tables: 5, discovered_tables: 12, columns: 40, discovery_complete: false },
+			},
+		});
+		const user = userEvent.setup();
+		renderWorkspace();
+
+		expect(
+			screen.getByText('Completion schema is bounded; some tables or columns were omitted.'),
+		).toBeInTheDocument();
+		const trigger = screen.getByLabelText('Completion schema details');
+		await user.hover(trigger);
+		await screen.findByText(/Loaded 5 of 12\+ tables \(40 columns\)/, undefined, {
+			timeout: 2_000,
+		});
 	});
 
 	it('falls back to the default draft when persisted state is malformed', async () => {

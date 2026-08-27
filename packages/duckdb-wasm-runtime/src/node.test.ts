@@ -7,6 +7,7 @@ import type {
 	IntegrationId,
 	Metrics,
 } from '@marimo-hub/core';
+import { DataQueryUserError } from '@marimo-hub/core';
 import {
 	createNodeDataQueryExecutorFactory,
 	createNodeDuckDBWasmRuntimeFactory,
@@ -494,6 +495,34 @@ describe.concurrent('DuckDB-Wasm data-query executor', () => {
 					new AbortController().signal,
 				),
 			).rejects.toThrow(/external access|disabled/i);
+		} finally {
+			executor.terminate();
+		}
+	}, 15_000);
+
+	it('carries user-SQL classification across the worker boundary', async ({ expect }) => {
+		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
+			new AbortController().signal,
+		);
+		const rejection = (sql: string, limits: Partial<DataQueryExecution['limits']> = {}) =>
+			executor.execute(dataQuery(sql, limits), new AbortController().signal).then(
+				() => {},
+				(cause: unknown) => cause as Error,
+			);
+		try {
+			const userError = await rejection('select * from missing_table');
+			expect(userError).toBeInstanceOf(DataQueryUserError);
+			expect(userError?.message).toMatch(/Catalog Error/);
+
+			const byteLimit = await rejection('select 1 as value', { maxBytes: 10 });
+			expect(byteLimit).toBeInstanceOf(DataQueryUserError);
+			expect(byteLimit?.message).toMatch(/response limit/);
+
+			const infraError = await rejection(
+				"select * from read_csv_auto('https://example.com/data.csv')",
+			);
+			expect(infraError).toBeDefined();
+			expect(infraError).not.toBeInstanceOf(DataQueryUserError);
 		} finally {
 			executor.terminate();
 		}

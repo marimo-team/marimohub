@@ -92,6 +92,7 @@ export type { OrgIntegrationsService, ProjectIntegrationsService } from './integ
 export {
 	assertValidDataQuerySql,
 	DataQueryService,
+	DataQueryUserError,
 	MAX_DATA_QUERY_SQL_BYTES,
 } from './integrations/data-query';
 export type {

@@ -2324,9 +2324,29 @@ components:
             - tables
             - columns
             - bytes
+        counts:
+          type: object
+          properties:
+            tables:
+              type: integer
+              minimum: 0
+            discovered_tables:
+              type: integer
+              minimum: 0
+            columns:
+              type: integer
+              minimum: 0
+            discovery_complete:
+              type: boolean
+          required:
+            - tables
+            - discovered_tables
+            - columns
+            - discovery_complete
       required:
         - tables
         - truncated
+        - counts
     IntegrationObjectBucket:
       type: object
       properties:

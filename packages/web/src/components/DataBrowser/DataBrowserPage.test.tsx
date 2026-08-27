@@ -131,6 +131,29 @@ describe('DataBrowserPage catalog', () => {
 		expect(await screen.findByTestId('browse-table')).toHaveTextContent('orders');
 	});
 
+	it('highlights the matched part of a filtered table name', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?q=ord`);
+
+		await user.click(await screen.findByTestId('browse-namespace'));
+		const table = await screen.findByTestId('browse-table');
+		expect(table).toHaveTextContent('orders');
+		expect(table.querySelector('mark')).toHaveTextContent('ord');
+	});
+
+	it('keeps the tree filter available and populated on the Query surface', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?q=ord`, {
+			role: 'manager',
+			querySurface: { available: true },
+		});
+
+		await screen.findByTestId('browse-namespace');
+		await user.click(screen.getByRole('button', { name: 'Query' }));
+
+		expect(await screen.findByLabelText('Filter tables')).toHaveValue('ord');
+	});
+
 	it('filters loaded tables and says so when nothing matches', async () => {
 		const user = userEvent.setup();
 		setup(`/projects/${PID}/data/${IID}?q=zzz`);

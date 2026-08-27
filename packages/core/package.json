@@ -10,6 +10,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./data-query-sql": "./src/services/integrations/data-query/sql.ts",
+		"./data-query-contracts": "./src/services/integrations/data-query/contracts.ts",
 		"./ports": "./src/ports/index.ts",
 		"./url": "./src/url.ts",
 		"./testing": "./src/testing/index.ts",
