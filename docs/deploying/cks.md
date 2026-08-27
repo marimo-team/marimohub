@@ -125,6 +125,7 @@ uses **file import**, which keeps the profile reviewable and re-appliable. Save
 this as `profile.yaml`, substituting `<ORG-ID>` (and the cluster/pool names if
 you changed them):
 
+<!-- prettier-ignore -->
 ```yaml
 display_name: marimohub
 spec:
@@ -134,12 +135,17 @@ spec:
     strategy: per-org
   network:
     egress:
-      # Kernels get outbound internet (pip installs, data APIs). Lock this
-      # down with an `allowlist` mode if your environment requires it.
+      # Kernels get outbound internet (pip installs, data APIs) but NOT the
+      # internal network: the allowlist covers all public IPv4 and omits the
+      # RFC1918/link-local ranges (10/8, 172.16/12, 192.168/16, 169.254/16), so
+      # the node metadata endpoint and pod/service network stay unreachable. The
+      # lone /32 pins one internal host kernels may still reach (an in-cluster
+      # data service, say) — drop it for a pure public-internet allowlist.
       default: internet
       modes:
         internet:
-          type: internet
+          type: allowlist
+          cidrs: [10.2.3.4/32, 0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/3, 96.0.0.0/6, 100.0.0.0/10, 100.128.0.0/9, 101.0.0.0/8, 102.0.0.0/7, 104.0.0.0/5, 112.0.0.0/4, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/8, 169.0.0.0/9, 169.128.0.0/10, 169.192.0.0/11, 169.224.0.0/12, 169.240.0.0/13, 169.248.0.0/14, 169.252.0.0/15, 169.255.0.0/16, 170.0.0.0/7, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 224.0.0.0/3]
     ingress:
       # Expose each sandbox publicly through the cluster's Traefik (installed
       # in step 6) at a per-sandbox hostname. The template's DNS + TLS are
