@@ -6,7 +6,7 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 
 export const COREWEAVE_USER_HOME_TEMPLATE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID';
-/** Pre-Sandbox-v1 selector; rejected with a pointer at the template-based replacement. */
+/** Unsupported selector; rejected with a pointer at the template replacement. */
 export const COREWEAVE_USER_HOME_PROFILE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE';
 
 function canonicalEmail(email: string): string {
@@ -28,8 +28,7 @@ function canonicalEmail(email: string): string {
  * Personal homes are composed behind a resolver so a future identity mapping can
  * replace email without changing session provisioning or compute adapters.
  *
- * CoreWeave Sandbox v1 replaced per-create profile selection with org-scoped
- * sandbox templates: editor sandboxes are created from the template named
+ * Editor sandboxes are created from the org-scoped sandbox template named
  * here, which mounts the per-user volume.
  */
 export function makeSandboxUserHome(
@@ -38,7 +37,7 @@ export function makeSandboxUserHome(
 ): SandboxUserHomeResolver | undefined {
 	if (env[COREWEAVE_USER_HOME_PROFILE] !== undefined) {
 		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_PROFILE} is no longer supported: CoreWeave Sandbox v1 removed per-create profile selection`,
+			`${COREWEAVE_USER_HOME_PROFILE} is not supported: Sandbox v1 has no per-create profile selection`,
 			{
 				variable: COREWEAVE_USER_HOME_PROFILE,
 				remediation: `Create a sandbox template with the user-home mounts and set ${COREWEAVE_USER_HOME_TEMPLATE} to its id.`,

@@ -1,11 +1,9 @@
 /**
  * Publishes each kernel at its public hostname with a Kubernetes Ingress.
  *
- * Under Sandbox v1beta2 the profile's `ingress` block made the runner create a
- * Traefik Ingress per sandbox. v1 creates ignore the profile: a
- * CUSTOM-visibility service gets a ClusterIP Service in the sandbox namespace
- * and nothing else. The hub runs in the same cluster, so it creates the
- * Ingress itself, owner-referenced to the runner's Service so Kubernetes
+ * A CUSTOM-visibility service gets a ClusterIP Service in the sandbox
+ * namespace and nothing else. The hub runs in the same cluster, so it creates
+ * the Ingress itself, owner-referenced to the runner's Service so Kubernetes
  * garbage-collects it with the sandbox.
  */
 import { readFile } from 'node:fs/promises';

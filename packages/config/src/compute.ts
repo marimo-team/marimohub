@@ -204,22 +204,22 @@ export function usesSandboxNativeObjectStorage(env: Env): boolean {
 }
 
 /**
- * CoreWeave Sandbox v1 (`@coreweave/cwsandbox` ≥0.2.0-beta.0) removed
- * create-time profile selection and the ingress/egress mode knobs; the SDK
- * rejects them client-side. Fail at boot with the reason rather than at the
- * first provision with a cryptic validation error. (The user-home profile var
- * is rejected in `userHome.ts`, next to the feature it configured.)
+ * Sandbox v1 has no per-create profile selection or network modes; the SDK
+ * rejects those options client-side. Fail at boot with the replacement rather
+ * than at the first provision with a cryptic validation error. (The user-home
+ * profile var is rejected in `userHome.ts`, next to the feature it
+ * configures.)
  */
-function rejectRemovedCoreWeaveVars(env: Env): void {
-	const removed = [
+function rejectUnsupportedCoreWeaveVars(env: Env): void {
+	const unsupported = [
 		'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
 		'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
 		'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
 	] as const;
-	for (const variable of removed) {
+	for (const variable of unsupported) {
 		if (env[variable] !== undefined) {
 			throw new ConfigError(
-				`${variable} is no longer supported: CoreWeave Sandbox v1 removed per-create profile selection and network modes`,
+				`${variable} is not supported: Sandbox v1 has no per-create profile selection or network modes`,
 				{
 					variable,
 					remediation:
@@ -292,7 +292,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			// via MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress
 			// URL, whose hostname scheme is CoreWeave backend specific — set
 			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (and, if needed, a HOSTNAME_TEMPLATE).
-			rejectRemovedCoreWeaveVars(env);
+			rejectUnsupportedCoreWeaveVars(env);
 			return new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
@@ -318,8 +318,8 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 							}),
 						}
 					: {}),
-				// Sandbox templates are v1's replacement for profile selection; without
-				// one, sandboxes run under the runner's default policy.
+				// Per-create specs come from a sandbox template; without one, sandboxes
+				// run under the runner's default policy.
 				templateId: env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID,
 				userHomeTemplateId: env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID,
 				maxLifetimeSeconds: resolveLifetimeBackstop(

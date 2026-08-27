@@ -34,20 +34,18 @@
  * INTEGRATION SURFACE (validate against the live CoreWeave API before production,
  * same caveat the Modal adapter carries): the kernel `services` declaration
  * (public visibility, no product endpoint — v1 Create rejects a set endpoint
- * as unimplemented) is what v1 offers in place of the removed `ingressMode`;
- * the public kernel URL is CONSTRUCTED from a hostname template (inspect's
+ * as unimplemented); the public kernel URL is CONSTRUCTED from a hostname template (inspect's
  * `serviceUrls` is assigned-not-edge-ready per the SDK docs); and the
  * `waitForPort` probe assumes `python3` is on the image PATH.
  *
- * Sandbox v1 (SDK ≥0.2.0-beta.0) removed create-time `profileNames`, `ports`,
- * and `ingressMode`/`egressMode` (rejected client-side). Per-create targeting
- * is now an org-scoped **sandbox template** (`runFromTemplate`): `templateId`
- * selects the template every sandbox is created from, and a sandbox with a
- * `userHome` uses `userHomeTemplateId` (a template mounting the per-user
- * volume) instead. Without a template, sandboxes run under the default policy
- * of the runner named by `runnerId` — a bare v1 create with no runner ids
- * schedules on the MANAGED SERVERLESS pool, not the caller's cluster, so CKS
- * deployments must keep `runnerId` set (the config layer defaults it).
+ * Per-create targeting is an org-scoped **sandbox template**
+ * (`runFromTemplate`): `templateId` selects the template every sandbox is
+ * created from, and a sandbox with a `userHome` uses `userHomeTemplateId` (a
+ * template mounting the per-user volume) instead. Without a template,
+ * sandboxes run under the default policy of the runner named by `runnerId` —
+ * a create with no runner ids schedules on the MANAGED SERVERLESS pool, not
+ * the caller's cluster, so CKS deployments must keep `runnerId` set (the
+ * config layer defaults it).
  */
 import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
@@ -394,10 +392,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const t2 = Date.now();
 		if (!existing) {
 			await this.sandbox.wait();
-			// v1's wait() reports a `completed` sandbox as a satisfied running-wait
-			// (the vendored SDK threw). For us the keep-alive exiting during boot is
-			// a failed provision — surface it here with the real cause rather than
-			// as NOT_FOUND on the first command.
+			// The SDK's wait() reports a `completed` sandbox as a satisfied
+			// running-wait. For us the keep-alive exiting during boot is a failed
+			// provision — surface it here with the real cause rather than as
+			// NOT_FOUND on the first command.
 			if (this.sandbox.status === 'completed') {
 				throw new Error(
 					`CoreWeave sandbox ${this.sandbox.sandboxId} completed before running (main process exited during boot)`,
@@ -453,11 +451,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	/**
-	 * v1's replacement for the removed `ports` + ingress mode: a public service
-	 * on the kernel port ("the platform chooses the mechanism"). No `endpoint`:
-	 * the v1 proto documents Create as rejecting a set endpoint as
-	 * unimplemented. Egress follows the runner policy default (the removed
-	 * `egressMode` has no v1 analogue).
+	 * The kernel port is declared as a service ("the platform chooses the
+	 * mechanism"). No `endpoint`: the v1 proto documents Create as rejecting a
+	 * set endpoint as unimplemented. Egress follows the runner policy default —
+	 * there is no per-create egress knob.
 	 */
 	private kernelServices(): readonly Service[] {
 		return [

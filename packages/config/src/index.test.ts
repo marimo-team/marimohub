@@ -832,14 +832,14 @@ describe('createFromEnv default role', () => {
 		).toThrow(/Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING.*shared, exclusive/);
 	});
 
-	it('rejects the CoreWeave vars that Sandbox v1 removed', () => {
+	it('rejects the CoreWeave vars Sandbox v1 cannot honor', () => {
 		// Set on any backend for the user-home var (its successor is runner-based)…
 		expect(() =>
 			createFromEnv({
 				...baseEnv,
 				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
 			}),
-		).toThrow(/USER_HOME_PROFILE is no longer supported/);
+		).toThrow(/USER_HOME_PROFILE is not supported/);
 		// …and on the coreweave backend for the profile / network-mode vars.
 		for (const variable of [
 			'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
@@ -853,7 +853,7 @@ describe('createFromEnv default role', () => {
 					MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
 					[variable]: 'some-value',
 				}),
-			).toThrow(new RegExp(`${variable} is no longer supported`));
+			).toThrow(new RegExp(`${variable} is not supported`));
 		}
 	});
 

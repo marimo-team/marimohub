@@ -14,11 +14,11 @@
  *
  * Kernel URLs: the W&B managed runner has no static hostname scheme, so this
  * backend ignores the hostname-template machinery and resolves URLs at expose
- * time from `serviceUrls` (v1's replacement for `serviceAddress`). The
- * handle's metadata — refreshed by the boot `wait()` — usually already
- * carries them, so the common path costs no extra Get round-trip.
+ * time from `serviceUrls`. The handle's metadata — refreshed by the boot
+ * `wait()` — usually already carries them, so the common path costs no extra
+ * Get round-trip.
  * INTEGRATION SURFACE: the exact `serviceUrls` contents from the W&B gateway
- * are unverified against a live sandbox since the v1 migration.
+ * are unverified against a live W&B sandbox.
  */
 import type { GetSandboxResult, ServiceUrl } from '@coreweave/cwsandbox';
 import { createSandboxClient, DEFAULT_WANDB_SANDBOX_BASE_URL } from '@coreweave/cwsandbox/wandb';

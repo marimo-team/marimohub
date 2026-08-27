@@ -122,9 +122,9 @@ changing it over templating):
 - **Ingress.** The browser connects to kernels **directly** (not proxied
   through the hub), so each sandbox must be published at a predictable
   per-sandbox hostname — `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` (step 8) with
-  wildcard DNS + TLS (steps 6 and 9). Sandbox v1 creates IGNORE the policy's
-  `ingress` block: on a CKS runner without HTTPS endpoint routes (this guide),
-  a kernel service gets only a ClusterIP Service, and the **hub publishes the
+  wildcard DNS + TLS (steps 6 and 9). The policy does not publish kernel
+  hostnames: on a CKS runner without HTTPS endpoint routes (this guide), a
+  kernel service gets only a ClusterIP Service, and the **hub publishes the
   per-kernel Ingress itself**. Enable that in step 8 by setting the chart's
   `sandboxIngress.namespace` and `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE`
   to the sandbox namespace (`org-ns-<ORG-ID>` under the per-org strategy). The
@@ -411,8 +411,8 @@ config:
   # Must name YOUR sandbox runner (`marimohub` in this guide); a create with no
   # runner id schedules on the managed serverless pool, not this cluster.
   MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID: marimohub
-  # v1 ignores the policy's ingress block, so the hub publishes each kernel's
-  # Ingress in the sandbox namespace (pair with sandboxIngress.namespace above).
+  # The hub publishes each kernel's Ingress in the sandbox namespace (pair
+  # with sandboxIngress.namespace above).
   MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: org-ns-<ORG-ID>
 
   # Auth — your OIDC provider (see docs/auth.md)

@@ -1,8 +1,8 @@
 /**
  * OTEL client spans for the CoreWeave Sandbox SDK, wrapped around the
- * `CoreWeaveClient` / `CoreWeaveSandbox` seam. The published v1 SDK exports no
- * transport to intercept (unlike the vendored v1beta2 build this replaced), so
- * spans cover the adapter's client operations rather than individual gRPC
+ * `CoreWeaveClient` / `CoreWeaveSandbox` seam. The SDK exports no transport
+ * to intercept, so spans cover the adapter's client operations rather than
+ * individual gRPC
  * requests — `Sandbox/wait` is one span over the whole poll loop, and
  * `Sandbox/writeFiles` one span over the batched AddFile fan-out.
  *
