@@ -50,8 +50,20 @@ function readLiveBrokerEnvironment(
 	};
 }
 
-const liveEnvironment = readLiveBrokerEnvironment(process.env);
-const describeLive = liveEnvironment ? describe : describe.skip;
+function captureLiveBrokerEnvironment(environment: Record<string, string | undefined>): {
+	environment?: LiveBrokerEnvironment;
+	error?: Error;
+} {
+	try {
+		return { environment: readLiveBrokerEnvironment(environment) };
+	} catch (error) {
+		return { error: error instanceof Error ? error : new Error(String(error)) };
+	}
+}
+
+const liveEnvironmentResult = captureLiveBrokerEnvironment(process.env);
+const describeLive =
+	liveEnvironmentResult.environment || liveEnvironmentResult.error ? describe : describe.skip;
 
 const integration = {
 	id: createIntegrationId(),
@@ -86,10 +98,21 @@ describe('readLiveBrokerEnvironment', () => {
 				'MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY',
 		);
 	});
+
+	it('captures partial process configuration without throwing during module evaluation', () => {
+		const result = captureLiveBrokerEnvironment({
+			MARIMOHUB_TEST_ICEBERG_BROKER_URI: 'http://127.0.0.1:18181',
+		});
+
+		expect(result.environment).toBeUndefined();
+		expect(result.error?.message).toContain('MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY');
+	});
 });
 
 describeLive('guarded DuckDB HTTP broker live', () => {
 	it('runs production preview and query plans through the guarded broker', async () => {
+		if (liveEnvironmentResult.error) throw liveEnvironmentResult.error;
+		const liveEnvironment = liveEnvironmentResult.environment;
 		if (!liveEnvironment) throw new Error('Expected live-test configuration.');
 		const { catalogUrl: liveCatalogUrl, s3Endpoint: liveS3Endpoint } = liveEnvironment;
 		const config = icebergRest.configSchema.parse({

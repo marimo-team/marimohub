@@ -27,7 +27,12 @@ import {
 	storageProperties,
 	validateExtraProperties,
 } from './icebergShared';
-import { HTTP_HEADER_NAME_REGEX, httpUrlField, isInsecureHttpUrl } from './common';
+import {
+	HTTP_HEADER_NAME_REGEX,
+	httpUrlField,
+	isInsecureHttpUrl,
+	usesInsecureAuthenticatedS3,
+} from './common';
 
 const httpUrl = httpUrlField;
 
@@ -220,7 +225,14 @@ export const icebergRest = defineIntegration({
 						'Basic auth. Enable allow_insecure_transport to override for local development.',
 				);
 			}
-			if (usesInsecureAuthenticatedS3(config)) {
+			if (
+				config.storage.scheme === 's3' &&
+				usesInsecureAuthenticatedS3({
+					endpoint: config.storage.endpoint,
+					authenticated: !config.storage.anonymous,
+					allowInsecureTransport: config.allow_insecure_transport,
+				})
+			) {
 				throw new ValidationError(
 					'Authenticated S3 storage requires an https:// endpoint. Enable ' +
 						'allow_insecure_transport to override for local development.',
@@ -850,7 +862,11 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 					readinessCheck(
 						's3-secure-transport',
 						'Use HTTPS for authenticated S3',
-						!usesInsecureAuthenticatedS3(value),
+						!usesInsecureAuthenticatedS3({
+							endpoint: typeof storage.endpoint === 'string' ? storage.endpoint : undefined,
+							authenticated: storage.anonymous !== true,
+							allowInsecureTransport: value.allow_insecure_transport,
+						}),
 						'storage.endpoint',
 						'authenticated S3 requires HTTPS unless insecure transport is explicitly enabled',
 					),
@@ -1029,15 +1045,6 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 			locations: config.storage.broker_read_locations,
 		},
 	};
-}
-
-function usesInsecureAuthenticatedS3(config: IcebergRestConfig): boolean {
-	return (
-		config.storage.scheme === 's3' &&
-		!config.storage.anonymous &&
-		!config.allow_insecure_transport &&
-		isInsecureHttpUrl(config.storage.endpoint)
-	);
 }
 
 function duckdbWarehouse(config: IcebergRestConfig, fallback: string): string {

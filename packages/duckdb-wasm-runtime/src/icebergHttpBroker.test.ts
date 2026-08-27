@@ -499,6 +499,37 @@ describe('IcebergHttpBroker', () => {
 		expect(transport).not.toHaveBeenCalled();
 	});
 
+	it('stops waiting when a closed capability header preparer ignores its signal', async () => {
+		const { broker, transport } = setup();
+		const prepareHeaders = vi.fn(() => new Promise<Readonly<Record<string, string>>>(() => {}));
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						prepareHeaders,
+					},
+				],
+			}),
+		);
+		const pending = broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET',
+		});
+		await vi.waitFor(() => expect(prepareHeaders).toHaveBeenCalledOnce());
+
+		broker.close(id);
+
+		await expect(pending).rejects.toMatchObject({
+			name: 'AbortError',
+			message: 'The DuckDB remote-read request was canceled.',
+		});
+		expect(transport).not.toHaveBeenCalled();
+	});
+
 	it('uses an exact route before an equal-path prefix route', async () => {
 		const { broker, calls } = setup();
 		const url = 'https://objects.example.test/warehouse/table.parquet';
