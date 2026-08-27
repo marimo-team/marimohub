@@ -18,7 +18,24 @@ export interface IcebergHttpBrokerRoute {
 	) => Promise<Readonly<Record<string, string>>>;
 	forwardRequestHeaders?: readonly string[];
 	discardRequestHeaders?: readonly string[];
+	observeResponse?: IcebergHttpBrokerResponseObserver;
 }
+
+export interface IcebergHttpBrokerObservedResponse {
+	request: Pick<IcebergHttpBrokerRequest, 'url' | 'method'>;
+	status: number;
+	headers: Readonly<Record<string, string>>;
+	body: Uint8Array;
+}
+
+export interface IcebergHttpBrokerRouteInstaller {
+	install(routes: readonly IcebergHttpBrokerRoute[]): readonly ('installed' | 'duplicate')[];
+}
+
+export type IcebergHttpBrokerResponseObserver = (
+	response: Readonly<IcebergHttpBrokerObservedResponse>,
+	installer: IcebergHttpBrokerRouteInstaller,
+) => void;
 
 export interface IcebergHttpBrokerCapability {
 	expiresAtMs: number;
@@ -29,6 +46,8 @@ export interface IcebergHttpBrokerCapability {
 		maxRedirects: number;
 		maxResponseBytes: number;
 		maxSingleResponseBytes?: number;
+		maxDynamicRoutes?: number;
+		maxDynamicRouteUrlBytes?: number;
 	};
 	forwardRequestHeaders?: readonly string[];
 }
@@ -60,6 +79,7 @@ export type IcebergHttpBrokerErrorCode =
 	| 'capability_expired'
 	| 'capability_unknown'
 	| 'credential_failed'
+	| 'dynamic_route_budget_exceeded'
 	| 'header_denied'
 	| 'invalid_capability'
 	| 'invalid_request'
@@ -88,31 +108,47 @@ interface NormalizedRoute {
 	prepareHeaders?: IcebergHttpBrokerRoute['prepareHeaders'];
 	forwardRequestHeaders: ReadonlySet<string>;
 	discardRequestHeaders: ReadonlySet<string>;
+	observeResponse?: IcebergHttpBrokerResponseObserver;
 }
 
 interface Session {
 	expiresAtMs: number;
-	routes: readonly NormalizedRoute[];
-	limits: IcebergHttpBrokerCapability['limits'];
+	routes: NormalizedRoute[];
+	limits: NormalizedLimits;
 	forwardRequestHeaders: ReadonlySet<string>;
 	lifecycleController: AbortController;
 	requests: number;
 	activeRequests: number;
 	responseBytes: number;
 	reservedResponseBytes: number;
+	dynamicRoutes: number;
+	dynamicRouteUrlBytes: number;
 	controllers: Set<AbortController>;
 	requestWaiters: Set<() => void>;
 	responseWaiters: Set<() => void>;
 	metrics: Metrics;
 }
 
+interface NormalizedLimits {
+	maxRequests: number;
+	maxConcurrentRequests: number;
+	maxRedirects: number;
+	maxResponseBytes: number;
+	maxSingleResponseBytes?: number;
+	maxDynamicRoutes: number;
+	maxDynamicRouteUrlBytes: number;
+}
+
 interface AuthorizedRequest {
 	request: IcebergHttpBrokerRequest;
 	redirectState: IcebergHttpBrokerRequest;
 	routeKind: IcebergHttpBrokerRoute['kind'];
+	observeResponse?: IcebergHttpBrokerResponseObserver;
 }
 
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
+const DEFAULT_MAX_DYNAMIC_ROUTES = 512;
+const DEFAULT_MAX_DYNAMIC_ROUTE_URL_BYTES = 512 * 1024;
 
 const DEFAULT_FORWARDED_REQUEST_HEADERS = [
 	'accept',
@@ -271,6 +307,20 @@ export class IcebergHttpBroker {
 					);
 
 					const headers = sanitizeResponseHeaders(response.headers);
+					authorized.observeResponse?.(
+						{
+							request: {
+								url: authorized.request.url,
+								method: authorized.request.method,
+							},
+							status: response.status,
+							headers,
+							body: response.body,
+						},
+						{
+							install: (routes) => installDynamicRoutes(session, routes),
+						},
+					);
 					const location = REDIRECT_STATUSES.has(response.status) ? headers.location : undefined;
 					if (!location) return { status: response.status, headers, body: response.body };
 					if (redirects >= session.limits.maxRedirects) {
@@ -316,6 +366,10 @@ function normalizeCapability(
 	metrics: Metrics,
 ): Session {
 	const limits = capability.limits;
+	const maxConcurrentRequests = limits?.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
+	const maxDynamicRoutes = limits?.maxDynamicRoutes ?? DEFAULT_MAX_DYNAMIC_ROUTES;
+	const maxDynamicRouteUrlBytes =
+		limits?.maxDynamicRouteUrlBytes ?? DEFAULT_MAX_DYNAMIC_ROUTE_URL_BYTES;
 	if (
 		!Number.isSafeInteger(capability.expiresAtMs) ||
 		capability.expiresAtMs <= now ||
@@ -327,9 +381,11 @@ function normalizeCapability(
 	}
 	for (const value of [
 		limits.maxRequests,
-		limits.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS,
+		maxConcurrentRequests,
 		limits.maxRedirects,
 		limits.maxResponseBytes,
+		maxDynamicRoutes,
+		maxDynamicRouteUrlBytes,
 	]) {
 		if (!Number.isSafeInteger(value) || value < 0) throw invalidCapability();
 	}
@@ -339,11 +395,7 @@ function normalizeCapability(
 	) {
 		throw invalidCapability();
 	}
-	if (
-		limits.maxRequests === 0 ||
-		(limits.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS) === 0 ||
-		limits.maxResponseBytes === 0
-	) {
+	if (limits.maxRequests === 0 || maxConcurrentRequests === 0 || limits.maxResponseBytes === 0) {
 		throw invalidCapability();
 	}
 	if (
@@ -364,13 +416,20 @@ function normalizeCapability(
 	return {
 		expiresAtMs: capability.expiresAtMs,
 		routes: capability.routes.map(normalizeRoute),
-		limits: { ...limits },
+		limits: {
+			...limits,
+			maxConcurrentRequests,
+			maxDynamicRoutes,
+			maxDynamicRouteUrlBytes,
+		},
 		forwardRequestHeaders: forwarded,
 		lifecycleController: new AbortController(),
 		requests: 0,
 		activeRequests: 0,
 		responseBytes: 0,
 		reservedResponseBytes: 0,
+		dynamicRoutes: 0,
+		dynamicRouteUrlBytes: 0,
 		controllers: new Set(),
 		requestWaiters: new Set(),
 		responseWaiters: new Set(),
@@ -398,6 +457,9 @@ function normalizeRoute(route: IcebergHttpBrokerRoute): NormalizedRoute {
 	if (methods.size !== route.methods.length) throw invalidCapability();
 	const headers = normalizeHeaders(route.headers ?? {}, 'invalid_capability');
 	if (route.prepareHeaders !== undefined && typeof route.prepareHeaders !== 'function') {
+		throw invalidCapability();
+	}
+	if (route.observeResponse !== undefined && typeof route.observeResponse !== 'function') {
 		throw invalidCapability();
 	}
 	if (route.forwardRequestHeaders !== undefined && !Array.isArray(route.forwardRequestHeaders)) {
@@ -443,6 +505,7 @@ function normalizeRoute(route: IcebergHttpBrokerRoute): NormalizedRoute {
 		prepareHeaders: route.prepareHeaders,
 		forwardRequestHeaders,
 		discardRequestHeaders,
+		observeResponse: route.observeResponse,
 	};
 }
 
@@ -527,7 +590,140 @@ async function authorize(
 		},
 		redirectState: { ...request, headers: workerHeaders },
 		routeKind: route.kind,
+		observeResponse: route.observeResponse,
 	};
+}
+
+function installDynamicRoutes(
+	session: Session,
+	routes: readonly IcebergHttpBrokerRoute[],
+): readonly ('installed' | 'duplicate')[] {
+	if (!Array.isArray(routes) || routes.length === 0) throw dynamicRouteConflict(session);
+	let normalized: NormalizedRoute[];
+	try {
+		normalized = routes.map(normalizeRoute);
+	} catch {
+		throw dynamicRouteConflict(session);
+	}
+	if (
+		normalized.some(
+			(route) =>
+				route.kind !== 'storage' ||
+				Object.keys(route.headers).length > 0 ||
+				route.prepareHeaders !== undefined ||
+				route.observeResponse !== undefined,
+		)
+	) {
+		throw dynamicRouteConflict(session);
+	}
+
+	const accepted = [...session.routes];
+	const outcomes: ('installed' | 'duplicate')[] = [];
+	for (const route of normalized) {
+		if (
+			accepted.some((candidate) => candidate.kind === 'catalog' && routesOverlap(candidate, route))
+		) {
+			throw dynamicRouteConflict(session);
+		}
+		const sameTarget = accepted.find(
+			(candidate) =>
+				candidate.kind === route.kind &&
+				candidate.match === route.match &&
+				candidate.url.toString() === route.url.toString(),
+		);
+		if (sameTarget) {
+			if (!sameRoutePolicy(sameTarget, route)) throw dynamicRouteConflict(session);
+			outcomes.push('duplicate');
+			continue;
+		}
+		accepted.push(route);
+		outcomes.push('installed');
+	}
+	const installed = normalized.filter((_route, index) => outcomes[index] === 'installed');
+	const installedUrlBytes = installed.reduce(
+		(total, route) => total + new TextEncoder().encode(route.url.toString()).byteLength,
+		0,
+	);
+	if (session.dynamicRoutes + installed.length > session.limits.maxDynamicRoutes) {
+		throw dynamicRouteBudgetExceeded(session, 'dynamic_route_count');
+	}
+	if (session.dynamicRouteUrlBytes + installedUrlBytes > session.limits.maxDynamicRouteUrlBytes) {
+		throw dynamicRouteBudgetExceeded(session, 'dynamic_route_url_bytes');
+	}
+	session.routes.push(...installed);
+	session.dynamicRoutes += installed.length;
+	session.dynamicRouteUrlBytes += installedUrlBytes;
+	for (const outcome of outcomes) {
+		session.metrics.increment('duckdb_http_broker.dynamic_route', 1, { outcome });
+	}
+	return outcomes;
+}
+
+function dynamicRouteBudgetExceeded(
+	session: Session,
+	budget: 'dynamic_route_count' | 'dynamic_route_url_bytes',
+): IcebergHttpBrokerError {
+	session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, { budget });
+	return new IcebergHttpBrokerError(
+		'dynamic_route_budget_exceeded',
+		'The catalog response exceeded the dynamic storage-route budget.',
+	);
+}
+
+function routesOverlap(left: NormalizedRoute, right: NormalizedRoute): boolean {
+	if (left.url.origin !== right.url.origin) return false;
+	if (left.match === 'exact' && right.match === 'exact') {
+		return left.url.pathname === right.url.pathname && left.url.search === right.url.search;
+	}
+	const leftPrefix = left.url.pathname.replace(/\/$/, '');
+	const rightPrefix = right.url.pathname.replace(/\/$/, '');
+	if (left.match === 'exact') {
+		return leftPrefix === rightPrefix || leftPrefix.startsWith(`${rightPrefix}/`);
+	}
+	if (right.match === 'exact') {
+		return rightPrefix === leftPrefix || rightPrefix.startsWith(`${leftPrefix}/`);
+	}
+	return (
+		leftPrefix === rightPrefix ||
+		leftPrefix.startsWith(`${rightPrefix}/`) ||
+		rightPrefix.startsWith(`${leftPrefix}/`)
+	);
+}
+
+function sameRoutePolicy(left: NormalizedRoute, right: NormalizedRoute): boolean {
+	return (
+		setsEqual(left.methods, right.methods) &&
+		recordsEqual(left.headers, right.headers) &&
+		left.prepareHeaders === right.prepareHeaders &&
+		left.observeResponse === right.observeResponse &&
+		setsEqual(left.forwardRequestHeaders, right.forwardRequestHeaders) &&
+		setsEqual(left.discardRequestHeaders, right.discardRequestHeaders)
+	);
+}
+
+function recordsEqual(
+	left: Readonly<Record<string, string>>,
+	right: Readonly<Record<string, string>>,
+): boolean {
+	const entries = Object.entries(left);
+	return (
+		entries.length === Object.keys(right).length &&
+		entries.every(([key, value]) => right[key] === value)
+	);
+}
+
+function setsEqual<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
+	return left.size === right.size && [...left].every((value) => right.has(value));
+}
+
+function dynamicRouteConflict(session: Session): IcebergHttpBrokerError {
+	session.metrics.increment('duckdb_http_broker.dynamic_route', 1, {
+		outcome: 'route_conflict',
+	});
+	return new IcebergHttpBrokerError(
+		'invalid_capability',
+		'The catalog response could not install a bounded storage route.',
+	);
 }
 
 function routeMatches(route: NormalizedRoute, target: URL): boolean {

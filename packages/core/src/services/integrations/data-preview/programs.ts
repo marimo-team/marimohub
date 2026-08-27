@@ -2,7 +2,7 @@ import type { ProjectId, SessionId, UserId } from '../../../ids';
 import type { IntegrationVersionPin, TablePreview } from '../../../ports/integrations';
 import type { RenderOutput } from '../sdk';
 
-export type PreviewRuntimeFeature = 'guarded-http' | 'iceberg-http';
+export type PreviewRuntimeFeature = 'guarded-http' | 'iceberg-http' | 'vended-s3-routes';
 export type PreviewCredentialVars =
 	| Record<string, string>
 	| (() => Promise<Record<string, string> | undefined>);
@@ -63,6 +63,13 @@ export interface DuckDBIcebergRestHttpAccess extends DuckDBHttpTransportPolicy {
 				kind: 'r2-catalog';
 				endpoint: string;
 				bucket: string;
+		  }
+		| {
+				kind: 'vended-s3';
+				endpoint: string;
+				region: string;
+				urlStyle: 'path' | 'vhost';
+				allowedLocations: readonly { bucket: string; prefix: string }[];
 		  };
 }
 

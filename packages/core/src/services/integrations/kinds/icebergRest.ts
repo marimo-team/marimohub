@@ -93,7 +93,7 @@ const icebergRestConfig = z.strictObject({
 	access_delegation: z
 		.enum(['none', 'vended_credentials', 'remote_signing', 'both'])
 		.default('vended_credentials')
-		.describe('Catalog delegation mode. Guarded Run SQL supports none or R2 vended credentials.'),
+		.describe('Catalog delegation mode. Guarded Run SQL supports bounded S3 vended credentials.'),
 	tls: z
 		.strictObject({
 			ca_bundle: z.string().min(1).optional(),
@@ -188,6 +188,8 @@ export const icebergRest = defineIntegration({
 		'auth.credentials_json': { widget: 'password' },
 		...icebergStorageUiHints,
 		'storage.broker_read_locations': { advanced: true },
+		'storage.vended_s3': { group: 'Storage', order: 20, advanced: true },
+		'storage.vended_s3.allowed_locations': { advanced: true },
 		access_delegation: { group: 'Storage', order: 21 },
 		tls: { group: 'TLS', order: 25, advanced: true },
 		'tls.ca_bundle': { widget: 'textarea' },
@@ -247,6 +249,15 @@ export const icebergRest = defineIntegration({
 			throw new ValidationError('SigV4 extra properties conflict with the typed auth fields.');
 		}
 		validateExtraProperties(config.extra_properties, OWNED_PROP_KEYS);
+		if (
+			config.storage.scheme === 'catalog' &&
+			config.storage.vended_s3 !== undefined &&
+			r2CatalogAccess(config) !== undefined
+		) {
+			throw new ValidationError(
+				'R2 Data Catalog derives its storage boundary from the catalog URI; remove storage.vended_s3.',
+			);
+		}
 	},
 
 	migrate(stored, fromVersion) {
@@ -290,7 +301,7 @@ export const icebergRest = defineIntegration({
 				ok: true,
 				programs: {
 					...(duckdbPreviewBlocker(config) === undefined
-						? { duckdbWasm: ['iceberg-http'] as const }
+						? { duckdbWasm: duckdbPreviewFeatures(config) }
 						: {}),
 					python: true,
 				},
@@ -341,7 +352,7 @@ export const icebergRest = defineIntegration({
 						params: [input.limit],
 					},
 					cleanup: [...(secret ? [secret.drop] : []), { text: `DETACH ${sqlIdentifier(alias)}` }],
-					requires: ['iceberg-http'],
+					requires: duckdbPreviewFeatures(input.config),
 					httpAccess: duckdbHttpAccess(input.config),
 				},
 				python,
@@ -735,7 +746,12 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 	const hasEndpoint = typeof storage.endpoint === 'string' && storage.endpoint.length > 0;
 	const storageIsS3 = storage.scheme === 's3';
 	const r2Catalog = r2CatalogAccess(value);
-	const supportedStorage = storageIsS3 || r2Catalog !== undefined;
+	const vendedS3 =
+		value.storage.scheme === 'catalog' && r2Catalog === undefined
+			? value.storage.vended_s3
+			: undefined;
+	const supportedStorage = storageIsS3 || r2Catalog !== undefined || vendedS3 !== undefined;
+	const usesCatalogDelegation = storage.scheme === 'catalog';
 	const endpointOriginOnly = endpoint
 		? endpoint.pathname === '/' && endpoint.search === '' && endpoint.hash === ''
 		: false;
@@ -789,6 +805,13 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 			`${String(authMethod)} authentication is not supported by DuckDB-Wasm preview`,
 		),
 		readinessCheck(
+			'vended-catalog-https',
+			'Use HTTPS for a catalog that vends storage credentials',
+			vendedS3 === undefined || catalogUrl?.protocol === 'https:',
+			'uri',
+			'catalog-vended S3 credentials require an HTTPS catalog URI',
+		),
+		readinessCheck(
 			'system-tls',
 			'Use system TLS without custom certificates',
 			!tls.ca_bundle && !tls.client_certificate,
@@ -825,19 +848,38 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 		),
 		readinessCheck(
 			'no-access-delegation',
-			r2Catalog ? 'Use catalog-vended credentials' : 'Set access delegation to none',
-			r2Catalog
+			usesCatalogDelegation ? 'Use catalog-vended credentials' : 'Set access delegation to none',
+			usesCatalogDelegation
 				? config.access_delegation === 'vended_credentials'
 				: config.access_delegation === 'none',
 			'access_delegation',
 			'catalog access delegation is not supported by DuckDB-Wasm preview',
 		),
+		...(storage.scheme === 'catalog' && r2Catalog === undefined
+			? [
+					readinessCheck(
+						'vended-s3-boundary',
+						'Configure administrator-owned vended S3 bounds',
+						vendedS3 !== undefined && vendedS3.allowed_locations.length > 0,
+						'storage.vended_s3.allowed_locations',
+						'DuckDB-Wasm preview requires administrator-owned storage.vended_s3.allowed_locations for catalog-vended credentials',
+					),
+					readinessCheck(
+						'vended-s3-virtual-host-endpoint',
+						'Use a DNS endpoint for virtual-hosted vended S3',
+						vendedS3?.force_virtual_addressing !== true ||
+							!isIpAddressHost(new URL(vendedS3.endpoint).hostname),
+						'storage.vended_s3.endpoint',
+						'virtual-hosted vended S3 addressing requires a DNS endpoint',
+					),
+				]
+			: []),
 		readinessCheck(
 			's3-storage',
-			'Use explicit S3 storage or a supported R2 Data Catalog',
+			'Use explicit S3 storage, bounded vended S3, or a supported R2 Data Catalog',
 			supportedStorage,
 			'storage',
-			'DuckDB-Wasm preview requires explicit S3 storage or a supported R2 Data Catalog',
+			'DuckDB-Wasm preview requires explicit S3 storage, bounded vended S3, or a supported R2 Data Catalog',
 		),
 		readinessCheck(
 			'r2-route-separation',
@@ -940,6 +982,14 @@ function duckdbPreviewBlocker(config: IcebergRestConfig): string | undefined {
 	return duckdbPreviewReadiness(config).find((check) => !check.ready)?.reason;
 }
 
+function duckdbPreviewFeatures(config: IcebergRestConfig) {
+	return r2CatalogAccess(config) === undefined &&
+		config.storage.scheme === 'catalog' &&
+		config.storage.vended_s3 !== undefined
+		? (['iceberg-http', 'vended-s3-routes'] as const)
+		: (['iceberg-http'] as const);
+}
+
 function duckdbAuthOptions(
 	config: IcebergRestConfig['auth'],
 	params: (string | number | boolean | null)[],
@@ -965,19 +1015,33 @@ function duckdbAuthOptions(
 
 function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
 	if (r2CatalogAccess(config)) return;
-	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
+	const vendedS3 = config.storage.scheme === 'catalog' ? config.storage.vended_s3 : undefined;
+	if (config.storage.scheme !== 's3' && vendedS3 === undefined) {
 		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
 	}
-	const endpoint = new URL(config.storage.endpoint);
+	const endpointValue =
+		config.storage.scheme === 's3' ? config.storage.endpoint : vendedS3?.endpoint;
+	if (!endpointValue) {
+		throw new ValidationError('DuckDB-Wasm requires an explicit S3 endpoint.');
+	}
+	const endpoint = new URL(endpointValue);
 	const name = sqlIdentifier(`marimohub_s3_${suffix}`);
-	const urlStyle = config.storage.force_virtual_addressing ? 'vhost' : 'path';
+	const urlStyle =
+		config.storage.scheme === 's3'
+			? config.storage.force_virtual_addressing
+				? 'vhost'
+				: 'path'
+			: vendedS3?.force_virtual_addressing
+				? 'vhost'
+				: 'path';
+	const region = config.storage.scheme === 's3' ? config.storage.region : vendedS3?.region;
 	return {
 		create: {
 			text:
 				`CREATE TEMPORARY SECRET ${name} (` +
 				"TYPE S3, KEY_ID 'marimohub-parent-broker', SECRET 'marimohub-parent-broker', " +
 				`REGION ?, ENDPOINT ?, URL_STYLE '${urlStyle}', USE_SSL ?)`,
-			params: [config.storage.region ?? 'us-east-1', endpoint.host, endpoint.protocol === 'https:'],
+			params: [region ?? 'us-east-1', endpoint.host, endpoint.protocol === 'https:'],
 		},
 		drop: { text: `DROP SECRET ${name}` },
 	};
@@ -999,6 +1063,40 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 				kind: 'r2-catalog',
 				endpoint: r2Catalog.endpoint,
 				bucket: r2Catalog.bucket,
+			},
+		};
+	}
+	if (config.storage.scheme === 'catalog' && config.storage.vended_s3 !== undefined) {
+		const storage = config.storage.vended_s3;
+		return {
+			kind: 'iceberg-rest',
+			...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),
+			catalog: {
+				url: config.uri,
+				...(config.auth.method === 'bearer_token'
+					? { authorization: `Bearer ${config.auth.token}` }
+					: {}),
+				...(config.auth.method === 'oauth2_client_credentials'
+					? {
+							oauth2: {
+								tokenEndpoint: config.auth.token_endpoint,
+								clientId: config.auth.client_id,
+								clientSecret: config.auth.client_secret,
+								scope: config.auth.scope,
+								refreshMarginSeconds: config.auth.refresh_margin_seconds,
+								...(config.auth.expires_in_seconds
+									? { fallbackExpiresInSeconds: config.auth.expires_in_seconds }
+									: {}),
+							},
+						}
+					: {}),
+			},
+			storage: {
+				kind: 'vended-s3',
+				endpoint: storage.endpoint,
+				region: storage.region,
+				urlStyle: storage.force_virtual_addressing ? 'vhost' : 'path',
+				allowedLocations: storage.allowed_locations,
 			},
 		};
 	}

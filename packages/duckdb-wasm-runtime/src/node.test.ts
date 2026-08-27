@@ -78,6 +78,7 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 			unavailable: {
 				'guarded-http': expect.stringMatching(/configured parent broker session/i),
 				'iceberg-http': expect.stringMatching(/configured parent broker session/i),
+				'vended-s3-routes': expect.stringMatching(/configured parent broker session/i),
 			},
 		});
 		expect(Object.isFrozen(capabilities)).toBe(true);
@@ -103,7 +104,7 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(runtime.features).toEqual([]);
 		await runtime.initialize({ memoryLimitMb: 128 });
 
-		expect(runtime.features).toEqual(['guarded-http', 'iceberg-http']);
+		expect(runtime.features).toEqual(['guarded-http', 'iceberg-http', 'vended-s3-routes']);
 		const beforeExecute = Date.now();
 		await expect(
 			runtime.execute({
@@ -141,6 +142,30 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		expect(expiresAtMs).toBeLessThanOrEqual(Date.now() + 125_000);
 		expect(fetch).not.toHaveBeenCalled();
 		expect(close).toHaveBeenCalledOnce();
+	}, 30_000);
+
+	it('advertises bounded vended routes whenever guarded HTTP is enabled', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const createSession: DuckDBHttpSessionFactory = () => ({
+			fetch: vi.fn(),
+			close: vi.fn(),
+		});
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', createSession)(),
+			onTestFinished,
+		);
+		await runtime.initialize({ memoryLimitMb: 64 });
+
+		expect(runtime.features).toEqual(['guarded-http', 'iceberg-http', 'vended-s3-routes']);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: 'SELECT 1 AS value' },
+				requires: ['vended-s3-routes'],
+			}),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
 	}, 30_000);
 
 	it('builds virtual-hosted S3 requests with the packaged HTTP extension', async ({

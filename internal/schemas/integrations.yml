@@ -3039,7 +3039,7 @@ components:
           $ref: '#/components/schemas/IcebergRuntime'
         access_delegation:
           default: vended_credentials
-          description: Catalog delegation mode. Guarded Run SQL supports none or R2 vended
+          description: Catalog delegation mode. Guarded Run SQL supports bounded S3 vended
             credentials.
           type: string
           enum:
@@ -3279,7 +3279,7 @@ components:
           $ref: '#/components/schemas/IcebergRuntimeStored'
         access_delegation:
           default: vended_credentials
-          description: Catalog delegation mode. Guarded Run SQL supports none or R2 vended
+          description: Catalog delegation mode. Guarded Run SQL supports bounded S3 vended
             credentials.
           type: string
           enum:
@@ -6040,6 +6040,40 @@ components:
             scheme:
               type: string
               const: catalog
+            vended_s3:
+              type: object
+              properties:
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
+                  format: uri
+                  x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and
+                    no port 0
+                region:
+                  default: us-east-1
+                  type: string
+                  minLength: 1
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                allowed_locations:
+                  minItems: 1
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      bucket:
+                        type: string
+                      prefix:
+                        type: string
+                    required:
+                      - bucket
+                      - prefix
+                    additionalProperties: false
+              required:
+                - endpoint
+                - allowed_locations
+              additionalProperties: false
           required:
             - scheme
           additionalProperties: false
@@ -6856,6 +6890,42 @@ components:
             scheme:
               type: string
               const: catalog
+            vended_s3:
+              type: object
+              properties:
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
+                  format: uri
+                  x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and
+                    no port 0
+                region:
+                  default: us-east-1
+                  type: string
+                  minLength: 1
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                allowed_locations:
+                  minItems: 1
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      bucket:
+                        type: string
+                      prefix:
+                        type: string
+                    required:
+                      - bucket
+                      - prefix
+                    additionalProperties: false
+              required:
+                - endpoint
+                - region
+                - force_virtual_addressing
+                - allowed_locations
+              additionalProperties: false
           required:
             - scheme
           additionalProperties: false

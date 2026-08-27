@@ -21,11 +21,29 @@ const LIVE_ENVIRONMENT_KEYS = [
 	'MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY',
 ] as const;
 
+const VENDED_LIVE_ENVIRONMENT_KEYS = [
+	'MARIMOHUB_TEST_ICEBERG_VENDED_URI',
+	'MARIMOHUB_TEST_ICEBERG_VENDED_S3_ENDPOINT',
+	'MARIMOHUB_TEST_ICEBERG_VENDED_BUCKET',
+	'MARIMOHUB_TEST_ICEBERG_VENDED_PREFIX',
+] as const;
+
 interface LiveBrokerEnvironment {
 	catalogUrl: string;
 	s3Endpoint: string;
 	s3AccessKey: string;
 	s3SecretKey: string;
+}
+
+interface VendedLiveEnvironment {
+	catalogUrl: string;
+	s3Endpoint: string;
+	bucket: string;
+	prefix: string;
+	token?: string;
+	warehouse?: string;
+	namespace: string;
+	table: string;
 }
 
 function readLiveBrokerEnvironment(
@@ -61,9 +79,55 @@ function captureLiveBrokerEnvironment(environment: Record<string, string | undef
 	}
 }
 
+function readVendedLiveEnvironment(
+	environment: Record<string, string | undefined>,
+): VendedLiveEnvironment | undefined {
+	const configured = VENDED_LIVE_ENVIRONMENT_KEYS.some((key) => environment[key] !== undefined);
+	if (!configured) return undefined;
+
+	const missing = VENDED_LIVE_ENVIRONMENT_KEYS.filter((key) => !environment[key]?.trim());
+	if (missing.length > 0) {
+		throw new Error(
+			'Vended S3 live tests are only partially configured. ' +
+				`Set all required live-test environment variables. Missing: ${missing.join(', ')}`,
+		);
+	}
+
+	return {
+		catalogUrl: environment.MARIMOHUB_TEST_ICEBERG_VENDED_URI!,
+		s3Endpoint: environment.MARIMOHUB_TEST_ICEBERG_VENDED_S3_ENDPOINT!,
+		bucket: environment.MARIMOHUB_TEST_ICEBERG_VENDED_BUCKET!,
+		prefix: environment.MARIMOHUB_TEST_ICEBERG_VENDED_PREFIX!,
+		...(environment.MARIMOHUB_TEST_ICEBERG_VENDED_TOKEN?.trim()
+			? { token: environment.MARIMOHUB_TEST_ICEBERG_VENDED_TOKEN }
+			: {}),
+		...(environment.MARIMOHUB_TEST_ICEBERG_VENDED_WAREHOUSE?.trim()
+			? { warehouse: environment.MARIMOHUB_TEST_ICEBERG_VENDED_WAREHOUSE }
+			: {}),
+		namespace: environment.MARIMOHUB_TEST_ICEBERG_VENDED_NAMESPACE?.trim() || 'demo',
+		table: environment.MARIMOHUB_TEST_ICEBERG_VENDED_TABLE?.trim() || 'events',
+	};
+}
+
+function captureVendedLiveEnvironment(environment: Record<string, string | undefined>): {
+	environment?: VendedLiveEnvironment;
+	error?: Error;
+} {
+	try {
+		return { environment: readVendedLiveEnvironment(environment) };
+	} catch (error) {
+		return { error: error instanceof Error ? error : new Error(String(error)) };
+	}
+}
+
 const liveEnvironmentResult = captureLiveBrokerEnvironment(process.env);
 const describeLive =
 	liveEnvironmentResult.environment || liveEnvironmentResult.error ? describe : describe.skip;
+const vendedLiveEnvironmentResult = captureVendedLiveEnvironment(process.env);
+const describeVendedLive =
+	vendedLiveEnvironmentResult.environment || vendedLiveEnvironmentResult.error
+		? describe
+		: describe.skip;
 
 const integration = {
 	id: createIntegrationId(),
@@ -76,6 +140,13 @@ const s3Integration = {
 	id: createIntegrationId(),
 	name: 'live_s3',
 	kind: 's3',
+	version: 1,
+};
+
+const vendedIntegration = {
+	id: createIntegrationId(),
+	name: 'live_vended_catalog',
+	kind: 'iceberg_rest',
 	version: 1,
 };
 
@@ -106,6 +177,26 @@ describe('readLiveBrokerEnvironment', () => {
 
 		expect(result.environment).toBeUndefined();
 		expect(result.error?.message).toContain('MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY');
+	});
+});
+
+describe('readVendedLiveEnvironment', () => {
+	it('does not enable the vended live test when none of its variables are set', () => {
+		expect(readVendedLiveEnvironment({})).toBeUndefined();
+	});
+
+	it('reports incomplete vended live-test configuration', () => {
+		expect(() =>
+			readVendedLiveEnvironment({
+				MARIMOHUB_TEST_ICEBERG_VENDED_URI: 'https://catalog.example.test',
+			}),
+		).toThrow(
+			'Vended S3 live tests are only partially configured. ' +
+				'Set all required live-test environment variables. Missing: ' +
+				'MARIMOHUB_TEST_ICEBERG_VENDED_S3_ENDPOINT, ' +
+				'MARIMOHUB_TEST_ICEBERG_VENDED_BUCKET, ' +
+				'MARIMOHUB_TEST_ICEBERG_VENDED_PREFIX',
+		);
 	});
 });
 
@@ -259,6 +350,69 @@ describeLive('guarded DuckDB HTTP broker live', () => {
 				url.pathname.startsWith('/warehouse/demo/events') ||
 					url.pathname.startsWith('/warehouse/broker-fixture'),
 			).toBe(true);
+		}
+	}, 45_000);
+});
+
+describeVendedLive('guarded vended S3 broker live', () => {
+	it('reads a real table without static S3 credentials in the query plan', async () => {
+		if (vendedLiveEnvironmentResult.error) throw vendedLiveEnvironmentResult.error;
+		const liveEnvironment = vendedLiveEnvironmentResult.environment;
+		if (!liveEnvironment) throw new Error('Expected vended live-test configuration.');
+		const config = icebergRest.configSchema.parse({
+			uri: liveEnvironment.catalogUrl,
+			...(liveEnvironment.warehouse ? { warehouse: liveEnvironment.warehouse } : {}),
+			auth: liveEnvironment.token
+				? { method: 'bearer_token', token: liveEnvironment.token }
+				: { method: 'none' },
+			access_delegation: 'vended_credentials',
+			storage: {
+				scheme: 'catalog',
+				vended_s3: {
+					endpoint: liveEnvironment.s3Endpoint,
+					allowed_locations: [{ bucket: liveEnvironment.bucket, prefix: liveEnvironment.prefix }],
+				},
+			},
+		});
+		const plan = icebergRest.query?.plan({ config, integration: vendedIntegration });
+		if (plan?.httpAccess?.kind !== 'iceberg-rest') {
+			throw new Error('Expected a guarded vended S3 query plan.');
+		}
+		expect(plan.httpAccess.storage).toEqual({
+			kind: 'vended-s3',
+			endpoint: liveEnvironment.s3Endpoint,
+			region: 'us-east-1',
+			urlStyle: 'path',
+			allowedLocations: [
+				{
+					bucket: liveEnvironment.bucket,
+					prefix: liveEnvironment.prefix.replaceAll(/^\/+|\/+$/g, ''),
+				},
+			],
+		});
+		expect(plan.httpAccess.storage).not.toHaveProperty('credentials');
+
+		const httpSessionFactory = createDuckDBHttpSessionFactory({ allowPrivate: true });
+		const executor = await createNodeDataQueryExecutorFactory({
+			memoryLimitMb: 128,
+			httpSessionFactory,
+		}).create(new AbortController().signal);
+		try {
+			const table = [vendedIntegration.name, liveEnvironment.namespace, liveEnvironment.table]
+				.map((part) => `"${part.replaceAll('"', '""')}"`)
+				.join('.');
+			const result = await executor.execute(
+				{
+					sql: `SELECT count(*) AS row_count FROM ${table}`,
+					connection: { files: [], vars: {}, integration: vendedIntegration, plan },
+					accessMode: 'read-only',
+					limits: { maxRows: 20, maxBytes: 1_048_576, deadlineMs: 20_000 },
+				},
+				new AbortController().signal,
+			);
+			expect(Number(result.rows[0]?.[0])).toBeGreaterThan(0);
+		} finally {
+			executor.terminate();
 		}
 	}, 45_000);
 });

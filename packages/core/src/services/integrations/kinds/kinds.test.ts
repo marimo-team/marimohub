@@ -845,6 +845,216 @@ describe('kind renders (golden)', () => {
 		expect(plan?.httpAccess).toEqual(programs?.duckdbWasm?.httpAccess);
 	});
 
+	it.each([
+		['Polaris', { method: 'bearer_token', token: 'catalog-token' } as const],
+		['Lakekeeper', { method: 'none' } as const],
+	])('iceberg_rest plans bounded vended S3 for %s-style catalogs', (_provider, auth) => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/iceberg',
+			warehouse: 'production',
+			auth,
+			storage: {
+				scheme: 'catalog',
+				vended_s3: {
+					endpoint: 'https://s3.us-east-1.amazonaws.com',
+					region: 'us-east-1',
+					allowed_locations: [{ bucket: 'warehouse', prefix: '/production/' }],
+				},
+			},
+			access_delegation: 'vended_credentials',
+		});
+		const checks = icebergRest.query?.readiness?.(config) ?? [];
+		const programs = icebergPreviewPrograms(config);
+		const access = programs?.duckdbWasm?.httpAccess;
+
+		expect(checks.every((check) => check.ready)).toBe(true);
+		for (const id of [
+			's3-endpoint',
+			's3-endpoint-origin',
+			's3-basic-options',
+			's3-credentials',
+			's3-read-locations',
+		]) {
+			expect(checks.map((check) => check.id)).not.toContain(id);
+		}
+		expect(programs?.duckdbWasm?.requires).toEqual(['iceberg-http', 'vended-s3-routes']);
+		expect(programs?.duckdbWasm?.setup[2]).toMatchObject({
+			text: expect.stringContaining("KEY_ID 'marimohub-parent-broker'"),
+			params: ['us-east-1', 's3.us-east-1.amazonaws.com', true],
+		});
+		expect(access?.kind).toBe('iceberg-rest');
+		expect(access?.kind === 'iceberg-rest' ? access.storage : undefined).toEqual({
+			kind: 'vended-s3',
+			endpoint: 'https://s3.us-east-1.amazonaws.com',
+			region: 'us-east-1',
+			urlStyle: 'path',
+			allowedLocations: [{ bucket: 'warehouse', prefix: 'production' }],
+		});
+	});
+
+	it('iceberg_rest keeps the insecure OAuth transport override for bounded vended S3', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/iceberg',
+			allow_insecure_transport: true,
+			auth: {
+				method: 'oauth2_client_credentials',
+				token_endpoint: 'http://identity.example.com/oauth/token',
+				client_id: 'client-id',
+				client_secret: 'client-secret',
+			},
+			storage: {
+				scheme: 'catalog',
+				vended_s3: {
+					endpoint: 'https://objects.example.com',
+					allowed_locations: [{ bucket: 'warehouse', prefix: 'production' }],
+				},
+			},
+			access_delegation: 'vended_credentials',
+		});
+		const programs = icebergPreviewPrograms(config);
+
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		expect(programs?.duckdbWasm?.httpAccess).toMatchObject({
+			kind: 'iceberg-rest',
+			allowInsecureTransport: true,
+			catalog: {
+				oauth2: { tokenEndpoint: 'http://identity.example.com/oauth/token' },
+			},
+			storage: { kind: 'vended-s3' },
+		});
+	});
+
+	it('iceberg_rest accepts overlapping and bucket-root vended S3 bounds', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/iceberg',
+			auth: { method: 'none' },
+			storage: {
+				scheme: 'catalog',
+				vended_s3: {
+					endpoint: 'https://objects.example.com',
+					allowed_locations: [
+						{ bucket: 'warehouse', prefix: '' },
+						{ bucket: 'warehouse', prefix: '/production/' },
+						{ bucket: 'warehouse', prefix: 'production/tables' },
+					],
+				},
+			},
+		});
+
+		expect(config.storage).toMatchObject({
+			vended_s3: {
+				allowed_locations: [
+					{ bucket: 'warehouse', prefix: '' },
+					{ bucket: 'warehouse', prefix: 'production' },
+					{ bucket: 'warehouse', prefix: 'production/tables' },
+				],
+			},
+		});
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+	});
+
+	it.each([
+		['missing storage bounds', { endpoint: 'https://objects.example.com', allowed_locations: [] }],
+		[
+			'an endpoint path',
+			{
+				endpoint: 'https://objects.example.com/storage',
+				allowed_locations: [{ bucket: 'warehouse', prefix: '' }],
+			},
+		],
+		[
+			'an insecure endpoint',
+			{
+				endpoint: 'http://objects.example.com',
+				allowed_locations: [{ bucket: 'warehouse', prefix: '' }],
+			},
+		],
+		[
+			'a malformed bucket',
+			{
+				endpoint: 'https://objects.example.com',
+				allowed_locations: [{ bucket: 'Warehouse_name', prefix: '' }],
+			},
+		],
+		[
+			'an encoded separator',
+			{
+				endpoint: 'https://objects.example.com',
+				allowed_locations: [{ bucket: 'warehouse', prefix: 'safe%2Fprivate' }],
+			},
+		],
+		[
+			'a backslash',
+			{
+				endpoint: 'https://objects.example.com',
+				allowed_locations: [{ bucket: 'warehouse', prefix: 'safe\\private' }],
+			},
+		],
+		[
+			'a dot segment',
+			{
+				endpoint: 'https://objects.example.com',
+				allowed_locations: [{ bucket: 'warehouse', prefix: 'safe/../private' }],
+			},
+		],
+		[
+			'an encoded dot segment',
+			{
+				endpoint: 'https://objects.example.com',
+				allowed_locations: [{ bucket: 'warehouse', prefix: 'safe/%2e%2e/private' }],
+			},
+		],
+	])('iceberg_rest rejects vended S3 configuration with %s', (_case, vendedS3) => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				uri: 'https://catalog.example.com/iceberg',
+				auth: { method: 'none' },
+				storage: { scheme: 'catalog', vended_s3: vendedS3 },
+			}).success,
+		).toBe(false);
+	});
+
+	it.each(['none', 'remote_signing', 'both'] as const)(
+		'iceberg_rest blocks bounded vended S3 with %s delegation',
+		(accessDelegation) => {
+			const config = icebergRest.configSchema.parse({
+				uri: 'https://catalog.example.com/iceberg',
+				auth: { method: 'none' },
+				storage: {
+					scheme: 'catalog',
+					vended_s3: {
+						endpoint: 'https://objects.example.com',
+						allowed_locations: [{ bucket: 'warehouse', prefix: 'production' }],
+					},
+				},
+				access_delegation: accessDelegation,
+			});
+
+			expect(icebergRest.query?.readiness?.(config)).toContainEqual(
+				expect.objectContaining({ id: 'no-access-delegation', ready: false }),
+			);
+			expect(icebergRest.preview?.available(config)).toEqual({
+				ok: true,
+				programs: { python: true },
+			});
+		},
+	);
+
+	it('iceberg_rest reports a missing vended S3 boundary before generic S3 readiness', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/iceberg',
+			auth: { method: 'none' },
+			storage: { scheme: 'catalog' },
+		});
+		const checks = icebergRest.query?.readiness?.(config) ?? [];
+
+		expect(checks.find((check) => !check.ready)).toMatchObject({
+			id: 'vended-s3-boundary',
+			field: 'storage.vended_s3.allowed_locations',
+		});
+		expect(checks.map((check) => check.id)).not.toContain('s3-credentials');
+	});
+
 	it('iceberg_rest supports R2 Data Catalog with a bearer token and vended credentials', () => {
 		const uri = 'https://catalog.cloudflarestorage.com/account-id/warehouse';
 		const config = icebergRest.configSchema.parse({

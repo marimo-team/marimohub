@@ -29,8 +29,11 @@ export {
 	type IcebergHttpBrokerErrorCode,
 	type IcebergHttpBrokerMethod,
 	type IcebergHttpBrokerRequest,
+	type IcebergHttpBrokerObservedResponse,
 	type IcebergHttpBrokerResponse,
+	type IcebergHttpBrokerResponseObserver,
 	type IcebergHttpBrokerRoute,
+	type IcebergHttpBrokerRouteInstaller,
 	type IcebergHttpBrokerTransport,
 	type IcebergHttpBrokerTransportRequest,
 } from './icebergHttpBroker';
@@ -65,11 +68,12 @@ const CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
 	unavailable: Object.freeze({
 		'guarded-http': ICEBERG_HTTP_UNAVAILABLE,
 		'iceberg-http': ICEBERG_HTTP_UNAVAILABLE,
+		'vended-s3-routes': ICEBERG_HTTP_UNAVAILABLE,
 	}),
 });
 
 const HTTP_CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
-	features: Object.freeze(['guarded-http', 'iceberg-http'] as const),
+	features: Object.freeze(['guarded-http', 'iceberg-http', 'vended-s3-routes'] as const),
 	unavailable: Object.freeze({}),
 });
 

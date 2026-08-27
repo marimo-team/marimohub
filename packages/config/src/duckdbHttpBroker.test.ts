@@ -18,6 +18,10 @@ import {
 	signS3Request,
 } from './duckdbHttpBroker';
 import type { OAuthTokenExchange, OAuthTokenExchangeRequest } from './duckdbHttpBroker';
+import {
+	VENDED_ICEBERG_LOAD_TABLE_BASE64,
+	VENDED_ICEBERG_OBJECTS_BASE64,
+} from './duckdbHttpBroker.fixture';
 
 const NOW = Date.parse('2026-08-13T12:00:00Z');
 const OAUTH_TRANSPORT_ERROR =
@@ -70,6 +74,21 @@ const R2_ACCESS = {
 		kind: 'r2-catalog',
 		endpoint: 'https://account-id.r2.cloudflarestorage.com',
 		bucket: 'warehouse',
+	},
+} as const satisfies DuckDBHttpAccess;
+
+const VENDED_ACCESS = {
+	kind: 'iceberg-rest',
+	catalog: {
+		url: 'https://catalog.example.test/iceberg',
+		authorization: 'Bearer catalog-secret',
+	},
+	storage: {
+		kind: 'vended-s3',
+		endpoint: 'https://objects.example.test',
+		region: 'us-east-1',
+		urlStyle: 'path',
+		allowedLocations: [{ bucket: 'warehouse', prefix: 'production' }],
 	},
 } as const satisfies DuckDBHttpAccess;
 
@@ -1004,6 +1023,433 @@ describe('createDuckDBHttpSessionFactory', () => {
 		expect(calls).toHaveLength(3);
 	});
 
+	it('installs bounded path-style and virtual-hosted routes before returning LoadTable', async () => {
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const increment = vi.fn();
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+			calls.push(request);
+			if (new URL(request.url).pathname.includes('/namespaces/')) {
+				return {
+					status: 200,
+					headers: {
+						'content-type': 'application/json; charset=utf-8',
+					} as Record<string, string>,
+					body: new TextEncoder().encode(
+						JSON.stringify({
+							metadata: {},
+							'storage-credentials': [
+								{
+									prefix: 's3://warehouse/production/table',
+									config: {
+										's3.access-key-id': 'vended-access-key',
+										's3.secret-access-key': 'vended-secret-key',
+										's3.session-token': 'vended-session-token',
+									},
+								},
+							],
+						}),
+					),
+				};
+			}
+			return {
+				status: 200,
+				headers: {} as Record<string, string>,
+				body: new Uint8Array([1]),
+			};
+		});
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			metrics: { increment, gauge: vi.fn() },
+			now: () => NOW,
+		})(VENDED_ACCESS, { expiresAtMs: NOW + 60_000 });
+
+		await session.fetch({
+			url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+			method: 'GET',
+			headers: { authorization: 'Bearer marimohub-parent-broker' },
+		});
+		const signingHeaders = {
+			authorization:
+				'AWS4-HMAC-SHA256 Credential=vended-access-key/20260814/us-east-1/s3/aws4_request',
+			'x-amz-content-sha256': 'payload-hash',
+			'x-amz-date': '20260814T120000Z',
+			'x-amz-security-token': 'vended-session-token',
+		};
+		await session.fetch({
+			url: 'https://objects.example.test/warehouse/production/table/metadata.json',
+			method: 'GET',
+			headers: signingHeaders,
+		});
+		await session.fetch({
+			url: 'https://warehouse.objects.example.test/production/table/data.parquet',
+			method: 'HEAD',
+			headers: signingHeaders,
+		});
+
+		expect(calls[0].headers).toEqual({
+			authorization: 'Bearer catalog-secret',
+			'x-iceberg-access-delegation': 'vended-credentials',
+		});
+		expect(calls[1].headers).toEqual(signingHeaders);
+		expect(calls[2].headers).toEqual(signingHeaders);
+		expect(increment).toHaveBeenCalledWith('duckdb_http_broker.dynamic_route', 1, {
+			outcome: 'installed',
+		});
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/production/sibling/data.parquet',
+				method: 'GET',
+				headers: signingHeaders,
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/sibling/production/table/data.parquet',
+				method: 'GET',
+				headers: signingHeaders,
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+	});
+
+	it.each([
+		['a sibling prefix', 's3://warehouse/staging/table'],
+		['a sibling bucket', 's3://sensitive-bucket/production/table'],
+	])('rejects a credential prefix outside the configured bound: %s', async (_case, prefix) => {
+		const increment = vi.fn();
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: { 'content-type': 'application/json' },
+			body: new TextEncoder().encode(
+				JSON.stringify({
+					metadata: {},
+					'storage-credentials': [{ prefix, config: { 's3.access-key-id': 'secret' } }],
+				}),
+			),
+		}));
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			metrics: { increment, gauge: vi.fn() },
+			now: () => NOW,
+		})(VENDED_ACCESS, { expiresAtMs: NOW + 60_000 });
+
+		await expect(
+			session.fetch({
+				url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		expect(increment).toHaveBeenCalledWith('duckdb_http_broker.dynamic_route', 1, {
+			outcome: 'outside_bound',
+		});
+	});
+
+	it.each([
+		['malformed JSON', 'application/json', new TextEncoder().encode('{')],
+		[
+			'a non-JSON body',
+			'text/plain',
+			new TextEncoder().encode(
+				JSON.stringify({
+					'storage-credentials': [{ prefix: 's3://warehouse/production/table', config: {} }],
+				}),
+			),
+		],
+		[
+			'an oversized credential list',
+			'application/json',
+			new TextEncoder().encode(
+				JSON.stringify({
+					'storage-credentials': Array.from({ length: 33 }, () => ({
+						prefix: 's3://warehouse/production/table',
+						config: {},
+					})),
+				}),
+			),
+		],
+	])('does not install a route from %s', async (_case, contentType, body) => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: { 'content-type': contentType },
+			body,
+		}));
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(VENDED_ACCESS, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await session.fetch({
+			url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+			method: 'GET',
+		});
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/production/table/data.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		expect(transport).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		's3://warehouse/production%2Fprivate',
+		's3://warehouse/production\\private',
+		's3://warehouse/production/../private',
+		's3://warehouse/production/%2e%2e/private',
+		's3://Warehouse/production/table',
+		's3://user@warehouse/production/table',
+		's3://warehouse/production/table?endpoint=evil',
+	])('does not install a route from malformed S3 prefix %s', async (prefix) => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: { 'content-type': 'application/json' },
+			body: new TextEncoder().encode(
+				JSON.stringify({
+					metadata: {},
+					'storage-credentials': [{ prefix, config: {} }],
+				}),
+			),
+		}));
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(VENDED_ACCESS, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await session.fetch({
+			url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+			method: 'GET',
+		});
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/production/table/data.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+	});
+
+	it('permits a bucket-root credential only inside a bucket-root administrator bound', async () => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => ({
+			status: 200,
+			headers: { 'content-type': 'application/json' },
+			body: new TextEncoder().encode(
+				JSON.stringify(
+					new URL(request.url).pathname.includes('/namespaces/')
+						? {
+								metadata: {},
+								'storage-credentials': [{ prefix: 's3://warehouse/', config: {} }],
+							}
+						: {},
+				),
+			),
+		}));
+		const rootAccess = {
+			...VENDED_ACCESS,
+			storage: {
+				...VENDED_ACCESS.storage,
+				allowedLocations: [{ bucket: 'warehouse', prefix: '' }],
+			},
+		} as const satisfies DuckDBHttpAccess;
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(rootAccess, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await session.fetch({
+			url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+			method: 'GET',
+		});
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/any/path/data.parquet',
+				method: 'GET',
+			}),
+		).resolves.toMatchObject({ status: 200 });
+	});
+
+	it('rejects a dynamic storage route that overlaps the catalog route', async () => {
+		const increment = vi.fn();
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: { 'content-type': 'application/json' },
+			body: new TextEncoder().encode(
+				JSON.stringify({
+					metadata: {},
+					'storage-credentials': [{ prefix: 's3://iceberg/production', config: {} }],
+				}),
+			),
+		}));
+		const overlapping = {
+			...VENDED_ACCESS,
+			storage: {
+				...VENDED_ACCESS.storage,
+				endpoint: 'https://catalog.example.test',
+				allowedLocations: [{ bucket: 'iceberg', prefix: 'production' }],
+			},
+		} as const satisfies DuckDBHttpAccess;
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			metrics: { increment, gauge: vi.fn() },
+			now: () => NOW,
+		})(overlapping, { expiresAtMs: NOW + 60_000 });
+
+		await expect(
+			session.fetch({
+				url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'invalid_capability' });
+		expect(increment).toHaveBeenCalledWith('duckdb_http_broker.dynamic_route', 1, {
+			outcome: 'route_conflict',
+		});
+	});
+
+	it('treats repeated credentials endpoint routes as idempotent duplicates', async () => {
+		const increment = vi.fn();
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: { 'content-type': 'application/json' },
+			body: new TextEncoder().encode(
+				JSON.stringify({
+					'storage-credentials': [{ prefix: 's3://warehouse/production/table', config: {} }],
+				}),
+			),
+		}));
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			metrics: { increment, gauge: vi.fn() },
+			now: () => NOW,
+		})(VENDED_ACCESS, { expiresAtMs: NOW + 60_000 });
+		const request = {
+			url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events/credentials',
+			method: 'GET' as const,
+		};
+
+		await session.fetch(request);
+		await session.fetch(request);
+
+		expect(increment).toHaveBeenCalledWith('duckdb_http_broker.dynamic_route', 1, {
+			outcome: 'duplicate',
+		});
+	});
+
+	it('rejects non-S3 credentials and does not inspect the config response', async () => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+			const path = new URL(request.url).pathname;
+			return {
+				status: 200,
+				headers: { 'content-type': 'application/json' },
+				body: new TextEncoder().encode(
+					JSON.stringify(
+						path.endsWith('/v1/config')
+							? {
+									'storage-credentials': [
+										{ prefix: 's3://warehouse/production/table', config: {} },
+									],
+								}
+							: {
+									metadata: {},
+									'storage-credentials': [
+										{ prefix: 'gs://warehouse/production/table', config: {} },
+									],
+								},
+					),
+				),
+			};
+		});
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(VENDED_ACCESS, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await session.fetch({
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET',
+		});
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/production/table/data.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+	});
+
+	it('installs independent routes from concurrent credential responses and removes them on close', async () => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+			const url = new URL(request.url);
+			const table = url.pathname.endsWith('/events') ? 'events' : 'users';
+			return {
+				status: 200,
+				headers: { 'content-type': 'application/json' },
+				body: new TextEncoder().encode(
+					JSON.stringify({
+						metadata: {},
+						'storage-credentials': [{ prefix: `s3://warehouse/production/${table}`, config: {} }],
+					}),
+				),
+			};
+		});
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(VENDED_ACCESS, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await Promise.all(
+			['events', 'users'].map((table) =>
+				session.fetch({
+					url: `https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/${table}`,
+					method: 'GET',
+				}),
+			),
+		);
+		await session.fetch({
+			url: 'https://objects.example.test/warehouse/production/events/data.parquet',
+			method: 'GET',
+		});
+		await session.fetch({
+			url: 'https://objects.example.test/warehouse/production/users/data.parquet',
+			method: 'GET',
+		});
+		session.close();
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/production/events/data.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'capability_unknown' });
+	});
+
+	it('does not install a route from a catalog redirect to another origin', async () => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 302,
+			headers: {
+				location: 'https://other-catalog.example.test/v1/namespaces/demo/tables/events',
+				'content-type': 'application/json',
+			},
+			body: new TextEncoder().encode(
+				JSON.stringify({
+					'storage-credentials': [{ prefix: 's3://warehouse/production/table', config: {} }],
+				}),
+			),
+		}));
+		const session = createDuckDBHttpSessionFactory({ transport, now: () => NOW })(VENDED_ACCESS, {
+			expiresAtMs: NOW + 60_000,
+		});
+
+		await expect(
+			session.fetch({
+				url: 'https://catalog.example.test/iceberg/v1/production/namespaces/demo/tables/events',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/production/table/data.parquet',
+				method: 'GET',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		expect(transport).toHaveBeenCalledOnce();
+	});
+
 	it('injects delegation into an actual DuckDB-Wasm catalog request', async () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
@@ -1058,6 +1504,140 @@ describe('createDuckDBHttpSessionFactory', () => {
 			authorization: 'Bearer catalog-secret',
 			'x-iceberg-access-delegation': 'vended-credentials',
 		});
+	}, 30_000);
+
+	it('uses LoadTable credentials for packaged Iceberg storage requests', async () => {
+		const loadTable = JSON.parse(
+			Buffer.from(VENDED_ICEBERG_LOAD_TABLE_BASE64, 'base64').toString('utf8'),
+		) as Record<string, unknown>;
+		const vendedConfig = {
+			's3.access-key-id': 'VendedAccessKey',
+			's3.secret-access-key': 'fixture-secret-not-for-assertion',
+			's3.session-token': 'vended-session-token',
+			's3.region': 'us-east-1',
+			's3.endpoint': 'https://objects.example.test',
+			's3.path-style-access': 'true',
+		};
+		loadTable['storage-credentials'] = [
+			{ prefix: 's3://warehouse/demo/events/metadata', config: vendedConfig },
+			{ prefix: 's3://warehouse/demo/events/data', config: vendedConfig },
+		];
+		const objects = Object.fromEntries(
+			Object.entries(VENDED_ICEBERG_OBJECTS_BASE64).map(([path, base64]) => [
+				path,
+				new Uint8Array(Buffer.from(base64, 'base64')),
+			]),
+		);
+		const calls: IcebergHttpBrokerTransportRequest[] = [];
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+			calls.push(request);
+			const url = new URL(request.url);
+			if (url.pathname.endsWith('/v1/config')) {
+				return {
+					status: 200,
+					headers: { 'content-type': 'application/json' } as Record<string, string>,
+					body: new TextEncoder().encode(JSON.stringify({ defaults: {}, overrides: {} })),
+				};
+			}
+			if (url.pathname.endsWith('/namespaces/demo')) {
+				return {
+					status: 200,
+					headers: { 'content-type': 'application/json' } as Record<string, string>,
+					body: new TextEncoder().encode(JSON.stringify({ properties: {} })),
+				};
+			}
+			if (url.pathname.endsWith('/namespaces/demo/tables/events')) {
+				return {
+					status: 200,
+					headers: { 'content-type': 'application/json' } as Record<string, string>,
+					body: new TextEncoder().encode(JSON.stringify(loadTable)),
+				};
+			}
+			const body = objects[url.pathname];
+			if (body) {
+				return {
+					status: 200,
+					headers: {
+						'accept-ranges': 'bytes',
+						'content-length': String(body.byteLength),
+						'content-type': 'application/octet-stream',
+					} as Record<string, string>,
+					body: request.method === 'HEAD' ? new Uint8Array() : body,
+				};
+			}
+			return { status: 404, headers: {}, body: new Uint8Array() };
+		});
+		const access = {
+			...VENDED_ACCESS,
+			storage: {
+				...VENDED_ACCESS.storage,
+				allowedLocations: [{ bucket: 'warehouse', prefix: 'demo/events' }],
+			},
+		} as const satisfies DuckDBHttpAccess;
+		const runtime = await createNodeDuckDBWasmRuntimeFactory(
+			'worker',
+			createDuckDBHttpSessionFactory({ transport }),
+		)();
+
+		try {
+			await runtime.initialize({ memoryLimitMb: 128 });
+			const result = await runtime.execute({
+				setup: [
+					{ text: 'LOAD iceberg' },
+					{ text: 'LOAD httpfs' },
+					{
+						text:
+							"CREATE TEMPORARY SECRET vended_e2e_s3 (TYPE S3, KEY_ID 'marimohub-parent-broker', " +
+							"SECRET 'marimohub-parent-broker', REGION ?, ENDPOINT ?, URL_STYLE 'path', USE_SSL true)",
+						params: ['us-east-1', 'objects.example.test'],
+					},
+					{
+						text:
+							`ATTACH 'warehouse' AS "vended_e2e" (` +
+							'TYPE iceberg, ENDPOINT ?, TOKEN ?, ACCESS_DELEGATION_MODE ?, READ_ONLY)',
+						params: [VENDED_ACCESS.catalog.url, 'marimohub-parent-broker', 'vended_credentials'],
+					},
+				],
+				query: { text: 'SELECT id, name FROM vended_e2e.demo.events ORDER BY id' },
+				cleanup: [{ text: 'DROP SECRET vended_e2e_s3' }, { text: 'DETACH "vended_e2e"' }],
+				requires: ['iceberg-http', 'vended-s3-routes'],
+				httpAccess: access,
+			});
+			expect(result).toEqual({
+				columns: ['id', 'name'],
+				rows: [
+					['1', 'signup'],
+					['2', 'page_view'],
+					['3', 'purchase'],
+				],
+			});
+		} finally {
+			await runtime.close();
+		}
+
+		const storageCalls = calls.filter((request) =>
+			new URL(request.url).hostname.endsWith('objects.example.test'),
+		);
+		expect(storageCalls.length).toBeGreaterThan(0);
+		expect(storageCalls).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					url: expect.stringMatching(/\/metadata\/.*\.avro$/),
+					headers: expect.objectContaining({
+						authorization: expect.stringContaining('Credential=VendedAccessKey/'),
+						'x-amz-security-token': 'vended-session-token',
+					}),
+				}),
+				expect.objectContaining({
+					url: expect.stringMatching(/\/data\/.*\.parquet$/),
+					headers: expect.objectContaining({
+						authorization: expect.stringContaining('Credential=VendedAccessKey/'),
+						'x-amz-security-token': 'vended-session-token',
+					}),
+				}),
+			]),
+		);
+		expect(JSON.stringify(calls)).not.toContain('fixture-secret-not-for-assertion');
 	}, 30_000);
 
 	it('injects a parent-exchanged OAuth token into an actual DuckDB-Wasm catalog request', async () => {
