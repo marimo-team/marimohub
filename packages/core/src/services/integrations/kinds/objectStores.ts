@@ -74,7 +74,15 @@ export const s3 = defineIntegration({
 	description: 'Amazon S3 or an S3-compatible store (MinIO, Cloudflare R2, Ceph).',
 	category: 'storage',
 	brand: { color: '#569A31' },
-	schemaVersion: 1,
+	schemaVersion: 2,
+	migrations: [
+		{
+			from: 1,
+			to: 2,
+			description:
+				'Preserve authenticated HTTP endpoints with an explicit insecure-transport override.',
+		},
+	],
 	configSchema: s3Config,
 	environmentVariables: [
 		'AWS_ACCESS_KEY_ID',
@@ -101,6 +109,19 @@ export const s3 = defineIntegration({
 	},
 	validate(config) {
 		assertSecureS3Transport(config);
+	},
+	migrate(stored, fromVersion) {
+		if (fromVersion !== 1 || typeof stored !== 'object' || stored === null) return stored;
+		const next = structuredClone(stored) as Record<string, unknown>;
+		const anonymous = (next.auth as { method?: unknown } | undefined)?.method === 'anonymous';
+		if (
+			!anonymous &&
+			typeof next.endpoint_url === 'string' &&
+			isInsecureHttpUrl(next.endpoint_url)
+		) {
+			next.allow_insecure_transport = true;
+		}
+		return next;
 	},
 	objectBrowse: {
 		provider: 's3',

@@ -215,6 +215,10 @@ The parent broker authorizes each request, injects credentials, checks DNS resul
 Authenticated catalog, OAuth2, and S3 endpoints require HTTPS by default. Enable
 `allow_insecure_transport` only for local development.
 
+> **Upgrade note:** Stored authenticated HTTP S3 configurations keep their current behavior.
+> The schema migration enables `allow_insecure_transport` for those configurations.
+> New configurations must enable this option explicitly.
+
 For OAuth2, the parent owns the client secret and refreshes the access token. The token endpoint
 uses the configured integration egress policy. Access tokens stay in one broker session. The worker
 receives only the dummy token from the generated `ATTACH` statement.
@@ -263,17 +267,23 @@ Successful queries create an audit event that records sizes and row counts, neve
 ### DuckDB remote-read errors
 
 Remote-read errors include a stable code and a safe explanation. They do not include credentials,
-object paths, endpoint URLs, or OAuth2 response bodies.
+object paths, endpoint URLs, or OAuth2 response bodies. This table lists every code returned to Run
+SQL callers.
 
-| Code                       | Action                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `credential_failed`        | Make sure that the OAuth2 configuration uses HTTPS and valid credentials.       |
-| `target_denied`            | Make sure that catalog redirects and `broker_read_locations` are correct.       |
-| `request_budget_exceeded`  | Narrow the query, or split it into smaller queries.                             |
-| `response_budget_exceeded` | Select fewer columns or rows.                                                   |
-| `redirect_budget_exceeded` | Make sure that the integration endpoint is correct.                             |
-| `capability_expired`       | Retry with a smaller query.                                                     |
-| `transport_failed`         | Make sure that DNS, TLS, and the integration egress policy permit the endpoint. |
+| Code                       | Action                                                                           |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `capability_expired`       | Retry with a smaller query.                                                      |
+| `capability_unknown`       | Retry the query. Reopen the integration if the error continues.                  |
+| `credential_failed`        | Make sure that authenticated endpoints use HTTPS and credentials are valid.      |
+| `header_denied`            | Remove the unsupported header, or use the sandbox runtime.                       |
+| `invalid_capability`       | Edit and re-save the integration. Contact an administrator if the error repeats. |
+| `invalid_request`          | Make sure that the remote URL and headers are valid.                             |
+| `method_denied`            | Use a GET or HEAD read, or use the sandbox runtime.                              |
+| `redirect_budget_exceeded` | Make sure that the integration endpoint is correct.                              |
+| `request_budget_exceeded`  | Narrow the query, or split it into smaller queries.                              |
+| `response_budget_exceeded` | Select fewer columns or rows.                                                    |
+| `target_denied`            | Make sure that catalog redirects and `broker_read_locations` are correct.        |
+| `transport_failed`         | Make sure that DNS, TLS, and the integration egress policy permit the endpoint.  |
 
 ### Scope and caching
 
@@ -699,6 +709,10 @@ Run SQL requires an explicit endpoint, static credentials or anonymous access, a
 location. Each location grants one bucket prefix. The default bucket does not grant access.
 Static credentials require HTTPS by default. Enable `allow_insecure_transport` only for local
 development. Anonymous endpoints can use HTTP without this option.
+
+> **Upgrade note:** Stored authenticated HTTP S3 configurations keep their current behavior.
+> The schema migration enables `allow_insecure_transport` for those configurations.
+> New configurations must enable this option explicitly.
 
 Use exact Parquet or CSV object paths. Globs are unavailable because they require a broader S3 list
 request. JSON is unavailable until the DuckDB-Wasm package includes the signed `json` extension.

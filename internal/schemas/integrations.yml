@@ -504,12 +504,16 @@ paths:
     summary: Iceberg REST Catalog
     description: Connect to an Iceberg REST catalog such as Polaris, Unity,
       Gravitino, or Glue.
-    x-kind-schema-version: 2
+    x-kind-schema-version: 3
     x-migrations:
       - from: 1
         to: 2
         description: Replace vended_credentials with access_delegation and remove
           obsolete S3 path-style configuration.
+      - from: 2
+        to: 3
+        description: Preserve authenticated HTTP S3 storage with an explicit
+          insecure-transport override.
     x-category: catalog
     x-brand-color: '#0969DA'
     x-secret-paths:
@@ -828,7 +832,12 @@ paths:
   /kinds/s3/config:
     summary: S3 object storage
     description: Amazon S3 or an S3-compatible store (MinIO, Cloudflare R2, Ceph).
-    x-kind-schema-version: 1
+    x-kind-schema-version: 2
+    x-migrations:
+      - from: 1
+        to: 2
+        description: Preserve authenticated HTTP endpoints with an explicit
+          insecure-transport override.
     x-category: storage
     x-brand-color: '#569A31'
     x-secret-paths:

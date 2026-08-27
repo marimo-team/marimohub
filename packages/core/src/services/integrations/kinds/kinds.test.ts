@@ -1646,7 +1646,7 @@ describe('kind renders (golden)', () => {
 	});
 
 	it('iceberg_rest migrates the v1 delegation and obsolete S3 path-style fields', () => {
-		const migrated = icebergRest.migrate?.(
+		const v2 = icebergRest.migrate?.(
 			{
 				...(FIXTURES.iceberg_rest as Record<string, unknown>),
 				vended_credentials: false,
@@ -1658,11 +1658,64 @@ describe('kind renders (golden)', () => {
 			},
 			1,
 		) as Record<string, unknown>;
+		const migrated = icebergRest.migrate?.(v2, 2) as Record<string, unknown>;
 		expect(migrated.access_delegation).toBe('none');
 		expect(migrated).not.toHaveProperty('vended_credentials');
 		expect(migrated.storage).not.toHaveProperty('path_style_access');
 		expect(() => icebergRest.configSchema.parse(migrated)).not.toThrow();
 	});
+
+	it.each([
+		['ambient', { method: 'ambient' as const }],
+		['profile', { method: 'profile' as const, profile_name: 'legacy' }],
+		[
+			'static',
+			{
+				method: 'static' as const,
+				access_key_id: 'access-key',
+				secret_access_key: 'secret-key',
+			},
+		],
+	])(
+		'iceberg_rest preserves legacy authenticated HTTP S3 storage for %s auth',
+		(_case, credentials) => {
+			const migrated = icebergRest.migrate?.(
+				{
+					...(FIXTURES.iceberg_rest as Record<string, unknown>),
+					access_delegation: 'none',
+					storage: {
+						scheme: 's3',
+						endpoint: 'http://objects.example.com',
+						credentials,
+						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				},
+				2,
+			) as Record<string, unknown>;
+			const config = icebergRest.configSchema.parse(migrated);
+
+			expect(config.allow_insecure_transport).toBe(true);
+			expect(() => icebergRest.validate?.(config)).not.toThrow();
+		},
+	);
+
+	it.each([
+		['HTTPS storage', 'https://objects.example.com', false],
+		['anonymous HTTP storage', 'http://objects.example.com', true],
+	] as const)(
+		'iceberg_rest does not add an insecure override for legacy %s',
+		(_case, endpoint, anonymous) => {
+			const migrated = icebergRest.migrate?.(
+				{
+					...(FIXTURES.iceberg_rest as Record<string, unknown>),
+					storage: { scheme: 's3', endpoint, anonymous },
+				},
+				2,
+			) as Record<string, unknown>;
+
+			expect(migrated.allow_insecure_transport).not.toBe(true);
+		},
+	);
 
 	it.each([
 		['bearer_token', { method: 'bearer_token', token: 'token' }, { token: 'token' }],
@@ -2278,6 +2331,43 @@ describe('kind renders (golden)', () => {
 			ok: false,
 			reason: 'DuckDB-Wasm Run SQL requires static S3 credentials or anonymous access',
 		});
+	});
+
+	it.each([
+		['ambient', { method: 'ambient' as const }],
+		[
+			'static',
+			{
+				method: 'static' as const,
+				access_key_id: 'access-key',
+				secret_access_key: 'secret-key',
+			},
+		],
+	])('s3 preserves a legacy authenticated HTTP endpoint for %s auth', (_case, auth) => {
+		const migrated = s3.migrate?.(
+			{
+				...(FIXTURES.s3 as Record<string, unknown>),
+				endpoint_url: 'http://objects.example.com',
+				auth,
+			},
+			1,
+		) as Record<string, unknown>;
+		const config = s3.configSchema.parse(migrated);
+
+		expect(config.allow_insecure_transport).toBe(true);
+		expect(() => s3.validate?.(config)).not.toThrow();
+	});
+
+	it.each([
+		['HTTPS authentication', 'https://objects.example.com', { method: 'ambient' as const }],
+		['anonymous HTTP', 'http://objects.example.com', { method: 'anonymous' as const }],
+	] as const)('s3 does not add an insecure override for legacy %s', (_case, endpoint_url, auth) => {
+		const migrated = s3.migrate?.(
+			{ ...(FIXTURES.s3 as Record<string, unknown>), endpoint_url, auth },
+			1,
+		) as Record<string, unknown>;
+
+		expect(migrated.allow_insecure_transport).not.toBe(true);
 	});
 
 	it.each([

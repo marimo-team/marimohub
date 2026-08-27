@@ -27,7 +27,7 @@ const OAUTH_SESSION_ERROR =
 const OAUTH_CANCELLED_ERROR =
 	'OAuth2 token request stopped because the DuckDB request ended or reached its deadline. Retry the query.';
 const OAUTH_RESPONSE_ERROR =
-	'OAuth2 token endpoint returned an invalid response. Make sure that access_token is non-empty and the expiry is between 1 and 86400 seconds.';
+	'OAuth2 token endpoint returned an invalid response. Make sure that access_token is non-empty. If token_type is present, it must be bearer. The expiry must be between 1 and 86400 seconds.';
 const ROUTE_OVERLAP_ERROR =
 	'Catalog and S3 routes overlap. Change the catalog path, S3 endpoint, bucket, or guarded read prefix.';
 const INVALID_S3_ENDPOINT_ERROR =
@@ -303,15 +303,62 @@ describe('createDuckDBHttpSessionFactory', () => {
 
 		await expect(session.fetch(request)).rejects.toThrow(OAUTH_TRANSPORT_ERROR);
 		expect(transport).not.toHaveBeenCalled();
-		await expect(session.fetch(request)).rejects.toThrow(
-			'OAuth2 token refresh failed recently. Retry the query in one second.',
-		);
+		await expect(session.fetch(request)).rejects.toThrow(OAUTH_TRANSPORT_ERROR);
 		expect(exchange).toHaveBeenCalledOnce();
 		clock += 1_001;
 		await expect(session.fetch(request)).resolves.toMatchObject({ status: 200 });
 		expect(exchange).toHaveBeenCalledTimes(2);
 		expect(transport).toHaveBeenCalledOnce();
 		expect(transport.mock.calls[0]?.[0].headers?.authorization).toBe('Bearer recovered-token');
+	});
+
+	it('preserves a credential error during the OAuth refresh backoff', async () => {
+		let tokenRequests = 0;
+		const tokenServer = createServer((_request, response) => {
+			tokenRequests += 1;
+			response.writeHead(401, { 'content-type': 'application/json' });
+			response.end('{"error":"invalid_client"}');
+		});
+		await new Promise<void>((resolve) => tokenServer.listen(0, '127.0.0.1', resolve));
+		const address = tokenServer.address();
+		if (address === null || typeof address === 'string') {
+			throw new Error('Expected an OAuth test-server port.');
+		}
+		const expected =
+			'OAuth2 token endpoint returned HTTP 401 for the credentials. Make sure that the client ID, client secret, and scope are correct.';
+		const transport = vi.fn<IcebergHttpBrokerTransport>();
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			allowPrivate: true,
+			now: () => NOW,
+		})(
+			{
+				...OAUTH_ACCESS,
+				allowInsecureTransport: true,
+				catalog: {
+					...OAUTH_ACCESS.catalog,
+					oauth2: {
+						...OAUTH_ACCESS.catalog.oauth2,
+						tokenEndpoint: `http://127.0.0.1:${address.port}/oauth/token`,
+					},
+				},
+			},
+			{ expiresAtMs: NOW + 60_000 },
+		);
+		const request = {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET' as const,
+		};
+
+		try {
+			await expect(session.fetch(request)).rejects.toThrow(expected);
+			await expect(session.fetch(request)).rejects.toThrow(expected);
+			expect(tokenRequests).toBe(1);
+			expect(transport).not.toHaveBeenCalled();
+		} finally {
+			session.close();
+			await new Promise<void>((resolve) => tokenServer.close(() => resolve()));
+		}
 	});
 
 	it('bounds OAuth exchange work to the broker session deadline', async () => {

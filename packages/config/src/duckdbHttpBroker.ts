@@ -353,6 +353,7 @@ function createOAuthTokenProvider(options: {
 	let cached: { token: string; expiresAtMs: number } | undefined;
 	let refresh: Promise<string> | undefined;
 	let retryAfterMs = 0;
+	let retryError: OAuthTokenError | undefined;
 	let closed = false;
 	const controller = new AbortController();
 	const metrics = options.metrics ?? noopMetrics;
@@ -391,23 +392,32 @@ function createOAuthTokenProvider(options: {
 				),
 			};
 			retryAfterMs = 0;
+			retryError = undefined;
 			metrics.increment('duckdb_http_broker.oauth_refresh', 1, { outcome: 'success' });
 			return cached.token;
 		} catch (error) {
-			retryAfterMs = Math.min(
-				options.sessionExpiresAtMs,
-				options.now() + OAUTH_REFRESH_RETRY_BACKOFF_MS,
-			);
+			const failure =
+				error instanceof OAuthTokenError
+					? error
+					: combinedSignal.aborted
+						? oauthFailure(controller.signal.aborted ? 'cancelled' : 'session')
+						: oauthFailure('transport');
+			if (failure.reason !== 'cancelled' && failure.reason !== 'session') {
+				retryAfterMs = Math.min(
+					options.sessionExpiresAtMs,
+					options.now() + OAUTH_REFRESH_RETRY_BACKOFF_MS,
+				);
+				retryError = failure;
+			} else {
+				retryAfterMs = 0;
+				retryError = undefined;
+			}
 			metrics.increment('duckdb_http_broker.oauth_refresh', 1, { outcome: 'failure' });
 			if (!closed && cached && options.now() < cached.expiresAtMs) {
 				metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'stale-cache' });
 				return cached.token;
 			}
-			if (error instanceof OAuthTokenError) throw error;
-			if (combinedSignal.aborted) {
-				throw oauthFailure(controller.signal.aborted ? 'cancelled' : 'session');
-			}
-			throw oauthFailure('transport');
+			throw failure;
 		}
 	};
 
@@ -425,10 +435,7 @@ function createOAuthTokenProvider(options: {
 					metrics.increment('duckdb_http_broker.oauth_token', 1, { source: 'stale-cache' });
 					return { authorization: `Bearer ${cached.token}` };
 				}
-				throw new OAuthTokenError(
-					'transport',
-					'OAuth2 token refresh failed recently. Retry the query in one second.',
-				);
+				if (retryError) throw retryError;
 			}
 			refresh ??= exchange().finally(() => {
 				refresh = undefined;
@@ -440,6 +447,7 @@ function createOAuthTokenProvider(options: {
 			closed = true;
 			cached = undefined;
 			retryAfterMs = 0;
+			retryError = undefined;
 			controller.abort();
 		},
 	};
@@ -483,7 +491,7 @@ function oauthFailure(reason: OAuthFailureReason, status?: number): OAuthTokenEr
 		case 'response':
 			return new OAuthTokenError(
 				reason,
-				'OAuth2 token endpoint returned an invalid response. Make sure that access_token is non-empty and the expiry is between 1 and 86400 seconds.',
+				'OAuth2 token endpoint returned an invalid response. Make sure that access_token is non-empty. If token_type is present, it must be bearer. The expiry must be between 1 and 86400 seconds.',
 			);
 		case 'cancelled':
 			return new OAuthTokenError(

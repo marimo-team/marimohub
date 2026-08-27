@@ -1,6 +1,6 @@
 <!-- GENERATED from internal/schemas/integrations.yml — do not edit; run `pnpm schemas:generate`. -->
 
-<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#0969DA;vertical-align:-1px"></span> `iceberg_rest` · catalog · config schema v2 · connection test supported
+<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#0969DA;vertical-align:-1px"></span> `iceberg_rest` · catalog · config schema v3 · connection test supported
 
 **Notebook packages:** `pyiceberg[pyarrow,s3fs,gcsfs,adlfs,hf,rest-sigv4,gcp-auth,entra-auth]>=0.11`
 

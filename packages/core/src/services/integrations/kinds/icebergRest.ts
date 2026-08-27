@@ -154,13 +154,19 @@ export const icebergRest = defineIntegration({
 	description: 'Connect to an Iceberg REST catalog such as Polaris, Unity, Gravitino, or Glue.',
 	category: 'catalog',
 	brand: { color: ICEBERG_BRAND_COLOR },
-	schemaVersion: 2,
+	schemaVersion: 3,
 	migrations: [
 		{
 			from: 1,
 			to: 2,
 			description:
 				'Replace vended_credentials with access_delegation and remove obsolete S3 path-style configuration.',
+		},
+		{
+			from: 2,
+			to: 3,
+			description:
+				'Preserve authenticated HTTP S3 storage with an explicit insecure-transport override.',
 		},
 	],
 	configSchema: icebergRestConfig,
@@ -232,15 +238,32 @@ export const icebergRest = defineIntegration({
 	},
 
 	migrate(stored, fromVersion) {
-		if (fromVersion !== 1 || typeof stored !== 'object' || stored === null) return stored;
-		const next = structuredClone(stored) as Record<string, unknown>;
-		if (typeof next.vended_credentials === 'boolean' && next.access_delegation === undefined) {
-			next.access_delegation = next.vended_credentials ? 'vended_credentials' : 'none';
+		if ((fromVersion !== 1 && fromVersion !== 2) || typeof stored !== 'object' || stored === null) {
+			return stored;
 		}
-		delete next.vended_credentials;
+		const next = structuredClone(stored) as Record<string, unknown>;
+		if (fromVersion === 1) {
+			if (typeof next.vended_credentials === 'boolean' && next.access_delegation === undefined) {
+				next.access_delegation = next.vended_credentials ? 'vended_credentials' : 'none';
+			}
+			delete next.vended_credentials;
+			const storage = next.storage;
+			if (typeof storage === 'object' && storage !== null) {
+				delete (storage as Record<string, unknown>).path_style_access;
+			}
+			return next;
+		}
 		const storage = next.storage;
 		if (typeof storage === 'object' && storage !== null) {
-			delete (storage as Record<string, unknown>).path_style_access;
+			const fields = storage as Record<string, unknown>;
+			if (
+				fields.scheme === 's3' &&
+				fields.anonymous !== true &&
+				typeof fields.endpoint === 'string' &&
+				isInsecureHttpUrl(fields.endpoint)
+			) {
+				next.allow_insecure_transport = true;
+			}
 		}
 		return next;
 	},

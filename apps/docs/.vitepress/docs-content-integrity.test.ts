@@ -7,6 +7,10 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const DOCS_ROOT = path.join(REPO_ROOT, 'docs');
 const OPENAPI_PATH = path.join(REPO_ROOT, 'packages/api/openapi.yaml');
+const DUCKDB_BROKER_PATH = path.join(
+	REPO_ROOT,
+	'packages/duckdb-wasm-runtime/src/icebergHttpBroker.ts',
+);
 const MANUALLY_WIRED_SELECTORS: Partial<Record<string, string[]>> = {
 	Compute: ['cloudflare'],
 };
@@ -131,5 +135,25 @@ describe('docs content integrity', () => {
 
 	it('the docs OpenAPI artifact reads from the committed API specification', () => {
 		expect(readFileSync(OPENAPI_PATH, 'utf8')).toMatch(/^openapi: 3\.1\.0/m);
+	});
+
+	it('documents every DuckDB remote-read error code', () => {
+		const broker = readFileSync(DUCKDB_BROKER_PATH, 'utf8');
+		const errorCodeType = broker.match(/export type IcebergHttpBrokerErrorCode =([\s\S]*?);/)?.[1];
+		expect(errorCodeType).toBeDefined();
+		const emittedCodes = [
+			...[...errorCodeType!.matchAll(/'([^']+)'/g)].map((match) => match[1]),
+			'transport_failed',
+		].sort();
+		const integrations = readFileSync(path.join(DOCS_ROOT, 'integrations.md'), 'utf8');
+		const errorSection = integrations.match(
+			/### DuckDB remote-read errors\n([\s\S]*?)(?=\n### )/,
+		)?.[1];
+		expect(errorSection).toBeDefined();
+		const documentedCodes = [...errorSection!.matchAll(/^\| `([^`]+)`/gm)]
+			.map((match) => match[1])
+			.sort();
+
+		expect(documentedCodes).toEqual(emittedCodes);
 	});
 });
