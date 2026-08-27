@@ -178,6 +178,14 @@ spec:
               mountPath: /dev/shm
 ```
 
+Save it as `marimohub-template.yaml`, create the template (note the id the
+CLI prints), and attach it to the runner:
+
+```bash
+cwic sandbox template create -f marimohub-template.yaml
+cwic sandbox runner edit $RUNNER_ID   # add the template id to the runner
+```
+
 Set `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID=<template-id>` (step 8) and every
 sandbox is created from it; omit the variable to use the default policy.
 
@@ -232,6 +240,13 @@ spec:
               subPathExpr: $(MARIMOHUB_USER_HOME_KEY)
             - name: user-home-links
               mountPath: /mnt
+```
+
+Create and attach it the same way:
+
+```bash
+cwic sandbox template create -f user-home-template.yaml
+cwic sandbox runner edit $RUNNER_ID
 ```
 
 marimohub creates editor sandboxes with personal storage from this template:
