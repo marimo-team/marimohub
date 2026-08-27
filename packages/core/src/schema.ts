@@ -319,8 +319,8 @@ export const EmailAddressSchema = z.string().refine(
 // added before they ever logged in. Exactly one of the two identifiers is set.
 // The schema lowercases emails on parse so the authz comparison (see authz.ts)
 // can rely on the invariant even for rows written outside ProjectService. An
-// email row is not rewritten to an id when the invitee first logs in — it keeps
-// matching by email.
+// email row keeps matching during the pending window, then becomes an id row on
+// the next membership write or maintenance sweep after the invitee signs in.
 export const ProjectMemberSchema = z
 	.object({
 		user_id: UserIdSchema.optional(),

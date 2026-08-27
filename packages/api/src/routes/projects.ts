@@ -453,13 +453,7 @@ app.openapi(updateMember, async (c) => {
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const body = c.req.valid('json');
 	const result = await projects.updateMemberRoleWithMutation(pid, uid, body.role, user.id);
-	const member = result.project.members.find(
-		(candidate) =>
-			(result.previousMember.user_id !== undefined &&
-				candidate.user_id === result.previousMember.user_id) ||
-			(result.previousMember.email !== undefined &&
-				candidate.email === result.previousMember.email),
-	);
+	const member = result.member;
 	if (member && member.role !== result.previousMember.role) {
 		scheduleProjectAlert(deps, pid, 'member.role_changed', { project_id: pid, user: user.id }, () =>
 			notificationRouter.render({

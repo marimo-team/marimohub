@@ -6,8 +6,9 @@ import { paths } from '../../paths';
 import { ACTOR, setupTestEnv } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
+import type { IdentityService } from '../identity/IdentityService';
 import type { NotebookService } from './NotebookService';
-import type { ProjectService } from './ProjectService';
+import { claimInviteRows, ProjectService } from './ProjectService';
 import { listAllKeys } from '../catalog/storage';
 
 describe('ProjectService', () => {
@@ -15,6 +16,7 @@ describe('ProjectService', () => {
 	let projects: ProjectService;
 	let notebooks: NotebookService;
 	let catalog: CatalogService;
+	let identities: IdentityService;
 
 	beforeEach(async () => {
 		const env = await setupTestEnv();
@@ -22,6 +24,7 @@ describe('ProjectService', () => {
 		projects = env.projects;
 		notebooks = env.notebooks;
 		catalog = env.catalog;
+		identities = env.identities;
 	});
 
 	describe('createProject', () => {
@@ -220,6 +223,20 @@ describe('ProjectService', () => {
 	describe('membership', () => {
 		const MEMBER = UserId.parse('user_member');
 
+		it('does not resolve or copy an id-only roster', async () => {
+			const members = [
+				{ user_id: ACTOR, role: 'admin' as const },
+				{ user_id: MEMBER, role: 'viewer' as const },
+			];
+			const resolveByEmail = vi.fn(async () => null);
+
+			const result = await claimInviteRows(members, resolveByEmail);
+
+			expect(resolveByEmail).not.toHaveBeenCalled();
+			expect(result.members).toBe(members);
+			expect(result.claimedRows).toBe(0);
+		});
+
 		it('projects the latest roster when catalog updates finish out of order', async () => {
 			const project = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			const first = UserId.parse('first_member');
@@ -294,6 +311,151 @@ describe('ProjectService', () => {
 			const snap = await catalog.getCurrentSnapshot();
 			expect(mutation).toMatchObject({ project: stored, mutationId: snap.snapshot_id });
 			expect(snap.projects[0].member_emails).toEqual(['invitee@example.com']);
+		});
+
+		it('claims a known invite on the next membership write without changing its role', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'invitee@example.com' }, 'editor', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'invitee@example.com', name: 'Invitee' });
+
+			await projects.addMember(p.id, { user_id: UserId.parse('user_other') }, 'viewer', ACTOR);
+
+			const stored = await projects.getProject(p.id);
+			expect(stored.members).toContainEqual({ user_id: MEMBER, role: 'editor' });
+			expect(stored.members.some((member) => member.email === 'invitee@example.com')).toBe(false);
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(snapshot.projects[0].member_ids).toContain(MEMBER);
+			expect(snapshot.projects[0].member_emails).toEqual([]);
+		});
+
+		it('leaves unknown invite emails pending on later membership writes', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'unknown@example.com' }, 'viewer', ACTOR);
+
+			const updated = await projects.addMember(
+				p.id,
+				{ user_id: UserId.parse('user_other') },
+				'editor',
+				ACTOR,
+			);
+
+			expect(updated.members).toContainEqual({ email: 'unknown@example.com', role: 'viewer' });
+		});
+
+		it('does not mutate the project or catalog when invite resolution fails', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'invitee@example.com' }, 'viewer', ACTOR);
+			const projectBefore = await projects.getProject(p.id);
+			const snapshotBefore = await catalog.getCurrentSnapshot();
+			const unavailable = new Error('identity directory unavailable');
+			const resolveByEmail = vi.fn(async () => {
+				throw unavailable;
+			});
+			const failingProjects = new ProjectService(bucket, catalog, undefined, resolveByEmail);
+
+			await expect(
+				failingProjects.addMember(p.id, { user_id: UserId.parse('user_other') }, 'editor', ACTOR),
+			).rejects.toBe(unavailable);
+
+			expect(resolveByEmail).toHaveBeenCalledWith('invitee@example.com');
+			expect(await projects.getProject(p.id)).toEqual(projectBefore);
+			expect(await catalog.getCurrentSnapshot()).toEqual(snapshotBefore);
+		});
+
+		it('collapses legacy id and email rows to the higher role', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'legacy@example.com' }, 'manager', ACTOR);
+			const key = paths.project(p.id).meta;
+			const stored = await projects.getProject(p.id);
+			await bucket.put(
+				key,
+				JSON.stringify({
+					...stored,
+					members: [...stored.members, { user_id: MEMBER, role: 'viewer' }],
+				}),
+			);
+			await identities.upsert({ id: MEMBER, email: 'legacy@example.com', name: 'Legacy' });
+
+			const updated = await projects.addMember(
+				p.id,
+				{ user_id: UserId.parse('user_other') },
+				'viewer',
+				ACTOR,
+			);
+
+			expect(updated.members.filter((member) => member.user_id === MEMBER)).toEqual([
+				{ user_id: MEMBER, role: 'manager' },
+			]);
+			expect(updated.members.some((member) => member.email === 'legacy@example.com')).toBe(false);
+		});
+
+		it('keeps email selectors valid on the write that claims the invite', async () => {
+			const updateProject = await projects.createProject(
+				{ name: 'Update', description: 'a' },
+				ACTOR,
+			);
+			await projects.addMember(updateProject.id, { email: 'invitee@example.com' }, 'viewer', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'invitee@example.com', name: 'Invitee' });
+
+			const updated = await projects.updateMemberRole(
+				updateProject.id,
+				'invitee@example.com',
+				'editor',
+				ACTOR,
+			);
+			expect(updated.members).toContainEqual({ user_id: MEMBER, role: 'editor' });
+
+			const removeProject = await projects.createProject(
+				{ name: 'Remove', description: 'a' },
+				ACTOR,
+			);
+			await projects.addMember(removeProject.id, { email: 'remove@example.com' }, 'viewer', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'remove@example.com', name: 'Invitee' });
+
+			const removed = await projects.removeMember(removeProject.id, 'remove@example.com', ACTOR);
+			expect(removed.members.some((member) => member.user_id === MEMBER)).toBe(false);
+			expect(removed.members.some((member) => member.email === 'remove@example.com')).toBe(false);
+		});
+
+		it('claims resolvable invites during maintenance and is idempotent', async () => {
+			const known = await projects.createProject({ name: 'Known', description: 'a' }, ACTOR);
+			const unknown = await projects.createProject({ name: 'Unknown', description: 'a' }, ACTOR);
+			await projects.addMember(known.id, { email: 'known@example.com' }, 'viewer', ACTOR);
+			await projects.addMember(unknown.id, { email: 'unknown@example.com' }, 'editor', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'known@example.com', name: 'Known' });
+
+			expect(await projects.claimPendingInvites()).toBe(1);
+			expect(await projects.claimPendingInvites()).toBe(0);
+			expect((await projects.getProject(known.id)).members).toContainEqual({
+				user_id: MEMBER,
+				role: 'viewer',
+			});
+			expect((await projects.getProject(unknown.id)).members).toContainEqual({
+				email: 'unknown@example.com',
+				role: 'editor',
+			});
+		});
+
+		it('leaves a failed maintenance claim pending and recovers on the next sweep', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.addMember(p.id, { email: 'invitee@example.com' }, 'editor', ACTOR);
+			await identities.upsert({ id: MEMBER, email: 'invitee@example.com', name: 'Invitee' });
+			const projectBefore = await projects.getProject(p.id);
+			const snapshotBefore = await catalog.getCurrentSnapshot();
+			const unavailable = new Error('identity directory unavailable');
+			const failingProjects = new ProjectService(bucket, catalog, undefined, async () => {
+				throw unavailable;
+			});
+
+			await expect(failingProjects.claimPendingInvites()).rejects.toBe(unavailable);
+			expect(await projects.getProject(p.id)).toEqual(projectBefore);
+			expect(await catalog.getCurrentSnapshot()).toEqual(snapshotBefore);
+
+			expect(await projects.claimPendingInvites()).toBe(1);
+			expect((await projects.getProject(p.id)).members).toContainEqual({
+				user_id: MEMBER,
+				role: 'editor',
+			});
 		});
 
 		it('rejects an id add carrying an email that matches a pending invite (409)', async () => {

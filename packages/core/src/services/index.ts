@@ -64,7 +64,8 @@ export type {
 	SyncNotebookInput,
 	UpdateSyncedNotebookSourceInput,
 } from '../integrations/syncedSource';
-export { ProjectService } from './content/ProjectService';
+export { claimInviteRows, ProjectService } from './content/ProjectService';
+export type { ClaimedInviteRows, InviteIdentityResolver } from './content/ProjectService';
 export {
 	MAX_PROJECT_ALERT_DESTINATIONS,
 	ProjectAlertConfigSchema,
@@ -345,15 +346,25 @@ export function createServices(
 	const catalog = wrap('CatalogService', new CatalogService(bucket, metrics, events), {
 		initialize: user,
 	});
-	const projects = wrap('ProjectService', new ProjectService(bucket, catalog, metrics), {
-		getProject: project,
-		updateProject: project,
-		deleteProject: project,
-		hardDeleteProject: project,
-		addMember: project,
-		updateMemberRole: project,
-		removeMember: project,
+	const identities = wrap('IdentityService', new IdentityService(bucket), {
+		get: user,
+		isSuspended: user,
+		setSuspension: user,
 	});
+	const projects = wrap(
+		'ProjectService',
+		new ProjectService(bucket, catalog, metrics, (email) => identities.getByEmail(email)),
+		{
+			getProject: project,
+			updateProject: project,
+			deleteProject: project,
+			hardDeleteProject: project,
+			addMember: project,
+			updateMemberRole: project,
+			removeMember: project,
+			claimPendingInvites: () => ({}),
+		},
+	);
 	const sessions = wrap('SessionService', new SessionService(bucket, metrics), {
 		createSession: (input) => ({
 			...notebook(input.project_id, input.notebook_id),
@@ -405,11 +416,6 @@ export function createServices(
 		getReusableProposal: proposal,
 		publishChangeRequest: (input) => proposal(input.projectId, input.notebookId, input.proposalId),
 		pruneExpiredPayloads: () => ({}),
-	});
-	const identities = wrap('IdentityService', new IdentityService(bucket), {
-		get: user,
-		isSuspended: user,
-		setSuspension: user,
 	});
 	const tokens = wrap('TokenService', new TokenService(bucket, identities), {
 		list: user,

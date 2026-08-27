@@ -86,7 +86,8 @@ async function scheduleUnavailableAppAlerts(
  *  5. `pruneEvents()`     — drop event-day folders past retention.
  *  6. `pruneExpiredPayloads()` — delete expired proposal change bytes while
  *     retaining proposal and publication metadata.
- *  7. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
+ *  7. `claimPendingInvites()` — replace resolvable email invites with user ids.
+ *  8. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
  *     soft-deleted projects/notebooks past their grace period. Projects first, so
  *     a deleted project's notebooks are reclaimed by the project subtree wipe.
  *
@@ -144,6 +145,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 				const eventsPruned = await maintenance.pruneEvents();
 				const idempotencyPruned = await idempotency.prune();
 				const proposalPayloadsPruned = await proposals.pruneExpiredPayloads();
+				const inviteRowsClaimed = await projects.claimPendingInvites();
 				// Projects before notebooks: a swept project wipes its whole subtree, so
 				// its soft-deleted notebooks are reclaimed without per-notebook work.
 				const projectsSwept = await projects.sweepDeletedProjects();
@@ -166,6 +168,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 					events_pruned: eventsPruned,
 					idempotency_pruned: idempotencyPruned,
 					proposal_payloads_pruned: proposalPayloadsPruned,
+					invite_rows_claimed: inviteRowsClaimed,
 					projects_swept: projectsSwept,
 					notebooks_swept: notebooksSwept.purged,
 					snapshots_reaped: snapshotsReaped,

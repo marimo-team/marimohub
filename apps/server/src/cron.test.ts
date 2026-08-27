@@ -66,10 +66,21 @@ describe('startMaintenance', () => {
 		expect(events[0]).toMatchObject({
 			event: 'maintenance_cycle',
 			sessions_expired: 0,
+			invite_rows_claimed: 0,
 			projects_swept: 0,
 			notebooks_swept: 0,
 			'counter.sessions_created': 1,
 		});
+	});
+
+	it('claims pending invite rows during the maintenance cycle', async () => {
+		const claimSpy = vi.spyOn(deps.services.projects, 'claimPendingInvites').mockResolvedValue(2);
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		expect(claimSpy).toHaveBeenCalledOnce();
+		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({ invite_rows_claimed: 2 });
 	});
 
 	it('sweeps projects before notebooks (a deleted project reclaims its own notebooks)', async () => {
