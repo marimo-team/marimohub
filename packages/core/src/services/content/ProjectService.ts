@@ -113,7 +113,7 @@ export class ProjectService {
 				matching,
 				BUCKET_SCAN_CONCURRENCY,
 				async (project) =>
-					project.tags !== undefined || (await this.getProject(project.id)).tags.includes(tag),
+					project.tags?.includes(tag) ?? (await this.getProject(project.id)).tags.includes(tag),
 			);
 			matching = matching.filter((_, index) => tagMatches[index]);
 		}

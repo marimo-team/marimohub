@@ -66,7 +66,6 @@ export function ListFilters<Status extends string>({
 		>
 			<div className="grid grid-cols-[minmax(0,2fr)_minmax(8rem,1fr)_minmax(9rem,1fr)_auto] items-end gap-3 max-md:grid-cols-1">
 				<SearchField
-					aria-label="Search"
 					label="Search"
 					name="q"
 					defaultValue={values.q ?? ''}

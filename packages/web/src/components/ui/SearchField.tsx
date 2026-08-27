@@ -3,19 +3,22 @@ import { SearchField as AriaSearchField, Input, Button, Label } from 'react-aria
 import { Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export interface SearchFieldProps {
+interface SearchFieldBaseProps {
 	value?: string;
 	defaultValue?: string;
 	onChange?: (value: string) => void;
 	name?: string;
-	label?: string;
 	placeholder?: string;
-	/** Accessible name used when no visible label is provided. */
-	'aria-label': string;
 	/** Forwarded to the input so a page-level hotkey can focus it. */
 	inputRef?: Ref<HTMLInputElement>;
 	className?: string;
 }
+
+type SearchFieldAccessibleName =
+	| { label: string; 'aria-label'?: never }
+	| { label?: never; 'aria-label': string };
+
+export type SearchFieldProps = SearchFieldBaseProps & SearchFieldAccessibleName;
 
 /** Search input with clear and Escape-to-clear behavior from React Aria. */
 export function SearchField({

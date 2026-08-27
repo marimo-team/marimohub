@@ -63,6 +63,7 @@ function ListSkeleton() {
 			{SKELETON_ROWS.map((row) => (
 				<div
 					key={row}
+					data-testid="list-skeleton-row"
 					aria-hidden="true"
 					className="flex items-center gap-3 border-b p-4 last:border-b-0"
 				>
