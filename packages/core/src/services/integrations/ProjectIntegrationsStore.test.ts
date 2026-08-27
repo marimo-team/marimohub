@@ -1930,6 +1930,7 @@ describe('ProjectIntegrationsStore', () => {
 			'clickhouse',
 			'custom_env',
 			'databricks',
+			'duckdb_http',
 			'gcs',
 			'huggingface',
 			'iceberg_bigquery',

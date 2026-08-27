@@ -10,7 +10,7 @@ source for the whole organization. Supported sources include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
 Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
 Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
-Blob), ML platforms (Weights & Biases, Hugging Face), and environment
+Blob), remote DuckDB databases, ML platforms (Weights & Biases, Hugging Face), and environment
 variables.
 
 Each new, non-ephemeral session receives the applicable connection
@@ -288,6 +288,63 @@ Brokered Iceberg and S3 plans can load only pinned local extensions and approved
 Row, response-byte, concurrency, per-user, memory, and time limits apply.
 Successful queries create an audit event that records sizes and row counts, never SQL text.
 
+### Remote DuckDB database files
+
+The `duckdb_http` integration attaches one database file as a read-only DuckDB catalog for Run SQL.
+It does not expose schema browsing or inject configuration into notebook sessions. Enable full
+data browsing to use Run SQL:
+
+```bash
+MARIMOHUB_DATA_BROWSER=full
+```
+
+Configure an exact object URL:
+
+```yaml
+url: https://data.example.com/snapshots/2026-08-27/analytics.duckdb
+auth:
+  method: bearer_token
+  token: secret
+```
+
+The URL must use HTTPS. It cannot contain embedded credentials, query parameters, a fragment,
+encoded path separators or dot segments, or a trailing slash. Its normalized path must end in
+`.duckdb` unless the advanced suffix override is enabled. Authentication can be `none`,
+`bearer_token`, or `basic`.
+Bearer tokens and Basic passwords stay in the parent process. The DuckDB worker cannot read them.
+
+The broker authorizes only the normalized URL, not its origin, parent path, or sibling files. GET
+and HEAD are the only methods. Redirects are rejected because the target would be outside the exact
+object capability. The server must support single byte ranges, return valid `Content-Range` values
+for 206 responses, and return one strong ETag on every successful response. Weak or missing ETags,
+multipart ranges, inconsistent lengths, changed ETags, and `412 Precondition Failed` responses stop
+the query. After the first response, the broker sends `If-Match` on every later request.
+
+One query can make at most 512 remote requests, with 4 in flight, and receive at most 64 MiB in
+total. One response is limited to 16 MiB. A server that ignores a GET range is accepted only when
+the complete object is at most 1 MiB. The database does not need to fit in memory, but a query that
+reads more than the cumulative budget fails. Keep remote databases at or below 1 GiB and test
+representative scans against the 64 MiB read budget.
+
+Publish new snapshots at new versioned paths and retain old snapshots while queries can still be
+running. Replacing bytes at the same URL is safe between queries, but replacement during a query
+fails the ETag precondition. A static Nginx location can preserve old files and provide ranges and
+strong ETags:
+
+```nginx
+location /snapshots/ {
+    alias /srv/duckdb-snapshots/;
+    etag on;
+    max_ranges 1;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+}
+```
+
+Write each snapshot to a new directory before publishing its URL. Do not overwrite or delete a
+snapshot until the longest possible Run SQL request has ended.
+
+<!--@include: ./partials/integrations/duckdb_http.md-->
+
 ### DuckDB remote-read errors
 
 Remote-read errors include a stable code and a safe explanation. They do not include credentials,
@@ -304,9 +361,13 @@ SQL callers.
 | `invalid_capability`            | Edit and re-save the integration. Contact an administrator if the error repeats. |
 | `invalid_request`               | Make sure that the remote URL and headers are valid.                             |
 | `method_denied`                 | Use a GET or HEAD read, or use the sandbox runtime.                              |
+| `object_changed`                | Retry against an immutable versioned DuckDB URL.                                 |
+| `range_invalid`                 | Configure the database server to return valid single byte ranges.                |
+| `redirect_denied`               | Configure the DuckDB integration with the final exact object URL.                |
 | `redirect_budget_exceeded`      | Make sure that the integration endpoint is correct.                              |
 | `request_budget_exceeded`       | Narrow the query, or split it into smaller queries.                              |
 | `response_budget_exceeded`      | Select fewer columns or rows.                                                    |
+| `strong_etag_required`          | Configure the database server to return a strong ETag.                           |
 | `target_denied`                 | Make sure that catalog redirects and `broker_read_locations` are correct.        |
 | `transport_failed`              | Make sure that DNS, TLS, and the integration egress policy permit the endpoint.  |
 

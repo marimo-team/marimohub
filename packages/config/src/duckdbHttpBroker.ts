@@ -26,6 +26,7 @@ const DEFAULT_MAX_REQUESTS = 512;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
 const DEFAULT_MAX_REDIRECTS = 8;
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const DATABASE_FULL_RESPONSE_BYTES = 1024 * 1024;
 const DEFAULT_OAUTH_TOKEN_TIMEOUT_MS = 10_000;
 const OAUTH_MAX_RESPONSE_BYTES = 64 * 1024;
 const OAUTH_MAX_EXPIRES_IN_SECONDS = 24 * 60 * 60;
@@ -126,6 +127,9 @@ function routesFor(
 	oauthProvider?: OAuthTokenProvider,
 	metrics: Metrics = noopMetrics,
 ) {
+	if (access.kind === 'http-database') {
+		return [databaseRouteFor(access, metrics)];
+	}
 	if (access.kind === 's3-object-store') {
 		return s3RoutesFor(access, now, access.allowInsecureTransport === true);
 	}
@@ -217,6 +221,213 @@ function routesFor(
 		catalog,
 		s3RoutesFor(storage, now, access.allowInsecureTransport === true),
 	);
+}
+
+function databaseRouteFor(
+	access: Readonly<Extract<DuckDBHttpAccess, { kind: 'http-database' }>>,
+	metrics: Metrics,
+): IcebergHttpBrokerRoute {
+	let url: URL;
+	try {
+		url = new URL(access.url);
+	} catch {
+		throw invalidDatabaseCapability();
+	}
+	if (
+		url.protocol !== 'https:' ||
+		url.username !== '' ||
+		url.password !== '' ||
+		url.search !== '' ||
+		url.hash !== '' ||
+		url.toString() !== access.url
+	) {
+		throw invalidDatabaseCapability();
+	}
+	const policy = createDatabaseResponsePolicy(metrics);
+	return {
+		kind: 'storage',
+		url: access.url,
+		match: 'exact',
+		methods: ['GET', 'HEAD'],
+		...(access.authorization ? { headers: { authorization: access.authorization } } : {}),
+		prepareHeaders: policy.prepareHeaders,
+		discardRequestHeaders: ['authorization', 'if-match'],
+		observeResponse: policy.observeResponse,
+	};
+}
+
+function invalidDatabaseCapability(): IcebergHttpBrokerError {
+	return new IcebergHttpBrokerError(
+		'invalid_capability',
+		'DuckDB database access requires one normalized exact HTTPS object URL.',
+	);
+}
+
+function createDatabaseResponsePolicy(metrics: Metrics) {
+	let strongEtag: string | undefined;
+	return {
+		prepareHeaders: (): Promise<Readonly<Record<string, string>>> => {
+			const headers: Record<string, string> = strongEtag ? { 'if-match': strongEtag } : {};
+			return Promise.resolve(headers);
+		},
+		observeResponse(response: Readonly<IcebergHttpBrokerObservedResponse>): void {
+			if (isRedirectStatus(response.status)) {
+				recordDatabasePolicy(metrics, 'redirect', 'denied');
+				throw new IcebergHttpBrokerError(
+					'redirect_denied',
+					'The remote DuckDB database redirected to another URL. Use a stable direct object URL.',
+				);
+			}
+			if (response.status === 412) {
+				recordDatabasePolicy(metrics, 'etag', 'changed');
+				throw objectChanged();
+			}
+			validateDatabaseRangeResponse(response, metrics);
+			if (!isSuccessfulStatus(response.status)) return;
+			const etag = response.headers.etag;
+			if (!isStrongEtag(etag)) {
+				recordDatabasePolicy(metrics, 'etag', etag?.startsWith('W/') ? 'weak' : 'missing');
+				throw new IcebergHttpBrokerError(
+					'strong_etag_required',
+					'The remote DuckDB database did not return a strong ETag. Serve immutable snapshots with a strong ETag.',
+				);
+			}
+			if (strongEtag === undefined) {
+				strongEtag = etag;
+				recordDatabasePolicy(metrics, 'etag', 'captured');
+			} else if (strongEtag !== etag) {
+				recordDatabasePolicy(metrics, 'etag', 'changed');
+				throw objectChanged();
+			} else {
+				recordDatabasePolicy(metrics, 'etag', 'matched');
+			}
+		},
+	};
+}
+
+function validateDatabaseRangeResponse(
+	response: Readonly<IcebergHttpBrokerObservedResponse>,
+	metrics: Metrics,
+): void {
+	if (!isSuccessfulStatus(response.status)) return;
+	const contentType = response.headers['content-type']?.toLowerCase();
+	if (contentType?.startsWith('multipart/byteranges')) {
+		throw invalidRange(metrics, 'multipart');
+	}
+	const rawRange = response.request.headers?.range;
+	if (rawRange === undefined) {
+		if (response.status !== 200) throw invalidRange(metrics, 'status');
+		if (response.request.method === 'GET') assertContentLength(response, metrics);
+		return;
+	}
+	const requested = /^bytes=(\d+)-(\d*)$/.exec(rawRange);
+	if (!requested) throw invalidRange(metrics, 'request');
+	if (response.request.method === 'HEAD') {
+		if (response.status !== 200 && response.status !== 206) {
+			throw invalidRange(metrics, 'status');
+		}
+		if (response.status === 206) {
+			assertRequestedContentRange(
+				parseContentRange(response.headers['content-range'], metrics),
+				requested,
+				metrics,
+			);
+		}
+		return;
+	}
+	if (response.status === 200) {
+		assertContentLength(response, metrics);
+		if (response.body.byteLength > DATABASE_FULL_RESPONSE_BYTES) {
+			throw invalidRange(metrics, 'full_response');
+		}
+		recordDatabasePolicy(metrics, 'range', 'full_response');
+		return;
+	}
+	if (response.status !== 206) throw invalidRange(metrics, 'status');
+	const contentRange = parseContentRange(response.headers['content-range'], metrics);
+	assertRequestedContentRange(contentRange, requested, metrics);
+	if (response.body.byteLength !== contentRange.end - contentRange.start + 1) {
+		throw invalidRange(metrics, 'content_range');
+	}
+	assertContentLength(response, metrics);
+	recordDatabasePolicy(metrics, 'range', 'partial');
+}
+
+function assertRequestedContentRange(
+	contentRange: { start: number; end: number; size: number },
+	requested: RegExpExecArray,
+	metrics: Metrics,
+): void {
+	const requestedStart = Number(requested[1]);
+	const requestedEnd = requested[2] === '' ? undefined : Number(requested[2]);
+	if (
+		contentRange.start !== requestedStart ||
+		(requestedEnd !== undefined && contentRange.end > requestedEnd) ||
+		contentRange.end >= contentRange.size
+	) {
+		throw invalidRange(metrics, 'content_range');
+	}
+}
+
+function parseContentRange(value: string | undefined, metrics: Metrics) {
+	const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(value ?? '');
+	if (!match) throw invalidRange(metrics, 'content_range');
+	const start = Number(match[1]);
+	const end = Number(match[2]);
+	const size = Number(match[3]);
+	if (![start, end, size].every(Number.isSafeInteger) || start < 0 || end < start || size < 1) {
+		throw invalidRange(metrics, 'content_range');
+	}
+	return { start, end, size };
+}
+
+function assertContentLength(
+	response: Readonly<IcebergHttpBrokerObservedResponse>,
+	metrics: Metrics,
+): void {
+	const raw = response.headers['content-length'];
+	if (raw === undefined) return;
+	const length = Number(raw);
+	if (!Number.isSafeInteger(length) || length < 0 || length !== response.body.byteLength) {
+		throw invalidRange(metrics, 'content_length');
+	}
+}
+
+function invalidRange(metrics: Metrics, outcome: string): IcebergHttpBrokerError {
+	recordDatabasePolicy(metrics, 'range', outcome);
+	return new IcebergHttpBrokerError(
+		'range_invalid',
+		'The remote DuckDB database returned invalid byte-range metadata. Serve single byte ranges with consistent Content-Range and Content-Length headers.',
+	);
+}
+
+function objectChanged(): IcebergHttpBrokerError {
+	return new IcebergHttpBrokerError(
+		'object_changed',
+		'The remote DuckDB database changed during the query. Retry against an immutable versioned URL.',
+	);
+}
+
+function isStrongEtag(value: string | undefined): boolean {
+	return (
+		value !== undefined && !value.startsWith('W/') && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(value)
+	);
+}
+
+function isSuccessfulStatus(status: number): boolean {
+	return status >= 200 && status < 300;
+}
+
+function isRedirectStatus(status: number): boolean {
+	return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function recordDatabasePolicy(
+	metrics: Metrics,
+	policy: 'etag' | 'range' | 'redirect',
+	outcome: string,
+) {
+	metrics.increment('duckdb_http_database.policy', 1, { policy, outcome });
 }
 
 interface S3RouteAccess {

@@ -157,6 +157,7 @@ export {
 	customEnv,
 	databricks,
 	defaultRegistry,
+	duckdbHttp,
 	gcs,
 	huggingFace,
 	icebergBigQuery,

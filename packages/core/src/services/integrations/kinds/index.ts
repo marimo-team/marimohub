@@ -4,6 +4,7 @@ import { bigquery } from './bigquery';
 import { clickhouse } from './clickhouse';
 import { customEnv } from './customEnv';
 import { databricks } from './databricks';
+import { duckdbHttp } from './duckdbHttp';
 import {
 	icebergBigQuery,
 	icebergDynamoDb,
@@ -28,6 +29,7 @@ export { bigquery } from './bigquery';
 export { clickhouse } from './clickhouse';
 export { customEnv } from './customEnv';
 export { databricks } from './databricks';
+export { duckdbHttp } from './duckdbHttp';
 export {
 	icebergBigQuery,
 	icebergDynamoDb,
@@ -58,6 +60,7 @@ export function defaultRegistry(): IntegrationRegistry {
 	registry.register(bigquery);
 	registry.register(redshift);
 	registry.register(motherduck);
+	registry.register(duckdbHttp);
 	registry.register(icebergRest);
 	registry.register(icebergSql);
 	registry.register(icebergHive);

@@ -249,6 +249,10 @@ const FIXTURES: Record<string, unknown> = {
 		vars: { MY_FLAG: 'on' },
 		secrets: [{ name: 'MY_TOKEN', value: 'tok' }],
 	},
+	duckdb_http: {
+		url: 'https://data.example.test/snapshots/analytics.duckdb',
+		auth: { method: 'none' },
+	},
 };
 
 describe('kind renders (golden)', () => {

@@ -235,6 +235,39 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/duckdb_http/config:
+    summary: Remote DuckDB Database
+    description: Query one immutable DuckDB database file over guarded HTTPS.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#FFF000'
+    x-secret-paths:
+      - auth.token
+      - auth.password
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_duckdb_http_config
+      summary: Stored duckdb_http config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/duckdb_http_stored'
+    put:
+      operationId: write_duckdb_http_config
+      summary: Input duckdb_http config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/duckdb_http'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/gcs/config:
     summary: Google Cloud Storage
     description: GCS buckets for gcsfs, polars, and duckdb, with ADC or a
@@ -1869,6 +1902,125 @@ components:
         - host
         - http_path
         - auth
+      additionalProperties: false
+    duckdb_http:
+      type: object
+      properties:
+        url:
+          type: string
+          minLength: 1
+          description: Exact HTTPS URL of one immutable DuckDB database file
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: bearer_token
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+              required:
+                - method
+                - token
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  minLength: 1
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+              required:
+                - method
+                - username
+                - password
+              additionalProperties: false
+          discriminator:
+            propertyName: method
+        allow_non_duckdb_suffix:
+          default: false
+          description: Allow a URL path that does not end in .duckdb
+          type: boolean
+      required:
+        - url
+        - auth
+      additionalProperties: false
+    duckdb_http_stored:
+      type: object
+      properties:
+        url:
+          type: string
+          minLength: 1
+          description: Exact HTTPS URL of one immutable DuckDB database file
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: bearer_token
+                token:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  minLength: 1
+                password:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+              required:
+                - method
+                - username
+                - password
+              additionalProperties: false
+          discriminator:
+            propertyName: method
+        allow_non_duckdb_suffix:
+          default: false
+          description: Allow a URL path that does not end in .duckdb
+          type: boolean
+      required:
+        - url
+        - auth
+        - allow_non_duckdb_suffix
       additionalProperties: false
     gcs:
       type: object
