@@ -16,9 +16,9 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 ## Storage
 
-Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `azure`, `fs`, `memory`, `r2`.
+Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `azure`, `fs`, `memory`, `library`, `r2`.
 
-Where all notebooks and state are stored. `s3`, `gcs`, and `azure` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.
+Stores all notebooks and state. Durable self-hosted backends are `s3`, `gcs`, `azure`, and single-node `fs`. `library` loads an external Node adapter. `r2` is Workers-only. `memory` is for development and tests.
 
 ### S3 / S3-compatible
 
@@ -80,6 +80,16 @@ Non-durable in-memory bucket — all state is lost on restart. Gated behind an e
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_ALLOW_EPHEMERAL_STORAGE` | Safety gate: must be `true` to use the non-durable memory backend (dev/tests only). | Yes | `false` | `true` |
 
+### External library (Node server only)
+
+`MARIMOHUB_STORAGE_BACKEND=library`
+
+Loads an external storage adapter from an npm package or ESM file at Node server startup. Cloudflare Workers do not support it.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_STORAGE_LIBRARY` | npm package specifier or ESM path that default-exports a storage adapter manifest. | Yes | — | `/etc/marimohub/storage.mjs` |
+
 ### R2 (Cloudflare Workers only)
 
 `MARIMOHUB_STORAGE_BACKEND=r2`
@@ -90,7 +100,7 @@ _No environment variables to set here._
 
 ## Compute
 
-Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `kubernetes`, `local`, `none`.
+Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `kubernetes`, `local`, `library`, `none`.
 
 Where notebook kernels run. The shared variables apply across compute backends.
 
@@ -231,6 +241,16 @@ Spawns `uv run marimo edit` as a host subprocess. Requires `uv` + Python on the 
 | `MARIMOHUB_COMPUTE_LOCAL_HOST` | Host the exposed kernel URL points to. | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_LOCAL_BIND_HOST` | Interface marimo binds to (set `0.0.0.0` in Docker). | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_LOCAL_PORTS` | Published port range (`start-end`). Required in Docker; omit for ephemeral ports. | — | — | `2718-2723` |
+
+### External library (Node server only)
+
+`MARIMOHUB_COMPUTE_BACKEND=library`
+
+Loads an external compute adapter from an npm package or ESM file at Node server startup. Cloudflare Workers do not support it.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_COMPUTE_LIBRARY` | npm package specifier or ESM path that default-exports a compute adapter manifest. | Yes | — | `/etc/marimohub/compute.mjs` |
 
 ### None
 
@@ -547,7 +567,7 @@ Integration management and session injection are enabled by default. Project ent
 | `MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS` | Hard deadline for one Run SQL worker, including startup. | — | `30` | — |
 | `MARIMOHUB_DATA_QUERY_MEMORY_LIMIT_MB` | Engine memory limit in MiB for each Run SQL worker. The worker also has fixed V8 heap and stack limits. | — | `128` | — |
 | `MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS` | Allow editors to browse ambient-auth S3 integrations with the control-plane AWS identity when compatible project WIF credentials are unavailable. Keep this off unless that identity is intentionally available to project editors. | — | `false` | — |
-| `MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS` | Maximum time for one object listing or metadata operation, including DNS resolution. | — | `30` | — |
+| `MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS` | Maximum time for one object listing, metadata, or catalog browse request, including DNS resolution. | — | `30` | — |
 | `MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS` | Maximum time for one bounded object preview, including DNS resolution and ranged reads. | — | `30` | — |
 | `MARIMOHUB_OBJECT_BROWSER_PREVIEW_MAX_BYTES` | Maximum source bytes read for CSV, JSON, JSON Lines, and text previews. | — | `8388608` | — |
 | `MARIMOHUB_OBJECT_BROWSER_INLINE_IMAGE_MAX_BYTES` | Maximum size of a magic-byte-validated raster image shown inline. | — | `10485760` | — |

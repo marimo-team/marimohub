@@ -151,7 +151,7 @@ function checkSandboxConfig(env: Env, deps: ApiDeps): CheckOutcome {
 	if (mode === 'proxy' && !deps.sandbox.appBaseUrl) {
 		issues.push('MARIMOHUB_APP_BASE_URL is empty (proxy URLs fall back to the request origin)');
 	}
-	if (!env.MARIMOHUB_COMPUTE_IMAGE && !['local', 'none', 'noop'].includes(backend)) {
+	if (!env.MARIMOHUB_COMPUTE_IMAGE && !['library', 'local', 'none', 'noop'].includes(backend)) {
 		issues.push(
 			'MARIMOHUB_COMPUTE_IMAGE is unset (the kernel image, or a comma-separated list of images)',
 		);

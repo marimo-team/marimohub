@@ -6,6 +6,7 @@ import { CONFIG_SPEC, CONFIG_DOCUMENTED_IDS, CONFIG_VAR_IDS } from './spec';
 // Files that read the env surface; scanned for MARIMOHUB_*/PORT literals.
 const WIRING_SOURCES = [
 	fileURLToPath(new URL('./index.ts', import.meta.url)),
+	fileURLToPath(new URL('./library.ts', import.meta.url)),
 	fileURLToPath(new URL('./storage.ts', import.meta.url)),
 	fileURLToPath(new URL('./compute.ts', import.meta.url)),
 	fileURLToPath(new URL('./auth.ts', import.meta.url)),

@@ -1,5 +1,5 @@
 ---
-description: Select and configure the sandbox backend that runs marimohub notebook kernels.
+description: Select a built-in or external sandbox backend for marimohub notebook kernels.
 ---
 
 # Compute
@@ -27,6 +27,7 @@ Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 | Local      | `local`      | Local development with `uv run marimo edit` |
 | Cloudflare | `cloudflare` | Workers entrypoint with Containers binding  |
 | None       | `none`       | Browse notebooks without runnable kernels   |
+| External   | `library`    | Operator-provided Node adapter              |
 
 ## Shared settings
 
@@ -135,6 +136,10 @@ sandboxes at the largest profile can exceed the host's capacity.
 ### None
 
 <!--@include: ./setup/compute/none.md-->
+
+### External library
+
+<!--@include: ./setup/compute/library.md-->
 
 ## Validate it
 

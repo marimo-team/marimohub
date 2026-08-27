@@ -1,5 +1,5 @@
 ---
-description: Select and configure S3, GCS, Azure, filesystem, R2, or memory storage for marimohub.
+description: Select built-in or external storage for marimohub.
 ---
 
 # Storage
@@ -13,14 +13,15 @@ Selector: `MARIMOHUB_STORAGE_BACKEND`. Full variables:
 
 ## Choose a backend
 
-| Backend    | Selector | Durable | Use for                                       |
-| ---------- | -------- | ------- | --------------------------------------------- |
-| S3         | `s3`     | Yes     | CoreWeave CAIOS, AWS S3, MinIO, Tigris, Ceph  |
-| GCS        | `gcs`    | Yes     | Google Cloud Storage                          |
-| Azure      | `azure`  | Yes     | Azure Blob Storage                            |
-| Filesystem | `fs`     | Yes     | Single-node self-hosting on a local disk      |
-| R2         | `r2`     | Yes     | Cloudflare Workers through a platform binding |
-| Memory     | `memory` | No      | Local development and tests only              |
+| Backend    | Selector  | Durable | Use for                                       |
+| ---------- | --------- | ------- | --------------------------------------------- |
+| S3         | `s3`      | Yes     | CoreWeave CAIOS, AWS S3, MinIO, Tigris, Ceph  |
+| GCS        | `gcs`     | Yes     | Google Cloud Storage                          |
+| Azure      | `azure`   | Yes     | Azure Blob Storage                            |
+| Filesystem | `fs`      | Yes     | Single-node self-hosting on a local disk      |
+| R2         | `r2`      | Yes     | Cloudflare Workers through a platform binding |
+| Memory     | `memory`  | No      | Local development and tests only              |
+| External   | `library` | Varies  | Operator-provided Node adapter                |
 
 `s3` is the default for the Node server. `fs` needs no external store but is
 single-replica only (see below). `r2` is Workers-only because it uses a runtime
@@ -63,6 +64,10 @@ Known-good options:
 ### Memory (dev/tests)
 
 <!--@include: ./setup/storage/memory.md-->
+
+### External library
+
+<!--@include: ./setup/storage/library.md-->
 
 ## Validate it
 

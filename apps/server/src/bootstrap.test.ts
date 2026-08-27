@@ -35,7 +35,7 @@ function makeHarness(
 	options: { closeImmediately?: boolean; otel?: OtelHandle | null } = {},
 ) {
 	const server = fakeServer(options.closeImmediately);
-	const createDeps = vi.fn(() => deps);
+	const createDeps = vi.fn<NonNullable<BootstrapOverrides['createDeps']>>(() => deps);
 	const serveFn = vi.fn<NonNullable<BootstrapOverrides['serveFn']>>(() => server.server);
 	const exit = vi.fn<(code: number) => void>();
 	const signals = new Map<Signal, () => void>();
@@ -378,11 +378,22 @@ describe('bootstrap', () => {
 		);
 	});
 
-	it('exits on a configuration error without serving', async () => {
+	it.each([
+		[
+			'synchronous',
+			() => {
+				throw new ConfigError('missing storage backend');
+			},
+		],
+		[
+			'asynchronous',
+			async () => {
+				throw new ConfigError('missing storage backend');
+			},
+		],
+	] as const)('exits on a %s configuration error without serving', async (_mode, fail) => {
 		const harness = makeHarness(deps);
-		harness.createDeps.mockImplementationOnce(() => {
-			throw new ConfigError('missing storage backend');
-		});
+		harness.createDeps.mockImplementationOnce(fail);
 
 		await expect(bootstrap(BASE_ENV, harness.overrides)).resolves.toBeUndefined();
 		expect(harness.exit).toHaveBeenCalledWith(1);
@@ -390,6 +401,15 @@ describe('bootstrap', () => {
 		expect(console.error).toHaveBeenCalledWith(
 			expect.stringContaining('Configuration error: missing storage backend'),
 		);
+	});
+
+	it('awaits asynchronous dependency creation before serving', async () => {
+		const harness = makeHarness(deps);
+		harness.createDeps.mockImplementationOnce(async () => deps);
+
+		await bootstrap(BASE_ENV, harness.overrides);
+
+		expect(harness.serveFn).toHaveBeenCalledOnce();
 	});
 
 	it('exits on invalid server-owned environment without creating adapters', async () => {

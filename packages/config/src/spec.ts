@@ -59,7 +59,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_STORAGE_BACKEND',
 		selectorDefault: 's3',
 		description:
-			'Where all notebooks and state are stored. `s3`, `gcs`, and `azure` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.',
+			'Stores all notebooks and state. Durable self-hosted backends are `s3`, `gcs`, `azure`, and single-node `fs`. `library` loads an external Node adapter. `r2` is Workers-only. `memory` is for development and tests.',
 		backends: [
 			{
 				name: 'S3 / S3-compatible',
@@ -205,6 +205,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Safety gate: must be `true` to use the non-durable memory backend (dev/tests only).',
 						example: 'true',
 						default: 'false',
+						required: true,
+					},
+				],
+			},
+			{
+				name: 'External library (Node server only)',
+				selectorValue: 'library',
+				description:
+					'Loads an external storage adapter from an npm package or ESM file at Node server startup. Cloudflare Workers do not support it.',
+				vars: [
+					{
+						id: 'MARIMOHUB_STORAGE_LIBRARY',
+						name: 'Storage adapter library',
+						description:
+							'npm package specifier or ESM path that default-exports a storage adapter manifest.',
+						example: '/etc/marimohub/storage.mjs',
 						required: true,
 					},
 				],
@@ -696,6 +712,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Published port range (`start-end`). Required in Docker; omit for ephemeral ports.',
 						example: '2718-2723',
+					},
+				],
+			},
+			{
+				name: 'External library (Node server only)',
+				selectorValue: 'library',
+				description:
+					'Loads an external compute adapter from an npm package or ESM file at Node server startup. Cloudflare Workers do not support it.',
+				vars: [
+					{
+						id: 'MARIMOHUB_COMPUTE_LIBRARY',
+						name: 'Compute adapter library',
+						description:
+							'npm package specifier or ESM path that default-exports a compute adapter manifest.',
+						example: '/etc/marimohub/compute.mjs',
+						required: true,
 					},
 				],
 			},

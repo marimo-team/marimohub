@@ -56,6 +56,7 @@ const ICONS: Record<string, string> = {
 	azure: '🔷',
 	fs: '📁',
 	memory: '🧪',
+	library: '🧩',
 	// compute
 	modal: '🚀',
 	coreweave: '🧶',

@@ -32,6 +32,7 @@ const DOC_HREFS: Record<string, string> = {
 	'storage/azure': '/storage#azure-blob-storage',
 	'storage/fs': '/storage#filesystem-setup',
 	'storage/memory': '/storage#memory-dev-tests',
+	'storage/library': '/storage#external-library',
 	'compute/coreweave': '/compute#coreweave',
 	'compute/wandb': '/compute#w-b',
 	'compute/modal': '/compute#modal',
@@ -41,6 +42,7 @@ const DOC_HREFS: Record<string, string> = {
 	'compute/podman': '/compute#podman',
 	'compute/local': '/compute#local-dev',
 	'compute/none': '/compute#none',
+	'compute/library': '/compute#external-library',
 	'ai/openai-compatible': '/ai#configuration',
 	'ai/none': '/ai#what-the-user-can-override',
 };

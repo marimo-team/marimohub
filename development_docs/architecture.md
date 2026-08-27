@@ -385,15 +385,16 @@ destinations.
 
 ### Storage — `MARIMOHUB_STORAGE_*`
 
-| Variable                                 | Purpose                                  |
-| ---------------------------------------- | ---------------------------------------- |
-| `MARIMOHUB_STORAGE_BACKEND`              | `s3` \| `r2` \| `gcs` \| `memory`        |
-| `MARIMOHUB_STORAGE_S3_BUCKET`            | Bucket name (S3-compatible)              |
-| `MARIMOHUB_STORAGE_S3_ENDPOINT`          | Endpoint URL (MinIO/Tigris/R2-via-S3)    |
-| `MARIMOHUB_STORAGE_S3_REGION`            | Region                                   |
-| `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID`     | Access key (secret)                      |
-| `MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY` | Secret key (secret)                      |
-| `MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE`  | `true` for MinIO and most non-AWS stores |
+| Variable                                 | Purpose                                                           |
+| ---------------------------------------- | ----------------------------------------------------------------- |
+| `MARIMOHUB_STORAGE_BACKEND`              | `s3` \| `gcs` \| `azure` \| `fs` \| `library` \| `r2` \| `memory` |
+| `MARIMOHUB_STORAGE_LIBRARY`              | External npm package or ESM file when the backend is `library`    |
+| `MARIMOHUB_STORAGE_S3_BUCKET`            | Bucket name (S3-compatible)                                       |
+| `MARIMOHUB_STORAGE_S3_ENDPOINT`          | Endpoint URL (MinIO/Tigris/R2-via-S3)                             |
+| `MARIMOHUB_STORAGE_S3_REGION`            | Region                                                            |
+| `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID`     | Access key (secret)                                               |
+| `MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY` | Secret key (secret)                                               |
+| `MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE`  | `true` for MinIO and most non-AWS stores                          |
 
 > On Cloudflare Workers, R2 is supplied as a native **binding** rather than
 > credentials, so the worker entrypoint uses the `r2` backend and the binding
@@ -401,17 +402,18 @@ destinations.
 
 ### Compute — `MARIMOHUB_COMPUTE_*`
 
-| Variable                                        | Purpose                                                                                          |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `MARIMOHUB_COMPUTE_BACKEND`                     | `cloudflare` \| `modal` \| `coreweave` \| `kubernetes` \| `docker` \| `e2b` \| `local` \| `none` |
-| `MARIMOHUB_COMPUTE_IMAGE`                       | Sandbox image reference                                                                          |
-| `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`            | Public hostname used when exposing kernel ports                                                  |
-| `MARIMOHUB_COMPUTE_MODAL_TOKEN_ID` / `_SECRET`  | Modal credentials (secret)                                                                       |
-| `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`           | `modal` backend: named Modal environment (defaults to the workspace environment)                 |
-| `MARIMOHUB_COMPUTE_COREWEAVE_API_KEY`           | `coreweave` backend: CoreWeave Sandbox API key (secret)                                          |
-| `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | `coreweave` backend: public kernel URL scheme (`{sandboxId}`/`{port}`/`{host}`)                  |
-| `MARIMOHUB_COMPUTE_LOCAL_HOST`                  | `local` backend: host for the kernel URL (default `localhost`)                                   |
-| `MARIMOHUB_COMPUTE_LOCAL_ROOT`                  | `local` backend: parent directory for sandboxes (default: OS temporary directory)                |
+| Variable                                        | Purpose                                                                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_COMPUTE_BACKEND`                     | `cloudflare` \| `modal` \| `coreweave` \| `kubernetes` \| `docker` \| `e2b` \| `local` \| `library` \| `none` |
+| `MARIMOHUB_COMPUTE_LIBRARY`                     | External npm package or ESM file when the backend is `library`                                                |
+| `MARIMOHUB_COMPUTE_IMAGE`                       | Sandbox image reference                                                                                       |
+| `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`            | Public hostname used when exposing kernel ports                                                               |
+| `MARIMOHUB_COMPUTE_MODAL_TOKEN_ID` / `_SECRET`  | Modal credentials (secret)                                                                                    |
+| `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`           | `modal` backend: named Modal environment (defaults to the workspace environment)                              |
+| `MARIMOHUB_COMPUTE_COREWEAVE_API_KEY`           | `coreweave` backend: CoreWeave Sandbox API key (secret)                                                       |
+| `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | `coreweave` backend: public kernel URL scheme (`{sandboxId}`/`{port}`/`{host}`)                               |
+| `MARIMOHUB_COMPUTE_LOCAL_HOST`                  | `local` backend: host for the kernel URL (default `localhost`)                                                |
+| `MARIMOHUB_COMPUTE_LOCAL_ROOT`                  | `local` backend: parent directory for sandboxes (default: OS temporary directory)                             |
 
 Modal derives its provider-side idle limit as 1.5 times
 `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. The record-driven lifecycle sweep
@@ -452,7 +454,7 @@ saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 ---
 
-## 5. Two Ways to Run It
+## 5. Three Ways to Run It
 
 ### Config-driven (the common case)
 
@@ -461,7 +463,28 @@ prebuilt artifact (the Worker, or the Docker image). A small `@marimo-hub/config
 package reads the env, selects each adapter from its `*_BACKEND` selector, and
 wires the system together. No code required.
 
-### Library-based (the complex case)
+### External adapter library (custom storage or compute)
+
+The Node server can load an external adapter without a custom entrypoint. Select
+`library` and provide an npm package or ESM file:
+
+```sh
+MARIMOHUB_STORAGE_BACKEND=library
+MARIMOHUB_STORAGE_LIBRARY=/etc/marimohub/storage.mjs
+MARIMOHUB_COMPUTE_BACKEND=library
+MARIMOHUB_COMPUTE_LIBRARY=@myorg/marimohub-compute
+```
+
+At startup, the server loads each module once and validates its version and port
+shape. It passes the `MARIMOHUB_*` environment to the module factory. Relative
+paths start at the server working directory.
+
+Only the Node server supports external adapters. Cloudflare Workers continue to
+use bindings and hand-wired composition. Load only trusted modules. They run
+with server privileges. See
+[`ports.md`](./ports.md#external-adapter-libraries) for the contract.
+
+### Library composition (the complex case)
 
 When you need something the config surface doesn't cover — a proprietary storage
 backend, a custom `Authorizer`, multi-tenant routing, or embedding marimohub
@@ -571,6 +594,7 @@ examples/
   cloudflare-worker/      Cloudflare Workers entrypoint (R2 + Containers + Access)
   docker-compose/         Docker Compose deployment of @marimo-hub/server
   library-composition/    library-mode example: import packages and wire adapters
+  external-adapter/       runtime-loaded storage and compute manifest examples
 ```
 
 The deployable entrypoints live under `examples/` and `apps/`: the **Cloudflare

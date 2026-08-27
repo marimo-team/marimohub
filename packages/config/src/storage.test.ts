@@ -145,7 +145,7 @@ describe('makeStorage backend selection', () => {
 
 	it('rejects an unknown backend and lists the accepted values', () => {
 		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'sqlite' })).toThrow(
-			/Invalid MARIMOHUB_STORAGE_BACKEND: sqlite \(expected s3, gcs, azure, fs, memory, r2\)/,
+			/Invalid MARIMOHUB_STORAGE_BACKEND: sqlite \(expected s3, gcs, azure, fs, memory, library, r2\)/,
 		);
 	});
 
@@ -190,5 +190,14 @@ describe('makeSandboxBucketConfig', () => {
 		expect(
 			makeSandboxBucketConfig({ MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: 'akid' }).credentials,
 		).toBeUndefined();
+	});
+
+	it('marks library storage as unavailable for direct sandbox mounts', () => {
+		expect(makeSandboxBucketConfig({ MARIMOHUB_STORAGE_BACKEND: 'library' })).toEqual({
+			name: '',
+			endpoint: '',
+			mountable: false,
+			credentials: undefined,
+		});
 	});
 });

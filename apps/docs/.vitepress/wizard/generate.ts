@@ -257,6 +257,14 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 				'Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3, gcs, or azure for multi-replica deployments.',
 		});
 	}
+	if (sel.storage === 'library' || sel.compute === 'library') {
+		warnings.push({
+			level: 'warning',
+			title: 'External adapter runs with server privileges',
+			message:
+				'Install or mount only trusted adapter code. External adapters run in-process and are not sandboxed.',
+		});
+	}
 	if (sel.compute === 'local') {
 		warnings.push({
 			level: 'warning',
@@ -337,8 +345,15 @@ export function generateLibrary(sel: WizardSelection): string {
 	const values = effective(sel);
 	const resolve = (id: string): string => resolveValue(id, values);
 
-	const storage = STORAGE_WIRING[sel.storage];
-	const compute = COMPUTE_WIRING[sel.compute];
+	const usesExternalStorage = sel.storage === 'library';
+	const usesExternalCompute = sel.compute === 'library';
+	const usesExternalLibrary = usesExternalStorage || usesExternalCompute;
+	const storage = usesExternalStorage
+		? { imports: [], rhs: () => 'externalBucket!' }
+		: STORAGE_WIRING[sel.storage];
+	const compute = usesExternalCompute
+		? { imports: [], rhs: () => 'externalCompute!' }
+		: COMPUTE_WIRING[sel.compute];
 	const auth = AUTH_WIRING[sel.auth];
 	if (!storage || !compute || !auth) {
 		throw new Error(`No library wiring for ${sel.storage}/${sel.compute}/${sel.auth}`);
@@ -346,6 +361,7 @@ export function generateLibrary(sel: WizardSelection): string {
 
 	const imports = [
 		`import { createApi } from '@marimo-hub/api';`,
+		...(usesExternalLibrary ? [`import { loadAdapterLibraries } from '@marimo-hub/config';`] : []),
 		`import { createServices } from '@marimo-hub/core';`,
 		...storage.imports,
 		...compute.imports,
@@ -372,6 +388,13 @@ export function generateLibrary(sel: WizardSelection): string {
 		: [];
 
 	const body = [
+		...(usesExternalLibrary
+			? [
+					`const { bucket: externalBucket, compute: externalCompute } =`,
+					`\tawait loadAdapterLibraries(process.env);`,
+					``,
+				]
+			: []),
 		`const bucket = ${storage.rhs(resolve)};`,
 		``,
 		`const compute = ${compute.rhs(resolve)};`,
