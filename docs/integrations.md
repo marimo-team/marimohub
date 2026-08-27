@@ -196,7 +196,7 @@ because a query cannot be preempted at its deadline. Each query runs in a
 read-only transaction after the runtime sets its memory limit and locks configuration.
 The unbrokered runtime disables external access and rejects remote Node file callbacks.
 
-The brokered runtime supports a narrow Iceberg REST configuration. It requires all these values:
+The brokered runtime supports explicit S3 storage. It requires all these values:
 
 - no authentication, bearer-token authentication, or OAuth2 client credentials
 - no access delegation
@@ -220,6 +220,40 @@ Authenticated catalog, OAuth2, and S3 endpoints require HTTPS by default. Enable
 For OAuth2, the parent owns the client secret and refreshes the access token. The token endpoint
 uses the configured integration egress policy. Access tokens stay in one broker session. The worker
 receives only the dummy token from the generated `ATTACH` statement.
+
+The broker also supports S3 credentials from a trusted Iceberg REST catalog. Configure this path as
+follows:
+
+```yaml
+storage:
+  scheme: catalog
+  vended_s3:
+    endpoint: https://s3.us-east-1.amazonaws.com
+    region: us-east-1
+    force_virtual_addressing: true
+    allowed_locations:
+      - bucket: warehouse
+        prefix: production/
+access_delegation: vended_credentials
+```
+
+Each allowed location is a maximum bound. The catalog cannot grant a sibling prefix, bucket, or
+endpoint. An empty prefix grants its complete bucket.
+
+The catalog must use HTTPS. The storage endpoint must be an HTTPS origin. The broker supports
+path-style and virtual-hosted S3 requests.
+
+The broker reads prefixes from `LoadTable` and table-credentials responses. It installs each route
+before DuckDB reads an object. The parent does not store the credential values.
+
+Only SigV4 authorization, date, payload-hash, and session-token headers enter dynamic storage
+routes. These headers cannot enter catalog routes or unmatched storage routes.
+
+GCS, Azure storage, remote signing, server-side scan responses, and worker-selected endpoints are
+not supported. These configurations use the Python executor.
+
+Bounded vended routes are available when guarded DuckDB HTTP is enabled. R2 Data Catalog routes use
+a bound from the catalog URI instead of configured `allowed_locations`.
 
 Other Iceberg configurations continue to use the sandbox executor.
 
@@ -260,20 +294,21 @@ Remote-read errors include a stable code and a safe explanation. They do not inc
 object paths, endpoint URLs, or OAuth2 response bodies. This table lists every code returned to Run
 SQL callers.
 
-| Code                       | Action                                                                           |
-| -------------------------- | -------------------------------------------------------------------------------- |
-| `capability_expired`       | Retry with a smaller query.                                                      |
-| `capability_unknown`       | Retry the query. Reopen the integration if the error continues.                  |
-| `credential_failed`        | Make sure that authenticated endpoints use HTTPS and credentials are valid.      |
-| `header_denied`            | Remove the unsupported header, or use the sandbox runtime.                       |
-| `invalid_capability`       | Edit and re-save the integration. Contact an administrator if the error repeats. |
-| `invalid_request`          | Make sure that the remote URL and headers are valid.                             |
-| `method_denied`            | Use a GET or HEAD read, or use the sandbox runtime.                              |
-| `redirect_budget_exceeded` | Make sure that the integration endpoint is correct.                              |
-| `request_budget_exceeded`  | Narrow the query, or split it into smaller queries.                              |
-| `response_budget_exceeded` | Select fewer columns or rows.                                                    |
-| `target_denied`            | Make sure that catalog redirects and `broker_read_locations` are correct.        |
-| `transport_failed`         | Make sure that DNS, TLS, and the integration egress policy permit the endpoint.  |
+| Code                            | Action                                                                           |
+| ------------------------------- | -------------------------------------------------------------------------------- |
+| `capability_expired`            | Retry with a smaller query.                                                      |
+| `capability_unknown`            | Retry the query. Reopen the integration if the error continues.                  |
+| `credential_failed`             | Make sure that authenticated endpoints use HTTPS and credentials are valid.      |
+| `dynamic_route_budget_exceeded` | Narrow the query, or configure fewer vended storage prefixes.                    |
+| `header_denied`                 | Remove the unsupported header, or use the sandbox runtime.                       |
+| `invalid_capability`            | Edit and re-save the integration. Contact an administrator if the error repeats. |
+| `invalid_request`               | Make sure that the remote URL and headers are valid.                             |
+| `method_denied`                 | Use a GET or HEAD read, or use the sandbox runtime.                              |
+| `redirect_budget_exceeded`      | Make sure that the integration endpoint is correct.                              |
+| `request_budget_exceeded`       | Narrow the query, or split it into smaller queries.                              |
+| `response_budget_exceeded`      | Select fewer columns or rows.                                                    |
+| `target_denied`                 | Make sure that catalog redirects and `broker_read_locations` are correct.        |
+| `transport_failed`              | Make sure that DNS, TLS, and the integration egress policy permit the endpoint.  |
 
 ### Scope and caching
 

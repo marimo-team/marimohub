@@ -345,6 +345,26 @@ describe('makeIntegrations data browser', () => {
 		});
 	});
 
+	it('enables bounded vended S3 queries without rollout configuration', () => {
+		const config = {
+			uri: 'https://catalog.example.com/iceberg',
+			auth: { method: 'none' },
+			storage: {
+				scheme: 'catalog',
+				vended_s3: {
+					endpoint: 'https://objects.example.com',
+					allowed_locations: [{ bucket: 'warehouse', prefix: 'production' }],
+				},
+			},
+			access_delegation: 'vended_credentials',
+		};
+		const integrations = makeIntegrations({}, new MemoryBucket()).integrations;
+
+		expect(
+			integrations?.queryReadiness({ kind: 'iceberg_rest', config }).every((check) => check.ready),
+		).toBe(true);
+	});
+
 	it('passes metadata and full modes to every production object browser', async () => {
 		for (const [mode, expected] of [
 			['metadata', { preview: false, download: false }],

@@ -35,17 +35,18 @@ uses HTTP Basic authentication and the `client_credentials` grant. The parent sh
 operation across concurrent requests. It keeps the token only for the broker session. The worker
 receives the dummy token from its `ATTACH` statement.
 
-For an R2 Data Catalog, temporary SigV4 credentials enter the disposable worker. The broker forwards
-signed requests only to the bucket derived from the trusted catalog URI. The parent adds
-`X-Iceberg-Access-Delegation: vended-credentials` to each R2 catalog request. This header asks the
-catalog to return temporary storage credentials.
+For an R2 Data Catalog, temporary SigV4 credentials enter the disposable worker. The broker limits
+signed requests to the bucket from the trusted catalog URI.
+
+Generic catalogs can also vend S3 credentials. An administrator configures the maximum endpoint,
+bucket, and key prefixes. The catalog can create routes only inside these bounds.
 
 For brokered Run SQL requests, the parent removes rendered integration files and environment
 variables from the worker request.
 
 ## Supported configuration
 
-The Iceberg REST integration supports two configurations.
+The Iceberg REST integration supports three configurations.
 
 The explicit S3 configuration for Iceberg REST requires:
 
@@ -68,6 +69,23 @@ The R2 Data Catalog configuration requires:
 - `access_delegation: vended_credentials`
 - system TLS without custom headers or extra properties
 - the default PyIceberg runtime and REST client options
+
+The generic vended S3 configuration requires:
+
+- an HTTPS catalog
+- no authentication, bearer-token authentication, or OAuth2 client credentials
+- `access_delegation: vended_credentials`
+- `storage.scheme: catalog`
+- an HTTPS, origin-only `storage.vended_s3.endpoint`
+- one or more `storage.vended_s3.allowed_locations` entries
+- system TLS without custom headers or extra properties
+- the default PyIceberg runtime and REST client options
+
+Each allowed location is a maximum storage bound. An empty prefix grants its complete bucket. A
+non-empty prefix grants that prefix and its children.
+
+The first release supports AWS S3 and fixed S3-compatible endpoints. It does not support GCS,
+Azure storage, remote signing, server-side scan responses, or worker-selected endpoints.
 
 The R2 route derives its storage endpoint and bucket from the catalog URI. R2 does not require these
 explicit S3 fields:
@@ -106,14 +124,33 @@ A broker session contains these controls:
 - an allowlist of `GET` and `HEAD` methods
 - parent-owned authorization or signing functions
 - request, redirect, cumulative-byte, and single-response limits
+- cumulative limits of 512 dynamic routes and 512 KiB of normalized dynamic-route URLs
 - at most four concurrent requests
 - response-byte reservations that adjust to actual response sizes
 
 The worker can submit safe protocol headers such as `Range` and `If-None-Match`.
 The broker drops worker-supplied authorization, cookie, host, proxy, forwarding, and Iceberg
 access-delegation headers. It also drops dummy DuckDB signatures on parent-authenticated routes.
-For R2, the parent adds the fixed access-delegation header only to the catalog route. Only R2 storage
-routes can receive catalog-vended SigV4 headers. Catalog routes and other buckets cannot receive them.
+For R2 and generic vended S3, the parent adds this header only to the catalog route:
+`X-Iceberg-Access-Delegation: vended-credentials`.
+
+For generic vended S3, the parent inspects successful JSON responses from these routes:
+
+- `GET .../namespaces/{namespace}/tables/{table}`
+- `GET .../namespaces/{namespace}/tables/{table}/credentials`
+
+The parent does not inspect `/v1/config`. It parses credential prefixes, but it does not parse or
+store credential values. The response must use an `s3://` prefix inside an administrator bound.
+
+The parent installs path-style and eligible virtual-hosted routes before it returns the response.
+Only these worker headers can enter a dynamic storage route:
+
+- `authorization`
+- `x-amz-content-sha256`
+- `x-amz-date`
+- `x-amz-security-token`
+
+Catalog routes, other origins, sibling buckets, and sibling prefixes cannot receive these headers.
 
 The Node transport does not follow redirects. The broker authorizes each redirect target and then
 applies the credentials for that route. Thus, catalog credentials cannot move to an object-store
@@ -141,7 +178,10 @@ Session closure aborts active transport requests. A preview worker that processe
 only that execution and then stops. A pooled worker cannot become a brokered worker after use.
 
 The broker emits low-cardinality metrics for authorization outcomes, redirects, exhausted budgets,
-response bytes, and latency. The runtime also records bridge failures and worker termination reasons.
+response bytes, and latency. Dynamic route outcomes are `installed`, `duplicate`, `malformed`,
+`outside_bound`, `unsupported_scheme`, and `route_conflict`.
+
+The runtime also records bridge failures and worker termination reasons.
 Metric tags contain only fixed outcome, reason, method, route, status-class, and budget values. They
 never contain URLs, capability IDs, or credentials.
 
@@ -161,8 +201,11 @@ The extension-download origin accepts only the four pinned file names.
 Unit tests cover authorization, OAuth2 refresh, credential separation, redirects, expiry,
 cancellation, concurrency, byte limits, S3 signing, anonymous S3 access, private-address policy,
 and DNS pinning. An integration test runs the
-packaged DuckDB-Wasm Iceberg extension through the worker bridge. The test checks that the R2 catalog
-transport receives the parent-owned bearer token and access-delegation header.
+packaged DuckDB-Wasm Iceberg extension through the worker bridge. One test checks the R2 delegation
+header. A second test uses a synthetic `LoadTable` response and fixed Iceberg object fixtures.
+
+The second test checks the access-key identifier and session-token header on manifest and Parquet
+requests. It does not check or log the secret key.
 
 The live test seeds an Iceberg snapshot in the local Iceberg REST and MinIO services. It runs the
 production preview and Run SQL plans. The test checks that catalog metadata, manifest-list, manifest,
@@ -179,3 +222,21 @@ MARIMOHUB_TEST_ICEBERG_BROKER_S3_ACCESS_KEY=minioadmin \
 MARIMOHUB_TEST_ICEBERG_BROKER_S3_SECRET_KEY=minioadmin \
 pnpm --filter @marimo-hub/config test -- --run src/duckdbHttpBroker.live.test.ts
 ```
+
+The same file has an optional live test for a Polaris, Lakekeeper, or compatible catalog that vends
+MinIO credentials. Configure an HTTPS catalog and storage endpoint. The bucket and prefix are the
+administrator-owned maximum bound. The token, warehouse, namespace, and table variables are
+optional. The namespace and table default to `demo.events`.
+
+```bash
+MARIMOHUB_TEST_ICEBERG_VENDED_URI=https://catalog.example.com/iceberg \
+MARIMOHUB_TEST_ICEBERG_VENDED_S3_ENDPOINT=https://minio.example.com \
+MARIMOHUB_TEST_ICEBERG_VENDED_BUCKET=warehouse \
+MARIMOHUB_TEST_ICEBERG_VENDED_PREFIX=production/demo/events \
+MARIMOHUB_TEST_ICEBERG_VENDED_TOKEN=catalog-token \
+MARIMOHUB_TEST_ICEBERG_VENDED_WAREHOUSE=production \
+pnpm --filter @marimo-hub/config test -- --run src/duckdbHttpBroker.live.test.ts
+```
+
+This test reads a real table and checks that the query capability contains only storage bounds. It
+does not add a static S3 credential to the capability.

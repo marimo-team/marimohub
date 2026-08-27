@@ -11,7 +11,9 @@ import {
 } from '@marimo-hub/duckdb-wasm-runtime/node';
 import type {
 	DuckDBHttpSessionFactory,
+	IcebergHttpBrokerObservedResponse,
 	IcebergHttpBrokerRequest,
+	IcebergHttpBrokerRouteInstaller,
 	IcebergHttpBrokerRoute,
 	IcebergHttpBrokerTransport,
 } from '@marimo-hub/duckdb-wasm-runtime/node';
@@ -34,6 +36,10 @@ const VENDED_S3_REQUEST_HEADERS = [
 	'x-amz-date',
 	'x-amz-security-token',
 ] as const;
+const MAX_VENDED_CREDENTIALS = 32;
+const MAX_CREDENTIAL_JSON_DEPTH = 64;
+const MAX_CREDENTIAL_JSON_ITEMS = 100_000;
+const MAX_CREDENTIAL_JSON_STRING_LENGTH = 1024 * 1024;
 
 export interface DuckDBHttpBrokerOptions {
 	allowPrivate?: boolean;
@@ -90,7 +96,7 @@ export function createDuckDBHttpSessionFactory(
 		const broker = new IcebergHttpBroker(transport, now, undefined, options.metrics);
 		const id = broker.open({
 			expiresAtMs: sessionOptions.expiresAtMs,
-			routes: routesFor(access, now, oauthProvider),
+			routes: routesFor(access, now, oauthProvider, options.metrics ?? noopMetrics),
 			limits: {
 				maxRequests: DEFAULT_MAX_REQUESTS,
 				maxConcurrentRequests: DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -118,6 +124,7 @@ function routesFor(
 	access: Readonly<DuckDBHttpAccess>,
 	now: () => number,
 	oauthProvider?: OAuthTokenProvider,
+	metrics: Metrics = noopMetrics,
 ) {
 	if (access.kind === 's3-object-store') {
 		return s3RoutesFor(access, now, access.allowInsecureTransport === true);
@@ -156,6 +163,24 @@ function routesFor(
 		discardRequestHeaders: ['authorization'] as const,
 	};
 	const storage = access.storage;
+	if (storage.kind === 'vended-s3') {
+		const endpoint = parseEndpoint(storage.endpoint);
+		assertCredentialTransport(endpoint.toString(), true, false, 'S3');
+		const vendedCatalog: IcebergHttpBrokerRoute = {
+			...catalog,
+			headers: {
+				...catalog.headers,
+				'x-iceberg-access-delegation': 'vended-credentials',
+			},
+			observeResponse: createVendedS3ResponseObserver({
+				endpoint,
+				urlStyle: storage.urlStyle,
+				allowedLocations: storage.allowedLocations,
+				metrics,
+			}),
+		};
+		return catalogAndStorageRoutes(vendedCatalog, []);
+	}
 	if (storage.kind === 'r2-catalog') {
 		const endpoint = parseEndpoint(storage.endpoint);
 		const pathStorageUrl = storagePrefixUrl(endpoint, storage.bucket, '', 'path', true);
@@ -241,6 +266,229 @@ function s3RoutesFor(
 		prepareHeaders: prepareStorageHeaders,
 		discardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
 	}));
+}
+
+function createVendedS3ResponseObserver(options: {
+	endpoint: URL;
+	urlStyle: 'path' | 'vhost';
+	allowedLocations: readonly { bucket: string; prefix: string }[];
+	metrics: Metrics;
+}) {
+	return (
+		response: Readonly<IcebergHttpBrokerObservedResponse>,
+		installer: IcebergHttpBrokerRouteInstaller,
+	): void => {
+		if (!isVendedCredentialResponse(response)) return;
+		let body: unknown;
+		try {
+			body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(response.body));
+			assertBoundedCredentialJson(body);
+		} catch {
+			recordDynamicRouteOutcome(options.metrics, 'malformed');
+			return;
+		}
+		const credentials = asJsonRecord(body)?.['storage-credentials'];
+		if (
+			!Array.isArray(credentials) ||
+			credentials.length === 0 ||
+			credentials.length > MAX_VENDED_CREDENTIALS
+		) {
+			recordDynamicRouteOutcome(options.metrics, 'malformed');
+			return;
+		}
+
+		const locations: { bucket: string; prefix: string }[] = [];
+		for (const credential of credentials) {
+			const prefix = asJsonRecord(credential)?.prefix;
+			if (typeof prefix !== 'string') {
+				recordDynamicRouteOutcome(options.metrics, 'malformed');
+				return;
+			}
+			const parsed = parseVendedS3Location(prefix);
+			if (parsed === 'unsupported') {
+				recordDynamicRouteOutcome(options.metrics, 'unsupported_scheme');
+				throw new IcebergHttpBrokerError(
+					'target_denied',
+					'The catalog returned credentials for an unsupported storage scheme.',
+				);
+			}
+			if (parsed === undefined) {
+				recordDynamicRouteOutcome(options.metrics, 'malformed');
+				return;
+			}
+			if (!mostSpecificBound(parsed, options.allowedLocations)) {
+				recordDynamicRouteOutcome(options.metrics, 'outside_bound');
+				throw new IcebergHttpBrokerError(
+					'target_denied',
+					'The catalog returned an S3 location outside the administrator-owned storage bounds.',
+				);
+			}
+			locations.push(parsed);
+		}
+
+		const styles: ('path' | 'vhost')[] =
+			options.urlStyle === 'vhost' ? ['vhost', 'path'] : ['path', 'vhost'];
+		const routes = locations.flatMap((location) =>
+			styles.flatMap((urlStyle): IcebergHttpBrokerRoute[] => {
+				if (urlStyle === 'vhost' && isIpAddressHost(options.endpoint.hostname)) return [];
+				return [
+					{
+						kind: 'storage',
+						url: storagePrefixUrl(
+							options.endpoint,
+							location.bucket,
+							location.prefix,
+							urlStyle,
+							true,
+						),
+						match: 'prefix',
+						methods: ['GET', 'HEAD'],
+						forwardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
+					},
+				];
+			}),
+		);
+		installer.install(routes);
+	};
+}
+
+function isVendedCredentialResponse(
+	response: Readonly<IcebergHttpBrokerObservedResponse>,
+): boolean {
+	if (
+		response.request.method !== 'GET' ||
+		response.status < 200 ||
+		response.status >= 300 ||
+		!isJsonContentType(response.headers['content-type'])
+	) {
+		return false;
+	}
+	const path = new URL(response.request.url).pathname.replace(/\/$/, '');
+	return /\/namespaces\/[^/]+\/tables\/[^/]+(?:\/credentials)?$/.test(path);
+}
+
+function isJsonContentType(value: string | undefined): boolean {
+	const mediaType = value?.split(';', 1)[0]?.trim().toLowerCase();
+	return mediaType === 'application/json' || mediaType?.endsWith('+json') === true;
+}
+
+function assertBoundedCredentialJson(value: unknown): void {
+	const pending: { value: unknown; depth: number }[] = [{ value, depth: 0 }];
+	let items = 0;
+	while (pending.length > 0) {
+		const current = pending.pop();
+		if (!current) break;
+		items += 1;
+		if (items > MAX_CREDENTIAL_JSON_ITEMS || current.depth > MAX_CREDENTIAL_JSON_DEPTH) {
+			throw new Error('Credential response structure exceeds its limit.');
+		}
+		if (typeof current.value === 'string') {
+			if (current.value.length > MAX_CREDENTIAL_JSON_STRING_LENGTH) {
+				throw new Error('Credential response string exceeds its limit.');
+			}
+			continue;
+		}
+		if (Array.isArray(current.value)) {
+			for (const child of current.value) pending.push({ value: child, depth: current.depth + 1 });
+			continue;
+		}
+		const record = asJsonRecord(current.value);
+		if (!record) continue;
+		for (const [key, child] of Object.entries(record)) {
+			if (key.length > MAX_CREDENTIAL_JSON_STRING_LENGTH) {
+				throw new Error('Credential response key exceeds its limit.');
+			}
+			pending.push({ value: child, depth: current.depth + 1 });
+		}
+	}
+}
+
+function asJsonRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function parseVendedS3Location(
+	value: string,
+): { bucket: string; prefix: string } | 'unsupported' | undefined {
+	if (!value.toLowerCase().startsWith('s3:')) return 'unsupported';
+	if (!value.startsWith('s3://') || value.includes('\\') || /%2f|%5c/i.test(value)) {
+		return undefined;
+	}
+	if (hasUnpairedSurrogate(value)) return undefined;
+	const withoutScheme = value.slice('s3://'.length);
+	const separator = withoutScheme.search(/[/?#]/);
+	const authority = separator === -1 ? withoutScheme : withoutScheme.slice(0, separator);
+	if (!isDnsCompatibleS3Bucket(authority)) return undefined;
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return undefined;
+	}
+	if (
+		url.protocol !== 's3:' ||
+		url.username ||
+		url.password ||
+		url.port ||
+		url.search ||
+		url.hash ||
+		url.hostname !== authority
+	) {
+		return undefined;
+	}
+	const rawPrefix =
+		separator === -1 ? '' : withoutScheme.slice(separator).replaceAll(/^\/+|\/+$/g, '');
+	const segments: string[] = [];
+	try {
+		for (const rawSegment of rawPrefix.split('/')) {
+			const segment = decodeURIComponent(rawSegment);
+			if (segment === '.' || segment === '..' || segment.includes('/') || segment.includes('\\')) {
+				return undefined;
+			}
+			segments.push(segment);
+		}
+	} catch {
+		return undefined;
+	}
+	return { bucket: authority, prefix: rawPrefix ? segments.join('/') : '' };
+}
+
+function mostSpecificBound(
+	location: Readonly<{ bucket: string; prefix: string }>,
+	bounds: readonly { bucket: string; prefix: string }[],
+): { bucket: string; prefix: string } | undefined {
+	return bounds
+		.filter(
+			(bound) =>
+				bound.bucket === location.bucket &&
+				(bound.prefix === '' ||
+					location.prefix === bound.prefix ||
+					location.prefix.startsWith(`${bound.prefix}/`)),
+		)
+		.sort((left, right) => right.prefix.length - left.prefix.length)[0];
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const codeUnit = value.charCodeAt(index);
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const next = value.charCodeAt(index + 1);
+			if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+			index++;
+		} else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function recordDynamicRouteOutcome(
+	metrics: Metrics,
+	outcome: 'malformed' | 'outside_bound' | 'unsupported_scheme',
+): void {
+	metrics.increment('duckdb_http_broker.dynamic_route', 1, { outcome });
 }
 
 export function createGuardedOAuthTokenExchange(options: {

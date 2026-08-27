@@ -174,10 +174,13 @@ It keeps `iceberg-http` as a compatibility alias.
 The worker submits synchronous requests through fixed shared-memory buffers.
 The parent authorizes each target, injects credentials, checks DNS results, and pins the socket.
 
-The Iceberg integration supports explicit S3 read prefixes, parent-owned OAuth2, and Cloudflare R2
-Data Catalogs. R2 uses a bearer token and catalog-vended credentials. The S3 integration supports
-exact Parquet and CSV object reads from configured prefixes. Unsupported authentication, storage,
-TLS, delegation, and runtime options use the sandbox executor. See
+The Iceberg integration supports explicit S3 prefixes, parent-owned OAuth2, Cloudflare R2, and
+bounded vended S3 routes. Generic vended routes must stay inside administrator-owned storage
+bounds.
+
+R2 uses a bearer token and a bound from the catalog URI. The S3 integration supports exact Parquet
+and CSV object reads from configured prefixes. Unsupported authentication, storage, TLS,
+delegation, and runtime options use the sandbox executor. See
 [the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the security boundary and
 test procedure.
 

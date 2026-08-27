@@ -3,7 +3,12 @@ import { ValidationError } from '../../../errors';
 import type { RenderOutput } from '../sdk';
 import { zSecret } from '../secretFields';
 import { INTEGRATIONS_DIR } from '../bundle';
-import { awsStaticCredentials, httpUrlField, s3BrokerReadLocationsSchema } from './common';
+import {
+	awsStaticCredentials,
+	httpUrlField,
+	isValidS3Bucket,
+	s3BrokerReadLocationsSchema,
+} from './common';
 
 export { HTTP_URL_REGEX } from './common';
 export const THRIFT_URL_REGEX = /^thrift:\/\/[^@\s]+$/;
@@ -79,6 +84,121 @@ const brokeredS3Storage = s3Storage.extend({
 	broker_read_locations: s3BrokerReadLocationsSchema
 		.default([])
 		.describe('S3 bucket prefixes the guarded DuckDB broker may read'),
+});
+
+function normalizeVendedS3Prefix(prefix: string): string {
+	const normalized = prefix.replaceAll(/^\/+|\/+$/g, '');
+	try {
+		return normalized
+			.split('/')
+			.map((segment) => decodeURIComponent(segment))
+			.join('/');
+	} catch {
+		return normalized;
+	}
+}
+
+function isSafeVendedS3Prefix(prefix: string): boolean {
+	const normalized = normalizeVendedS3Prefix(prefix);
+	if (prefix.includes('\\') || /%2f|%5c/i.test(prefix)) return false;
+	try {
+		for (const segment of prefix.replaceAll(/^\/+|\/+$/g, '').split('/')) {
+			decodeURIComponent(segment);
+		}
+	} catch {
+		return false;
+	}
+	for (const character of prefix) {
+		const codePoint = character.codePointAt(0) ?? 0;
+		if (codePoint < 32 || codePoint === 127) return false;
+	}
+	for (let index = 0; index < prefix.length; index++) {
+		const codeUnit = prefix.charCodeAt(index);
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const next = prefix.charCodeAt(index + 1);
+			if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+			index++;
+		} else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+			return false;
+		}
+	}
+	return !normalized.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
+const vendedS3AllowedLocationSchema = z.strictObject({
+	bucket: z.string().refine(isValidS3Bucket, 'Vended S3 bounds require a DNS-compatible bucket.'),
+	prefix: z
+		.string()
+		.refine(
+			isSafeVendedS3Prefix,
+			'Vended S3 bounds require a non-traversing prefix with valid Unicode text.',
+		)
+		.overwrite(normalizeVendedS3Prefix),
+});
+
+const vendedS3Storage = z
+	.strictObject({
+		endpoint: url().refine((value) => {
+			try {
+				const endpoint = new URL(value);
+				return (
+					endpoint.protocol === 'https:' &&
+					endpoint.pathname === '/' &&
+					endpoint.search === '' &&
+					endpoint.hash === ''
+				);
+			} catch {
+				return false;
+			}
+		}, 'Vended S3 endpoints must be an HTTPS origin without a path, query, or fragment.'),
+		region: z.string().min(1).default('us-east-1'),
+		force_virtual_addressing: z.boolean().default(false),
+		allowed_locations: z
+			.array(vendedS3AllowedLocationSchema)
+			.min(1, 'Vended S3 requires at least one administrator-owned storage bound.')
+			.superRefine((locations, context) => {
+				const seen = new Set<string>();
+				for (const [index, location] of locations.entries()) {
+					const key = `${location.bucket}\0${location.prefix}`;
+					if (seen.has(key)) {
+						context.addIssue({
+							code: 'custom',
+							path: [index],
+							message: 'Vended S3 bounds must not contain duplicate bucket prefixes.',
+						});
+					}
+					seen.add(key);
+				}
+			}),
+	})
+	.superRefine((storage, context) => {
+		let hostname: string;
+		try {
+			hostname = new URL(storage.endpoint).hostname;
+		} catch {
+			return;
+		}
+		if (storage.force_virtual_addressing && isIpAddressHost(hostname)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['endpoint'],
+				message: 'Virtual-hosted vended S3 addressing requires a DNS endpoint.',
+			});
+		}
+	});
+
+function isIpAddressHost(hostname: string): boolean {
+	if (hostname.includes(':')) return true;
+	const octets = hostname.split('.');
+	return (
+		octets.length === 4 &&
+		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+	);
+}
+
+const catalogStorage = z.strictObject({
+	scheme: z.literal('catalog'),
+	vended_s3: vendedS3Storage.optional(),
 });
 
 const gcsStorage = z.strictObject({
@@ -157,7 +277,7 @@ export const icebergStorageSchema = z
 
 export const icebergRestStorageSchema = z
 	.discriminatedUnion('scheme', [
-		z.strictObject({ scheme: z.literal('catalog') }),
+		catalogStorage,
 		brokeredS3Storage,
 		gcsStorage,
 		adlsStorage,

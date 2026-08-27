@@ -81,6 +81,17 @@ describe('IcebergHttpBroker', () => {
 		).toThrow(IcebergHttpBrokerError);
 	});
 
+	it.each([
+		['dynamic route count', { maxDynamicRoutes: -1 }],
+		['dynamic route URL bytes', { maxDynamicRouteUrlBytes: 1.5 }],
+	])('rejects an invalid %s budget', (_case, limit) => {
+		const { broker } = setup();
+
+		expect(() => broker.open(capability({ limits: { ...capability().limits, ...limit } }))).toThrow(
+			IcebergHttpBrokerError,
+		);
+	});
+
 	it('rejects non-string forwarded header names as an invalid capability', () => {
 		const { broker } = setup();
 		let error: unknown;
@@ -633,6 +644,110 @@ describe('IcebergHttpBroker', () => {
 			authorization: 'Bearer catalog-secret',
 		});
 		expect(calls[1].headers).toEqual({ range: 'bytes=0-99' });
+	});
+
+	it('enforces the cumulative dynamic route-count budget atomically', async () => {
+		const metrics = { increment: vi.fn(), gauge: vi.fn() } satisfies Metrics;
+		let batch = 0;
+		const { broker } = setup(undefined, metrics);
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						observeResponse: (_response, installer) => {
+							batch += 1;
+							installer.install(
+								['first', 'second'].map((suffix) => ({
+									kind: 'storage',
+									url: `https://objects.example.test/warehouse/${batch}-${suffix}`,
+									match: 'prefix',
+									methods: ['GET'],
+								})),
+							);
+						},
+					},
+				],
+				limits: {
+					...capability().limits,
+					maxRequests: 8,
+					maxDynamicRoutes: 3,
+					maxDynamicRouteUrlBytes: 4096,
+				},
+			}),
+		);
+		const catalogRequest = {
+			url: 'https://catalog.example.test/iceberg/v1/table',
+			method: 'GET' as const,
+		};
+
+		await broker.fetch(id, catalogRequest);
+		await expectCode(
+			broker.fetch(id, catalogRequest),
+			'dynamic_route_budget_exceeded',
+			'The catalog response exceeded the dynamic storage-route budget.',
+		);
+		await expect(
+			broker.fetch(id, {
+				url: 'https://objects.example.test/warehouse/1-first/data.parquet',
+				method: 'GET',
+			}),
+		).resolves.toMatchObject({ status: 200 });
+		await expectCode(
+			broker.fetch(id, {
+				url: 'https://objects.example.test/warehouse/2-first/data.parquet',
+				method: 'GET',
+			}),
+			'target_denied',
+		);
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.budget_exhausted', 1, {
+			budget: 'dynamic_route_count',
+		});
+	});
+
+	it('enforces cumulative normalized dynamic-route URL bytes', async () => {
+		const metrics = { increment: vi.fn(), gauge: vi.fn() } satisfies Metrics;
+		const firstUrl = `https://objects.example.test/warehouse/${'é'.repeat(16)}`;
+		const normalizedBytes = new TextEncoder().encode(new URL(firstUrl).toString()).byteLength;
+		let route = firstUrl;
+		const { broker } = setup(undefined, metrics);
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET'],
+						observeResponse: (_response, installer) => {
+							installer.install([
+								{ kind: 'storage', url: route, match: 'prefix', methods: ['GET'] },
+							]);
+						},
+					},
+				],
+				limits: {
+					...capability().limits,
+					maxDynamicRoutes: 8,
+					maxDynamicRouteUrlBytes: normalizedBytes,
+				},
+			}),
+		);
+		const catalogRequest = {
+			url: 'https://catalog.example.test/iceberg/v1/table',
+			method: 'GET' as const,
+		};
+
+		expect(normalizedBytes).toBeGreaterThan(firstUrl.length);
+		await broker.fetch(id, catalogRequest);
+		route = 'https://objects.example.test/warehouse/second';
+		await expectCode(broker.fetch(id, catalogRequest), 'dynamic_route_budget_exceeded');
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.budget_exhausted', 1, {
+			budget: 'dynamic_route_url_bytes',
+		});
 	});
 
 	it('emits low-cardinality policy, redirect, budget, byte, and latency metrics', async () => {
