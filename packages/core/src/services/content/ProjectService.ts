@@ -1,10 +1,16 @@
 import type { Bucket } from '../../ports/bucket';
-import { canAct, canSeeProjectEntry, isSuperAdmin, subjectDefaultRole } from '../../authz';
+import {
+	canAct,
+	canSeeProjectEntry,
+	isSuperAdmin,
+	roleAtLeast,
+	subjectDefaultRole,
+} from '../../authz';
 import type { AuthSubject, AuthzPolicy } from '../../authz';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import type { AssignableRole } from '../../constants';
+import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
 import { assertVersionMatch, ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { createProjectId, SYSTEM_ACTOR } from '../../ids';
@@ -23,7 +29,7 @@ import type {
 	SnapshotProjectEntry,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
-import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
+import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
 import { createListFilter } from './listFilters';
@@ -64,9 +70,121 @@ export interface ExistingMemberMutationResult extends MemberMutationResult {
 	previousMember: ProjectMember;
 }
 
+export interface UpdatedMemberMutationResult extends ExistingMemberMutationResult {
+	member: ProjectMember;
+}
+
 export interface ProjectDeleteMutationResult {
 	project: Project;
 	mutationId: SnapshotId;
+}
+
+export type InviteIdentityResolver = (
+	emails: readonly string[],
+) => Promise<ReadonlyMap<string, { id: UserId }>>;
+
+export interface ClaimedInviteRows {
+	members: readonly ProjectMember[];
+	claimedRows: number;
+	userIdsByEmail: ReadonlyMap<string, UserId>;
+}
+
+const EMPTY_EMAIL_CLAIMS: ReadonlyMap<string, UserId> = new Map();
+
+function hasInviteRows(members: readonly ProjectMember[]): boolean {
+	return members.some((member) => member.email !== undefined);
+}
+
+function noInviteClaims(members: readonly ProjectMember[]): ClaimedInviteRows {
+	return { members, claimedRows: 0, userIdsByEmail: EMPTY_EMAIL_CLAIMS };
+}
+
+function higherRole(a: Role, b: Role): Role {
+	return roleAtLeast(a, b) ? a : b;
+}
+
+function selectorAfterClaims(member: ProjectMember, claimed: ClaimedInviteRows): string {
+	if (member.user_id !== undefined) return member.user_id;
+	const email = member.email as string;
+	return claimed.userIdsByEmail.get(normalizeEmail(email)) ?? email;
+}
+
+function sameValues(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined || a.length !== b.length) return false;
+	return a.every((value, index) => value === b[index]);
+}
+
+async function resolveInviteRows(
+	members: readonly ProjectMember[],
+	resolveIdentitiesByEmail: InviteIdentityResolver,
+): Promise<ClaimedInviteRows> {
+	const emails = [
+		...new Set(
+			members.flatMap((member) =>
+				member.email === undefined ? [] : [normalizeEmail(member.email)],
+			),
+		),
+	];
+	const resolved = await resolveIdentitiesByEmail(emails);
+	const userIdsByEmail = new Map<string, UserId>();
+	for (const email of emails) {
+		const identity = resolved.get(email);
+		if (identity !== undefined) userIdsByEmail.set(email, identity.id);
+	}
+
+	const directUserIds = new Set(
+		members.flatMap((member) => (member.user_id === undefined ? [] : [member.user_id])),
+	);
+	const output: ProjectMember[] = [];
+	const outputIndexByUserId = new Map<UserId, number>();
+	const pendingRoles = new Map<UserId, Role>();
+	let claimedRows = 0;
+
+	for (const member of members) {
+		if (member.user_id !== undefined) {
+			const pendingRole = pendingRoles.get(member.user_id);
+			const index = output.length;
+			output.push({
+				user_id: member.user_id,
+				role: pendingRole ? higherRole(member.role, pendingRole) : member.role,
+			});
+			if (!outputIndexByUserId.has(member.user_id)) outputIndexByUserId.set(member.user_id, index);
+			pendingRoles.delete(member.user_id);
+			continue;
+		}
+
+		const email = normalizeEmail(member.email as string);
+		const userId = userIdsByEmail.get(email);
+		if (userId === undefined) {
+			output.push(member);
+			continue;
+		}
+
+		claimedRows++;
+		const existingIndex = outputIndexByUserId.get(userId);
+		if (existingIndex !== undefined) {
+			const existing = output[existingIndex];
+			output[existingIndex] = { user_id: userId, role: higherRole(existing.role, member.role) };
+		} else if (directUserIds.has(userId)) {
+			const pendingRole = pendingRoles.get(userId);
+			pendingRoles.set(userId, pendingRole ? higherRole(pendingRole, member.role) : member.role);
+		} else {
+			outputIndexByUserId.set(userId, output.length);
+			output.push({ user_id: userId, role: member.role });
+		}
+	}
+
+	return { members: output, claimedRows, userIdsByEmail };
+}
+
+export async function claimInviteRows(
+	members: readonly ProjectMember[],
+	resolveIdentitiesByEmail: InviteIdentityResolver,
+): Promise<ClaimedInviteRows> {
+	return hasInviteRows(members)
+		? resolveInviteRows(members, resolveIdentitiesByEmail)
+		: noInviteClaims(members);
 }
 
 function normalizeProjectName(name: string): string {
@@ -82,6 +200,7 @@ export class ProjectService {
 		private bucket: Bucket,
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
+		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 	) {}
 
 	/**
@@ -271,12 +390,14 @@ export class ProjectService {
 	): Promise<MemberMutationResult> {
 		const userId = 'user_id' in member ? member.user_id : undefined;
 		const email = member.email !== undefined ? normalizeEmail(member.email) : undefined;
-		return this.writeMembers(
+		const { project, mutationId } = await this.writeMembers(
 			id,
-			(current) => {
-				const duplicate = current.members.some(
+			(_current, claimed) => {
+				const claimedUserId =
+					userId ?? (email === undefined ? undefined : claimed.userIdsByEmail.get(email));
+				const duplicate = claimed.members.some(
 					(m) =>
-						(userId !== undefined && m.user_id === userId) ||
+						(claimedUserId !== undefined && m.user_id === claimedUserId) ||
 						(email !== undefined && m.email === email),
 				);
 				if (duplicate) {
@@ -284,10 +405,11 @@ export class ProjectService {
 				}
 				const row: ProjectMember =
 					userId !== undefined ? { user_id: userId, role } : { email: email as string, role };
-				return [...current.members, row];
+				return [...claimed.members, row];
 			},
 			actor,
 		);
+		return { project, mutationId };
 	}
 
 	/**
@@ -309,11 +431,12 @@ export class ProjectService {
 		selector: string,
 		role: AssignableRole,
 		actor: UserId,
-	): Promise<ExistingMemberMutationResult> {
+	): Promise<UpdatedMemberMutationResult> {
 		let previousMember: ProjectMember | undefined;
+		let member: ProjectMember | undefined;
 		const { project, mutationId } = await this.writeMembers(
 			id,
-			(current) => {
+			(current, claimed) => {
 				if (selector === current.owner) {
 					throw new ConflictError(`Cannot change the role of the project owner`);
 				}
@@ -321,13 +444,16 @@ export class ProjectService {
 				if (!previousMember) {
 					throw new NotFoundError(`${selector} is not a member of project ${id}`);
 				}
-				return current.members.map((m) =>
-					memberRefMatchesSelector(m, selector) ? { ...m, role } : m,
+				const claimedSelector = selectorAfterClaims(previousMember, claimed);
+				const members = claimed.members.map((m) =>
+					memberRefMatchesSelector(m, claimedSelector) ? { ...m, role } : m,
 				);
+				member = members.find((candidate) => memberRefMatchesSelector(candidate, claimedSelector));
+				return members;
 			},
 			actor,
 		);
-		return { project, mutationId, previousMember: previousMember! };
+		return { project, mutationId, previousMember: previousMember!, member: member! };
 	}
 
 	/**
@@ -346,7 +472,7 @@ export class ProjectService {
 		let previousMember: ProjectMember | undefined;
 		const { project, mutationId } = await this.writeMembers(
 			id,
-			(current) => {
+			(current, claimed) => {
 				if (selector === current.owner) {
 					throw new ConflictError(`Cannot remove the project owner`);
 				}
@@ -354,7 +480,8 @@ export class ProjectService {
 				if (!previousMember) {
 					throw new NotFoundError(`${selector} is not a member of project ${id}`);
 				}
-				return current.members.filter((m) => !memberRefMatchesSelector(m, selector));
+				const claimedSelector = selectorAfterClaims(previousMember, claimed);
+				return claimed.members.filter((m) => !memberRefMatchesSelector(m, claimedSelector));
 			},
 			actor,
 		);
@@ -368,30 +495,95 @@ export class ProjectService {
 	// `updated_at` and refreshes both rosters to match.
 	private async writeMembers(
 		id: ProjectId,
-		deriveMembers: (current: Project) => ProjectMember[],
+		deriveMembers: (current: Project, claimed: ClaimedInviteRows) => ProjectMember[],
 		actor: UserId,
 	): Promise<MemberMutationResult> {
-		const key = paths.project(id).meta;
-		const updated = await mutateObject(
-			this.bucket,
-			key,
-			(raw) => parseStored(ProjectSchema, raw, key),
-			(current) => {
-				if (current.status === 'deleted') {
-					throw new NotFoundError(`Project ${id} not found`);
-				}
-				return {
-					...current,
-					members: deriveMembers(current),
-					updated_at: new Date().toISOString(),
-				};
-			},
-			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
-		);
+		const { project: updated } = await this.mutateMemberObject(id, deriveMembers);
 		const snapshot = await this.catalog.updateProjectEntry('project.members', actor, id, (entry) =>
 			loadProjectCatalogPatch(this.bucket, id, entry),
 		);
 		return { project: updated, mutationId: snapshot.snapshot_id };
+	}
+
+	private async mutateMemberObject(
+		id: ProjectId,
+		deriveMembers: (current: Project, claimed: ClaimedInviteRows) => ProjectMember[],
+		options: {
+			skipIfNoClaims?: boolean;
+			resolveIdentitiesByEmail?: InviteIdentityResolver;
+		} = {},
+	): Promise<{ project: Project; claimedRows: number; written: boolean }> {
+		const key = paths.project(id).meta;
+		return withCasRetry(this.bucket, async (cas) => {
+			const object = await this.bucket.get(key);
+			if (!object) throw new NotFoundError(`Project ${id} not found`);
+			const current = await readStored(ProjectSchema, object, key);
+			if (current.status === 'deleted') throw new NotFoundError(`Project ${id} not found`);
+			const claimed = hasInviteRows(current.members)
+				? await resolveInviteRows(
+						current.members,
+						options.resolveIdentitiesByEmail ?? this.resolveIdentitiesByEmail,
+					)
+				: noInviteClaims(current.members);
+			if (options.skipIfNoClaims && claimed.claimedRows === 0) {
+				return { project: current, claimedRows: 0, written: false };
+			}
+			const updated = {
+				...current,
+				members: deriveMembers(current, claimed),
+				updated_at: new Date().toISOString(),
+			};
+			await cas.put(key, JSON.stringify(updated), { onlyIfEtagMatches: object.etag });
+			return { project: updated, claimedRows: claimed.claimedRows, written: true };
+		});
+	}
+
+	private async claimProjectInvites(
+		candidate: SnapshotProjectEntry,
+		resolveIdentitiesByEmail: InviteIdentityResolver,
+	): Promise<number> {
+		try {
+			const result = await this.mutateMemberObject(
+				candidate.id,
+				(_current, claimed) => [...claimed.members],
+				{
+					skipIfNoClaims: true,
+					resolveIdentitiesByEmail,
+				},
+			);
+			const projection = projectCatalogPatch(result.project, candidate);
+			const projectionIsCurrent =
+				sameValues(candidate.member_ids, projection.member_ids) &&
+				sameValues(candidate.member_emails, projection.member_emails);
+			if (!result.written && projectionIsCurrent) return 0;
+			await this.catalog.updateProjectEntry(
+				result.written ? 'project.members.claim' : 'project.members.repair',
+				SYSTEM_ACTOR,
+				candidate.id,
+				(entry) => loadProjectCatalogPatch(this.bucket, candidate.id, entry),
+			);
+			return result.claimedRows;
+		} catch (error) {
+			if (error instanceof NotFoundError) return 0;
+			throw error;
+		}
+	}
+
+	async claimPendingInvites(): Promise<number> {
+		const snapshot = await this.catalog.getCurrentSnapshot();
+		const candidates = snapshot.projects.filter(
+			(project) => project.status !== 'deleted' && (project.member_emails?.length ?? 0) > 0,
+		);
+		if (candidates.length === 0) return 0;
+		const candidateEmails = [
+			...new Set(candidates.flatMap((project) => project.member_emails ?? []).map(normalizeEmail)),
+		];
+		const resolved = await this.resolveIdentitiesByEmail(candidateEmails);
+		const resolveFromSweep: InviteIdentityResolver = async () => resolved;
+		const claimed = await mapWithConcurrency(candidates, BUCKET_SCAN_CONCURRENCY, (project) =>
+			this.claimProjectInvites(project, resolveFromSweep),
+		);
+		return claimed.reduce((total, count) => total + count, 0);
 	}
 
 	/**

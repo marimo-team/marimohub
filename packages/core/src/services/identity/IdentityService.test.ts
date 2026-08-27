@@ -589,6 +589,25 @@ describe('IdentityService', () => {
 				}),
 			);
 			expect((await identities.getByEmail('shared@x.io'))?.id).toBe(uid('new'));
+			expect(await identities.getUniqueByEmail('shared@x.io')).toBeNull();
+		});
+
+		it('resolves a unique email and rejects unknown or ambiguous matches', async () => {
+			await identities.upsert({ id: uid('only'), email: 'only@x.io', name: 'Only' });
+
+			expect((await identities.getUniqueByEmail('ONLY@x.io'))?.id).toBe(uid('only'));
+			expect(await identities.getUniqueByEmail('missing@x.io')).toBeNull();
+		});
+
+		it('bypasses a stale directory cache when checking uniqueness', async () => {
+			await identities.upsert({ id: uid('first'), email: 'shared@x.io', name: 'First' });
+			await identities.list();
+			const otherReplica = new IdentityService(bucket);
+			await otherReplica.upsert({ id: uid('second'), email: 'shared@x.io', name: 'Second' });
+			const list = vi.spyOn(bucket, 'list');
+
+			expect(await identities.getUniqueByEmail('shared@x.io')).toBeNull();
+			expect(list).toHaveBeenCalledOnce();
 		});
 	});
 });

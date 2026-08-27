@@ -599,6 +599,45 @@ describe('Project member routes', () => {
 		expect(listed.map((p: any) => p.id)).toContain(pid);
 	});
 
+	it('claims an invite to the user id after sign-in and the next membership action', async () => {
+		const services = createServices(bucket);
+		const ownerRequest = createTestApi({
+			bucket,
+			deps: { services, notifier },
+		}).request;
+		const inviteeId = uid('claimed_invitee');
+		const email = `${inviteeId}@example.com`;
+
+		await expectOk(
+			await ownerRequest('POST', `/projects/${pid}/members`, { email, role: 'editor' }),
+			201,
+		);
+		const inviteeRequest = createTestApi({
+			bucket,
+			userId: inviteeId,
+			deps: { services },
+		}).request;
+		expect((await expectOk<any>(await inviteeRequest('GET', `/projects/${pid}`))).your_role).toBe(
+			'editor',
+		);
+		const pendingMembers = await expectOk<any[]>(
+			await ownerRequest('GET', `/projects/${pid}/members`),
+		);
+		expect(pendingMembers).toContainEqual({ email, role: 'editor' });
+		expect(pendingMembers.some((member) => member.user_id === inviteeId)).toBe(false);
+
+		await expectOk(
+			await ownerRequest('POST', `/projects/${pid}/members`, {
+				user_id: uid('another_member'),
+				role: 'viewer',
+			}),
+			201,
+		);
+		const members = await expectOk<any[]>(await ownerRequest('GET', `/projects/${pid}/members`));
+		expect(members).toContainEqual({ user_id: inviteeId, role: 'editor' });
+		expect(members.some((member) => member.email === email)).toBe(false);
+	});
+
 	it('uses a new dedupe key after an invite is removed and added again', async () => {
 		const email = 'returning@example.com';
 		await expectOk(await owner('POST', `/projects/${pid}/members`, { email, role: 'viewer' }), 201);

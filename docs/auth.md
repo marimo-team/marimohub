@@ -106,6 +106,12 @@ an invite row and an id row — adding a member is rejected (409) when any of
 their known identifiers is already on the roster, so removing a member always
 revokes their access.
 
+After an invitee signs in, the next membership write or maintenance sweep
+replaces their email invite with a user-id row while preserving their role. A
+legacy roster that contains both forms is collapsed to one user-id row with the
+higher role. Email matching remains active until that claim occurs, so access is
+continuous.
+
 The login email grants access, so OIDC requires `email_verified: true` by
 default. `trusted-issuer` permits an enterprise issuer to omit the claim,
 including when a domain allowlist is active. If the claim is present, its value

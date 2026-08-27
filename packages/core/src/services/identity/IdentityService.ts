@@ -225,11 +225,36 @@ export class IdentityService {
 	 * record wins.
 	 */
 	async getByEmail(email: string): Promise<Identity | null> {
-		const target = normalizeEmail(email);
-		if (!target) return null;
-		const all = await this.list();
-		const matches = all.filter((u) => normalizeEmail(u.email) === target);
+		const matches = await this.findByEmail(email);
 		if (matches.length === 0) return null;
 		return matches.reduce((a, b) => (a.updated_at >= b.updated_at ? a : b));
+	}
+
+	async getUniqueByEmail(email: string): Promise<Identity | null> {
+		const target = normalizeEmail(email);
+		if (!target) return null;
+		return (await this.getUniqueByEmails([target])).get(target) ?? null;
+	}
+
+	/**
+	 * Resolve only unambiguous emails from a fresh directory scan. Claiming an
+	 * invite is destructive, so the eventually consistent search cache is unsafe.
+	 */
+	async getUniqueByEmails(emails: readonly string[]): Promise<ReadonlyMap<string, Identity>> {
+		const targets = new Set(emails.map(normalizeEmail).filter(Boolean));
+		if (targets.size === 0) return new Map();
+		const matches = new Map<string, Identity | null>();
+		for (const identity of await this.scanDirectory()) {
+			const email = normalizeEmail(identity.email);
+			if (!targets.has(email)) continue;
+			matches.set(email, matches.has(email) ? null : identity);
+		}
+		return new Map([...matches].filter((entry): entry is [string, Identity] => entry[1] !== null));
+	}
+
+	private async findByEmail(email: string): Promise<Identity[]> {
+		const target = normalizeEmail(email);
+		if (!target) return [];
+		return (await this.list()).filter((identity) => normalizeEmail(identity.email) === target);
 	}
 }
