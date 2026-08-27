@@ -970,6 +970,22 @@ describe('kind renders (golden)', () => {
 			},
 		],
 		[
+			'an IPv4 virtual-host endpoint',
+			{
+				endpoint: 'https://192.0.2.10',
+				force_virtual_addressing: true,
+				allowed_locations: [{ bucket: 'warehouse', prefix: '' }],
+			},
+		],
+		[
+			'an IPv6 virtual-host endpoint',
+			{
+				endpoint: 'https://[2001:db8::1]',
+				force_virtual_addressing: true,
+				allowed_locations: [{ bucket: 'warehouse', prefix: '' }],
+			},
+		],
+		[
 			'a malformed bucket',
 			{
 				endpoint: 'https://objects.example.com',
@@ -1012,6 +1028,22 @@ describe('kind renders (golden)', () => {
 				storage: { scheme: 'catalog', vended_s3: vendedS3 },
 			}).success,
 		).toBe(false);
+	});
+
+	it('iceberg_rest accepts path-style vended S3 with an IP endpoint', () => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				uri: 'https://catalog.example.com/iceberg',
+				auth: { method: 'none' },
+				storage: {
+					scheme: 'catalog',
+					vended_s3: {
+						endpoint: 'https://192.0.2.10',
+						allowed_locations: [{ bucket: 'warehouse', prefix: '' }],
+					},
+				},
+			}).success,
+		).toBe(true);
 	});
 
 	it.each(['none', 'remote_signing', 'both'] as const)(

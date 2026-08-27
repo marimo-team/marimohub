@@ -136,40 +136,65 @@ const vendedS3AllowedLocationSchema = z.strictObject({
 		.overwrite(normalizeVendedS3Prefix),
 });
 
-const vendedS3Storage = z.strictObject({
-	endpoint: url().refine((value) => {
-		try {
-			const endpoint = new URL(value);
-			return (
-				endpoint.protocol === 'https:' &&
-				endpoint.pathname === '/' &&
-				endpoint.search === '' &&
-				endpoint.hash === ''
-			);
-		} catch {
-			return false;
-		}
-	}, 'Vended S3 endpoints must be an HTTPS origin without a path, query, or fragment.'),
-	region: z.string().min(1).default('us-east-1'),
-	force_virtual_addressing: z.boolean().default(false),
-	allowed_locations: z
-		.array(vendedS3AllowedLocationSchema)
-		.min(1, 'Vended S3 requires at least one administrator-owned storage bound.')
-		.superRefine((locations, context) => {
-			const seen = new Set<string>();
-			for (const [index, location] of locations.entries()) {
-				const key = `${location.bucket}\0${location.prefix}`;
-				if (seen.has(key)) {
-					context.addIssue({
-						code: 'custom',
-						path: [index],
-						message: 'Vended S3 bounds must not contain duplicate bucket prefixes.',
-					});
-				}
-				seen.add(key);
+const vendedS3Storage = z
+	.strictObject({
+		endpoint: url().refine((value) => {
+			try {
+				const endpoint = new URL(value);
+				return (
+					endpoint.protocol === 'https:' &&
+					endpoint.pathname === '/' &&
+					endpoint.search === '' &&
+					endpoint.hash === ''
+				);
+			} catch {
+				return false;
 			}
-		}),
-});
+		}, 'Vended S3 endpoints must be an HTTPS origin without a path, query, or fragment.'),
+		region: z.string().min(1).default('us-east-1'),
+		force_virtual_addressing: z.boolean().default(false),
+		allowed_locations: z
+			.array(vendedS3AllowedLocationSchema)
+			.min(1, 'Vended S3 requires at least one administrator-owned storage bound.')
+			.superRefine((locations, context) => {
+				const seen = new Set<string>();
+				for (const [index, location] of locations.entries()) {
+					const key = `${location.bucket}\0${location.prefix}`;
+					if (seen.has(key)) {
+						context.addIssue({
+							code: 'custom',
+							path: [index],
+							message: 'Vended S3 bounds must not contain duplicate bucket prefixes.',
+						});
+					}
+					seen.add(key);
+				}
+			}),
+	})
+	.superRefine((storage, context) => {
+		let hostname: string;
+		try {
+			hostname = new URL(storage.endpoint).hostname;
+		} catch {
+			return;
+		}
+		if (storage.force_virtual_addressing && isIpAddressHost(hostname)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['endpoint'],
+				message: 'Virtual-hosted vended S3 addressing requires a DNS endpoint.',
+			});
+		}
+	});
+
+function isIpAddressHost(hostname: string): boolean {
+	if (hostname.includes(':')) return true;
+	const octets = hostname.split('.');
+	return (
+		octets.length === 4 &&
+		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+	);
+}
 
 const catalogStorage = z.strictObject({
 	scheme: z.literal('catalog'),
