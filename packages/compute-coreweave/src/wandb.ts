@@ -3,22 +3,19 @@
  *
  * Same gRPC API and endpoint as the direct CoreWeave path; only auth differs.
  * Instead of a CoreWeave API key, the gateway authenticates via gRPC metadata
- * (`x-wandb-api-key` + optional entity/project headers), which the SDK's
- * `/wandb` entrypoint assembles. `env: {}` disables its ambient
- * `WANDB_*`/netrc fallbacks — server config is env-driven through our config
- * layer only, and a blank key is rejected here rather than silently falling
- * back to the operator's `~/.netrc`.
+ * (`x-wandb-api-key` + optional entity/project headers), assembled by the
+ * SDK's `/wandb` entrypoint. `env: {}` disables its ambient `WANDB_*`/netrc
+ * fallbacks — server config flows through our config layer only — and a
+ * blank key is rejected here rather than silently falling back to `~/.netrc`.
  *
  * The config surface is a restricted subset of `CoreWeaveConfig`: the W&B
  * gateway does not support GPU resource requests, and CAIOS object-storage
- * vending is unconfirmed through it. Use hub-minted WIF for bucket access on
- * this backend.
+ * vending is unconfirmed through it. Use hub-minted WIF for bucket access.
  *
- * Kernel URLs: the W&B managed runner does not serve sandboxes under a static
- * hostname scheme, so this backend resolves URLs at expose time from the
- * sandbox's `serviceUrls` (Sandbox v1's replacement for the removed
- * `serviceAddress` field) and ignores the hostname-template machinery. The
- * handle's own metadata — refreshed by the boot `wait()` — usually already
+ * Kernel URLs: the W&B managed runner has no static hostname scheme, so this
+ * backend ignores the hostname-template machinery and resolves URLs at expose
+ * time from `serviceUrls` (v1's replacement for `serviceAddress`). The
+ * handle's metadata — refreshed by the boot `wait()` — usually already
  * carries them, so the common path costs no extra Get round-trip.
  * INTEGRATION SURFACE: the exact `serviceUrls` contents from the W&B gateway
  * are unverified against a live sandbox since the v1 migration.

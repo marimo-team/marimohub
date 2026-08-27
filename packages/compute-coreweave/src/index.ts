@@ -39,17 +39,15 @@
  * `serviceUrls` is assigned-not-edge-ready per the SDK docs); and the
  * `waitForPort` probe assumes `python3` is on the image PATH.
  *
- * Sandbox v1 (SDK ≥0.2.0-beta.0) REMOVED create-time profile selection
- * (`profileNames`) along with `ports`/`ingressMode`/`egressMode` — the SDK
- * rejects them client-side. A runner's DEFAULT profile template now decides
- * network, mounts, and placement, so per-create targeting happens by pinning
- * `runnerIds` to runners bound to the wanted template (the SDK sets
- * `mode: CKS` whenever runner ids are supplied — own-cluster runners only).
- * User-home personal storage rides that mechanism: editor sandboxes with a
- * `userHome` are pinned to `userHomeRunnerIds`, whose default profile must
- * mount the per-user PVC. The v1 proto's direct successors —
- * `CreateSandboxFromTemplate` and registered Volumes (`volume_id`) — are not
- * exposed by the TS SDK yet; adopt them here when they land.
+ * Sandbox v1 (SDK ≥0.2.0-beta.0) removed create-time `profileNames`, `ports`,
+ * and `ingressMode`/`egressMode` (rejected client-side). A runner's DEFAULT
+ * profile template now decides network, mounts, and placement, so per-create
+ * targeting pins `runnerIds` instead (the SDK then sets `mode: CKS` —
+ * own-cluster runners only). User homes ride the same mechanism: a sandbox
+ * with a `userHome` is pinned to `userHomeRunnerIds`, whose default profile
+ * must mount the per-user PVC. Adopt the proto's direct successors
+ * (`CreateSandboxFromTemplate`, registered Volumes) once the TS SDK exposes
+ * them.
  */
 import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
@@ -208,10 +206,9 @@ export interface CoreWeaveConfig {
 	/** Tag applied to every sandbox we own (manual discovery/cleanup). Default `marimohub`. */
 	ownerTag?: string;
 	/**
-	 * Runner IDs sandboxes may schedule on. This is v1's placement lever: a
-	 * runner's DEFAULT profile template decides network/mounts/placement, so a
-	 * deployment selects a profile template by pinning the runner(s) bound to
-	 * it. Omit to let the fleet schedule anywhere.
+	 * Runner IDs sandboxes may schedule on — v1's placement lever: pinning a
+	 * runner selects its DEFAULT profile template (network/mounts/placement).
+	 * Omit to let the fleet schedule anywhere.
 	 */
 	runnerIds?: readonly string[];
 	/**
