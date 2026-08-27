@@ -5,12 +5,18 @@ import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Pro
 
 describe('notebook filters', () => {
 	it('provides labeled controls and announces the result count', async () => {
+		const user = userEvent.setup();
 		makeFetch();
 		await renderProject();
 
+		const toggle = screen.getByRole('button', { name: 'Filters' });
+		expect(toggle).toHaveAttribute('aria-expanded', 'false');
+		expect(screen.queryByRole('search', { name: 'Filter notebooks' })).not.toBeInTheDocument();
+
+		await user.click(toggle);
 		expect(screen.getByRole('search', { name: 'Filter notebooks' })).toBeInTheDocument();
 		expect(screen.getByRole('searchbox', { name: 'Search' })).toBeInTheDocument();
-		expect(screen.getByRole('textbox', { name: 'Tag (exact)' })).toBeInTheDocument();
+		expect(screen.getByRole('textbox', { name: 'Exact tag' })).toBeInTheDocument();
 		const status = screen.getByRole('combobox', { name: 'Status' });
 		expect(status).toBeInTheDocument();
 		expect(within(status).getByRole('option', { name: 'Draft' })).toHaveValue('draft');
@@ -42,10 +48,11 @@ describe('notebook filters', () => {
 		});
 		await renderProject();
 
+		await user.click(screen.getByRole('button', { name: 'Filters' }));
 		await user.type(screen.getByRole('searchbox', { name: 'Search' }), 'annual');
-		await user.type(screen.getByRole('textbox', { name: 'Tag (exact)' }), 'finance');
+		await user.type(screen.getByRole('textbox', { name: 'Exact tag' }), 'finance');
 		await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'archived');
-		await user.click(screen.getByRole('button', { name: 'Apply Filters' }));
+		await user.click(screen.getByRole('button', { name: 'Apply' }));
 
 		expect(await screen.findByText('Archived forecast')).toBeInTheDocument();
 		expect(screen.queryByText('Current forecast')).not.toBeInTheDocument();
@@ -72,8 +79,9 @@ describe('notebook filters', () => {
 		});
 		await renderProject();
 
+		await user.click(screen.getByRole('button', { name: 'Filters' }));
 		await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'draft');
-		await user.click(screen.getByRole('button', { name: 'Apply Filters' }));
+		await user.click(screen.getByRole('button', { name: 'Apply' }));
 
 		expect(await screen.findByText('Import retry')).toBeInTheDocument();
 		expect(screen.queryByText('Forecast')).not.toBeInTheDocument();
@@ -90,6 +98,10 @@ describe('notebook filters', () => {
 		makeFetch();
 		await renderProject(`/projects/${PID}?q=missing`);
 
+		expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute(
+			'aria-expanded',
+			'true',
+		);
 		expect(await screen.findByText('No notebooks match these filters')).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Reset filters' }));
 		expect(await screen.findByText('Forecast')).toBeInTheDocument();

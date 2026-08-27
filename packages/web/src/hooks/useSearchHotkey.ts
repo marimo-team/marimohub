@@ -6,7 +6,10 @@ import type { RefObject } from 'react';
  * while the user is already typing in a field, and ignores the key when a
  * modifier is held so it never hijacks browser/OS shortcuts.
  */
-export function useSearchHotkey(ref: RefObject<HTMLInputElement | null>): void {
+export function useSearchHotkey(
+	ref: RefObject<HTMLInputElement | null>,
+	onActivate?: () => void,
+): void {
 	useEffect(() => {
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -17,10 +20,11 @@ export function useSearchHotkey(ref: RefObject<HTMLInputElement | null>): void {
 			if (isTyping) return;
 
 			event.preventDefault();
+			onActivate?.();
 			ref.current?.focus();
 		}
 
 		document.addEventListener('keydown', onKeyDown);
 		return () => document.removeEventListener('keydown', onKeyDown);
-	}, [ref]);
+	}, [ref, onActivate]);
 }
