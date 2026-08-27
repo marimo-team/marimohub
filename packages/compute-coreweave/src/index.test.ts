@@ -104,40 +104,27 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
-		it('passes configured runner ids at create time and omits them by default', async () => {
-			const world = makeWorld();
-			await makeCompute(world, { ...baseConfig, runnerIds: ['runner-a', 'runner-b'] })
-				.create(SANDBOX_ID)
-				.exec('true');
-			expect(world.created[0].runnerIds).toEqual(['runner-a', 'runner-b']);
-
-			const bare = makeWorld();
-			await makeCompute(bare).create(SANDBOX_ID).exec('true');
-			expect(bare.created[0].runnerIds).toBeUndefined();
-		});
-
-		it('pins a user-home sandbox to the user-home runner and exposes the email path safely', async () => {
+		it('provisions a user-home sandbox from the user-home template and exposes the email path safely', async () => {
 			const world = makeWorld();
 			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 			try {
 				await makeCompute(world, {
 					...baseConfig,
-					runnerIds: ['runner-marimohub'],
-					userHomeRunnerIds: ['runner-marimohub-user-home'],
+					templateId: 'tmpl-marimohub',
+					userHomeTemplateId: 'tmpl-marimohub-user-home',
 				})
 					.create(SANDBOX_ID, {
 						userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
 					})
 					.exec('true');
 
-				expect(world.created[0].runnerIds).toEqual(['runner-marimohub-user-home']);
 				expect(world.created[0].environmentVariables).toMatchObject({
 					MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
 				});
 				const command = world.registry.get('cw-1')!.fake.runCalls[0][2];
 				expect(command).toContain("if [ ! -d '/var/run/marimohub/user-home' ]");
 				expect(command).toContain(
-					'marimohub: user-home runner mount missing at /var/run/marimohub/user-home',
+					'marimohub: user-home template mount missing at /var/run/marimohub/user-home',
 				);
 				expect(command).toContain("ln -s '/var/run/marimohub/user-home' '/mnt/ada@example.com'");
 				expect(command).toMatch(/; true$/);
@@ -145,7 +132,7 @@ describe('CoreWeaveCompute', () => {
 					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
 					.find((event) => event.event === 'coreweave_ensure');
 				expect(ensureEvent).toMatchObject({
-					runner_ids: ['runner-marimohub-user-home'],
+					template_id: 'tmpl-marimohub-user-home',
 					user_home_attached: true,
 				});
 				expect(ensureEvent).not.toHaveProperty('user_home_key');
@@ -159,7 +146,7 @@ describe('CoreWeaveCompute', () => {
 			const world = makeWorld();
 			await makeCompute(world, {
 				...baseConfig,
-				userHomeRunnerIds: ['runner-marimohub-user-home'],
+				userHomeTemplateId: 'tmpl-marimohub-user-home',
 				objectStorageEndpoint: 'https://cwobject.com',
 				objectStorageRegion: 'us-east-04a',
 			})
@@ -175,13 +162,13 @@ describe('CoreWeaveCompute', () => {
 			});
 		});
 
-		it('rejects a user home without a configured CoreWeave user-home runner', () => {
+		it('rejects a user home without a configured CoreWeave user-home template', () => {
 			const world = makeWorld();
 			expect(() =>
 				makeCompute(world).create(SANDBOX_ID, {
 					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
 				}),
-			).toThrow(/user-home runner is required/);
+			).toThrow(/user-home template is required/);
 		});
 
 		it('a per-create image override replaces the configured containerImage', async () => {
@@ -410,7 +397,7 @@ describe('CoreWeaveCompute', () => {
 			try {
 				const inst = makeCompute(world, {
 					...baseConfig,
-					userHomeRunnerIds: ['runner-marimohub-user-home'],
+					userHomeTemplateId: 'tmpl-marimohub-user-home',
 				}).create(SANDBOX_ID, {
 					reuse: false,
 					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },

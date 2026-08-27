@@ -399,18 +399,18 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'https://{sandboxId}-{port}.{host}',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS',
-						name: 'CoreWeave runner ids',
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID',
+						name: 'CoreWeave sandbox template id',
 						description:
-							"Comma-separated runner id(s) sandboxes may schedule on (own-cluster/CKS runners); the runner's default policy decides network, mounts, and placement. Omit to let the fleet schedule anywhere.",
-						example: 'runner-marimohub',
+							"Org-scoped sandbox template every sandbox is created from — custom specs such as GPU placement, egress rules, or pod shape. Omit to use the runner's default policy.",
+						example: 'tmpl-marimohub',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS',
-						name: 'CoreWeave user-home runner ids',
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID',
+						name: 'CoreWeave user-home template id',
 						description:
-							"Comma-separated runner id(s) used only for editor-or-higher edit sandboxes; must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. The runner's default policy must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes use the normal runners.",
-						example: 'runner-marimohub-user-home',
+							'Sandbox template used only for editor-or-higher edit sandboxes; must differ from `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`. The template must mount the per-user volume at `/var/run/marimohub/user-home` (`subPathExpr: $(MARIMOHUB_USER_HOME_KEY)`) and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes use the normal template.',
+						example: 'tmpl-marimohub-user-home',
 						optIn: true,
 					},
 					{

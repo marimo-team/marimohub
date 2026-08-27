@@ -111,19 +111,13 @@ runner comes with a default sandbox policy — you'll review it next.
 
 Details: [Get started with CoreWeave sandboxes](https://docs.coreweave.com/products/sandboxes/get-started).
 
-## 5. Review the runner's default sandbox policy
+## 5. Sandbox templates (optional)
 
-Every sandbox runs under its runner's **default policy**: which namespace it
-uses, how its network is exposed, and how its pod is shaped. Runners ship with
-a sensible default, so there is nothing to create or bind — review it, and
-edit only if you want marimohub-specific settings:
-
-```bash
-cwic sandbox runner policy edit marimohub --print-template   # review
-cwic sandbox runner policy edit marimohub                    # edit (optional)
-```
-
-Two things to check in the printed template:
+Every sandbox runs under the runner's **default policy** — namespace,
+network, and pod shape — and the shipped default is good, so a fresh
+deployment can leave this step for later. Verify two things in it (and edit
+the default with `cwic sandbox runner policy edit marimohub` if you prefer
+changing it over templating):
 
 - **Ingress.** The browser connects to kernels **directly** (not proxied
   through the hub), so each sandbox must be published at a predictable
@@ -144,7 +138,19 @@ Two things to check in the printed template:
   endpoint, pod/service network) stay unreachable; pin any internal host
   kernels may still reach with its own /32.
 
-Recommended pod settings for notebook kernels (all optional):
+Beyond the default policy, customization is per-create via org-scoped
+**sandbox templates**:
+
+```bash
+RUNNER_ID=marimohub
+# shows the runner's templates
+cwic sandbox runner edit $RUNNER_ID --print-template
+```
+
+### Optional: a marimohub template
+
+Create a template for custom specs — GPU placement, denied egress, or pod
+tweaks like node-pool pinning and a larger `/dev/shm`:
 
 ```yaml
 spec:
@@ -172,31 +178,28 @@ spec:
               mountPath: /dev/shm
 ```
 
-Sandbox v1 has no per-create profile selection — the default policy applies to
-every sandbox the runner places. Dedicate the runner (or cluster) to
-marimohub; if other runners share the org, pin placement with
-`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`.
+Set `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID=<template-id>` (step 8) and every
+sandbox is created from it; omit the variable to use the default policy.
 
-Policy schema, egress allowlists, and examples:
+Policy and template schema, egress allowlists, and examples:
 [Configure a sandbox profile](https://docs.coreweave.com/products/sandboxes/profiles/configure),
 [Profiles overview](https://docs.coreweave.com/products/sandboxes/profiles/profiles),
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
-### Optional per-user VAST directories
+### User-home template (optional per-user VAST directories)
 
-Personal storage uses a **second runner** whose default policy adds the
-per-user mount. Enable another runner (step 4 flow) and give its policy the
-same network and placement settings as the normal one, plus the fields below.
-Keep the normal runner's policy without this volume: notebook apps are shared
-across users and must not inherit the starter's directory. The PVC must exist in the sandbox namespace, and each
-selected directory must be writable by the sandbox image's user (`appuser`, UID
-1000 in the default image). The shared-vast `csi.vastdata.com` driver with NFSv3
-allows kubelet to create a missing `subPathExpr` directory automatically as
-`root:root` mode `0777`, so that setup needs no directory pre-provisioner. Verify
-the behavior with your CSI configuration. If your setup creates `root:root` mode
-`0755`, use a supported `fsGroup` or a root init container to grant UID 1000
-access. The excerpt below shows the additional Pod fields; retain the ingress
-and egress settings from the normal policy.
+Personal storage uses a second template that only adds the per-user mount —
+no egress or network customization needed. Keep the normal template (or
+default policy) without this volume: notebook apps are shared across users
+and must not inherit the starter's directory. The PVC must exist in the
+sandbox namespace, and each selected directory must be writable by the
+sandbox image's user (`appuser`, UID 1000 in the default image). The
+shared-vast `csi.vastdata.com` driver with NFSv3 allows kubelet to create a
+missing `subPathExpr` directory automatically as `root:root` mode `0777`, so
+that setup needs no directory pre-provisioner. Verify the behavior with your
+CSI configuration. If your setup creates `root:root` mode `0755`, use a
+supported `fsGroup` or a root init container to grant UID 1000 access. The
+template's additional Pod fields:
 
 ```yaml
 spec:
@@ -228,20 +231,18 @@ spec:
               mountPath: /mnt
 ```
 
-Apply it with `cwic sandbox runner policy edit <user-home-runner>`;
-marimohub pins personal-storage editor sandboxes to that runner by id:
+marimohub creates editor sandboxes with personal storage from this template:
 
 ```yaml
 MARIMOHUB_EDITOR_SANDBOX_SHARING: exclusive
-MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS: <NORMAL-RUNNER-ID>
-MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: <USER-HOME-RUNNER-ID>
+MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: <USER-HOME-TEMPLATE-ID>
 ```
 
 Kubernetes does not expand environment variables in `mountPath`, so marimohub
 creates `/mnt/<lowercase-email>` as a symlink to the isolated VAST mount. The
 `emptyDir` makes `/mnt` writable without running the sandbox as root. marimohub
 refuses to enable user homes unless editor sharing is `exclusive`, and refuses
-to start when the normal and user-home runner lists overlap. Because the
+to start when the normal and user-home template ids are the same. Because the
 `emptyDir` is mounted at `/mnt`, it shadows anything the sandbox image placed
 there. A user whose email changes receives a different directory; migrate or
 alias that data before changing the identity-provider email.
@@ -515,9 +516,9 @@ For setup steps, access policies, and trade-offs, see
 
 ### GPU sandboxes
 
-Give a dedicated runner a policy whose pod placement requests GPU instance
-types (`spec.pod.placement.instanceTypes`, e.g. `gd-8xh100ib-i128`) backed by
-a GPU node pool, and pin it via `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`. See
+Create a sandbox template whose pod placement requests GPU instance types
+(`spec.pod.placement.instanceTypes`, e.g. `gd-8xh100ib-i128`) backed by a GPU
+node pool, and select it via `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`. See
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
 ### Custom domain

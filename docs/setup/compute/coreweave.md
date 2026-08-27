@@ -26,9 +26,9 @@ see the [Configuration reference](/configuration#coreweave-sandbox).
 
 ::: warning Removed with CoreWeave Sandbox v1
 The former `…COREWEAVE_PROFILE`, `…_INGRESS_MODE`, `…_EGRESS_MODE`, and
-`…_USER_HOME_PROFILE` variables are rejected at boot: v1 has no per-create
-profile selection or network modes. The runner's **default policy** decides
-network, mounts, and placement — pin a runner with
-`MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS`, and give personal storage its own
-runner via `…_USER_HOME_RUNNER_IDS`.
+`…_USER_HOME_PROFILE` variables are rejected at boot: v1 replaced profile
+selection with org-scoped **sandbox templates**. Sandboxes run under the
+runner's default policy unless `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`
+selects a template; personal storage uses its own template via
+`…_USER_HOME_TEMPLATE_ID`.
 :::

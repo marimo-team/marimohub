@@ -40,14 +40,13 @@
  * `waitForPort` probe assumes `python3` is on the image PATH.
  *
  * Sandbox v1 (SDK ≥0.2.0-beta.0) removed create-time `profileNames`, `ports`,
- * and `ingressMode`/`egressMode` (rejected client-side). A runner's DEFAULT
- * profile template now decides network, mounts, and placement, so per-create
- * targeting pins `runnerIds` instead (the SDK then sets `mode: CKS` —
- * own-cluster runners only). User homes ride the same mechanism: a sandbox
- * with a `userHome` is pinned to `userHomeRunnerIds`, whose default profile
- * must mount the per-user PVC. Adopt the proto's direct successors
- * (`CreateSandboxFromTemplate`, registered Volumes) once the TS SDK exposes
- * them.
+ * and `ingressMode`/`egressMode` (rejected client-side). Per-create targeting
+ * is now an org-scoped **sandbox template** (`CreateSandboxFromTemplate` in
+ * the v1 proto): `templateId` selects the template every sandbox is created
+ * from, and a sandbox with a `userHome` uses `userHomeTemplateId` (a template
+ * mounting the per-user volume) instead. Sandboxes without a template run
+ * under the runner's default policy. See the TODO in `ensure()` — the TS SDK
+ * does not expose template creates yet.
  */
 import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
@@ -125,7 +124,7 @@ const DEFAULT_KERNEL_PORT = 2718;
 const DEFAULT_OWNER_TAG = 'marimohub';
 /** Prefix for the per-sandbox tag that encodes our `SandboxId`. */
 const ID_TAG_PREFIX = 'mh-sbx-';
-/** Fixed profile-template mount; a bootstrap symlink exposes it at `/mnt/<email>`. */
+/** Fixed template mount; a bootstrap symlink exposes it at `/mnt/<email>`. */
 const USER_HOME_MOUNT_PATH = '/var/run/marimohub/user-home';
 const USER_HOME_KEY_ENV = 'MARIMOHUB_USER_HOME_KEY';
 
@@ -207,19 +206,18 @@ export interface CoreWeaveConfig {
 	/** Tag applied to every sandbox we own (manual discovery/cleanup). Default `marimohub`. */
 	ownerTag?: string;
 	/**
-	 * Runner IDs sandboxes may schedule on — v1's placement lever: pinning a
-	 * runner selects its default policy (network/mounts/placement).
-	 * Omit to let the fleet schedule anywhere.
+	 * Org-scoped sandbox template every sandbox is created from (custom specs:
+	 * GPU placement, egress rules, pod shape). Omit to use the runner's
+	 * default policy.
 	 */
-	runnerIds?: readonly string[];
+	templateId?: string;
 	/**
-	 * Runner(s) whose default policy mounts the per-user VAST/PVC at
-	 * `USER_HOME_MOUNT_PATH` (`subPathExpr` on the injected
-	 * `MARIMOHUB_USER_HOME_KEY` env var). Used only for editor sandboxes
-	 * carrying a `userHome`; must be disjoint from `runnerIds` so apps and
-	 * viewer sandboxes can never land on the mount-bearing runner.
+	 * Sandbox template mounting the per-user volume at `USER_HOME_MOUNT_PATH`
+	 * (`subPathExpr` on the injected `MARIMOHUB_USER_HOME_KEY` env var). Used
+	 * only for editor sandboxes carrying a `userHome`; must differ from
+	 * `templateId` so apps and viewer sandboxes never receive the mount.
 	 */
-	userHomeRunnerIds?: readonly string[];
+	userHomeTemplateId?: string;
 	/**
 	 * Template for the public kernel URL. `{sandboxId}`, `{port}`, and `{host}` are
 	 * substituted. Default `https://{sandboxId}-{port}.{host}` where `{host}` is the
@@ -363,6 +361,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
 		// and boot phases separately measurable for the wide event below.
+		// TODO(cwsandbox): create from `this.config.templateId` via the SDK's
+		// CreateSandboxFromTemplate once it ships (the v1 proto already has it).
+		// Until then the configured template id is NOT applied — sandboxes run
+		// under the runner's default policy, and a user-home template's mount is
+		// absent (the bootstrap below fails loudly rather than running unmounted).
 		this.sandbox = existing
 			? await this.client.fromId(existing.sandboxId)
 			: await this.client.create(this.createOptions());
@@ -395,7 +398,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				create_ms: t2 - t1,
 				boot_ms: t3 - t2,
 				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
-				...(this.config.runnerIds?.length ? { runner_ids: this.config.runnerIds } : {}),
+				...(this.config.templateId ? { template_id: this.config.templateId } : {}),
 				...(this.userHome ? { user_home_attached: true } : {}),
 			},
 			{ channel: 'warn' },
@@ -442,7 +445,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			// (the removed `egressMode` has no v1 analogue).
 			services: [{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility: 'public' }],
 			tags: [this.config.ownerTag ?? DEFAULT_OWNER_TAG, this.idTag],
-			...(this.config.runnerIds?.length ? { runnerIds: this.config.runnerIds } : {}),
 			...(this.config.resources ? { resources: this.config.resources } : {}),
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
@@ -486,7 +488,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		if (this.needsAwsConfigBootstrap()) snippets.push(AWS_CONFIG_BOOTSTRAP);
 		if (this.userHome) {
 			const parent = this.userHome.path.slice(0, this.userHome.path.lastIndexOf('/')) || '/';
-			const mountMissing = `marimohub: user-home runner mount missing at ${USER_HOME_MOUNT_PATH}`;
+			const mountMissing = `marimohub: user-home template mount missing at ${USER_HOME_MOUNT_PATH}`;
 			const linkFailed = `marimohub: cannot prepare user home at ${this.userHome.path}`;
 			snippets.push(
 				`if [ ! -d ${shellQuote(USER_HOME_MOUNT_PATH)} ]; then ` +
@@ -868,10 +870,10 @@ export class CoreWeaveCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		if (options?.userHome && !this.config.userHomeRunnerIds?.length) {
+		if (options?.userHome && !this.config.userHomeTemplateId) {
 			// Failing here beats provisioning an editor without its mount: the
 			// bootstrap would abort in-sandbox, after the boot wait.
-			throw new Error('A CoreWeave user-home runner is required for personal storage');
+			throw new Error('A CoreWeave user-home template is required for personal storage');
 		}
 		const resources = coreWeaveProfileResources(options?.resources);
 		const config =
@@ -879,7 +881,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 				? {
 						...this.config,
 						...(options?.image ? { image: options.image } : {}),
-						...(options?.userHome ? { runnerIds: this.config.userHomeRunnerIds } : {}),
+						...(options?.userHome ? { templateId: this.config.userHomeTemplateId } : {}),
 						...(resources
 							? { resources: mergeCoreWeaveResources(this.config.resources, resources) }
 							: {}),

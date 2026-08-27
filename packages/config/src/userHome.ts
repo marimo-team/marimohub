@@ -2,12 +2,11 @@ import { BadRequestError } from '@marimo-hub/core';
 import type { EditorSandboxSharing } from '@marimo-hub/core';
 import type { SandboxUserHomeResolver } from '@marimo-hub/api';
 import { computeBackend } from './compute';
-import { parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
-export const COREWEAVE_USER_HOME_RUNNERS = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS';
-/** Pre-Sandbox-v1 selector; rejected with a pointer at the runner-based replacement. */
+export const COREWEAVE_USER_HOME_TEMPLATE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID';
+/** Pre-Sandbox-v1 selector; rejected with a pointer at the template-based replacement. */
 export const COREWEAVE_USER_HOME_PROFILE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE';
 
 function canonicalEmail(email: string): string {
@@ -29,9 +28,9 @@ function canonicalEmail(email: string): string {
  * Personal homes are composed behind a resolver so a future identity mapping can
  * replace email without changing session provisioning or compute adapters.
  *
- * CoreWeave Sandbox v1 removed per-create profile selection, so the feature now
- * rides a dedicated runner: editor sandboxes are pinned to the runner(s) named
- * here, whose default policy mounts the per-user PVC.
+ * CoreWeave Sandbox v1 replaced per-create profile selection with org-scoped
+ * sandbox templates: editor sandboxes are created from the template named
+ * here, which mounts the per-user volume.
  */
 export function makeSandboxUserHome(
 	env: Env,
@@ -42,23 +41,23 @@ export function makeSandboxUserHome(
 			`${COREWEAVE_USER_HOME_PROFILE} is no longer supported: CoreWeave Sandbox v1 removed per-create profile selection`,
 			{
 				variable: COREWEAVE_USER_HOME_PROFILE,
-				remediation: `Give a dedicated runner a default policy with the user-home mounts and set ${COREWEAVE_USER_HOME_RUNNERS} to that runner's id.`,
+				remediation: `Create a sandbox template with the user-home mounts and set ${COREWEAVE_USER_HOME_TEMPLATE} to its id.`,
 				docs: 'docs/deploying/cks.md',
 			},
 		);
 	}
-	const runners = parseList(env[COREWEAVE_USER_HOME_RUNNERS]);
-	if (!runners) return undefined;
+	const template = env[COREWEAVE_USER_HOME_TEMPLATE]?.trim();
+	if (!template) return undefined;
 	if (computeBackend(env) !== 'coreweave') {
-		throw new ConfigError(`${COREWEAVE_USER_HOME_RUNNERS} requires the coreweave backend`, {
-			variable: COREWEAVE_USER_HOME_RUNNERS,
-			remediation: 'Set MARIMOHUB_COMPUTE_BACKEND=coreweave or remove the user-home runners.',
+		throw new ConfigError(`${COREWEAVE_USER_HOME_TEMPLATE} requires the coreweave backend`, {
+			variable: COREWEAVE_USER_HOME_TEMPLATE,
+			remediation: 'Set MARIMOHUB_COMPUTE_BACKEND=coreweave or remove the user-home template.',
 			docs: 'docs/deploying/cks.md',
 		});
 	}
 	if (sharing !== 'exclusive') {
 		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_RUNNERS} requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`,
+			`${COREWEAVE_USER_HOME_TEMPLATE} requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`,
 			{
 				variable: 'MARIMOHUB_EDITOR_SANDBOX_SHARING',
 				remediation: 'Set MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive.',
@@ -66,15 +65,13 @@ export function makeSandboxUserHome(
 			},
 		);
 	}
-	const normalRunners = parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS) ?? [];
-	const overlap = runners.filter((runner) => normalRunners.includes(runner));
-	if (overlap.length > 0) {
+	if (template === env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID?.trim()) {
 		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_RUNNERS} must not overlap MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS: ${overlap.join(', ')}`,
+			`${COREWEAVE_USER_HOME_TEMPLATE} must differ from MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID: ${template}`,
 			{
-				variable: COREWEAVE_USER_HOME_RUNNERS,
+				variable: COREWEAVE_USER_HOME_TEMPLATE,
 				remediation:
-					'Use a dedicated runner for editor personal storage; apps and viewer sandboxes must not schedule on it.',
+					'Use a dedicated template for editor personal storage; apps and viewer sandboxes must not receive the mount.',
 				docs: 'docs/deploying/cks.md',
 			},
 		);

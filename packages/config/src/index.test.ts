@@ -857,12 +857,12 @@ describe('createFromEnv default role', () => {
 		}
 	});
 
-	it('requires exclusive CoreWeave editors when a user-home runner is configured', () => {
+	it('requires exclusive CoreWeave editors when a user-home template is configured', () => {
 		const coreweave = {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 		};
 		expect(() => createFromEnv(coreweave)).toThrow(
 			/requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive/,
@@ -870,23 +870,23 @@ describe('createFromEnv default role', () => {
 		expect(() =>
 			createFromEnv({
 				...baseEnv,
-				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 			}),
 		).toThrow(/requires the coreweave backend/);
 	});
 
-	it('requires normal and user-home CoreWeave runners to be disjoint', () => {
+	it('requires the normal and user-home CoreWeave templates to differ', () => {
 		expect(() =>
 			createFromEnv({
 				...baseEnv,
 				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-				MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS: 'runner-a, runner-shared',
-				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-shared, runner-user-home',
+				MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID: 'tmpl-shared',
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-shared',
 				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 			}),
-		).toThrow(/must not overlap.*runner-shared/);
+		).toThrow(/must differ.*tmpl-shared/);
 	});
 
 	it('resolves exclusive CoreWeave user homes from canonical email', () => {
@@ -894,7 +894,7 @@ describe('createFromEnv default role', () => {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: ' CoreWeave ',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 		});
 		expect(
@@ -907,7 +907,7 @@ describe('createFromEnv default role', () => {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS: 'runner-user-home',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 		});
 		const resolve = () =>

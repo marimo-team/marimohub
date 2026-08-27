@@ -223,7 +223,7 @@ function rejectRemovedCoreWeaveVars(env: Env): void {
 				{
 					variable,
 					remediation:
-						"Remove the variable. The runner's default policy now decides network and mounts; pin a runner with MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS.",
+						"Remove the variable. Sandboxes run under the runner's default policy; for custom specs create a sandbox template and set MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID.",
 					docs: 'docs/setup/compute/coreweave.md',
 				},
 			);
@@ -299,10 +299,10 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE,
-				// Runner pinning is v1's stand-in for the removed profile selection: a
-				// runner's default policy decides network/mounts/placement.
-				runnerIds: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_IDS),
-				userHomeRunnerIds: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_RUNNER_IDS),
+				// Sandbox templates are v1's replacement for profile selection; without
+				// one, sandboxes run under the runner's default policy.
+				templateId: env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID,
+				userHomeTemplateId: env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID,
 				maxLifetimeSeconds: resolveLifetimeBackstop(
 					env,
 					'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
