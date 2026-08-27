@@ -44,6 +44,44 @@ function setup(
 }
 
 describe('DataQueryService', () => {
+	it('routes each plan to its installed engine factory', async () => {
+		const duckExecute = vi.fn(async () => ({ columns: [], rows: [], truncated: false }));
+		const postgresExecute = vi.fn(async () => ({ columns: [], rows: [], truncated: false }));
+		const factory = (execute: typeof duckExecute): DataQueryExecutorFactory => ({
+			create: async () => ({ runtime: 'worker', execute, terminate: vi.fn() }),
+		});
+		const service = new DataQueryService({
+			...serviceOptions,
+			executorFactories: {
+				'duckdb-wasm': factory(duckExecute),
+				postgres: factory(postgresExecute),
+			},
+		});
+		const postgresConnection = {
+			...connection,
+			plan: {
+				engine: 'postgres' as const,
+				connection: {
+					provider: 'postgres' as const,
+					host: 'db.example.test',
+					port: 5432,
+					database: 'app',
+					username: 'reader',
+					password: 'secret',
+					tls: { mode: 'verify-full' as const, ca: { kind: 'system' as const } },
+				},
+			},
+		};
+
+		await service.query(user, { sql: 'select 1', connection });
+		await service.query(user, { sql: 'select 1', connection: postgresConnection });
+
+		expect(duckExecute).toHaveBeenCalledOnce();
+		expect(postgresExecute).toHaveBeenCalledOnce();
+		expect(service.supports('duckdb-wasm')).toBe(true);
+		expect(service.supports('postgres')).toBe(true);
+	});
+
 	it.each([
 		['maxConcurrent', 0],
 		['maxConcurrentPerUser', -1],
@@ -332,6 +370,24 @@ describe('DataQueryService', () => {
 			execution_ms: expect.any(Number),
 		});
 		expect(terminate).toHaveBeenCalledOnce();
+	});
+
+	it('returns only explicitly sanitized query rejection details', async () => {
+		const safe = setup(async () => {
+			throw new DataQueryUserError(
+				'PostgreSQL rejected this read-only query (SQLSTATE 42601 at character 8).',
+			);
+		}).service;
+		const unsafe = setup(async () => {
+			throw new ValidationError('provider text with relation and SQL');
+		}).service;
+
+		await expect(safe.query(user, { sql: 'select broken', connection })).rejects.toThrow(
+			'SQLSTATE 42601 at character 8',
+		);
+		await expect(unsafe.query(user, { sql: 'select broken', connection })).rejects.toThrow(
+			'could not execute',
+		);
 	});
 
 	it.each([

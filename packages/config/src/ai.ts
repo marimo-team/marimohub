@@ -15,6 +15,17 @@ import { ConfigError } from './errors';
 
 const DOCS = 'docs/ai.md';
 
+export function sqlGenerationInstructions(
+	dialect: 'duckdb' | 'postgresql',
+	rules?: string,
+): string {
+	return (
+		`You generate ${dialect === 'postgresql' ? 'PostgreSQL' : 'DuckDB'} SQL. ` +
+		`Return SQL only, without Markdown fences or explanation. ` +
+		`Use only the supplied schema and write read-only statements.${rules ? `\n${rules}` : ''}`
+	);
+}
+
 export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 	const backend = env.MARIMOHUB_AI_BACKEND?.trim().toLowerCase();
 	if (backend === undefined || backend === '' || backend === 'none') return {};
@@ -90,11 +101,7 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 			async generateSql(input) {
 				const result = await generateText({
 					model: provider.chatModel(model),
-					instructions:
-						`You generate DuckDB SQL. Return SQL only, without Markdown fences or explanation. ` +
-						`Use only the supplied schema and write read-only statements.${
-							env.MARIMOHUB_AI_RULES ? `\n${env.MARIMOHUB_AI_RULES}` : ''
-						}`,
+					instructions: sqlGenerationInstructions(input.dialect, env.MARIMOHUB_AI_RULES),
 					prompt: [
 						`Mode: ${input.mode}`,
 						`Instruction: ${input.instruction}`,

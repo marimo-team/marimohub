@@ -1,6 +1,8 @@
 import type { IntegrationId, SessionId, UserId } from '../ids';
 import type { BrowseSurface, ObjectBrowseCapability } from './objectBrowser';
 
+export type QueryDialect = 'duckdb' | 'postgresql';
+
 export const INTEGRATION_CATEGORIES = [
 	'database',
 	'catalog',
@@ -172,7 +174,7 @@ export interface BrowseCapabilityResult {
 	surfaces: {
 		tables?: { available: boolean; preview: boolean; reason?: string };
 		objects?: ObjectBrowseCapability;
-		query?: { available: boolean; reason?: string };
+		query?: { available: boolean; dialect: QueryDialect; reason?: string };
 	};
 }
 

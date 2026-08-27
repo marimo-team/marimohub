@@ -16,7 +16,9 @@ const MAX_MESSAGE_LENGTH = 500;
 export function redactConnectionSecrets(message: string, connection: DataQueryConnection): string {
 	const secrets = new Set<string>(Object.values(connection.vars));
 	for (const file of connection.files) collectFileSecrets(file.content, secrets);
-	if (connection.plan) {
+	if (connection.plan?.engine === 'postgres') {
+		collectStrings(connection.plan.connection, secrets);
+	} else if (connection.plan) {
 		for (const statement of [...connection.plan.setup, ...(connection.plan.cleanup ?? [])]) {
 			for (const param of statement.params ?? []) {
 				if (typeof param === 'string') secrets.add(param);

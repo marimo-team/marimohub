@@ -2163,10 +2163,20 @@ components:
               properties:
                 available:
                   type: boolean
+                dialect:
+                  type: string
+                  enum:
+                    - duckdb
+                    - postgresql
+                    - unknown
+                  description: 'Known values: duckdb, postgresql. Unrecognized values normalize to
+                    unknown.'
+                  example: duckdb
                 reason:
                   type: string
               required:
                 - available
+                - dialect
       required:
         - surfaces
     IntegrationBrowseNamespacePage:

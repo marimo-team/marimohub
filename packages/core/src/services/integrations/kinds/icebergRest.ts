@@ -350,6 +350,8 @@ export const icebergRest = defineIntegration({
 	},
 
 	query: {
+		engine: 'duckdb-wasm',
+		dialect: 'duckdb',
 		readiness: duckdbPreviewReadiness,
 		available(config) {
 			const reason = duckdbPreviewBlocker(config);
@@ -370,6 +372,7 @@ export const icebergRest = defineIntegration({
 			const alias = sqlIdentifier(integration.name);
 			const secret = duckdbS3Secret(config, integration.id.replaceAll('-', '_'));
 			return {
+				engine: 'duckdb-wasm',
 				setup: [
 					{ text: 'LOAD iceberg' },
 					{ text: 'LOAD httpfs' },

@@ -1,10 +1,8 @@
 import type { Env } from './env';
 
-export const EXPERIMENTS = {
-	'duckdb-wasm-preview': {
-		description: 'Run compatible integration-authored preview SQL in DuckDB-Wasm',
-	},
-} as const;
+// Empty since `duckdb-wasm-preview` graduated to always-on; setting a graduated
+// ID now logs the unknown-experiment warning as an upgrade nudge.
+export const EXPERIMENTS = {} as const satisfies Record<string, { description: string }>;
 
 export type Experiment = keyof typeof EXPERIMENTS;
 

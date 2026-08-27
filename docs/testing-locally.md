@@ -47,18 +47,14 @@ MARIMOHUB_SUPER_ADMINS=user@localhost
 MARIMOHUB_INTEGRATIONS=on
 MARIMOHUB_INTEGRATIONS_PROBE=private
 MARIMOHUB_DATA_BROWSER=full
-MARIMOHUB_DUCKDB_OAUTH=on
-MARIMOHUB_DUCKDB_OBJECT_QUERIES=on
 MARIMOHUB_DATA_PREVIEW_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest
-MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview
 ```
 
 The entrypoint also generates a random local `MARIMOHUB_SECRETS_KEK` so
 integrations with inline secrets work without setup. With
 `MARIMOHUB_DEV_PERSIST=true` the key is kept in `.context/dev-secrets-kek` so
 persisted secrets stay decryptable across restarts. Set your own
-`MARIMOHUB_EXPERIMENTS` or `MARIMOHUB_SECRETS_KEK` to override these two
-values.
+`MARIMOHUB_SECRETS_KEK` to override this value.
 
 Startup is ready when the `server` process is listening on port `3000` and the
 `web` process prints a Vite local URL on port `5175`. The server owns the API;

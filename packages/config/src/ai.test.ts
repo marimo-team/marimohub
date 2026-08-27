@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeAi } from './ai';
+import { makeAi, sqlGenerationInstructions } from './ai';
 import { ConfigError } from './errors';
 
 const aiEnv = {
@@ -11,6 +11,14 @@ const aiEnv = {
 };
 
 describe('makeAi', () => {
+	it('selects SQL generation instructions from the advertised dialect', () => {
+		expect(sqlGenerationInstructions('duckdb')).toContain('generate DuckDB SQL');
+		expect(sqlGenerationInstructions('postgresql', 'Avoid private tables.')).toBe(
+			'You generate PostgreSQL SQL. Return SQL only, without Markdown fences or explanation. ' +
+				'Use only the supplied schema and write read-only statements.\nAvoid private tables.',
+		);
+	});
+
 	it('is disabled when the backend is unset or none', () => {
 		expect(makeAi({})).toEqual({});
 		expect(makeAi({ MARIMOHUB_AI_BACKEND: 'none' })).toEqual({});

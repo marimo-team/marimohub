@@ -49,6 +49,35 @@ jobs:
           docker run -d --name trino -p 18080:8080 trinodb/trino:483
           docker run -d --name clickhouse -p 18123:8123 \
             -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:26.2
+          mkdir -p "$RUNNER_TEMP/postgres-certs"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -keyout "$RUNNER_TEMP/postgres-certs/ca.key" \
+            -out "$RUNNER_TEMP/postgres-certs/ca.crt" -subj '/CN=marimohub-postgres-test-ca'
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout "$RUNNER_TEMP/postgres-certs/server.key" \
+            -out "$RUNNER_TEMP/postgres-certs/server.csr" -subj '/CN=postgres.test'
+          printf 'subjectAltName=DNS:postgres.test,IP:127.0.0.1\n' \
+            > "$RUNNER_TEMP/postgres-certs/server.ext"
+          openssl x509 -req -days 2 -in "$RUNNER_TEMP/postgres-certs/server.csr" \
+            -CA "$RUNNER_TEMP/postgres-certs/ca.crt" \
+            -CAkey "$RUNNER_TEMP/postgres-certs/ca.key" -CAcreateserial \
+            -extfile "$RUNNER_TEMP/postgres-certs/server.ext" \
+            -out "$RUNNER_TEMP/postgres-certs/server.crt"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -keyout "$RUNNER_TEMP/postgres-certs/wrong-ca.key" \
+            -out "$RUNNER_TEMP/postgres-certs/wrong-ca.crt" -subj '/CN=wrong-test-ca'
+          docker volume create postgres-certs
+          docker run --rm -v postgres-certs:/target \
+            -v "$RUNNER_TEMP/postgres-certs:/source:ro" alpine:3.23 sh -c \
+            'cp /source/ca.crt /source/server.crt /source/server.key /target/; chown 70:70 /target/*; chmod 600 /target/server.key'
+          docker run -d --name postgres -p 15432:5432 \
+            -e POSTGRES_PASSWORD=adminpass -e POSTGRES_DB=hubtest \
+            -v postgres-certs:/certs:ro postgres:18.6-alpine3.23 \
+            -c ssl=on -c ssl_ca_file=/certs/ca.crt \
+            -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+          docker run -d --name postgres-plain -p 15433:5432 \
+            -e POSTGRES_PASSWORD=adminpass -e POSTGRES_DB=hubtest \
+            postgres:18.6-alpine3.23
 
       - name: Wait for catalog servers
         run: |
@@ -77,6 +106,45 @@ jobs:
             curl -fsS 'http://127.0.0.1:18123/?query=SELECT%201' && break
             sleep 1; [ "$i" = 30 ] && exit 1
           done
+          for name in postgres postgres-plain; do
+            consecutive=0
+            for i in $(seq 1 60); do
+              if docker exec "$name" pg_isready -U postgres -d hubtest; then
+                consecutive=$((consecutive + 1))
+                [ "$consecutive" = 3 ] && break
+              else
+                consecutive=0
+              fi
+              sleep 1; [ "$i" = 60 ] && exit 1
+            done
+          done
+          docker exec postgres psql -U postgres -d hubtest -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE hub_reader LOGIN PASSWORD 'readerpass';
+             CREATE ROLE hub_writer LOGIN PASSWORD 'writerpass';
+             CREATE SCHEMA sales;
+             CREATE TABLE sales.orders (id bigint PRIMARY KEY, amount numeric(20,4), created_at timestamptz, payload bytea, meta jsonb, tags text[], special double precision);
+             COMMENT ON COLUMN sales.orders.amount IS 'Exact total';
+             INSERT INTO sales.orders VALUES (1, 1234567890123456.7890, '2026-01-02T03:04:05Z', decode('00ff','hex'), '{\"ok\":true}', ARRAY['one','two'], 'Infinity');
+             CREATE VIEW sales.order_view AS SELECT * FROM sales.orders;
+             CREATE MATERIALIZED VIEW sales.order_materialized AS SELECT * FROM sales.orders;
+             CREATE TABLE sales.orders_partitioned (id bigint) PARTITION BY RANGE (id);
+             CREATE TABLE sales.orders_partition_1 PARTITION OF sales.orders_partitioned FOR VALUES FROM (0) TO (100);
+             CREATE TABLE sales.\"Odd \"\" Table\" (\"Odd \"\" Column\" text);
+             INSERT INTO sales.\"Odd \"\" Table\" VALUES ('quoted');
+             CREATE EXTENSION file_fdw;
+             CREATE SERVER hub_file FOREIGN DATA WRAPPER file_fdw;
+             CREATE FOREIGN TABLE sales.foreign_orders (id bigint) SERVER hub_file OPTIONS (filename '/tmp/foreign-orders.csv', format 'csv');
+             GRANT CONNECT ON DATABASE hubtest TO hub_reader, hub_writer;
+             GRANT USAGE ON SCHEMA sales TO hub_reader, hub_writer;
+             GRANT SELECT ON ALL TABLES IN SCHEMA sales TO hub_reader;
+             GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA sales TO hub_writer;"
+          docker exec postgres-plain psql -U postgres -d hubtest -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE hub_reader LOGIN PASSWORD 'readerpass';
+             CREATE SCHEMA sales;
+             CREATE TABLE sales.orders (id bigint PRIMARY KEY);
+             GRANT CONNECT ON DATABASE hubtest TO hub_reader;
+             GRANT USAGE ON SCHEMA sales TO hub_reader;
+             GRANT SELECT ON ALL TABLES IN SCHEMA sales TO hub_reader;"
 
       - name: Browse contracts against the live servers
         env:
@@ -89,6 +157,10 @@ jobs:
           MARIMOHUB_TEST_TRINO_PORT: 18080
           MARIMOHUB_TEST_CLICKHOUSE_HOST: 127.0.0.1
           MARIMOHUB_TEST_CLICKHOUSE_PORT: 18123
+          MARIMOHUB_TEST_POSTGRES_PORT: 15432
+          MARIMOHUB_TEST_POSTGRES_PLAIN_PORT: 15433
+          MARIMOHUB_TEST_POSTGRES_CA_PATH: ${{ runner.temp }}/postgres-certs/ca.crt
+          MARIMOHUB_TEST_POSTGRES_WRONG_CA_PATH: ${{ runner.temp }}/postgres-certs/wrong-ca.crt
         run: |
           vp test \
             packages/core/src/services/integrations/kinds/icebergRest.browse.live.test.ts \
@@ -96,4 +168,5 @@ jobs:
             packages/core/src/services/integrations/kinds/clickhouse.browse.live.test.ts \
             packages/duckdb-wasm-runtime/src/icebergHttpBroker.test.ts \
             packages/config/src/duckdbHttpBroker.test.ts \
-            packages/config/src/duckdbHttpBroker.live.test.ts
+            packages/config/src/duckdbHttpBroker.live.test.ts \
+            packages/postgres-runtime/src/postgres.live.test.ts

@@ -14,7 +14,7 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./ai.ts', import.meta.url)),
 	fileURLToPath(new URL('./secrets.ts', import.meta.url)),
 	fileURLToPath(new URL('./integrations.ts', import.meta.url)),
-	fileURLToPath(new URL('./duckdbFeatures.ts', import.meta.url)),
+	fileURLToPath(new URL('./postgresFeatures.ts', import.meta.url)),
 	fileURLToPath(new URL('./experiments.ts', import.meta.url)),
 	fileURLToPath(new URL('./notifications.ts', import.meta.url)),
 	fileURLToPath(new URL('./projectAlerts.ts', import.meta.url)),

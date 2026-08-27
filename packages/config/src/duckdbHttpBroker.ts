@@ -17,8 +17,6 @@ import type {
 } from '@marimo-hub/duckdb-wasm-runtime/node';
 import { createPinnedLookup } from '@marimo-hub/object-browser-commons';
 import type { GuardedHostResolver } from '@marimo-hub/object-browser-commons';
-import { duckDBHttpAccessBlocker } from './duckdbFeatures';
-import type { DuckDBRolloutFeatures } from './duckdbFeatures';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 30_000;
@@ -43,7 +41,6 @@ export interface DuckDBHttpBrokerOptions {
 	now?: () => number;
 	transport?: IcebergHttpBrokerTransport;
 	oauthTokenExchange?: OAuthTokenExchange;
-	rolloutFeatures?: Readonly<DuckDBRolloutFeatures>;
 }
 
 export interface OAuthTokenExchangeRequest {
@@ -79,12 +76,6 @@ export function createDuckDBHttpSessionFactory(
 			metrics: options.metrics,
 		});
 	return (access, sessionOptions) => {
-		const rolloutBlocker = options.rolloutFeatures
-			? duckDBHttpAccessBlocker(access, options.rolloutFeatures)
-			: undefined;
-		if (rolloutBlocker) {
-			throw new IcebergHttpBrokerError('invalid_capability', rolloutBlocker);
-		}
 		const oauthProvider =
 			access.kind === 'iceberg-rest' && access.catalog.oauth2
 				? createOAuthTokenProvider({

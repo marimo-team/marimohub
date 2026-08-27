@@ -345,7 +345,7 @@ Server-wide settings; no backend selector.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current value: `duckdb-wasm-preview`. | — | — | `duckdb-wasm-preview` |
+| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown or graduated IDs (such as the removed `duckdb-wasm-preview`) are ignored with a startup warning. No experiment currently gates behavior. | — | — | `some-experiment-id` |
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
 | `MARIMOHUB_APP_BASE_URL` | Public URL for browser links and the Node SPA base path. When the app uses a path prefix, set this variable. If unset, links use the request origin and the SPA uses `/`. | — | — | `https://hub.example.com/marimohub` |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
@@ -548,10 +548,9 @@ Integration management and session injection are enabled by default. Project ent
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and requires `MARIMOHUB_DATA_BROWSER=off`. | — | `guarded` | — |
-| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires integrations to remain enabled and an enabled integration probe. `off` disables browsing. | — | `off` | — |
-| `MARIMOHUB_DUCKDB_OAUTH` | Enables parent-owned OAuth2 client-credentials exchange for DuckDB Iceberg REST queries. Disabled by default. Set to `on` only after validating the catalog integration. | — | `off` | — |
-| `MARIMOHUB_DUCKDB_OBJECT_QUERIES` | Enables guarded DuckDB queries for S3 object-store integrations. Disabled by default. Other Run SQL integrations remain available when this setting is off. | — | `off` | — |
+| `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and data browsing; an explicit `MARIMOHUB_DATA_BROWSER=metadata` or `full` setting then fails at startup. | — | `guarded` | — |
+| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` (default) enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. `off` disables browsing. The default yields silently when integrations or the probe are off; an explicit `metadata` or `full` setting then fails at startup instead. | — | `metadata` | — |
+| `MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT` | Allows PostgreSQL TLS modes that do not verify both the CA and hostname: `disable`, `prefer`, and `require`. Disabled by default. | — | `off` | — |
 | `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of runtime-backed previews in this server process. | — | `4` | — |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of runtime-backed previews for one user. | — | `1` | — |

@@ -958,8 +958,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_EXPERIMENTS',
 						name: 'Experiments',
 						description:
-							'Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current value: `duckdb-wasm-preview`.',
-						example: 'duckdb-wasm-preview',
+							'Comma-separated experimental feature IDs. Unknown or graduated IDs (such as the removed `duckdb-wasm-preview`) are ignored with a startup warning. No experiment currently gates behavior.',
+						example: 'some-experiment-id',
 					},
 					{
 						id: 'PORT',
@@ -1558,28 +1558,21 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_INTEGRATIONS_PROBE',
 						name: 'Integration egress policy',
 						description:
-							'Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and requires `MARIMOHUB_DATA_BROWSER=off`.',
+							'Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and data browsing; an explicit `MARIMOHUB_DATA_BROWSER=metadata` or `full` setting then fails at startup.',
 						default: 'guarded',
 					},
 					{
 						id: 'MARIMOHUB_DATA_BROWSER',
 						name: 'Data browser',
 						description:
-							'Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires integrations to remain enabled and an enabled integration probe. `off` disables browsing.',
-						default: 'off',
+							'Controls read-only data browsing for editors and higher roles. `metadata` (default) enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. `off` disables browsing. The default yields silently when integrations or the probe are off; an explicit `metadata` or `full` setting then fails at startup instead.',
+						default: 'metadata',
 					},
 					{
-						id: 'MARIMOHUB_DUCKDB_OAUTH',
-						name: 'DuckDB OAuth2 catalog access',
+						id: 'MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT',
+						name: 'PostgreSQL insecure transport',
 						description:
-							'Enables parent-owned OAuth2 client-credentials exchange for DuckDB Iceberg REST queries. Disabled by default. Set to `on` only after validating the catalog integration.',
-						default: 'off',
-					},
-					{
-						id: 'MARIMOHUB_DUCKDB_OBJECT_QUERIES',
-						name: 'DuckDB S3 object queries',
-						description:
-							'Enables guarded DuckDB queries for S3 object-store integrations. Disabled by default. Other Run SQL integrations remain available when this setting is off.',
+							'Allows PostgreSQL TLS modes that do not verify both the CA and hostname: `disable`, `prefer`, and `require`. Disabled by default.',
 						default: 'off',
 					},
 					{
