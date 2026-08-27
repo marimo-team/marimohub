@@ -65,6 +65,9 @@ import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
 import { makeSourceControl } from './sourceControl';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
+import { loadAdapterLibraries } from './library';
+import type { LoadedAdapterLibraries } from './library';
+import { DEFAULT_SESSION_IDLE_TIMEOUT_S, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseSecondsEnv } from './env';
@@ -98,6 +101,9 @@ export type {
 	ComputeProfilesConfig,
 	ComputeResources,
 } from './computeProfiles';
+export { loadAdapterLibraries, resolveAdapterSpecifier } from './library';
+export type { LoadedAdapterLibraries } from './library';
+export { DEFAULT_SESSION_IDLE_TIMEOUT_S, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
 
 const warnedUnsupportedProfileBackends = new Set<string>();
 
@@ -311,8 +317,6 @@ function parsePositiveIntEnv(env: Env, key: string, fallback: number): number {
 }
 
 /** Session-lifecycle defaults (seconds). See docs/configuration.md#server--api. */
-const DEFAULT_SESSION_MAX_LIFETIME_S = 14400; // 4h graceful lifetime
-const DEFAULT_SESSION_IDLE_TIMEOUT_S = 1800; // 30m no-editors idle reap
 const DEFAULT_SESSION_SNAPSHOT_INTERVAL_S = 120; // 2m periodic-save floor
 const DEFAULT_SESSION_LIFETIME_EXTENSION_S = 1800; // 30m slide while editors connected
 const DEFAULT_SESSION_SWEEP_INTERVAL_S = 60;
@@ -484,6 +488,7 @@ function parseSandboxExposure(env: Env): SandboxExposure {
 export interface CreateFromEnvOptions {
 	/** Wrap the bucket and services in OTEL spans (see `createServices`). */
 	tracing?: boolean;
+	libraries?: LoadedAdapterLibraries;
 }
 
 export function createFromEnv(
@@ -492,7 +497,7 @@ export function createFromEnv(
 	options?: CreateFromEnvOptions,
 ): ApiDeps {
 	const experiments = parseExperiments(env);
-	const bucket = makeStorage(env);
+	const bucket = makeStorage(env, options?.libraries);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
@@ -525,6 +530,7 @@ export function createFromEnv(
 	const compute = makeCompute(env, {
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
+		libraries: options?.libraries,
 	});
 	const duckdbFeatures = duckDBRolloutFeatures(env);
 	const brokerPolicy =
@@ -630,4 +636,13 @@ export function createFromEnv(
 	// Logged once (non-fatal) at boot and served by GET /api/health?deep=true.
 	deps.preflight = () => runPreflight(buildPreflightChecks(env, deps));
 	return deps;
+}
+
+export async function createFromEnvAsync(
+	env: Env = process.env,
+	metrics?: Metrics,
+	options?: CreateFromEnvOptions,
+): Promise<ApiDeps> {
+	const libraries = await loadAdapterLibraries(env);
+	return createFromEnv(env, metrics, { ...options, libraries });
 }

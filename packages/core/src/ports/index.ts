@@ -10,3 +10,5 @@ export * from './notifier';
 export * from './objectBrowser';
 export * from './projectAlerts';
 export * from './sourceControl';
+export * from './adapterShape';
+export * from './externalAdapter';

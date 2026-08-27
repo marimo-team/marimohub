@@ -9,6 +9,7 @@ import { FsStorage } from '@marimo-hub/storage-fs';
 import { parseBool, parseEnumOr, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import type { LoadedAdapterLibraries } from './library';
 import { CONFIG_SPEC } from './spec';
 
 const STORAGE_CONFIG = CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_STORAGE_BACKEND');
@@ -29,7 +30,7 @@ export function storageBackend(env: Env): string {
 		STORAGE_BACKEND_VALUES,
 		DEFAULT_STORAGE_BACKEND,
 		{
-			remediation: 'Supported backends: s3, gcs, azure, fs, memory (dev), r2 (Workers).',
+			remediation: 'Supported backends: s3, gcs, azure, fs, library, memory (dev), r2 (Workers).',
 			docs: 'docs/configuration.md#storage',
 		},
 	);
@@ -44,7 +45,7 @@ function s3Credentials(env: Env) {
 		: undefined;
 }
 
-export function makeStorage(env: Env): Bucket {
+export function makeStorage(env: Env, libraries?: LoadedAdapterLibraries): Bucket {
 	const backend = storageBackend(env);
 	switch (backend) {
 		case 's3':
@@ -151,6 +152,16 @@ export function makeStorage(env: Env): Bucket {
 				);
 			}
 			return new MemoryBucket();
+		case 'library':
+			if (libraries?.bucket) return libraries.bucket;
+			throw new ConfigError(
+				'MARIMOHUB_STORAGE_BACKEND=library requires a preloaded adapter; use createFromEnvAsync().',
+				{
+					variable: 'MARIMOHUB_STORAGE_LIBRARY',
+					remediation: 'Use createFromEnvAsync() in the Node server composition root.',
+					docs: 'development_docs/ports.md#external-adapter-libraries',
+				},
+			);
 		case 'r2':
 			throw new ConfigError(
 				'MARIMOHUB_STORAGE_BACKEND=r2 requires a Cloudflare R2 binding; wire it in examples/cloudflare-worker.',
@@ -159,7 +170,7 @@ export function makeStorage(env: Env): Bucket {
 		default:
 			throw new ConfigError(`Unknown MARIMOHUB_STORAGE_BACKEND: ${backend}`, {
 				variable: 'MARIMOHUB_STORAGE_BACKEND',
-				remediation: 'Supported backends: s3, gcs, azure, fs, memory (dev), r2 (Workers).',
+				remediation: 'Supported backends: s3, gcs, azure, fs, library, memory (dev), r2 (Workers).',
 				docs: 'docs/configuration.md#storage',
 			});
 	}

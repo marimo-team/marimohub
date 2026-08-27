@@ -151,6 +151,36 @@ describe('config -> code generators', () => {
 		expect(library).toContain('resolveIngressTlsMode(');
 		expect(library).not.toContain('JSON.parse(');
 	});
+
+	it.each([
+		['storage', { ...CASES['default-prod (s3 + modal + oidc)'], storage: 'library' }],
+		['compute', { ...CASES['default-prod (s3 + modal + oidc)'], compute: 'library' }],
+		[
+			'both',
+			{
+				...CASES['default-prod (s3 + modal + oidc)'],
+				storage: 'library',
+				compute: 'library',
+			},
+		],
+	] satisfies [string, WizardSelection][])('loads external %s adapters once', (_, selection) => {
+		const library = generateLibrary(selection);
+		expect(library.match(/loadAdapterLibraries/g)).toHaveLength(2);
+		expect(library.match(/await loadAdapterLibraries/g)).toHaveLength(1);
+		if (selection.storage === 'library')
+			expect(library).toContain('const bucket = externalBucket!;');
+		if (selection.compute === 'library')
+			expect(library).toContain('const compute = externalCompute!;');
+	});
+
+	it('rejects a selection without programmatic wiring', () => {
+		expect(() =>
+			generateLibrary({
+				...CASES['default-prod (s3 + modal + oidc)'],
+				compute: 'unknown',
+			}),
+		).toThrow('No library wiring for s3/unknown/oidc');
+	});
 });
 
 describe('validateSelection', () => {
@@ -165,6 +195,16 @@ describe('validateSelection', () => {
 
 	it('is silent for a safe production combo', () => {
 		expect(validateSelection(CASES['default-prod (s3 + modal + oidc)'])).toEqual([]);
+	});
+
+	it('warns that external adapters are trusted in-process code', () => {
+		const selection = { ...CASES['default-prod (s3 + modal + oidc)'], storage: 'library' };
+		expect(validateSelection(selection)).toEqual([
+			expect.objectContaining({
+				level: 'warning',
+				title: expect.stringMatching(/server privileges/i),
+			}),
+		]);
 	});
 
 	it('flags plaintext or contradictory kubernetes TLS settings', () => {

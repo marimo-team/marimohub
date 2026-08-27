@@ -4,7 +4,7 @@ import { httpInstrumentationMiddleware } from '@hono/otel';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
-import { createFromEnv, isConfigError } from '@marimo-hub/config';
+import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { validateServerEnv } from './env';
@@ -20,7 +20,7 @@ const DRAIN_TIMEOUT_MS = 10_000;
 type Signal = 'SIGTERM' | 'SIGINT';
 
 export interface BootstrapOverrides {
-	createDeps?: typeof createFromEnv;
+	createDeps?: (...args: Parameters<typeof createFromEnvAsync>) => ApiDeps | Promise<ApiDeps>;
 	prepareDeps?: (deps: ApiDeps) => Promise<void>;
 	hostname?: string;
 	serveFn?: typeof serve;
@@ -38,7 +38,7 @@ export async function bootstrap(
 	env: Record<string, string | undefined>,
 	overrides: BootstrapOverrides = {},
 ): Promise<BootstrapHandle | undefined> {
-	const createDeps = overrides.createDeps ?? createFromEnv;
+	const createDeps = overrides.createDeps ?? createFromEnvAsync;
 	const prepareDeps = overrides.prepareDeps;
 	const serveFn = overrides.serveFn ?? serve;
 	const startOtelFn = overrides.startOtelFn ?? startOtel;
@@ -70,7 +70,7 @@ export async function bootstrap(
 	let deps: ApiDeps;
 	try {
 		validatedEnv = validateServerEnv(env);
-		deps = createDeps(validatedEnv, metrics, { tracing: otel?.tracing ?? false });
+		deps = await createDeps(validatedEnv, metrics, { tracing: otel?.tracing ?? false });
 		await prepareDeps?.(deps);
 	} catch (err) {
 		if (isConfigError(err)) {

@@ -3,6 +3,61 @@
 Every external dependency sits behind a port. This page shows the implementation
 and verification status of each adapter.
 
+## External adapter libraries
+
+The Node server can load external storage and compute adapters at startup. Set
+the port selector to `library`. Set its library variable to an npm package, an
+ESM file path, or a `file://` URL:
+
+```sh
+MARIMOHUB_STORAGE_BACKEND=library
+MARIMOHUB_STORAGE_LIBRARY=/etc/marimohub/storage.mjs
+MARIMOHUB_COMPUTE_BACKEND=library
+MARIMOHUB_COMPUTE_LIBRARY=@myorg/marimohub-compute
+```
+
+A module must default-export a manifest. A CommonJS module can use
+`module.exports` or `module.exports.default`.
+
+```js
+export default {
+	apiVersion: 1,
+	kind: 'storage', // or 'compute'
+	async create(context) {
+		return makeAdapter(context);
+	},
+};
+```
+
+`apiVersion` must equal `1`. A storage factory returns a `Bucket`. A compute
+factory returns a `SandboxProvider`. Each factory receives the full
+`MARIMOHUB_*` environment. A compute factory also receives
+`sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in `context.compute`.
+
+At startup, the loader validates the five required `Bucket` methods and its CAS
+safety contract. For compute, it validates `create` and `proxy`, plus optional
+methods when present. It validates the first `SandboxInstance` after the provider
+creates it. Structural validation does not replace the contracts in
+`@marimo-hub/core/testing`.
+
+A storage adapter must implement atomic `onlyIfEtagMatches` and
+`onlyIfNotExists` writes. If a conditional write fails, throw
+`context.errors.preconditionFailed(message)`. This function returns the server's
+`PreconditionFailedError`, so the adapter does not need `@marimo-hub/core` at
+runtime.
+
+The storage adapter must implement `verifyConditionalWrites()` and set `casScope`
+to `global` or `process`. During development, run the contract for your port:
+`bucketContract` or `computeContract`.
+
+The server loads each module once. It does not sandbox, unload, or hot-reload
+modules. Only the Node server supports these modules. Load only trusted code. It
+runs with server privileges.
+
+For deployment, bundle the adapter and its SDK dependencies into one `.mjs` file.
+Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
+[`examples/external-adapter`](../examples/external-adapter/README.md).
+
 **Legend**
 
 | Icon | Status      | Meaning                                                 |

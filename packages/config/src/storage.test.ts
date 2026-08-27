@@ -145,7 +145,7 @@ describe('makeStorage backend selection', () => {
 
 	it('rejects an unknown backend and lists the accepted values', () => {
 		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'sqlite' })).toThrow(
-			/Invalid MARIMOHUB_STORAGE_BACKEND: sqlite \(expected s3, gcs, azure, fs, memory, r2\)/,
+			/Invalid MARIMOHUB_STORAGE_BACKEND: sqlite \(expected s3, gcs, azure, fs, memory, library, r2\)/,
 		);
 	});
 

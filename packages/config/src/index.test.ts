@@ -1,8 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { BadRequestError, createProjectId, createSessionId } from '@marimo-hub/core';
-import type { ProxyExposure } from '@marimo-hub/core';
+import type { ProxyExposure, SandboxProvider } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
-import { createFromEnv } from './index';
+import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import { createFromEnv, createFromEnvAsync } from './index';
+
+const validStorageFixture = fileURLToPath(
+	new URL('./testdata/adapters/valid-storage.mjs', import.meta.url),
+);
 
 /**
  * Composition-root selector tests. `createFromEnv` accepts an env object, so we
@@ -550,6 +556,65 @@ describe('createFromEnv auth backend selection', () => {
 			new Request('http://x', { headers: { authorization: 'Bearer mhub_pat_bogus' } }),
 		);
 		expect(viaBadPat).toBeNull();
+	});
+});
+
+describe('createFromEnv external adapter libraries', () => {
+	const env = {
+		MARIMOHUB_STORAGE_BACKEND: 'library',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('requires preloaded adapters in the synchronous API', () => {
+		expect(() => createFromEnv(env)).toThrow(/use createFromEnvAsync/);
+		expect(() =>
+			createFromEnv({
+				MARIMOHUB_STORAGE_BACKEND: 'memory',
+				MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+				MARIMOHUB_COMPUTE_BACKEND: 'library',
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+			}),
+		).toThrow(/use createFromEnvAsync/);
+	});
+
+	it('wires a preloaded adapter and reports its backend', () => {
+		const bucket = new MemoryBucket();
+		const deps = createFromEnv(env, undefined, { libraries: { bucket } });
+		expect(deps.bucket).toBe(bucket);
+		expect(deps.version?.backends?.storage).toBe('library');
+	});
+
+	it('wires a preloaded compute provider', () => {
+		const compute = {
+			create() {
+				throw new Error('not used');
+			},
+			async proxy() {
+				return null;
+			},
+		} satisfies SandboxProvider;
+		const deps = createFromEnv(
+			{
+				MARIMOHUB_STORAGE_BACKEND: 'memory',
+				MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+				MARIMOHUB_COMPUTE_BACKEND: 'library',
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+			},
+			undefined,
+			{ libraries: { compute } },
+		);
+		expect(deps.compute).toBe(compute);
+		expect(deps.version?.backends?.compute).toBe('library');
+	});
+
+	it('loads and wires an adapter end to end through the async API', async () => {
+		const deps = await createFromEnvAsync({
+			...env,
+			MARIMOHUB_STORAGE_LIBRARY: validStorageFixture,
+		});
+		expect(deps.version?.backends?.storage).toBe('library');
+		await expect(deps.bucket.list()).resolves.toMatchObject({ objects: [], truncated: false });
 	});
 });
 

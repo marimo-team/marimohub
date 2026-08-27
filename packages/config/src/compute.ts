@@ -16,6 +16,7 @@ import {
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import type { LoadedAdapterLibraries } from './library';
 import { CONFIG_SPEC } from './spec';
 
 const COMPUTE_BACKEND_VALUES = [
@@ -128,6 +129,7 @@ export interface ComputeOptions {
 	sessionMaxLifetimeSeconds?: Seconds;
 	/** Effective marimohub idle deadline; Modal uses 1.5× this as a fallback. */
 	sessionIdleTimeoutMs?: Millis;
+	libraries?: LoadedAdapterLibraries;
 }
 
 /**
@@ -221,6 +223,16 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 	// notebook's non-default choice rides in per-create via CreateSandboxOptions.
 	const defaultImage = parseList(env.MARIMOHUB_COMPUTE_IMAGE)?.[0];
 	switch (backend) {
+		case 'library':
+			if (opts?.libraries?.compute) return opts.libraries.compute;
+			throw new ConfigError(
+				'MARIMOHUB_COMPUTE_BACKEND=library requires a preloaded adapter; use createFromEnvAsync().',
+				{
+					variable: 'MARIMOHUB_COMPUTE_LIBRARY',
+					remediation: 'Use createFromEnvAsync() in the Node server composition root.',
+					docs: 'development_docs/ports.md#external-adapter-libraries',
+				},
+			);
 		case 'modal': {
 			const tokenId = computeVar(env, 'MARIMOHUB_COMPUTE_MODAL_TOKEN_ID', 'modal');
 			const tokenSecret = computeVar(env, 'MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET', 'modal');

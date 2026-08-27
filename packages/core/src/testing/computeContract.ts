@@ -16,6 +16,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { SandboxId } from '../ids';
 import type { SandboxInstance, SandboxProvider } from '../ports/sandbox';
 import {
+	SANDBOX_INSTANCE_OPTIONAL_METHODS,
+	SANDBOX_INSTANCE_REQUIRED_METHODS,
+} from '../ports/adapterShape';
+import {
 	expectExecResult,
 	expectFileResult,
 	expectLaunchResult,
@@ -136,27 +140,6 @@ export interface ComputeContractLaunchSemantics {
 
 const CONTRACT_ID = CONTRACT_SANDBOX_ID;
 
-const REQUIRED_METHODS: (keyof SandboxInstance)[] = [
-	'exec',
-	'execStream',
-	'readFile',
-	'listFiles',
-	'writeFiles',
-	'gitCheckout',
-	'setEnvVars',
-	'mountBucket',
-	'unmountBucket',
-	'startProcess',
-	'exposePort',
-	'destroy',
-];
-
-/**
- * Capabilities an adapter may implement but need not. Present-but-not-a-function
- * is still a bug, so pin that rather than skipping them entirely.
- */
-const OPTIONAL_METHODS: (keyof SandboxInstance)[] = ['drainTimings'];
-
 export interface ComputeContractOptions {
 	/**
 	 * The adapter rejects `mountBucket` so the provisioner falls back to copying
@@ -213,7 +196,7 @@ export function computeContract(
 
 		it('create() exposes the full SandboxInstance method surface', () => {
 			const inst = provider.create(CONTRACT_ID);
-			for (const method of REQUIRED_METHODS) {
+			for (const method of SANDBOX_INSTANCE_REQUIRED_METHODS) {
 				expect(typeof inst[method], `${method} must be a function`).toBe('function');
 			}
 		});
@@ -228,13 +211,17 @@ export function computeContract(
 
 		it('optional capabilities are either absent or callable', () => {
 			const inst = provider.create(CONTRACT_ID);
-			for (const method of OPTIONAL_METHODS) {
+			for (const method of SANDBOX_INSTANCE_OPTIONAL_METHODS) {
 				const impl = inst[method];
 				expect(
 					impl === undefined || typeof impl === 'function',
 					`${method} must be a function when present`,
 				).toBe(true);
 			}
+			expect(
+				inst.supportsBucketMount === undefined || typeof inst.supportsBucketMount === 'boolean',
+				'supportsBucketMount must be a boolean when present',
+			).toBe(true);
 		});
 
 		it('writeFiles accepts raw bytes (a backend must never stringify them)', async () => {

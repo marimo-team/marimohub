@@ -168,6 +168,12 @@ describe('sandbox.config check', () => {
 		);
 		expect(by('sandbox.config')?.status).toBe('ok');
 	});
+
+	it('does not require the built-in image setting for library compute', async () => {
+		const { by } = await run({ MARIMOHUB_COMPUTE_BACKEND: 'library' }, makeDeps());
+		expect(by('sandbox.config')).toMatchObject({ status: 'ok' });
+		expect(by('sandbox.config')?.message).not.toContain('MARIMOHUB_COMPUTE_IMAGE');
+	});
 });
 
 describe('compute check', () => {
