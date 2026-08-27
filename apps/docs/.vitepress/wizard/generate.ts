@@ -338,6 +338,7 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 
 const AUTH_BIND: Record<string, (rhs: string) => string> = {
 	oidc: (rhs) => `const { authenticator, routes: authRoutes } = ${rhs};`,
+	'proxy-header': (rhs) => `const authenticator = ${rhs};\nconst authRoutes = undefined;`,
 	dev: (rhs) => `const authenticator = ${rhs};\nconst authRoutes = undefined;`,
 };
 

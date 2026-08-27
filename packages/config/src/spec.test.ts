@@ -54,9 +54,25 @@ describe('config registry drift', () => {
 });
 
 describe('config registry sanity', () => {
-	it('has no duplicate variable ids', () => {
-		const ids = CONFIG_SPEC.flatMap((g) => g.backends.flatMap((b) => b.vars.map((v) => v.id)));
-		expect(sorted(ids)).toEqual(sorted(CONFIG_VAR_IDS));
+	it('has no duplicate variable ids within a backend', () => {
+		for (const group of CONFIG_SPEC) {
+			for (const backend of group.backends) {
+				const ids = backend.vars.map((variable) => variable.id);
+				expect(new Set(ids).size, `${group.name}/${backend.name}`).toBe(ids.length);
+			}
+		}
+	});
+
+	it('reuses one definition when a variable applies to multiple backends', () => {
+		const definitions = new Map<string, object>();
+		for (const variable of CONFIG_SPEC.flatMap((group) =>
+			group.backends.flatMap((backend) => backend.vars),
+		)) {
+			const existing = definitions.get(variable.id);
+			if (existing) expect(variable, variable.id).toBe(existing);
+			else definitions.set(variable.id, variable);
+		}
+		expect(sorted(definitions.keys())).toEqual(sorted(CONFIG_VAR_IDS));
 	});
 
 	it('every variable has a name and a non-empty description', () => {

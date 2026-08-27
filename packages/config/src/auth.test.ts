@@ -17,6 +17,11 @@ const oidcEnv = {
 	MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
 };
 
+const proxyHeaderEnv = {
+	MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+	MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+};
+
 function getConfigError(run: () => unknown): ConfigError {
 	try {
 		run();
@@ -33,7 +38,8 @@ describe('makeAuth selector errors', () => {
 
 		expect(error.opts).toEqual({
 			variable: 'MARIMOHUB_AUTH_BACKEND',
-			remediation: 'Set it to oidc (production), cloudflare-access (Workers), or dev (local only).',
+			remediation:
+				'Set it to oidc or proxy-header (production), cloudflare-access (Workers), or dev (local only).',
 			docs: 'docs/configuration.md#auth',
 		});
 		expect(error.format()).toContain('Refusing to start');
@@ -49,7 +55,7 @@ describe('makeAuth selector errors', () => {
 
 		expect(error.message).toMatch(/Invalid MARIMOHUB_AUTH_BACKEND: basic/);
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_BACKEND');
-		expect(error.message).toContain('expected oidc, dev, cloudflare-access');
+		expect(error.message).toContain('expected oidc, proxy-header, dev, cloudflare-access');
 	});
 
 	it('still supports the explicit local-development backend', async () => {
@@ -320,5 +326,164 @@ describe('makeAuth cloudflare-access', () => {
 		expect(() => makeAuth({ MARIMOHUB_AUTH_BACKEND: 'cloudflare-access' })).toThrow(
 			/cloudflare-worker/,
 		);
+	});
+});
+
+describe('makeAuth proxy-header', () => {
+	it('uses the default email and user-id headers without auth routes', async () => {
+		const { authenticator, authRoutes } = makeAuth(proxyHeaderEnv);
+		expect(authRoutes).toBeUndefined();
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@example.com',
+						'X-Forwarded-User': 'user-1',
+					},
+				}),
+			),
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+	});
+
+	it('supports one custom header for both identity fields', async () => {
+		const { authenticator } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_PROXY_HEADER: 'Tailscale-User-Login',
+		});
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: { 'Tailscale-User-Login': 'user@example.com' },
+				}),
+			),
+		).resolves.toEqual({ id: 'user@example.com', email: 'user@example.com' });
+	});
+
+	it('requires a deliberate email-domain allowlist', () => {
+		const error = getConfigError(() =>
+			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: undefined }),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS');
+		expect(error.opts.remediation).toContain('"*" to allow all');
+	});
+
+	it.each(['', '   ', ',,,'])('rejects an empty email-domain allowlist: %j', (domains) => {
+		const error = getConfigError(() =>
+			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: domains }),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS');
+	});
+
+	it('accepts an explicit wildcard email policy', async () => {
+		const { authenticator } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+		});
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@outside.example',
+						'X-Forwarded-User': 'user-1',
+					},
+				}),
+			),
+		).resolves.toEqual({ id: 'user-1', email: 'user@outside.example' });
+	});
+
+	it.each([
+		',,,',
+		'X-Email,',
+		',X-User',
+		'X-Email,,X-User',
+		'X-Email,X-User,X-Extra',
+		'X Email',
+		'X-Email:X-User',
+	])('rejects an invalid header-mode mapping: %s', (headers) => {
+		const error = getConfigError(() =>
+			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_PROXY_HEADER: headers }),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_PROXY_HEADER');
+	});
+
+	it.each([
+		['issuer', { MARIMOHUB_AUTH_PROXY_JWT_ISSUER: 'https://cloud.google.com/iap' }],
+		['JWKS URL', { MARIMOHUB_AUTH_PROXY_JWKS_URL: 'https://issuer.example.com/jwks.json' }],
+	])('requires the audience when the %s selects JWT mode', (_name, jwtSetting) => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...proxyHeaderEnv,
+				...jwtSetting,
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE');
+	});
+
+	it('treats blank JWT settings as unset', async () => {
+		const { authenticator } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_PROXY_JWT_ISSUER: ' ',
+			MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: ' ',
+			MARIMOHUB_AUTH_PROXY_JWKS_URL: ' ',
+		});
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@example.com',
+						'X-Forwarded-User': 'user-1',
+					},
+				}),
+			),
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+	});
+
+	it('accepts an audience-only IAP configuration without auth routes', async () => {
+		const { authenticator, authRoutes } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: '/projects/123/apps/hub',
+		});
+		expect(authRoutes).toBeUndefined();
+		await expect(
+			authenticator.authenticate(new Request('https://hub.example.com')),
+		).resolves.toBeNull();
+	});
+
+	it('requires one assertion header in JWT mode', () => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...proxyHeaderEnv,
+				MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: 'audience',
+				MARIMOHUB_AUTH_PROXY_HEADER: 'X-Assertion,X-Other',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_PROXY_HEADER');
+	});
+
+	it('rejects an assertion header with an empty trailing item', () => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...proxyHeaderEnv,
+				MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: 'audience',
+				MARIMOHUB_AUTH_PROXY_HEADER: 'X-Assertion,',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_PROXY_HEADER');
+	});
+
+	it.each([
+		'not-a-url',
+		'http://issuer.example.com/jwks.json',
+		'ftp://issuer.example.com/jwks.json',
+		'https://user:password@issuer.example.com/jwks.json',
+	])('rejects an unsafe JWKS URL: %s', (jwksUrl) => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...proxyHeaderEnv,
+				MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE: 'audience',
+				MARIMOHUB_AUTH_PROXY_JWKS_URL: jwksUrl,
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_PROXY_JWKS_URL');
 	});
 });

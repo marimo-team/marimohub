@@ -53,6 +53,14 @@ export interface ConfigGroup {
 	backends: ConfigBackend[];
 }
 
+const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
+	id: 'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
+	name: 'Allowed email domains',
+	description: 'Comma-separated email-domain allowlist. Set `*` to allow all domains.',
+	example: 'example.com,example.org',
+	required: true,
+};
+
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Storage',
@@ -777,7 +785,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		name: 'Auth',
 		selector: 'MARIMOHUB_AUTH_BACKEND',
 		description:
-			'Must be set explicitly (`oidc` | `cloudflare-access` | `dev`) — there is no default; an unset backend fails closed rather than falling back to the insecure dev bypass.',
+			'Set this selector explicitly. An unset value fails closed and never enables dev auth.',
 		backends: [
 			{
 				name: 'OIDC',
@@ -856,14 +864,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: '28800',
 						optIn: true,
 					},
-					{
-						id: 'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
-						name: 'Allowed email domains',
-						description:
-							'Comma-separated email-domain allowlist. Set `*` to allow all domains. A single domain is also the Google `hd` hint.',
-						example: 'example.com,example.org',
-						required: true,
-					},
+					AUTH_ALLOWED_EMAIL_DOMAINS,
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
 						name: 'Groups claim pointer',
@@ -909,6 +910,48 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Maximum group-session age, from 300 to 3600 seconds. This value limits the deprovisioning delay.',
 						default: '3600',
+						optIn: true,
+					},
+				],
+			},
+			{
+				name: 'Trusted proxy headers',
+				selectorValue: 'proxy-header',
+				description:
+					'Reads trusted proxy headers or verifies a Google IAP JWT. Isolate header mode behind a proxy that removes client-supplied identity headers. Set `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Use `*` to allow all domains.',
+				vars: [
+					AUTH_ALLOWED_EMAIL_DOMAINS,
+					{
+						id: 'MARIMOHUB_AUTH_PROXY_HEADER',
+						name: 'Proxy identity header',
+						description:
+							'Comma-separated email and optional user-ID headers for header mode. Assertion header for JWT mode.',
+						default:
+							'X-Forwarded-Email,X-Forwarded-User (header) or X-Goog-IAP-JWT-Assertion (JWT)',
+						example: 'Tailscale-User-Login',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_PROXY_JWT_ISSUER',
+						name: 'Proxy JWT issuer',
+						description:
+							'Expected issuer. This variable enables JWT mode and requires the audience.',
+						default: 'https://cloud.google.com/iap',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE',
+						name: 'Proxy JWT audience',
+						description: 'Required audience for JWT mode. This variable also enables JWT mode.',
+						example: '/projects/123456789/global/backendServices/987654321',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_PROXY_JWKS_URL',
+						name: 'Proxy JWT JWKS URL',
+						description:
+							'HTTPS JWKS URL. This variable enables JWT mode and requires the audience.',
+						default: 'https://www.gstatic.com/iap/verify/public_key-jwk',
 						optIn: true,
 					},
 				],

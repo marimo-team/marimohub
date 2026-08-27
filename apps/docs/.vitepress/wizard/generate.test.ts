@@ -64,6 +64,12 @@ const CASES: Record<string, WizardSelection> = {
 		values: { MARIMOHUB_COMPUTE_WANDB_ENTITY: 'my-team' },
 	},
 	's3 + docker + dev': { storage: 's3', compute: 'docker', auth: 'dev', ai: 'none' },
+	's3 + docker + proxy-header': {
+		storage: 's3',
+		compute: 'docker',
+		auth: 'proxy-header',
+		ai: 'none',
+	},
 	's3 + e2b + oidc': { storage: 's3', compute: 'e2b', auth: 'oidc', ai: 'none' },
 	's3 + none + dev': { storage: 's3', compute: 'none', auth: 'dev', ai: 'none' },
 	's3 + modal + oidc, managed ai': {
@@ -104,6 +110,29 @@ describe('config -> code generators', () => {
 		);
 		expect(env).toContain('MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret');
 		expect(env).not.toContain('MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub');
+	});
+
+	it('includes required proxy-header configuration and library wiring', () => {
+		const selection = CASES['s3 + docker + proxy-header'];
+		expect(generateEnv(selection)).toContain(
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org',
+		);
+		expect(generateHelm(selection)).toContain(
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org',
+		);
+		expect(generateCompose(selection)).toContain(
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org',
+		);
+
+		const library = generateLibrary(selection);
+		expect(library).toContain(
+			`import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';`,
+		);
+		expect(library).toContain(`mode: 'headers'`);
+		expect(library).toContain(
+			`throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is required.');`,
+		);
+		expect(library).toContain('const authRoutes = undefined;');
 	});
 
 	it('leaves compute profiles unset unless explicitly configured', () => {

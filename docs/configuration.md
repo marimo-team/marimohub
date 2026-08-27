@@ -286,9 +286,9 @@ All kernel traffic is forwarded through the app, authenticated like `/api/v1/*` 
 
 ## Auth
 
-Selected by `MARIMOHUB_AUTH_BACKEND`; one of `oidc`, `dev`, `cloudflare-access`.
+Selected by `MARIMOHUB_AUTH_BACKEND`; one of `oidc`, `proxy-header`, `dev`, `cloudflare-access`.
 
-Must be set explicitly (`oidc` | `cloudflare-access` | `dev`) — there is no default; an unset backend fails closed rather than falling back to the insecure dev bypass.
+Set this selector explicitly. An unset value fails closed and never enables dev auth.
 
 ### OIDC
 
@@ -308,7 +308,7 @@ App-native OpenID Connect (the production backend).
 | `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid. | — | `required` | `trusted-issuer` |
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
 | `MARIMOHUB_AUTH_SESSION_TTL_SECONDS` | Signed browser-session lifetime, from 300 to 86400 seconds. | — | `28800` | — |
-| `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. A single domain is also the Google `hd` hint. | Yes | — | `example.com,example.org` |
+| `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
 | `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM` | RFC 6901 JSON Pointer to an array of exact provider group IDs. Required for group policy. | — | — | `/groups` |
 | `MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS` | Exact comma-separated group IDs. A user must belong to at least one. Missing or malformed group data fails closed. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS` | Exact comma-separated group IDs mapped to marimohub super-admin. | — | — | — |
@@ -316,6 +316,20 @@ App-native OpenID Connect (the production backend).
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` | Groups granted a deployment-wide default editor role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS` | Groups granted a deployment-wide default project-manager role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS` | Maximum group-session age, from 300 to 3600 seconds. This value limits the deprovisioning delay. | — | `3600` | — |
+
+### Trusted proxy headers
+
+`MARIMOHUB_AUTH_BACKEND=proxy-header`
+
+Reads trusted proxy headers or verifies a Google IAP JWT. Isolate header mode behind a proxy that removes client-supplied identity headers. Set `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Use `*` to allow all domains.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
+| `MARIMOHUB_AUTH_PROXY_HEADER` | Comma-separated email and optional user-ID headers for header mode. Assertion header for JWT mode. | — | `X-Forwarded-Email,X-Forwarded-User (header) or X-Goog-IAP-JWT-Assertion (JWT)` | `Tailscale-User-Login` |
+| `MARIMOHUB_AUTH_PROXY_JWT_ISSUER` | Expected issuer. This variable enables JWT mode and requires the audience. | — | `https://cloud.google.com/iap` | — |
+| `MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE` | Required audience for JWT mode. This variable also enables JWT mode. | — | — | `/projects/123456789/global/backendServices/987654321` |
+| `MARIMOHUB_AUTH_PROXY_JWKS_URL` | HTTPS JWKS URL. This variable enables JWT mode and requires the audience. | — | `https://www.gstatic.com/iap/verify/public_key-jwk` | — |
 
 ### Dev bypass (local only)
 

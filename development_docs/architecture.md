@@ -242,21 +242,16 @@ cost-ceiling escape).
 
 ### 3.3 Authentication (AuthN)
 
-Establishes _who_ is making a request. **Authentication is OAuth/OIDC only** —
-there is no password store, no bespoke credential handling. marimohub delegates
-identity entirely to an external provider and consumes the resulting token.
+Identifies the requester. marimohub stores no passwords. It accepts a verified token or trusted proxy headers.
 
-|                  |                                                                                                                                                                                                                                                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Port**         | `Authenticator` — `authenticate(request) → AuthUser \| null` (`AuthUser` = `{ id, email }`)                                                                                                                                                                                                             |
-| **Adapters**     | **OIDC** (any compliant provider: Auth0, Google, Okta, Keycloak, GitHub OAuth) · **Cloudflare Access** (a managed OIDC front door; the worker verifies the `CF-Access-JWT-Assertion` JWT against the team JWKS) · **dev bypass** (no network identity — a fixed local user, for local development only) |
-| **Verification** | JWT signature + audience validated against the provider's JWKS endpoint (cached, auto-rotating) via `jose`.                                                                                                                                                                                             |
+|                  |                                                                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Port**         | `Authenticator` — `authenticate(request) → AuthUser \| null` (`AuthUser` = `{ id, email }`)                                                                    |
+| **Adapters**     | **OIDC** (Auth0, Google, Okta, Keycloak, GitHub OAuth) · **proxy header** (oauth2-proxy, Tailscale Serve, Google IAP) · **Cloudflare Access** · **dev bypass** |
+| **Verification** | OIDC, Google IAP, and Cloudflare Access verify JWT claims and signatures. Raw proxy-header mode trusts headers from an isolated proxy.                         |
 
-All production adapters are OAuth/OIDC under the hood — Cloudflare Access is
-simply a hosted OIDC gateway. The **dev bypass** is not an auth mode in the
-product sense; it is an explicit "no identity" shortcut for running the stack
-locally without a provider, and should never be enabled in a deployment that
-serves real users.
+Raw proxy headers require network isolation and removal of client-supplied headers.
+The **dev bypass** supplies a fixed local identity. Never enable it for real users.
 
 ### 3.4 Authorization (AuthZ)
 
@@ -433,14 +428,14 @@ saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 ### Authentication — `MARIMOHUB_AUTH_*`
 
-| Variable                                | Purpose                                              |
-| --------------------------------------- | ---------------------------------------------------- |
-| `MARIMOHUB_AUTH_BACKEND`                | `oidc` \| `cloudflare-access` \| `dev`               |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`            | OIDC issuer URL                                      |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`         | OAuth client ID                                      |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`     | OAuth client secret (secret)                         |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`          | Deprecated and ignored; `aud` must contain client ID |
-| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL` | Fixed identity for the `dev` bypass (local only)     |
+| Variable                                | Purpose                                                  |
+| --------------------------------------- | -------------------------------------------------------- |
+| `MARIMOHUB_AUTH_BACKEND`                | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev` |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`            | OIDC issuer URL                                          |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`         | OAuth client ID                                          |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`     | OAuth client secret (secret)                             |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`          | Deprecated and ignored; `aud` must contain client ID     |
+| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL` | Fixed identity for the `dev` bypass (local only)         |
 
 > Authorization needs no env vars: roles are data in the notebook storage
 > ([§3.4](#34-authorization-authz)).
@@ -535,7 +530,7 @@ The same core runs in three shapes. What changes is the **entrypoint** and the
 | **Entrypoint** | Workers (`examples/cloudflare-worker/src/index.ts`) | Node server (`@marimo-hub/server`)             | Same Node server, replicated               |
 | **Storage**    | R2 (binding)                                        | S3 / MinIO / filesystem / Azure                | S3 / MinIO / Ceph / GCS / Azure            |
 | **Compute**    | Cloudflare Containers (DO)                          | Docker/Podman, Modal, E2B (or `local` for dev) | in-cluster pods (`kubernetes`), Modal, E2B |
-| **AuthN**      | Cloudflare Access (OIDC)                            | any OIDC provider                              | any OIDC provider                          |
+| **AuthN**      | Cloudflare Access (OIDC)                            | OIDC or trusted SSO proxy                      | OIDC or trusted SSO proxy                  |
 | **Frontend**   | Cloudflare static assets                            | nginx sidecar / same server                    | CDN or ingress                             |
 | **Scaling**    | automatic, edge                                     | single host                                    | horizontal (stateless API)                 |
 
@@ -583,6 +578,7 @@ packages/
   credentials-coreweave/  CoreWeave CAIOS credential broker (OIDC federation)
   secrets-aws/            AWS Secrets Manager adapter
   auth-oidc/              generic OIDC adapter
+  auth-proxy-header/      trusted proxy header / Google IAP adapter
   auth-cloudflare-access/ Cloudflare Access adapter
   auth-dev/               dev-bypass authenticator (local only)
   ts-config/              shared tsconfig bases (+ vendored ts-reset)
@@ -597,10 +593,8 @@ examples/
   external-adapter/       runtime-loaded storage and compute manifest examples
 ```
 
-The deployable entrypoints live under `examples/` and `apps/`: the **Cloudflare
-Workers** entrypoint is `examples/cloudflare-worker/` (composing the R2, Cloudflare
-Containers, and Cloudflare Access adapters), and the **Node** entrypoint is
-`apps/server/` (package `@marimo-hub/server`), used by the Docker/Kubernetes shapes.
+The **Cloudflare Workers** entrypoint is `examples/cloudflare-worker/`. It composes R2, Cloudflare Containers, and Cloudflare Access.
+The **Node** entrypoint is `apps/server/` (`@marimo-hub/server`). Docker and Kubernetes use it with OIDC or proxy-header authentication.
 
 A dependency only ever points "inward": adapters depend on `core`'s interfaces;
 entrypoints depend on `core`, `api`, and whichever adapters they load. `core` and

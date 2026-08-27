@@ -12,7 +12,7 @@ a provider means swapping the library noted here — the ports stay fixed.
 | -------------------------------- | --------------------------------------------- | ---------------------------------- |
 | Notebook Storage (`Bucket`)      | Cloudflare R2 (native binding)                | AWS S3 / MinIO / Tigris via S3 SDK |
 | Compute (`SandboxProvider`)      | Cloudflare Containers + `@cloudflare/sandbox` | Modal / local Docker               |
-| Authentication (`Authenticator`) | Cloudflare Access (OIDC) + `jose`             | any OIDC provider                  |
+| Authentication (`Authenticator`) | Cloudflare Access (OIDC) + `jose`             | OIDC or trusted SSO proxy          |
 | Authorization (`Authorizer`)     | roles in storage (no extra tech)              | same                               |
 | API                              | `hono` + `@hono/zod-openapi` + `zod`          | same (portable)                    |
 | Frontend                         | React 19 + Vite + Tailwind v4 (shadcn-style)  | same (portable)                    |
@@ -60,8 +60,8 @@ built on `cloudflare/sandbox:0.7.1`:
 
 A managed OIDC front door for multi-user deployments. The worker reads the
 `CF-Access-JWT-Assertion` header and verifies it against the team's JWKS endpoint.
-Authentication is **OAuth/OIDC only**. Access is a hosted OIDC gateway, and
-any compliant provider (Auth0, Google, Okta, Keycloak) can take its place.
+Access is a hosted OIDC gateway. Node deployments can use OIDC, Google IAP, or
+trusted headers from an isolated SSO proxy.
 
 ---
 
@@ -85,8 +85,7 @@ version, session, and event shapes.
 
 ### jose
 
-JWT verification. Validates Cloudflare Access / OIDC tokens against a remote JWKS
-set (`createRemoteJWKSet`), handling key caching and rotation.
+JWT verification for Cloudflare Access, OIDC, and Google IAP. `createRemoteJWKSet` caches remote keys and handles rotation.
 
 ### @cloudflare/sandbox
 

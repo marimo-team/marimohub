@@ -80,7 +80,7 @@ DEV_PORT_BASE=4100 pnpm dev
 | ------- | ----------------------- | ----------------------------------------------------------------------- |
 | Storage | `memory`, volatile      | CAIOS, S3, GCS, Azure, or R2 -> [Storage](./storage.md)                 |
 | Compute | `local`, host process   | CoreWeave, Modal, Kubernetes, Docker, Podman -> [Compute](./compute.md) |
-| Auth    | `dev`, fixed local user | OIDC or Cloudflare Access -> [Auth](./auth.md)                          |
+| Auth    | `dev`, fixed local user | OIDC, trusted SSO proxy, or Cloudflare Access -> [Auth](./auth.md)      |
 
 By default, state is held in memory and disappears on restart. The stack starts
 kernels on your machine, signs every request in as a fixed super admin, enables

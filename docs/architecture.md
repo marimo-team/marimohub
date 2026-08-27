@@ -18,7 +18,7 @@ logic, and you can switch later without migrating notebooks.
 | ----------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Storage** | Holds all state         | `s3`, `gcs`, `azure`, `fs`, `library`, `r2`, `memory` — [Storage](/storage)                                                            |
 | **Compute** | Runs notebook kernels   | `coreweave`, `wandb`, `modal`, `kubernetes`, `docker`, `podman`, `e2b`, `local`, `library`, `cloudflare`, `none` — [Compute](/compute) |
-| **Auth**    | Decides who can sign in | `oidc`, `cloudflare-access`, `dev` — [Auth](/auth)                                                                                     |
+| **Auth**    | Decides who can sign in | `oidc`, `proxy-header`, `cloudflare-access`, `dev` — [Auth](/auth)                                                             |
 
 You select an adapter per port with the `*_BACKEND` env vars, and the server
 wires everything up. See [Deployment options](/deployment-options) for the

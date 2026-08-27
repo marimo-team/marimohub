@@ -3,6 +3,7 @@ import { basePathFromUrl } from '@marimo-hub/core/url';
 import { createOidcAuth } from '@marimo-hub/auth-oidc';
 import type { EmailVerificationPolicy, OidcGroupPolicy } from '@marimo-hub/auth-oidc';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
+import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';
 import type { Hono } from 'hono';
 import { parseEnum, parseEnumOr, parseList, requiredVar } from './env';
 import type { Env } from './env';
@@ -18,15 +19,16 @@ const AUTH_BACKEND_VALUES = (
 export function authBackend(env: Env): string | undefined {
 	return parseEnum(env, 'MARIMOHUB_AUTH_BACKEND', {
 		allowed: AUTH_BACKEND_VALUES,
-		remediation: 'Set it to oidc (production), cloudflare-access (Workers), or dev (local only).',
+		remediation:
+			'Set it to oidc or proxy-header (production), cloudflare-access (Workers), or dev (local only).',
 		docs: 'docs/configuration.md#auth',
 	});
 }
 
 /**
- * Comma-separated email-domain allowlist for OIDC login (e.g. `marimo.io`).
+ * Comma-separated email-domain allowlist for production authentication.
  *
- * REQUIRED for the oidc backend: marimohub is an internal tool, so an unset
+ * REQUIRED for OIDC and proxy-header: marimohub is an internal tool, so an unset
  * allowlist would silently admit every account the IdP can authenticate. Fail
  * closed unless the operator either names the allowed domains or explicitly sets
  * `*` to opt into allowing all domains (a conscious choice, like the
@@ -36,8 +38,8 @@ function parseEmailDomains(raw: string | undefined): string[] | undefined {
 	const value = raw?.trim();
 	if (!value) {
 		throw new ConfigError(
-			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS must be set for the oidc backend, so an internal ' +
-				'deployment cannot silently admit every account the identity provider authenticates.',
+			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS must be set for production authentication, so an ' +
+				'internal deployment cannot silently admit every authenticated account.',
 			{
 				variable: 'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
 				remediation:
@@ -56,6 +58,69 @@ function parseEmailDomains(raw: string | undefined): string[] | undefined {
 		});
 	}
 	return domains;
+}
+
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function parseProxyHeaders(
+	raw: string | undefined,
+	mode: 'headers' | 'jwt',
+): readonly [string, string?] | undefined {
+	if (raw === undefined || raw.trim() === '') return undefined;
+	const headers = raw.split(',').map((header) => header.trim());
+	const maximum = mode === 'jwt' ? 1 : 2;
+	if (headers.length > maximum || headers.some((header) => !HEADER_NAME.test(header))) {
+		throw new ConfigError(
+			mode === 'jwt'
+				? 'MARIMOHUB_AUTH_PROXY_HEADER must contain one valid JWT assertion header name.'
+				: 'MARIMOHUB_AUTH_PROXY_HEADER must contain one or two valid header names.',
+			{
+				variable: 'MARIMOHUB_AUTH_PROXY_HEADER',
+				remediation:
+					mode === 'jwt'
+						? 'Set one header name, such as X-Goog-IAP-JWT-Assertion.'
+						: 'Set an email header and optional user-id header, separated by a comma.',
+				docs: 'docs/configuration.md#auth',
+			},
+		);
+	}
+	return headers.length === 1 ? [headers[0]] : [headers[0], headers[1]];
+}
+
+function proxyJwtConfigured(env: Env): boolean {
+	return [
+		env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER,
+		env.MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE,
+		env.MARIMOHUB_AUTH_PROXY_JWKS_URL,
+	].some((value) => Boolean(value?.trim()));
+}
+
+function proxyJwtAudience(env: Env): string {
+	const value = env.MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE?.trim();
+	if (value) return value;
+	throw new ConfigError(
+		'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE is required when proxy JWT verification is configured.',
+		{
+			variable: 'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE',
+			remediation: 'Set the signed-header JWT audience for the protected resource.',
+			docs: 'docs/configuration.md#auth',
+		},
+	);
+}
+
+function proxyJwksUrl(raw: string | undefined): string | undefined {
+	const value = raw?.trim();
+	if (!value) return undefined;
+	try {
+		const url = new URL(value);
+		if (url.protocol === 'https:' && !url.username && !url.password) return url.toString();
+	} catch {
+		// Report the same configuration error for invalid and unsafe URLs.
+	}
+	throw new ConfigError('MARIMOHUB_AUTH_PROXY_JWKS_URL must be an HTTPS URL without credentials.', {
+		variable: 'MARIMOHUB_AUTH_PROXY_JWKS_URL',
+		docs: 'docs/configuration.md#auth',
+	});
 }
 
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;
@@ -186,7 +251,7 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 			{
 				variable: 'MARIMOHUB_AUTH_BACKEND',
 				remediation:
-					'Set it to oidc (production), cloudflare-access (Workers), or dev (local only).',
+					'Set it to oidc or proxy-header (production), cloudflare-access (Workers), or dev (local only).',
 				docs: 'docs/configuration.md#auth',
 			},
 		);
@@ -237,6 +302,32 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 			});
 			return { authenticator, authRoutes: routes };
 		}
+		case 'proxy-header': {
+			const allowedEmailDomains = parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS);
+			if (proxyJwtConfigured(env)) {
+				const headers = parseProxyHeaders(env.MARIMOHUB_AUTH_PROXY_HEADER, 'jwt');
+				const issuer = env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER?.trim();
+				const jwksUrl = proxyJwksUrl(env.MARIMOHUB_AUTH_PROXY_JWKS_URL);
+				return {
+					authenticator: new ProxyHeaderAuthenticator({
+						mode: 'jwt',
+						audience: proxyJwtAudience(env),
+						allowedEmailDomains,
+						...(headers ? { header: headers[0] } : {}),
+						...(issuer ? { issuer } : {}),
+						...(jwksUrl ? { jwksUrl } : {}),
+					}),
+				};
+			}
+			const headers = parseProxyHeaders(env.MARIMOHUB_AUTH_PROXY_HEADER, 'headers');
+			return {
+				authenticator: new ProxyHeaderAuthenticator({
+					mode: 'headers',
+					allowedEmailDomains,
+					...(headers ? { headers } : {}),
+				}),
+			};
+		}
 		case 'dev':
 			return {
 				authenticator: new DevAuthenticator({
@@ -253,7 +344,7 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 		default:
 			throw new ConfigError(`Unknown MARIMOHUB_AUTH_BACKEND: ${backend}`, {
 				variable: 'MARIMOHUB_AUTH_BACKEND',
-				remediation: 'Supported backends: oidc, cloudflare-access, dev.',
+				remediation: 'Supported backends: oidc, proxy-header, cloudflare-access, dev.',
 				docs: 'docs/configuration.md#auth',
 			});
 	}

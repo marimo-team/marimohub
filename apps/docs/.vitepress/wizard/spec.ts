@@ -69,6 +69,7 @@ const ICONS: Record<string, string> = {
 	none: '🚫',
 	// auth
 	oidc: '🔐',
+	'proxy-header': '🛡️',
 	dev: '🛠️',
 	// managed ai
 	'openai-compatible': '🤖',
@@ -375,6 +376,28 @@ export const AUTH_WIRING: Record<string, BackendWiring> = {
 				`\tredirectUri: ${env('MARIMOHUB_AUTH_OIDC_REDIRECT_URI', true)},`,
 				`\tsessionSecret: ${env('MARIMOHUB_AUTH_SESSION_SECRET', true)},`,
 				`\tallowedEmailDomains: (process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS ?? '').split(','),`,
+				`})`,
+			].join('\n'),
+	},
+	'proxy-header': {
+		imports: [`import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';`],
+		rhs: () =>
+			[
+				`new ProxyHeaderAuthenticator({`,
+				`\tmode: 'headers',`,
+				`\theaders: (`,
+				`\t\tprocess.env.MARIMOHUB_AUTH_PROXY_HEADER ??`,
+				`\t\t'X-Forwarded-Email,X-Forwarded-User'`,
+				`\t)`,
+				`\t\t.split(',')`,
+				`\t\t.map((header) => header.trim()) as [string, string?],`,
+				`\tallowedEmailDomains: (() => {`,
+				`\t\tconst value = process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS?.trim();`,
+				`\t\tif (!value) {`,
+				`\t\t\tthrow new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is required.');`,
+				`\t\t}`,
+				`\t\treturn value.split(',');`,
+				`\t})(),`,
 				`})`,
 			].join('\n'),
 	},

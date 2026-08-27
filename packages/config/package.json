@@ -25,6 +25,7 @@
 		"@marimo-hub/api": "workspace:*",
 		"@marimo-hub/auth-dev": "workspace:*",
 		"@marimo-hub/auth-oidc": "workspace:*",
+		"@marimo-hub/auth-proxy-header": "workspace:*",
 		"@marimo-hub/compute-container": "workspace:*",
 		"@marimo-hub/compute-coreweave": "workspace:*",
 		"@marimo-hub/compute-e2b": "workspace:*",
