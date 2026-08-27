@@ -403,11 +403,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'CoreWeave runner id',
 						description:
 							'Runner (by operator-assigned id) sandboxes schedule on — must name your CKS sandbox runner. A create without a runner id schedules on the CoreWeave-managed serverless pool, not your cluster. Set to an empty value to opt into serverless.',
-						// The example (what the wizard emits) matches the CKS guide's runner
-						// name; the code default matches nothing in the guide, so generated
-						// configs must carry the value explicitly.
-						example: 'marimohub',
-						default: 'marimo-hub',
+						default: 'marimohub',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',

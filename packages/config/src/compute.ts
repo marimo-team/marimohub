@@ -303,7 +303,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				// runner id defaults on: set-but-empty opts out for serverless.
 				runnerId:
 					env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID === undefined
-						? 'marimo-hub'
+						? 'marimohub'
 						: env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID.trim() || undefined,
 				// CKS runners without endpoint routes reject a `public` kernel service
 				// and expose a `custom` one as a bare ClusterIP Service; the hub then
