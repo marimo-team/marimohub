@@ -1,5 +1,5 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- React does not recognize the HTML search element. */
-import { useCallback, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, Filter } from 'lucide-react';
 import { Button } from './Button';
 import { SearchField } from './SearchField';
@@ -42,8 +42,22 @@ export function ListFilters<Status extends string>({
 	const searchRef = useRef<HTMLInputElement>(null);
 	const active = hasListFilters(values);
 	const [isOpen, setIsOpen] = useState(active);
-	const openFilters = useCallback(() => setIsOpen(true), []);
+	const focusSearchOnOpen = useRef(false);
+	const openFilters = useCallback(() => {
+		if (searchRef.current) return;
+		focusSearchOnOpen.current = true;
+		setIsOpen(true);
+	}, []);
 	useSearchHotkey(searchRef, openFilters);
+	useEffect(() => {
+		if (active) setIsOpen(true);
+	}, [active]);
+	useEffect(() => {
+		const input = searchRef.current;
+		if (!isOpen || !focusSearchOnOpen.current || !input) return;
+		focusSearchOnOpen.current = false;
+		input.focus();
+	}, [isOpen]);
 	const pluralName = `${itemName}${resultCount === 1 ? '' : 's'}`;
 	const announcement = isLoading
 		? `Loading ${itemName}s…`
@@ -121,7 +135,7 @@ export function ListFilters<Status extends string>({
 								defaultValue={values.status ?? ''}
 								className="h-8 cursor-pointer rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-sm transition-colors [color-scheme:light] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-md:h-11 dark:[color-scheme:dark]"
 							>
-								<option value="">All statuses</option>
+								<option value="">All current statuses</option>
 								{statuses.map((status) => (
 									<option key={status.value} value={status.value}>
 										{status.label}

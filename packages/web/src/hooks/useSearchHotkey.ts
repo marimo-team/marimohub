@@ -21,11 +21,7 @@ export function useSearchHotkey(
 
 			event.preventDefault();
 			onActivate?.();
-			if (ref.current) {
-				ref.current.focus();
-			} else {
-				requestAnimationFrame(() => ref.current?.focus());
-			}
+			ref.current?.focus();
 		}
 
 		document.addEventListener('keydown', onKeyDown);
