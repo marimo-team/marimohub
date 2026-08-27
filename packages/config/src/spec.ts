@@ -1650,7 +1650,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS',
 						name: 'Object-metadata timeout',
 						description:
-							'Maximum time for one object listing or metadata operation, including DNS resolution.',
+							'Maximum time for one object listing, metadata, or catalog browse request, including DNS resolution.',
 						default: '30',
 					},
 					{
