@@ -94,6 +94,7 @@ describe('ProjectList', () => {
 		renderList([project('Sales', 'revenue'), project('Marketing', 'campaign analysis')]);
 		await waitForLoaded();
 
+		await user.click(screen.getByRole('button', { name: 'Filters' }));
 		await user.type(screen.getByRole('searchbox', { name: 'Search' }), 'analysis{Enter}');
 
 		await waitFor(() => expect(screen.getByText('Marketing')).toBeInTheDocument());
@@ -105,23 +106,43 @@ describe('ProjectList', () => {
 		renderList([project('Sales')]);
 		await waitForLoaded();
 
+		await user.click(screen.getByRole('button', { name: 'Filters' }));
 		await user.type(screen.getByRole('searchbox', { name: 'Search' }), 'zzz');
-		await user.click(screen.getByRole('button', { name: 'Apply Filters' }));
+		await user.click(screen.getByRole('button', { name: 'Apply' }));
 
 		expect(await screen.findByText('No projects match these filters')).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Reset filters' }));
 		expect(await screen.findByText('Sales')).toBeInTheDocument();
 	});
 
-	it('provides labeled controls and announces the result count', async () => {
+	it('opens the filters and focuses search with the search shortcut', async () => {
+		const user = userEvent.setup();
 		renderList([project('Sales')]);
 		await waitForLoaded();
 
+		await user.keyboard('/');
+
+		await waitFor(() => expect(screen.getByRole('searchbox', { name: 'Search' })).toHaveFocus());
+	});
+
+	it('provides labeled controls and announces the result count', async () => {
+		const user = userEvent.setup();
+		renderList([project('Sales')]);
+		await waitForLoaded();
+
+		const toggle = screen.getByRole('button', { name: 'Filters' });
+		expect(toggle).toHaveAttribute('aria-expanded', 'false');
+		expect(screen.queryByRole('search', { name: 'Filter projects' })).not.toBeInTheDocument();
+		expect(screen.getByRole('status')).toHaveTextContent('1 project');
+
+		await user.click(toggle);
 		expect(screen.getByRole('search', { name: 'Filter projects' })).toBeInTheDocument();
 		expect(screen.getByRole('searchbox', { name: 'Search' })).toBeInTheDocument();
-		expect(screen.getByRole('textbox', { name: 'Tag (exact)' })).toBeInTheDocument();
+		expect(screen.getByRole('textbox', { name: 'Exact tag' })).toBeInTheDocument();
 		expect(screen.getByRole('combobox', { name: 'Status' })).toBeInTheDocument();
-		expect(screen.getByRole('status')).toHaveTextContent('1 project');
+
+		await user.click(toggle);
+		expect(screen.queryByRole('search', { name: 'Filter projects' })).not.toBeInTheDocument();
 	});
 
 	it('loads combined filters from the URL and sends them to the API', async () => {
@@ -134,8 +155,12 @@ describe('ProjectList', () => {
 		);
 		await waitForLoaded();
 
+		expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute(
+			'aria-expanded',
+			'true',
+		);
 		expect(screen.getByRole('searchbox', { name: 'Search' })).toHaveValue('analysis');
-		expect(screen.getByRole('textbox', { name: 'Tag (exact)' })).toHaveValue('finance');
+		expect(screen.getByRole('textbox', { name: 'Exact tag' })).toHaveValue('finance');
 		expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('active');
 		expect(screen.getByText('Sales')).toBeInTheDocument();
 		expect(screen.queryByText('Marketing')).not.toBeInTheDocument();
