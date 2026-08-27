@@ -15,22 +15,19 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
 import { GcsObjectBrowser } from '@marimo-hub/object-browser-gcs';
 import { AzureBlobObjectBrowser } from '@marimo-hub/object-browser-azure';
-import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
+import { PostgresDatabaseBrowser } from '@marimo-hub/postgres-runtime/node';
+import { parseBool, parseIntEnv, parseOnOff, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
-import { duckDBQueryGate, duckDBRolloutFeatures } from './duckdbFeatures';
-import type { DuckDBRolloutFeatures } from './duckdbFeatures';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
+import { postgresDataAccessFeatures, postgresDataAccessGate } from './postgresFeatures';
 
 export function integrationsEnabled(env: Env): boolean {
-	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
-	if (setting === undefined || setting === '' || setting === 'on') return true;
-	if (setting === 'off') return false;
-	throw new ConfigError(
-		`Unknown MARIMOHUB_INTEGRATIONS: ${env.MARIMOHUB_INTEGRATIONS} (supported: on, off).`,
-		{ variable: 'MARIMOHUB_INTEGRATIONS', docs: 'docs/integrations.md' },
-	);
+	return parseOnOff(env, 'MARIMOHUB_INTEGRATIONS', {
+		fallback: true,
+		docs: 'docs/integrations.md',
+	});
 }
 
 export function makeIntegrations(
@@ -39,11 +36,10 @@ export function makeIntegrations(
 	metrics?: Metrics,
 	dataPreview?: DataPreviewService,
 	dataQuery?: DataQueryService,
-	duckdbFeatures: Readonly<DuckDBRolloutFeatures> = duckDBRolloutFeatures(env),
 ): Pick<ApiDeps, 'integrations' | 'orgIntegrations' | 'dataBrowser'> {
-	const dataBrowser = dataBrowserSetting(env);
+	const requested = dataBrowserSetting(env);
 	if (!integrationsEnabled(env)) {
-		if (dataBrowser !== 'off') {
+		if (requested.explicit && requested.mode !== 'off') {
 			throw new ConfigError(
 				'MARIMOHUB_DATA_BROWSER requires integrations to be enabled; remove MARIMOHUB_INTEGRATIONS=off or set it to on.',
 				{
@@ -55,10 +51,14 @@ export function makeIntegrations(
 		return {};
 	}
 	const secretSources = makeSecretSources(env);
-	const enabledDataQuery = dataBrowser === 'full' ? dataQuery : undefined;
+	const postgresFeatures = postgresDataAccessFeatures(env);
 	// Parsed once so both probes interpret the same validated policy — neither
 	// depends on the other having rejected an invalid value first.
 	const policy = integrationProbePolicy(env);
+	// The default (metadata) yields to an explicit probe opt-out; an explicit
+	// data-browser setting instead fails fast in makeBrowseProbe.
+	const dataBrowser = !requested.explicit && policy === 'off' ? 'off' : requested.mode;
+	const enabledDataQuery = dataBrowser === 'full' ? dataQuery : undefined;
 	const objectBrowsers =
 		dataBrowser === 'off'
 			? undefined
@@ -85,6 +85,28 @@ export function makeIntegrations(
 						azure_blob: new AzureBlobObjectBrowser(browserOptions),
 					};
 				})();
+	// dataBrowser !== 'off' implies policy !== 'off': the default degrades above
+	// and an explicit setting fails fast in makeBrowseProbe.
+	const databaseBrowsers =
+		dataBrowser === 'off' || !postgresFeatures.enabled
+			? undefined
+			: (() => {
+					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);
+					const limits = objectBrowserLimitsFromEnv(env, dataBrowser);
+					return {
+						postgres: new PostgresDatabaseBrowser({
+							mode: dataBrowser,
+							metrics,
+							resolveHost: createGuardedHostResolver({
+								allowPrivate: policy === 'private',
+								timeoutMs: deadlines.resolveTimeoutMs,
+							}),
+							metadataTimeoutMs: deadlines.metadataTimeoutMs,
+							previewTimeoutMs: deadlines.previewTimeoutMs,
+							previewMaxBytes: limits.previewMaxBytes,
+						}),
+					};
+				})();
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
@@ -93,10 +115,11 @@ export function makeIntegrations(
 		probe: makeProbe(policy),
 		browseProbe: makeBrowseProbe(env, policy, dataBrowser),
 		...(objectBrowsers ? { objectBrowsers } : {}),
+		...(databaseBrowsers ? { databaseBrowsers } : {}),
 		metrics,
 		dataPreview,
 		dataQuery: enabledDataQuery,
-		queryGate: duckDBQueryGate(duckdbFeatures),
+		queryGate: postgresDataAccessGate(postgresFeatures),
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
@@ -262,16 +285,16 @@ export function objectBrowserDeadlinesFromEnv(
 	};
 }
 
-function dataBrowserSetting(env: Env): 'off' | 'metadata' | 'full' {
+function dataBrowserSetting(env: Env): { mode: 'off' | 'metadata' | 'full'; explicit: boolean } {
 	const setting = env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase();
 	switch (setting) {
 		case undefined:
 		case '':
+			return { mode: 'metadata', explicit: false };
 		case 'off':
-			return 'off';
 		case 'metadata':
 		case 'full':
-			return setting;
+			return { mode: setting, explicit: true };
 		default:
 			throw new ConfigError(
 				`Unknown MARIMOHUB_DATA_BROWSER: ${env.MARIMOHUB_DATA_BROWSER} (supported: off, metadata, full).`,

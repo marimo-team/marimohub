@@ -45,6 +45,22 @@ export function parseBool(env: Env, key: string): boolean {
 	throw new ConfigError(`Invalid ${key}: ${env[key]} (expected true or false)`, { variable: key });
 }
 
+/** Read a case-insensitive `on` or `off`; reject other non-empty values. */
+export function parseOnOff(
+	env: Env,
+	key: string,
+	options: { fallback: boolean; docs?: string },
+): boolean {
+	const value = readFolded(env, key);
+	if (value === undefined) return options.fallback;
+	if (value === 'on') return true;
+	if (value === 'off') return false;
+	throw new ConfigError(`Unknown ${key}: ${env[key]} (supported: on, off).`, {
+		variable: key,
+		...(options.docs ? { docs: options.docs } : {}),
+	});
+}
+
 /** An integer env value; undefined if unset/empty. Throws on a non-integer. */
 export function parseIntEnv(env: Env, key: string): number | undefined {
 	const raw = env[key];

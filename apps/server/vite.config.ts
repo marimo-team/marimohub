@@ -16,7 +16,7 @@ export default defineConfig({
 		},
 	},
 	pack: {
-		entry: ['src/index.ts', 'src/duckdbWorker.ts'],
+		entry: ['src/index.ts', 'src/duckdbWorker.ts', 'src/postgresWorker.ts'],
 		platform: 'node',
 		format: ['esm'],
 		dts: false,

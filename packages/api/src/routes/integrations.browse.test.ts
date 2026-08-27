@@ -422,6 +422,7 @@ describe('Data browser routes', () => {
 				tables: { available: true, preview: false },
 				query: {
 					available: false,
+					dialect: 'duckdb',
 					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},
@@ -443,6 +444,7 @@ describe('Data browser routes', () => {
 				tables: { available: false, preview: false, reason: 'sandbox only' },
 				query: {
 					available: false,
+					dialect: 'duckdb',
 					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},
@@ -514,6 +516,7 @@ describe('Data browser routes', () => {
 				},
 				query: {
 					available: false,
+					dialect: 'duckdb',
 					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},
@@ -851,6 +854,7 @@ describe('Data browser routes', () => {
 				tables: { available: true, preview: true },
 				query: {
 					available: false,
+					dialect: 'duckdb',
 					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},
@@ -1690,7 +1694,20 @@ describe('Data browser routes', () => {
 		const capability = await expectOk<Record<string, unknown>>(
 			await request('GET', `/projects/${pid}/integrations/${pg.id}/browse`),
 		);
-		expect(capability).toEqual({ surfaces: {} });
+		expect(capability).toEqual({
+			surfaces: {
+				tables: {
+					available: false,
+					preview: false,
+					reason: 'Data browsing is not enabled on this deployment.',
+				},
+				query: {
+					available: false,
+					dialect: 'postgresql',
+					reason: 'Run SQL is not enabled on this deployment.',
+				},
+			},
+		});
 	});
 
 	it('serves repeat lookups from the cache and enforces the per-user budget', async () => {
@@ -1897,6 +1914,7 @@ describe('Data browser routes', () => {
 				tables: { available: true, preview: false },
 				query: {
 					available: false,
+					dialect: 'duckdb',
 					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},

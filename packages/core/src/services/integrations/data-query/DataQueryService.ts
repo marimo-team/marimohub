@@ -5,6 +5,7 @@ import type { UserId } from '../../../ids';
 import { assertPositiveIntegers } from '../../../internal/validation';
 import type {
 	DataQueryConnection,
+	DataQueryEngine,
 	DataQueryExecutorFactory,
 	DataQueryResult,
 	DisposableDataQueryExecutor,
@@ -18,7 +19,9 @@ import { singleDataQueryStatement } from './sql';
 export const MAX_DATA_QUERY_SQL_BYTES = 32 * 1024;
 
 export interface DataQueryServiceOptions {
-	executorFactory: DataQueryExecutorFactory;
+	executorFactories?: Readonly<Partial<Record<DataQueryEngine, DataQueryExecutorFactory>>>;
+	/** Compatibility input for embedders that only install DuckDB-Wasm. */
+	executorFactory?: DataQueryExecutorFactory;
 	maxConcurrent: number;
 	maxConcurrentPerUser: number;
 	maxRows: number;
@@ -56,6 +59,17 @@ export class DataQueryService extends DrainableService {
 				new ResourceExhaustedError('The deployment data-query limit is currently full.'),
 			perKey: () => new ResourceExhaustedError('A data query is already running for this user.'),
 		});
+	}
+
+	supports(engine: DataQueryEngine): boolean {
+		return this.factoryFor(engine) !== undefined;
+	}
+
+	private factoryFor(engine: DataQueryEngine): DataQueryExecutorFactory | undefined {
+		return (
+			this.options.executorFactories?.[engine] ??
+			(engine === 'duckdb-wasm' ? this.options.executorFactory : undefined)
+		);
 	}
 
 	async query(
@@ -130,7 +144,11 @@ export class DataQueryService extends DrainableService {
 		try {
 			const started = performance.now();
 			const work = (async () => {
-				const created = await guarded(() => this.options.executorFactory.create(controller.signal));
+				const engine = input.connection.plan?.engine ?? 'duckdb-wasm';
+				const factory = this.factoryFor(engine);
+				if (!factory)
+					throw new UnavailableError('The requested data-query engine is not installed.');
+				const created = await guarded(() => factory.create(controller.signal));
 				executor = created;
 				if (controller.signal.aborted) {
 					terminate();

@@ -15,7 +15,7 @@ import { lintGutter } from '@codemirror/lint';
 import type { EditorState } from '@codemirror/state';
 import { Compartment, EditorSelection, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import { sql } from '@codemirror/lang-sql';
+import { PostgreSQL, sql } from '@codemirror/lang-sql';
 import {
 	NodeSqlParser,
 	QueryContextAnalyzer,
@@ -92,8 +92,19 @@ interface SqlTarget {
 	document: string;
 }
 
-const DEFAULT_SQL = '-- Select a table or write a DuckDB query\nSELECT 1 AS ready;';
 const MAX_HISTORY = 20;
+
+export type QueryDialect = 'duckdb' | 'postgresql';
+
+export function sqlDialectSettings(dialect: QueryDialect) {
+	return dialect === 'postgresql'
+		? ({
+				parserDatabase: 'PostgreSQL',
+				formatterLanguage: 'postgresql',
+				name: 'PostgreSQL',
+			} as const)
+		: ({ parserDatabase: 'DuckDB', formatterLanguage: 'duckdb', name: 'DuckDB' } as const);
+}
 
 interface SqlWorkspaceProps {
 	projectId: string;
@@ -101,6 +112,7 @@ interface SqlWorkspaceProps {
 	integrationName: string;
 	selection: Selection | null;
 	aiAvailable: boolean;
+	dialect?: QueryDialect;
 }
 
 export default function SqlWorkspace(props: SqlWorkspaceProps) {
@@ -115,6 +127,7 @@ function SqlWorkspaceSession({
 	integrationName,
 	selection,
 	aiAvailable,
+	dialect = 'duckdb',
 	storageKey,
 }: SqlWorkspaceProps & { storageKey: string }) {
 	const schemaQuery = useDataQuerySchemaQuery(projectId, integrationId, selection);
@@ -331,9 +344,10 @@ function SqlWorkspaceSession({
 			) : null}
 			<SqlEditor
 				ref={editorRef}
-				initialSql={stored.draft || DEFAULT_SQL}
+				initialSql={stored.draft || defaultSql(dialect)}
 				tables={schema.tables}
 				integrationName={integrationName}
+				dialect={dialect}
 				onRun={() => void run(false)}
 				onChange={persistDraft}
 			/>
@@ -385,12 +399,14 @@ const SqlEditor = forwardRef(function SqlEditor(
 		initialSql,
 		tables,
 		integrationName,
+		dialect,
 		onRun,
 		onChange,
 	}: {
 		initialSql: string;
 		tables: QueryTable[];
 		integrationName: string;
+		dialect: QueryDialect;
 		onRun: () => void;
 		onChange: (sql: string) => void;
 	},
@@ -447,7 +463,7 @@ const SqlEditor = forwardRef(function SqlEditor(
 			if (!view) return;
 			try {
 				const formatted = formatSql(view.state.doc.toString(), {
-					language: 'duckdb',
+					language: sqlDialectSettings(dialect).formatterLanguage,
 					keywordCase: 'upper',
 				});
 				view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: formatted } });
@@ -459,7 +475,7 @@ const SqlEditor = forwardRef(function SqlEditor(
 	useEffect(() => {
 		if (!parentRef.current) return;
 		const parser = new NodeSqlParser({
-			getParserOptions: () => ({ database: 'DuckDB' }),
+			getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
 		});
 		const contextAnalyzer = new QueryContextAnalyzer(parser);
 		analyzersRef.current = { parser, contextAnalyzer };
@@ -485,7 +501,9 @@ const SqlEditor = forwardRef(function SqlEditor(
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) onChangeRef.current(update.state.doc.toString());
 				}),
-				schemaCompartment.of(schemaExtensions(initialSchemaRef.current, parser, contextAnalyzer)),
+				schemaCompartment.of(
+					schemaExtensions(initialSchemaRef.current, dialect, parser, contextAnalyzer),
+				),
 				themeCompartment.of(editorTheme(initialThemeRef.current)),
 			],
 		});
@@ -494,19 +512,20 @@ const SqlEditor = forwardRef(function SqlEditor(
 			view.destroy();
 			viewRef.current = null;
 		};
-	}, [initialSql, schemaCompartment, themeCompartment]);
+	}, [dialect, initialSql, schemaCompartment, themeCompartment]);
 
 	useEffect(() => {
 		viewRef.current?.dispatch({
 			effects: schemaCompartment.reconfigure(
 				schemaExtensions(
 					schema,
+					dialect,
 					analyzersRef.current?.parser,
 					analyzersRef.current?.contextAnalyzer,
 				),
 			),
 		});
-	}, [schema, schemaCompartment]);
+	}, [dialect, schema, schemaCompartment]);
 
 	useEffect(() => {
 		viewRef.current?.dispatch({ effects: themeCompartment.reconfigure(editorTheme(theme)) });
@@ -517,12 +536,16 @@ const SqlEditor = forwardRef(function SqlEditor(
 
 function schemaExtensions(
 	schema: Record<string, string[]>,
-	parser = new NodeSqlParser({ getParserOptions: () => ({ database: 'DuckDB' }) }),
+	dialect: QueryDialect,
+	parser = new NodeSqlParser({
+		getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
+	}),
 	contextAnalyzer = new QueryContextAnalyzer(parser),
 ) {
+	const sqlDialect = dialect === 'postgresql' ? PostgreSQL : DuckDBDialect;
 	return [
-		sql({ dialect: DuckDBDialect, schema, upperCaseKeywords: true }),
-		...sqlCompletion({ dialect: DuckDBDialect, schema, parser, contextAnalyzer }),
+		sql({ dialect: sqlDialect, schema, upperCaseKeywords: true }),
+		...sqlCompletion({ dialect: sqlDialect, schema, parser, contextAnalyzer }),
 		...sqlExtension({
 			schema,
 			linterConfig: { delay: 250, parser },
@@ -541,6 +564,11 @@ function schemaExtensions(
 			navigationConfig: { keymap: true },
 		}),
 	];
+}
+
+export function defaultSql(dialect: QueryDialect): string {
+	const { name } = sqlDialectSettings(dialect);
+	return `-- Select a table or write a ${name} query\nSELECT 1 AS ready;`;
 }
 
 function editorTheme(theme: 'light' | 'dark') {

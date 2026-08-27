@@ -15,7 +15,9 @@ import type {
 	TablePreviewRequest,
 	TestResult,
 	UiHints,
+	QueryDialect,
 } from '../../ports/integrations';
+import type { DatabaseSource } from '../../ports/databaseBrowser';
 import type { ProjectId, SessionId, UserId } from '../../ids';
 import type { ObjectStoreProvider, ObjectStoreSourceFor } from '../../ports/objectBrowser';
 import type {
@@ -117,6 +119,13 @@ export type ObjectBrowseDefinition<C> = {
 	};
 }[ObjectStoreProvider];
 
+export interface DatabaseBrowseDefinition<C> {
+	provider: DatabaseSource['provider'];
+	available(config: C): { ok: true } | { ok: false; reason: string };
+	source(config: C): DatabaseSource;
+	snippet(instanceName: string, namespace: string[], table: string): string;
+}
+
 export function pageByNameCursor<T>(
 	items: T[],
 	request: BrowsePageRequest,
@@ -201,6 +210,7 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * degraded to a generic one — the same posture as `testConnection`.
 	 */
 	browse?: BrowseCapability<z.infer<S>>;
+	databaseBrowse?: DatabaseBrowseDefinition<z.infer<S>>;
 	objectBrowse?: ObjectBrowseDefinition<z.infer<S>>;
 	preview?: {
 		available(
@@ -209,6 +219,8 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 		programs(input: PreviewProgramInput<z.infer<S>>): PreviewPrograms;
 	};
 	query?: {
+		engine?: DataQueryPlan['engine'];
+		dialect?: QueryDialect;
 		readiness?(config: z.infer<S>): QueryReadinessCheck[];
 		available(config: z.infer<S>): { ok: true } | { ok: false; reason: string };
 		plan(input: { config: z.infer<S>; integration: IntegrationVersionPin }): DataQueryPlan;
@@ -235,7 +247,16 @@ export function defineIntegration<S extends z.ZodType>(
 	def: IntegrationDefinition<S>,
 ): IntegrationDefinition<S> {
 	const testConnection = def.testConnection?.bind(def);
-	if (!testConnection && !def.browse && !def.objectBrowse && !def.preview && !def.query) return def;
+	if (
+		!testConnection &&
+		!def.browse &&
+		!def.databaseBrowse &&
+		!def.objectBrowse &&
+		!def.preview &&
+		!def.query
+	) {
+		return def;
+	}
 	let paths: SecretPath[] | undefined;
 	const pathsOf = () =>
 		(paths ??= secretPaths(
@@ -267,9 +288,53 @@ export function defineIntegration<S extends z.ZodType>(
 				}
 			: {}),
 		...(def.browse ? { browse: guardedBrowse(def.browse, pathsOf) } : {}),
+		...(def.databaseBrowse
+			? { databaseBrowse: guardedDatabaseBrowse(def.databaseBrowse, pathsOf) }
+			: {}),
 		...(def.objectBrowse ? { objectBrowse: guardedObjectBrowse(def.objectBrowse, pathsOf) } : {}),
 		...(def.preview ? { preview: guardedPreview(def.preview, pathsOf) } : {}),
 		...(def.query ? { query: guardedQuery(def.query, pathsOf) } : {}),
+	};
+}
+
+function guardedDatabaseBrowse<C>(
+	databaseBrowse: DatabaseBrowseDefinition<C>,
+	pathsOf: () => SecretPath[],
+): DatabaseBrowseDefinition<C> {
+	const available = databaseBrowse.available.bind(databaseBrowse);
+	return {
+		provider: databaseBrowse.provider,
+		available(config) {
+			let verdict: ReturnType<typeof available>;
+			try {
+				verdict = available(config);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				return { ok: false, reason: 'this instance cannot be browsed from the hub' };
+			}
+			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
+				return { ok: false, reason: 'this instance cannot be browsed from the hub' };
+			}
+			return verdict;
+		},
+		source(config) {
+			try {
+				const source = databaseBrowse.source(config);
+				if (source.provider !== databaseBrowse.provider) throw new ProviderMismatchError();
+				return source;
+			} catch (err) {
+				if (err instanceof ProviderMismatchError) {
+					throw new UnavailableError('The database provider does not match its integration.');
+				}
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				throw new UnavailableError('The database request failed.');
+			}
+		},
+		snippet: databaseBrowse.snippet.bind(databaseBrowse),
 	};
 }
 
@@ -280,6 +345,8 @@ function guardedQuery<C>(
 	const available = query.available.bind(query);
 	const readiness = query.readiness?.bind(query);
 	return {
+		...(query.engine ? { engine: query.engine } : {}),
+		...(query.dialect ? { dialect: query.dialect } : {}),
 		...(readiness
 			? {
 					readiness(config: C) {

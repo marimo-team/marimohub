@@ -1,5 +1,8 @@
 import type { IntegrationVersionPin } from '../../../ports/integrations';
 import type { DuckDBHttpAccess } from '../data-preview/programs';
+import type { PostgresConnectionCapability } from '../../../ports/databaseBrowser';
+
+export type DataQueryEngine = 'duckdb-wasm' | 'postgres';
 
 export interface DataQueryResult {
 	columns: string[];
@@ -13,11 +16,22 @@ export interface DataQueryStatement {
 	params?: readonly (string | number | boolean | null)[];
 }
 
-export interface DataQueryPlan {
+export interface DuckDBDataQueryPlan {
+	engine?: 'duckdb-wasm';
 	setup: readonly DataQueryStatement[];
 	cleanup?: readonly DataQueryStatement[];
 	httpAccess?: Readonly<DuckDBHttpAccess>;
 }
+
+export interface PostgresDataQueryPlan {
+	engine: 'postgres';
+	connection: Readonly<PostgresConnectionCapability>;
+	setup?: never;
+	cleanup?: never;
+	httpAccess?: never;
+}
+
+export type DataQueryPlan = DuckDBDataQueryPlan | PostgresDataQueryPlan;
 
 export interface DataQueryConnection {
 	/** Ephemeral secret-bearing material for this request; executors must never persist or log it. */

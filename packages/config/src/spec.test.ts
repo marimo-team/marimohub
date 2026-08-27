@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
+import { EXPERIMENTS } from './experiments';
 import { CONFIG_SPEC, CONFIG_DOCUMENTED_IDS, CONFIG_VAR_IDS } from './spec';
 
 // Files that read the env surface; scanned for MARIMOHUB_*/PORT literals.
@@ -14,7 +15,7 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./ai.ts', import.meta.url)),
 	fileURLToPath(new URL('./secrets.ts', import.meta.url)),
 	fileURLToPath(new URL('./integrations.ts', import.meta.url)),
-	fileURLToPath(new URL('./duckdbFeatures.ts', import.meta.url)),
+	fileURLToPath(new URL('./postgresFeatures.ts', import.meta.url)),
 	fileURLToPath(new URL('./experiments.ts', import.meta.url)),
 	fileURLToPath(new URL('./notifications.ts', import.meta.url)),
 	fileURLToPath(new URL('./projectAlerts.ts', import.meta.url)),
@@ -77,6 +78,15 @@ describe('config registry sanity', () => {
 		expect(audience?.name).toContain('deprecated');
 		expect(audience?.description).toContain('ignored');
 		expect(audience?.description).toContain('client ID');
+	});
+
+	it('does not recommend an experiment when no experiment exists', () => {
+		if (Object.keys(EXPERIMENTS).length > 0) return;
+		const experiments = CONFIG_SPEC.flatMap((group) => group.backends)
+			.flatMap((backend) => backend.vars)
+			.find((variable) => variable.id === 'MARIMOHUB_EXPERIMENTS');
+
+		expect(experiments?.example).toBeUndefined();
 	});
 
 	it('selector values are unique within a group, and only appear where a group has a selector', () => {

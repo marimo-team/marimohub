@@ -342,8 +342,25 @@ export default defineConfig({
 								'@marimo-hub/object-browser-*',
 								'@marimo-hub/source-control-*',
 								'@marimo-hub/duckdb-wasm-runtime',
+								'@marimo-hub/postgres-runtime',
 							],
 						},
+					],
+				},
+			},
+			{
+				files: ['packages/**', 'apps/**', 'examples/**'],
+				excludeFiles: [
+					'packages/config/**',
+					'packages/core/**',
+					'packages/api/**',
+					'packages/postgres-runtime/**',
+					'apps/server/src/postgresWorker.ts',
+				],
+				rules: {
+					'no-restricted-imports': [
+						'error',
+						{ patterns: ['@marimo-hub/postgres-runtime', '@marimo-hub/postgres-runtime/*'] },
 					],
 				},
 			},

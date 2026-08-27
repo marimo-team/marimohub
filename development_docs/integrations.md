@@ -181,8 +181,8 @@ TLS, delegation, and runtime options use the sandbox executor. See
 [the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the security boundary and
 test procedure.
 
-Parent-owned OAuth2 requires `MARIMOHUB_DUCKDB_OAUTH=on`. Guarded S3 object queries require
-`MARIMOHUB_DUCKDB_OBJECT_QUERIES=on`. Both gates default to off. The query gate is evaluated before
+Parent-owned OAuth2 and guarded S3 object queries are enabled whenever Run SQL is. The query gate
+is evaluated before
 secret resolution and again after resolved configuration is loaded, so a concurrent integration
 update cannot bypass it.
 
@@ -195,11 +195,20 @@ Deadlines bound startup and execution. A `finally` block destroys each sandbox;
 DuckDB failures poison and close the affected engine slot before later traffic.
 
 Run SQL has a separate, fail-closed `DataQueryService` contract and does not
-reuse trusted preview programs. The Node composition root wires a fresh
-DuckDB-Wasm worker per request only when `MARIMOHUB_DATA_BROWSER=full`. The
+reuse trusted preview programs. It selects an executor from the plan's engine.
+The Node composition root wires a fresh DuckDB-Wasm worker per request only when
+`MARIMOHUB_DATA_BROWSER=full`. The
 route remains in OpenAPI while the runtime is disabled and returns `404`.
 Read-only execution, one-statement validation, row, byte, memory, concurrency,
 and deadline limits apply; inline execution is forbidden.
+
+Database-native browsers use `DatabaseBrowseDefinition` and the `DatabaseBrowser` port. The
+definition creates a closed connection capability from resolved configuration. Only the matching
+adapter can open it. PostgreSQL uses one worker and one connection per operation. The adapter pins
+guarded DNS results, preserves the original hostname for TLS, streams arrays with a cursor, and
+normalizes values before they cross the worker boundary. Its query plan uses the `postgres` engine
+and advertises the `postgresql` dialect. The insecure-transport switch is checked before secret
+resolution.
 
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.

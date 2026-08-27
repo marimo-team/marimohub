@@ -5,9 +5,30 @@ import {
 	applySqlTarget,
 	completionSchemaSummary,
 	csvCell,
+	defaultSql,
 	selectedOrCurrentStatement,
+	sqlDialectSettings,
 	sqlTargetAtState,
 } from './SqlWorkspace';
+
+describe('SQL dialect selection', () => {
+	it('selects PostgreSQL parsing, formatting, and starter text', () => {
+		expect(sqlDialectSettings('postgresql')).toEqual({
+			parserDatabase: 'PostgreSQL',
+			formatterLanguage: 'postgresql',
+			name: 'PostgreSQL',
+		});
+		expect(defaultSql('postgresql')).toContain('write a PostgreSQL query');
+	});
+
+	it('keeps the existing DuckDB settings', () => {
+		expect(sqlDialectSettings('duckdb')).toMatchObject({
+			parserDatabase: 'DuckDB',
+			formatterLanguage: 'duckdb',
+		});
+		expect(defaultSql('duckdb')).toContain('write a DuckDB query');
+	});
+});
 
 describe('SQL statement selection', () => {
 	it('prefers a non-empty selection', () => {

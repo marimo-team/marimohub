@@ -64,7 +64,7 @@ export class IntegrationRegistry {
 		if (cached) return cached;
 		const def = this.get(kind);
 		const browse_surfaces = [
-			...(def.browse ? (['tables'] as const) : []),
+			...(def.browse || def.databaseBrowse ? (['tables'] as const) : []),
 			...(def.objectBrowse ? (['objects'] as const) : []),
 		];
 		const descriptor: KindDescriptor = {

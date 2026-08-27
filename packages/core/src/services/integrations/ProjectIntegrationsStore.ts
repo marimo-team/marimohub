@@ -53,6 +53,11 @@ import type {
 	UpdateIntegrationInput,
 } from '../../ports/integrations';
 import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/secrets';
+import type {
+	DatabaseBrowser,
+	DatabaseBrowserRegistry,
+	DatabaseSource,
+} from '../../ports/databaseBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
 import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '../../ports/objectBrowser';
 import type {
@@ -131,6 +136,11 @@ function unavailableObjectCapability(provider: ObjectStoreSource['provider'], re
 		reason,
 	};
 }
+
+const DATABASE_BROWSE_PROBE: IntegrationProbe = {
+	fetch: () => Promise.reject(new Error('Database browsers do not use the HTTP probe.')),
+	connect: () => Promise.reject(new Error('Database browsers manage their own sockets.')),
+};
 
 /** Bounds list scans and session rendering for one integration tier. */
 export const MAX_INTEGRATIONS_PER_SCOPE = 500;
@@ -235,6 +245,7 @@ export interface IntegrationsStoreOptions {
 	 */
 	browseProbe?: IntegrationProbe;
 	objectBrowsers?: ObjectBrowserRegistry;
+	databaseBrowsers?: DatabaseBrowserRegistry;
 	/** Injectable clock for deterministic tests. */
 	now?: () => string;
 	metrics?: Metrics;
@@ -260,6 +271,7 @@ class ScopedIntegrationsStore {
 	private readonly probe?: IntegrationProbe;
 	private readonly browseProbe?: IntegrationProbe;
 	private readonly objectBrowsers: ObjectBrowserRegistry;
+	private readonly databaseBrowsers: DatabaseBrowserRegistry;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 	private readonly dataPreview?: DataPreviewService;
@@ -276,6 +288,7 @@ class ScopedIntegrationsStore {
 		this.probe = options.probe;
 		this.browseProbe = options.browseProbe;
 		this.objectBrowsers = options.objectBrowsers ?? {};
+		this.databaseBrowsers = options.databaseBrowsers ?? {};
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
 		this.dataPreview = options.dataPreview;
@@ -299,7 +312,10 @@ class ScopedIntegrationsStore {
 			const objectProvider = def.objectBrowse?.provider;
 			const browse_surfaces = descriptor.browse_surfaces.filter(
 				(surface) =>
-					(surface === 'tables' && tableBrowsable) ||
+					(surface === 'tables' &&
+						((def.browse !== undefined && tableBrowsable) ||
+							(def.databaseBrowse !== undefined &&
+								this.databaseBrowsers[def.databaseBrowse.provider] !== undefined))) ||
 					(surface === 'objects' &&
 						objectProvider !== undefined &&
 						this.objectBrowsers[objectProvider]?.provider === objectProvider),
@@ -873,6 +889,10 @@ class ScopedIntegrationsStore {
 			surfaces.tables = this.browseProbe
 				? { available: false, preview: false }
 				: unavailableTableCapability('Data browsing is not enabled on this deployment.');
+		} else if (def.databaseBrowse) {
+			surfaces.tables = this.databaseBrowsers[def.databaseBrowse.provider]
+				? { available: false, preview: false }
+				: unavailableTableCapability('Data browsing is not enabled on this deployment.');
 		}
 		if (def.objectBrowse) {
 			surfaces.objects = unavailableObjectCapability(
@@ -884,8 +904,12 @@ class ScopedIntegrationsStore {
 		}
 		if (def.query) {
 			surfaces.query = this.dataQuery
-				? { available: false }
-				: { available: false, reason: 'Run SQL is not enabled on this deployment.' };
+				? { available: false, dialect: def.query.dialect ?? 'duckdb' }
+				: {
+						available: false,
+						dialect: def.query.dialect ?? 'duckdb',
+						reason: 'Run SQL is not enabled on this deployment.',
+					};
 		}
 		const compatibility = (reason?: string): BrowseCapabilityResult => ({
 			integration_kind: head.kind,
@@ -895,7 +919,7 @@ class ScopedIntegrationsStore {
 			...state,
 			...(reason ? { reason } : {}),
 		});
-		if (!def.browse && !def.objectBrowse && !def.query) {
+		if (!def.browse && !def.databaseBrowse && !def.objectBrowse && !def.query) {
 			return compatibility(`Integration kind "${head.kind}" does not support browsing.`);
 		}
 		if (!head.enabled) {
@@ -904,7 +928,9 @@ class ScopedIntegrationsStore {
 			if (surfaces.objects && def.objectBrowse) {
 				surfaces.objects = unavailableObjectCapability(def.objectBrowse.provider, reason);
 			}
-			if (surfaces.query) surfaces.query = { available: false, reason };
+			if (surfaces.query && def.query) {
+				surfaces.query = { available: false, dialect: def.query.dialect ?? 'duckdb', reason };
+			}
 			return compatibility(reason);
 		}
 		const { config } = await this.loadCurrent(scope, head);
@@ -919,7 +945,9 @@ class ScopedIntegrationsStore {
 			if (surfaces.objects && def.objectBrowse) {
 				surfaces.objects = unavailableObjectCapability(def.objectBrowse.provider, reason);
 			}
-			if (surfaces.query) surfaces.query = { available: false, reason };
+			if (surfaces.query && def.query) {
+				surfaces.query = { available: false, dialect: def.query.dialect ?? 'duckdb', reason };
+			}
 			return compatibility(reason);
 		}
 		if (def.browse && this.browseProbe) {
@@ -931,6 +959,18 @@ class ScopedIntegrationsStore {
 			surfaces.tables = verdict.ok
 				? { available: true, preview: def.browse.previewRows !== undefined || runtimePreview }
 				: unavailableTableCapability(verdict.reason);
+		}
+		if (def.databaseBrowse) {
+			const browser = this.databaseBrowsers[def.databaseBrowse.provider];
+			if (browser) {
+				const gate = this.queryGateBlocker(head.kind, parsed);
+				const verdict = gate
+					? { ok: false as const, reason: gate.reason }
+					: def.databaseBrowse.available(parsed);
+				surfaces.tables = verdict.ok
+					? { available: true, preview: browser.preview }
+					: unavailableTableCapability(verdict.reason);
+			}
 		}
 		if (def.objectBrowse && objectContext) {
 			const source = def.objectBrowse.source(parsed);
@@ -944,12 +984,21 @@ class ScopedIntegrationsStore {
 		if (def.query && this.dataQuery) {
 			const gate = this.queryGateBlocker(head.kind, parsed);
 			if (gate) {
-				surfaces.query = { available: false, reason: gate.reason };
+				surfaces.query = {
+					available: false,
+					dialect: def.query.dialect ?? 'duckdb',
+					reason: gate.reason,
+				};
 			} else {
 				const verdict = def.query.available(parsed);
-				surfaces.query = verdict.ok
-					? { available: true }
-					: { available: false, reason: verdict.reason };
+				surfaces.query =
+					verdict.ok && this.dataQuery.supports(def.query.engine ?? 'duckdb-wasm')
+						? { available: true, dialect: def.query.dialect ?? 'duckdb' }
+						: {
+								available: false,
+								dialect: def.query.dialect ?? 'duckdb',
+								reason: verdict.ok ? 'The required query engine is not installed.' : verdict.reason,
+							};
 			}
 		}
 		const anySurfaceAvailable =
@@ -1222,6 +1271,11 @@ class ScopedIntegrationsStore {
 		return browser?.provider === source.provider ? (browser as ObjectBrowser) : undefined;
 	}
 
+	private databaseBrowserFor(source: DatabaseSource): DatabaseBrowser | undefined {
+		const browser = this.databaseBrowsers[source.provider];
+		return browser?.provider === source.provider ? browser : undefined;
+	}
+
 	private async guardObjectBrowse<T>(run: () => Promise<T> | T): Promise<T> {
 		try {
 			return await run();
@@ -1237,7 +1291,71 @@ class ScopedIntegrationsStore {
 	 * browsing writes nothing to the bucket.
 	 */
 	private async openBrowse(scope: IntegrationScope, id: IntegrationId) {
+		const preflightHead = await this.getHead(scope, id);
+		const definition = this.registry.get(preflightHead.kind);
+		if (definition.databaseBrowse) {
+			const browser = this.databaseBrowsers[definition.databaseBrowse.provider];
+			if (!browser) throw new ValidationError('Data browsing is not enabled on this deployment.');
+			const { config } = await this.loadCurrent(scope, preflightHead);
+			const placeholder = parseStoredWithPlaceholders({
+				schema: definition.configSchema,
+				paths: this.registry.secretPathsOf(preflightHead.kind),
+				stored: config,
+			});
+			if (placeholder === undefined) {
+				throw new ValidationError(
+					`Integration kind "${preflightHead.kind}" has an invalid stored config.`,
+				);
+			}
+			const gate = this.queryGateBlocker(preflightHead.kind, placeholder);
+			if (gate) throw new ValidationError(gate.reason);
+		}
 		const { head, def, version, config: parsed } = await this.openResolvedBrowse(scope, id);
+		if (def.databaseBrowse) {
+			const verdict = def.databaseBrowse.available(parsed);
+			if (!verdict.ok) {
+				throw new ValidationError(
+					`Integration "${head.name}" cannot be browsed: ${verdict.reason}.`,
+				);
+			}
+			const source = def.databaseBrowse.source(parsed);
+			const browser = this.databaseBrowserFor(source);
+			if (!browser) throw new ValidationError('Data browsing is not enabled on this deployment.');
+			const browse = {
+				available: () => ({ ok: true as const }),
+				listNamespaces: (
+					_config: unknown,
+					_probe: IntegrationProbe,
+					request: BrowseNamespacesRequest,
+				) => browser.listNamespaces(source, request),
+				listTables: (
+					_config: unknown,
+					_probe: IntegrationProbe,
+					namespace: string[],
+					request: BrowsePageRequest,
+				) => browser.listTables(source, namespace, request),
+				getTableSchema: (
+					_config: unknown,
+					_probe: IntegrationProbe,
+					namespace: string[],
+					table: string,
+					request?: Pick<TablePreviewRequest, 'signal'>,
+				) => browser.getTableSchema(source, namespace, table, request),
+				...(browser.preview
+					? {
+							previewRows: (
+								_config: unknown,
+								_probe: IntegrationProbe,
+								namespace: string[],
+								table: string,
+								request: TablePreviewRequest,
+							) => browser.previewRows(source, namespace, table, request),
+						}
+					: {}),
+				snippet: def.databaseBrowse.snippet,
+			};
+			return { head, def, version, browse, config: parsed, probe: DATABASE_BROWSE_PROBE };
+		}
 		const probe = this.browseProbe;
 		if (!probe) {
 			throw new ValidationError('Data browsing is not enabled on this deployment.');

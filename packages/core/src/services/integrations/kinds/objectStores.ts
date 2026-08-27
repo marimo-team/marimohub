@@ -164,6 +164,8 @@ export const s3 = defineIntegration({
 		},
 	},
 	query: {
+		engine: 'duckdb-wasm',
+		dialect: 'duckdb',
 		readiness: s3QueryReadiness,
 		available(config) {
 			const reason = s3QueryBlocker(config);
@@ -176,6 +178,7 @@ export const s3 = defineIntegration({
 			const secretName = sqlIdentifier(`marimohub_s3_${integration.id.replaceAll('-', '_')}`);
 			const urlStyle = config.path_style ? 'path' : 'vhost';
 			return {
+				engine: 'duckdb-wasm',
 				setup: [
 					{ text: 'LOAD httpfs' },
 					{ text: 'LOAD parquet' },

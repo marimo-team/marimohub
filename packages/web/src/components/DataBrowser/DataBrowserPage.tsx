@@ -381,6 +381,7 @@ export default function DataBrowserPage() {
 									integrationName={selected.name}
 									selection={selection}
 									aiAvailable={capabilities?.data_browser?.ai_query ?? false}
+									dialect={querySurface?.dialect === 'postgresql' ? 'postgresql' : 'duckdb'}
 								/>
 							</Suspense>
 						) : selected && selectedSurface === 'objects' ? (

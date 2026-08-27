@@ -120,7 +120,13 @@ const BrowseCapabilitySchema = z
 					reason: z.string().optional(),
 				})
 				.optional(),
-			query: z.object({ available: z.boolean(), reason: z.string().optional() }).optional(),
+			query: z
+				.object({
+					available: z.boolean(),
+					dialect: extensibleResponseEnum(['duckdb', 'postgresql'], 'duckdb'),
+					reason: z.string().optional(),
+				})
+				.optional(),
 		}),
 	})
 	.openapi('IntegrationBrowseCapability');
@@ -1504,7 +1510,12 @@ app.openapi(generateDataQuerySql, async (c) => {
 					.join(', ')})`,
 		)
 		.join('\n');
-	const generated = await generateSql({ ...body, schema, signal: c.req.raw.signal });
+	const generated = await generateSql({
+		...body,
+		schema,
+		dialect: capability.surfaces.query.dialect,
+		signal: c.req.raw.signal,
+	});
 	const sql = generated
 		.trim()
 		.replace(/^```(?:sql)?\s*/i, '')

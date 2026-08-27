@@ -116,17 +116,17 @@ describe('makeIntegrations', () => {
 });
 
 describe('makeIntegrations data browser', () => {
-	it('is off by default; metadata wires the capability and browse support', () => {
-		const dark = makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket());
+	it('defaults to metadata; explicit off disables the capability and browse support', () => {
+		const defaulted = makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket());
+		expect(defaulted.dataBrowser).toMatchObject({ preview: false });
+		expect(defaulted.integrations?.listKinds().some((k) => k.supports_browse)).toBe(true);
+
+		const dark = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'off' },
+			new MemoryBucket(),
+		);
 		expect(dark.dataBrowser).toBeUndefined();
 		expect(dark.integrations?.listKinds().every((k) => !k.supports_browse)).toBe(true);
-
-		expect(
-			makeIntegrations(
-				{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'off' },
-				new MemoryBucket(),
-			).dataBrowser,
-		).toBeUndefined();
 
 		const wired = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'metadata' },
@@ -306,6 +306,45 @@ describe('makeIntegrations data browser', () => {
 		await wired.dataBrowser?.close?.();
 	});
 
+	it('advertises PostgreSQL browsing only when its rollout flag is on', () => {
+		const dark = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'off' },
+			new MemoryBucket(),
+		);
+		const wired = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_DATA_BROWSER: 'metadata',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'private',
+			},
+			new MemoryBucket(),
+		);
+		const enabled = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_DATA_BROWSER: 'metadata',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'private',
+				MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+			},
+			new MemoryBucket(),
+		);
+
+		expect(dark.integrations?.listKinds().find((kind) => kind.kind === 'postgres')).toMatchObject({
+			supports_browse: false,
+			browse_surfaces: [],
+		});
+		expect(wired.integrations?.listKinds().find((kind) => kind.kind === 'postgres')).toMatchObject({
+			supports_browse: false,
+			browse_surfaces: [],
+		});
+		expect(
+			enabled.integrations?.listKinds().find((kind) => kind.kind === 'postgres'),
+		).toMatchObject({
+			supports_browse: true,
+			browse_surfaces: ['tables'],
+		});
+	});
+
 	it('passes metadata and full modes to every production object browser', async () => {
 		for (const [mode, expected] of [
 			['metadata', { preview: false, download: false }],
@@ -391,6 +430,19 @@ describe('makeIntegrations data browser', () => {
 		).toThrow(/probe/);
 	});
 
+	it('the metadata default yields silently to a disabled probe or integrations gate', () => {
+		const probeOff = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_INTEGRATIONS_PROBE: 'off' },
+			new MemoryBucket(),
+		);
+		expect(probeOff.dataBrowser).toBeUndefined();
+		expect(probeOff.integrations?.listKinds().every((k) => !k.supports_browse)).toBe(true);
+
+		expect(
+			makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'off' }, new MemoryBucket()).dataBrowser,
+		).toBeUndefined();
+	});
+
 	it('rejects unknown values', () => {
 		for (const value of ['bogus']) {
 			expect(() =>
@@ -463,5 +515,201 @@ describe('makeIntegrations data browser', () => {
 				new MemoryBucket(),
 			),
 		).toThrow(/cannot exceed/);
+	});
+});
+
+describe('makeIntegrations data-browser lockdown', () => {
+	it('normalizes case and whitespace in the data-browser setting', () => {
+		const shouty = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: ' METADATA ' },
+			new MemoryBucket(),
+		);
+		expect(shouty.dataBrowser).toMatchObject({ preview: false });
+
+		expect(
+			makeIntegrations(
+				{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: ' OFF ' },
+				new MemoryBucket(),
+			).dataBrowser,
+		).toBeUndefined();
+	});
+
+	it('treats a whitespace-only setting as the default, so it still yields to a disabled probe', () => {
+		const degraded = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'off',
+				MARIMOHUB_DATA_BROWSER: '   ',
+			},
+			new MemoryBucket(),
+		);
+		expect(degraded.dataBrowser).toBeUndefined();
+	});
+
+	it('rejects invalid data-browser values even when integrations are off', () => {
+		expect(() =>
+			makeIntegrations(
+				{ MARIMOHUB_INTEGRATIONS: 'off', MARIMOHUB_DATA_BROWSER: 'bogus' },
+				new MemoryBucket(),
+			),
+		).toThrow(/supported: off, metadata, full/);
+	});
+
+	it('rejects an invalid probe policy instead of degrading the default browser', () => {
+		expect(() =>
+			makeIntegrations(
+				{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_INTEGRATIONS_PROBE: 'bogus' },
+				new MemoryBucket(),
+			),
+		).toThrow(/MARIMOHUB_INTEGRATIONS_PROBE/);
+	});
+
+	it('refuses explicit full mode without a probe', () => {
+		expect(() =>
+			makeIntegrations(
+				{
+					MARIMOHUB_INTEGRATIONS: 'on',
+					MARIMOHUB_INTEGRATIONS_PROBE: 'off',
+					MARIMOHUB_DATA_BROWSER: 'full',
+				},
+				new MemoryBucket(),
+			),
+		).toThrow(/probe/);
+	});
+
+	it('locks previews, Run SQL, and ambient credentials off in the metadata default', () => {
+		const defaulted = makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket());
+		expect(defaulted.dataBrowser).toMatchObject({
+			preview: false,
+			query: false,
+			objectBrowser: { allowServerAmbientCredentials: false },
+		});
+		expect(defaulted.dataBrowser?.checkPreview).toBeUndefined();
+	});
+
+	it('keeps the PostgreSQL runtime preview-disabled in metadata mode', () => {
+		const browsers = (mode: string) =>
+			(
+				makeIntegrations(
+					{
+						MARIMOHUB_INTEGRATIONS: 'on',
+						MARIMOHUB_DATA_BROWSER: mode,
+						MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+					},
+					new MemoryBucket(),
+				).integrations as unknown as {
+					store: { databaseBrowsers?: { postgres?: { preview: boolean } } };
+				}
+			).store.databaseBrowsers;
+
+		expect(browsers('metadata')?.postgres?.preview).toBe(false);
+		expect(browsers('full')?.postgres?.preview).toBe(true);
+	});
+
+	it('refuses Run SQL end-to-end in metadata mode', async () => {
+		const wired = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'metadata' },
+			new MemoryBucket(),
+		);
+		const pid = createProjectId();
+		const created = await wired.integrations!.create(
+			pid,
+			{ kind: 'custom_env', name: 'flags', config: { vars: { FLAG: 'on' } } },
+			ACTOR,
+		);
+		await expect(
+			wired.integrations!.runDataQuery(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'select 1',
+			),
+		).rejects.toThrow(/Run SQL is not enabled/);
+	});
+});
+
+describe('PostgreSQL transport lockdown through the store', () => {
+	const wire = (env: Record<string, string> = {}) =>
+		makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_POSTGRES_DATA_ACCESS: 'on', ...env },
+			new MemoryBucket(),
+		).integrations!;
+
+	it.each(['disable', 'prefer', 'require'])(
+		'reports %s blocked in query readiness without the transport override',
+		(mode) => {
+			const checks = wire().queryReadiness({
+				kind: 'postgres',
+				config: { ...PG_CONFIG, ssl: { mode } },
+			});
+			expect(checks[0]).toMatchObject({
+				id: 'postgres-insecure-transport',
+				ready: false,
+				field: 'ssl.mode',
+			});
+		},
+	);
+
+	it('clears the transport blocker only with the explicit override', () => {
+		const checks = wire({ MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT: 'on' }).queryReadiness({
+			kind: 'postgres',
+			config: { ...PG_CONFIG, ssl: { mode: 'disable' } },
+		});
+		expect(checks.some(({ id }) => id === 'postgres-insecure-transport')).toBe(false);
+	});
+
+	it('defaults an omitted ssl block to verify-full, which passes without the override', () => {
+		const checks = wire().queryReadiness({ kind: 'postgres', config: { ...PG_CONFIG } });
+		expect(checks.some(({ id }) => id === 'postgres-insecure-transport')).toBe(false);
+		expect(checks.find(({ id }) => id === 'postgres-ca')).toMatchObject({ ready: true });
+	});
+
+	it('blocks insecure-transport Run SQL before execution even in full mode', async () => {
+		const bucket = new MemoryBucket();
+		const dataQuery = new DataQueryService({
+			executorFactory: {
+				create: async () => ({
+					runtime: 'worker',
+					execute: async () => {
+						throw new Error('must not execute');
+					},
+					terminate: () => {},
+				}),
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+			maxRows: 10,
+			maxBytes: 4096,
+			executionTimeoutMs: 1000,
+		});
+		const { integrations } = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_DATA_BROWSER: 'full',
+				MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+				MARIMOHUB_SECRETS_KEK: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=',
+			},
+			bucket,
+			undefined,
+			undefined,
+			dataQuery,
+		);
+		const pid = createProjectId();
+		const created = await integrations!.create(
+			pid,
+			{ kind: 'postgres', name: 'db', config: { ...PG_CONFIG, ssl: { mode: 'disable' } } },
+			ACTOR,
+		);
+		await expect(
+			integrations!.runDataQuery(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'select 1',
+			),
+		).rejects.toThrow(/MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT/);
+		await dataQuery.close();
 	});
 });

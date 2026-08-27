@@ -176,6 +176,7 @@ export interface AiProxyConfig {
 		instruction: string;
 		sql?: string;
 		schema: string;
+		dialect: 'duckdb' | 'postgresql';
 		signal: AbortSignal;
 	}) => Promise<string>;
 }

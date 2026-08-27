@@ -100,10 +100,13 @@ export {
 } from './integrations/data-query';
 export type {
 	DataQueryConnection,
+	DataQueryEngine,
+	DuckDBDataQueryPlan,
 	DataQueryExecution,
 	DataQueryExecutorFactory,
 	DataQueryInput,
 	DataQueryPlan,
+	PostgresDataQueryPlan,
 	DataQueryResult,
 	DataQueryServiceOptions,
 	DataQueryStatement,
@@ -133,7 +136,12 @@ export type {
 } from './integrations/data-preview';
 export { IntegrationRegistry } from './integrations/registry';
 export { defineIntegration, envSegment } from './integrations/sdk';
-export type { IntegrationDefinition, RenderInput, RenderOutput } from './integrations/sdk';
+export type {
+	DatabaseBrowseDefinition,
+	IntegrationDefinition,
+	RenderInput,
+	RenderOutput,
+} from './integrations/sdk';
 export { SECRET_MARK, zSecret } from './integrations/secretFields';
 export {
 	assertValidIntegrationName,

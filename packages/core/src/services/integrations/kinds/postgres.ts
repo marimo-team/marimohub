@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PostgresConnectionCapability } from '../../../ports/databaseBrowser';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
 import {
@@ -99,6 +100,50 @@ const pgConfig = z.strictObject({
 	ambient_env: discoveryEnvField('PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE'),
 });
 
+type PostgresConfig = z.infer<typeof pgConfig>;
+
+function hubReadiness(config: PostgresConfig): { ok: true } | { ok: false; reason: string } {
+	if (
+		'mode' in config.ssl &&
+		(config.ssl.mode === 'verify-ca' || config.ssl.mode === 'verify-full') &&
+		'ca_path' in config.ssl &&
+		config.ssl.ca_path !== undefined &&
+		config.ssl.ca_path !== DEFAULT_CA_PATH
+	) {
+		return {
+			ok: false,
+			reason: 'Custom CA paths are sandbox-only. Paste the certificate into CA bundle.',
+		};
+	}
+	return { ok: true };
+}
+
+function connectionCapability(config: PostgresConfig): PostgresConnectionCapability {
+	const tls =
+		config.ssl.mode === 'verify-ca' || config.ssl.mode === 'verify-full'
+			? {
+					mode: config.ssl.mode,
+					ca:
+						'ca_bundle' in config.ssl && config.ssl.ca_bundle
+							? ({ kind: 'bundle', pem: config.ssl.ca_bundle } as const)
+							: ({ kind: 'system' } as const),
+				}
+			: { mode: config.ssl.mode };
+	return {
+		provider: 'postgres',
+		host: config.host,
+		port: config.port,
+		database: config.database,
+		username: config.username,
+		password: config.password,
+		tls,
+	};
+}
+
+function quotePgIdentifier(value: string): string {
+	return `"${value.replaceAll('"', '""')}"`;
+}
+
 export const postgres = defineIntegration({
 	kind: 'postgres',
 	title: 'PostgreSQL',
@@ -135,6 +180,52 @@ export const postgres = defineIntegration({
 
 	validate(config) {
 		if ('ca_path' in config.ssl) validateCaFields(config.ssl, 'ssl');
+	},
+
+	databaseBrowse: {
+		provider: 'postgres',
+		available: hubReadiness,
+		source: connectionCapability,
+		snippet(instanceName, namespace, table) {
+			const relation = `${quotePgIdentifier(namespace[0] ?? '')}.${quotePgIdentifier(table)}`;
+			const query = JSON.stringify(`SELECT * FROM ${relation} LIMIT 100`);
+			return (
+				'import os\nimport polars as pl\n\n' +
+				`df = pl.read_database_uri(${query}, ` +
+				`os.environ['MARIMOHUB_PG_${envSegment(instanceName)}_URL'])`
+			);
+		},
+	},
+
+	query: {
+		engine: 'postgres',
+		dialect: 'postgresql',
+		readiness(config) {
+			const verdict = hubReadiness(config);
+			return verdict.ok
+				? [
+						{
+							id: 'postgres-ca',
+							label: 'Use a CA bundle supported by the hub',
+							ready: true,
+							field: 'ssl.ca_bundle',
+							reason: '',
+						},
+					]
+				: [
+						{
+							id: 'postgres-ca',
+							label: 'Use a CA bundle supported by the hub',
+							ready: false,
+							field: 'ssl.ca_bundle',
+							reason: verdict.reason,
+						},
+					];
+		},
+		available: hubReadiness,
+		plan({ config }) {
+			return { engine: 'postgres', connection: connectionCapability(config) };
+		},
 	},
 
 	migrate(stored, fromVersion) {

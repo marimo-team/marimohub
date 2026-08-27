@@ -8,9 +8,12 @@ export { DataQueryUserError } from './contracts';
 export type { DataQueryInput, DataQueryServiceOptions } from './DataQueryService';
 export type {
 	DataQueryConnection,
+	DataQueryEngine,
+	DuckDBDataQueryPlan,
 	DataQueryExecution,
 	DataQueryExecutorFactory,
 	DataQueryPlan,
+	PostgresDataQueryPlan,
 	DataQueryResult,
 	DataQueryStatement,
 	DisposableDataQueryExecutor,

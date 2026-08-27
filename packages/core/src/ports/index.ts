@@ -4,6 +4,7 @@ export * from './sandboxExposure';
 export * from './auth';
 export * from './metrics';
 export * from './credentialBroker';
+export * from './databaseBrowser';
 export * from './secrets';
 export * from './integrations';
 export * from './notifier';

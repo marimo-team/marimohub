@@ -30,10 +30,12 @@ revision. Each session records the revisions that it uses.
 
 ## Browse data
 
-Set `MARIMOHUB_DATA_BROWSER=metadata` to enable the Data page and browse API.
-Set it to `full` to also enable row previews, object previews, and object
-downloads. Browsing requires integrations and an integration probe that is not
-`off`.
+`MARIMOHUB_DATA_BROWSER=metadata` is the default: the Data page and browse API
+are enabled for metadata. Set it to `full` to also enable row previews, object
+previews, and object downloads, or to `off` to disable browsing. Browsing
+requires integrations and an integration probe that is not `off`. The default
+yields silently when integrations or the probe are off; an explicit `metadata`
+or `full` setting fails at startup instead.
 
 Editors and higher roles can use the Data page at `/projects/{pid}/data`.
 They do not need a notebook session. The URL stores the selected integration,
@@ -187,11 +189,7 @@ browsable integrations emit a runtime-specific preview program. The preview
 service prefers DuckDB-Wasm SQL when the runtime supports every required
 feature, then falls back to a new sandbox running a fixed Python program.
 
-Enable the experimental DuckDB executor with:
-
-```bash
-MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview
-```
+The DuckDB executor is enabled by default in full data-browser mode.
 
 The Node server uses a worker thread. Blocking inline execution is unavailable
 because a query cannot be preempted at its deadline. Each query runs in a
@@ -245,16 +243,8 @@ browsing is selected:
 MARIMOHUB_DATA_BROWSER=full
 ```
 
-OAuth2 Iceberg catalogs and S3 object queries have separate rollout gates. Both are off by
-default. Enable only the capability that the deployment needs:
-
-```bash
-MARIMOHUB_DUCKDB_OAUTH=on
-MARIMOHUB_DUCKDB_OBJECT_QUERIES=on
-```
-
-When OAuth2 catalog access is off, table previews use the configured Python preview runtime when
-it is available. When S3 object queries are off, other Run SQL integrations remain available.
+OAuth2 Iceberg catalogs and S3 object queries are enabled with full data browsing. To take a
+capability away from one integration, disable that integration.
 
 Only project managers and administrators can run SQL. Each request receives a
 fresh DuckDB-Wasm worker, runs one statement in a read-only transaction, and is
@@ -416,6 +406,63 @@ point it elsewhere:
   integration's other files and `sslrootcert` points there.
 
 Set one or the other, not both.
+
+### Hub data browser
+
+Direct PostgreSQL browsing is off by default. Enable it for all compatible PostgreSQL integrations:
+
+```bash
+MARIMOHUB_POSTGRES_DATA_ACCESS=on
+```
+
+The default `metadata` mode lists user schemas, selectable relations, and columns. Full mode also
+enables row previews and PostgreSQL-native Run SQL:
+
+```bash
+MARIMOHUB_DATA_BROWSER=full
+```
+
+The Node server starts one worker and one database connection for each operation. It resolves the
+configured host through `MARIMOHUB_INTEGRATIONS_PROBE`, pins the approved addresses, and keeps the
+configured host for TLS SNI and hostname verification. `guarded` permits public targets. `private`
+also permits trusted private and loopback services. Cloudflare Workers do not install this runtime.
+
+The hub supports `verify-ca` and `verify-full` when only the data-access switch is on. The
+`disable`, `prefer`, and `require` modes need this separate deployment override:
+
+```bash
+MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT=on
+```
+
+For hub access, paste a private CA into **CA bundle**. A custom **CA path** remains available to the
+notebook sandbox, but the hub cannot read sandbox image paths. Without a pasted bundle, the hub
+uses Node's default trust roots. This works across supported Node platforms and does not depend on
+a Linux distribution's CA path.
+
+Run SQL uses PostgreSQL syntax. It runs one row-producing statement inside a read-only transaction
+with statement, lock, idle-transaction, row, byte, and wall-clock limits. Cancellation sends a
+PostgreSQL cancel request through a separately pinned socket. For TLS sessions, the cancel socket
+uses the same encryption, CA, and hostname-verification policy before it sends the backend cancel
+key, as supported by the
+[PostgreSQL protocol](https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-CANCELING-REQUESTS).
+The cancel request is plaintext only for `disable` or when `prefer` falls back to plaintext.
+
+PostgreSQL read-only transactions do not prevent every effect from a volatile user-defined
+function. Create a dedicated role with only the required `CONNECT`, schema `USAGE`, and table or
+view `SELECT` privileges. Do not grant write privileges or broad function execution rights to the
+production browser role.
+
+For an emergency rollback, set `MARIMOHUB_POSTGRES_DATA_ACCESS=off`. Then restart the server.
+This change does not disable other data browsers. Existing notebook PostgreSQL connections remain
+available.
+
+The runtime emits `postgres_runtime.operation` counters and `postgres_runtime.duration_ms`
+histograms. Labels contain only the operation and fixed outcome. Target policy, authentication,
+TLS, connection, timeout, malformed-result, and worker failures use fixed messages. A rejected SQL
+statement can also return its five-character SQLSTATE and a character position adjusted to the
+submitted statement. It never returns PostgreSQL's provider message. Check the data-browser mode,
+egress policy, role grants, TLS mode, and CA bundle for failures. The runtime does not log SQL,
+hostnames, database names, relation names, credentials, or provider error bodies.
 
 By default, `ambient_env` also exports `PGHOST`, `PGUSER`, `PGDATABASE`,
 `PGPORT`, `PGPASSWORD`, and the TLS pair, which makes this connection

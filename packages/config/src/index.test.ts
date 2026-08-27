@@ -99,7 +99,7 @@ describe('createFromEnv auth backend selection', () => {
 		]);
 	});
 
-	it('wires a preview service only when an executor is configured', () => {
+	it('wires a preview service in full mode regardless of the compute backend', () => {
 		const env = {
 			...baseEnv,
 			MARIMOHUB_AUTH_BACKEND: 'dev',
@@ -107,17 +107,11 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_DATA_BROWSER: 'full',
 			MARIMOHUB_DATA_PREVIEW_IMAGE: 'preview-image',
 		};
+		// Sandbox previews stay unavailable on backends without image overrides,
+		// but the always-on DuckDB-Wasm executor still serves compatible previews.
 		const local = createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser;
 		expect(local).toMatchObject({ preview: true });
-		expect(local?.checkPreview).toBeUndefined();
-		const e2b = createFromEnv({
-			...env,
-			MARIMOHUB_COMPUTE_BACKEND: 'e2b',
-			MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
-			MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'base-template',
-		}).dataBrowser;
-		expect(e2b).toMatchObject({ preview: true });
-		expect(e2b?.checkPreview).toBeUndefined();
+		expect(local?.checkPreview).toBeTypeOf('function');
 
 		const preview = createFromEnv({
 			...env,
@@ -127,21 +121,14 @@ describe('createFromEnv auth backend selection', () => {
 		expect(preview?.close).toBeTypeOf('function');
 	});
 
-	it('registers DuckDB-Wasm only behind its experiment', () => {
-		const env = {
+	it('registers DuckDB-Wasm previews by default in full mode', () => {
+		const deps = createFromEnv({
 			...baseEnv,
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
-		};
-		const withoutExperiment = createFromEnv(env).dataBrowser;
-		expect(withoutExperiment).toMatchObject({ preview: true });
-		expect(withoutExperiment?.checkPreview).toBeUndefined();
-
-		const deps = createFromEnv({
-			...env,
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 		});
+		expect(deps.dataBrowser).toMatchObject({ preview: true });
 		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');
 		expect(deps.dataBrowser?.close).toBeTypeOf('function');
 	});
@@ -181,11 +168,11 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.dataBrowser?.query).toBe(true);
 		expect(deps.dataBrowser?.close).toBeTypeOf('function');
 		const stores = deps.integrations as unknown as {
-			store: { dataQuery: { options: { maxRows: number; executorFactory: unknown } } };
+			store: { dataQuery: { options: { maxRows: number; executorFactories: unknown } } };
 		};
 		expect(stores.store.dataQuery.options).toMatchObject({
 			maxRows: 321,
-			executorFactory: expect.any(Object),
+			executorFactories: expect.objectContaining({ 'duckdb-wasm': expect.any(Object) }),
 		});
 		const pid = createProjectId();
 		const integration = await deps.integrations!.create(
@@ -205,7 +192,7 @@ describe('createFromEnv auth backend selection', () => {
 		await deps.dataBrowser?.close?.();
 	});
 
-	it('keeps DuckDB OAuth2 and S3 object queries behind default-off rollout gates', () => {
+	it('reports DuckDB OAuth2 and S3 object queries ready with no rollout gates', () => {
 		const env = {
 			...baseEnv,
 			MARIMOHUB_AUTH_BACKEND: 'dev',
@@ -236,41 +223,15 @@ describe('createFromEnv auth backend selection', () => {
 			access_delegation: 'none',
 		};
 
-		const disabled = createFromEnv(env).integrations!;
-		expect(disabled.queryReadiness({ kind: 's3', config: s3Config })[0]).toMatchObject({
-			id: 'duckdb-object-queries',
-			ready: false,
-		});
-		expect(disabled.queryReadiness({ kind: 'iceberg_rest', config: oauthConfig })[0]).toMatchObject(
-			{ id: 'duckdb-oauth', ready: false },
+		const wired = createFromEnv(env).integrations!;
+		expect(wired.queryReadiness({ kind: 's3', config: s3Config }).every(({ ready }) => ready)).toBe(
+			true,
 		);
-
-		const enabled = createFromEnv({
-			...env,
-			MARIMOHUB_DUCKDB_OAUTH: 'on',
-			MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'on',
-		}).integrations!;
 		expect(
-			enabled
-				.queryReadiness({ kind: 's3', config: s3Config })
-				.some(({ id }) => id === 'duckdb-object-queries'),
-		).toBe(false);
-		expect(
-			enabled
+			wired
 				.queryReadiness({ kind: 'iceberg_rest', config: oauthConfig })
-				.some(({ id }) => id === 'duckdb-oauth'),
-		).toBe(false);
-	});
-
-	it('rejects invalid DuckDB rollout gate values', () => {
-		const env = { ...baseEnv, MARIMOHUB_AUTH_BACKEND: 'dev' };
-
-		expect(() => createFromEnv({ ...env, MARIMOHUB_DUCKDB_OAUTH: 'true' })).toThrow(
-			'Invalid MARIMOHUB_DUCKDB_OAUTH: true (expected on, off)',
-		);
-		expect(() => createFromEnv({ ...env, MARIMOHUB_DUCKDB_OBJECT_QUERIES: 'enabled' })).toThrow(
-			'Invalid MARIMOHUB_DUCKDB_OBJECT_QUERIES: enabled (expected on, off)',
-		);
+				.every(({ ready }) => ready),
+		).toBe(true);
 	});
 
 	it('wires DuckDB-Wasm pool and idle lifecycle settings', () => {
@@ -279,7 +240,6 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 			MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT: '3',
 			MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB: '96',
 			MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS: '17',
@@ -311,7 +271,6 @@ describe('createFromEnv auth backend selection', () => {
 				MARIMOHUB_AUTH_BACKEND: 'dev',
 				MARIMOHUB_INTEGRATIONS: 'on',
 				MARIMOHUB_DATA_BROWSER: 'full',
-				MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 				MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB: '72',
 				MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS: '19',
 				MARIMOHUB_DUCKDB_WASM_RUNTIME: 'inline',
@@ -345,7 +304,6 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 			MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB: '96',
 			MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB: '72',
 		});
@@ -363,7 +321,6 @@ describe('createFromEnv auth backend selection', () => {
 				MARIMOHUB_AUTH_BACKEND: 'dev',
 				MARIMOHUB_INTEGRATIONS: 'on',
 				MARIMOHUB_DATA_BROWSER: 'full',
-				MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 				MARIMOHUB_DATA_PREVIEW_EMBEDDED_RUNTIME: 'inline',
 			}),
 		).toThrow(/MARIMOHUB_DATA_PREVIEW_EMBEDDED_RUNTIME/);
@@ -375,7 +332,6 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 		};
 		expect(() =>
 			createFromEnv({ ...env, MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS: '0' }),
@@ -1208,5 +1164,67 @@ describe('createFromEnv super admins', () => {
 		expect(
 			createFromEnv({ ...baseEnv, MARIMOHUB_SUPER_ADMINS: ' , ' }).policy.superAdmins,
 		).toBeUndefined();
+	});
+});
+
+describe('createFromEnv data-browser lockdown', () => {
+	const env = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('defaults to metadata with previews and Run SQL locked off', () => {
+		const deps = createFromEnv({ ...env });
+		expect(deps.dataBrowser).toMatchObject({ preview: false, query: false });
+		expect(deps.dataBrowser?.checkPreview).toBeUndefined();
+	});
+
+	it('boots without a data browser when the probe or integrations are off by default', () => {
+		expect(
+			createFromEnv({ ...env, MARIMOHUB_INTEGRATIONS_PROBE: 'off' }).dataBrowser,
+		).toBeUndefined();
+		expect(
+			createFromEnv({
+				...env,
+				MARIMOHUB_INTEGRATIONS: 'off',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'off',
+			}).dataBrowser,
+		).toBeUndefined();
+	});
+
+	it('refuses explicit full mode without a probe', () => {
+		expect(() =>
+			createFromEnv({
+				...env,
+				MARIMOHUB_INTEGRATIONS_PROBE: 'off',
+				MARIMOHUB_DATA_BROWSER: 'full',
+			}),
+		).toThrow(/probe/);
+	});
+
+	it('trims and lowercases the mode consistently across every wiring site', () => {
+		const deps = createFromEnv({ ...env, MARIMOHUB_DATA_BROWSER: ' FULL ' });
+		expect(deps.dataBrowser).toMatchObject({ preview: true, query: true });
+		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');
+	});
+
+	it('registers PostgreSQL query execution only with its rollout flag', () => {
+		const deps = createFromEnv({ ...env, MARIMOHUB_DATA_BROWSER: 'full' });
+		const enabled = createFromEnv({
+			...env,
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_POSTGRES_DATA_ACCESS: 'on',
+		});
+		const stores = deps.integrations as unknown as {
+			store: { dataQuery: { options: { executorFactories: Record<string, unknown> } } };
+		};
+		const enabledStores = enabled.integrations as unknown as typeof stores;
+		expect(Object.keys(stores.store.dataQuery.options.executorFactories)).toEqual(['duckdb-wasm']);
+		expect(Object.keys(enabledStores.store.dataQuery.options.executorFactories).sort()).toEqual([
+			'duckdb-wasm',
+			'postgres',
+		]);
 	});
 });

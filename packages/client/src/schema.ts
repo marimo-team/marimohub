@@ -2316,6 +2316,12 @@ export interface components {
 				};
 				query?: {
 					available: boolean;
+					/**
+					 * @description Known values: duckdb, postgresql. Unrecognized values normalize to unknown.
+					 * @example duckdb
+					 * @enum {string}
+					 */
+					dialect: 'duckdb' | 'postgresql' | 'unknown';
 					reason?: string;
 				};
 			};
