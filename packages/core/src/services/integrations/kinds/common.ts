@@ -86,6 +86,18 @@ export function isInsecureHttpUrl(value: string | undefined): boolean {
 	}
 }
 
+export function usesInsecureAuthenticatedS3({
+	endpoint,
+	authenticated,
+	allowInsecureTransport,
+}: {
+	endpoint: string | undefined;
+	authenticated: boolean;
+	allowInsecureTransport: boolean;
+}): boolean {
+	return authenticated && !allowInsecureTransport && isInsecureHttpUrl(endpoint);
+}
+
 export const serviceUrlField = () =>
 	z
 		.string()

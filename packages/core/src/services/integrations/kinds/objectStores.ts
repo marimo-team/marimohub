@@ -24,6 +24,7 @@ import {
 	renderFile,
 	S3_BUCKET_REGEX,
 	s3BrokerReadLocationsSchema,
+	usesInsecureAuthenticatedS3,
 } from './common';
 
 const s3Config = z.strictObject({
@@ -260,7 +261,11 @@ function s3QueryReadiness(config: S3Config): QueryReadinessCheck[] {
 		readinessCheck(
 			's3-secure-transport',
 			'Use HTTPS for authenticated S3',
-			!usesInsecureAuthenticatedS3(config),
+			!usesInsecureAuthenticatedS3({
+				endpoint: config.endpoint_url,
+				authenticated: config.auth.method !== 'anonymous',
+				allowInsecureTransport: config.allow_insecure_transport,
+			}),
 			'endpoint_url',
 			'authenticated S3 requires HTTPS unless insecure transport is explicitly enabled',
 		),
@@ -336,16 +341,16 @@ function s3HttpAccess(config: S3Config): DuckDBHttpAccess {
 	};
 }
 
-function usesInsecureAuthenticatedS3(config: S3Config): boolean {
-	return (
-		config.auth.method !== 'anonymous' &&
-		!config.allow_insecure_transport &&
-		isInsecureHttpUrl(config.endpoint_url)
-	);
-}
-
 function assertSecureS3Transport(config: S3Config): void {
-	if (!usesInsecureAuthenticatedS3(config)) return;
+	if (
+		!usesInsecureAuthenticatedS3({
+			endpoint: config.endpoint_url,
+			authenticated: config.auth.method !== 'anonymous',
+			allowInsecureTransport: config.allow_insecure_transport,
+		})
+	) {
+		return;
+	}
 	throw new ValidationError(
 		'Authenticated S3 requires an https:// endpoint. Enable allow_insecure_transport to override ' +
 			'for local development.',

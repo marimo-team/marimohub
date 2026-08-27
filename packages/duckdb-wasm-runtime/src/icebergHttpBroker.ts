@@ -508,8 +508,11 @@ async function authorize(
 	if (signal?.aborted) throw abortError();
 	session.requests += 1;
 	const preparation = route.prepareHeaders?.(request, session.lifecycleController.signal);
+	const preparationSignal = signal
+		? AbortSignal.any([signal, session.lifecycleController.signal])
+		: session.lifecycleController.signal;
 	const preparedHeaders = normalizeHeaders(
-		preparation ? await withAbortSignal(preparation, signal, abortError) : {},
+		preparation ? await withAbortSignal(preparation, preparationSignal, abortError) : {},
 		'invalid_request',
 	);
 	session.metrics.increment('duckdb_http_broker.request', 1, {
