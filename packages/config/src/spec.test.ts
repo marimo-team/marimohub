@@ -105,6 +105,18 @@ describe('config registry sanity', () => {
 		expect(experiments?.example).toBeUndefined();
 	});
 
+	it('documents proxy header defaults as mode-specific guidance', () => {
+		const auth = CONFIG_SPEC.find((group) => group.selector === 'MARIMOHUB_AUTH_BACKEND');
+		const oidc = auth?.backends.find((backend) => backend.selectorValue === 'oidc');
+		const proxy = auth?.backends.find((backend) => backend.selectorValue === 'proxy-header');
+		const header = proxy?.vars.find((variable) => variable.id === 'MARIMOHUB_AUTH_PROXY_HEADER');
+
+		expect(oidc?.description).toContain('`hd` hint');
+		expect(header?.default).toBeUndefined();
+		expect(header?.description).toContain('X-Forwarded-Email,X-Forwarded-User');
+		expect(header?.description).toContain('X-Goog-IAP-JWT-Assertion');
+	});
+
 	it('selector values are unique within a group, and only appear where a group has a selector', () => {
 		for (const g of CONFIG_SPEC) {
 			const selectorValues = g.backends

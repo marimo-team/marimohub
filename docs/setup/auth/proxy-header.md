@@ -4,14 +4,22 @@ CAUTION: In header mode, block direct access to marimohub. The proxy must remove
 
 Both modes require `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Set `*` only to allow all authenticated domains.
 
-For oauth2-proxy, use the default headers:
+oauth2-proxy can supply the default marimohub headers:
 
 ```bash
 MARIMOHUB_AUTH_BACKEND=proxy-header
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com
 ```
 
-The defaults map `X-Forwarded-Email` to the email and `X-Forwarded-User` to the stable user ID.
+oauth2-proxy sends these headers when `--pass-user-headers=true`. Current releases enable this option by default.
+
+If you disable this option, marimohub receives no identity and returns 401.
+
+For Nginx `auth_request`, enable `--set-xauthrequest`. Copy both response headers upstream. Then set their names in marimohub:
+
+```bash
+MARIMOHUB_AUTH_PROXY_HEADER=X-Auth-Request-Email,X-Auth-Request-User
+```
 
 For a custom pair, set two comma-separated names:
 

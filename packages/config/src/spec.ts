@@ -790,7 +790,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'OIDC',
 				selectorValue: 'oidc',
-				description: 'App-native OpenID Connect (the production backend).',
+				description:
+					'App-native OpenID Connect (the production backend). If the allowlist contains one domain, Google receives it as the `hd` hint.',
 				vars: [
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_ISSUER',
@@ -925,9 +926,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_PROXY_HEADER',
 						name: 'Proxy identity header',
 						description:
-							'Comma-separated email and optional user-ID headers for header mode. Assertion header for JWT mode.',
-						default:
-							'X-Forwarded-Email,X-Forwarded-User (header) or X-Goog-IAP-JWT-Assertion (JWT)',
+							'Header mode accepts an email header and optional user-ID header. Its defaults are `X-Forwarded-Email,X-Forwarded-User`. JWT mode accepts one assertion header and defaults to `X-Goog-IAP-JWT-Assertion`.',
 						example: 'Tailscale-User-Login',
 						optIn: true,
 					},

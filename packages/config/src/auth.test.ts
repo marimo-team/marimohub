@@ -391,6 +391,33 @@ describe('makeAuth proxy-header', () => {
 		).resolves.toEqual({ id: 'user-1', email: 'user@outside.example' });
 	});
 
+	it('does not treat a wildcard mixed with a domain as allow-all', async () => {
+		const { authenticator } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com,*',
+		});
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@example.com',
+						'X-Forwarded-User': 'user-1',
+					},
+				}),
+			),
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@outside.example',
+						'X-Forwarded-User': 'user-2',
+					},
+				}),
+			),
+		).resolves.toBeNull();
+	});
+
 	it.each([
 		',,,',
 		'X-Email,',

@@ -57,7 +57,7 @@ function normalizeDomains(domains: readonly string[] | undefined): string[] {
 	const normalized = (domains ?? [])
 		.map((domain) => domain.trim().toLowerCase().replace(/^@/, ''))
 		.filter(Boolean);
-	return normalized.includes('*') ? [] : normalized;
+	return normalized.length === 1 && normalized[0] === '*' ? [] : normalized;
 }
 
 function emailAllowed(email: string, domains: readonly string[]): boolean {

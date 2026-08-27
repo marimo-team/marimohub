@@ -294,7 +294,7 @@ Set this selector explicitly. An unset value fails closed and never enables dev 
 
 `MARIMOHUB_AUTH_BACKEND=oidc`
 
-App-native OpenID Connect (the production backend).
+App-native OpenID Connect (the production backend). If the allowlist contains one domain, Google receives it as the `hd` hint.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
@@ -326,7 +326,7 @@ Reads trusted proxy headers or verifies a Google IAP JWT. Isolate header mode be
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
-| `MARIMOHUB_AUTH_PROXY_HEADER` | Comma-separated email and optional user-ID headers for header mode. Assertion header for JWT mode. | — | `X-Forwarded-Email,X-Forwarded-User (header) or X-Goog-IAP-JWT-Assertion (JWT)` | `Tailscale-User-Login` |
+| `MARIMOHUB_AUTH_PROXY_HEADER` | Header mode accepts an email header and optional user-ID header. Its defaults are `X-Forwarded-Email,X-Forwarded-User`. JWT mode accepts one assertion header and defaults to `X-Goog-IAP-JWT-Assertion`. | — | — | `Tailscale-User-Login` |
 | `MARIMOHUB_AUTH_PROXY_JWT_ISSUER` | Expected issuer. This variable enables JWT mode and requires the audience. | — | `https://cloud.google.com/iap` | — |
 | `MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE` | Required audience for JWT mode. This variable also enables JWT mode. | — | — | `/projects/123456789/global/backendServices/987654321` |
 | `MARIMOHUB_AUTH_PROXY_JWKS_URL` | HTTPS JWKS URL. This variable enables JWT mode and requires the audience. | — | `https://www.gstatic.com/iap/verify/public_key-jwk` | — |

@@ -1409,22 +1409,92 @@ const compute = new DockerCompute({
 	bindHost: "127.0.0.1",
 });
 
-const authenticator = new ProxyHeaderAuthenticator({
-	mode: 'headers',
-	headers: (
-		process.env.MARIMOHUB_AUTH_PROXY_HEADER ??
-		'X-Forwarded-Email,X-Forwarded-User'
-	)
-		.split(',')
-		.map((header) => header.trim()) as [string, string?],
-	allowedEmailDomains: (() => {
-		const value = process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS?.trim();
-		if (!value) {
-			throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is required.');
+const authenticator = (() => {
+	const domainsValue = process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS?.trim();
+	if (!domainsValue) {
+		throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is required.');
+	}
+	const allowedEmailDomains =
+		domainsValue === '*'
+			? undefined
+			: domainsValue
+				.split(',')
+				.map((domain) => domain.trim())
+				.filter(Boolean);
+	if (allowedEmailDomains?.length === 0) {
+		throw new Error('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS lists no domains.');
+	}
+
+	const jwtConfigured = [
+		process.env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER,
+		process.env.MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE,
+		process.env.MARIMOHUB_AUTH_PROXY_JWKS_URL,
+	].some((value) => Boolean(value?.trim()));
+	const parseHeaders = () => {
+		const raw = process.env.MARIMOHUB_AUTH_PROXY_HEADER;
+		if (raw === undefined || raw.trim() === '') return undefined;
+		const headers = raw.split(',').map((header) => header.trim());
+		const maximum = jwtConfigured ? 1 : 2;
+		const headerName = new RegExp("^[!#$%&'*+\\\\-.^_\`|~0-9A-Za-z]+$");
+		if (headers.length > maximum || headers.some((header) => !headerName.test(header))) {
+			throw new Error(
+				jwtConfigured
+					? 'MARIMOHUB_AUTH_PROXY_HEADER must contain one valid JWT assertion header name.'
+					: 'MARIMOHUB_AUTH_PROXY_HEADER must contain one or two valid header names.',
+			);
 		}
-		return value.split(',');
-	})(),
-});
+		return headers;
+	};
+
+	if (jwtConfigured) {
+		const audience = process.env.MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE?.trim();
+		if (!audience) {
+			throw new Error(
+				'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE is required when proxy JWT verification is configured.',
+			);
+		}
+		const headers = parseHeaders();
+		const issuer = process.env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER?.trim() || undefined;
+		const jwksValue = process.env.MARIMOHUB_AUTH_PROXY_JWKS_URL?.trim();
+		const jwksUrl = (() => {
+			if (!jwksValue) return undefined;
+			try {
+				const url = new URL(jwksValue);
+				if (url.protocol === 'https:' && !url.username && !url.password) {
+					return url.toString();
+				}
+			} catch {}
+			throw new Error(
+				'MARIMOHUB_AUTH_PROXY_JWKS_URL must be an HTTPS URL without credentials.',
+			);
+		})();
+		return new ProxyHeaderAuthenticator({
+			mode: 'jwt',
+			audience,
+			allowedEmailDomains,
+			...(headers ? { header: headers[0] } : {}),
+			...(issuer ? { issuer } : {}),
+			...(jwksUrl ? { jwksUrl } : {}),
+		});
+	}
+
+	const headers = parseHeaders();
+	if (!headers) {
+		return new ProxyHeaderAuthenticator({ mode: 'headers', allowedEmailDomains });
+	}
+	if (headers.length === 1) {
+		return new ProxyHeaderAuthenticator({
+			mode: 'headers',
+			headers: [headers[0]],
+			allowedEmailDomains,
+		});
+	}
+	return new ProxyHeaderAuthenticator({
+		mode: 'headers',
+		headers: [headers[0], headers[1]],
+		allowedEmailDomains,
+	});
+})();
 const authRoutes = undefined;
 
 const app = createApi({

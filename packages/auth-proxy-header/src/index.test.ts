@@ -194,6 +194,29 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 			),
 		).resolves.toEqual({ id: 'user-1', email: 'user@outside.example' });
 	});
+
+	it('treats a wildcard as allow-all only when it is the sole entry', async () => {
+		const auth = new ProxyHeaderAuthenticator({
+			mode: 'headers',
+			allowedEmailDomains: ['example.com', '*'],
+		});
+		await expect(
+			auth.authenticate(
+				request({
+					'X-Forwarded-Email': 'user@example.com',
+					'X-Forwarded-User': 'user-1',
+				}),
+			),
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		await expect(
+			auth.authenticate(
+				request({
+					'X-Forwarded-Email': 'user@outside.example',
+					'X-Forwarded-User': 'user-2',
+				}),
+			),
+		).resolves.toBeNull();
+	});
 });
 
 describe('ProxyHeaderAuthenticator JWT mode', () => {
