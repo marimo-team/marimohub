@@ -104,6 +104,55 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
+		it('passes the configured runner id so creates target the CKS cluster', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, runnerId: 'marimo-hub' })
+				.create(SANDBOX_ID)
+				.exec('true');
+			expect(world.created[0].runnerIds).toEqual(['marimo-hub']);
+
+			const bare = makeWorld();
+			await makeCompute(bare).create(SANDBOX_ID).exec('true');
+			expect(bare.created[0].runnerIds).toBeUndefined();
+		});
+
+		it('creates from the configured template with our tags, image, and keep-alive', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				runnerId: 'marimo-hub',
+				templateId: 'tmpl-marimohub',
+			})
+				.create(SANDBOX_ID)
+				.exec('true');
+
+			expect(world.created).toHaveLength(0);
+			expect(world.createdFromTemplate).toHaveLength(1);
+			const { templateId, options } = world.createdFromTemplate[0];
+			expect(templateId).toBe('tmpl-marimohub');
+			// The id tag must replace the template's tags or reconnect breaks.
+			expect(options.tags).toEqual(['marimohub', ID_TAG]);
+			// The overlay must re-supply image + keep-alive (runFromTemplate injects
+			// no command) so per-notebook image selection keeps working.
+			expect(options.containerImage).toBe('my-image');
+			expect(options.command).toBeDefined();
+			expect(options.runnerIds).toEqual(['marimo-hub']);
+			expect(options.waitUntilRunning).toBe(false);
+		});
+
+		it('rejects objectStorageBuckets on the template path (no overlay field)', async () => {
+			const world = makeWorld();
+			await expect(
+				makeCompute(world, {
+					...baseConfig,
+					templateId: 'tmpl-marimohub',
+					objectStorageBuckets: ['org-data'],
+				})
+					.create(SANDBOX_ID)
+					.exec('true'),
+			).rejects.toThrow(/objectStorageBuckets cannot be combined with a sandbox template/);
+		});
+
 		it('provisions a user-home sandbox from the user-home template and exposes the email path safely', async () => {
 			const world = makeWorld();
 			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -118,9 +167,16 @@ describe('CoreWeaveCompute', () => {
 					})
 					.exec('true');
 
-				expect(world.created[0].environmentVariables).toMatchObject({
+				expect(world.createdFromTemplate).toHaveLength(1);
+				const { templateId, options } = world.createdFromTemplate[0];
+				expect(templateId).toBe('tmpl-marimohub-user-home');
+				expect(options.environmentVariables).toMatchObject({
 					MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
 				});
+				// No image/command overlay: `containerImage` would replace the
+				// template's container and drop its per-user mount.
+				expect(options.containerImage).toBeUndefined();
+				expect(options.command).toBeUndefined();
 				const command = world.registry.get('cw-1')!.fake.runCalls[0][2];
 				expect(command).toContain("if [ ! -d '/var/run/marimohub/user-home' ]");
 				expect(command).toContain(
@@ -155,7 +211,7 @@ describe('CoreWeaveCompute', () => {
 				})
 				.exec('true');
 
-			expect(world.created[0].environmentVariables).toEqual({
+			expect(world.createdFromTemplate[0].options.environmentVariables).toEqual({
 				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
 				AWS_REGION: 'us-east-04a',
 				MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
@@ -907,6 +963,9 @@ describe('CoreWeaveCompute', () => {
 				create: async () => {
 					throw new Error('NOT_FOUND: org wif-config not configured');
 				},
+				runFromTemplate: async () => {
+					throw new Error('unused');
+				},
 				fromId: async () => {
 					throw new Error('unused');
 				},
@@ -970,6 +1029,9 @@ describe('CoreWeaveCompute', () => {
 						throw new Error('gRPC unavailable');
 					},
 				}),
+				runFromTemplate: async () => {
+					throw new Error('unused');
+				},
 				fromId: async (id) => ({
 					sandboxId: id,
 					wait: async () => {},
@@ -1000,6 +1062,9 @@ describe('CoreWeaveCompute', () => {
 			// adapter must turn that into a boot failure, not a working sandbox.
 			const client: CoreWeaveClient = {
 				create: async () => ({ ...bareSandbox('cw-done'), status: 'completed' as const }),
+				runFromTemplate: async () => {
+					throw new Error('unused');
+				},
 				fromId: async (id) => bareSandbox(id),
 				list: async () => ({ sandboxes: [] }),
 				delete: async () => {},
@@ -1015,6 +1080,9 @@ describe('CoreWeaveCompute', () => {
 				create: async () => {
 					created += 1;
 					return bareSandbox(`cw-new`);
+				},
+				runFromTemplate: async () => {
+					throw new Error('unused');
 				},
 				fromId: async (id) => bareSandbox(id),
 				list: async () => ({
@@ -1034,6 +1102,9 @@ describe('CoreWeaveCompute', () => {
 						throw new CWSandboxNotFoundError('already gone');
 					},
 				}),
+				runFromTemplate: async () => {
+					throw new Error('unused');
+				},
 				fromId: async (id) => bareSandbox(id),
 				list: async () => ({ sandboxes: [] }),
 				delete: async () => {},

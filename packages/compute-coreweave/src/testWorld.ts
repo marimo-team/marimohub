@@ -121,6 +121,10 @@ export function makeWorld(opts?: {
 	proc?: FakeProcessState;
 }) {
 	const created: NonNullable<Parameters<CoreWeaveClient['create']>[0]>[] = [];
+	const createdFromTemplate: {
+		templateId: string;
+		options: NonNullable<Parameters<CoreWeaveClient['runFromTemplate']>[1]>;
+	}[] = [];
 	const deleted: string[] = [];
 	const listCalls: (readonly string[])[] = [];
 	const registry = new Map<string, { fake: FakeSandbox; tags: string[] }>();
@@ -173,6 +177,13 @@ export function makeWorld(opts?: {
 	const client: CoreWeaveClient = {
 		create: async (options) => {
 			created.push(options!);
+			const cwId = `cw-${++seq}`;
+			const { fake, sandbox } = build(cwId);
+			registry.set(cwId, { fake, tags: [...(options?.tags ?? [])] });
+			return sandbox;
+		},
+		runFromTemplate: async (templateId, options) => {
+			createdFromTemplate.push({ templateId, options: options ?? {} });
 			const cwId = `cw-${++seq}`;
 			const { fake, sandbox } = build(cwId);
 			registry.set(cwId, { fake, tags: [...(options?.tags ?? [])] });
@@ -232,5 +243,5 @@ export function makeWorld(opts?: {
 		};
 	}
 
-	return { client, created, deleted, listCalls, registry };
+	return { client, created, createdFromTemplate, deleted, listCalls, registry };
 }

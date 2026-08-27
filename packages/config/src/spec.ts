@@ -399,6 +399,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'https://{sandboxId}-{port}.{host}',
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID',
+						name: 'CoreWeave runner id',
+						description:
+							'Runner (by operator-assigned id) sandboxes schedule on — must name your CKS sandbox runner. A create without a runner id schedules on the CoreWeave-managed serverless pool, not your cluster. Set to an empty value to opt into serverless.',
+						default: 'marimo-hub',
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID',
 						name: 'CoreWeave sandbox template id',
 						description:

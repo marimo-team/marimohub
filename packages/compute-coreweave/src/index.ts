@@ -41,12 +41,13 @@
  *
  * Sandbox v1 (SDK ≥0.2.0-beta.0) removed create-time `profileNames`, `ports`,
  * and `ingressMode`/`egressMode` (rejected client-side). Per-create targeting
- * is now an org-scoped **sandbox template** (`CreateSandboxFromTemplate` in
- * the v1 proto): `templateId` selects the template every sandbox is created
- * from, and a sandbox with a `userHome` uses `userHomeTemplateId` (a template
- * mounting the per-user volume) instead. Sandboxes without a template run
- * under the runner's default policy. See the TODO in `ensure()` — the TS SDK
- * does not expose template creates yet.
+ * is now an org-scoped **sandbox template** (`runFromTemplate`): `templateId`
+ * selects the template every sandbox is created from, and a sandbox with a
+ * `userHome` uses `userHomeTemplateId` (a template mounting the per-user
+ * volume) instead. Without a template, sandboxes run under the default policy
+ * of the runner named by `runnerId` — a bare v1 create with no runner ids
+ * schedules on the MANAGED SERVERLESS pool, not the caller's cluster, so CKS
+ * deployments must keep `runnerId` set (the config layer defaults it).
  */
 import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
@@ -57,14 +58,17 @@ import type {
 	ProcessResult,
 	ResourceOptions,
 	SandboxInfo,
+	SandboxRunFromTemplateOptions,
 	SandboxRunOptions,
 	SandboxStatus,
+	Service,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
 import {
 	createSandboxClient,
 	DEFAULT_BASE_URL,
 	DEFAULT_CONTAINER_IMAGE,
+	DEFAULT_KEEP_ALIVE_COMMAND,
 } from '@coreweave/cwsandbox/node';
 import {
 	buildFindFilesCommand,
@@ -206,6 +210,12 @@ export interface CoreWeaveConfig {
 	/** Tag applied to every sandbox we own (manual discovery/cleanup). Default `marimohub`. */
 	ownerTag?: string;
 	/**
+	 * Runner (by operator-assigned id) sandboxes schedule on; supplying one
+	 * makes creates target the caller's own CKS cluster. Omit only for the
+	 * managed serverless pool.
+	 */
+	runnerId?: string;
+	/**
 	 * Org-scoped sandbox template every sandbox is created from (custom specs:
 	 * GPU placement, egress rules, pod shape). Omit to use the runner's
 	 * default policy.
@@ -274,6 +284,10 @@ export interface CoreWeaveConfig {
  */
 export interface CoreWeaveClient {
 	create(options?: SandboxRunOptions): Promise<CoreWeaveSandbox>;
+	runFromTemplate(
+		templateId: string,
+		options?: SandboxRunFromTemplateOptions,
+	): Promise<CoreWeaveSandbox>;
 	fromId(sandboxId: string): Promise<CoreWeaveSandbox>;
 	list(options?: {
 		tags?: readonly string[];
@@ -361,14 +375,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
 		// and boot phases separately measurable for the wide event below.
-		// TODO(cwsandbox): create from `this.config.templateId` via the SDK's
-		// CreateSandboxFromTemplate once it ships (the v1 proto already has it).
-		// Until then the configured template id is NOT applied — sandboxes run
-		// under the runner's default policy, and a user-home template's mount is
-		// absent (the bootstrap below fails loudly rather than running unmounted).
 		this.sandbox = existing
 			? await this.client.fromId(existing.sandboxId)
-			: await this.client.create(this.createOptions());
+			: this.config.templateId
+				? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
+				: await this.client.create(this.createOptions());
 		const t2 = Date.now();
 		if (!existing) {
 			await this.sandbox.wait();
@@ -430,29 +441,81 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		return sandboxes.find((s) => !isDeadStatus(s.status));
 	}
 
-	private createOptions(): SandboxRunOptions {
-		const objectStorage = this.objectStorageOptions();
-		const environmentVariables = {
-			...objectStorage.environmentVariables,
+	/**
+	 * v1's replacement for the removed `ports` + ingress mode: a public service
+	 * on the kernel port ("the platform chooses the mechanism"). No `endpoint`:
+	 * the v1 proto documents Create as rejecting a set endpoint as
+	 * unimplemented. Egress follows the runner policy default (the removed
+	 * `egressMode` has no v1 analogue).
+	 */
+	private kernelServices(): readonly Service[] {
+		return [{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility: 'public' }];
+	}
+
+	private environmentVariables(): Record<string, string> {
+		return {
+			...this.objectStorageOptions().environmentVariables,
 			...(this.userHome ? { [USER_HOME_KEY_ENV]: this.userHome.key } : {}),
 		};
+	}
+
+	private createOptions(): SandboxRunOptions {
+		const environmentVariables = this.environmentVariables();
 		return {
 			containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
-			// v1's replacement for the removed `ports` + ingress mode: a public
-			// service on the kernel port ("the platform chooses the mechanism").
-			// No `endpoint`: the v1 proto documents Create as rejecting a set
-			// endpoint as unimplemented. Egress follows the runner policy default
-			// (the removed `egressMode` has no v1 analogue).
-			services: [{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility: 'public' }],
+			services: this.kernelServices(),
 			tags: [this.config.ownerTag ?? DEFAULT_OWNER_TAG, this.idTag],
+			// Targets the caller's CKS cluster (the SDK co-emits CKS mode).
+			// Without it a v1 create schedules on the managed serverless pool.
+			...(this.config.runnerId ? { runnerIds: [this.config.runnerId] } : {}),
 			...(this.config.resources ? { resources: this.config.resources } : {}),
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
-			...objectStorage,
+			...this.objectStorageOptions(),
 			...(Object.keys(environmentVariables).length > 0 ? { environmentVariables } : {}),
 			// `ensure` runs the readiness wait itself so create and boot time are
 			// measured separately.
+			waitUntilRunning: false,
+		};
+	}
+
+	/**
+	 * Overlay for a template create. Field semantics are replace-on-presence:
+	 * our tags/services/env replace the template's (the id tag must win for
+	 * reconnect), everything unspecified is inherited from the template.
+	 */
+	private templateOptions(): SandboxRunFromTemplateOptions {
+		if (this.config.objectStorageBuckets?.length) {
+			// The v1 template overlay has no object-storage field, so silently
+			// creating without the vended credentials would strand notebooks.
+			throw new Error(
+				'objectStorageBuckets cannot be combined with a sandbox template; ' +
+					'configure object-storage access in the template itself',
+			);
+		}
+		const environmentVariables = this.environmentVariables();
+		return {
+			// `containerImage` REPLACES the template's container and drops its
+			// volume mounts — which would delete a user-home template's per-user
+			// mount. So the user-home path inherits the template's container
+			// (image, keep-alive command, mounts) and per-create image overrides
+			// do not apply there; the normal path keeps image selection and must
+			// re-supply the keep-alive (runFromTemplate injects no command).
+			...(this.userHome
+				? {}
+				: {
+						containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
+						command: DEFAULT_KEEP_ALIVE_COMMAND,
+						...(this.config.resources ? { resources: this.config.resources } : {}),
+					}),
+			services: this.kernelServices(),
+			tags: [this.config.ownerTag ?? DEFAULT_OWNER_TAG, this.idTag],
+			...(this.config.runnerId ? { runnerIds: [this.config.runnerId] } : {}),
+			...(this.config.maxLifetimeSeconds
+				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
+				: {}),
+			...(Object.keys(environmentVariables).length > 0 ? { environmentVariables } : {}),
 			waitUntilRunning: false,
 		};
 	}

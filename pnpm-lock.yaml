@@ -767,8 +767,8 @@ importers:
   packages/compute-coreweave:
     dependencies:
       '@coreweave/cwsandbox':
-        specifier: 0.3.0-beta.0
-        version: 0.3.0-beta.0
+        specifier: file:../../vendor/coreweave-cwsandbox-0.3.0-beta.0-pr53.tgz
+        version: file:vendor/coreweave-cwsandbox-0.3.0-beta.0-pr53.tgz
       '@marimo-hub/compute-commons':
         specifier: workspace:*
         version: link:../compute-commons
@@ -2141,8 +2141,9 @@ packages:
     peerDependencies:
       '@bufbuild/protobuf': ^2.7.0
 
-  '@coreweave/cwsandbox@0.3.0-beta.0':
-    resolution: {integrity: sha512-Swi3C9bUDw0KP+sT3F97QANneMLPg9iqQNPhusuZoCx1d+mq1sNaHZLmlv7zIfFJL7WDBq9EKfZ/OLPQkgnxTg==}
+  '@coreweave/cwsandbox@file:vendor/coreweave-cwsandbox-0.3.0-beta.0-pr53.tgz':
+    resolution: {integrity: sha512-mYtzG6V/OMsdaLeTsP8bNcg6sGFgaQDZWnoHQOfj77ashcU0+U/1DAeZnpSu8llO0QL0/Qv+dD5ykEELmbMu9g==, tarball: file:vendor/coreweave-cwsandbox-0.3.0-beta.0-pr53.tgz}
+    version: 0.3.0-beta.0
     engines: {node: '>=22'}
 
   '@csstools/color-helpers@6.0.2':
@@ -6952,7 +6953,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.12.1
 
-  '@coreweave/cwsandbox@0.3.0-beta.0':
+  '@coreweave/cwsandbox@file:vendor/coreweave-cwsandbox-0.3.0-beta.0-pr53.tgz':
     dependencies:
       '@grpc/grpc-js': 1.14.4
       '@protobuf-ts/grpc-transport': 2.11.1(@grpc/grpc-js@1.14.4)

@@ -157,6 +157,13 @@ export function instrumentCoreWeaveClient(
 				() => client.create(options),
 				(span, sandbox) => span.setAttribute('coreweave.sandbox_id', sandbox.sandboxId),
 			).then((sandbox) => instrumentSandbox(sandbox, endpoint)),
+		runFromTemplate: (templateId, options) =>
+			opRequest(
+				op('runFromTemplate'),
+				{ ...endpoint, 'coreweave.template_id': templateId },
+				() => client.runFromTemplate(templateId, options),
+				(span, sandbox) => span.setAttribute('coreweave.sandbox_id', sandbox.sandboxId),
+			).then((sandbox) => instrumentSandbox(sandbox, endpoint)),
 		fromId: (sandboxId) =>
 			opRequest(op('fromId'), { ...endpoint, 'coreweave.sandbox_id': sandboxId }, () =>
 				client.fromId(sandboxId),

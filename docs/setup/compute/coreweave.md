@@ -10,6 +10,7 @@ MARIMOHUB_COMPUTE_BACKEND=coreweave
 MARIMOHUB_COMPUTE_COREWEAVE_API_KEY=…           # secret
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
+MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID=marimohub    # your sandbox runner's id
 ```
 
 ::: tip Best for CoreWeave deployments

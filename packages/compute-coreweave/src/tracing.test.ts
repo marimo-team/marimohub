@@ -48,6 +48,7 @@ function fakeSandbox(over: Partial<CoreWeaveSandbox> = {}): CoreWeaveSandbox {
 function fakeClient(sandbox: CoreWeaveSandbox = fakeSandbox()) {
 	return {
 		create: vi.fn(async () => sandbox),
+		runFromTemplate: vi.fn(async () => sandbox),
 		fromId: vi.fn(async () => sandbox),
 		list: vi.fn(async () => ({ sandboxes: [] })),
 		delete: vi.fn(async () => {}),

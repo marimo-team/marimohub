@@ -19,7 +19,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@coreweave/cwsandbox": "0.3.0-beta.0",
+		"@coreweave/cwsandbox": "file:../../vendor/coreweave-cwsandbox-0.3.0-beta.0-pr53.tgz",
 		"@marimo-hub/compute-commons": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
 		"@opentelemetry/api": "catalog:"

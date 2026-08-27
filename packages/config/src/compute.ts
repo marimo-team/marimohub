@@ -299,6 +299,12 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE,
+				// A bare v1 create schedules on the managed serverless pool, so the
+				// runner id defaults on: set-but-empty opts out for serverless.
+				runnerId:
+					env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID === undefined
+						? 'marimo-hub'
+						: env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID.trim() || undefined,
 				// Sandbox templates are v1's replacement for profile selection; without
 				// one, sandboxes run under the runner's default policy.
 				templateId: env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID,

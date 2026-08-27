@@ -187,7 +187,8 @@ cwic sandbox runner edit $RUNNER_ID   # add the template id to the runner
 ```
 
 Set `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID=<template-id>` (step 8) and every
-sandbox is created from it; omit the variable to use the default policy.
+sandbox is created from it; omit the variable to use the default policy of the
+runner named by `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID`.
 
 Policy and template schema, egress allowlists, and examples:
 [Configure a sandbox profile](https://docs.coreweave.com/products/sandboxes/profiles/configure),
@@ -396,6 +397,9 @@ config:
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandbox.<ORG-ID>-marimohub.coreweave.app
   # No {port}: Traefik routes the hostname to the kernel port.
   MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE: https://{sandboxId}.{host}
+  # Must name YOUR sandbox runner (`marimohub` in this guide); a create with no
+  # runner id schedules on the managed serverless pool, not this cluster.
+  MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID: marimohub
 
   # Auth — your OIDC provider (see docs/auth.md)
   MARIMOHUB_AUTH_BACKEND: oidc
