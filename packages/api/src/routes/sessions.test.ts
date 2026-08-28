@@ -187,11 +187,10 @@ describe('Session routes', () => {
 			}
 			return originalExec(command, options);
 		};
-		const compute = {
-			...fakeComputeFrom(sb.instance),
+		const compute = Object.assign(fakeComputeFrom(sb.instance), {
 			brokeredPortConnectionsEnabled: true as const,
 			connectPort: vi.fn(),
-		};
+		});
 		const request = exclusiveApi(ACTOR, compute, {
 			sandbox: sandboxConfig({
 				images: [image],
@@ -201,6 +200,10 @@ describe('Session routes', () => {
 		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 		expect(session.can.develop).toBe(true);
 		expect(session.remote_development.ssh).toEqual({ available: true });
+		expect(compute.lastCreateOptions?.brokeredPorts).toEqual([2222]);
+		await expect(
+			createServices(bucket).sessions.getSession(pid, session.session_id as SessionId),
+		).resolves.toMatchObject({ sandbox_brokered_ports: [2222] });
 
 		const preparePath = sessionsPath(`/${session.session_id}/remote-development/ssh/prepare`);
 		const publicKey = ed25519PublicKey();
@@ -235,6 +238,46 @@ describe('Session routes', () => {
 		expect(sb.calls.exec.join('\n')).not.toContain(publicKey);
 		expect(Date.parse(prepared.key_expires_at)).toBeGreaterThan(Date.now());
 		expect(Date.parse(prepared.key_expires_at)).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+	});
+
+	it('requires a restart when SSH is enabled after a matching sandbox was launched', async () => {
+		const image = 'registry.example/marimo:remote-development';
+		const compute = Object.assign(makeFakeCompute(), {
+			brokeredPortConnectionsEnabled: true as const,
+			connectPort: vi.fn(),
+		});
+		const startedWithoutSsh = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({ images: [image] }),
+		});
+		const session = await expectOk<ApiSession>(await startedWithoutSsh('POST', sessionsPath()));
+		expect(compute.lastCreateOptions?.brokeredPorts).toBeUndefined();
+		await expect(
+			createServices(bucket).sessions.getSession(pid, session.session_id as SessionId),
+		).resolves.not.toHaveProperty('sandbox_brokered_ports');
+
+		const restartedHub = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({
+				images: [image],
+				remoteDevelopment: { mode: 'ssh', images: [image], port: 2222 },
+			}),
+		});
+		const reloaded = await expectOk<ApiSession>(
+			await restartedHub('GET', sessionsPath(`/${session.session_id}`)),
+		);
+		expect(reloaded.remote_development.ssh).toEqual({
+			available: false,
+			reason: 'restart_required',
+		});
+		const prepareError = await expectError(
+			await restartedHub(
+				'POST',
+				sessionsPath(`/${session.session_id}/remote-development/ssh/prepare`),
+				{ public_key: ed25519PublicKey() },
+			),
+			409,
+			'CONFLICT',
+		);
+		expect(prepareError.message).toBe('SSH access is unavailable: restart_required');
 	});
 
 	it('fails closed when the sandbox SSH helper fails or returns an invalid identity', async () => {

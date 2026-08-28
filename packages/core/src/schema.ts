@@ -771,6 +771,8 @@ export const SessionSchema = z.looseObject({
 	sandbox_url: z.string().optional(),
 	/** Resolved image actually used by the running sandbox; never exposed directly. */
 	sandbox_image: z.string().optional(),
+	/** Brokered ports requested at sandbox creation; absent on older sessions. */
+	sandbox_brokered_ports: z.array(z.number().int().min(1).max(65_535)).optional(),
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),
 	compute_from_snapshot: z.boolean().optional(),

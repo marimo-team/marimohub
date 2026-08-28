@@ -169,19 +169,16 @@ export interface ContainerConfig {
 type ResolvedConfig = Required<Omit<ContainerConfig, 'network' | 'daemonHost'>> &
 	Pick<ContainerConfig, 'network'> & { engine: string };
 
-function isRemoteDaemon(host: string | undefined): boolean {
-	if (!host?.trim()) return false;
-	return !/^(?:unix|npipe|fd):\/\//i.test(host.trim());
+function isLocalDaemon(host: string | undefined): boolean {
+	return /^(?:unix|npipe|fd):\/\//i.test(host?.trim() ?? '');
 }
 
 function inheritedDaemonHost(engine: string): string | undefined {
 	if (engine === 'docker') {
-		return (
-			process.env.DOCKER_HOST ??
-			(process.env.DOCKER_CONTEXT && process.env.DOCKER_CONTEXT !== 'default'
-				? `context://${process.env.DOCKER_CONTEXT}`
-				: undefined)
-		);
+		if (process.env.DOCKER_CONTEXT) {
+			return `context://${process.env.DOCKER_CONTEXT}`;
+		}
+		return process.env.DOCKER_HOST;
 	}
 	return (
 		process.env.CONTAINER_HOST ??
@@ -550,7 +547,9 @@ export class ContainerCompute implements SandboxProvider, SandboxPortConnector {
 		const daemonHost = Object.hasOwn(config, 'daemonHost')
 			? config.daemonHost
 			: inheritedDaemonHost(engine);
-		this.brokeredPortConnectionsEnabled = !isRemoteDaemon(daemonHost);
+		// An unset endpoint can inherit a persisted Docker context or Podman connection.
+		// Only an explicit local transport proves that loopback-published ports are on this host.
+		this.brokeredPortConnectionsEnabled = isLocalDaemon(daemonHost);
 		this.config = {
 			engine,
 			image: config.image || DEFAULT_IMAGE,
@@ -574,7 +573,9 @@ export class ContainerCompute implements SandboxProvider, SandboxPortConnector {
 
 	async connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection> {
 		if (!this.brokeredPortConnectionsEnabled) {
-			throw new Error(`${this.config.engine} cannot broker ports through a remote daemon`);
+			throw new Error(
+				`${this.config.engine} brokered ports require an explicitly configured local daemon`,
+			);
 		}
 		const name = `${NAME_PREFIX}${id}`;
 		const published = await this.runner.run(['port', name, `${port}/tcp`]);

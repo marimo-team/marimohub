@@ -468,11 +468,15 @@ function parseRemoteDevelopment(
 		);
 	}
 	if (!asSandboxPortConnector(compute)) {
+		const containerEndpointVariable =
+			backend === 'docker' ? 'DOCKER_HOST' : backend === 'podman' ? 'CONTAINER_HOST' : undefined;
 		throw new ConfigError(
 			'The selected compute backend does not support brokered SSH connections',
 			{
 				variable: 'MARIMOHUB_REMOTE_DEVELOPMENT',
-				remediation: 'Disable remote development or select a supported compute backend.',
+				remediation: containerEndpointVariable
+					? `Set ${containerEndpointVariable} to an explicit local socket endpoint, or disable remote development.`
+					: 'Disable remote development or select a supported compute backend.',
 				docs: 'docs/remote-development.md',
 			},
 		);

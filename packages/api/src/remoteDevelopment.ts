@@ -38,6 +38,9 @@ export function sshAvailability(deps: ApiDeps, session: Session): SshAvailabilit
 	if (!config.images.includes(session.sandbox_image)) {
 		return { available: false, reason: 'unsupported_image' };
 	}
+	if (!session.sandbox_brokered_ports?.includes(config.port)) {
+		return { available: false, reason: 'restart_required' };
+	}
 	return { available: true };
 }
 

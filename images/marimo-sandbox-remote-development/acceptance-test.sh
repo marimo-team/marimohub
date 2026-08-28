@@ -59,8 +59,8 @@ if ssh -i "$tmp/wrong-id" -o BatchMode=yes -o IdentitiesOnly=yes \
 	echo 'unauthorized SSH key unexpectedly succeeded' >&2
 	exit 1
 fi
-if ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -R 0:127.0.0.1:8765 \
-	"${ssh_args[@]}" 2>/dev/null; then
+if ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -R 0:127.0.0.1:8765 \
+	"${ssh_args[@]}" true 2>/dev/null; then
 	echo 'remote port forwarding unexpectedly succeeded' >&2
 	exit 1
 fi

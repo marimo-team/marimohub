@@ -137,6 +137,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'last_snapshot_at',
 			'development_active_until',
 			'sandbox_image',
+			'sandbox_brokered_ports',
 			'sandbox_reclaimed_at',
 			'takeover_capture_completed_at',
 		];

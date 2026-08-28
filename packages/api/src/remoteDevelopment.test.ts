@@ -16,7 +16,12 @@ describe('sshAvailability', () => {
 		});
 
 		deps.sandbox.remoteDevelopment = { mode: 'ssh', images: ['remote-image'], port: 2222 };
-		expect(sshAvailability(deps, makeSession({ sandbox_image: 'remote-image' }))).toEqual({
+		expect(
+			sshAvailability(
+				deps,
+				makeSession({ sandbox_image: 'remote-image', sandbox_brokered_ports: [2222] }),
+			),
+		).toEqual({
 			available: false,
 			reason: 'unsupported_backend',
 		});
@@ -37,6 +42,24 @@ describe('sshAvailability', () => {
 			reason: 'unsupported_image',
 		});
 		expect(sshAvailability(deps, makeSession({ sandbox_image: 'remote-image' }))).toEqual({
+			available: false,
+			reason: 'restart_required',
+		});
+		expect(
+			sshAvailability(
+				deps,
+				makeSession({ sandbox_image: 'remote-image', sandbox_brokered_ports: [2223] }),
+			),
+		).toEqual({
+			available: false,
+			reason: 'restart_required',
+		});
+		expect(
+			sshAvailability(
+				deps,
+				makeSession({ sandbox_image: 'remote-image', sandbox_brokered_ports: [2222] }),
+			),
+		).toEqual({
 			available: true,
 		});
 	});
@@ -57,6 +80,7 @@ async function createAuthorizationWorld(userId = ACTOR, authorizationExpiresAt?:
 		user_id: ACTOR,
 		sandbox_id: createSandboxId(),
 		sandbox_image: 'remote-image',
+		sandbox_brokered_ports: [2222],
 		editor_sandbox_sharing: 'exclusive',
 		authorization_expires_at: authorizationExpiresAt,
 	});

@@ -67,12 +67,18 @@ async function relay(
 	let closed = false;
 	const timers: { authorization?: ReturnType<typeof setInterval> } = {};
 	let failureCategory = 'none';
-	const close = async () => {
+	const close = async (code = 1000, reason?: string) => {
 		if (closed) return;
 		closed = true;
 		if (timers.authorization) clearInterval(timers.authorization);
+		if (ws.readyState === WebSocket.OPEN) ws.close(code, reason);
 		await Promise.allSettled([reader.cancel(), writer.close(), connection.close()]);
-		if (ws.readyState === WebSocket.OPEN) ws.close(1000);
+		try {
+			reader.releaseLock();
+		} catch {}
+		try {
+			writer.releaseLock();
+		} catch {}
 	};
 	ws.on('message', (data, isBinary) => {
 		if (!isBinary) {
@@ -97,32 +103,38 @@ async function relay(
 	ws.on('close', () => void close());
 	ws.on('error', () => void close());
 
-	const refresh = async () => {
-		const decision = await authorizeRemoteDevelopmentRequest(request, deps);
+	const refresh = async (): Promise<boolean> => {
+		let decision: Awaited<ReturnType<typeof authorizeRemoteDevelopmentRequest>>;
+		try {
+			decision = await authorizeRemoteDevelopmentRequest(request, deps);
+		} catch {
+			failureCategory = 'authorization_error';
+			await close(1011, 'authorization check failed');
+			return false;
+		}
 		if (decision.kind !== 'connect' || decision.session.session_id !== sessionId) {
 			failureCategory = 'authorization';
-			ws.close(1008, 'authorization expired');
-			await close();
-			return;
+			await close(1008, 'authorization expired');
+			return false;
 		}
-		await deps.services.sessions.heartbeatDevelopmentConnection(
-			decision.session.project_id,
-			decision.session.session_id,
-			new Date(Date.now() + DEVELOPMENT_LEASE_MS).toISOString(),
-		);
+		try {
+			await deps.services.sessions.heartbeatDevelopmentConnection(
+				decision.session.project_id,
+				decision.session.session_id,
+				new Date(Date.now() + DEVELOPMENT_LEASE_MS).toISOString(),
+			);
+		} catch {
+			failureCategory = 'lease_refresh';
+			await close(1011, 'lease refresh failed');
+			return false;
+		}
+		return true;
 	};
-	await refresh();
-	timers.authorization = setInterval(
-		() =>
-			void refresh().catch(() => {
-				failureCategory = 'authorization';
-				return close();
-			}),
-		reauthorizeMs,
-	);
-	timers.authorization.unref();
-
 	try {
+		if (!(await refresh())) return;
+		timers.authorization = setInterval(() => void refresh(), reauthorizeMs);
+		timers.authorization.unref();
+
 		while (true) {
 			if (closed) break;
 			const next = await reader.read();

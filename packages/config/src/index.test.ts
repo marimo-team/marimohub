@@ -917,6 +917,7 @@ describe('createFromEnv default role', () => {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: 'docker',
 			MARIMOHUB_COMPUTE_IMAGE: image,
+			DOCKER_HOST: 'unix:///var/run/docker.sock',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 			MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
 			MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: image,
@@ -935,10 +936,26 @@ describe('createFromEnv default role', () => {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: 'docker',
 			MARIMOHUB_COMPUTE_IMAGE: image,
+			DOCKER_HOST: 'unix:///var/run/docker.sock',
 			MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
 			MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: image,
 		};
 		expect(() => createFromEnv(configured)).toThrow(/requires.*exclusive/);
+		expect(() =>
+			createFromEnv({
+				...configured,
+				DOCKER_HOST: undefined,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/does not support brokered SSH/);
+		expect(() =>
+			createFromEnv({
+				...configured,
+				MARIMOHUB_COMPUTE_BACKEND: 'podman',
+				DOCKER_HOST: undefined,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/does not support brokered SSH/);
 		expect(() =>
 			createFromEnv({
 				...configured,
@@ -959,7 +976,13 @@ describe('createFromEnv default role', () => {
 		).toThrow(/does not support brokered SSH/);
 		for (const remoteDaemon of [
 			{ MARIMOHUB_COMPUTE_BACKEND: 'docker', DOCKER_HOST: 'tcp://docker.example:2376' },
+			{ MARIMOHUB_COMPUTE_BACKEND: 'docker', DOCKER_CONTEXT: 'default' },
 			{ MARIMOHUB_COMPUTE_BACKEND: 'docker', DOCKER_CONTEXT: 'production' },
+			{
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				DOCKER_CONTEXT: 'production',
+				DOCKER_HOST: 'unix:///var/run/docker.sock',
+			},
 			{
 				MARIMOHUB_COMPUTE_BACKEND: 'podman',
 				CONTAINER_HOST: 'ssh://podman.example/run/podman.sock',

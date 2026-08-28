@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
-import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type {
+	CreateSandboxOptions,
+	FilesystemSnapshots,
+	SandboxInstance,
+	SandboxProvider,
+} from '../../ports/sandbox';
 import { ACTOR, makeFakeSandbox, setupTestEnv, uid } from '../../testing';
 import {
 	captureFilesystemSnapshot,
@@ -17,11 +22,11 @@ function snapshotProvider(
 ): SandboxProvider &
 	FilesystemSnapshots & {
 		created: string[];
-		createdFrom: { id: string; snapshotId: string }[];
+		createdFrom: { id: string; snapshotId: string; options?: CreateSandboxOptions }[];
 		deleted: string[];
 	} {
 	const created: string[] = [];
-	const createdFrom: { id: string; snapshotId: string }[] = [];
+	const createdFrom: { id: string; snapshotId: string; options?: CreateSandboxOptions }[] = [];
 	const deleted: string[] = [];
 	return {
 		filesystemSnapshotsEnabled: true,
@@ -30,8 +35,8 @@ function snapshotProvider(
 			return instance;
 		},
 		proxy: async () => null,
-		createFromSnapshot(id, snapshotId) {
-			createdFrom.push({ id, snapshotId });
+		createFromSnapshot(id, snapshotId, options) {
+			createdFrom.push({ id, snapshotId, options });
 			return instance;
 		},
 		async captureSnapshot() {
@@ -67,8 +72,24 @@ describe('filesystemSnapshots', () => {
 		it('restores via createFromSnapshot when capable and a restore id is given', () => {
 			const { instance } = makeFakeSandbox();
 			const provider = snapshotProvider(instance);
-			expect(createOrRestoreSandbox(provider, sandboxId, 'snap_x')).toBe(instance);
-			expect(provider.createdFrom).toEqual([{ id: sandboxId, snapshotId: 'snap_x' }]);
+			expect(
+				createOrRestoreSandbox(
+					provider,
+					sandboxId,
+					'snap_x',
+					undefined,
+					undefined,
+					undefined,
+					[2222],
+				),
+			).toBe(instance);
+			expect(provider.createdFrom).toEqual([
+				{
+					id: sandboxId,
+					snapshotId: 'snap_x',
+					options: { reuse: false, brokeredPorts: [2222] },
+				},
+			]);
 			expect(provider.created).toEqual([]);
 		});
 

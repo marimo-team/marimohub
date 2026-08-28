@@ -53,6 +53,7 @@ export interface CreateSessionInput {
 	sandbox_id?: SandboxId;
 	sandbox_url?: string;
 	sandbox_image?: string;
+	sandbox_brokered_ports?: number[];
 	compute_profile?: string;
 	compute_resources?: Session['compute_resources'];
 	compute_from_snapshot?: boolean;
@@ -166,6 +167,7 @@ export class SessionService {
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
 			sandbox_image: input.sandbox_image,
+			sandbox_brokered_ports: input.sandbox_brokered_ports,
 			compute_profile: input.compute_profile,
 			compute_resources: input.compute_resources,
 			...(input.compute_from_snapshot ? { compute_from_snapshot: true } : {}),

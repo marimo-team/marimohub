@@ -45,7 +45,9 @@ MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES=registry.example/marimo-sandbox:remote-devel
 
 `MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES` accepts a comma-separated list. Each value must match a configured compute image.
 
-If the configuration is unsafe or inconsistent, the server stops during startup. Existing sessions without an image record require a restart.
+For Docker or Podman, also set `DOCKER_HOST` or `CONTAINER_HOST` to the local socket used by the server. For example, use `DOCKER_HOST=unix:///var/run/docker.sock`. Do not rely on a default context or connection saved in the CLI configuration.
+
+If the configuration is unsafe or inconsistent, the server stops during startup. Existing sessions without brokered-port launch metadata require a restart.
 
 ## Connect
 
@@ -85,7 +87,7 @@ Prepare, connect, and disconnect events contain user and session identifiers. Lo
 
 ## Backend behavior
 
-Docker and Podman publish port `2222` on the daemon host's loopback interface, even when kernel ports use a public bind. Remote Docker contexts, Podman connections, and network-based `DOCKER_HOST` or `CONTAINER_HOST` endpoints are not supported because the Hub cannot securely reach that loopback port. The server rejects SSH configuration with these remote daemon connections.
+Docker and Podman publish port `2222` on the daemon host's loopback interface, even when kernel ports use a public bind. Set `DOCKER_HOST` or `CONTAINER_HOST` to an explicit local `unix://`, `npipe://`, or `fd://` endpoint when SSH is enabled. This overrides any persisted default Docker context or Podman connection and proves that the Hub can reach the published port on its own loopback interface. Named contexts, named connections, network endpoints, and implicit daemon selection are not supported. The server rejects SSH configuration for these cases.
 
 Kubernetes adds port `2222/TCP` to the per-session ClusterIP Service. It does not add an Ingress for SSH.
 

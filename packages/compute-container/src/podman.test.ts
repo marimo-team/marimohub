@@ -42,7 +42,16 @@ describe('PodmanCompute brokered ports', () => {
 
 		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
 		await expect(compute.connectPort('sb-aaaaaaaaaaaaaaaa' as SandboxId, 2222)).rejects.toThrow(
-			/remote daemon/,
+			/local daemon/,
+		);
+	});
+
+	it('disables brokered ports when connection selection is implicit', async () => {
+		const compute = new PodmanCompute({ daemonHost: undefined }, fakeRunner());
+
+		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
+		await expect(compute.connectPort('sb-aaaaaaaaaaaaaaaa' as SandboxId, 2222)).rejects.toThrow(
+			/local daemon/,
 		);
 	});
 });
@@ -63,7 +72,7 @@ portConnectorContract(
 	'PodmanCompute',
 	(publishedPort) =>
 		new PodmanCompute(
-			{ bindHost: '127.0.0.1' },
+			{ bindHost: '127.0.0.1', daemonHost: 'unix:///run/user/1000/podman/podman.sock' },
 			{
 				run: async (args) =>
 					args[0] === 'port'

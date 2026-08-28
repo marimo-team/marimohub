@@ -320,11 +320,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
 				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
-				daemonHost:
-					env.DOCKER_HOST ??
-					(env.DOCKER_CONTEXT && env.DOCKER_CONTEXT !== 'default'
-						? `context://${env.DOCKER_CONTEXT}`
-						: undefined),
+				daemonHost: env.DOCKER_CONTEXT ? `context://${env.DOCKER_CONTEXT}` : env.DOCKER_HOST,
 			});
 		case 'podman':
 			return new PodmanCompute({

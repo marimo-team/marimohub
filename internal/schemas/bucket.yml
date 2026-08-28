@@ -2075,6 +2075,12 @@ components:
           type: string
         sandbox_image:
           type: string
+        sandbox_brokered_ports:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
         compute_profile:
           type: string
         compute_resources:

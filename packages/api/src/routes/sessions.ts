@@ -1297,6 +1297,9 @@ app.openapi(createSession, async (c) => {
 		mode === 'edit' &&
 		sharing === 'exclusive' &&
 		!ephemeral;
+	const sandboxBrokeredPorts = remoteDevelopmentEligible
+		? [deps.sandbox.remoteDevelopment!.port]
+		: undefined;
 
 	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
 	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
@@ -1334,6 +1337,7 @@ app.openapi(createSession, async (c) => {
 					user_id: user.id,
 					sandbox_id: sandboxId,
 					sandbox_image: resolvedSandboxImage,
+					sandbox_brokered_ports: sandboxBrokeredPorts,
 					compute_profile: appliedComputeProfile.name,
 					compute_resources: appliedComputeProfile.resources,
 					compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
@@ -1549,9 +1553,7 @@ app.openapi(createSession, async (c) => {
 						image,
 						resources: requestedComputeProfile.resources,
 						userHome,
-						brokeredPorts: remoteDevelopmentEligible
-							? [deps.sandbox.remoteDevelopment!.port]
-							: undefined,
+						brokeredPorts: sandboxBrokeredPorts,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
 						launchStrategy: resolvedLaunchStrategy.strategy,

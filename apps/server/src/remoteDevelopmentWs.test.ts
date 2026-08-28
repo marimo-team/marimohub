@@ -31,6 +31,7 @@ async function createRelayWorld(
 		user_id: ACTOR,
 		sandbox_id: createSandboxId(),
 		sandbox_image: 'remote-image',
+		sandbox_brokered_ports: [2222],
 		editor_sandbox_sharing: 'exclusive',
 	});
 	await services.sessions.setRunning(project.id, session.session_id, 'https://sandbox.invalid');
@@ -59,7 +60,7 @@ async function createRelayWorld(
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 	const port = (server.address() as AddressInfo).port;
 	const url = `ws://127.0.0.1:${port}/api/v1/projects/${project.id}/notebooks/${notebook.id}/sessions/${session.session_id}/remote-development/ssh/relay`;
-	return { close, connector, notebook, project, server, services, session, url };
+	return { close, connector, deps, notebook, project, server, services, session, stream, url };
 }
 
 async function openClient(url: string, token = 'test'): Promise<WebSocket> {
@@ -111,6 +112,28 @@ describe('attachRemoteDevelopmentUpgrade', () => {
 		client.close();
 		await new Promise<void>((resolve) => client.once('close', () => resolve()));
 		await vi.waitFor(() => expect(world.close).toHaveBeenCalled());
+		await closeServer(world.server);
+	});
+
+	it('cleans up the relay when the initial development lease refresh fails', async () => {
+		const world = await createRelayWorld();
+		vi.spyOn(world.deps.services.sessions, 'heartbeatDevelopmentConnection').mockRejectedValue(
+			new Error('storage unavailable'),
+		);
+		const client = new WebSocket(world.url, {
+			headers: { Authorization: 'Bearer test' },
+		});
+		const opened = new Promise<void>((resolve, reject) => {
+			client.once('open', resolve);
+			client.once('error', reject);
+		});
+		const closed = new Promise<number>((resolve) => client.once('close', resolve));
+
+		await opened;
+		expect(await closed).toBe(1011);
+		await vi.waitFor(() => expect(world.close).toHaveBeenCalledTimes(1));
+		expect(world.stream.readable.locked).toBe(false);
+		expect(world.stream.writable.locked).toBe(false);
 		await closeServer(world.server);
 	});
 

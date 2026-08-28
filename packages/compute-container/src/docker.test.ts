@@ -33,7 +33,10 @@ describe('DockerCompute', () => {
 				: defaultHandler(args),
 		);
 		await expect(
-			new DockerCompute({}, failed.runner).connectPort(SANDBOX_ID, 2222),
+			new DockerCompute({ daemonHost: 'unix:///var/run/docker.sock' }, failed.runner).connectPort(
+				SANDBOX_ID,
+				2222,
+			),
 		).rejects.toThrow(/container is not running/);
 
 		const malformed = fakeRunner((args) =>
@@ -42,7 +45,10 @@ describe('DockerCompute', () => {
 				: defaultHandler(args),
 		);
 		await expect(
-			new DockerCompute({}, malformed.runner).connectPort(SANDBOX_ID, 2222),
+			new DockerCompute(
+				{ daemonHost: 'unix:///var/run/docker.sock' },
+				malformed.runner,
+			).connectPort(SANDBOX_ID, 2222),
 		).rejects.toThrow(/could not resolve a loopback host port/);
 	});
 
@@ -51,7 +57,7 @@ describe('DockerCompute', () => {
 		const compute = new DockerCompute({ daemonHost: 'tcp://docker.example:2376' }, runner);
 
 		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
-		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(/remote daemon/);
+		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(/local daemon/);
 		expect(calls).toHaveLength(0);
 	});
 
@@ -59,6 +65,15 @@ describe('DockerCompute', () => {
 		const compute = new DockerCompute({ daemonHost: 'unix:///var/run/docker.sock' });
 
 		expect(compute.brokeredPortConnectionsEnabled).toBe(true);
+	});
+
+	it('disables brokered ports when daemon selection is implicit', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const compute = new DockerCompute({ daemonHost: undefined }, runner);
+
+		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
+		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(/local daemon/);
+		expect(calls).toHaveLength(0);
 	});
 
 	it('create + ensure: runs the container with name, label, and published port', async () => {
@@ -638,5 +653,8 @@ portConnectorContract('DockerCompute', (publishedPort) => {
 			? { stdout: `127.0.0.1:${publishedPort}\n`, stderr: '', exitCode: 0 }
 			: defaultHandler(args),
 	);
-	return new DockerCompute({ bindHost: '127.0.0.1' }, runner);
+	return new DockerCompute(
+		{ bindHost: '127.0.0.1', daemonHost: 'unix:///var/run/docker.sock' },
+		runner,
+	);
 });

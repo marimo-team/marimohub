@@ -32,6 +32,20 @@ describe('SessionService', () => {
 			expect(session.session_id).toMatch(/^sess-/);
 		});
 
+		it('persists the brokered ports requested for the sandbox', async () => {
+			const session = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				sandbox_brokered_ports: [2222],
+			});
+
+			expect(session.sandbox_brokered_ports).toEqual([2222]);
+			await expect(sessions.getSession(projectId, session.session_id)).resolves.toMatchObject({
+				sandbox_brokered_ports: [2222],
+			});
+		});
+
 		it('rejects a source version at or before the prune cutoff', async () => {
 			const sourceVersion = createVersionId();
 			await sessions.advanceVersionPruneCutoff(projectId, notebookId, sourceVersion);
