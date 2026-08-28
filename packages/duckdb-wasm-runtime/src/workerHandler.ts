@@ -1,8 +1,7 @@
 import { parentPort } from 'node:worker_threads';
 import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';
 import { BlockingDuckDBEngine } from './engine.ts';
-import { isRuntimeRequest, runtimeRequestId } from './protocol.ts';
-import type { RuntimeRequest, RuntimeResponse } from './protocol.ts';
+import type { RuntimeRequest, RuntimeResponse } from './protocol';
 import { createSyncXmlHttpRequest } from './syncXmlHttpRequest.ts';
 
 if (!parentPort) throw new Error('DuckDB-Wasm worker started without a parent port.');
@@ -16,25 +15,14 @@ Object.defineProperty(globalThis, 'XMLHttpRequest', {
 const engine = new BlockingDuckDBEngine();
 let requestQueue = Promise.resolve();
 
-port.on('message', (request: unknown) => {
+port.on('message', (request: RuntimeRequest) => {
 	requestQueue = requestQueue
 		.then(
-			() => handleMessage(request),
-			() => handleMessage(request),
+			() => handle(request),
+			() => handle(request),
 		)
 		.catch(() => {});
 });
-
-async function handleMessage(value: unknown): Promise<void> {
-	if (isRuntimeRequest(value)) {
-		await handle(value);
-		return;
-	}
-	const id = runtimeRequestId(value);
-	if (id !== undefined) {
-		port.postMessage({ id, ok: false, error: 'DuckDB-Wasm worker request is invalid.' });
-	}
-}
 
 async function handle(request: RuntimeRequest): Promise<void> {
 	let response: RuntimeResponse;
@@ -66,8 +54,6 @@ async function handle(request: RuntimeRequest): Promise<void> {
 				engine.ping();
 				response = { id: request.id, ok: true };
 				break;
-			default:
-				return assertNever(request);
 		}
 	} catch (error) {
 		response = {
@@ -78,10 +64,6 @@ async function handle(request: RuntimeRequest): Promise<void> {
 		};
 	}
 	port.postMessage(response);
-}
-
-function assertNever(value: never): never {
-	throw new Error(`Unhandled DuckDB-Wasm request: ${String(value)}`);
 }
 
 async function withExecutionBridge<T>(
