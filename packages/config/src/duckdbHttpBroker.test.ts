@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
-import { createIntegrationId, s3 } from '@marimo-hub/core';
+import { createIntegrationId, duckdbHttp, ducklake, icebergRest, s3 } from '@marimo-hub/core';
 import type { DuckDBHttpAccess } from '@marimo-hub/core';
 import {
 	createNodeDataQueryExecutorFactory,
@@ -22,6 +22,7 @@ import {
 	VENDED_ICEBERG_LOAD_TABLE_BASE64,
 	VENDED_ICEBERG_OBJECTS_BASE64,
 } from './duckdbHttpBroker.fixture';
+import { rangedObjectResponse } from './rangedObject.testUtils';
 
 const NOW = Date.parse('2026-08-13T12:00:00Z');
 const OAUTH_TRANSPORT_ERROR =
@@ -121,6 +122,71 @@ const OAUTH_ACCESS = {
 } as const satisfies DuckDBHttpAccess;
 
 describe('createDuckDBHttpSessionFactory', () => {
+	it('accepts capabilities produced by the core integration planners', () => {
+		const integration = (kind: string) => ({
+			id: createIntegrationId(),
+			name: kind,
+			kind,
+			version: 1,
+		});
+		const duckdbConfig = duckdbHttp.configSchema.parse({
+			url: 'https://data.example.test/releases/app.duckdb',
+			auth: { method: 'none' },
+		});
+		const ducklakeConfig = ducklake.configSchema.parse({
+			metadata: {
+				type: 'duckdb',
+				url: 'https://data.example.test/releases/lake.ducklake',
+				auth: { method: 'none' },
+			},
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.test',
+				region: 'us-east-1',
+				credentials: {
+					method: 'static',
+					access_key_id: 'access-key',
+					secret_access_key: 'secret-key',
+				},
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'lake/data' }],
+			},
+		});
+		const icebergConfig = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.test/iceberg',
+			auth: {
+				method: 'oauth2_client_credentials',
+				token_endpoint: 'https://identity.example.test/oauth/token',
+				client_id: 'client-id',
+				client_secret: 'client-secret',
+			},
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.test',
+				credentials: {
+					method: 'static',
+					access_key_id: 'access-key',
+					secret_access_key: 'secret-key',
+				},
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+			access_delegation: 'none',
+		});
+		const accesses = [
+			duckdbHttp.query?.plan({ config: duckdbConfig, integration: integration('duckdb_http') })
+				.httpAccess,
+			ducklake.query?.plan({ config: ducklakeConfig, integration: integration('ducklake') })
+				.httpAccess,
+			icebergRest.query?.plan({ config: icebergConfig, integration: integration('iceberg_rest') })
+				.httpAccess,
+		];
+		const factory = createDuckDBHttpSessionFactory({ transport: vi.fn(), now: () => NOW });
+
+		for (const access of accesses) {
+			expect(access).toBeDefined();
+			if (access) factory(access, { expiresAtMs: NOW + 60_000 }).close();
+		}
+	});
+
 	it('opens bearer, OAuth2, and S3 object-query sessions', () => {
 		const factory = createDuckDBHttpSessionFactory({
 			transport: vi.fn(),
@@ -747,26 +813,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
 			calls.push(request);
-			const headers = {
-				'accept-ranges': 'bytes',
-				'content-length': String(bytes.byteLength),
-				etag: '"fixture-1"',
-			};
-			if (request.method === 'HEAD') return { status: 200, headers, body: new Uint8Array() };
-			const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers?.range ?? '');
-			if (!range) return { status: 200, headers, body: bytes };
-			const start = Number(range[1]);
-			const end = Math.min(Number(range[2]), bytes.byteLength - 1);
-			const body = bytes.slice(start, end + 1);
-			return {
-				status: 206,
-				headers: {
-					...headers,
-					'content-length': String(body.byteLength),
-					'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
-				},
-				body,
-			};
+			return rangedObjectResponse(request, bytes, '"fixture-1"');
 		});
 		const config = s3.configSchema.parse({
 			endpoint_url: 'https://objects.example.test',
@@ -828,26 +875,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
 			calls.push(request);
-			const headers = {
-				'accept-ranges': 'bytes',
-				'content-length': String(bytes.byteLength),
-				etag: '"anonymous-fixture"',
-			};
-			if (request.method === 'HEAD') return { status: 200, headers, body: new Uint8Array() };
-			const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers?.range ?? '');
-			if (!range) return { status: 200, headers, body: bytes };
-			const start = Number(range[1]);
-			const end = Math.min(Number(range[2]), bytes.byteLength - 1);
-			const body = bytes.slice(start, end + 1);
-			return {
-				status: 206,
-				headers: {
-					...headers,
-					'content-length': String(body.byteLength),
-					'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
-				},
-				body,
-			};
+			return rangedObjectResponse(request, bytes, '"anonymous-fixture"');
 		});
 		const config = s3.configSchema.parse({
 			endpoint_url: 'https://objects.example.test',

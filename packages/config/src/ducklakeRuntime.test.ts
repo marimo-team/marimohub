@@ -5,12 +5,10 @@ import {
 	createNodeDataQueryExecutorFactory,
 	DUCKLAKE_SPEC_VERSION,
 } from '@marimo-hub/duckdb-wasm-runtime/node';
-import type {
-	IcebergHttpBrokerResponse,
-	IcebergHttpBrokerTransportRequest,
-} from '@marimo-hub/duckdb-wasm-runtime/node';
+import type { IcebergHttpBrokerTransportRequest } from '@marimo-hub/duckdb-wasm-runtime/node';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
+import { rangedObjectResponse } from './rangedObject.testUtils';
 
 const METADATA_URL = 'https://data.example.test/releases/ducklake-0.3.ducklake';
 const METADATA_ETAG = '"ducklake-metadata-v1"';
@@ -62,47 +60,6 @@ function queryPlan(prefix = 'ducklake/data/') {
 	return plan;
 }
 
-function rangedResponse(
-	request: IcebergHttpBrokerTransportRequest,
-	bytes: Uint8Array,
-	etag: string,
-): IcebergHttpBrokerResponse {
-	if (request.method === 'HEAD') {
-		return {
-			status: 200,
-			headers: { etag, 'accept-ranges': 'bytes', 'content-length': String(bytes.byteLength) },
-			body: new Uint8Array(),
-		};
-	}
-	const match = /^bytes=(\d+)-(\d*)$/.exec(request.headers?.range ?? '');
-	if (!match) {
-		return {
-			status: 200,
-			headers: { etag, 'content-length': String(bytes.byteLength) },
-			body: bytes,
-		};
-	}
-	const start = Number(match[1]);
-	const end = match[2] ? Math.min(Number(match[2]), bytes.byteLength - 1) : bytes.byteLength - 1;
-	if (start >= bytes.byteLength) {
-		return {
-			status: 416,
-			headers: { etag, 'content-range': `bytes */${bytes.byteLength}` },
-			body: new Uint8Array(),
-		};
-	}
-	const body = bytes.slice(start, end + 1);
-	return {
-		status: 206,
-		headers: {
-			etag,
-			'content-length': String(body.byteLength),
-			'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
-		},
-		body,
-	};
-}
-
 describe('packaged DuckLake integration', () => {
 	it('queries pinned 0.3 metadata and guarded S3 data through separate routes', async () => {
 		const requests: IcebergHttpBrokerTransportRequest[] = [];
@@ -112,12 +69,12 @@ describe('packaged DuckLake integration', () => {
 				transport: async (request) => {
 					requests.push(request);
 					if (request.url === METADATA_URL) {
-						return rangedResponse(request, metadata, METADATA_ETAG);
+						return rangedObjectResponse(request, metadata, METADATA_ETAG);
 					}
 					if (
 						request.url.startsWith('https://warehouse.s3.example.test/ducklake/data/main/orders/')
 					) {
-						return rangedResponse(request, parquet, DATA_ETAG);
+						return rangedObjectResponse(request, parquet, DATA_ETAG);
 					}
 					throw new Error('Unexpected fixture route.');
 				},
@@ -178,7 +135,7 @@ describe('packaged DuckLake integration', () => {
 				transport: async (request) => {
 					requests.push(request);
 					if (request.url === METADATA_URL) {
-						return rangedResponse(request, metadata, METADATA_ETAG);
+						return rangedObjectResponse(request, metadata, METADATA_ETAG);
 					}
 					throw new Error('Storage transport must not receive an out-of-bounds request.');
 				},

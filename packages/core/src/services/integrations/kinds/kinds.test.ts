@@ -13,6 +13,7 @@ import type { IntegrationDefinition, RenderInput } from '../sdk';
 import { athena } from './awsQueryEngines';
 import { bigquery } from './bigquery';
 import { customEnv } from './customEnv';
+import { isIpAddressHost, isValidS3Bucket } from './common';
 import { databricks } from './databricks';
 import {
 	icebergBigQuery,
@@ -840,6 +841,7 @@ describe('kind renders (golden)', () => {
 				version: 1,
 			},
 		});
+		if (!plan?.setup) throw new Error('Expected an Iceberg DuckDB query plan.');
 
 		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 		expect(programs?.duckdbWasm?.setup.at(-1)?.params).toEqual([
@@ -864,7 +866,14 @@ describe('kind renders (golden)', () => {
 		});
 		expect(JSON.stringify(programs?.duckdbWasm?.setup)).not.toContain('client-id');
 		expect(JSON.stringify(programs?.duckdbWasm?.setup)).not.toContain('client-secret');
-		expect(plan?.httpAccess).toEqual(programs?.duckdbWasm?.httpAccess);
+		expect(plan.httpAccess).toEqual(programs?.duckdbWasm?.httpAccess);
+		expect(plan.setup.at(-1)?.params).toEqual(programs?.duckdbWasm?.setup.at(-1)?.params);
+		expect(plan.setup.at(-1)?.text.split(' (').at(-1)).toBe(
+			programs?.duckdbWasm?.setup.at(-1)?.text.split(' (').at(-1),
+		);
+		expect(plan.cleanup?.map(({ text }) => text.split(' ')[0])).toEqual(
+			programs?.duckdbWasm?.cleanup?.map(({ text }) => text.split(' ')[0]),
+		);
 	});
 
 	it.each([
@@ -3170,6 +3179,16 @@ describe('connection kinds (golden)', () => {
 	])('object stores reject the invalid bucket name %s', (bucket, valid) => {
 		expect(s3.configSchema.safeParse({ bucket }).success).toBe(valid);
 		expect(gcs.configSchema.safeParse({ bucket }).success).toBe(valid);
+	});
+
+	it.each([
+		['192.168.1.1', false, true],
+		['999.999.999.999', true, false],
+		['warehouse', true, false],
+		['warehouse_name', false, false],
+	] as const)('applies the shared S3 DNS policy to %s', (value, validBucket, ipHost) => {
+		expect(isValidS3Bucket(value)).toBe(validBucket);
+		expect(isIpAddressHost(value)).toBe(ipHost);
 	});
 
 	// Validated apart because the provider rules genuinely differ; a shared

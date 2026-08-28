@@ -8,6 +8,7 @@ import {
 	AWS_REGION_REGEX,
 	awsStaticCredentials,
 	httpUrlField,
+	isIpAddressHost,
 	isValidS3Bucket,
 	s3BrokerReadLocationsSchema,
 } from './common';
@@ -16,6 +17,7 @@ import {
 	exactObjectAuthSchema,
 	normalizeExactObjectUrl,
 } from './binaryDatabase';
+import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
 
 const metadataSchema = z.strictObject({
 	type: z.literal('duckdb'),
@@ -131,9 +133,13 @@ function duckLakeQueryPlan(
 	integration: { id: string; name: string },
 ): DuckDBDataQueryPlan {
 	const alias = sqlIdentifier(integration.name);
-	const secretName = sqlIdentifier(`marimohub_s3_${integration.id.replaceAll('-', '_')}`);
-	const endpoint = new URL(config.storage.endpoint);
 	const urlStyle = config.storage.force_virtual_addressing ? 'vhost' : 'path';
+	const secret = brokeredS3Secret({
+		suffix: integration.id.replaceAll('-', '_'),
+		endpoint: config.storage.endpoint,
+		region: config.storage.region,
+		urlStyle,
+	});
 	const metadataUrl = normalizeDuckLakeMetadataUrl(config.metadata);
 	const snapshot =
 		config.snapshot.version !== undefined
@@ -147,13 +153,7 @@ function duckLakeQueryPlan(
 			{ text: 'LOAD httpfs' },
 			{ text: 'LOAD parquet' },
 			{ text: 'LOAD ducklake' },
-			{
-				text:
-					`CREATE TEMPORARY SECRET ${secretName} (` +
-					"TYPE S3, KEY_ID 'marimohub-parent-broker', SECRET 'marimohub-parent-broker', " +
-					`REGION ?, ENDPOINT ?, URL_STYLE '${urlStyle}', USE_SSL ?)`,
-				params: [config.storage.region, endpoint.host, endpoint.protocol === 'https:'],
-			},
+			secret.create,
 			{
 				text:
 					`ATTACH ${sqlLiteral(`ducklake:${metadataUrl}`)} AS ${alias} (` +
@@ -161,7 +161,7 @@ function duckLakeQueryPlan(
 				...(snapshot ? { params: [snapshot.value] } : {}),
 			},
 		],
-		cleanup: [{ text: `DROP SECRET ${secretName}` }, { text: `DETACH ${alias}` }],
+		cleanup: [secret.drop, { text: `DETACH ${alias}` }],
 		httpAccess: duckLakeAccess(config),
 	};
 }
@@ -175,23 +175,13 @@ function duckLakeAccess(config: DuckLakeConfig): DuckDBDuckLakeHttpAccess {
 			normalizeDuckLakeMetadataUrl(config.metadata),
 			config.metadata.auth,
 		),
-		storage: {
+		storage: duckdbS3StorageAccess({
 			endpoint: new URL(storage.endpoint).toString(),
 			region: storage.region,
 			urlStyle: storage.force_virtual_addressing ? 'vhost' : 'path',
-			credentials: {
-				method: 'static',
-				accessKeyId: storage.credentials.access_key_id,
-				secretAccessKey: storage.credentials.secret_access_key,
-				...(storage.credentials.session_token
-					? { sessionToken: storage.credentials.session_token }
-					: {}),
-			},
-			locations: storage.broker_read_locations.map(({ bucket, prefix }) => ({
-				bucket,
-				prefix: prefix.replaceAll(/^\/+|\/+$/g, ''),
-			})),
-		},
+			credentials: staticS3Credentials(storage.credentials),
+			locations: storage.broker_read_locations,
+		}),
 	};
 }
 
@@ -216,15 +206,6 @@ function validateDuckLakeStorage(storage: DuckLakeConfig['storage']): void {
 	if (storage.force_virtual_addressing && isIpAddressHost(endpoint.hostname)) {
 		throw new ValidationError('DuckLake virtual-hosted S3 access requires a DNS endpoint.');
 	}
-}
-
-function isIpAddressHost(hostname: string): boolean {
-	if (hostname.includes(':')) return true;
-	const octets = hostname.split('.');
-	return (
-		octets.length === 4 &&
-		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
-	);
 }
 
 function validateRouteOwnership(config: DuckLakeConfig): void {

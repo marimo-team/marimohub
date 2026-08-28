@@ -604,6 +604,20 @@ describe('createGuardedProbe node transport (real local server)', () => {
 		expect(hits).toBe(1);
 	});
 
+	it('opens a fresh pinned socket for every request', async () => {
+		let connections = 0;
+		const base = await serve((_req, res) => res.end('{}'));
+		server?.on('connection', () => {
+			connections += 1;
+		});
+		const probe = createGuardedProbe({ allowPrivate: true });
+
+		await probe.fetch(base);
+		await probe.fetch(base);
+
+		expect(connections).toBe(2);
+	});
+
 	it('caps the response size (an oversized body parses as non-JSON)', async () => {
 		const base = await serve((_req, res) => {
 			res.end('x'.repeat(4096));

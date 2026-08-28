@@ -140,8 +140,20 @@ export function isValidS3Bucket(value: string): boolean {
 		value.length <= 63 &&
 		S3_BUCKET_REGEX.test(value) &&
 		!value.includes('..') &&
-		!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)
+		!isIpv4Address(value)
 	);
+}
+
+export function isIpv4Address(value: string): boolean {
+	const octets = value.split('.');
+	return (
+		octets.length === 4 &&
+		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+	);
+}
+
+export function isIpAddressHost(hostname: string): boolean {
+	return hostname.includes(':') || isIpv4Address(hostname);
 }
 
 export function isValidGcsBucket(value: string): boolean {
@@ -209,7 +221,7 @@ export const s3BrokerReadLocationsSchema = z
 		}
 	});
 
-function normalizeBrokerPrefix(prefix: string): string {
+export function normalizeBrokerPrefix(prefix: string): string {
 	return prefix.replaceAll(/^\/+|\/+$/g, '');
 }
 

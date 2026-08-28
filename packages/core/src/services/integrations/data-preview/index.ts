@@ -10,6 +10,7 @@ export type {
 	DuckDBPreviewParameter,
 	DuckDBPreviewStatement,
 	DuckDBHttpAccess,
+	DuckDBS3StorageAccess,
 	DuckDBWasmRuntime,
 	DuckDBWasmRuntimeFactory,
 	PreviewExecutorStatus,

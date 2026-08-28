@@ -126,6 +126,7 @@ export type {
 	DuckDBPreviewParameter,
 	DuckDBPreviewStatement,
 	DuckDBHttpAccess,
+	DuckDBS3StorageAccess,
 	DuckDBWasmDataPreviewOptions,
 	DuckDBWasmRuntime,
 	DuckDBWasmRuntimeFactory,
@@ -136,6 +137,7 @@ export type {
 	SandboxDataPreviewOptions,
 } from './integrations/data-preview';
 export { IntegrationRegistry } from './integrations/registry';
+export { isIpAddressHost, isValidS3Bucket } from './integrations/kinds/common';
 export { defineIntegration, envSegment } from './integrations/sdk';
 export type {
 	DatabaseBrowseDefinition,

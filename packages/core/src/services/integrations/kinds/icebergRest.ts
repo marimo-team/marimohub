@@ -31,8 +31,11 @@ import {
 	HTTP_HEADER_NAME_REGEX,
 	httpUrlField,
 	isInsecureHttpUrl,
+	isIpAddressHost,
+	isValidS3Bucket,
 	usesInsecureAuthenticatedS3,
 } from './common';
+import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
 
 const httpUrl = httpUrlField;
 
@@ -326,34 +329,22 @@ export const icebergRest = defineIntegration({
 			};
 			if (duckdbPreviewBlocker(input.config)) return { python };
 			const alias = `preview_${input.integration.id.replaceAll('-', '_')}`;
-			const secret = duckdbS3Secret(input.config, alias);
-			const attachParams: (string | number | boolean | null)[] = [input.config.uri];
-			const options = ['TYPE iceberg', 'ENDPOINT ?'];
-			if (input.config.warehouse) {
-				options.push('WAREHOUSE ?');
-				attachParams.push(input.config.warehouse);
-			}
-			options.push(...duckdbAuthOptions(input.config.auth, attachParams));
-			options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
-			attachParams.push(input.config.access_delegation);
+			const attachment = duckdbIcebergAttachment(
+				input.config,
+				alias,
+				alias,
+				input.integration.name,
+			);
 			return {
 				duckdbWasm: {
-					setup: [
-						{ text: 'LOAD iceberg' },
-						{ text: 'LOAD httpfs' },
-						...(secret ? [secret.create] : []),
-						{
-							text: `ATTACH ${sqlLiteral(duckdbWarehouse(input.config, input.integration.name))} AS ${sqlIdentifier(alias)} (${options.join(', ')})`,
-							params: attachParams,
-						},
-					],
+					setup: attachment.setup,
 					query: {
 						text: `SELECT * FROM ${[alias, ...input.namespace, input.table].map(sqlIdentifier).join('.')} LIMIT ?`,
 						params: [input.limit],
 					},
-					cleanup: [...(secret ? [secret.drop] : []), { text: `DETACH ${sqlIdentifier(alias)}` }],
+					cleanup: attachment.cleanup,
 					requires: duckdbPreviewFeatures(input.config),
-					httpAccess: duckdbHttpAccess(input.config),
+					httpAccess: attachment.httpAccess,
 				},
 				python,
 			};
@@ -371,30 +362,9 @@ export const icebergRest = defineIntegration({
 		plan({ config, integration }) {
 			const reason = duckdbPreviewBlocker(config);
 			if (reason) throw new ValidationError(reason);
-			const params: (string | number | boolean | null)[] = [config.uri];
-			const options = ['TYPE iceberg', 'ENDPOINT ?'];
-			if (config.warehouse) {
-				options.push('WAREHOUSE ?');
-				params.push(config.warehouse);
-			}
-			options.push(...duckdbAuthOptions(config.auth, params));
-			options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
-			params.push(config.access_delegation);
-			const alias = sqlIdentifier(integration.name);
-			const secret = duckdbS3Secret(config, integration.id.replaceAll('-', '_'));
 			return {
 				engine: 'duckdb-wasm',
-				setup: [
-					{ text: 'LOAD iceberg' },
-					{ text: 'LOAD httpfs' },
-					...(secret ? [secret.create] : []),
-					{
-						text: `ATTACH ${sqlLiteral(duckdbWarehouse(config, integration.name))} AS ${alias} (${options.join(', ')})`,
-						params,
-					},
-				],
-				cleanup: [...(secret ? [secret.drop] : []), { text: `DETACH ${alias}` }],
-				httpAccess: duckdbHttpAccess(config),
+				...duckdbIcebergAttachment(config, integration.name, integration.id.replaceAll('-', '_')),
 			};
 		},
 	},
@@ -635,27 +605,8 @@ function parsedUrl(value: unknown): URL | undefined {
 	}
 }
 
-function isDnsCompatibleS3Bucket(value: unknown): boolean {
-	return (
-		typeof value === 'string' &&
-		value.length >= 3 &&
-		value.length <= 63 &&
-		/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(value) &&
-		!value.includes('..') &&
-		!isIpv4Address(value)
-	);
-}
-
-function isIpAddressHost(hostname: string): boolean {
-	return hostname.includes(':') || isIpv4Address(hostname);
-}
-
-function isIpv4Address(value: string): boolean {
-	const octets = value.split('.');
-	return (
-		octets.length === 4 &&
-		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
-	);
+function isValidS3BucketValue(value: unknown): boolean {
+	return typeof value === 'string' && isValidS3Bucket(value);
 }
 
 interface R2CatalogAccess {
@@ -954,7 +905,7 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 							(storage.force_virtual_addressing !== true ||
 								(Array.isArray(storage.broker_read_locations) &&
 									storage.broker_read_locations.every((location) =>
-										isDnsCompatibleS3Bucket(asRecord(location)?.bucket),
+										isValidS3BucketValue(asRecord(location)?.bucket),
 									))),
 						storageIsS3 ? 'storage.broker_read_locations' : 'storage',
 						'virtual-hosted S3 addressing requires DNS-compatible bucket names',
@@ -1024,8 +975,6 @@ function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
 	if (!endpointValue) {
 		throw new ValidationError('DuckDB-Wasm requires an explicit S3 endpoint.');
 	}
-	const endpoint = new URL(endpointValue);
-	const name = sqlIdentifier(`marimohub_s3_${suffix}`);
 	const urlStyle =
 		config.storage.scheme === 's3'
 			? config.storage.force_virtual_addressing
@@ -1035,16 +984,7 @@ function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
 				? 'vhost'
 				: 'path';
 	const region = config.storage.scheme === 's3' ? config.storage.region : vendedS3?.region;
-	return {
-		create: {
-			text:
-				`CREATE TEMPORARY SECRET ${name} (` +
-				"TYPE S3, KEY_ID 'marimohub-parent-broker', SECRET 'marimohub-parent-broker', " +
-				`REGION ?, ENDPOINT ?, URL_STYLE '${urlStyle}', USE_SSL ?)`,
-			params: [region ?? 'us-east-1', endpoint.host, endpoint.protocol === 'https:'],
-		},
-		drop: { text: `DROP SECRET ${name}` },
-	};
+	return brokeredS3Secret({ suffix, endpoint: endpointValue, region, urlStyle });
 }
 
 function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
@@ -1106,14 +1046,7 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 	const credentials =
 		config.storage.anonymous || config.storage.credentials.method !== 'static'
 			? ({ method: 'anonymous' } as const)
-			: {
-					method: 'static' as const,
-					accessKeyId: config.storage.credentials.access_key_id,
-					secretAccessKey: config.storage.credentials.secret_access_key,
-					...(config.storage.credentials.session_token
-						? { sessionToken: config.storage.credentials.session_token }
-						: {}),
-				};
+			: staticS3Credentials(config.storage.credentials);
 	return {
 		kind: 'iceberg-rest',
 		...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),
@@ -1139,12 +1072,46 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 		},
 		storage: {
 			kind: 's3',
-			endpoint: config.storage.endpoint,
-			region: config.storage.region ?? 'us-east-1',
-			urlStyle: config.storage.force_virtual_addressing ? 'vhost' : 'path',
-			credentials,
-			locations: config.storage.broker_read_locations,
+			...duckdbS3StorageAccess({
+				endpoint: config.storage.endpoint,
+				region: config.storage.region,
+				urlStyle: config.storage.force_virtual_addressing ? 'vhost' : 'path',
+				credentials,
+				locations: config.storage.broker_read_locations,
+			}),
 		},
+	};
+}
+
+function duckdbIcebergAttachment(
+	config: IcebergRestConfig,
+	alias: string,
+	secretSuffix: string,
+	warehouseFallback = alias,
+) {
+	const params: (string | number | boolean | null)[] = [config.uri];
+	const options = ['TYPE iceberg', 'ENDPOINT ?'];
+	if (config.warehouse) {
+		options.push('WAREHOUSE ?');
+		params.push(config.warehouse);
+	}
+	options.push(...duckdbAuthOptions(config.auth, params));
+	options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
+	params.push(config.access_delegation);
+	const identifier = sqlIdentifier(alias);
+	const secret = duckdbS3Secret(config, secretSuffix);
+	return {
+		setup: [
+			{ text: 'LOAD iceberg' },
+			{ text: 'LOAD httpfs' },
+			...(secret ? [secret.create] : []),
+			{
+				text: `ATTACH ${sqlLiteral(duckdbWarehouse(config, warehouseFallback))} AS ${identifier} (${options.join(', ')})`,
+				params,
+			},
+		],
+		cleanup: [...(secret ? [secret.drop] : []), { text: `DETACH ${identifier}` }],
+		httpAccess: duckdbHttpAccess(config),
 	};
 }
 

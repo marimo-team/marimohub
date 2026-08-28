@@ -27,13 +27,16 @@ interface DuckDBHttpTransportPolicy {
 	allowInsecureTransport?: boolean;
 }
 
-export interface DuckDBS3HttpAccess extends DuckDBHttpTransportPolicy {
-	kind: 's3-object-store';
+export interface DuckDBS3StorageAccess {
 	endpoint: string;
 	region: string;
 	urlStyle: 'path' | 'vhost';
 	credentials: DuckDBS3Credentials;
 	locations: readonly { bucket: string; prefix: string }[];
+}
+
+export interface DuckDBS3HttpAccess extends DuckDBHttpTransportPolicy, DuckDBS3StorageAccess {
+	kind: 's3-object-store';
 }
 
 export interface DuckDBIcebergRestHttpAccess extends DuckDBHttpTransportPolicy {
@@ -51,14 +54,9 @@ export interface DuckDBIcebergRestHttpAccess extends DuckDBHttpTransportPolicy {
 		};
 	};
 	storage:
-		| {
+		| ({
 				kind: 's3';
-				endpoint: string;
-				region: string;
-				urlStyle: 'path' | 'vhost';
-				credentials: DuckDBS3Credentials;
-				locations: readonly { bucket: string; prefix: string }[];
-		  }
+		  } & DuckDBS3StorageAccess)
 		| {
 				kind: 'r2-catalog';
 				endpoint: string;
@@ -82,7 +80,7 @@ export interface DuckDBDatabaseHttpAccess {
 export interface DuckDBDuckLakeHttpAccess extends DuckDBHttpTransportPolicy {
 	kind: 'ducklake';
 	metadata: DuckDBDatabaseHttpAccess;
-	storage: Omit<DuckDBS3HttpAccess, 'kind' | 'allowInsecureTransport'>;
+	storage: DuckDBS3StorageAccess;
 }
 
 export type DuckDBHttpAccess =

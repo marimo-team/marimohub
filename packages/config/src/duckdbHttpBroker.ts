@@ -1,9 +1,6 @@
 import { createHmac, createHash } from 'node:crypto';
-import { request as httpRequest } from 'node:http';
-import type { RequestOptions } from 'node:http';
-import { request as httpsRequest } from 'node:https';
-import { noopMetrics } from '@marimo-hub/core';
-import type { DuckDBHttpAccess, Metrics } from '@marimo-hub/core';
+import { isIpAddressHost, isValidS3Bucket, noopMetrics } from '@marimo-hub/core';
+import type { DuckDBHttpAccess, DuckDBS3StorageAccess, Metrics } from '@marimo-hub/core';
 import {
 	HTTP_BRIDGE_BODY_BYTES,
 	IcebergHttpBroker,
@@ -17,9 +14,9 @@ import type {
 	IcebergHttpBrokerRoute,
 	IcebergHttpBrokerTransport,
 } from '@marimo-hub/duckdb-wasm-runtime/node';
-import { createPinnedLookup } from '@marimo-hub/object-browser-commons';
 import type { GuardedHostResolver } from '@marimo-hub/object-browser-commons';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
+import { pinnedHttpRequest } from './pinnedHttpTransport';
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REQUESTS = 512;
@@ -209,7 +206,7 @@ function routesFor(
 				methods: ['GET', 'HEAD'] as const,
 				forwardRequestHeaders: VENDED_S3_REQUEST_HEADERS,
 			},
-			...(isDnsCompatibleS3Bucket(storage.bucket) && !isIpAddressHost(endpoint.hostname)
+			...(isValidS3Bucket(storage.bucket) && !isIpAddressHost(endpoint.hostname)
 				? [
 						{
 							kind: 'storage' as const,
@@ -436,23 +433,8 @@ function recordDatabasePolicy(
 	metrics.increment('duckdb_http_database.policy', 1, { policy, outcome });
 }
 
-interface S3RouteAccess {
-	endpoint: string;
-	region: string;
-	urlStyle: 'path' | 'vhost';
-	credentials:
-		| { method: 'anonymous' }
-		| {
-				method: 'static';
-				accessKeyId: string;
-				secretAccessKey: string;
-				sessionToken?: string;
-		  };
-	locations: readonly { bucket: string; prefix: string }[];
-}
-
 function s3RoutesFor(
-	storage: Readonly<S3RouteAccess>,
+	storage: Readonly<DuckDBS3StorageAccess>,
 	now: () => number,
 	allowInsecureTransport: boolean,
 ): IcebergHttpBrokerRoute[] {
@@ -637,7 +619,7 @@ function parseVendedS3Location(
 	const withoutScheme = value.slice('s3://'.length);
 	const separator = withoutScheme.search(/[/?#]/);
 	const authority = separator === -1 ? withoutScheme : withoutScheme.slice(0, separator);
-	if (!isDnsCompatibleS3Bucket(authority)) return undefined;
+	if (!isValidS3Bucket(authority)) return undefined;
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -998,66 +980,16 @@ export function createGuardedBinaryTransport(options: {
 		const dnsSignal = deadlineSignal(request.signal, deadlineMs);
 		const pinned = await resolveHost(url.hostname, dnsSignal);
 		const signal = deadlineSignal(request.signal, deadlineMs);
-		return new Promise((resolve, reject) => {
-			let settled = false;
-			const settle = (fn: () => void) => {
-				if (settled) return;
-				settled = true;
-				fn();
-			};
-			const requestOptions: RequestOptions & { autoSelectFamily?: boolean } = {
-				method: request.method,
-				headers: request.headers,
-				lookup: createPinnedLookup(pinned),
-				autoSelectFamily: true,
-				agent: false,
-				signal,
-			};
-			const outgoing = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
-				url,
-				requestOptions,
-				(response) => {
-					const declared = Number(response.headers['content-length']);
-					if (
-						request.method !== 'HEAD' &&
-						Number.isFinite(declared) &&
-						declared > request.maxResponseBytes
-					) {
-						response.destroy();
-						settle(() => reject(responseTooLarge()));
-						return;
-					}
-					const chunks: Buffer[] = [];
-					let total = 0;
-					response.on('data', (chunk: Buffer) => {
-						total += chunk.byteLength;
-						if (total > request.maxResponseBytes) {
-							response.destroy();
-							settle(() => reject(responseTooLarge()));
-							return;
-						}
-						chunks.push(chunk);
-					});
-					response.on('end', () =>
-						settle(() =>
-							resolve({
-								status: response.statusCode ?? 0,
-								headers: Object.fromEntries(
-									Object.entries(response.headers).flatMap(([name, value]) =>
-										value === undefined
-											? []
-											: [[name, Array.isArray(value) ? value.join(', ') : value]],
-									),
-								),
-								body: new Uint8Array(Buffer.concat(chunks)),
-							}),
-						),
-					);
-					response.on('error', (error) => settle(() => reject(error)));
-				},
-			);
-			outgoing.on('error', (error) => settle(() => reject(error)));
-			outgoing.end();
+		return pinnedHttpRequest({
+			url,
+			method: request.method,
+			headers: request.headers,
+			pinned,
+			maxResponseBytes: request.maxResponseBytes,
+			signal,
+			overflow: 'reject',
+			overflowError: responseTooLarge,
+			checkContentLength: request.method !== 'HEAD',
 		});
 	};
 }
@@ -1218,7 +1150,7 @@ function storagePrefixUrl(
 	}
 	const url = new URL(endpoint);
 	if (urlStyle === 'vhost') {
-		if (!isDnsCompatibleS3Bucket(bucket) || isIpAddressHost(endpoint.hostname)) {
+		if (!isValidS3Bucket(bucket) || isIpAddressHost(endpoint.hostname)) {
 			throw new IcebergHttpBrokerError(
 				'invalid_capability',
 				'Virtual-hosted S3 requires a DNS bucket and endpoint. Use path-style addressing for IP endpoints or non-DNS buckets.',
@@ -1252,28 +1184,6 @@ function invalidCatalogEndpoint(): IcebergHttpBrokerError {
 	return new IcebergHttpBrokerError(
 		'invalid_capability',
 		'Catalog endpoint is invalid. Use an HTTP or HTTPS URL without embedded credentials or query parameters.',
-	);
-}
-
-function isDnsCompatibleS3Bucket(bucket: string): boolean {
-	return (
-		bucket.length >= 3 &&
-		bucket.length <= 63 &&
-		/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(bucket) &&
-		!bucket.includes('..') &&
-		!isIpv4Address(bucket)
-	);
-}
-
-function isIpAddressHost(hostname: string): boolean {
-	return hostname.includes(':') || isIpv4Address(hostname);
-}
-
-function isIpv4Address(value: string): boolean {
-	const octets = value.split('.');
-	return (
-		octets.length === 4 &&
-		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
 	);
 }
 

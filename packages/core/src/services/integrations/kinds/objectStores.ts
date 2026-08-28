@@ -8,7 +8,6 @@ import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import type { QueryReadinessCheck } from '../../../ports/integrations';
 import type { DuckDBHttpAccess } from '../data-preview/programs';
-import { sqlIdentifier } from '../data-preview/sql';
 import { defineIntegration, HOSTNAME_REGEX } from '../sdk';
 import { zSecret } from '../secretFields';
 import {
@@ -18,6 +17,7 @@ import {
 	GCS_BUCKET_REGEX,
 	httpUrlField,
 	isInsecureHttpUrl,
+	isIpAddressHost,
 	isValidGcsBucket,
 	isValidS3Bucket,
 	renderConnection,
@@ -26,6 +26,7 @@ import {
 	s3BrokerReadLocationsSchema,
 	usesInsecureAuthenticatedS3,
 } from './common';
+import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
 
 const s3Config = z.strictObject({
 	bucket: z
@@ -174,23 +175,17 @@ export const s3 = defineIntegration({
 		plan({ config, integration }) {
 			const reason = s3QueryBlocker(config);
 			if (reason) throw new ValidationError(reason);
-			const endpoint = new URL(config.endpoint_url!);
-			const secretName = sqlIdentifier(`marimohub_s3_${integration.id.replaceAll('-', '_')}`);
 			const urlStyle = config.path_style ? 'path' : 'vhost';
+			const secret = brokeredS3Secret({
+				suffix: integration.id.replaceAll('-', '_'),
+				endpoint: config.endpoint_url!,
+				region: config.region,
+				urlStyle,
+			});
 			return {
 				engine: 'duckdb-wasm',
-				setup: [
-					{ text: 'LOAD httpfs' },
-					{ text: 'LOAD parquet' },
-					{
-						text:
-							`CREATE TEMPORARY SECRET ${secretName} (` +
-							"TYPE S3, KEY_ID 'marimohub-parent-broker', SECRET 'marimohub-parent-broker', " +
-							`REGION ?, ENDPOINT ?, URL_STYLE '${urlStyle}', USE_SSL ?)`,
-						params: [config.region ?? 'us-east-1', endpoint.host, endpoint.protocol === 'https:'],
-					},
-				],
-				cleanup: [{ text: `DROP SECRET ${secretName}` }],
+				setup: [{ text: 'LOAD httpfs' }, { text: 'LOAD parquet' }, secret.create],
+				cleanup: [secret.drop],
 				httpAccess: s3HttpAccess(config),
 			};
 		},
@@ -275,7 +270,7 @@ function s3QueryReadiness(config: S3Config): QueryReadinessCheck[] {
 		readinessCheck(
 			's3-virtual-host-endpoint',
 			'Use a DNS endpoint for virtual-hosted S3',
-			config.path_style || (endpoint !== undefined && !isIpAddress(endpoint.hostname)),
+			config.path_style || (endpoint !== undefined && !isIpAddressHost(endpoint.hostname)),
 			'endpoint_url',
 			'virtual-hosted S3 addressing requires a DNS endpoint',
 		),
@@ -325,22 +320,16 @@ function s3HttpAccess(config: S3Config): DuckDBHttpAccess {
 	return {
 		kind: 's3-object-store',
 		...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),
-		endpoint: config.endpoint_url,
-		region: config.region ?? 'us-east-1',
-		urlStyle: config.path_style ? 'path' : 'vhost',
-		credentials:
-			config.auth.method === 'anonymous'
-				? { method: 'anonymous' }
-				: {
-						method: 'static',
-						accessKeyId: config.auth.access_key_id,
-						secretAccessKey: config.auth.secret_access_key,
-						...(config.auth.session_token ? { sessionToken: config.auth.session_token } : {}),
-					},
-		locations: config.broker_read_locations.map((location) => ({
-			bucket: location.bucket,
-			prefix: location.prefix.replaceAll(/^\/+|\/+$/g, ''),
-		})),
+		...duckdbS3StorageAccess({
+			endpoint: config.endpoint_url,
+			region: config.region,
+			urlStyle: config.path_style ? 'path' : 'vhost',
+			credentials:
+				config.auth.method === 'anonymous'
+					? { method: 'anonymous' }
+					: staticS3Credentials(config.auth),
+			locations: config.broker_read_locations,
+		}),
 	};
 }
 
@@ -357,15 +346,6 @@ function assertSecureS3Transport(config: S3Config): void {
 	throw new ValidationError(
 		'Authenticated S3 requires an https:// endpoint. Enable allow_insecure_transport to override ' +
 			'for local development.',
-	);
-}
-
-function isIpAddress(hostname: string): boolean {
-	if (hostname.includes(':')) return true;
-	const octets = hostname.split('.');
-	return (
-		octets.length === 4 &&
-		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
 	);
 }
 
