@@ -506,6 +506,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 }
 
 export class ContainerCompute implements SandboxProvider {
+	readonly capabilities = { multiPort: false } as const;
 	private readonly config: ResolvedConfig;
 
 	constructor(

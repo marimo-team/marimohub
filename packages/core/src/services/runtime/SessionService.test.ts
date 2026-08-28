@@ -293,9 +293,23 @@ describe('SessionService', () => {
 			const key = paths.session(projectId, session.session_id);
 			const raw = await (await bucket.get(key))?.json<Record<string, unknown>>();
 			const pin = [{ id: 'intg-0000000000000000', name: 'prod', kind: 'postgres', version: 3 }];
+			const futureSurface = {
+				status: 'starting',
+				attempt_id: 'attempt-newer',
+				attempt_started_at: new Date().toISOString(),
+				future_routing_field: 'from-a-newer-replica',
+			};
 			await bucket.put(
 				key,
-				JSON.stringify({ ...raw, integrations: pin, future_field: 'from-a-newer-replica' }),
+				JSON.stringify({
+					...raw,
+					integrations: pin,
+					future_field: 'from-a-newer-replica',
+					surfaces: {
+						...(raw?.surfaces as Record<string, unknown> | undefined),
+						vscode: futureSurface,
+					},
+				}),
 			);
 
 			advanceTime(61 * 1000);
@@ -303,9 +317,11 @@ describe('SessionService', () => {
 			restoreClock();
 
 			const rewritten = await (await bucket.get(key))?.json<Record<string, unknown>>();
+			const rewrittenSurfaces = rewritten?.surfaces as Record<string, unknown> | undefined;
 			expect(rewritten?.status).toBe('running');
 			expect(rewritten?.integrations).toEqual(pin);
 			expect(rewritten?.future_field).toBe('from-a-newer-replica');
+			expect(rewrittenSurfaces?.vscode).toEqual(futureSurface);
 		});
 	});
 

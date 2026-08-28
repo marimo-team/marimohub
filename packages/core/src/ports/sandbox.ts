@@ -176,6 +176,8 @@ export interface SetEnvVarsOptions {
 export interface SandboxInstance {
 	/** Whether `mountBucket` is a real backend capability rather than a copy fallback signal. */
 	readonly supportsBucketMount?: boolean;
+	resolveProcessPath?(path: string): string;
+	isPortReady?(port: number, options?: Omit<WaitForPortOptions, 'timeout'>): Promise<boolean>;
 	/**
 	 * Resolve the backing sandbox without running anything in it, so an adapter
 	 * that creates lazily pays its create here rather than inside whichever call
@@ -277,6 +279,9 @@ export interface CreateSandboxOptions {
 }
 
 export interface SandboxProvider {
+	readonly capabilities?: {
+		multiPort: boolean;
+	};
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/**
 	 * Proxy an incoming request to a sandbox's exposed port.

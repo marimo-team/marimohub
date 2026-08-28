@@ -20,6 +20,7 @@ export interface MarimoLaunchParams {
 	 * websocket URLs resolve beneath the proxied prefix. Omit to serve at root.
 	 */
 	baseUrl?: string;
+	watch?: boolean;
 }
 
 export interface MarimoLaunchPlan {
@@ -53,9 +54,9 @@ interface ModeLaunch {
  * Per-mode launch strategy. `app` maps to `marimo run`, which accepts every
  * common flag including `--asset-url` (a hidden option on `run` — verified
  * against marimo 0.23.x `cli.py`, so app pages get the CDN fast path too);
- * only `--convert` is edit-only. `--include-code`, `--watch`, and
- * `--session-ttl` are deliberately left at marimo's defaults; the default TTL
- * (120s) is what garbage-collects a disconnected viewer's kernel.
+ * only `--convert` and `--watch` are edit-only. `--include-code` and
+ * `--session-ttl` stay at marimo's defaults; the default TTL (120s) is what
+ * garbage-collects a disconnected viewer's kernel.
  */
 const LAUNCH_MODES: Record<SessionMode, ModeLaunch> = {
 	edit: {
@@ -63,7 +64,8 @@ const LAUNCH_MODES: Record<SessionMode, ModeLaunch> = {
 		// --convert opens a non-marimo .py file (e.g. a plain script); no-op on real
 		// marimo notebooks, so it's safe to always pass for .py. Its fallback can
 		// rewrite the file as Python, so never pass it for md/qmd notebooks.
-		flags: (p) => `${p.notebookFile.endsWith('.py') ? '--convert ' : ''}${commonFlags(p)}`,
+		flags: (p) =>
+			`${p.notebookFile.endsWith('.py') ? '--convert ' : ''}${p.watch ? '--watch ' : ''}${commonFlags(p)}`,
 	},
 	app: {
 		subcommand: 'run',

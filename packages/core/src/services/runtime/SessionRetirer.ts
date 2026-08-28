@@ -9,6 +9,7 @@ import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { sessionPersistsEdits } from './sessionState';
 import type { SessionService, TakeoverDrainStage } from './SessionService';
+import { shellQuote } from './shell';
 
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
@@ -196,6 +197,7 @@ export class SessionRetirer {
 	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
+		await this.stopSecondarySurfaces(sandbox, session);
 		if (!session.takeover_capture_completed_at) {
 			const persisted = await this.provisioner.captureSession(
 				sandbox,
@@ -276,6 +278,7 @@ export class SessionRetirer {
 	private async teardownSandbox(session: Session, captureBeforeDestroy = true): Promise<boolean> {
 		if (!session.sandbox_id) return true;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
+		await this.stopSecondarySurfaces(sandbox, session);
 		let persisted = false;
 		if (captureBeforeDestroy) {
 			try {
@@ -337,5 +340,23 @@ export class SessionRetirer {
 			);
 			return false;
 		}
+	}
+
+	private async stopSecondarySurfaces(
+		sandbox: ReturnType<SandboxProvider['create']>,
+		session: Session,
+	): Promise<void> {
+		const surfaces = Object.entries(session.surfaces ?? {}).filter(
+			([id, state]) => id !== 'marimo' && (state.status === 'starting' || state.status === 'ready'),
+		);
+		await Promise.allSettled(
+			surfaces.map(([id]) => {
+				const pidFile = `/tmp/.marimohub/surfaces/${session.session_id}/${id}/surface.pid`;
+				return sandbox.exec(
+					`if test -f ${shellQuote(pidFile)}; then pid="$(cat ${shellQuote(pidFile)})"; kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 10; do sleep 0.5; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; fi`,
+					{ timeout: 10_000 },
+				);
+			}),
+		);
 	}
 }

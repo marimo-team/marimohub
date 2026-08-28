@@ -77,6 +77,7 @@ import { checkSandboxHostIsolation } from './hostIsolation';
 import { buildPreflightChecks } from './preflightChecks';
 import { parseExperiments } from './experiments';
 import { postgresDataAccessFeatures } from './postgresFeatures';
+import { surfacesFromEnv } from './surfaces';
 
 export { ConfigError, isConfigError } from './errors';
 export type { ConfigErrorOptions } from './errors';
@@ -544,6 +545,13 @@ export function createFromEnv(
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 		libraries: options?.libraries,
 	});
+	const surfaces = surfacesFromEnv(env);
+	if (surfaces?.vscode && compute.capabilities?.multiPort !== true) {
+		throw new ConfigError(
+			`The ${computeBackendValue} compute backend cannot expose a second sandbox port for VS Code`,
+			{ variable: 'MARIMOHUB_SURFACES' },
+		);
+	}
 	const brokerPolicy =
 		integrationsEnabled(env) && env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
@@ -593,6 +601,7 @@ export function createFromEnv(
 			computeProfiles: profilesSupported ? [...appliedComputeProfiles.profiles] : [],
 			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
 			userHome,
+			surfaces,
 		},
 		policy: {
 			defaultRole: parseDefaultRole(env),

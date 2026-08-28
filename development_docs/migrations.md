@@ -58,6 +58,11 @@ readers fan out over versions rather than rewriting old records.
 
 ## Rolling-deploy compatibility
 
+Session records may now include an optional `surfaces` map. `SessionSchema`
+remains a `z.looseObject`, so an old replica preserves this field during a CAS
+read-modify-write. New replicas treat an absent map as a session with no started
+secondary surfaces. No stored-data migration is required.
+
 Lazy/fan-out migration handles the **old data → new code** direction. The
 dangerous direction during a rolling deploy is the opposite one: a **new-version
 replica writes an object an old-version replica then reads, mutates, and

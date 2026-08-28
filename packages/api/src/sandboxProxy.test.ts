@@ -221,6 +221,140 @@ describe('authorizeProxyRequest', () => {
 		});
 	});
 
+	it('authorizes a VS Code surface separately and strips the code-server proxy prefix', async () => {
+		const services = createServices(bucket);
+		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+			status: 'ready',
+			origin_url: 'http://vscode.internal:8443',
+		});
+
+		const path = `/surface-proxy/${token}/vscode/stable/out.js?v=1`;
+		const allowed = await authorizeProxyRequest(req(path), deps(ACTOR));
+		expect(allowed).toMatchObject({
+			kind: 'forward',
+			targetUrl: 'http://vscode.internal:8443/stable/out.js?v=1',
+			sessionId,
+		});
+
+		const denied = await authorizeProxyRequest(req(path), {
+			...deps(STRANGER),
+			policy: { defaultRole: 'viewer' },
+		});
+		expect(denied).toMatchObject({ kind: 'reject', status: 403 });
+	});
+
+	it('maps the code-server surface root to the upstream root and preserves its query', async () => {
+		const services = createServices(bucket);
+		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+			status: 'ready',
+			origin_url: 'http://vscode.internal:8443',
+		});
+		const path = `/surface-proxy/${token}/vscode/?folder=%2Fworkspace`;
+
+		const allowed = await authorizeProxyRequest(req(path), deps(ACTOR));
+
+		expect(allowed).toMatchObject({
+			kind: 'forward',
+			targetUrl: 'http://vscode.internal:8443/?folder=%2Fworkspace',
+		});
+	});
+
+	it.each(['starting', 'failed', 'stopped'] as const)(
+		'rejects a %s VS Code surface before forwarding',
+		async (status) => {
+			await createServices(bucket).sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+				status,
+				origin_url: 'http://vscode.internal:8443',
+			});
+
+			const decision = await authorizeProxyRequest(
+				req(`/surface-proxy/${token}/vscode/`),
+				deps(ACTOR),
+			);
+
+			expect(decision).toMatchObject({
+				kind: 'reject',
+				status: 503,
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'Session surface is not reachable via the proxy',
+			});
+		},
+	);
+
+	it('preserves the proxy prefix configured as the OpenVSCode server base path', async () => {
+		const services = createServices(bucket);
+		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+			status: 'ready',
+			origin_url: 'http://vscode.internal:8443',
+		});
+		const configured = deps(ACTOR);
+		configured.sandbox.surfaces = {
+			vscode: {
+				flavor: 'openvscode',
+				start: 'on-demand',
+				port: 8443,
+				settings: {},
+				extensionGallery: 'openvsx',
+				embed: 'tab',
+				marimoWatch: true,
+			},
+		};
+		const path = `/surface-proxy/${token}/vscode/stable/out.js?v=1`;
+
+		const allowed = await authorizeProxyRequest(req(path), configured);
+
+		expect(allowed).toMatchObject({
+			kind: 'forward',
+			targetUrl: `http://vscode.internal:8443${path}`,
+		});
+	});
+
+	it.each([
+		{
+			persisted: 'strip-prefix' as const,
+			configured: 'openvscode' as const,
+			expectedPath: '/stable/out.js?v=1',
+		},
+		{
+			persisted: 'preserve-prefix' as const,
+			configured: 'code-server' as const,
+			expectedPath: 'preserve',
+		},
+	])('uses persisted $persisted routing during a change to $configured', async (testCase) => {
+		const services = createServices(bucket);
+		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+			status: 'ready',
+			origin_url: 'http://vscode.internal:8443',
+			proxy_path: testCase.persisted,
+		});
+		const configured = deps(ACTOR);
+		configured.sandbox.surfaces = {
+			vscode: {
+				flavor: testCase.configured,
+				start: 'on-demand',
+				port: 8443,
+				settings: {},
+				extensionGallery: 'openvsx',
+				embed: 'tab',
+				marimoWatch: true,
+			},
+		};
+
+		const allowed = await authorizeProxyRequest(
+			req(`/surface-proxy/${token}/vscode/stable/out.js?v=1`),
+			configured,
+		);
+
+		const expectedPath =
+			testCase.expectedPath === 'preserve'
+				? `/surface-proxy/${token}/vscode/stable/out.js?v=1`
+				: testCase.expectedPath;
+		expect(allowed).toMatchObject({
+			kind: 'forward',
+			targetUrl: `http://vscode.internal:8443${expectedPath}`,
+		});
+	});
+
 	it('rejects a terminated session with 410', async () => {
 		await createServices(bucket).sessions.terminate(pid, sessionId as never);
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));

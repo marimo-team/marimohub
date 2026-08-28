@@ -117,6 +117,14 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
 | `MARIMOHUB_COMPUTE_ASSET_URL` | Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
 | `MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS` | How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value. | — | `120` | — |
+| `MARIMOHUB_SURFACES` | Comma-separated editor surfaces enabled in notebook sandboxes. `marimo` is always available; add `vscode` to enable browser VS Code. | — | `marimo` | `marimo,vscode` |
+| `MARIMOHUB_SURFACE_VSCODE_FLAVOR` | Browser editor implementation (`code-server` or `openvscode`). | — | `code-server` | — |
+| `MARIMOHUB_SURFACE_VSCODE_START` | Start VS Code on demand or with every edit session. | — | `on-demand` | — |
+| `MARIMOHUB_SURFACE_VSCODE_PORT` | Logical sandbox port used by the VS Code surface. Must differ from marimo port 2718. | — | `8443` | — |
+| `MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY` | Extension gallery (`openvsx`, `none`, or the HTTP(S) service URL of a mirror). | — | `openvsx` | — |
+| `MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON` | JSON object merged over the safe browser-editor defaults. | — | `{}` | `{"editor.fontSize":14}` |
+| `MARIMOHUB_SURFACE_VSCODE_EMBED` | Open VS Code in a new tab or an iframe (`tab` or `iframe`). | — | `tab` | — |
+| `MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH` | Pass `--watch` to marimo edit when the VS Code surface is enabled. | — | `true` | — |
 
 ### CoreWeave Sandbox
 

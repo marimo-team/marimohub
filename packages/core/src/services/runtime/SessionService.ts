@@ -32,7 +32,8 @@ import {
 	SessionSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
-import type { EditorClaim, Session } from '../../schema';
+import type { EditorClaim, Session, SurfaceState } from '../../schema';
+import type { SurfaceId } from './surfaces/types';
 import {
 	ACTIVE_STATUSES,
 	isTerminal,
@@ -65,6 +66,8 @@ export interface CreateSessionInput {
 	authorization_expires_at?: string;
 	session_id?: SessionId;
 }
+
+export const SURFACE_START_LEASE_MS = Millis.minutes(3);
 
 const HEARTBEAT_TTL_MS = Millis.minutes(5);
 const TERMINAL_RETENTION_MS = Millis.hours(24);
@@ -270,6 +273,15 @@ export class SessionService {
 				...session,
 				status: 'running',
 				sandbox_url: sandboxUrl,
+				surfaces: {
+					...session.surfaces,
+					marimo: {
+						status: 'ready',
+						port: 2718,
+						url: sandboxUrl,
+						started_at: new Date().toISOString(),
+					},
+				},
 				// Persisted only in `proxy` exposure mode (the forwarder's target); absent
 				// in `subdomain` mode where the client reaches the kernel directly.
 				sandbox_origin_url: originUrl,
@@ -314,6 +326,101 @@ export class SessionService {
 	 * whose sandbox is still being snapshotted while editors remain connected. */
 	async markSnapshotted(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
+	}
+
+	async beginSurfaceStart(
+		projectId: ProjectId,
+		id: SessionId,
+		surface: SurfaceId,
+		options?: { replaceReady?: { startedAt?: string; url?: string } },
+	): Promise<{
+		session: Session;
+		transitioned: boolean;
+		attemptId?: string;
+		cleanupExistingProcess?: boolean;
+	}> {
+		let transitioned = false;
+		let cleanupExistingProcess = false;
+		const attemptId = crypto.randomUUID();
+		const now = Date.now();
+		const leaseMs = Number(SURFACE_START_LEASE_MS);
+		const session = await this.mutate(projectId, id, (current) => {
+			const state = current.surfaces?.[surface];
+			const attemptStartedAt = state?.attempt_started_at
+				? Date.parse(state.attempt_started_at)
+				: Number.NaN;
+			const attemptAge = now - attemptStartedAt;
+			const expiredAttempt =
+				state?.status === 'starting' &&
+				(!Number.isFinite(attemptStartedAt) || attemptAge >= leaseMs || attemptAge < -leaseMs);
+			const replaceReady =
+				state?.status === 'ready' &&
+				options?.replaceReady !== undefined &&
+				state.started_at === options.replaceReady.startedAt &&
+				state.url === options.replaceReady.url;
+			const restartable =
+				state === undefined ||
+				state.status === 'stopped' ||
+				state.status === 'failed' ||
+				state.status === 'unavailable';
+			transitioned =
+				current.status === 'running' && (restartable || expiredAttempt || replaceReady);
+			if (!transitioned) return null;
+			cleanupExistingProcess = state !== undefined && state.status !== 'unavailable';
+			return {
+				...current,
+				surfaces: {
+					...current.surfaces,
+					[surface]: {
+						status: 'starting',
+						attempt_id: attemptId,
+						attempt_started_at: new Date(now).toISOString(),
+					},
+				},
+			};
+		});
+		return {
+			session,
+			transitioned,
+			...(transitioned ? { attemptId, cleanupExistingProcess } : {}),
+		};
+	}
+
+	async setSurfaceStateForAttempt(
+		projectId: ProjectId,
+		id: SessionId,
+		surface: SurfaceId,
+		attemptId: string,
+		state: SurfaceState,
+	): Promise<{ session: Session; transitioned: boolean }> {
+		let transitioned = false;
+		const session = await this.mutate(projectId, id, (current) => {
+			const existing = current.surfaces?.[surface];
+			transitioned =
+				existing?.status === 'starting' &&
+				existing.attempt_id === attemptId &&
+				(current.status === 'running' || state.status !== 'ready');
+			if (!transitioned) return null;
+			return { ...current, surfaces: { ...current.surfaces, [surface]: state } };
+		});
+		return { session, transitioned };
+	}
+
+	async setSurfaceState(
+		projectId: ProjectId,
+		id: SessionId,
+		surface: SurfaceId,
+		state: SurfaceState,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (current) => {
+			if (
+				current.status !== 'running' &&
+				(state.status === 'starting' || state.status === 'ready')
+			) {
+				return null;
+			}
+			return { ...current, surfaces: { ...current.surfaces, [surface]: state } };
+		});
 	}
 
 	/** Record provider-confirmed sandbox destruction for claim fencing and reconciliation. */

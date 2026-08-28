@@ -19,6 +19,12 @@ export const DOMAIN_ERROR_CODES = [
 	'SERVICE_UNAVAILABLE',
 	'PYTHON_ENV_SETUP_FAILED',
 	'RESOURCE_EXHAUSTED',
+	'SURFACE_NOT_ENABLED',
+	'SURFACE_UNAVAILABLE',
+	'SURFACE_FORBIDDEN',
+	'SURFACE_PRIMARY',
+	'SURFACE_UNSUPPORTED_PROVIDER',
+	'SURFACE_OPEN_INVALID',
 ] as const;
 
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
@@ -183,6 +189,60 @@ export class ResourceExhaustedError extends DomainError {
 	constructor(message = 'Resource limit exceeded') {
 		super(message);
 		this.name = 'ResourceExhaustedError';
+	}
+}
+
+export class SurfaceNotEnabledError extends DomainError {
+	readonly code = 'SURFACE_NOT_ENABLED';
+	readonly status = 409;
+	constructor(message = 'The surface is not enabled') {
+		super(message);
+		this.name = 'SurfaceNotEnabledError';
+	}
+}
+
+export class SurfaceUnavailableError extends DomainError {
+	readonly code = 'SURFACE_UNAVAILABLE';
+	readonly status = 409;
+	constructor(message = 'The surface is unavailable') {
+		super(message);
+		this.name = 'SurfaceUnavailableError';
+	}
+}
+
+export class SurfaceForbiddenError extends DomainError {
+	readonly code = 'SURFACE_FORBIDDEN';
+	readonly status = 403;
+	constructor(message = 'Not authorized to use this session surface') {
+		super(message);
+		this.name = 'SurfaceForbiddenError';
+	}
+}
+
+export class SurfacePrimaryError extends DomainError {
+	readonly code = 'SURFACE_PRIMARY';
+	readonly status = 400;
+	constructor(message = 'The primary surface cannot be managed separately') {
+		super(message);
+		this.name = 'SurfacePrimaryError';
+	}
+}
+
+export class SurfaceUnsupportedProviderError extends DomainError {
+	readonly code = 'SURFACE_UNSUPPORTED_PROVIDER';
+	readonly status = 409;
+	constructor(message = 'The compute backend cannot expose this surface') {
+		super(message);
+		this.name = 'SurfaceUnsupportedProviderError';
+	}
+}
+
+export class SurfaceOpenInvalidError extends DomainError {
+	readonly code = 'SURFACE_OPEN_INVALID';
+	readonly status = 400;
+	constructor(message = 'The surface open path is invalid') {
+		super(message);
+		this.name = 'SurfaceOpenInvalidError';
 	}
 }
 

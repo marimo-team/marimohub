@@ -447,6 +447,7 @@ class E2bSandboxInstance implements SandboxInstance {
 }
 
 export class E2bCompute implements SandboxProvider {
+	readonly capabilities = { multiPort: true } as const;
 	private client?: E2bClient;
 	private readonly sandboxStates = new Map<SandboxId, E2bSandboxStateEntry>();
 	private readonly sandboxStateFinalizer = new FinalizationRegistry<{

@@ -143,6 +143,17 @@ export interface SandboxConfig {
 	computeProfileOverride?: 'none' | 'editors';
 	/** Resolve personal storage for owner-isolated editor sandboxes. */
 	userHome?: SandboxUserHomeResolver;
+	surfaces?: {
+		vscode?: {
+			flavor: 'code-server' | 'openvscode';
+			start: 'on-demand' | 'eager';
+			port: number;
+			settings: Record<string, unknown>;
+			extensionGallery: string;
+			embed: 'tab' | 'iframe';
+			marimoWatch: boolean;
+		};
+	};
 }
 
 /**

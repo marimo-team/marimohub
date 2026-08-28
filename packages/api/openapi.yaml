@@ -70,6 +70,12 @@ components:
                 - SERVICE_UNAVAILABLE
                 - PYTHON_ENV_SETUP_FAILED
                 - RESOURCE_EXHAUSTED
+                - SURFACE_NOT_ENABLED
+                - SURFACE_UNAVAILABLE
+                - SURFACE_FORBIDDEN
+                - SURFACE_PRIMARY
+                - SURFACE_UNSUPPORTED_PROVIDER
+                - SURFACE_OPEN_INVALID
                 - UNAUTHORIZED
                 - USER_SUSPENDED
                 - GONE
@@ -317,6 +323,35 @@ components:
           enum:
             - none
             - editors
+        surfaces:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                enum:
+                  - vscode
+              flavor:
+                type: string
+                enum:
+                  - code-server
+                  - openvscode
+              start:
+                type: string
+                enum:
+                  - on-demand
+                  - eager
+              embed:
+                type: string
+                enum:
+                  - tab
+                  - iframe
+            required:
+              - id
+              - flavor
+              - start
+              - embed
       required:
         - federation
         - integrations
@@ -332,6 +367,7 @@ components:
         - sandbox_startup_timeout_seconds
         - compute_profiles
         - compute_profile_override
+        - surfaces
     ComputeResources:
       type: object
       properties:
@@ -1555,9 +1591,20 @@ components:
               type: boolean
             stop:
               type: boolean
+            surfaces:
+              type: object
+              properties:
+                vscode:
+                  type: boolean
+              required:
+                - vscode
           required:
             - attach
             - stop
+        surfaces:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Surface'
         active_connections:
           type: number
         connections_checked_at:
@@ -1608,6 +1655,42 @@ components:
         - last_heartbeat
         - mode
         - can
+    Surface:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - starting
+            - ready
+            - stopping
+            - stopped
+            - failed
+            - unavailable
+        port:
+          type: integer
+          exclusiveMinimum: 0
+        url:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          example: 2025-03-05T14:00:00Z
+        probe:
+          type: object
+          properties:
+            available:
+              type: boolean
+            reason:
+              type: string
+            version:
+              type: string
+          required:
+            - available
+        last_error:
+          type: string
+      required:
+        - status
     EditorSessionState:
       type: object
       properties:
@@ -1739,6 +1822,13 @@ components:
           type: string
           enum:
             - temporary
+      additionalProperties: false
+    SurfaceStartBody:
+      type: object
+      properties:
+        open:
+          type: string
+          maxLength: 4096
     IntegrationKind:
       type: object
       properties:
@@ -8182,6 +8272,373 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}:
+    post:
+      operationId: sessions.surfaces.ensure
+      tags:
+        - Sessions
+      summary: Start or reuse a session surface
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+        - schema:
+            type: string
+            enum:
+              - vscode
+          required: true
+          name: surface
+          in: path
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SurfaceStartBody'
+      responses:
+        '200':
+          description: Surface ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/Surface'
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            enum:
+                              - vscode
+                        required:
+                          - id
+                required:
+                  - success
+                  - data
+        '202':
+          description: Surface starting
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/Surface'
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            enum:
+                              - vscode
+                        required:
+                          - id
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      operationId: sessions.surfaces.get
+      tags:
+        - Sessions
+      summary: Get a session surface
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+        - schema:
+            type: string
+            enum:
+              - vscode
+          required: true
+          name: surface
+          in: path
+      responses:
+        '200':
+          description: Surface status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/Surface'
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            enum:
+                              - vscode
+                        required:
+                          - id
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: sessions.surfaces.stop
+      tags:
+        - Sessions
+      summary: Stop a secondary session surface
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+        - schema:
+            type: string
+            enum:
+              - vscode
+          required: true
+          name: surface
+          in: path
+      responses:
+        '200':
+          description: Surface stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
           content:
             application/json:
               schema:

@@ -80,6 +80,16 @@ its own. In `proxy` mode the hub's auth + per-session check front it; in
 Never expose the kernel hostname directly — keep marimohub (and your ingress, for
 the `kubernetes`/`coreweave` backends) in front.
 
+## Secondary editor surfaces
+
+The optional VS Code surface runs in the existing edit sandbox. Its terminal
+can read the same session credentials and project integrations as the marimo
+kernel, so only an editor who can attach to that edit session may start or reach
+it. App sessions and viewer-owned ephemeral sessions are denied. Proxy exposure
+rechecks this grant on every HTTP request and WebSocket upgrade; subdomain
+exposure treats the returned URL as a capability and withholds it from other
+callers.
+
 ## Authentication fails closed
 
 - `MARIMOHUB_AUTH_BACKEND` has **no default** — an unset backend refuses to

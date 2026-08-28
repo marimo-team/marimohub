@@ -30,7 +30,7 @@ import {
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
 type ApiSession = Session & {
-	can: { attach: boolean; stop: boolean };
+	can: { attach: boolean; stop: boolean; surfaces?: { vscode: boolean } };
 	reused?: boolean;
 };
 
@@ -1477,6 +1477,343 @@ describe('Session routes', () => {
 		await expectError(await stranger('POST', sessionsPath()), 403, 'FORBIDDEN');
 	});
 
+	it('starts, reports, and stops a VS Code surface on an edit sandbox', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const compute = Object.assign(fakeComputeFrom(instance), {
+			capabilities: { multiPort: true } as const,
+		});
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: sandboxConfig({
+					surfaces: {
+						vscode: {
+							flavor: 'code-server',
+							start: 'on-demand',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+							marimoWatch: true,
+						},
+					},
+				}),
+			},
+		}).request;
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		const path = sessionsPath(`/${session.session_id}/surfaces/vscode`);
+
+		const surface = await expectOk<{ status: string; url?: string }>(
+			await request('POST', path, { open: 'notebook.py' }),
+			202,
+		);
+		expect(surface).toMatchObject({ status: 'starting' });
+		await vi.waitFor(async () => {
+			expect(await expectOk(await request('GET', path))).toMatchObject({
+				status: 'ready',
+				url: expect.stringContaining('folder='),
+			});
+		});
+		expect(calls.exposePort.at(-1)?.port).toBe(8443);
+		expect(calls.startProcess.at(-1)?.cmd).toContain('code-server');
+
+		const exec = instance.exec.bind(instance);
+		instance.exec = async (cmd, execOptions) =>
+			cmd.includes('kill -TERM')
+				? {
+						success: false,
+						stdout: '',
+						stderr: 'permission denied',
+						error: { code: 'COMMAND_FAILED' },
+					}
+				: exec(cmd, execOptions);
+		await expectError(await request('DELETE', path), 503, 'SERVICE_UNAVAILABLE');
+		expect(await expectOk(await request('GET', path))).toMatchObject({
+			status: 'failed',
+			last_error: 'Failed to stop vscode',
+		});
+		instance.exec = exec;
+		await expectOk(await request('DELETE', path));
+		expect(calls.exec.at(-1)).toContain('/vscode/surface.pid');
+	});
+
+	it('returns 202 without waiting for VS Code readiness', async () => {
+		const { instance } = makeFakeSandbox();
+		let finishReadiness!: () => void;
+		const readiness = new Promise<void>((resolve) => {
+			finishReadiness = resolve;
+		});
+		const deferred: Promise<unknown>[] = [];
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: Object.assign(fakeComputeFrom(instance), {
+				capabilities: { multiPort: true } as const,
+			}),
+			deps: {
+				backgroundTasks: { defer: (task) => deferred.push(task) },
+				sandbox: sandboxConfig({
+					surfaces: {
+						vscode: {
+							flavor: 'code-server',
+							start: 'on-demand',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+							marimoWatch: true,
+						},
+					},
+				}),
+			},
+		}).request;
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		instance.startProcess = vi.fn(async () => ({
+			id: 'surface-vscode',
+			command: 'code-server',
+			kill: async () => {},
+			waitForPort: async () => readiness,
+			getLogs: async () => ({ stdout: '', stderr: '' }),
+		}));
+		const path = sessionsPath(`/${session.session_id}/surfaces/vscode`);
+
+		const starting = await expectOk<{ status: string }>(await request('POST', path), 202);
+
+		expect(starting.status).toBe('starting');
+		expect(deferred).toHaveLength(1);
+		expect(await expectOk(await request('GET', path))).toMatchObject({ status: 'starting' });
+		finishReadiness();
+		await Promise.all(deferred);
+		expect(await expectOk(await request('GET', path))).toMatchObject({ status: 'ready' });
+	});
+
+	it('reports a deferred startup failure through the surface status', async () => {
+		const { instance } = makeFakeSandbox();
+		const deferred: Promise<unknown>[] = [];
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: Object.assign(fakeComputeFrom(instance), {
+				capabilities: { multiPort: true } as const,
+			}),
+			deps: {
+				backgroundTasks: { defer: (task) => deferred.push(task) },
+				sandbox: sandboxConfig({
+					surfaces: {
+						vscode: {
+							flavor: 'code-server',
+							start: 'on-demand',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+							marimoWatch: true,
+						},
+					},
+				}),
+			},
+		}).request;
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		instance.startProcess = vi.fn(async () => ({
+			id: 'surface-vscode',
+			command: 'code-server',
+			kill: async () => {},
+			waitForPort: async () => {
+				throw new Error('readiness failed');
+			},
+			getLogs: async () => ({ stdout: '', stderr: '' }),
+		}));
+		const path = sessionsPath(`/${session.session_id}/surfaces/vscode`);
+
+		await expectOk(await request('POST', path), 202);
+		await Promise.all(deferred);
+
+		expect(await expectOk(await request('GET', path))).toMatchObject({
+			status: 'failed',
+			last_error: 'Failed to start vscode (Error)',
+		});
+	});
+
+	it('lets a manager stop an exclusive surface after VS Code is disabled', async () => {
+		await createServices(bucket).projects.addMember(pid, { user_id: MANAGER }, 'manager', ACTOR);
+		const { instance, calls } = makeFakeSandbox();
+		const compute = Object.assign(fakeComputeFrom(instance), {
+			capabilities: { multiPort: true } as const,
+		});
+		const ownerRequest = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				policy: { editorSandboxSharing: 'exclusive' },
+				sandbox: sandboxConfig({
+					surfaces: {
+						vscode: {
+							flavor: 'code-server',
+							start: 'on-demand',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+							marimoWatch: true,
+						},
+					},
+				}),
+			},
+		}).request;
+		const session = await expectOk<ApiSession>(await ownerRequest('POST', sessionsPath()));
+		const path = sessionsPath(`/${session.session_id}/surfaces/vscode`);
+		await expectOk(await ownerRequest('POST', path), 202);
+		await vi.waitFor(async () => {
+			expect(
+				(await createServices(bucket).sessions.getSession(pid, session.session_id)).surfaces?.vscode
+					?.status,
+			).toBe('ready');
+		});
+		const managerRequest = createTestApi({
+			bucket,
+			userId: MANAGER,
+			compute,
+			deps: { policy: { editorSandboxSharing: 'exclusive' } },
+		}).request;
+
+		await expectOk(await managerRequest('DELETE', path));
+
+		expect(calls.exec.at(-1)).toContain('/vscode/surface.pid');
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, session.session_id)).surfaces?.vscode,
+		).toEqual({ status: 'stopped' });
+	});
+
+	it('rejects the removed create-session surface field without provisioning', async () => {
+		await expectError(
+			await owner('POST', sessionsPath(), { surfaces: ['vscode'] }),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(0);
+	});
+
+	it('rejects an unsafe VS Code open path without starting the surface', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const compute = Object.assign(fakeComputeFrom(instance), {
+			capabilities: { multiPort: true } as const,
+		});
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: sandboxConfig({
+					surfaces: {
+						vscode: {
+							flavor: 'code-server',
+							start: 'on-demand',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+							marimoWatch: true,
+						},
+					},
+				}),
+			},
+		}).request;
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		const processCount = calls.startProcess.length;
+
+		await expectError(
+			await request('POST', sessionsPath(`/${session.session_id}/surfaces/vscode`), {
+				open: '../secret.py',
+			}),
+			400,
+			'SURFACE_OPEN_INVALID',
+		);
+		expect(calls.startProcess).toHaveLength(processCount);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, session.session_id)).surfaces?.vscode,
+		).toBeUndefined();
+	});
+
+	it('does not eagerly start VS Code for a viewer-owned ephemeral session', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const compute = Object.assign(fakeComputeFrom(instance), {
+			capabilities: { multiPort: true } as const,
+		});
+		const request = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute,
+			deps: {
+				sandbox: sandboxConfig({
+					surfaces: {
+						vscode: {
+							flavor: 'code-server',
+							start: 'eager',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+							marimoWatch: true,
+						},
+					},
+				}),
+				policy: { defaultRole: 'viewer', viewerMode: 'ephemeral-sandbox' },
+			},
+		}).request;
+
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		expect(session.ephemeral).toBe(true);
+		expect(session.can.surfaces?.vscode).toBe(false);
+		expect(calls.startProcess.some(({ cmd }) => cmd.includes('code-server'))).toBe(false);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, session.session_id)).surfaces?.vscode,
+		).toBeUndefined();
+		await expectError(
+			await request('POST', sessionsPath(`/${session.session_id}/surfaces/vscode`)),
+			403,
+			'SURFACE_FORBIDDEN',
+		);
+	});
+
+	it('keeps session creation successful when configured eager startup is unsupported', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: makeFakeCompute(),
+				deps: {
+					sandbox: sandboxConfig({
+						surfaces: {
+							vscode: {
+								flavor: 'code-server',
+								start: 'eager',
+								port: 8443,
+								settings: {},
+								extensionGallery: 'openvsx',
+								embed: 'tab',
+								marimoWatch: true,
+							},
+						},
+					}),
+				},
+			}).request;
+
+			const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+
+			expect(session.status).toBe('running');
+			expect(session.surfaces?.vscode).toBeUndefined();
+			expect(log.mock.calls.some(([line]) => String(line).includes('surface_start_failed'))).toBe(
+				true,
+			);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it("a non-member super admin can start, heartbeat, and stop another user's session", async () => {
 		const god = createTestApi({
 			bucket,
@@ -1487,7 +1824,7 @@ describe('Session routes', () => {
 
 		const sid = await startSession(); // started by ACTOR
 		const session = await expectOk<ApiSession>(await god('GET', sessionsPath(`/${sid}`)));
-		expect(session.can).toEqual({ attach: true, stop: true });
+		expect(session.can).toEqual({ attach: true, stop: true, surfaces: { vscode: true } });
 		await expectOk(await god('POST', sessionsPath(`/${sid}/heartbeat`)));
 		await expectOk(await god('DELETE', sessionsPath(`/${sid}`)));
 	});
@@ -1501,7 +1838,7 @@ describe('Session routes', () => {
 		const visible = await expectOk<ApiSession>(
 			await manager('GET', sessionsPath(`/${session.session_id}`)),
 		);
-		expect(visible.can).toEqual({ attach: false, stop: true });
+		expect(visible.can).toEqual({ attach: false, stop: true, surfaces: { vscode: false } });
 		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)));
 	});
 

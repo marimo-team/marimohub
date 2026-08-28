@@ -543,7 +543,7 @@ exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServe
 		const result = await sb.launchProcess!(testCase.command, {
 			...(testCase.setup ? { setup: testCase.setup } : {}),
 			cwd: '/workspace',
-			port: 2718,
+			port: CONTRACT_LAUNCH_LOCAL_PORT,
 			startupTimeout: testCase.timeout,
 		});
 		expect(result).toMatchObject({
@@ -565,6 +565,10 @@ exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServe
 		const sb = newSandbox();
 		const proc = await sb.startProcess(SERVER_CMD, { cwd: '/workspace' });
 		await proc.waitForPort(2718, { timeout: 15_000 });
+		expect(sb.resolveProcessPath?.('/workspace/notebook.py')).toMatch(
+			/\/marimohub-sandbox-[^/]+\/workspace\/notebook\.py$/,
+		);
+		await expect(sb.isPortReady?.(2718, { mode: 'http', path: '/' })).resolves.toBe(true);
 
 		const { url } = await sb.exposePort(2718, { hostname: 'ignored' });
 		expect(url).toMatch(/^http:\/\/localhost:\d+$/);

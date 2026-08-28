@@ -672,6 +672,27 @@ export type SecretEnvelopeRecord = z.infer<typeof SecretEnvelopeSchema>;
 
 // --- Session ---
 
+export const SurfaceStateSchema = z.looseObject({
+	status: z.enum(['starting', 'ready', 'stopping', 'stopped', 'failed', 'unavailable']),
+	attempt_id: z.string().optional(),
+	attempt_started_at: z.iso.datetime().optional(),
+	port: z.number().int().positive().optional(),
+	url: z.string().optional(),
+	origin_url: z.string().optional(),
+	proxy_path: z.enum(['strip-prefix', 'preserve-prefix']).optional(),
+	started_at: z.iso.datetime().optional(),
+	probe: z
+		.object({
+			available: z.boolean(),
+			reason: z.string().optional(),
+			version: z.string().optional(),
+		})
+		.optional(),
+	last_error: z.string().optional(),
+});
+
+export type SurfaceState = z.infer<typeof SurfaceStateSchema>;
+
 // `looseObject` for the same rolling-deploy reason as TokenSchema: every status
 // change is a CAS read-modify-write of the whole record, so a strict parse on an
 // older replica would strip fields a newer replica wrote (e.g. the `integrations`
@@ -755,6 +776,7 @@ export const SessionSchema = z.looseObject({
 	 * directly).
 	 */
 	sandbox_origin_url: z.string().optional(),
+	surfaces: z.record(z.string(), SurfaceStateSchema).optional(),
 	used_fallback: z.boolean().optional(),
 	/**
 	 * Why a session went `failed` — a sanitized `{ code, message }` set by

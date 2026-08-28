@@ -1,4 +1,4 @@
-{{- if or .Values.config .Values.compute.profiles (ne .Values.compute.profileOverride "none") }}
+{{- if or .Values.config .Values.compute.profiles (ne .Values.compute.profileOverride "none") .Values.surfaces.vscode.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,6 +10,15 @@ data:
   {{- if not (or
     (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES"))
     (and (ne $.Values.compute.profileOverride "none") (eq $k "MARIMOHUB_COMPUTE_PROFILE_OVERRIDE"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACES"))
+    (and $.Values.surfaces.vscode.sandboxImage (eq $k "MARIMOHUB_COMPUTE_IMAGE"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_FLAVOR"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_START"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_PORT"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_EMBED"))
+    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH"))
   ) }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
@@ -19,5 +28,18 @@ data:
   {{- end }}
   {{- if ne .Values.compute.profileOverride "none" }}
   MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: {{ .Values.compute.profileOverride | quote }}
+  {{- end }}
+  {{- if .Values.surfaces.vscode.enabled }}
+  MARIMOHUB_SURFACES: "marimo,vscode"
+  MARIMOHUB_SURFACE_VSCODE_FLAVOR: {{ .Values.surfaces.vscode.flavor | quote }}
+  MARIMOHUB_SURFACE_VSCODE_START: {{ .Values.surfaces.vscode.start | quote }}
+  MARIMOHUB_SURFACE_VSCODE_PORT: {{ .Values.surfaces.vscode.port | quote }}
+  MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY: {{ .Values.surfaces.vscode.extensionGallery | quote }}
+  MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON: {{ .Values.surfaces.vscode.settingsJson | quote }}
+  MARIMOHUB_SURFACE_VSCODE_EMBED: {{ .Values.surfaces.vscode.embed | quote }}
+  MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH: {{ .Values.surfaces.vscode.marimoWatch | quote }}
+  {{- with .Values.surfaces.vscode.sandboxImage }}
+  MARIMOHUB_COMPUTE_IMAGE: {{ . | quote }}
+  {{- end }}
   {{- end }}
 {{- end }}

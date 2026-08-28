@@ -208,6 +208,7 @@ export interface ProvisionOptions {
 	 * the proxied prefix. Omit in `subdomain` mode (the kernel serves at root).
 	 */
 	baseUrl?: string;
+	marimoWatch?: boolean;
 	/**
 	 * CoreWeave-native filesystem snapshot id to restore the sandbox FROM, when the
 	 * provider supports it (see `FilesystemSnapshots`). Ignored by every other
@@ -826,6 +827,7 @@ export class SandboxProvisioner {
 					mode: options.launchMode,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
+					watch: options.marimoWatch,
 				},
 				options.launchStrategy,
 			),
