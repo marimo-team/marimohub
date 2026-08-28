@@ -67,6 +67,8 @@ afterEach(async () => {
 const serverCmdOn = (port: number) =>
 	`node -e "const i=process.argv.indexOf('--port');const p=+process.argv[i+1];require('http').createServer((_,r)=>r.end('ok')).listen(p,'127.0.0.1')" -- --port ${port}`;
 const SERVER_CMD = serverCmdOn(2718);
+const serverCmdOnQuotedOption = (option: '--port' | '--bind-addr', value: string) =>
+	`node -e "const i=process.argv.findIndex(v=>v==='--port'||v==='--bind-addr');const v=process.argv[i+1];const p=+v.slice(v.lastIndexOf(':')+1);require('http').createServer((_,r)=>r.end('ok')).listen(p,'127.0.0.1')" -- '${option}' '${value}'`;
 
 // An uncommon port for the contract launch cases: the never-ready probes hit the
 // logical port directly (no `--port` to rewrite), and a developer's live marimo
@@ -577,6 +579,19 @@ exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServe
 
 		const res = await fetch(url);
 		expect(await res.text()).toBe('ok');
+	});
+
+	it.each([
+		['--port', serverCmdOnQuotedOption('--port', '2718')],
+		['--bind-addr', serverCmdOnQuotedOption('--bind-addr', '127.0.0.1:2718')],
+	] as const)('maps shell-quoted %s arguments to a real free port', async (_option, command) => {
+		const sb = newSandbox();
+		const proc = await sb.startProcess(command, { cwd: '/workspace' });
+		await proc.waitForPort(2718, { timeout: 15_000 });
+
+		const { url } = await sb.exposePort(2718, { hostname: 'ignored' });
+		expect(url).not.toContain(':2718');
+		expect(await (await fetch(url)).text()).toBe('ok');
 	});
 
 	it('gives concurrent sandboxes different real ports', async () => {

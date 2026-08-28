@@ -18,6 +18,7 @@ export interface SurfaceContext {
 }
 
 export interface SurfaceProbe {
+	[key: string]: unknown;
 	available: boolean;
 	reason?: string;
 	version?: string;

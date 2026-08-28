@@ -64,8 +64,15 @@ async function validateOpenInSandbox(
 	if (!result.success) throw new SurfaceOpenInvalidError('Surface open path escapes the workspace');
 }
 
-function stopProcessCommand(pidFile: string, requirePid = false): string {
-	return `if test ! -f ${shellQuote(pidFile)}; then ${requirePid ? 'exit 1' : 'exit 0'}; fi; pid="$(cat ${shellQuote(pidFile)})"; case "$pid" in ''|*[!0-9]*) exit 1;; esac; kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 10; do sleep 0.5; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; sleep 0.1; kill -0 "$pid" 2>/dev/null && exit 1; rm -f ${shellQuote(pidFile)}`;
+function cancellationFile(userDataDir: string, attemptId: string): string {
+	return `${userDataDir}/cancel-${attemptId}`;
+}
+
+function stopProcessCommand(pidFile: string, requirePid = false, cancelFile?: string): string {
+	const cancel = cancelFile
+		? `mkdir -p ${shellQuote(pidFile.slice(0, pidFile.lastIndexOf('/')))} && touch ${shellQuote(cancelFile)} && `
+		: '';
+	return `${cancel}if test ! -f ${shellQuote(pidFile)}; then ${requirePid ? 'exit 1' : 'exit 0'}; fi; pid="$(cat ${shellQuote(pidFile)})"; case "$pid" in ''|*[!0-9]*) exit 1;; esac; kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 10; do sleep 0.5; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; sleep 0.1; kill -0 "$pid" 2>/dev/null && exit 1; rm -f ${shellQuote(pidFile)}`;
 }
 
 function processAliveCommand(pidFile: string): string {
@@ -219,6 +226,7 @@ export class SurfaceManager {
 		let process: SandboxProcess | undefined;
 		try {
 			const pidFile = `${context.userDataDir}/surface.pid`;
+			const cancelFile = cancellationFile(context.userDataDir, attemptId);
 			if (cleanupExistingProcess) {
 				const stopped = await instance.exec(stopProcessCommand(pidFile), { timeout: 10_000 });
 				if (!stopped.success) {
@@ -255,7 +263,7 @@ export class SurfaceManager {
 			const port = options.port ?? spec.defaultPort;
 			const launch = spec.command(context, port);
 			process = await instance.startProcess(
-				`mkdir -p ${shellQuote(context.userDataDir)} && echo $$ > ${shellQuote(pidFile)} && exec ${commandLine(launch.cmd)}`,
+				`mkdir -p ${shellQuote(context.userDataDir)} && test ! -f ${shellQuote(cancelFile)} && echo $$ > ${shellQuote(pidFile)} && test ! -f ${shellQuote(cancelFile)} && exec ${commandLine(launch.cmd)}`,
 				{ cwd: context.workspaceDir, env: launch.env, processId: `surface-${id}` },
 			);
 			const afterLaunch = await this.sessions.getSession(session.project_id, session.session_id);
@@ -313,27 +321,47 @@ export class SurfaceManager {
 		this.secondary(id);
 		const current = await this.sessions.getSession(session.project_id, session.session_id);
 		if (!current.sandbox_id) throw new ConflictError('The session has no sandbox');
-		const pidFile = `/tmp/.marimohub/surfaces/${session.session_id}/${id}/surface.pid`;
+		const userDataDir = `/tmp/.marimohub/surfaces/${session.session_id}/${id}`;
+		const pidFile = `${userDataDir}/surface.pid`;
 		const instance = this.provider.create(current.sandbox_id);
-		await this.sessions.setSurfaceState(session.project_id, session.session_id, id, {
-			status: 'stopping',
-		});
+		const begun = await this.sessions.beginSurfaceStop(session.project_id, session.session_id, id);
+		if (!begun.transitioned) {
+			if (begun.session.surfaces?.[id]?.status === 'stopped') return;
+			throw new ConflictError('The surface is already stopping');
+		}
+		const attemptId = begun.attemptId!;
+		const cancelledAttemptId = begun.session.surfaces?.[id]?.cancelled_attempt_id;
 		try {
 			const stopped = await instance.exec(
-				stopProcessCommand(pidFile, current.surfaces?.[id]?.status === 'ready'),
+				stopProcessCommand(
+					pidFile,
+					begun.previousStatus === 'ready',
+					cancelledAttemptId ? cancellationFile(userDataDir, cancelledAttemptId) : undefined,
+				),
 				{ timeout: 10_000 },
 			);
 			if (!stopped.success) throw new Error('stop command failed');
 		} catch (cause) {
-			await this.sessions.setSurfaceState(session.project_id, session.session_id, id, {
-				status: 'failed',
-				last_error: `Failed to stop ${id}`,
-			});
+			await this.sessions.setSurfaceStateForStopAttempt(
+				session.project_id,
+				session.session_id,
+				id,
+				attemptId,
+				{
+					status: 'failed',
+					last_error: `Failed to stop ${id}`,
+				},
+			);
 			throw new UnavailableError(`Failed to stop ${id}`, { cause });
 		}
-		await this.sessions.setSurfaceState(session.project_id, session.session_id, id, {
-			status: 'stopped',
-		});
+		const stopped = await this.sessions.setSurfaceStateForStopAttempt(
+			session.project_id,
+			session.session_id,
+			id,
+			attemptId,
+			{ status: 'stopped' },
+		);
+		if (!stopped.transitioned) throw new ConflictError('The surface stop was superseded');
 	}
 
 	private secondary(id: SurfaceId): SurfaceSpec {

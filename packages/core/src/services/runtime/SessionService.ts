@@ -406,6 +406,63 @@ export class SessionService {
 		return { session, transitioned };
 	}
 
+	async beginSurfaceStop(
+		projectId: ProjectId,
+		id: SessionId,
+		surface: SurfaceId,
+	): Promise<{
+		session: Session;
+		transitioned: boolean;
+		attemptId?: string;
+		previousStatus?: SurfaceState['status'];
+	}> {
+		let transitioned = false;
+		let previousStatus: SurfaceState['status'] | undefined;
+		const attemptId = crypto.randomUUID();
+		const session = await this.mutate(projectId, id, (current) => {
+			const existing = current.surfaces?.[surface];
+			previousStatus = existing?.status;
+			transitioned = existing?.status !== 'stopping' && existing?.status !== 'stopped';
+			if (!transitioned) return null;
+			const cancelledAttemptId =
+				existing?.status === 'starting' ? existing.attempt_id : existing?.cancelled_attempt_id;
+			return {
+				...current,
+				surfaces: {
+					...current.surfaces,
+					[surface]: {
+						status: 'stopping',
+						attempt_id: attemptId,
+						attempt_started_at: new Date().toISOString(),
+						...(cancelledAttemptId ? { cancelled_attempt_id: cancelledAttemptId } : {}),
+					},
+				},
+			};
+		});
+		return {
+			session,
+			transitioned,
+			...(transitioned ? { attemptId, previousStatus } : {}),
+		};
+	}
+
+	async setSurfaceStateForStopAttempt(
+		projectId: ProjectId,
+		id: SessionId,
+		surface: SurfaceId,
+		attemptId: string,
+		state: SurfaceState,
+	): Promise<{ session: Session; transitioned: boolean }> {
+		let transitioned = false;
+		const session = await this.mutate(projectId, id, (current) => {
+			const existing = current.surfaces?.[surface];
+			transitioned = existing?.status === 'stopping' && existing.attempt_id === attemptId;
+			if (!transitioned) return null;
+			return { ...current, surfaces: { ...current.surfaces, [surface]: state } };
+		});
+		return { session, transitioned };
+	}
+
 	async setSurfaceState(
 		projectId: ProjectId,
 		id: SessionId,
@@ -468,15 +525,37 @@ export class SessionService {
 		const session = await this.mutate(projectId, id, (current) => {
 			const next = nextStatus(current.status, 'terminate');
 			transitioned = next !== null;
-			return next
-				? {
-						...current,
-						status: next,
-						...(attribution
-							? { ended_reason: attribution.reason, ended_by_user_id: attribution.by }
-							: {}),
+			if (!next) return null;
+			const now = new Date().toISOString();
+			const surfaces = Object.fromEntries(
+				Object.entries(current.surfaces ?? {}).map(([surface, state]) => {
+					if (
+						surface === 'marimo' ||
+						(state.status !== 'starting' && state.status !== 'ready' && state.status !== 'stopping')
+					) {
+						return [surface, state];
 					}
-				: null;
+					const cancelledAttemptId =
+						state.status === 'starting' ? state.attempt_id : state.cancelled_attempt_id;
+					return [
+						surface,
+						{
+							status: 'stopping' as const,
+							attempt_id: crypto.randomUUID(),
+							attempt_started_at: now,
+							...(cancelledAttemptId ? { cancelled_attempt_id: cancelledAttemptId } : {}),
+						},
+					];
+				}),
+			);
+			return {
+				...current,
+				status: next,
+				...(current.surfaces ? { surfaces } : {}),
+				...(attribution
+					? { ended_reason: attribution.reason, ended_by_user_id: attribution.by }
+					: {}),
+			};
 		});
 		return { session, transitioned };
 	}

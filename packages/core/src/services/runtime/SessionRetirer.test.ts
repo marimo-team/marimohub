@@ -5,6 +5,7 @@ import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../.
 import type { Session } from '../../schema';
 import {
 	ACTOR,
+	fakeComputeFrom,
 	makeFakeSandbox,
 	makeLocalSource,
 	makeSession,
@@ -17,6 +18,10 @@ import { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { SessionRetirer } from './SessionRetirer';
 import { SessionService } from './SessionService';
+import { marimoSurface } from './surfaces/marimo';
+import { SurfaceManager } from './surfaces/SurfaceManager';
+import { SurfaceRegistry } from './surfaces/registry';
+import { vscodeSurface } from './surfaces/vscode';
 
 function snapshotProvider(
 	instance: SandboxInstance,
@@ -187,6 +192,150 @@ describe('SessionRetirer', () => {
 		await retirer(compute).retire(session);
 
 		expect(captureSnapshot).not.toHaveBeenCalled();
+	});
+
+	it('fences a probing secondary surface before capturing the workspace', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		let enteredProbe!: () => void;
+		const probing = new Promise<void>((resolve) => {
+			enteredProbe = resolve;
+		});
+		let finishProbe!: () => void;
+		const probeGate = new Promise<void>((resolve) => {
+			finishProbe = resolve;
+		});
+		const vscode = vscodeSurface();
+		const manager = new SurfaceManager(
+			fakeComputeFrom(instance),
+			sessions,
+			new SurfaceRegistry([
+				marimoSurface,
+				{
+					...vscode,
+					probe: async () => {
+						enteredProbe();
+						await probeGate;
+						return { available: true };
+					},
+				},
+			]),
+		);
+		const begun = await manager.begin(session, 'vscode', {
+			user: { id: ACTOR, email: 'owner@example.com' },
+			workspaceDir: '/workspace',
+			exposure: 'subdomain',
+			hostname: 'sandbox.example',
+		});
+		await probing;
+		await sessions.beginTerminating(projectId, session.session_id);
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+			expect(
+				(await sessions.getSession(projectId, session.session_id)).surfaces?.vscode?.status,
+			).toBe('stopping');
+			return false;
+		});
+
+		await retirer(fakeComputeFrom(instance)).retire(session);
+		finishProbe();
+
+		await expect(begun.completion).rejects.toThrow('cancelled');
+		expect(calls.startProcess).toHaveLength(0);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
+
+	it('cancels a stale launcher before capturing the workspace', async () => {
+		const { instance } = makeFakeSandbox();
+		const session = await persistentSession();
+		let markerCreated = false;
+		const originalExec = instance.exec.bind(instance);
+		instance.exec = async (cmd, options) => {
+			const result = await originalExec(cmd, options);
+			if (cmd.includes('touch') && cmd.includes('/cancel-')) markerCreated = true;
+			return result;
+		};
+		let enteredStart!: () => void;
+		const starting = new Promise<void>((resolve) => {
+			enteredStart = resolve;
+		});
+		let releaseStart!: () => void;
+		const startGate = new Promise<void>((resolve) => {
+			releaseStart = resolve;
+		});
+		let launchCommandRan = false;
+		const originalStartProcess = instance.startProcess.bind(instance);
+		instance.startProcess = async (cmd, options) => {
+			enteredStart();
+			await startGate;
+			if (!markerCreated) launchCommandRan = true;
+			return originalStartProcess(cmd, options);
+		};
+		const manager = new SurfaceManager(
+			fakeComputeFrom(instance),
+			sessions,
+			new SurfaceRegistry([marimoSurface, vscodeSurface()]),
+		);
+		const begun = await manager.begin(session, 'vscode', {
+			user: { id: ACTOR, email: 'owner@example.com' },
+			workspaceDir: '/workspace',
+			exposure: 'subdomain',
+			hostname: 'sandbox.example',
+		});
+		await starting;
+		await sessions.beginTerminating(projectId, session.session_id);
+		let enteredCapture!: () => void;
+		const capturing = new Promise<void>((resolve) => {
+			enteredCapture = resolve;
+		});
+		let releaseCapture!: () => void;
+		const captureGate = new Promise<void>((resolve) => {
+			releaseCapture = resolve;
+		});
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+			enteredCapture();
+			await captureGate;
+			return false;
+		});
+
+		const retirement = retirer(fakeComputeFrom(instance)).retire(session);
+		await capturing;
+		expect(markerCreated).toBe(true);
+		expect(launchCommandRan).toBe(false);
+
+		releaseStart();
+		await expect(begun.completion).rejects.toThrow('cancelled');
+		expect(launchCommandRan).toBe(false);
+		releaseCapture();
+		await retirement;
+	});
+
+	it('does not capture when a starting surface cannot be cancelled', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			surfaces: {
+				vscode: {
+					status: 'starting',
+					attempt_id: 'start-attempt',
+					attempt_started_at: new Date().toISOString(),
+				},
+			},
+		});
+		await sessions.beginTerminating(projectId, session.session_id);
+		instance.exec = async () => ({
+			success: false,
+			stdout: '',
+			stderr: 'sandbox unavailable',
+			error: { code: 'BACKEND_ERROR' },
+		});
+		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+
+		await expect(retirer(fakeComputeFrom(instance)).retire(session)).rejects.toThrow(
+			'Failed to stop vscode before session retirement',
+		);
+
+		expect(capture).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
 	});
 
 	it('captures an owner-scoped filesystem snapshot during takeover', async () => {

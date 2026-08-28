@@ -676,13 +676,14 @@ export const SurfaceStateSchema = z.looseObject({
 	status: z.enum(['starting', 'ready', 'stopping', 'stopped', 'failed', 'unavailable']),
 	attempt_id: z.string().optional(),
 	attempt_started_at: z.iso.datetime().optional(),
+	cancelled_attempt_id: z.string().optional(),
 	port: z.number().int().positive().optional(),
 	url: z.string().optional(),
 	origin_url: z.string().optional(),
 	proxy_path: z.enum(['strip-prefix', 'preserve-prefix']).optional(),
 	started_at: z.iso.datetime().optional(),
 	probe: z
-		.object({
+		.looseObject({
 			available: z.boolean(),
 			reason: z.string().optional(),
 			version: z.string().optional(),

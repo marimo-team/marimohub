@@ -23,6 +23,7 @@ import {
 	SnapshotProjectEntrySchema,
 	SnapshotSchema,
 	SourceSchema,
+	SurfaceStateSchema,
 	VersionIdSchema,
 	toPublicNotebookEntry,
 	toPublicProjectEntry,
@@ -237,6 +238,20 @@ describe('SnapshotSchema (looseObject rolling-deploy invariant)', () => {
 		const bad = validSnapshot();
 		delete (bad as Record<string, unknown>).actor;
 		expect(SnapshotSchema.safeParse(bad).success).toBe(false);
+	});
+});
+
+describe('SurfaceStateSchema', () => {
+	it('preserves unknown nested probe fields during rolling deploys', () => {
+		const parsed = SurfaceStateSchema.parse({
+			status: 'starting',
+			probe: {
+				available: true,
+				checked_at: NOW,
+			},
+		});
+
+		expect(parsed.probe).toEqual({ available: true, checked_at: NOW });
 	});
 });
 

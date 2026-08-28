@@ -58,6 +58,7 @@ describe('SurfaceManager', () => {
 		expect(second.status).toBe('ready');
 		expect(calls.startProcess).toHaveLength(1);
 		expect(calls.startProcess[0].cmd).toContain('surface.pid');
+		expect(calls.startProcess[0].cmd.match(/cancel-/g)).toHaveLength(2);
 		expect(calls.waitForPort).toEqual([8443]);
 		expect(calls.exposePort).toEqual([
 			{
@@ -217,6 +218,8 @@ describe('SurfaceManager', () => {
 		const start = manager.ensure(session, 'vscode', options());
 		await probing;
 		await manager.stop(session, 'vscode');
+		expect(calls.exec.at(-1)).toContain('touch');
+		expect(calls.exec.at(-1)).toContain('/vscode/cancel-');
 		finishProbe();
 
 		await expect(start).rejects.toThrow('cancelled');
@@ -575,10 +578,47 @@ describe('SurfaceManager', () => {
 		await stopping;
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
-		).toEqual({ status: 'stopping' });
+		).toMatchObject({ status: 'stopping', attempt_id: expect.any(String) });
 		finishStop();
 		await stop;
 		expect(calls.exec.at(-1)).toContain('then exit 1');
+		expect(
+			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
+		).toEqual({ status: 'stopped' });
+	});
+
+	it('allows only the CAS owner to run and complete a concurrent stop', async () => {
+		const { instance, manager, session, sessions } = await setup();
+		await manager.ensure(session, 'vscode', options());
+		const exec = instance.exec.bind(instance);
+		let enteredStop!: () => void;
+		const stopping = new Promise<void>((resolve) => {
+			enteredStop = resolve;
+		});
+		let finishStop!: () => void;
+		const stopped = new Promise<void>((resolve) => {
+			finishStop = resolve;
+		});
+		let stopCommands = 0;
+		instance.exec = async (cmd, execOptions) => {
+			if (cmd.includes('kill -TERM')) {
+				stopCommands += 1;
+				if (stopCommands === 1) {
+					enteredStop();
+					await stopped;
+				}
+			}
+			return exec(cmd, execOptions);
+		};
+		const current = await sessions.getSession(session.project_id, session.session_id);
+		const first = manager.stop(current, 'vscode');
+		await stopping;
+
+		const concurrent = await manager.stop(current, 'vscode').catch((error: unknown) => error);
+		finishStop();
+		await first;
+		expect(concurrent).toMatchObject({ code: 'CONFLICT' });
+		expect(stopCommands).toBe(1);
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });
