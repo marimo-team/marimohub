@@ -10,7 +10,10 @@ const authSchema = z.discriminatedUnion('method', [
 	z.strictObject({ method: z.literal('bearer_token'), token: zSecret() }),
 	z.strictObject({
 		method: z.literal('basic'),
-		username: z.string().min(1),
+		username: z
+			.string()
+			.min(1)
+			.regex(/^[^:]+$/, 'Basic authentication username must not contain a colon'),
 		password: zSecret(),
 	}),
 ]);
@@ -115,6 +118,9 @@ function authorization(auth: DuckDBHttpConfig['auth']): string | undefined {
 export function normalizeDuckDBHttpUrl(
 	config: Pick<DuckDBHttpConfig, 'url' | 'allow_non_duckdb_suffix'>,
 ): string {
+	if (hasRawDotSegment(config.url)) {
+		throw invalidUrl();
+	}
 	let url: URL;
 	try {
 		url = new URL(config.url);
@@ -147,6 +153,12 @@ export function normalizeDuckDBHttpUrl(
 		throw invalidUrl();
 	}
 	return url.toString();
+}
+
+function hasRawDotSegment(input: string): boolean {
+	const match = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*(?<pathname>[^?#]*)/i.exec(input);
+	const pathname = match?.groups?.pathname ?? input;
+	return pathname.split('/').some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment));
 }
 
 function hasEncodedPathSyntax(pathname: string): boolean {

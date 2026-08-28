@@ -28,6 +28,12 @@ describe('duckdb_http schema', () => {
 		expect(parse({ auth })).toMatchObject({ auth });
 	});
 
+	it('rejects a colon in a Basic authentication username', () => {
+		expect(() =>
+			parse({ auth: { method: 'basic', username: 'reader:admin', password: 'basic-secret' } }),
+		).toThrow(/username must not contain a colon/);
+	});
+
 	it.each([
 		'http://data.example.com/analytics.duckdb',
 		'https://reader:secret@data.example.com/analytics.duckdb',
@@ -36,6 +42,11 @@ describe('duckdb_http schema', () => {
 		'https://data.example.com/snapshots/',
 		'https://data.example.com/snapshots%2Fanalytics.duckdb',
 		'https://data.example.com/snapshots%5canalytics.duckdb',
+		'https://data.example.com/safe/../analytics.duckdb',
+		'https://data.example.com/safe/./analytics.duckdb',
+		'https://data.example.com/safe/%2E/analytics.duckdb',
+		'https://data.example.com/safe/%2e%2e/analytics.duckdb',
+		'https://data.example.com/safe/.%2E/analytics.duckdb',
 		'https://data.example.com/safe/%252F/analytics.duckdb',
 		'https://data.example.com/safe/%255C/analytics.duckdb',
 		'https://data.example.com/safe/%252e%252e/analytics.duckdb',
