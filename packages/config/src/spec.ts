@@ -610,8 +610,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Kubernetes hostname template',
 						description:
 							'Kernel URL template. Supports `{id}`, `{name}`, `{namespace}`, `{port}`, `{host}`, and `{token}`. Proxy exposure defaults to the internal Service URL. Set this only for a different cluster DNS domain.',
-						default:
-							'subdomain https://{id}.{host}, proxy http://{name}.{namespace}.svc.cluster.local:{port}',
+						default: 'https://{id}.{host}',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS',

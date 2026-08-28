@@ -187,7 +187,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly image: string;
 	private readonly hostname: string;
 	private readonly kernelPort: number;
-	private readonly managesIngress: boolean;
+	private readonly subdomainExposure: boolean;
 	private resolved = false;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
@@ -206,12 +206,12 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		this.image = config.image ?? DEFAULT_IMAGE;
 		this.hostname = config.hostname ?? '';
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
-		this.managesIngress = (config.exposureMode ?? 'subdomain') === 'subdomain' && !!this.hostname;
+		this.subdomainExposure = (config.exposureMode ?? 'subdomain') === 'subdomain';
 	}
 
 	/** The per-session Ingress host, or empty when this deployment does not manage one. */
 	private ingressHost(): string {
-		if (!this.managesIngress) return '';
+		if (!this.subdomainExposure || !this.hostname) return '';
 		// Reuse the URL template, then keep just its host component.
 		return new URL(this.urlFrom(this.hostname, '')).host;
 	}
@@ -594,9 +594,9 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 
 	async destroy(): Promise<void> {
-		// Proxy deployments have no Ingress API dependency. Subdomain sessions must
-		// be drained before changing modes so their old configuration deletes the Ingress.
-		await this.client.delete(this.name, { ingress: this.managesIngress });
+		// A removed hostname can leave an Ingress from earlier subdomain config.
+		// Proxy mode remains free of Ingress API access.
+		await this.client.delete(this.name, { ingress: this.subdomainExposure });
 		this.resolved = false;
 	}
 }

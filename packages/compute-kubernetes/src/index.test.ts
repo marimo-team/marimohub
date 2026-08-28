@@ -748,6 +748,17 @@ describe('KubernetesCompute', () => {
 			expect(world.deleted).toEqual([NAME, NAME]);
 			expect(world.deleteIngress).toEqual([true, true]);
 		});
+
+		it('attempts legacy Ingress cleanup when a subdomain hostname was removed', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world, { ...baseConfig, hostname: undefined }).create(SANDBOX_ID);
+
+			await inst.exec('true');
+			expect(world.ensured[0]?.host).toBe('');
+
+			await inst.destroy();
+			expect(world.deleteIngress).toEqual([true]);
+		});
 	});
 
 	describe('provider surface', () => {
