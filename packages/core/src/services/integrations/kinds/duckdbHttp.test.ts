@@ -37,6 +37,8 @@ describe('duckdb_http schema', () => {
 	it.each([
 		'http://data.example.com/analytics.duckdb',
 		'https://reader:secret@data.example.com/analytics.duckdb',
+		'https://data.example.com/analytics.duckdb?',
+		'https://data.example.com/analytics.duckdb#',
 		'https://data.example.com/analytics.duckdb?version=1',
 		'https://data.example.com/analytics.duckdb#fragment',
 		'https://data.example.com/snapshots/',
@@ -135,6 +137,14 @@ describe('duckdb_http query plan', () => {
 		});
 		expect(JSON.stringify(plan?.setup)).not.toContain('bearer-secret');
 	});
+
+	it.each(['bearer\rsecret', 'bearer\nsecret'])(
+		'rejects a bearer token containing a line break',
+		(token) => {
+			const config = parse({ auth: { method: 'bearer_token', token } });
+			expect(() => duckdbHttp.query?.plan({ config, integration })).toThrow(/line break/);
+		},
+	);
 
 	it('registers a query-only database descriptor with no runtime requirements', () => {
 		const descriptor = defaultRegistry().describe('duckdb_http');

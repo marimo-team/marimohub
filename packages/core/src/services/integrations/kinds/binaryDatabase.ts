@@ -35,7 +35,7 @@ export function normalizeExactObjectUrl(options: {
 	label: string;
 }): string {
 	const { url: input, allowedSuffixes, allowOtherSuffix, label } = options;
-	if (hasRawDotSegment(input)) throw invalidUrl(label, allowedSuffixes);
+	if (/[?#]/.test(input) || hasRawDotSegment(input)) throw invalidUrl(label, allowedSuffixes);
 	let url: URL;
 	try {
 		url = new URL(input);
@@ -78,6 +78,9 @@ function exactObjectAuthorization(auth: ExactObjectAuth): string | undefined {
 		case 'none':
 			return;
 		case 'bearer_token':
+			if (/[\r\n]/.test(auth.token)) {
+				throw new ValidationError('Bearer token must not contain a line break.');
+			}
 			return `Bearer ${auth.token}`;
 		case 'basic':
 			return basicAuthHeader(auth.username, auth.password);
