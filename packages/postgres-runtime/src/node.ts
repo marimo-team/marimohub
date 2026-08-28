@@ -79,6 +79,24 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 		);
 	}
 
+	async testConnection(source: PostgresConnectionCapability) {
+		const started = performance.now();
+		try {
+			await this.run<{ connected: true }>(source, { type: 'test' }, 'test');
+			return {
+				ok: true,
+				latency_ms: Math.round(performance.now() - started),
+				details: 'PostgreSQL connection succeeded.',
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				latency_ms: Math.round(performance.now() - started),
+				details: postgresTestFailure(error),
+			};
+		}
+	}
+
 	async listTables(
 		source: PostgresConnectionCapability,
 		namespace: string[],
@@ -135,7 +153,7 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	private async run<T extends PostgresWorkerValue>(
 		source: PostgresConnectionCapability,
 		operation: PostgresOperation,
-		kind: 'metadata' | 'preview',
+		kind: 'test' | 'metadata' | 'preview',
 		signal?: AbortSignal,
 	): Promise<T> {
 		const started = performance.now();
@@ -157,8 +175,8 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 		}
 	}
 
-	private timeoutMs(kind: 'metadata' | 'preview'): number {
-		return kind === 'metadata' ? this.options.metadataTimeoutMs : this.options.previewTimeoutMs;
+	private timeoutMs(kind: 'test' | 'metadata' | 'preview'): number {
+		return kind === 'preview' ? this.options.previewTimeoutMs : this.options.metadataTimeoutMs;
 	}
 }
 
@@ -394,6 +412,21 @@ function failureOutcome(error: unknown): string {
 	if (error instanceof ValidationError) return 'rejected';
 	if (error instanceof Error && error.name === 'AbortError') return 'cancelled';
 	return 'failed';
+}
+
+function postgresTestFailure(error: unknown): string {
+	const safeMessages = new Set([
+		'The PostgreSQL target is not permitted.',
+		'PostgreSQL authentication failed.',
+		'The PostgreSQL TLS connection failed.',
+		'The PostgreSQL connection failed.',
+		'The PostgreSQL request timed out.',
+		'PostgreSQL returned an invalid result.',
+		'The PostgreSQL worker failed.',
+	]);
+	return error instanceof Error && safeMessages.has(error.message)
+		? error.message
+		: 'The PostgreSQL connection test failed.';
 }
 
 function aborted(): Error {

@@ -56,6 +56,7 @@ import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/
 import type {
 	DatabaseBrowser,
 	DatabaseBrowserRegistry,
+	DatabaseConnectionTesterRegistry,
 	DatabaseSource,
 } from '../../ports/databaseBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
@@ -245,12 +246,14 @@ export interface IntegrationsStoreOptions {
 	 */
 	browseProbe?: IntegrationProbe;
 	objectBrowsers?: ObjectBrowserRegistry;
+	databaseTesters?: DatabaseConnectionTesterRegistry;
 	databaseBrowsers?: DatabaseBrowserRegistry;
 	/** Injectable clock for deterministic tests. */
 	now?: () => string;
 	metrics?: Metrics;
 	dataPreview?: DataPreviewService;
 	dataQuery?: DataQueryService;
+	databaseTestGate?: IntegrationQueryGate;
 	queryGate?: IntegrationQueryGate;
 }
 
@@ -271,11 +274,13 @@ class ScopedIntegrationsStore {
 	private readonly probe?: IntegrationProbe;
 	private readonly browseProbe?: IntegrationProbe;
 	private readonly objectBrowsers: ObjectBrowserRegistry;
+	private readonly databaseTesters: DatabaseConnectionTesterRegistry;
 	private readonly databaseBrowsers: DatabaseBrowserRegistry;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 	private readonly dataPreview?: DataPreviewService;
 	private readonly dataQuery?: DataQueryService;
+	private readonly databaseTestGate?: IntegrationQueryGate;
 	private readonly queryGate?: IntegrationQueryGate;
 
 	constructor(options: IntegrationsStoreOptions) {
@@ -288,11 +293,13 @@ class ScopedIntegrationsStore {
 		this.probe = options.probe;
 		this.browseProbe = options.browseProbe;
 		this.objectBrowsers = options.objectBrowsers ?? {};
+		this.databaseTesters = options.databaseTesters ?? {};
 		this.databaseBrowsers = options.databaseBrowsers ?? {};
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
 		this.dataPreview = options.dataPreview;
 		this.dataQuery = options.dataQuery;
+		this.databaseTestGate = options.databaseTestGate;
 		this.queryGate = options.queryGate;
 	}
 
@@ -310,6 +317,7 @@ class ScopedIntegrationsStore {
 		return this.registry.describeAll().map((descriptor) => {
 			const def = this.registry.get(descriptor.kind);
 			const objectProvider = def.objectBrowse?.provider;
+			const databaseProvider = def.databaseBrowse?.provider;
 			const browse_surfaces = descriptor.browse_surfaces.filter(
 				(surface) =>
 					(surface === 'tables' &&
@@ -323,6 +331,8 @@ class ScopedIntegrationsStore {
 			const supportsTest =
 				descriptor.supports_test &&
 				(def.testConnection !== undefined ||
+					(databaseProvider !== undefined &&
+						this.databaseTesters[databaseProvider]?.provider === databaseProvider) ||
 					(objectProvider !== undefined &&
 						this.objectBrowsers[objectProvider]?.provider === objectProvider));
 			return {
@@ -792,7 +802,7 @@ class ScopedIntegrationsStore {
 				});
 			}
 		}
-		if (!def.testConnection && !def.objectBrowse) {
+		if (!def.testConnection && !def.databaseBrowse && !def.objectBrowse) {
 			throw new ValidationError(`Integration kind "${def.kind}" does not support testing.`);
 		}
 		const probe = this.probe;
@@ -807,6 +817,22 @@ class ScopedIntegrationsStore {
 			);
 		}
 		if (def.testConnection) return def.testConnection(parsed.data, probe);
+		if (def.databaseBrowse) {
+			const blocker = this.databaseTestGate?.({ kind: def.kind, config: parsed.data });
+			if (blocker?.ready === false) return { ok: false, details: blocker.reason };
+			const verdict = def.databaseBrowse.available(parsed.data);
+			if (!verdict.ok) return { ok: false, details: verdict.reason };
+			const source = def.databaseBrowse.source(parsed.data);
+			const tester = this.databaseTesters[source.provider];
+			if (!tester || tester.provider !== source.provider) {
+				throw new ValidationError('Database connection testing is not enabled on this deployment.');
+			}
+			try {
+				return await tester.testConnection(source);
+			} catch {
+				return { ok: false, details: 'Database connection test failed.' };
+			}
+		}
 		if (!objectContext) {
 			throw new ValidationError('Object-store connection testing requires a user context.');
 		}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { postgresDataAccessFeatures, postgresDataAccessGate } from './postgresFeatures';
+import {
+	postgresDataAccessFeatures,
+	postgresDataAccessGate,
+	postgresTransportGate,
+} from './postgresFeatures';
 
 describe('PostgreSQL data-access features', () => {
 	it('defaults data access and insecure transport off and accepts only on or off', () => {
@@ -44,6 +48,21 @@ describe('PostgreSQL data-access features', () => {
 		});
 		expect(allowed({ kind: 'postgres', config: { ssl: { mode } } })).toBeUndefined();
 	});
+
+	it.each(['disable', 'prefer', 'require'])(
+		'gates %s transport independently of the data-access rollout',
+		(mode) => {
+			const blocked = postgresTransportGate({ allowInsecureTransport: false });
+			const allowed = postgresTransportGate({ allowInsecureTransport: true });
+
+			expect(blocked({ kind: 'postgres', config: { ssl: { mode } } })).toMatchObject({
+				id: 'postgres-insecure-transport',
+				ready: false,
+				field: 'ssl.mode',
+			});
+			expect(allowed({ kind: 'postgres', config: { ssl: { mode } } })).toBeUndefined();
+		},
+	);
 
 	it('leaves other integration kinds unchanged', () => {
 		const gate = postgresDataAccessGate({ enabled: false, allowInsecureTransport: false });

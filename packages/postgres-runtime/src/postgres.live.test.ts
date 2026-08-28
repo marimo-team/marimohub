@@ -150,6 +150,19 @@ live('PostgreSQL live conformance', () => {
 		expect(second.items[0] > first.items[0]).toBe(true);
 	});
 
+	it('tests the native connection and credentials', async () => {
+		await expect(browser.testConnection(connection)).resolves.toMatchObject({
+			ok: true,
+			details: 'PostgreSQL connection succeeded.',
+		});
+		await expect(
+			browser.testConnection({ ...connection, password: 'not-the-password' }),
+		).resolves.toMatchObject({
+			ok: false,
+			details: 'PostgreSQL authentication failed.',
+		});
+	});
+
 	tlsIt('preserves the original hostname for verified TLS', async () => {
 		const verified = {
 			...connection,

@@ -791,7 +791,7 @@ paths:
     x-brand-icon: postgresql
     x-secret-paths:
       - password
-    x-supports-test: false
+    x-supports-test: true
     x-requirements:
       - sqlalchemy>=2
       - psycopg2-binary>=2.9

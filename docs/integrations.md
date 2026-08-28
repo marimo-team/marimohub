@@ -559,6 +559,12 @@ point it elsewhere:
 
 Set one or the other, not both.
 
+**Test connection** opens a guarded native PostgreSQL connection, authenticates with the configured
+credentials, applies the selected TLS policy, and runs a read-only `SELECT 1`. It is available when
+`MARIMOHUB_INTEGRATIONS_PROBE` is `guarded` or `private`, independently of the data-browser rollout.
+Testing `disable`, `prefer`, or `require` also requires
+`MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT=on`.
+
 ### Hub data browser
 
 Direct PostgreSQL browsing is off by default. Enable it for all compatible PostgreSQL integrations:

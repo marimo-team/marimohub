@@ -45,6 +45,7 @@ describe('IntegrationRegistry', () => {
 			browse_surfaces: [],
 		});
 		expect(registry.describe('tables')).toMatchObject({
+			supports_test: false,
 			supports_browse: true,
 			browse_surfaces: ['tables'],
 		});

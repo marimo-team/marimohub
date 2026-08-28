@@ -26,6 +26,19 @@ function browser(resolveHost = vi.fn(async () => [{ address: '203.0.113.10', fam
 }
 
 describe('PostgresDatabaseBrowser', () => {
+	it('returns a safe failed connection test when the target is rejected', async () => {
+		const runtime = browser(
+			vi.fn(async () => {
+				throw new Error('blocked database.example.test secret-value');
+			}),
+		);
+
+		await expect(runtime.browser.testConnection(source)).resolves.toMatchObject({
+			ok: false,
+			details: 'The PostgreSQL target is not permitted.',
+		});
+	});
+
 	it('returns an empty page for child namespaces without resolving the target', async () => {
 		const runtime = browser();
 

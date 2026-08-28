@@ -227,6 +227,9 @@ async function runOperation(client: PgClient, operation: PostgresOperation) {
 			`${timeout}ms`,
 		]);
 		switch (operation.type) {
+			case 'test':
+				await client.query('SELECT 1');
+				return { connected: true as const };
 			case 'namespaces':
 				return await listNamespaces(client, operation);
 			case 'tables':
