@@ -1,5 +1,5 @@
 import { Millis, Seconds } from '@marimo-hub/core';
-import type { SandboxProvider } from '@marimo-hub/core';
+import type { SandboxExposureMode, SandboxProvider } from '@marimo-hub/core';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
@@ -120,6 +120,8 @@ function kubernetesIngressTlsMode(env: Env): 'disabled' | 'controller-default' |
 }
 
 export interface ComputeOptions {
+	/** Selected exposure mode, used by backends with mode-specific network resources. */
+	sandboxExposureMode?: SandboxExposureMode;
 	/**
 	 * The marimohub-owned session TTL (seconds) the record-driven lifecycle sweep
 	 * enforces with a graceful save + teardown. Providers with a hard lifetime cap
@@ -355,12 +357,8 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				ports: parsePortRange(env.MARIMOHUB_COMPUTE_LOCAL_PORTS),
 			});
 		case 'kubernetes': {
-			// Native Kubernetes: one keep-alive Pod + Service + Ingress per session,
-			// created via @kubernetes/client-node and exec'd into to run marimo. The
-			// kernel is reached directly at its `{id}.{host}` Ingress host, so set
-			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME and provide an ingress class plus either
-			// a named wildcard TLS secret or controller-default TLS. `proxy()` is a no-op
-			// like local/coreweave.
+			// Native Kubernetes: a Pod + Service per session, with an Ingress added for
+			// subdomain exposure. Proxy exposure reaches the Service inside the cluster.
 			const resources = {
 				cpu: env.MARIMOHUB_COMPUTE_KUBERNETES_CPU,
 				memory: env.MARIMOHUB_COMPUTE_KUBERNETES_MEMORY,
@@ -372,7 +370,8 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				'MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS',
 			);
 			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY;
-			const ingressTlsMode = kubernetesIngressTlsMode(env);
+			const proxyExposure = opts?.sandboxExposureMode === 'proxy';
+			const ingressTlsMode = proxyExposure ? undefined : kubernetesIngressTlsMode(env);
 			if (pullPolicy && !['Always', 'IfNotPresent', 'Never'].includes(pullPolicy)) {
 				throw new ConfigError(
 					`Invalid MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: ${pullPolicy}`,
@@ -383,17 +382,19 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				);
 			}
 			return new KubernetesCompute({
+				exposureMode: opts?.sandboxExposureMode,
 				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
 				image: defaultImage,
-				hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
+				hostname: proxyExposure ? undefined : env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE,
-				ingressClassName: env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
-				ingressAnnotations: kubernetesIngressAnnotations(
-					env,
-					'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS',
-				),
+				ingressClassName: proxyExposure
+					? undefined
+					: env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
+				ingressAnnotations: proxyExposure
+					? undefined
+					: kubernetesIngressAnnotations(env, 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS'),
 				ingressTlsMode,
-				tlsSecretName: env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
+				tlsSecretName: proxyExposure ? undefined : env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 				serviceAccountName: env.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT,
 				imagePullSecret: env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET,
 				imagePullPolicy: pullPolicy as 'Always' | 'IfNotPresent' | 'Never' | undefined,

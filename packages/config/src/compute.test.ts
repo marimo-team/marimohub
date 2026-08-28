@@ -39,6 +39,10 @@ const configOf = (provider: unknown) =>
 				ingressAnnotations?: Record<string, string>;
 				ingressTlsMode?: string;
 				tlsSecretName?: string;
+				exposureMode?: string;
+				hostname?: string;
+				hostnameTemplate?: string;
+				ingressClassName?: string;
 			};
 		}
 	).config;
@@ -199,6 +203,28 @@ describe('makeCompute fail-fast', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes' })).toBeInstanceOf(
 			KubernetesCompute,
 		);
+	});
+
+	it('configures kubernetes proxy mode without public ingress settings', () => {
+		expect(
+			configOf(
+				makeCompute(
+					{
+						MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+						MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandboxes.example.net',
+						MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS: 'nginx',
+						MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert',
+					},
+					{ sandboxExposureMode: 'proxy' },
+				),
+			),
+		).toMatchObject({
+			exposureMode: 'proxy',
+			hostname: undefined,
+			ingressClassName: undefined,
+			ingressTlsMode: undefined,
+			tlsSecretName: undefined,
+		});
 	});
 
 	it('rejects an invalid kubernetes image pull policy', () => {

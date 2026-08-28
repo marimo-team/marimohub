@@ -65,6 +65,11 @@ The separate-domain guard doesn't apply here, and
 `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` is unused. Proxy mode runs on the Node
 server; the Cloudflare Workers deployment uses `subdomain`.
 
+Kubernetes proxy mode uses each kernel's internal Service URL. It does not query,
+create, or delete Ingresses. Before you change from subdomain exposure, complete
+the required [session drain](/deploying/kubernetes#changing-from-subdomain-to-proxy).
+An old tokenless Ingress otherwise stays public and becomes orphaned.
+
 Note the interaction with [notebook apps](/apps): the same-origin risk you
 acknowledge is that notebook-authored JS can script the control plane as
 whoever opens the kernel. `MARIMOHUB_VIEWER_MODE=applications` widens who that

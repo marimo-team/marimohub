@@ -713,7 +713,7 @@ describe('createK8sClient', () => {
 		k8sMock.net.deleteNamespacedIngress.mockRejectedValueOnce({ code: 403 });
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await expect(client.delete('mh-sb')).rejects.toMatchObject({ code: 403 });
+		await expect(client.delete('mh-sb', { ingress: true })).rejects.toMatchObject({ code: 403 });
 	});
 
 	it('streams a Uint8Array stdin as raw bytes to the pod (objectMode:false)', async () => {
@@ -794,12 +794,28 @@ describe('createK8sClient', () => {
 		k8sMock.net.deleteNamespacedIngress.mockRejectedValueOnce({ code: 404 });
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await client.delete('mh-sb');
+		await client.delete('mh-sb', { ingress: true });
 
 		expect(k8sMock.net.deleteNamespacedIngress).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
 		});
+		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+		});
+		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+		});
+	});
+
+	it('deletes only the service and pod when no ingress was managed', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await client.delete('mh-sb', { ingress: false });
+
+		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
 		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',

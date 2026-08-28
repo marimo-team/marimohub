@@ -737,6 +737,21 @@ describe('createFromEnv sandbox exposure mode', () => {
 		expect((deps.sandbox.exposure as ProxyExposure).signingSecret).toBe('x'.repeat(48));
 		expect(deps.sandbox.appBaseUrl).toBe('https://hub.example.com');
 	});
+
+	it('passes proxy exposure to the kubernetes compute adapter', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandboxes.example.net',
+			MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS: 'nginx',
+			MARIMOHUB_SANDBOX_EXPOSURE: 'proxy',
+			MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: 'true',
+			MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
+		});
+		const config = (deps.compute as unknown as { config: { exposureMode?: string } }).config;
+
+		expect(config.exposureMode).toBe('proxy');
+	});
 });
 
 describe('createFromEnv default role', () => {

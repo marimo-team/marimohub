@@ -465,10 +465,12 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			});
 		},
 
-		async delete(name: string): Promise<void> {
+		async delete(name: string, options: { ingress: boolean }): Promise<void> {
 			const { core, net } = await apis();
 			await Promise.all([
-				deleteTolerant(() => net.deleteNamespacedIngress({ name, namespace })),
+				options.ingress
+					? deleteTolerant(() => net.deleteNamespacedIngress({ name, namespace }))
+					: undefined,
 				deleteTolerant(() => core.deleteNamespacedService({ name, namespace })),
 				deleteTolerant(() => core.deleteNamespacedPod({ name, namespace })),
 			]);

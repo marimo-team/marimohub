@@ -93,7 +93,7 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | 🟡     | Modal                           | `compute-modal`            |                                                       |
 | 🟡     | Docker                          | `compute-container/docker` | Local end-to-end test passed; not run in a deployment |
 | 🟡     | Podman                          | `compute-container/podman` | Hermetic CLI tests; not yet live-verified             |
-| 🟡     | Kubernetes                      | `compute-kubernetes`       | Pod + Service + Ingress per sandbox; vendor-neutral   |
+| 🟡     | Kubernetes                      | `compute-kubernetes`       | Pod + Service; optional Ingress; vendor-neutral       |
 | ⬜     | Fly.io Machines                 | —                          | VM per sandbox, per-machine public hostname           |
 | ⬜     | Daytona                         | —                          | Sandbox SDK (exec/files/preview URLs)                 |
 | ⬜     | AWS Fargate / ECS RunTask       | —                          | RunTask + ECS Exec + ALB                              |

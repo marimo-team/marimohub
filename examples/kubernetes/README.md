@@ -10,10 +10,10 @@ cluster.
 
 ## What's here
 
-| File                                   | Purpose                                                                                                                               |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| [`rbac.yaml`](./rbac.yaml)             | Kernel namespace + ServiceAccount + Role/RoleBinding granting the control plane just enough to manage kernel Pods/Services/Ingresses. |
-| [`deployment.yaml`](./deployment.yaml) | The marimohub API + maintenance Deployments and a Service, wired to the ServiceAccount and a config Secret.                           |
+| File                                   | Purpose                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`rbac.yaml`](./rbac.yaml)             | Kernel namespace + ServiceAccount + Role/RoleBinding for kernel Pods/Services and subdomain-mode Ingresses. |
+| [`deployment.yaml`](./deployment.yaml) | The marimohub API + maintenance Deployments and a Service, wired to the ServiceAccount and a config Secret. |
 
 ## Prerequisites
 
@@ -22,10 +22,11 @@ cluster.
    `pnpm add @kubernetes/client-node` (or `npm i @kubernetes/client-node`).
 2. **A sandbox image** with marimo + uv + python3 + git
    (`MARIMOHUB_COMPUTE_IMAGE`).
-3. **An ingress controller**, a wildcard DNS record `*.hub.example.com`, and
-   either a wildcard TLS secret `marimo-kernels-wildcard-tls` in the
-   `marimo-kernels` namespace or an ingress-controller default certificate so
-   each `https://<id>.hub.example.com` kernel URL resolves.
+3. For `subdomain` exposure, **an ingress controller**, a wildcard DNS record
+   `*.hub.example.com`, and either a wildcard TLS secret
+   `marimo-kernels-wildcard-tls` in the `marimo-kernels` namespace or an
+   ingress-controller default certificate so each
+   `https://<id>.hub.example.com` kernel URL resolves.
 4. A **config Secret** `marimohub-config` holding every `MARIMOHUB_*` variable
    (storage / compute / auth). The compute keys for this backend:
 
@@ -37,6 +38,14 @@ cluster.
    MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
    MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
    ```
+
+   For proxy exposure, omit all hostname, Ingress, and TLS variables. Set
+   `MARIMOHUB_SANDBOX_EXPOSURE=proxy` and
+   `MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED=true`.
+
+   For an existing subdomain deployment, complete the required
+   [session drain](../../docs/deploying/kubernetes.md#changing-from-subdomain-to-proxy)
+   before you change the mode or RBAC.
 
    On OpenShift, you can use the default ingress certificate instead of a named
    secret. Remove or comment out `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` from
@@ -57,8 +66,9 @@ kubectl -n marimohub create secret generic marimohub-config --from-env-file=.env
 kubectl apply -f deployment.yaml
 ```
 
-Kernel Pods/Services/Ingresses appear in `marimo-kernels` while a notebook is
-open and are deleted on teardown:
+Kernel Pods and Services appear in `marimo-kernels` while a notebook is open.
+Subdomain exposure also creates Ingresses. All managed resources are deleted on
+teardown:
 
 ```bash
 kubectl -n marimo-kernels get pods,svc,ingress -l app.kubernetes.io/managed-by=marimohub

@@ -542,6 +542,7 @@ export function createFromEnv(
 	const compute = makeCompute(env, {
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
+		sandboxExposureMode: exposure.mode,
 		libraries: options?.libraries,
 	});
 	const brokerPolicy =

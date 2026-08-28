@@ -1,9 +1,9 @@
 # RBAC for the marimohub `kubernetes` compute backend.
 #
 # The control plane runs in the `marimohub` namespace and creates one kernel
-# Pod + Service + Ingress per session in the `marimo-kernels` namespace. This
-# grants its ServiceAccount exactly those permissions in that namespace — and
-# nothing cluster-wide.
+# Pod + Service per session, plus an Ingress in subdomain exposure, in the
+# `marimo-kernels` namespace. This grants its ServiceAccount exactly those
+# permissions in that namespace — and nothing cluster-wide.
 ---
 apiVersion: v1
 kind: Namespace
@@ -32,6 +32,7 @@ rules:
   - apiGroups: ['']
     resources: ['pods/log']
     verbs: ['get']
+  # Drain all subdomain sessions before you select proxy mode and remove this rule.
   - apiGroups: ['networking.k8s.io']
     resources: ['ingresses']
     verbs: ['create', 'get', 'list', 'watch', 'update', 'delete']

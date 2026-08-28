@@ -73,6 +73,7 @@ function makeWorld(opts?: {
 }) {
 	const ensured: EnsureSandboxOptions[] = [];
 	const deleted: string[] = [];
+	const deleteIngress: boolean[] = [];
 	const execCalls: {
 		name: string;
 		command: string[];
@@ -98,8 +99,9 @@ function makeWorld(opts?: {
 			execCalls.push({ name, command, stdin, options });
 			return opts?.execImpl?.(command, stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
 		},
-		delete: async (name) => {
+		delete: async (name, options) => {
 			deleted.push(name);
+			deleteIngress.push(options.ingress);
 			pods.delete(name);
 		},
 		list: async () =>
@@ -115,7 +117,7 @@ function makeWorld(opts?: {
 		if (p) p.phase = phase;
 	};
 
-	return { client, ensured, deleted, execCalls, pods, setPhase };
+	return { client, ensured, deleted, deleteIngress, execCalls, pods, setPhase };
 }
 
 function makeCompute(world: ReturnType<typeof makeWorld>, config: KubernetesConfig = baseConfig) {
@@ -686,6 +688,53 @@ describe('KubernetesCompute', () => {
 
 			expect(url).toBe('https://hub.example.com/proxy/tok-123/2718');
 		});
+
+		it('uses the internal Service and does not request an Ingress in proxy mode', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world, {
+				...baseConfig,
+				exposureMode: 'proxy',
+				namespace: 'marimo-sandboxes',
+			}).create('SB_ABC.123' as SandboxId);
+
+			await expect(inst.exposePort(2718, { hostname: 'hub.example.com' })).resolves.toEqual({
+				url: 'http://mh-sb-abc-123.marimo-sandboxes.svc.cluster.local:2718',
+			});
+			expect(world.ensured).toHaveLength(1);
+			expect(world.ensured[0]?.host).toBe('');
+
+			await inst.destroy();
+			expect(world.deleteIngress).toEqual([false]);
+		});
+
+		it('honours a custom internal hostnameTemplate in proxy mode', async () => {
+			const world = makeWorld();
+			const { url } = await makeCompute(world, {
+				...baseConfig,
+				exposureMode: 'proxy',
+				namespace: 'marimo-sandboxes',
+				hostnameTemplate: 'http://mh-{id}.marimo-sandboxes.svc.cluster.local:{port}',
+			})
+				.create(SANDBOX_ID)
+				.exposePort(2718, { hostname: 'hub.example.com' });
+
+			expect(url).toBe('http://mh-sb-abc.marimo-sandboxes.svc.cluster.local:2718');
+			expect(world.ensured[0]?.host).toBe('');
+		});
+
+		it('substitutes the Service name and namespace in a proxy template', async () => {
+			const world = makeWorld();
+			const { url } = await makeCompute(world, {
+				...baseConfig,
+				exposureMode: 'proxy',
+				namespace: 'marimo-sandboxes',
+				hostnameTemplate: 'http://{name}.{namespace}.svc.internal:{port}',
+			})
+				.create('SB_ABC.123' as SandboxId)
+				.exposePort(2718, { hostname: 'hub.example.com' });
+
+			expect(url).toBe('http://mh-sb-abc-123.marimo-sandboxes.svc.internal:2718');
+		});
 	});
 
 	describe('destroy()', () => {
@@ -697,6 +746,7 @@ describe('KubernetesCompute', () => {
 			expect(world.deleted).toEqual([NAME]);
 			await inst.destroy(); // re-resolve + delete again; fake tolerates the miss
 			expect(world.deleted).toEqual([NAME, NAME]);
+			expect(world.deleteIngress).toEqual([true, true]);
 		});
 	});
 
