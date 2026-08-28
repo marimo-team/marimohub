@@ -76,6 +76,35 @@ describe('sessionCan', () => {
 		).toBe(false);
 	});
 
+	it('grants development only to the owner of a running persistent exclusive editor', () => {
+		const eligible = {
+			mode: 'edit' as const,
+			ephemeral: undefined,
+			user_id: ME,
+			editor_sandbox_sharing: 'exclusive' as const,
+			status: 'running' as const,
+		};
+		expect(sessionCan('develop', actor({ role: 'editor' }), eligible)).toBe(true);
+		expect(sessionCan('develop', actor({ role: 'manager', userId: OTHER }), eligible)).toBe(false);
+		expect(sessionCan('develop', actor({ role: 'viewer' }), eligible)).toBe(false);
+		expect(sessionCan('develop', actor({ role: null }), eligible)).toBe(false);
+		for (const status of ['starting', 'terminating', 'terminated', 'failed'] as const) {
+			expect(sessionCan('develop', actor({ role: 'editor' }), { ...eligible, status })).toBe(false);
+		}
+		expect(sessionCan('develop', actor({ role: 'editor' }), { ...eligible, ephemeral: true })).toBe(
+			false,
+		);
+		expect(
+			sessionCan('develop', actor({ role: 'editor' }), {
+				...eligible,
+				editor_sandbox_sharing: 'shared',
+			}),
+		).toBe(false);
+		expect(sessionCan('develop', actor({ role: 'editor' }), { ...eligible, mode: 'app' })).toBe(
+			false,
+		);
+	});
+
 	it('a viewer fully controls their own ephemeral session while the tier grants it', () => {
 		expect(sessionCan('attach', actor({ viewerMode: 'ephemeral-sandbox' }), ownEphemeral)).toBe(
 			true,
@@ -126,11 +155,13 @@ describe('sessionGrants', () => {
 			attach: true,
 			stop: false,
 			surface: false,
+			develop: false,
 		});
 		expect(sessionGrants(actor({ role: 'editor' }), app)).toEqual({
 			attach: true,
 			stop: true,
 			surface: false,
+			develop: false,
 		});
 	});
 });

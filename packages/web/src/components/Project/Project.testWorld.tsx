@@ -44,7 +44,7 @@ export const runningSession = (): Session =>
 
 export const stoppableSession = (): Session => ({
 	...runningSession(),
-	can: { attach: true, stop: true },
+	can: { attach: true, stop: true, develop: false },
 });
 
 export function makeFetch(

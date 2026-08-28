@@ -249,6 +249,7 @@ export {
 	canStartSessionMode,
 	type SessionAction,
 	type SessionActor,
+	type SessionAuthorizationTarget,
 	sessionCan,
 	sessionGrants,
 } from './runtime/sessionAuthz';

@@ -15,7 +15,8 @@ function makeSession(status: Session['status']): Session {
 		user_id: 'user_1',
 		status,
 		mode: 'edit',
-		can: { attach: true, stop: true },
+		can: { attach: true, stop: true, develop: false },
+		remote_development: { ssh: { available: false, reason: 'disabled' } },
 		started_at: '2026-06-24T12:00:00Z',
 		last_heartbeat: '2026-06-24T12:00:00Z',
 	};

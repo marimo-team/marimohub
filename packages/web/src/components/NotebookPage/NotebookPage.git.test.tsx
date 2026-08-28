@@ -80,7 +80,7 @@ describe('NotebookPage git-synced editor', () => {
 			sourceType: 'git',
 			session: gitEditSession({
 				source_version_id: 'ver-old',
-				can: { attach: true, stop: false },
+				can: { attach: true, stop: false, develop: false },
 			}),
 			headVersion: 'ver-head',
 		});

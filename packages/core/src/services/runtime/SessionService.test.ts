@@ -146,6 +146,48 @@ describe('SessionService', () => {
 	});
 
 	describe('heartbeat', () => {
+		it('refreshes the remote-development lease only for a running session', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const lease = new Date(Date.now() + 90_000).toISOString();
+			const starting = await sessions.heartbeatDevelopmentConnection(
+				projectId,
+				created.session_id,
+				lease,
+			);
+			expect(starting.development_active_until).toBeUndefined();
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
+			const running = await sessions.heartbeatDevelopmentConnection(
+				projectId,
+				created.session_id,
+				lease,
+			);
+			expect(running.development_active_until).toBe(lease);
+		});
+
+		it('does not shorten a lease when an older heartbeat arrives late', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
+			const laterLease = new Date(Date.now() + 120_000).toISOString();
+			const earlierLease = new Date(Date.now() + 90_000).toISOString();
+
+			await sessions.heartbeatDevelopmentConnection(projectId, created.session_id, laterLease);
+			const result = await sessions.heartbeatDevelopmentConnection(
+				projectId,
+				created.session_id,
+				earlierLease,
+			);
+
+			expect(result.development_active_until).toBe(laterLease);
+		});
+
 		it('does not promote a starting session', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,

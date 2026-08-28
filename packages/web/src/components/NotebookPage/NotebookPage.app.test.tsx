@@ -89,7 +89,7 @@ describe('NotebookPage app variant', () => {
 		const impl = makeFetch({
 			role: 'viewer',
 			viewerMode: 'applications',
-			session: appSession({ can: { attach: true, stop: false } }),
+			session: appSession({ can: { attach: true, stop: false, develop: false } }),
 		});
 		const { container } = renderPage('app');
 
@@ -108,7 +108,10 @@ describe('NotebookPage app variant', () => {
 		makeFetch({
 			role: 'viewer',
 			viewerMode: 'applications',
-			session: appSession({ source_version_id: 'ver-old', can: { attach: true, stop: false } }),
+			session: appSession({
+				source_version_id: 'ver-old',
+				can: { attach: true, stop: false, develop: false },
+			}),
 			headVersion: 'ver-head',
 		});
 		renderPage('app');

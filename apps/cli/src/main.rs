@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use clap::ArgMatches;
-use mohub::{cli, client, config, deploy, manifest, Error};
+use mohub::{cli, client, config, deploy, manifest, remote_development, Error};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use update_informer::{registry, Check};
@@ -692,6 +692,39 @@ fn run_command(
     path: &[String],
     leaf: &ArgMatches,
 ) -> Result<(), Error> {
+    if matches!(path, [command] if command == "proxy-ssh")
+        || matches!(path, [sessions, command] if sessions == "sessions" && (command == "ssh" || command == "code"))
+    {
+        let profile = config::load_profile_with_token(
+            matches
+                .get_one::<String>("profile-name")
+                .map(String::as_str),
+        )?;
+        require_matching_profile_server(matches, &profile.name, &profile.profile.base_url)?;
+        let token = profile.token.ok_or_else(|| Error::Authentication {
+            server: server_label(&profile.profile.base_url),
+            reason: "no stored credential".into(),
+        })?;
+        let target = remote_development::Target::from_matches(leaf)?;
+        return match path {
+            [command] if command == "proxy-ssh" => {
+                remote_development::proxy(&profile.name, &profile.profile.base_url, &token, &target)
+            }
+            [_, command] if command == "ssh" => remote_development::open_ssh(
+                &profile.name,
+                &profile.profile.base_url,
+                &token,
+                &target,
+            ),
+            [_, command] if command == "code" => remote_development::open_code(
+                &profile.name,
+                &profile.profile.base_url,
+                &token,
+                &target,
+            ),
+            _ => unreachable!(),
+        };
+    }
     if path.first().map(String::as_str) == Some("profile") {
         return handle_profile(matches.subcommand().expect("selected profile").1);
     }
@@ -795,7 +828,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 82);
+        assert_eq!(manifest.operations.len(), 83);
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest

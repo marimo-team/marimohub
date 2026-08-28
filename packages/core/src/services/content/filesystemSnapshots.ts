@@ -35,12 +35,14 @@ export function createOrRestoreSandbox(
 	image?: string,
 	resources?: ComputeResources,
 	userHome?: SandboxUserHome,
+	brokeredPorts?: readonly number[],
 ): SandboxInstance {
 	const fs = asFilesystemSnapshots(provider);
 	const common: CreateSandboxOptions = {
 		reuse: false,
 		...(resources ? { resources } : {}),
 		...(userHome ? { userHome } : {}),
+		...(brokeredPorts && brokeredPorts.length > 0 ? { brokeredPorts } : {}),
 	};
 	// reuse: false — this id is brand new, so the adapter's reconnect lookup can
 	// never match and would just cost a round-trip on the critical path.
@@ -82,7 +84,7 @@ export async function captureFilesystemSnapshot(
 	sandbox: SandboxInstance,
 	projectId: ProjectId,
 	notebookId: NotebookId,
-	compute?: Pick<FsSnapshot, 'compute_profile' | 'compute_resources' | 'owner_user_id'>,
+	compute?: Pick<FsSnapshot, 'image' | 'compute_profile' | 'compute_resources' | 'owner_user_id'>,
 ): Promise<void> {
 	const fs = asFilesystemSnapshots(provider);
 	if (!fs) return;

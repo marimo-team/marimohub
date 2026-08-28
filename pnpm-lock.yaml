@@ -147,6 +147,9 @@ catalogs:
     '@types/pg-cursor':
       specifier: ^2.7.2
       version: 2.7.2
+    '@types/ws':
+      specifier: ^8.18.1
+      version: 8.18.1
     '@vitest/coverage-v8':
       specifier: 4.1.8
       version: 4.1.8
@@ -255,6 +258,9 @@ catalogs:
     vitest:
       specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
       version: 0.1.24
+    ws:
+      specifier: ^8.18.3
+      version: 8.21.0
     yaml:
       specifier: ^2.9.0
       version: 2.9.0
@@ -416,6 +422,9 @@ importers:
       hono:
         specifier: 4.12.34
         version: 4.12.34
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.0
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -429,6 +438,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.3
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
       tsx:
         specifier: 'catalog:'
         version: 4.23.1
@@ -3743,6 +3755,9 @@ packages:
 
   '@types/web-bluetooth@0.0.21':
     resolution: {integrity: sha512-oIQLCGWtcFZy2JW77j9k8nHzAOpqMHLQejDA48XXMWH6tjCQHz5RCFz1bzsmROyL6PUm+LLnUiI4BCn221inxA==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@typespec/ts-http-runtime@0.3.7':
     resolution: {integrity: sha512-JVUD8X2tfDMWjcjLs4yVxxVrS8yR5vnh386GAXT9Qj79nBxxXSaHFQZg5FweLmT8HlPQ3kii6noUB+Z9RN7DvQ==}
@@ -8193,6 +8208,10 @@ snapshots:
   '@types/unist@3.0.3': {}
 
   '@types/web-bluetooth@0.0.21': {}
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 25.9.3
 
   '@typespec/ts-http-runtime@0.3.7':
     dependencies:

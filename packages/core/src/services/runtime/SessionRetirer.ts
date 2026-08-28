@@ -221,6 +221,7 @@ export class SessionRetirer {
 					session.project_id,
 					session.notebook_id,
 					{
+						image: session.sandbox_image,
 						compute_profile: session.compute_profile,
 						compute_resources: session.compute_resources,
 						owner_user_id: session.user_id,
@@ -319,6 +320,7 @@ export class SessionRetirer {
 				session.project_id,
 				session.notebook_id,
 				{
+					image: session.sandbox_image,
 					compute_profile: session.compute_profile,
 					compute_resources: session.compute_resources,
 					owner_user_id: session.user_id,

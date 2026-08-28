@@ -17,12 +17,17 @@ export interface SessionActor {
 	editorSandboxSharing?: EditorSandboxSharing;
 }
 
+export type SessionAuthorizationTarget = Pick<
+	Session,
+	'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'
+> & { status?: Session['status'] };
+
 /**
  * `attach` — reach the session's kernel: proxy/WS traffic, keep-alive
  * heartbeats, and seeing `sandbox_url` (in `subdomain` exposure the URL is
  * the capability). `stop` — terminate or restart it.
  */
-export type SessionAction = 'attach' | 'stop' | 'surface';
+export type SessionAction = 'attach' | 'stop' | 'surface' | 'develop';
 
 /**
  * May the actor START a session of `mode`? Editor+ always; a viewer exactly
@@ -51,11 +56,21 @@ export function canStartSessionMode(
 export function sessionCan(
 	action: SessionAction,
 	actor: SessionActor,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAuthorizationTarget,
 ): boolean {
 	if (action === 'surface') {
 		if (!roleAtLeast(actor.role, 'editor') || sessionMode(session) !== 'edit') return false;
 		return sessionCan('attach', actor, session);
+	}
+	if (action === 'develop') {
+		return (
+			session.status === 'running' &&
+			roleAtLeast(actor.role, 'editor') &&
+			sessionMode(session) === 'edit' &&
+			!session.ephemeral &&
+			(session.editor_sandbox_sharing ?? actor.editorSandboxSharing ?? 'shared') === 'exclusive' &&
+			session.user_id === actor.userId
+		);
 	}
 	if (roleAtLeast(actor.role, 'editor')) {
 		if (sessionMode(session) !== 'edit') return true;
@@ -82,11 +97,12 @@ export function sessionCan(
 /** Both grants at once — the `can` object shipped on every session response. */
 export function sessionGrants(
 	actor: SessionActor,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
-): { attach: boolean; stop: boolean; surface: boolean } {
+	session: SessionAuthorizationTarget,
+): { attach: boolean; stop: boolean; surface: boolean; develop: boolean } {
 	return {
 		attach: sessionCan('attach', actor, session),
 		stop: sessionCan('stop', actor, session),
 		surface: sessionCan('surface', actor, session),
+		develop: sessionCan('develop', actor, session),
 	};
 }

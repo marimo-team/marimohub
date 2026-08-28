@@ -29,12 +29,14 @@
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"hono": "catalog:",
+		"ws": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@opentelemetry/core": "catalog:",
 		"@types/node": "catalog:",
+		"@types/ws": "catalog:",
 		"tsx": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

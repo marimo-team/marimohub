@@ -17,6 +17,7 @@
 		"./testing/memory-bucket": "./src/testing/MemoryBucket.ts",
 		"./testing/contract": "./src/testing/bucketContract.ts",
 		"./testing/compute-contract": "./src/testing/computeContract.ts",
+		"./testing/port-connector-contract": "./src/testing/portConnectorContract.ts",
 		"./testing/browse-contract": "./src/testing/browseContract.ts",
 		"./testing/object-browse-contract": "./src/testing/objectBrowseContract.ts",
 		"./testing/notifier-contract": "./src/testing/notifierContract.ts",

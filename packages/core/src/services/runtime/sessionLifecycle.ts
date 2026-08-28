@@ -219,7 +219,9 @@ export class SessionLifecycleService {
 						.catch(() => {});
 				}
 			}
-			const hasEditors = (active ?? 0) > 0;
+			const hasDevelopmentConnection =
+				!!s.development_active_until && now < Date.parse(s.development_active_until);
+			const hasEditors = (active ?? 0) > 0 || hasDevelopmentConnection;
 
 			if (isTerminal(s.status)) {
 				const superseded = liveNotebooks.has(s.notebook_id);

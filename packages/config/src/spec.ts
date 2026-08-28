@@ -1209,6 +1209,21 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'source',
 					},
 					{
+						id: 'MARIMOHUB_REMOTE_DEVELOPMENT',
+						name: 'Remote development',
+						description:
+							'Brokered remote-development mode (`disabled` or `ssh`). SSH requires exclusive editor sandboxes, a compatible compute backend, and explicitly marked images.',
+						example: 'ssh',
+						default: 'disabled',
+					},
+					{
+						id: 'MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES',
+						name: 'Remote-development images',
+						description:
+							'Comma-separated exact references from MARIMOHUB_COMPUTE_IMAGE that implement the remote-development image contract.',
+						example: 'ghcr.io/orgname/marimo-sandbox:remote-dev',
+					},
+					{
 						id: 'MARIMOHUB_VERSION',
 						name: 'Deployment version',
 						description:

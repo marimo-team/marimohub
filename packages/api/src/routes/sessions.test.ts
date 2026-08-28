@@ -30,7 +30,15 @@ import {
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
 type ApiSession = Session & {
-	can: { attach: boolean; stop: boolean; surfaces?: { vscode: boolean } };
+	can: {
+		attach: boolean;
+		stop: boolean;
+		develop: boolean;
+		surfaces?: { vscode: boolean };
+	};
+	remote_development: {
+		ssh: { available: true } | { available: false; reason: string };
+	};
 	reused?: boolean;
 };
 
@@ -43,6 +51,20 @@ type EditorState = {
 	};
 	can_take_over: boolean;
 };
+
+function ed25519PublicKey(comment = 'cli-test'): string {
+	const algorithm = Buffer.from('ssh-ed25519');
+	const algorithmLength = Buffer.alloc(4);
+	algorithmLength.writeUInt32BE(algorithm.length);
+	const keyLength = Buffer.alloc(4);
+	keyLength.writeUInt32BE(32);
+	return `ssh-ed25519 ${Buffer.concat([
+		algorithmLength,
+		algorithm,
+		keyLength,
+		Buffer.alloc(32, 1),
+	]).toString('base64')} ${comment}`;
+}
 
 describe('Session routes', () => {
 	let bucket: MemoryBucket;
@@ -146,6 +168,122 @@ describe('Session routes', () => {
 		} finally {
 			log.mockRestore();
 		}
+	});
+
+	it('prepares short-lived SSH access without exposing the sandbox endpoint or key in commands', async () => {
+		const image = 'registry.example/marimo:remote-development';
+		const sb = makeFakeSandbox();
+		const originalExec = sb.instance.exec.bind(sb.instance);
+		sb.instance.exec = async (command, options) => {
+			if (command.startsWith('marimohub-ssh prepare ')) {
+				return {
+					success: true,
+					stdout: JSON.stringify({
+						username: 'appuser',
+						host_key: ed25519PublicKey('sandbox-host'),
+					}),
+					stderr: '',
+				};
+			}
+			return originalExec(command, options);
+		};
+		const compute = {
+			...fakeComputeFrom(sb.instance),
+			brokeredPortConnectionsEnabled: true as const,
+			connectPort: vi.fn(),
+		};
+		const request = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({
+				images: [image],
+				remoteDevelopment: { mode: 'ssh', images: [image], port: 2222 },
+			}),
+		});
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		expect(session.can.develop).toBe(true);
+		expect(session.remote_development.ssh).toEqual({ available: true });
+
+		const preparePath = sessionsPath(`/${session.session_id}/remote-development/ssh/prepare`);
+		const publicKey = ed25519PublicKey();
+		for (const [invalidKey, status, code] of [
+			['ssh-rsa invalid', 400, 'BAD_REQUEST'],
+			['ssh-ed25519 !!!', 400, 'BAD_REQUEST'],
+			[`${publicKey}\ncommand="touch /tmp/pwned"`, 400, 'BAD_REQUEST'],
+			[`ssh-ed25519 ${'A'.repeat(1_025)}`, 422, 'VALIDATION_ERROR'],
+		] as const) {
+			await expectError(
+				await request('POST', preparePath, { public_key: invalidKey }),
+				status,
+				code,
+			);
+		}
+		const prepared = await expectOk<{
+			username: string;
+			host_key: string;
+			workspace_path: string;
+			key_expires_at: string;
+			persistence: string;
+		}>(await request('POST', preparePath, { public_key: publicKey }));
+		expect(prepared).toMatchObject({
+			username: 'appuser',
+			workspace_path: '/workspace',
+			persistence: 'source',
+		});
+		expect(sb.calls.writeFile).toContainEqual({
+			path: `/tmp/marimohub-ssh/${session.session_id}.pub`,
+			content: `${publicKey}\n`,
+		});
+		expect(sb.calls.exec.join('\n')).not.toContain(publicKey);
+		expect(Date.parse(prepared.key_expires_at)).toBeGreaterThan(Date.now());
+		expect(Date.parse(prepared.key_expires_at)).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+	});
+
+	it('fails closed when the sandbox SSH helper fails or returns an invalid identity', async () => {
+		const image = 'registry.example/marimo:remote-development';
+		const sb = makeFakeSandbox();
+		const originalExec = sb.instance.exec.bind(sb.instance);
+		let helperResult: Awaited<ReturnType<SandboxInstance['exec']>> = {
+			success: false,
+			stdout: '',
+			stderr: 'sshd unavailable',
+			error: { code: 'COMMAND_FAILED' },
+		};
+		sb.instance.exec = async (command, options) => {
+			if (command.startsWith('marimohub-ssh prepare ')) return helperResult;
+			return originalExec(command, options);
+		};
+		const compute = {
+			...fakeComputeFrom(sb.instance),
+			brokeredPortConnectionsEnabled: true as const,
+			connectPort: vi.fn(),
+		};
+		const request = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({
+				images: [image],
+				remoteDevelopment: { mode: 'ssh', images: [image], port: 2222 },
+			}),
+		});
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		const preparePath = sessionsPath(`/${session.session_id}/remote-development/ssh/prepare`);
+		const prepare = () => request('POST', preparePath, { public_key: ed25519PublicKey() });
+
+		await expectError(await prepare(), 409, 'CONFLICT');
+
+		helperResult = { success: true, stdout: 'not json', stderr: '' };
+		await expectError(await prepare(), 503, 'SERVICE_UNAVAILABLE');
+
+		helperResult = {
+			success: true,
+			stdout: JSON.stringify({ username: '../root', host_key: ed25519PublicKey('sandbox-host') }),
+			stderr: '',
+		};
+		await expectError(await prepare(), 503, 'SERVICE_UNAVAILABLE');
+
+		helperResult = {
+			success: true,
+			stdout: JSON.stringify({ username: 'appuser', host_key: `ssh-ed25519 ${'B'.repeat(44)}` }),
+			stderr: '',
+		};
+		await expectError(await prepare(), 503, 'SERVICE_UNAVAILABLE');
 	});
 
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
@@ -1824,7 +1962,12 @@ describe('Session routes', () => {
 
 		const sid = await startSession(); // started by ACTOR
 		const session = await expectOk<ApiSession>(await god('GET', sessionsPath(`/${sid}`)));
-		expect(session.can).toEqual({ attach: true, stop: true, surfaces: { vscode: true } });
+		expect(session.can).toEqual({
+			attach: true,
+			stop: true,
+			develop: false,
+			surfaces: { vscode: true },
+		});
 		await expectOk(await god('POST', sessionsPath(`/${sid}/heartbeat`)));
 		await expectOk(await god('DELETE', sessionsPath(`/${sid}`)));
 	});
@@ -1838,7 +1981,12 @@ describe('Session routes', () => {
 		const visible = await expectOk<ApiSession>(
 			await manager('GET', sessionsPath(`/${session.session_id}`)),
 		);
-		expect(visible.can).toEqual({ attach: false, stop: true, surfaces: { vscode: false } });
+		expect(visible.can).toEqual({
+			attach: false,
+			stop: true,
+			develop: false,
+			surfaces: { vscode: false },
+		});
 		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)));
 	});
 

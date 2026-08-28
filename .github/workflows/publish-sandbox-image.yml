@@ -4,10 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'images/marimo-sandbox/Dockerfile'
+      - 'images/marimo-sandbox/**'
+      - 'images/marimo-sandbox-remote-development/**'
+      - '.github/workflows/publish-sandbox-image.yml'
   pull_request:
     paths:
-      - 'images/marimo-sandbox/Dockerfile'
+      - 'images/marimo-sandbox/**'
+      - 'images/marimo-sandbox-remote-development/**'
+      - '.github/workflows/publish-sandbox-image.yml'
 
 permissions:
   contents: read
@@ -53,6 +57,11 @@ jobs:
             done
           '
 
+      - name: Build and test the remote-development variant
+        env:
+          MARIMOHUB_REMOTE_DEVELOPMENT_BASE_IMAGE: marimo-sandbox:ci
+        run: images/marimo-sandbox-remote-development/acceptance-test.sh marimo-sandbox:remote-development-ci
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         if: github.event_name == 'push'
 
@@ -64,7 +73,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish
+      - name: Publish base image
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -75,7 +84,6 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}
-
       - name: Publish VS Code variant
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -88,3 +96,17 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-vscode
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-vscode
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-vscode
+
+      - name: Publish remote-development image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/marimo-sandbox-remote-development
+          platforms: linux/amd64
+          build-args: |
+            BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:remote-development
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-remote-development
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-remote-development

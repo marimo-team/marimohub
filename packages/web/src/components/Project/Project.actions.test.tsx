@@ -171,13 +171,13 @@ describe('Project — Notebook Actions: configuration', () => {
 					...runningSession(),
 					session_id: 'sess-edit',
 					mode: 'edit',
-					can: { attach: true, stop: true },
+					can: { attach: true, stop: true, develop: false },
 				} as Session,
 				{
 					...runningSession(),
 					session_id: 'sess-app',
 					mode: 'app',
-					can: { attach: true, stop: true },
+					can: { attach: true, stop: true, develop: false },
 				} as Session,
 			],
 			capabilities: {
@@ -218,14 +218,14 @@ describe('Project — Notebook Actions: configuration', () => {
 					session_id: 'sess-temporary',
 					mode: 'edit',
 					ephemeral: true,
-					can: { attach: true, stop: true },
+					can: { attach: true, stop: true, develop: false },
 				} as Session,
 				{
 					...runningSession(),
 					session_id: 'sess-app',
 					mode: 'app',
 					source_version_id: 'ver-old',
-					can: { attach: true, stop: true },
+					can: { attach: true, stop: true, develop: false },
 				} as Session,
 			],
 		});
@@ -245,7 +245,7 @@ describe('Project — Notebook Actions: configuration', () => {
 				{
 					...runningSession(),
 					mode: 'edit',
-					can: { attach: true, stop: true },
+					can: { attach: true, stop: true, develop: false },
 				} as Session,
 			],
 			capabilities: {

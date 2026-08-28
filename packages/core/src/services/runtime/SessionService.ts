@@ -52,6 +52,7 @@ export interface CreateSessionInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	sandbox_id?: SandboxId;
 	sandbox_url?: string;
+	sandbox_image?: string;
 	compute_profile?: string;
 	compute_resources?: Session['compute_resources'];
 	compute_from_snapshot?: boolean;
@@ -164,6 +165,7 @@ export class SessionService {
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
+			sandbox_image: input.sandbox_image,
 			compute_profile: input.compute_profile,
 			compute_resources: input.compute_resources,
 			...(input.compute_from_snapshot ? { compute_from_snapshot: true } : {}),
@@ -506,6 +508,30 @@ export class SessionService {
 			const ageMs = Date.now() - new Date(session.last_heartbeat).getTime();
 			if (ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
 			return { ...session, last_heartbeat: new Date().toISOString() };
+		});
+	}
+
+	async heartbeatDevelopmentConnection(
+		projectId: ProjectId,
+		id: SessionId,
+		activeUntil: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			if (session.status !== 'running') return null;
+			const now = new Date().toISOString();
+			const heartbeatFresh =
+				Date.now() - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS;
+			const existingDeadline = session.development_active_until;
+			const deadline =
+				existingDeadline && Date.parse(existingDeadline) >= Date.parse(activeUntil)
+					? existingDeadline
+					: activeUntil;
+			if (heartbeatFresh && existingDeadline === deadline) return null;
+			return {
+				...session,
+				last_heartbeat: heartbeatFresh ? session.last_heartbeat : now,
+				development_active_until: deadline,
+			};
 		});
 	}
 

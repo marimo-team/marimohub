@@ -7,6 +7,7 @@ import {
 	computeContract,
 	isContractNonDirectoryFindCommand,
 } from '@marimo-hub/core/testing/compute-contract';
+import { portConnectorContract } from '@marimo-hub/core/testing/port-connector-contract';
 import { DockerCompute, spawnDockerRunner } from './docker';
 import {
 	containerCliContract,
@@ -25,10 +26,45 @@ const SANDBOX_ID = 'sb-abc' as SandboxId;
 const NAME = 'marimohub-sbx-sb-abc';
 
 describe('DockerCompute', () => {
+	it('rejects failed and malformed daemon port lookups', async () => {
+		const failed = fakeRunner((args) =>
+			args[0] === 'port'
+				? { stdout: '', stderr: 'container is not running', exitCode: 1 }
+				: defaultHandler(args),
+		);
+		await expect(
+			new DockerCompute({}, failed.runner).connectPort(SANDBOX_ID, 2222),
+		).rejects.toThrow(/container is not running/);
+
+		const malformed = fakeRunner((args) =>
+			args[0] === 'port'
+				? { stdout: '0.0.0.0:49153', stderr: '', exitCode: 0 }
+				: defaultHandler(args),
+		);
+		await expect(
+			new DockerCompute({}, malformed.runner).connectPort(SANDBOX_ID, 2222),
+		).rejects.toThrow(/could not resolve a loopback host port/);
+	});
+
+	it('disables brokered ports for remote daemons', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const compute = new DockerCompute({ daemonHost: 'tcp://docker.example:2376' }, runner);
+
+		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
+		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(/remote daemon/);
+		expect(calls).toHaveLength(0);
+	});
+
+	it('keeps brokered ports enabled for an explicit local daemon socket', () => {
+		const compute = new DockerCompute({ daemonHost: 'unix:///var/run/docker.sock' });
+
+		expect(compute.brokeredPortConnectionsEnabled).toBe(true);
+	});
+
 	it('create + ensure: runs the container with name, label, and published port', async () => {
 		const { runner, calls } = fakeRunner(defaultHandler);
 		const compute = new DockerCompute({ image: 'my-image', bindHost: '127.0.0.1' }, runner);
-		const sb = compute.create(SANDBOX_ID);
+		const sb = compute.create(SANDBOX_ID, { brokeredPorts: [2222] });
 
 		await sb.exec('true');
 
@@ -40,10 +76,23 @@ describe('DockerCompute', () => {
 		expect(runCall!.args).toContain('marimohub.sandbox=sb-abc');
 		expect(runCall!.args).toContain('-p');
 		expect(runCall!.args).toContain('127.0.0.1::2718');
+		expect(runCall!.args).toContain('127.0.0.1::2222');
 		expect(runCall!.args).toContain('my-image');
 		// exec goes through `sh -lc`
 		const execCall = calls.find((c) => c.args[0] === 'exec' && c.args.includes('true'));
 		expect(execCall).toBeDefined();
+	});
+
+	it('keeps brokered ports on loopback when kernel ports use a public bind', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const compute = new DockerCompute({ bindHost: '0.0.0.0' }, runner);
+
+		await compute.create(SANDBOX_ID, { brokeredPorts: [2222] }).exec('true');
+
+		const args = calls.find((call) => call.args[0] === 'run')!.args;
+		expect(args).toContain('0.0.0.0::2718');
+		expect(args).toContain('127.0.0.1::2222');
+		expect(args).not.toContain('0.0.0.0::2222');
 	});
 
 	it('a per-create image override replaces the configured image in docker run', async () => {
@@ -582,3 +631,12 @@ containerCliContract(
 	(config, runner) => new DockerCompute(config, runner),
 	spawnDockerRunner,
 );
+
+portConnectorContract('DockerCompute', (publishedPort) => {
+	const { runner } = fakeRunner((args) =>
+		args[0] === 'port'
+			? { stdout: `127.0.0.1:${publishedPort}\n`, stderr: '', exitCode: 0 }
+			: defaultHandler(args),
+	);
+	return new DockerCompute({ bindHost: '127.0.0.1' }, runner);
+});

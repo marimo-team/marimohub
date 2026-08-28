@@ -165,7 +165,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 					...runningSession(),
 					session_id: 'sess-app',
 					mode: 'app',
-					can: { attach: true, stop: false },
+					can: { attach: true, stop: false, develop: false },
 				} as Session,
 			],
 			capabilities: {
@@ -206,7 +206,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 					...runningSession(),
 					session_id: 'sess-app',
 					mode: 'app',
-					can: { attach: false, stop: false },
+					can: { attach: false, stop: false, develop: false },
 				} as Session,
 			],
 			capabilities: {
@@ -233,7 +233,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 					...runningSession(),
 					session_id: 'sess-app',
 					mode: 'app',
-					can: { attach: true, stop: true },
+					can: { attach: true, stop: true, develop: false },
 				} as Session,
 			],
 		});

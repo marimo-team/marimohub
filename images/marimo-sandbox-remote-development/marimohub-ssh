@@ -1,0 +1,65 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" != prepare ]; then
+	echo 'usage: marimohub-ssh prepare --public-key-file PATH --expires-at ISO --workspace PATH' >&2
+	exit 2
+fi
+shift
+key_file=''
+expires_at=''
+workspace='/workspace'
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--public-key-file) key_file=$2; shift 2 ;;
+		--expires-at) expires_at=$2; shift 2 ;;
+		--workspace) workspace=$2; shift 2 ;;
+		*) echo "unknown argument: $1" >&2; exit 2 ;;
+	esac
+done
+[ -n "$key_file" ] && [ -f "$key_file" ] && [ -n "$expires_at" ] || exit 2
+
+runtime=/tmp/marimohub-ssh
+umask 077
+mkdir -p "$runtime"
+host_key="$runtime/ssh_host_ed25519_key"
+if [ ! -s "$host_key" ]; then
+	ssh-keygen -q -t ed25519 -N '' -f "$host_key"
+fi
+expiry=$(date -u -d "$expires_at" +%Y%m%d%H%M%SZ)
+key=$(head -n 1 "$key_file")
+case "$key" in ssh-ed25519\ *) ;; *) exit 2 ;; esac
+printf 'expiry-time="%s",no-agent-forwarding,no-X11-forwarding,no-user-rc,command="/usr/local/bin/marimohub-ssh-shell" %s\n' \
+	"$expiry" "$key" > "$runtime/authorized_keys"
+printf '%s\n' "$workspace" > "$runtime/workspace"
+
+config="$runtime/sshd_config"
+cat > "$config" <<EOF
+Port 2222
+ListenAddress 0.0.0.0
+HostKey $host_key
+PidFile $runtime/sshd.pid
+AuthorizedKeysFile $runtime/authorized_keys
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+UsePAM no
+PermitRootLogin no
+AllowUsers $(id -un)
+StrictModes no
+AllowAgentForwarding no
+X11Forwarding no
+AllowTcpForwarding local
+GatewayPorts no
+PermitTunnel no
+PermitUserRC no
+PermitUserEnvironment no
+PrintMotd no
+PrintLastLog no
+Subsystem sftp internal-sftp
+EOF
+
+if [ ! -s "$runtime/sshd.pid" ] || ! kill -0 "$(cat "$runtime/sshd.pid")" 2>/dev/null; then
+	/usr/sbin/sshd -f "$config" -E "$runtime/sshd.log"
+fi
+printf '{"username":"%s","host_key":"%s"}\n' "$(id -un)" "$(cat "$host_key.pub")"

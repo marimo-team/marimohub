@@ -31,7 +31,7 @@ export function runningSession(overrides: Partial<Session> = {}): Session {
 		started_at: '2025-03-05T14:00:00Z',
 		last_heartbeat: '2025-03-05T14:00:00Z',
 		sandbox_url: 'https://sandbox.example/kernel',
-		can: { attach: true, stop: true },
+		can: { attach: true, stop: true, develop: false },
 		...overrides,
 	} as Session;
 }

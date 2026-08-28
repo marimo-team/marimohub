@@ -14,6 +14,7 @@ import { startOtel } from './otel';
 import { settleAllWithin } from './promise';
 import { serveSpaFallback, serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
+import { attachRemoteDevelopmentUpgrade } from './remoteDevelopmentWs';
 
 const DRAIN_TIMEOUT_MS = 10_000;
 
@@ -161,6 +162,7 @@ export async function bootstrap(
 	// In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the
 	// kernel (the HTTP side is handled inside `app.fetch`). A no-op otherwise.
 	attachSandboxProxyUpgrade(server, deps);
+	attachRemoteDevelopmentUpgrade(server, deps);
 
 	const unregisterSignals: (() => void)[] = [];
 	let drainPromise: Promise<void> | undefined;

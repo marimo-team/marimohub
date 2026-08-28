@@ -19,6 +19,7 @@ export interface PodmanConfig {
 	bindHost?: string;
 	network?: string;
 	labelKey?: string;
+	daemonHost?: string;
 }
 
 export function spawnPodmanRunner(bin = 'podman'): PodmanRunner {

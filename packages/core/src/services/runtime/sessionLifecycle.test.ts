@@ -273,6 +273,34 @@ describe('SessionLifecycleService', () => {
 			expect((await getStored(s)).status).toBe('running');
 		});
 
+		it('keeps a stale session alive while a remote-development lease is active', async () => {
+			probe.mockResolvedValue(0);
+			const s = await putSession({
+				last_heartbeat: iso(-IDLE_TIMEOUT_MS - 1000),
+				development_active_until: iso(90_000),
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reapedIdle).toBe(0);
+			expect(sandboxCalls.destroy).toBe(0);
+			expect((await getStored(s)).status).toBe('running');
+		});
+
+		it('reaps a stale session after its remote-development lease expires', async () => {
+			probe.mockResolvedValue(0);
+			const s = await putSession({
+				last_heartbeat: iso(-IDLE_TIMEOUT_MS - 1000),
+				development_active_until: iso(-1000),
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reapedIdle).toBe(1);
+			expect(sandboxCalls.destroy).toBe(1);
+			expect((await getStored(s)).status).toBe('terminated');
+		});
+
 		it('never probes or reaps a healthy session (fresh heartbeat, before deadline)', async () => {
 			const s = await putSession({
 				started_at: iso(-1000),

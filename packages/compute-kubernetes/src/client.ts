@@ -126,7 +126,7 @@ function podManifest(o: EnsureSandboxOptions): V1Pod {
 					// Keep-alive: the Pod idles while we exec marimo into it (see
 					// startProcess). Mirrors the CoreWeave "main process is keep-alive".
 					command: ['sh', '-c', 'sleep infinity'],
-					ports: [{ containerPort: o.port }],
+					ports: [o.port, ...(o.brokeredPorts ?? [])].map((port) => ({ containerPort: port })),
 					resources: buildResources(o.resources),
 				},
 			],
@@ -143,7 +143,12 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 		},
 		spec: {
 			selector: { [SANDBOX_NAME_LABEL]: o.name },
-			ports: [{ port: o.port, targetPort: o.port, protocol: 'TCP' }],
+			ports: [o.port, ...(o.brokeredPorts ?? [])].map((port) => ({
+				name: `tcp-${port}`,
+				port,
+				targetPort: port,
+				protocol: 'TCP',
+			})),
 		},
 	};
 }
