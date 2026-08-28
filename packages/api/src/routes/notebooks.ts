@@ -5,20 +5,26 @@ import {
 	applyGitSourceUpdate,
 	assertSyncedSource,
 	BadRequestError,
+	ConflictError,
 	createGitSource,
 	DomainError,
+	effectiveRole,
 	ForbiddenError,
 	joinUrlPath,
 	NotebookId,
 	NotFoundError,
+	MAX_WORKSPACE_FILE_BYTES,
 	notificationRouter,
 	ProjectId,
+	roleAtLeast,
+	sessionMode,
 	sourceDrift,
 	toPublicNotebookMeta,
 	toPublicSource,
 	toPublicVersion,
 	VersionId,
 } from '@marimo-hub/core';
+import type { WorkspaceFileItem } from '@marimo-hub/core';
 import {
 	assertProjectRole,
 	assertProjectVisible,
@@ -33,6 +39,7 @@ import {
 	IdempotencyKeyHeader,
 	jsonBody,
 	jsonContent,
+	loadVisibleProject,
 	GitSourceResponseSchema,
 	NotebookDetailResponseSchema,
 	NotebookIdParam,
@@ -47,6 +54,7 @@ import {
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
+import { objectContentDisposition } from '../contentDisposition';
 import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
 import type { HonoEnv, SandboxConfig } from '../context';
 import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
@@ -142,6 +150,41 @@ const UpdateNotebookBody = z.object({
 const DuplicateNotebookBody = z.object({
 	title: z.string().min(1).optional().openapi({ example: 'Revenue Analysis (copy)' }),
 });
+
+const WorkspaceItemSchema = z
+	.object({
+		path: z.string(),
+		name: z.string(),
+		kind: z.enum(['file', 'directory']),
+		size: z.number().int().nonnegative().optional(),
+		modified_at: z.number().int().nonnegative().optional(),
+		mime_type: z.string().optional(),
+	})
+	.openapi('WorkspaceItem');
+
+const WorkspacePathQuery = z.object({ path: z.string().optional().default('/') });
+const WorkspaceListQuery = WorkspacePathQuery.extend({ cursor: z.string().optional() });
+const WorkspaceSearchQuery = WorkspacePathQuery.extend({ query: z.string().min(1) });
+const WorkspaceFilePathQuery = z.object({ path: z.string().min(1) });
+const WorkspaceFileQuery = WorkspaceFilePathQuery.extend({
+	create: z.enum(['true', 'false']).optional(),
+});
+const WorkspaceDirectoryBody = z.object({ path: z.string().min(1) });
+const WorkspaceTransferBody = z.object({ from: z.string().min(1), to: z.string().min(1) });
+
+const WorkspaceAccessSchema = z
+	.object({
+		writable: z.boolean(),
+		read_only_reason: z.enum(['git_source', 'viewer', 'active_session']).nullable(),
+		protected_paths: z.array(
+			z.object({
+				path: z.string(),
+				denied_operations: z.array(z.enum(['create', 'write', 'move', 'copy', 'delete'])),
+			}),
+		),
+	})
+	.openapi('WorkspaceAccess');
+const WorkspaceFileBinary = z.string().openapi({ format: 'binary' });
 
 /**
  * Validate a requested base image against the deployment's configured list,
@@ -559,9 +602,356 @@ const duplicateNotebook = createRoute({
 	},
 });
 
+const getWorkspaceAccess = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/access',
+	operationId: 'notebooks.workspace.access',
+	tags: ['Notebooks'],
+	summary: 'Get workspace file capabilities',
+	request: { params: NotebookIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: WorkspaceAccessSchema }),
+			'Workspace access policy',
+		),
+		...commonErrors(),
+		...errorResponses(404),
+	},
+});
+
+const listWorkspaceEntries = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/entries',
+	operationId: 'notebooks.workspace.list',
+	tags: ['Notebooks'],
+	summary: 'List a workspace directory',
+	request: { params: NotebookIdParam, query: WorkspaceListQuery },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ items: z.array(WorkspaceItemSchema), cursor: z.string().optional() }),
+			}),
+			'Workspace entries',
+		),
+		...commonErrors(),
+		...errorResponses(400, 404),
+	},
+});
+
+const searchWorkspace = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/search',
+	operationId: 'notebooks.workspace.search',
+	tags: ['Notebooks'],
+	summary: 'Search workspace paths',
+	request: { params: NotebookIdParam, query: WorkspaceSearchQuery },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ items: z.array(WorkspaceItemSchema) }),
+			}),
+			'Workspace search results',
+		),
+		...commonErrors(),
+		...errorResponses(400, 404),
+	},
+});
+
+const createWorkspaceDirectory = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/directories',
+	operationId: 'notebooks.workspace.directories.create',
+	tags: ['Notebooks'],
+	summary: 'Create a workspace directory',
+	request: { params: NotebookIdParam, body: jsonBody(WorkspaceDirectoryBody) },
+	responses: {
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: WorkspaceItemSchema }),
+			'Workspace directory created',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409),
+	},
+});
+
+const deleteWorkspaceEntry = createRoute({
+	method: 'delete',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/entries',
+	operationId: 'notebooks.workspace.delete',
+	'x-cli-destructive': true,
+	tags: ['Notebooks'],
+	summary: 'Delete a workspace entry',
+	request: { params: NotebookIdParam, query: WorkspaceFilePathQuery },
+	responses: {
+		200: jsonContent(SuccessResponseSchema, 'Workspace entry deleted'),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409),
+	},
+});
+
+function workspaceTransferRoute(action: 'move' | 'copy') {
+	return createRoute({
+		method: 'post',
+		path: `/projects/{pid}/notebooks/{nid}/workspace/${action}`,
+		operationId: `notebooks.workspace.${action}`,
+		...(action === 'move' ? { 'x-cli-destructive': true as const } : {}),
+		tags: ['Notebooks'],
+		summary: `${action === 'move' ? 'Move' : 'Copy'} a workspace entry`,
+		request: { params: NotebookIdParam, body: jsonBody(WorkspaceTransferBody) },
+		responses: {
+			200: jsonContent(
+				z.object({ success: z.literal(true), data: WorkspaceItemSchema }),
+				`Workspace entry ${action === 'move' ? 'moved' : 'copied'}`,
+			),
+			...commonErrors(),
+			...errorResponses(400, 403, 404, 409),
+		},
+	});
+}
+
+const moveWorkspaceEntry = workspaceTransferRoute('move');
+const copyWorkspaceEntry = workspaceTransferRoute('copy');
+
+const readWorkspaceFile = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/files',
+	operationId: 'notebooks.workspace.files.read',
+	'x-cli-hidden': true,
+	tags: ['Notebooks'],
+	summary: 'Read raw workspace file content',
+	request: { params: NotebookIdParam, query: WorkspaceFilePathQuery },
+	responses: {
+		200: {
+			content: { 'application/octet-stream': { schema: WorkspaceFileBinary } },
+			description: 'Raw workspace file bytes',
+		},
+		...commonErrors(),
+		...errorResponses(400, 404),
+	},
+});
+
+const writeWorkspaceFile = createRoute({
+	method: 'put',
+	path: '/projects/{pid}/notebooks/{nid}/workspace/files',
+	operationId: 'notebooks.workspace.files.write',
+	'x-cli-hidden': true,
+	tags: ['Notebooks'],
+	summary: 'Create or overwrite a workspace file',
+	request: {
+		params: NotebookIdParam,
+		query: WorkspaceFileQuery,
+		body: {
+			required: true,
+			content: { 'application/octet-stream': { schema: WorkspaceFileBinary } },
+		},
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: WorkspaceItemSchema }),
+			'Workspace file saved',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409),
+	},
+});
+
 // --- App ---
 
 const app = createApp();
+
+// Register raw content contracts without attaching the OpenAPI request parser.
+app.openAPIRegistry.registerPath(readWorkspaceFile);
+app.openAPIRegistry.registerPath(writeWorkspaceFile);
+
+function toWorkspaceItem(item: WorkspaceFileItem) {
+	return {
+		path: `/${item.path}`,
+		name: item.name,
+		kind: item.kind,
+		...(item.size === undefined ? {} : { size: item.size }),
+		...(item.modifiedAt === undefined ? {} : { modified_at: item.modifiedAt }),
+		...(item.mimeType === undefined ? {} : { mime_type: item.mimeType }),
+	};
+}
+
+async function workspaceState(
+	c: Context<HonoEnv>,
+	pid: ProjectId,
+	nid: NotebookId,
+	mutation: boolean,
+) {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { notebooks, projects, sessions } = deps.services;
+	const [project, active] = await Promise.all([
+		mutation
+			? assertProjectRole(projects, pid, user, 'editor', deps.policy)
+			: loadVisibleProject(projects, pid, user, deps.policy),
+		sessions.listActiveByProject(pid),
+	]);
+	const editorActive = active.some(
+		(session) => session.notebook_id === nid && sessionMode(session) === 'edit',
+	);
+	const role = effectiveRole(project, user, deps.policy);
+	const sourceAccess = await notebooks.workspace.access(pid, nid);
+	const readOnlyReason = !sourceAccess.writable
+		? ('git_source' as const)
+		: !roleAtLeast(role, 'editor')
+			? ('viewer' as const)
+			: editorActive
+				? ('active_session' as const)
+				: null;
+	if (mutation && editorActive) {
+		throw new ConflictError('Workspace files cannot be changed while an edit session is active');
+	}
+	return {
+		writable: readOnlyReason === null,
+		readOnlyReason,
+		protectedPaths: sourceAccess.protectedPaths,
+	};
+}
+
+app.openapi(getWorkspaceAccess, async (c) => {
+	const { pid, nid } = c.req.valid('param');
+	const state = await workspaceState(c, pid, nid, false);
+	return c.json(
+		{
+			success: true,
+			data: {
+				writable: state.writable,
+				read_only_reason: state.readOnlyReason,
+				protected_paths: state.protectedPaths.map((rule) => ({
+					path: `/${rule.path}`,
+					denied_operations: [...rule.deniedOperations],
+				})),
+			},
+		},
+		200,
+	);
+});
+
+app.openapi(listWorkspaceEntries, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	await assertProjectVisible(deps.services.projects, pid, user, deps.policy);
+	const query = c.req.valid('query');
+	const result = await deps.services.notebooks.workspace.list(pid, nid, query.path, query.cursor);
+	return c.json(
+		{
+			success: true,
+			data: {
+				items: result.items.map(toWorkspaceItem),
+				...(result.cursor ? { cursor: result.cursor } : {}),
+			},
+		},
+		200,
+	);
+});
+
+app.openapi(searchWorkspace, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	await assertProjectVisible(deps.services.projects, pid, user, deps.policy);
+	const query = c.req.valid('query');
+	const items = await deps.services.notebooks.workspace.search(pid, nid, query.query, query.path);
+	return c.json({ success: true, data: { items: items.map(toWorkspaceItem) } }, 200);
+});
+
+app.openapi(createWorkspaceDirectory, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid } = c.req.valid('param');
+	await workspaceState(c, pid, nid, true);
+	const item = await deps.services.notebooks.workspace.createDirectory(
+		pid,
+		nid,
+		c.req.valid('json').path,
+	);
+	return c.json({ success: true, data: toWorkspaceItem(item) }, 201);
+});
+
+app.openapi(deleteWorkspaceEntry, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid } = c.req.valid('param');
+	await workspaceState(c, pid, nid, true);
+	await deps.services.notebooks.workspace.delete(pid, nid, c.req.valid('query').path);
+	return c.json({ success: true }, 200);
+});
+
+app.openapi(moveWorkspaceEntry, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid } = c.req.valid('param');
+	await workspaceState(c, pid, nid, true);
+	const body = c.req.valid('json');
+	const item = await deps.services.notebooks.workspace.move(pid, nid, body.from, body.to);
+	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
+});
+
+app.openapi(copyWorkspaceEntry, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid } = c.req.valid('param');
+	await workspaceState(c, pid, nid, true);
+	const body = c.req.valid('json');
+	const item = await deps.services.notebooks.workspace.copy(pid, nid, body.from, body.to);
+	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
+});
+
+app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const pid = c.req.param('pid');
+	const nid = c.req.param('nid');
+	if (!ProjectId.is(pid) || !NotebookId.is(nid)) throw new NotFoundError('Notebook not found');
+	const path = c.req.query('path');
+	if (!path) throw new BadRequestError('path is required');
+	await assertProjectVisible(deps.services.projects, pid, user, deps.policy);
+	const file = await deps.services.notebooks.workspace.read(pid, nid, path);
+	return new Response(new Uint8Array(file.bytes), {
+		headers: {
+			'cache-control': 'private, no-store',
+			'content-disposition': objectContentDisposition(file.item.name, false),
+			'content-type': file.item.mimeType ?? 'application/octet-stream',
+			'x-content-type-options': 'nosniff',
+		},
+	});
+});
+
+app.put('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const pid = c.req.param('pid');
+	const nid = c.req.param('nid');
+	if (!ProjectId.is(pid) || !NotebookId.is(nid)) throw new NotFoundError('Notebook not found');
+	const path = c.req.query('path');
+	if (!path) throw new BadRequestError('path is required');
+	const create = c.req.query('create');
+	if (create !== undefined && create !== 'true' && create !== 'false') {
+		throw new BadRequestError('create must be true or false');
+	}
+	await workspaceState(c, pid, nid, true);
+	const declaredSize = Number(c.req.header('content-length'));
+	if (Number.isFinite(declaredSize) && declaredSize > MAX_WORKSPACE_FILE_BYTES) {
+		return fail(
+			c,
+			'PAYLOAD_TOO_LARGE',
+			`Workspace file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+			413,
+		);
+	}
+	const bytes = new Uint8Array(await c.req.raw.arrayBuffer());
+	const item = await deps.services.notebooks.workspace.write(
+		pid,
+		nid,
+		path,
+		bytes,
+		user.id,
+		create === 'true',
+	);
+	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
+});
 
 function syncUrl(c: Context<HonoEnv>, pid: string, nid: string) {
 	return joinUrlPath(

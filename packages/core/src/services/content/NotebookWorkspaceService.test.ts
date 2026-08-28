@@ -1,0 +1,388 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	MAX_WORKSPACE_BYTES,
+	MAX_WORKSPACE_FILE_BYTES,
+	MAX_WORKSPACE_FILES,
+} from '../../constants';
+import { ForbiddenError } from '../../errors';
+import { NotebookId, ProjectId, VersionId } from '../../ids';
+import type { UserId } from '../../ids';
+import { paths } from '../../paths';
+import type { NotebookMeta, Source } from '../../schema';
+import { MemoryBucket } from '../../testing';
+import { WORKSPACE_DIRECTORY_MARKER } from '../../integrations/remoteWorkspace';
+import { NotebookWorkspaceService } from './NotebookWorkspaceService';
+import type { NotebookDetail } from './NotebookService';
+
+const PROJECT_ID = ProjectId.create();
+const NOTEBOOK_ID = NotebookId.create();
+const ACTOR = 'user-1' as UserId;
+const encode = (value: string) => new TextEncoder().encode(value);
+
+class DeleteFailingBucket extends MemoryBucket {
+	failDeleteKey: string | null = null;
+
+	override async delete(key: string | string[]): Promise<void> {
+		if (typeof key === 'string' && key === this.failDeleteKey) {
+			this.failDeleteKey = null;
+			throw new Error('delete failed');
+		}
+		return super.delete(key);
+	}
+}
+
+class PutFailingBucket extends MemoryBucket {
+	failPutKey: string | null = null;
+
+	override async put(...args: Parameters<MemoryBucket['put']>) {
+		if (args[0] === this.failPutKey) throw new Error('put failed');
+		return super.put(...args);
+	}
+}
+
+function notebookDetail(source: Source): NotebookDetail {
+	return {
+		meta: { status: 'active' } as NotebookMeta,
+		readme: null,
+		source,
+	};
+}
+
+describe('NotebookWorkspaceService', () => {
+	let bucket: MemoryBucket;
+	let detail: NotebookDetail;
+	let saveSourceFile: (
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		path: 'notebook.py' | 'pyproject.toml',
+		content: string,
+		actor: UserId,
+	) => Promise<void>;
+	let service: NotebookWorkspaceService;
+
+	beforeEach(() => {
+		bucket = new MemoryBucket();
+		detail = notebookDetail({
+			schema_version: 1,
+			type: 'local',
+			current_version_id: VersionId.create(),
+		});
+		saveSourceFile = vi.fn(async (_pid, _nid, path, content) => {
+			await bucket.put(
+				paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile(path),
+				content,
+			);
+		});
+		service = new NotebookWorkspaceService(bucket, {
+			getNotebook: async () => detail,
+			saveSourceFile,
+		});
+	});
+
+	it('lists files and synthetic directories without exposing directory markers', async () => {
+		const nb = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID);
+		await bucket.put(nb.workspaceFile('notebook.py'), 'print(1)');
+		await bucket.put(nb.workspaceFile('data/cars.csv'), 'a,b');
+		await service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'empty');
+
+		const root = await service.list(PROJECT_ID, NOTEBOOK_ID);
+		expect(root.items.map((item) => [item.path, item.kind])).toEqual([
+			['notebook.py', 'file'],
+			['data', 'directory'],
+			['empty', 'directory'],
+		]);
+		expect((await service.list(PROJECT_ID, NOTEBOOK_ID, 'data')).items[0]?.path).toBe(
+			'data/cars.csv',
+		);
+		expect((await service.search(PROJECT_ID, NOTEBOOK_ID, 'empty'))[0]).toMatchObject({
+			path: 'empty',
+			kind: 'directory',
+		});
+		const keys = (await bucket.list({ prefix: nb.workspacePrefix })).objects.map(
+			(object) => object.key,
+		);
+		expect(keys).toContain(nb.workspaceFile(`empty/${WORKSPACE_DIRECTORY_MARKER}`));
+		expect(keys.every((key) => !key.endsWith('/'))).toBe(true);
+		expect((await service.list(PROJECT_ID, NOTEBOOK_ID, 'empty')).items).toEqual([]);
+	});
+
+	it('rejects direct access to internal directory marker paths', async () => {
+		for (const path of [WORKSPACE_DIRECTORY_MARKER, `data/${WORKSPACE_DIRECTORY_MARKER}`]) {
+			await expect(service.read(PROJECT_ID, NOTEBOOK_ID, path)).rejects.toThrow('Reserved');
+			await expect(
+				service.write(PROJECT_ID, NOTEBOOK_ID, path, encode('poison'), ACTOR),
+			).rejects.toThrow('Reserved');
+		}
+	});
+
+	it('writes, copies, moves, searches, and recursively deletes auxiliary files', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'data/a.txt', encode('hello'), ACTOR, true);
+		await service.copy(PROJECT_ID, NOTEBOOK_ID, 'data', 'copy');
+		await service.move(PROJECT_ID, NOTEBOOK_ID, 'copy/a.txt', 'copy/b.txt');
+
+		expect(
+			new TextDecoder().decode((await service.read(PROJECT_ID, NOTEBOOK_ID, 'copy/b.txt')).bytes),
+		).toBe('hello');
+		expect(
+			(await service.search(PROJECT_ID, NOTEBOOK_ID, 'b.txt')).map((item) => item.path),
+		).toEqual(['copy/b.txt']);
+
+		await service.delete(PROJECT_ID, NOTEBOOK_ID, 'copy');
+		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'copy')).rejects.toThrow('not found');
+	});
+
+	it('routes source edits through the owner and protects their anchor paths', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', encode('print(2)'), ACTOR);
+		expect(saveSourceFile).toHaveBeenCalledWith(
+			PROJECT_ID,
+			NOTEBOOK_ID,
+			'notebook.py',
+			'print(2)',
+			ACTOR,
+		);
+		await expect(service.move(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', 'main.py')).rejects.toThrow(
+			ForbiddenError,
+		);
+		await expect(service.delete(PROJECT_ID, NOTEBOOK_ID, 'pyproject.toml')).rejects.toThrow(
+			ForbiddenError,
+		);
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'replacement.toml', encode('x = 1'), ACTOR, true);
+		await expect(
+			service.move(PROJECT_ID, NOTEBOOK_ID, 'replacement.toml', '/pyproject.toml'),
+		).rejects.toThrow(ForbiddenError);
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'replacement.toml')).toBeDefined();
+	});
+
+	it('protects only root anchors and permits copying them', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', encode('print(1)'), ACTOR);
+		await service.write(
+			PROJECT_ID,
+			NOTEBOOK_ID,
+			'nested/notebook.py',
+			encode('print(2)'),
+			ACTOR,
+			true,
+		);
+
+		await expect(
+			service.copy(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', 'backup.py'),
+		).resolves.toEqual(expect.objectContaining({ path: 'backup.py' }));
+		await expect(
+			service.move(PROJECT_ID, NOTEBOOK_ID, 'nested/notebook.py', 'nested/main.py'),
+		).resolves.toEqual(expect.objectContaining({ path: 'nested/main.py' }));
+		await service.delete(PROJECT_ID, NOTEBOOK_ID, 'nested/main.py');
+	});
+
+	it('serves the current git version but rejects every mutation', async () => {
+		const versionId = VersionId.create();
+		detail = notebookDetail({
+			schema_version: 1,
+			type: 'git',
+			provider: 'github',
+			repo: 'org/repo',
+			branch: 'main',
+			root_path: '',
+			entry_notebook: 'app.py',
+			sync_mode: 'push',
+			current_version_id: versionId,
+			commit: 'abc',
+			last_synced_at: new Date().toISOString(),
+		});
+		const version = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).version(versionId);
+		await bucket.put(version.workspaceFile('app.py'), 'print(1)');
+
+		expect((await service.list(PROJECT_ID, NOTEBOOK_ID)).items[0]?.path).toBe('app.py');
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'app.py', encode('print(2)'), ACTOR),
+		).rejects.toThrow('read-only');
+	});
+
+	it('treats an unsynced git workspace as empty', async () => {
+		detail = notebookDetail({
+			schema_version: 1,
+			type: 'git',
+			provider: 'github',
+			repo: 'org/repo',
+			branch: 'main',
+			root_path: '',
+			entry_notebook: 'app.py',
+			sync_mode: 'push',
+			current_version_id: null,
+			commit: null,
+			last_synced_at: null,
+		});
+
+		expect(await service.list(PROJECT_ID, NOTEBOOK_ID)).toEqual({ items: [] });
+		expect(await service.search(PROJECT_ID, NOTEBOOK_ID, 'app')).toEqual([]);
+		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'app.py')).rejects.toThrow('not found');
+		await expect(service.read(PROJECT_ID, NOTEBOOK_ID, 'app.py')).rejects.toThrow('not found');
+	});
+
+	it('rejects traversal paths', async () => {
+		for (const path of ['../secret', '/data/../../secret', '//server/share', 'data/a\0b']) {
+			await expect(service.read(PROJECT_ID, NOTEBOOK_ID, path)).rejects.toThrow(
+				'Invalid workspace file path',
+			);
+		}
+	});
+
+	it('paginates directory entries and rejects create and copy collisions', async () => {
+		for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+			await service.write(PROJECT_ID, NOTEBOOK_ID, name, encode(name), ACTOR, true);
+		}
+
+		const first = await service.list(PROJECT_ID, NOTEBOOK_ID, '/', undefined, 2);
+		expect(first.items.map((item) => item.name)).toEqual(['a.txt', 'b.txt']);
+		expect(first.cursor).toBeTruthy();
+		expect(
+			(await service.list(PROJECT_ID, NOTEBOOK_ID, '/', first.cursor, 2)).items.map(
+				(item) => item.name,
+			),
+		).toEqual(['c.txt']);
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'a.txt', encode('again'), ACTOR, true),
+		).rejects.toThrow('already exists');
+		await expect(service.copy(PROJECT_ID, NOTEBOOK_ID, 'a.txt', 'b.txt')).rejects.toThrow(
+			'already exists',
+		);
+	});
+
+	it('rejects file-directory collisions and files below non-directories', async () => {
+		await service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'data');
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'data', encode('file'), ACTOR, true),
+		).rejects.toThrow('already exists');
+
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'archive', encode('file'), ACTOR, true);
+		await expect(service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'archive')).rejects.toThrow(
+			'already exists',
+		);
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'archive/nested.txt', encode('x'), ACTOR, true),
+		).rejects.toThrow('not a directory');
+		await expect(
+			service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'archive/nested'),
+		).rejects.toThrow('not a directory');
+	});
+
+	it('copies explicit empty directories without exposing their markers', async () => {
+		await service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'empty');
+		expect(await service.copy(PROJECT_ID, NOTEBOOK_ID, 'empty', 'empty-copy')).toEqual({
+			path: 'empty-copy',
+			name: 'empty-copy',
+			kind: 'directory',
+		});
+		expect(
+			(await service.list(PROJECT_ID, NOTEBOOK_ID)).items.map((item) => item.path).sort(),
+		).toEqual(['empty', 'empty-copy'].sort());
+		expect((await service.list(PROJECT_ID, NOTEBOOK_ID, 'empty-copy')).items).toEqual([]);
+		await expect(service.read(PROJECT_ID, NOTEBOOK_ID, 'empty-copy')).rejects.toThrow('not found');
+	});
+
+	it('rejects recursive copies and leaves the source unchanged', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'data/a.txt', encode('a'), ACTOR, true);
+
+		await expect(service.copy(PROJECT_ID, NOTEBOOK_ID, 'data', 'data/copy')).rejects.toThrow(
+			'into itself',
+		);
+		await expect(service.copy(PROJECT_ID, NOTEBOOK_ID, 'data', 'data')).rejects.toThrow(
+			'into itself',
+		);
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'data/a.txt')).toBeDefined();
+	});
+
+	it('deletes an exact directory prefix without touching a similarly named sibling', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'data/a.txt', encode('a'), ACTOR, true);
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'database/b.txt', encode('b'), ACTOR, true);
+
+		await service.delete(PROJECT_ID, NOTEBOOK_ID, 'data');
+		await expect(service.read(PROJECT_ID, NOTEBOOK_ID, 'data/a.txt')).rejects.toThrow('not found');
+		expect(
+			new TextDecoder().decode(
+				(await service.read(PROJECT_ID, NOTEBOOK_ID, 'database/b.txt')).bytes,
+			),
+		).toBe('b');
+	});
+
+	it('rolls back partial directory copies when a destination write fails', async () => {
+		const failingBucket = new PutFailingBucket();
+		service = new NotebookWorkspaceService(failingBucket, {
+			getNotebook: async () => detail,
+			saveSourceFile,
+		});
+		const nb = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID);
+		await failingBucket.put(nb.workspaceFile('source/a.txt'), 'a');
+		await failingBucket.put(nb.workspaceFile('source/b.txt'), 'b');
+		failingBucket.failPutKey = nb.workspaceFile('target/b.txt');
+
+		await expect(service.copy(PROJECT_ID, NOTEBOOK_ID, 'source', 'target')).rejects.toThrow(
+			'put failed',
+		);
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'source/a.txt')).toBeDefined();
+		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'target')).rejects.toThrow('not found');
+	});
+
+	it('rejects invalid UTF-8 source edits before calling the source owner', async () => {
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', Uint8Array.from([0xc3, 0x28]), ACTOR),
+		).rejects.toThrow('valid UTF-8');
+		expect(saveSourceFile).not.toHaveBeenCalled();
+	});
+
+	it('enforces per-file, total-byte, and file-count limits', async () => {
+		await expect(
+			service.write(
+				PROJECT_ID,
+				NOTEBOOK_ID,
+				'too-large.bin',
+				new Uint8Array(MAX_WORKSPACE_FILE_BYTES + 1),
+				ACTOR,
+			),
+		).rejects.toThrow(`${MAX_WORKSPACE_FILE_BYTES} bytes`);
+
+		const fullFile = new Uint8Array(MAX_WORKSPACE_FILE_BYTES);
+		for (let index = 0; index < MAX_WORKSPACE_BYTES / MAX_WORKSPACE_FILE_BYTES; index++) {
+			await bucket.put(
+				paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile(`large-${index}.bin`),
+				fullFile,
+			);
+		}
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'one-too-many.bin', new Uint8Array(1), ACTOR),
+		).rejects.toThrow(`${MAX_WORKSPACE_BYTES} bytes`);
+
+		bucket = new MemoryBucket();
+		service = new NotebookWorkspaceService(bucket, {
+			getNotebook: async () => detail,
+			saveSourceFile,
+		});
+		const prefix = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspacePrefix;
+		await Promise.all(
+			Array.from({ length: MAX_WORKSPACE_FILES }, (_, index) =>
+				bucket.put(`${prefix}file-${index}.txt`, new Uint8Array()),
+			),
+		);
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'overflow.txt', new Uint8Array(), ACTOR),
+		).rejects.toThrow(`${MAX_WORKSPACE_FILES} files`);
+	});
+
+	it('removes the copied destination when a move cannot delete its source', async () => {
+		const failingBucket = new DeleteFailingBucket();
+		service = new NotebookWorkspaceService(failingBucket, {
+			getNotebook: async () => detail,
+			saveSourceFile,
+		});
+		const sourceKey = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile('source.txt');
+		await failingBucket.put(sourceKey, 'keep me');
+		failingBucket.failDeleteKey = sourceKey;
+
+		await expect(
+			service.move(PROJECT_ID, NOTEBOOK_ID, 'source.txt', 'destination.txt'),
+		).rejects.toThrow('delete failed');
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'source.txt')).toBeDefined();
+		await expect(service.read(PROJECT_ID, NOTEBOOK_ID, 'destination.txt')).rejects.toThrow(
+			'not found',
+		);
+	});
+});

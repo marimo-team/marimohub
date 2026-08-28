@@ -305,6 +305,30 @@ describe('LocalCompute file ops', () => {
 		expect(list.files.map((f) => f.name)).toContain('notebook.py');
 	});
 
+	it('returns relative paths and directories from recursive listings', async () => {
+		const sb = newSandbox();
+		expect((await sb.exec('mkdir -p /workspace/empty /workspace/nested')).success).toBe(true);
+		await sb.writeFiles([{ path: '/workspace/nested/data.txt', content: 'data' }]);
+
+		const list = await sb.listFiles('/workspace', { recursive: true });
+
+		expect(list.success).toBe(true);
+		expect(list.files).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					absolutePath: '/workspace/empty',
+					relativePath: 'empty',
+					type: 'directory',
+				}),
+				expect.objectContaining({
+					absolutePath: '/workspace/nested/data.txt',
+					relativePath: 'nested/data.txt',
+					type: 'file',
+				}),
+			]),
+		);
+	});
+
 	it('waits for active writes before destroying and rejects later writes', async () => {
 		const id = `sb-write-destroy-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
 		created.push(id);

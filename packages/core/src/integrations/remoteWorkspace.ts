@@ -1,5 +1,6 @@
 import { BadRequestError } from '../errors';
 import type { Source } from '../schema';
+import { MAX_WORKSPACE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES } from '../constants';
 
 export interface SyncedWorkspaceFile {
 	path: string;
@@ -9,6 +10,29 @@ export interface SyncedWorkspaceFile {
 export type SyncedWorkspaceFileMap = Map<string, Uint8Array>;
 
 export type WorkspaceLoadMode = 'mount-or-copy' | 'copy-only';
+export const WORKSPACE_OPERATIONS = ['create', 'write', 'move', 'copy', 'delete'] as const;
+export type WorkspaceOperation = (typeof WORKSPACE_OPERATIONS)[number];
+export type WorkspaceReadOnlyReason = 'git_source' | 'viewer' | 'active_session';
+export const WORKSPACE_DIRECTORY_MARKER = '.marimohub-directory';
+
+export const WORKSPACE_LIMITS = {
+	maxFileBytes: MAX_WORKSPACE_FILE_BYTES,
+	maxTotalBytes: MAX_WORKSPACE_BYTES,
+	maxFiles: MAX_WORKSPACE_FILES,
+} as const;
+
+export interface WorkspacePathRule {
+	path: string;
+	deniedOperations: readonly WorkspaceOperation[];
+}
+
+function hasAsciiControlCharacter(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code <= 31 || code === 127) return true;
+	}
+	return false;
+}
 
 /**
  * How a notebook's source behaves as a sandbox workspace. Local notebooks are
@@ -22,11 +46,24 @@ export interface WorkspaceSourcePolicy {
 	loadMode: WorkspaceLoadMode;
 	persistSessionEdits: boolean;
 	restoreFilesystemSnapshot: boolean;
+	workspaceWritable: boolean;
+	allowedOperations: readonly WorkspaceOperation[];
+	protectedPaths: readonly WorkspacePathRule[];
 }
+
+const LOCAL_PROTECTED_PATHS: readonly WorkspacePathRule[] = [
+	{ path: 'notebook.py', deniedOperations: ['move', 'delete'] },
+	{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
+];
 
 export function isSafeWorkspacePath(path: string, allowEmpty = false): boolean {
 	if (path === '') return allowEmpty;
-	if (path.startsWith('/') || path.endsWith('/') || path.includes('\\') || path.includes('\0')) {
+	if (
+		path.startsWith('/') ||
+		path.endsWith('/') ||
+		path.includes('\\') ||
+		hasAsciiControlCharacter(path)
+	) {
 		return false;
 	}
 	return path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
@@ -70,7 +107,28 @@ export function normalizeWorkspaceFilePath(path: string): string {
 	if (!isSafeWorkspacePath(normalized)) {
 		throw new BadRequestError(`Invalid workspace file path: ${path}`);
 	}
+	if (isWorkspaceInternalPath(normalized)) {
+		throw new BadRequestError(`Reserved workspace path: ${path}`);
+	}
 	return normalized;
+}
+
+export function isWorkspaceInternalPath(path: string): boolean {
+	return path.split('/').includes(WORKSPACE_DIRECTORY_MARKER);
+}
+
+export function workspaceDirectoryMarkerPath(directory: string): string {
+	return `${directory}/${WORKSPACE_DIRECTORY_MARKER}`;
+}
+
+export function workspaceDirectoryFromMarkerPath(path: string): string | null {
+	if (path.endsWith('/')) return path.slice(0, -1);
+	const suffix = `/${WORKSPACE_DIRECTORY_MARKER}`;
+	return path.endsWith(suffix) ? path.slice(0, -suffix.length) : null;
+}
+
+export function isWorkspaceDirectoryMarkerPath(path: string): boolean {
+	return workspaceDirectoryFromMarkerPath(path) !== null;
 }
 
 export function toSyncedWorkspaceFileMap(files: SyncedWorkspaceFile[]): SyncedWorkspaceFileMap {
@@ -100,18 +158,36 @@ const WORKSPACE_SOURCE_POLICIES: {
 		loadMode: 'mount-or-copy',
 		persistSessionEdits: true,
 		restoreFilesystemSnapshot: true,
+		workspaceWritable: true,
+		allowedOperations: WORKSPACE_OPERATIONS,
+		protectedPaths: LOCAL_PROTECTED_PATHS,
 	}),
 	git: (source) => ({
 		entryNotebook: source.entry_notebook,
 		loadMode: 'copy-only',
 		persistSessionEdits: false,
 		restoreFilesystemSnapshot: false,
+		workspaceWritable: false,
+		allowedOperations: [],
+		protectedPaths: [],
 	}),
 };
 
 export function workspaceSourcePolicy(source: Source): WorkspaceSourcePolicy {
 	const policy = WORKSPACE_SOURCE_POLICIES[source.type] as (s: Source) => WorkspaceSourcePolicy;
 	return policy(source);
+}
+
+export function workspaceOperationDenied(
+	source: Source,
+	operation: WorkspaceOperation,
+	path: string,
+): boolean {
+	const policy = workspaceSourcePolicy(source);
+	if (!policy.allowedOperations.includes(operation)) return true;
+	return policy.protectedPaths.some(
+		(rule) => rule.path === path && rule.deniedOperations.includes(operation),
+	);
 }
 
 /**

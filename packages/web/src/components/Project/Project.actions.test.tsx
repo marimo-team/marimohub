@@ -28,6 +28,7 @@ describe('Project — Notebook Actions: configuration', () => {
 			'Rename',
 			'Duplicate',
 			'Run as app',
+			'Browse files',
 			'View static outputs',
 			'Version history',
 			'Download notebook file',
@@ -35,6 +36,22 @@ describe('Project — Notebook Actions: configuration', () => {
 			'Download workspace',
 			'Delete',
 		]);
+	});
+
+	it('opens the persisted workspace browser from the notebook menu', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		expect(within(dialog).getByText('Browse files · Forecast')).toBeInTheDocument();
+		expect(
+			await within(dialog).findByText(
+				'notebook.py and pyproject.toml can be edited, but cannot be moved or deleted.',
+			),
+		).toBeInTheDocument();
 	});
 
 	it('"View static outputs" opens the sandbox-free snapshot page', async () => {

@@ -403,31 +403,40 @@ class LocalSandboxInstance implements SandboxInstance {
 	async listFiles(p: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		try {
 			const base = this.mapPath(p);
-			const entries = await readdir(base, { withFileTypes: true });
 			const files: FileInfo[] = [];
-			for (const e of entries) {
-				if (!options?.includeHidden && e.name.startsWith('.')) continue;
-				const abs = path.join(base, e.name);
-				let size = 0;
-				try {
-					size = (await stat(abs)).size;
-				} catch {
-					// ignore — best effort
+			const visit = async (directory: string, relativeDirectory: string): Promise<void> => {
+				const entries = await readdir(directory, { withFileTypes: true });
+				for (const entry of entries) {
+					if (!options?.includeHidden && entry.name.startsWith('.')) continue;
+					const relativePath = relativeDirectory
+						? path.join(relativeDirectory, entry.name)
+						: entry.name;
+					const hostPath = path.join(directory, entry.name);
+					let size = 0;
+					try {
+						size = (await stat(hostPath)).size;
+					} catch {
+						// Metadata is best-effort; the entry is still useful to callers.
+					}
+					files.push({
+						name: entry.name,
+						absolutePath: path.join(p, relativePath),
+						relativePath,
+						type: entry.isDirectory()
+							? 'directory'
+							: entry.isSymbolicLink()
+								? 'symlink'
+								: entry.isFile()
+									? 'file'
+									: 'other',
+						size,
+					});
+					if (options?.recursive && entry.isDirectory()) {
+						await visit(hostPath, relativePath);
+					}
 				}
-				files.push({
-					name: e.name,
-					absolutePath: abs,
-					relativePath: path.join(p, e.name),
-					type: e.isDirectory()
-						? 'directory'
-						: e.isSymbolicLink()
-							? 'symlink'
-							: e.isFile()
-								? 'file'
-								: 'other',
-					size,
-				});
-			}
+			};
+			await visit(base, '');
 			return { success: true, files };
 		} catch (error) {
 			return listFilesFailure(

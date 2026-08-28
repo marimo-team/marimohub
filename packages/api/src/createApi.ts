@@ -10,6 +10,7 @@ import {
 	IntegrationId,
 	isPatRequest,
 	MAX_REQUEST_BYTES,
+	MAX_WORKSPACE_FILE_BYTES,
 	NotebookId,
 	noopNotifier,
 	probeKernelLiveness,
@@ -269,19 +270,27 @@ export function createApi(rawDeps: ApiDeps) {
 	// MAX_REQUEST_BYTES with the standard envelope before any handler runs. Scoped
 	// to `/api/v1/*` so it never touches the kernel proxy above (which short-circuits
 	// on `*` and may carry large uploads of its own).
-	app.use(
-		`${API_PREFIX}/*`,
-		bodyLimit({
-			maxSize: MAX_REQUEST_BYTES,
-			onError: (c) =>
-				fail(
-					c,
-					'PAYLOAD_TOO_LARGE',
-					`Request body exceeds the ${MAX_REQUEST_BYTES}-byte limit`,
-					413,
-				),
-		}),
-	);
+	const standardBodyLimit = bodyLimit({
+		maxSize: MAX_REQUEST_BYTES,
+		onError: (c) =>
+			fail(c, 'PAYLOAD_TOO_LARGE', `Request body exceeds the ${MAX_REQUEST_BYTES}-byte limit`, 413),
+	});
+	const workspaceFileBodyLimit = bodyLimit({
+		maxSize: MAX_WORKSPACE_FILE_BYTES,
+		onError: (c) =>
+			fail(
+				c,
+				'PAYLOAD_TOO_LARGE',
+				`Workspace file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+				413,
+			),
+	});
+	app.use(`${API_PREFIX}/*`, (c, next) => {
+		const isWorkspaceFilePut =
+			c.req.method === 'PUT' &&
+			/\/projects\/[^/]+\/notebooks\/[^/]+\/workspace\/files$/.test(c.req.path);
+		return (isWorkspaceFilePut ? workspaceFileBodyLimit : standardBodyLimit)(c, next);
+	});
 	app.use(
 		'/api/sync/*',
 		bodyLimit({

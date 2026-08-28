@@ -9,7 +9,8 @@ export interface DialogModalProps {
 	onClose: () => void;
 	title?: string;
 	children: ReactNode;
-	width?: 'sm' | 'md' | 'lg' | 'xl';
+	width?: 'sm' | 'md' | 'lg' | 'xl' | 'screen';
+	contentClassName?: string;
 }
 
 const widthClasses: Record<NonNullable<DialogModalProps['width']>, string> = {
@@ -17,9 +18,17 @@ const widthClasses: Record<NonNullable<DialogModalProps['width']>, string> = {
 	md: 'max-w-md',
 	lg: 'max-w-lg',
 	xl: 'max-w-6xl',
+	screen: 'h-[92dvh] max-w-[95vw]',
 };
 
-export function DialogModal({ isOpen, onClose, title, children, width = 'md' }: DialogModalProps) {
+export function DialogModal({
+	isOpen,
+	onClose,
+	title,
+	children,
+	width = 'md',
+	contentClassName,
+}: DialogModalProps) {
 	return (
 		<ModalOverlay
 			isOpen={isOpen}
@@ -39,7 +48,12 @@ export function DialogModal({ isOpen, onClose, title, children, width = 'md' }: 
 					widthClasses[width],
 				)}
 			>
-				<Dialog className="flex max-h-[calc(100dvh-2rem)] flex-col outline-none">
+				<Dialog
+					className={cn(
+						'flex max-h-[calc(100dvh-2rem)] flex-col outline-none',
+						width === 'screen' && 'h-full',
+					)}
+				>
 					{title && (
 						<div className="flex shrink-0 items-center justify-between border-b px-5 py-3.5">
 							<Heading slot="title" className="text-sm font-semibold">
@@ -50,7 +64,9 @@ export function DialogModal({ isOpen, onClose, title, children, width = 'md' }: 
 							</IconButton>
 						</div>
 					)}
-					<div className="min-h-0 overflow-y-auto overscroll-contain p-5">{children}</div>
+					<div className={cn('min-h-0 overflow-y-auto overscroll-contain p-5', contentClassName)}>
+						{children}
+					</div>
 				</Dialog>
 			</Modal>
 		</ModalOverlay>

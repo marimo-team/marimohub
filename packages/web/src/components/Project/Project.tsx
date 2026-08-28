@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FileTrigger } from 'react-aria-components';
 import { toast } from 'sonner';
@@ -17,6 +17,7 @@ import {
 	FileDown,
 	FileText,
 	FolderArchive,
+	FolderSearch,
 	GitBranch,
 	History,
 	MoreHorizontal,
@@ -104,6 +105,10 @@ import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 import { canManageProject } from '@/lib/roles';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, ResolvedUser, Session } from '@/types';
+
+const WorkspaceBrowserDialog = lazy(
+	() => import('@/components/WorkspaceBrowser/WorkspaceBrowserDialog'),
+);
 
 /** Keep non-active lifecycle state visible even when the notebook has user tags. */
 function notebookBadges(nb: NotebookEntry): string[] {
@@ -249,6 +254,7 @@ export function Project() {
 	const baseImageModal = useDialogTarget<NotebookEntry>();
 	const computeProfileModal = useDialogTarget<NotebookEntry>();
 	const historyModal = useDialogTarget<NotebookEntry>();
+	const workspaceBrowser = useDialogTarget<NotebookEntry>();
 	const syncedCreateModal = useDisclosure();
 	const syncSettings = useDialogTarget<{ notebookId: string; title: string; token?: string }>();
 	const stopModal = useDialogTarget<{ notebook: NotebookEntry; session: Session }>();
@@ -558,6 +564,7 @@ export function Project() {
 		else if (key === 'change-image') baseImageModal.open(nb);
 		else if (key === 'change-compute') computeProfileModal.open(nb);
 		else if (key === 'history') historyModal.open(nb);
+		else if (key === 'browse-files') workspaceBrowser.open(nb);
 		else if (key === 'sync-settings') syncSettings.open({ notebookId: nb.id, title: nb.title });
 		else if (key === 'download-file') handleDownloadFile(nb);
 		else if (key === 'download-outputs') handleDownloadOutputs(nb);
@@ -609,6 +616,7 @@ export function Project() {
 			],
 			runtimeActions,
 			[
+				{ id: 'browse-files', label: 'Browse files', icon: <FolderSearch className="size-4" /> },
 				...(offersImageChoice
 					? [
 							{
@@ -1092,6 +1100,18 @@ export function Project() {
 					onSaveCloudAccess={handleSaveCloudAccess}
 				/>
 			)}
+
+			{workspaceBrowser.isOpen && workspaceBrowser.target ? (
+				<Suspense fallback={null}>
+					<WorkspaceBrowserDialog
+						isOpen
+						onClose={workspaceBrowser.close}
+						projectId={pid!}
+						notebookId={workspaceBrowser.target.id}
+						notebookTitle={workspaceBrowser.target.title}
+					/>
+				</Suspense>
+			) : null}
 
 			{alertsModal.isOpen && capabilities?.project_alerts && (
 				<ProjectAlertsDialog

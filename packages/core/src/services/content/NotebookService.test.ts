@@ -560,6 +560,37 @@ describe('NotebookService', () => {
 			expect(files.every((f) => !f.path.startsWith('workspace/'))).toBe(true);
 		});
 
+		it('omits internal directory markers from workspace downloads', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'print(1)' },
+				ACTOR,
+			);
+			await notebooks.workspace.createDirectory(projectId, created.id, 'empty');
+
+			const files = await notebooks.listWorkspaceFiles(projectId, created.id);
+
+			expect(files.map((file) => file.path)).not.toContain('empty/.marimohub-directory');
+		});
+
+		it('serializes simultaneous source-file saves without losing either edit', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'old code', deps: 'old deps' },
+				ACTOR,
+			);
+
+			await Promise.all([
+				notebooks.workspace.write(projectId, created.id, 'notebook.py', enc('new code'), ACTOR),
+				notebooks.workspace.write(projectId, created.id, 'pyproject.toml', enc('new deps'), ACTOR),
+			]);
+
+			const nb = paths.project(projectId).notebook(created.id);
+			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('new code');
+			expect(await (await bucket.get(nb.deps))?.text()).toBe('new deps');
+			expect(await notebooks.listVersions(projectId, created.id)).toHaveLength(3);
+		});
+
 		it('throws NotFoundError for a missing notebook', async () => {
 			await expect(
 				notebooks.listWorkspaceFiles(projectId, 'nb-0000000000000000' as NotebookId),

@@ -3,9 +3,19 @@ import { mapWithConcurrency } from '../../concurrency';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxInstance } from '../../ports/sandbox';
-import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../../constants';
+import {
+	MAX_ARTIFACT_BYTES,
+	MAX_WORKSPACE_BYTES,
+	MAX_WORKSPACE_FILE_BYTES,
+	MAX_WORKSPACE_FILES,
+} from '../../constants';
 import { shellQuote } from './shell';
-import { isSafeWorkspacePath } from '../../integrations/remoteWorkspace';
+import {
+	isSafeWorkspacePath,
+	isWorkspaceInternalPath,
+	workspaceDirectoryFromMarkerPath,
+	workspaceDirectoryMarkerPath,
+} from '../../integrations/remoteWorkspace';
 import { listAllKeys, listAllObjects } from '../catalog/storage';
 import type { CommitSessionInput } from '../content/NotebookService';
 
@@ -69,6 +79,28 @@ function batchByBytes<T extends { size: number }>(items: readonly T[], maxBytes:
 	return batches;
 }
 
+async function createSandboxDirectories(
+	sandbox: SandboxInstance,
+	directories: readonly string[],
+): Promise<void> {
+	const execute = (command: string) =>
+		withRetry(async () => {
+			const result = await sandbox.exec(command);
+			if (!result.success) throw new Error(`sandbox mkdir failed: ${result.stderr}`);
+		});
+	const maxCommandLength = 3800;
+	let command = 'mkdir -p';
+	for (const directory of new Set(directories)) {
+		const argument = ` ${shellQuote(directory)}`;
+		if (command.length > 'mkdir -p'.length && command.length + argument.length > maxCommandLength) {
+			await execute(command);
+			command = 'mkdir -p';
+		}
+		command += argument;
+	}
+	if (command.length > 'mkdir -p'.length) await execute(command);
+}
+
 /**
  * Workspace-relative paths the capture/restore path leaves alone. Entries ending
  * in `/` are directory names matched at any depth; the rest are exact root files.
@@ -87,11 +119,6 @@ const WORKSPACE_EXCLUDE = [
 	'.venv/',
 	'__pycache__/',
 ];
-
-/** Cap on the total bytes captured into `workspace/` per teardown. */
-const MAX_WORKSPACE_BYTES = 100 * 1024 * 1024;
-/** Cap on the number of files captured into `workspace/` per teardown. */
-const MAX_WORKSPACE_FILES = 1000;
 
 /** True when a workspace-relative path is a source/snapshot/junk path we never capture/delete. */
 function isExcluded(rel: string): boolean {
@@ -138,16 +165,37 @@ export async function restoreWorkspace(
 	// fetched object.
 	const objects = await listAllObjects(bucket, sourcePrefix);
 	const wanted: { key: string; dest: string; size: number }[] = [];
+	const directories: string[] = [];
 	for (const obj of objects) {
 		const rel = obj.key.slice(sourcePrefix.length);
 		if (!rel) continue;
+		const markerDirectory = workspaceDirectoryFromMarkerPath(rel);
+		if (markerDirectory !== null) {
+			if (!markerDirectory) continue;
+			if (
+				options.excludeRelativeRoots?.some(
+					(root) => markerDirectory === root || markerDirectory.startsWith(`${root}/`),
+				)
+			) {
+				continue;
+			}
+			if (!isSafeWorkspacePath(markerDirectory) || isWorkspaceInternalPath(markerDirectory)) {
+				if (options.requireComplete) {
+					throw new Error(`restoreWorkspace: unsafe workspace path: ${markerDirectory}`);
+				}
+				console.warn(`restoreWorkspace: unsafe workspace path; skipping ${markerDirectory}`);
+				continue;
+			}
+			directories.push(`${workingDir}/${markerDirectory}`);
+			continue;
+		}
 		if (options.excludeRelativeRoots?.some((root) => rel === root || rel.startsWith(`${root}/`))) {
 			continue;
 		}
 		// A poisoned key (e.g. from a compromised/synced source) whose relative path
 		// carries `..`/absolute/backslash segments would escape workingDir once
 		// concatenated. Reject or skip it — the sandbox working dir is a hard boundary.
-		if (!isSafeWorkspacePath(rel)) {
+		if (!isSafeWorkspacePath(rel) || isWorkspaceInternalPath(rel)) {
 			if (options.requireComplete) {
 				throw new Error(`restoreWorkspace: unsafe workspace path: ${rel}`);
 			}
@@ -171,8 +219,11 @@ export async function restoreWorkspace(
 	// `writeFiles` creates parent directories (port contract), so the only case
 	// still needing an explicit mkdir is an empty workspace — nothing gets written,
 	// yet marimo still needs the cwd it runs in to exist.
+	if (directories.length > 0) await createSandboxDirectories(sandbox, directories);
 	if (wanted.length === 0) {
-		await withRetry(() => sandbox.exec(`mkdir -p ${shellQuote(workingDir)}`));
+		if (directories.length === 0) {
+			await createSandboxDirectories(sandbox, [workingDir]);
+		}
 		return { objectCount: 0, bytes: 0 };
 	}
 
@@ -226,9 +277,8 @@ export async function captureWorkspace(
 ): Promise<void> {
 	const nb = paths.project(projectId).notebook(notebookId);
 
-	// Relative paths currently present in the sandbox working dir (files only,
-	// excluding source + snapshots). Used both to upload (workspace mode) and to
-	// drive mirror-deletes (both modes).
+	// Relative paths currently present in the sandbox working dir, excluding source
+	// files and snapshots. Used to upload files and drive mirror-deletes.
 	const present = new Set<string>();
 
 	if (mode === 'workspace') {
@@ -249,11 +299,17 @@ export async function captureWorkspace(
 		// parallel below. Uses each file's listed size for the caps (≈ the bytes we'll
 		// upload), so the decision never waits on a read.
 		const selected: string[] = [];
+		const directoryMarkers: string[] = [];
 		let totalBytes = 0;
 		for (const file of listing.files) {
-			if (file.type !== 'file') continue;
 			const rel = file.relativePath;
-			if (isExcluded(rel)) continue;
+			if (!isSafeWorkspacePath(rel) || isWorkspaceInternalPath(rel) || isExcluded(rel)) {
+				continue;
+			}
+			if (file.type === 'directory') {
+				directoryMarkers.push(workspaceDirectoryMarkerPath(rel));
+				continue;
+			}
 
 			if (selected.length >= MAX_WORKSPACE_FILES) {
 				console.warn(
@@ -292,6 +348,10 @@ export async function captureWorkspace(
 		for (const rel of captured) {
 			if (rel) present.add(rel);
 		}
+		await mapWithConcurrency(directoryMarkers, CAPTURE_FILE_CONCURRENCY, async (marker) =>
+			bucket.put(nb.workspaceFile(marker), new Uint8Array()),
+		);
+		for (const marker of directoryMarkers) present.add(marker);
 	}
 
 	// Mirror-delete: drop any captured key no longer present in the sandbox. Never
