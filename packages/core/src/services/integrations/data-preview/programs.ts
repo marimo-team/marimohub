@@ -79,8 +79,15 @@ export interface DuckDBDatabaseHttpAccess {
 	authorization?: string;
 }
 
+export interface DuckDBDuckLakeHttpAccess extends DuckDBHttpTransportPolicy {
+	kind: 'ducklake';
+	metadata: DuckDBDatabaseHttpAccess;
+	storage: Omit<DuckDBS3HttpAccess, 'kind' | 'allowInsecureTransport'>;
+}
+
 export type DuckDBHttpAccess =
 	| DuckDBDatabaseHttpAccess
+	| DuckDBDuckLakeHttpAccess
 	| DuckDBIcebergRestHttpAccess
 	| DuckDBS3HttpAccess;
 

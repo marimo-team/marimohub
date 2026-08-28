@@ -133,6 +133,12 @@ function routesFor(
 	if (access.kind === 's3-object-store') {
 		return s3RoutesFor(access, now, access.allowInsecureTransport === true);
 	}
+	if (access.kind === 'ducklake') {
+		return [
+			databaseRouteFor(access.metadata, metrics),
+			...s3RoutesFor(access.storage, now, access.allowInsecureTransport === true),
+		];
+	}
 	if (access.kind !== 'iceberg-rest') {
 		throw new IcebergHttpBrokerError(
 			'invalid_capability',

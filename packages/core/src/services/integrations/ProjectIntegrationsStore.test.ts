@@ -1931,6 +1931,7 @@ describe('ProjectIntegrationsStore', () => {
 			'custom_env',
 			'databricks',
 			'duckdb_http',
+			'ducklake',
 			'gcs',
 			'huggingface',
 			'iceberg_bigquery',

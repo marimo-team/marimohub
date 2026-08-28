@@ -253,6 +253,24 @@ const FIXTURES: Record<string, unknown> = {
 		url: 'https://data.example.test/snapshots/analytics.duckdb',
 		auth: { method: 'none' },
 	},
+	ducklake: {
+		metadata: {
+			type: 'duckdb',
+			url: 'https://data.example.test/releases/catalog.ducklake',
+			auth: { method: 'none' },
+		},
+		storage: {
+			scheme: 's3',
+			endpoint: 'https://s3.example.test',
+			region: 'us-east-1',
+			credentials: {
+				method: 'static',
+				access_key_id: 'AKIAEXAMPLE',
+				secret_access_key: 's3-secret',
+			},
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'ducklake/data/' }],
+		},
+	},
 };
 
 describe('kind renders (golden)', () => {

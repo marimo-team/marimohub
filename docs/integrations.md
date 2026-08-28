@@ -8,7 +8,7 @@ A **project manager** can connect a data source once for one project. A
 [super admin](./auth.md#super-admins-marimohub_super_admins) can connect a data
 source for the whole organization. Supported sources include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
-Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
+Snowflake, BigQuery, Redshift, MotherDuck, DuckLake), query engines (Trino, Spark Connect,
 Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
 Blob), remote DuckDB databases, ML platforms (Weights & Biases, Hugging Face), and environment
 variables.
@@ -344,6 +344,62 @@ Write each snapshot to a new directory before publishing its URL. Do not overwri
 snapshot until the longest possible Run SQL request has ended.
 
 <!--@include: ./partials/integrations/duckdb_http.md-->
+
+### DuckLake
+
+The `ducklake` integration reads one DuckDB metadata catalog and its S3 data files.
+The integration is available only for Run SQL. It does not add files or variables to notebook sessions.
+
+The pinned DuckDB 1.4.3 extension supports DuckLake specification version `0.3`.
+It does not support automatic migration. Create the metadata catalog with DuckDB 1.4.3.
+
+Configure an immutable metadata URL and explicit S3 bounds:
+
+```yaml
+metadata:
+  type: duckdb
+  url: https://data.example.com/catalog/releases/42.ducklake
+  auth:
+    method: bearer_token
+    token: secret
+storage:
+  scheme: s3
+  endpoint: https://s3.us-east-1.amazonaws.com
+  region: us-east-1
+  force_virtual_addressing: true
+  credentials:
+    method: static
+    access_key_id: secret
+    secret_access_key: secret
+  broker_read_locations:
+    - bucket: warehouse
+      prefix: ducklake/data/
+snapshot:
+  version: 42
+```
+
+The metadata URL uses the same exact-object policy as `duckdb_http`.
+The server must return single byte ranges and one strong ETag.
+The broker rejects redirects, changed objects, and sibling paths.
+
+The S3 endpoint must be an HTTPS origin. Each read location grants one bucket prefix.
+The broker rejects requests outside these locations, even if the metadata catalog contains another path.
+
+The worker receives dummy S3 credentials. The parent broker adds the real S3 signature to approved requests.
+Metadata authorization cannot enter an S3 request. S3 authorization cannot enter a metadata request.
+
+DuckLake attaches the catalog with `READ_ONLY` and `CREATE_IF_NOT_EXISTS false`.
+The integration does not set `DATA_PATH` or `OVERRIDE_DATA_PATH`.
+The extension reads the data path from the metadata catalog.
+
+Set `snapshot.version` or `snapshot.timestamp` to read a historical snapshot.
+Do not set both fields. Omit both fields to read the latest snapshot.
+
+SQLite metadata and standalone SQLite files are not supported.
+The pinned SQLite extension cannot open a DuckDB-Wasm buffer registration.
+This restriction prevents host-path access and accidental database creation.
+
+<!--@include: ./partials/integrations/ducklake.md-->
 
 ### DuckDB remote-read errors
 

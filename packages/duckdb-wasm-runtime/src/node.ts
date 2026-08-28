@@ -38,6 +38,7 @@ export {
 	type IcebergHttpBrokerTransportRequest,
 } from './icebergHttpBroker';
 export { HTTP_BRIDGE_BODY_BYTES } from './httpBridge';
+export { DUCKLAKE_SPEC_VERSION } from './extensionManifest';
 
 export type DuckDBWasmRuntimeMode = 'auto' | 'worker' | 'inline';
 
