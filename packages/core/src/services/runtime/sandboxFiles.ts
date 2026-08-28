@@ -310,6 +310,7 @@ export async function captureWorkspace(
 				directoryMarkers.push(workspaceDirectoryMarkerPath(rel));
 				continue;
 			}
+			if (file.type !== 'file') continue;
 
 			if (selected.length >= MAX_WORKSPACE_FILES) {
 				console.warn(

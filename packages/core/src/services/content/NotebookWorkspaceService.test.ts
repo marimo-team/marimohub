@@ -10,7 +10,10 @@ import type { UserId } from '../../ids';
 import { paths } from '../../paths';
 import type { NotebookMeta, Source } from '../../schema';
 import { MemoryBucket } from '../../testing';
-import { WORKSPACE_DIRECTORY_MARKER } from '../../integrations/remoteWorkspace';
+import {
+	WORKSPACE_DIRECTORY_MARKER,
+	workspaceDirectoryMarkerPath,
+} from '../../integrations/remoteWorkspace';
 import { NotebookWorkspaceService } from './NotebookWorkspaceService';
 import type { NotebookDetail } from './NotebookService';
 
@@ -129,6 +132,21 @@ describe('NotebookWorkspaceService', () => {
 
 		await service.delete(PROJECT_ID, NOTEBOOK_ID, 'copy');
 		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'copy')).rejects.toThrow('not found');
+	});
+
+	it('keeps whitespace-containing paths distinct from protected source paths', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', encode('source'), ACTOR);
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'notebook.py ', encode('auxiliary'), ACTOR, true);
+
+		expect(
+			new TextDecoder().decode((await service.read(PROJECT_ID, NOTEBOOK_ID, 'notebook.py ')).bytes),
+		).toBe('auxiliary');
+		expect(
+			new TextDecoder().decode((await service.read(PROJECT_ID, NOTEBOOK_ID, 'notebook.py')).bytes),
+		).toBe('source');
+
+		await service.delete(PROJECT_ID, NOTEBOOK_ID, 'notebook.py ');
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'notebook.py')).toBeDefined();
 	});
 
 	it('routes source edits through the owner and protects their anchor paths', async () => {
@@ -263,6 +281,65 @@ describe('NotebookWorkspaceService', () => {
 		await expect(
 			service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'archive/nested'),
 		).rejects.toThrow('not a directory');
+	});
+
+	it('serializes file-directory collisions across service instances', async () => {
+		const other = new NotebookWorkspaceService(bucket, {
+			getNotebook: async () => detail,
+			saveSourceFile,
+		});
+
+		const results = await Promise.allSettled([
+			service.createDirectory(PROJECT_ID, NOTEBOOK_ID, 'shared'),
+			other.write(PROJECT_ID, NOTEBOOK_ID, 'shared', encode('file'), ACTOR, true),
+		]);
+
+		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+		expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+		const nb = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID);
+		const fileExists = (await bucket.get(nb.workspaceFile('shared'))) !== null;
+		const markerExists =
+			(await bucket.get(nb.workspaceFile(workspaceDirectoryMarkerPath('shared')))) !== null;
+		expect(fileExists).not.toBe(markerExists);
+	});
+
+	it('recovers a workspace whose previous mutation claim expired', async () => {
+		const claimKey = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceMutationClaim;
+		await bucket.put(
+			claimKey,
+			JSON.stringify({ holder: `${VersionId.create()}:${Date.now() - 1}` }),
+		);
+
+		await expect(
+			service.write(PROJECT_ID, NOTEBOOK_ID, 'recovered.txt', encode('ok'), ACTOR, true),
+		).resolves.toEqual(expect.objectContaining({ path: 'recovered.txt' }));
+		expect(await (await bucket.get(claimKey))?.json()).toEqual({ holder: null });
+	});
+
+	it('does not lose a concurrent child write during a directory move', async () => {
+		const other = new NotebookWorkspaceService(bucket, {
+			getNotebook: async () => detail,
+			saveSourceFile,
+		});
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'source/original.txt', encode('a'), ACTOR, true);
+
+		await Promise.all([
+			service.move(PROJECT_ID, NOTEBOOK_ID, 'source', 'target'),
+			other.write(PROJECT_ID, NOTEBOOK_ID, 'source/concurrent.txt', encode('b'), ACTOR, true),
+		]);
+
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'target/original.txt')).toBeDefined();
+		const locations = await Promise.all([
+			service.read(PROJECT_ID, NOTEBOOK_ID, 'source/concurrent.txt').then(
+				() => true,
+				() => false,
+			),
+			service.read(PROJECT_ID, NOTEBOOK_ID, 'target/concurrent.txt').then(
+				() => true,
+				() => false,
+			),
+		]);
+		expect(locations.filter(Boolean)).toHaveLength(1);
 	});
 
 	it('copies explicit empty directories without exposing their markers', async () => {

@@ -44,6 +44,8 @@ export interface NotebookPaths {
 	 * Present only when MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT is enabled.
 	 */
 	fsSnapshot: string;
+	/** Short-lived CAS claim serializing mutations of the workspace namespace. */
+	workspaceMutationClaim: string;
 	/**
 	 * Prefix of the `workspace/` folder: `projects/{pid}/notebooks/{nid}/workspace/`.
 	 * `workspace/` is the latest-only mirror of the sandbox working directory.
@@ -122,6 +124,7 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		source: `${base}/source.json`,
 		integrationSyncToken: `${base}/integration_sync_token.json`,
 		fsSnapshot: `${base}/fs_snapshot.json`,
+		workspaceMutationClaim: `${base}/workspace_mutation_claim.json`,
 		// workspace/ = latest-only mirror of the sandbox working dir.
 		// notebook.py + pyproject.toml are the always-present source files;
 		// everything else is present only under PERSIST_WORKSPACE=workspace.

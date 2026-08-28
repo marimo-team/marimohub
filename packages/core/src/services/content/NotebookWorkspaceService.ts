@@ -3,6 +3,7 @@ import {
 	MAX_WORKSPACE_FILE_BYTES,
 	MAX_WORKSPACE_FILES,
 } from '../../constants';
+import { sleep } from '../../duration';
 import {
 	BadRequestError,
 	ConflictError,
@@ -11,6 +12,7 @@ import {
 	PreconditionFailedError,
 	ResourceExhaustedError,
 } from '../../errors';
+import { VersionId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import {
 	isWorkspaceDirectoryMarkerPath,
@@ -29,10 +31,14 @@ import {
 import { paths } from '../../paths';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import type { Source } from '../../schema';
+import { acquireSingletonClaim, releaseSingletonClaim } from '../catalog/cas';
 import { listAllObjects } from '../catalog/storage';
 import type { NotebookDetail } from './NotebookService';
 
 const DEFAULT_PAGE_SIZE = 200;
+const WORKSPACE_MUTATION_LEASE_MS = 2 * 60_000;
+const WORKSPACE_MUTATION_WAIT_ATTEMPTS = 100;
+const WORKSPACE_MUTATION_RETRY_MS = 20;
 export const MAX_WORKSPACE_SEARCH_RESULTS = 200;
 
 export interface WorkspaceFileItem {
@@ -88,7 +94,26 @@ function assertTextSource(path: string, bytes: Uint8Array): string {
 	}
 }
 
+function parseWorkspaceMutationHolder(raw: unknown): string | null {
+	if (typeof raw !== 'object' || raw === null || !('holder' in raw)) {
+		throw new Error('Invalid workspace mutation claim');
+	}
+	const holder = raw.holder;
+	if (holder !== null && typeof holder !== 'string') {
+		throw new Error('Invalid workspace mutation claim holder');
+	}
+	return holder;
+}
+
+function workspaceMutationHolderIsLive(holder: string): boolean {
+	const separator = holder.lastIndexOf(':');
+	const expiresAt = Number(holder.slice(separator + 1));
+	return separator > 0 && Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
 export class NotebookWorkspaceService {
+	private readonly mutationQueues = new Map<string, Promise<void>>();
+
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly owner: WorkspaceServiceOwner,
@@ -210,6 +235,19 @@ export class NotebookWorkspaceService {
 		actor: UserId,
 		createOnly = false,
 	): Promise<WorkspaceFileItem> {
+		return this.withMutation(projectId, notebookId, () =>
+			this.writeUnlocked(projectId, notebookId, path, bytes, actor, createOnly),
+		);
+	}
+
+	private async writeUnlocked(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		path: string,
+		bytes: Uint8Array,
+		actor: UserId,
+		createOnly: boolean,
+	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'write', path);
 		const relative = normalizeWorkspacePathInput(path);
 		if (bytes.byteLength > MAX_WORKSPACE_FILE_BYTES) {
@@ -256,6 +294,16 @@ export class NotebookWorkspaceService {
 		notebookId: NotebookId,
 		path: string,
 	): Promise<WorkspaceFileItem> {
+		return this.withMutation(projectId, notebookId, () =>
+			this.createDirectoryUnlocked(projectId, notebookId, path),
+		);
+	}
+
+	private async createDirectoryUnlocked(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		path: string,
+	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'create', path);
 		const relative = normalizeWorkspacePathInput(path);
 		if (await this.exists(context.prefix, relative)) {
@@ -280,6 +328,16 @@ export class NotebookWorkspaceService {
 	}
 
 	async delete(projectId: ProjectId, notebookId: NotebookId, path: string): Promise<void> {
+		return this.withMutation(projectId, notebookId, () =>
+			this.deleteUnlocked(projectId, notebookId, path),
+		);
+	}
+
+	private async deleteUnlocked(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		path: string,
+	): Promise<void> {
 		const context = await this.mutableContext(projectId, notebookId, 'delete', path);
 		const relative = normalizeWorkspacePathInput(path);
 		const key = `${context.prefix}${relative}`;
@@ -294,6 +352,17 @@ export class NotebookWorkspaceService {
 	}
 
 	async copy(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		from: string,
+		to: string,
+	): Promise<WorkspaceFileItem> {
+		return this.withMutation(projectId, notebookId, () =>
+			this.copyUnlocked(projectId, notebookId, from, to),
+		);
+	}
+
+	private async copyUnlocked(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		from: string,
@@ -350,16 +419,78 @@ export class NotebookWorkspaceService {
 		from: string,
 		to: string,
 	): Promise<WorkspaceFileItem> {
+		return this.withMutation(projectId, notebookId, () =>
+			this.moveUnlocked(projectId, notebookId, from, to),
+		);
+	}
+
+	private async moveUnlocked(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		from: string,
+		to: string,
+	): Promise<WorkspaceFileItem> {
 		await this.mutableContext(projectId, notebookId, 'move', from);
 		await this.mutableContext(projectId, notebookId, 'move', to);
-		const copied = await this.copy(projectId, notebookId, from, to);
+		const copied = await this.copyUnlocked(projectId, notebookId, from, to);
 		try {
-			await this.delete(projectId, notebookId, from);
+			await this.deleteUnlocked(projectId, notebookId, from);
 		} catch (error) {
-			await this.delete(projectId, notebookId, to).catch(() => {});
+			await this.deleteUnlocked(projectId, notebookId, to).catch(() => {});
 			throw error;
 		}
 		return copied;
+	}
+
+	private async withMutation<T>(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		mutation: () => Promise<T>,
+	): Promise<T> {
+		const queueKey = `${projectId}/${notebookId}`;
+		const previous = this.mutationQueues.get(queueKey) ?? Promise.resolve();
+		const run = previous
+			.catch(() => {})
+			.then(() => this.withMutationClaim(projectId, notebookId, mutation));
+		const settled = run.then(
+			() => {},
+			() => {},
+		);
+		this.mutationQueues.set(queueKey, settled);
+		try {
+			return await run;
+		} finally {
+			if (this.mutationQueues.get(queueKey) === settled) this.mutationQueues.delete(queueKey);
+		}
+	}
+
+	private async withMutationClaim<T>(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		mutation: () => Promise<T>,
+	): Promise<T> {
+		const key = paths.project(projectId).notebook(notebookId).workspaceMutationClaim;
+		const claim = {
+			bucket: this.bucket,
+			key,
+			serialize: (holder: string | null) => JSON.stringify({ holder }),
+			parseHolder: parseWorkspaceMutationHolder,
+			isHolderLive: async (holder: string) => workspaceMutationHolderIsLive(holder),
+		};
+		const claimId = VersionId.create();
+		let holder = '';
+		for (let attempt = 0; attempt < WORKSPACE_MUTATION_WAIT_ATTEMPTS; attempt++) {
+			holder = `${claimId}:${Date.now() + WORKSPACE_MUTATION_LEASE_MS}`;
+			if ((await acquireSingletonClaim(claim, holder)).acquired) {
+				try {
+					return await mutation();
+				} finally {
+					await releaseSingletonClaim(claim, holder);
+				}
+			}
+			await sleep(WORKSPACE_MUTATION_RETRY_MS);
+		}
+		throw new ConflictError('Workspace is busy with another mutation; retry the operation');
 	}
 
 	private async context(projectId: ProjectId, notebookId: NotebookId): Promise<WorkspaceContext> {

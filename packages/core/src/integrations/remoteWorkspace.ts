@@ -103,7 +103,7 @@ export function normalizeEntryNotebook(path: string): string {
 }
 
 export function normalizeWorkspaceFilePath(path: string): string {
-	const normalized = path.trim();
+	const normalized = path;
 	if (!isSafeWorkspacePath(normalized)) {
 		throw new BadRequestError(`Invalid workspace file path: ${path}`);
 	}

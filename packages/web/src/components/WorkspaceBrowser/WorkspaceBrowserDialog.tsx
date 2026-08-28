@@ -77,6 +77,26 @@ function ItemIcon({
 	);
 }
 
+function EditableItemName({
+	item,
+	isEditing,
+	access,
+	className,
+}: {
+	item: FileItem;
+	isEditing: boolean;
+	access: WorkspaceAccess;
+	className?: string;
+}) {
+	return isEditing && !isWorkspacePathProtected(access, item.path, 'move') ? (
+		<Finder.RenameInput className="min-w-0 flex-1">
+			<Input className="w-full rounded border bg-background px-1 text-foreground outline-none" />
+		</Finder.RenameInput>
+	) : (
+		<span className={cn('min-w-0 truncate', className)}>{item.name}</span>
+	);
+}
+
 function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAccess }) {
 	if (view === 'table') {
 		return (
@@ -118,18 +138,27 @@ function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAcce
 							className="outline-none data-[selected]:bg-primary/10 data-[hovered]:bg-accent"
 							style={{ width: 'inherit', height: 'inherit' }}
 						>
-							<Finder.Cell className="border-b p-2 text-sm">
-								<span className="flex items-center gap-2">
-									<ItemIcon item={item} />
-									{item.name}
-								</span>
-							</Finder.Cell>
-							<Finder.Cell className="border-b p-2 text-right text-xs text-muted-foreground">
-								{item.kind === 'file' ? formatFileSize(item.size) : '—'}
-							</Finder.Cell>
-							<Finder.Cell className="border-b p-2 text-xs text-muted-foreground">
-								{formatDate(item.modifiedAt)}
-							</Finder.Cell>
+							{({ isEditing }) => (
+								<>
+									<Finder.Cell className="border-b p-2 text-sm">
+										<span className="flex items-center gap-2">
+											<ItemIcon item={item} />
+											<EditableItemName
+												item={item}
+												isEditing={isEditing}
+												access={access}
+												className="flex-1"
+											/>
+										</span>
+									</Finder.Cell>
+									<Finder.Cell className="border-b p-2 text-right text-xs text-muted-foreground">
+										{item.kind === 'file' ? formatFileSize(item.size) : '—'}
+									</Finder.Cell>
+									<Finder.Cell className="border-b p-2 text-xs text-muted-foreground">
+										{formatDate(item.modifiedAt)}
+									</Finder.Cell>
+								</>
+							)}
 						</Finder.Item>
 					)}
 				</Finder.TableBody>
@@ -155,15 +184,12 @@ function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAcce
 					{({ isEditing }) => (
 						<>
 							<ItemIcon item={item} className={grid ? 'size-8' : undefined} />
-							{isEditing && !isWorkspacePathProtected(access, item.path, 'move') ? (
-								<Finder.RenameInput className="min-w-0 flex-1">
-									<Input className="w-full rounded border bg-background px-1 text-foreground outline-none" />
-								</Finder.RenameInput>
-							) : (
-								<span className={cn('min-w-0 truncate', grid ? 'w-full text-xs' : 'flex-1')}>
-									{item.name}
-								</span>
-							)}
+							<EditableItemName
+								item={item}
+								isEditing={isEditing}
+								access={access}
+								className={grid ? 'w-full text-xs' : 'flex-1'}
+							/>
 							{!grid && item.kind === 'file' ? (
 								<span className="text-xs text-muted-foreground">{formatFileSize(item.size)}</span>
 							) : null}

@@ -290,6 +290,53 @@ describe('restoreWorkspace', () => {
 });
 
 describe('captureWorkspace', () => {
+	it('does not follow symlinks or capture other special filesystem entries', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const { instance, calls } = makeFsSandbox({ files: { 'ordinary.txt': 'safe' } });
+		const listFiles = vi.fn(async () => ({
+			success: true as const,
+			files: [
+				{
+					name: 'ordinary.txt',
+					absolutePath: `${MOUNT}/ordinary.txt`,
+					relativePath: 'ordinary.txt',
+					type: 'file' as const,
+					size: 4,
+				},
+				{
+					name: 'outside',
+					absolutePath: `${MOUNT}/outside`,
+					relativePath: 'outside',
+					type: 'symlink' as const,
+					size: 100,
+				},
+				{
+					name: 'socket',
+					absolutePath: `${MOUNT}/socket`,
+					relativePath: 'socket',
+					type: 'other' as const,
+					size: 0,
+				},
+			],
+		}));
+
+		await captureWorkspace(
+			{ ...instance, listFiles },
+			bucket,
+			projectId,
+			notebookId,
+			MOUNT,
+			'workspace',
+		);
+
+		expect(await bucket.get(nb.workspaceFile('ordinary.txt'))).not.toBeNull();
+		expect(await bucket.get(nb.workspaceFile('outside'))).toBeNull();
+		expect(await bucket.get(nb.workspaceFile('socket'))).toBeNull();
+		expect(calls.exec.some((command) => command.includes('outside'))).toBe(false);
+		expect(calls.exec.some((command) => command.includes('socket'))).toBe(false);
+	});
+
 	it('captures empty directories as portable marker objects', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
 		const bucket = new MemoryBucket();

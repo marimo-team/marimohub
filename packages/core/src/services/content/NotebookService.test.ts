@@ -13,8 +13,7 @@ import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { ACTOR, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
-import { MAX_VERSIONS } from './NotebookService';
-import type { NotebookService } from './NotebookService';
+import { MAX_VERSIONS, NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
 import type { SessionService } from '../runtime/SessionService';
 import { listAllKeys, listAllPrefixes } from '../catalog/storage';
@@ -573,16 +572,23 @@ describe('NotebookService', () => {
 			expect(files.map((file) => file.path)).not.toContain('empty/.marimohub-directory');
 		});
 
-		it('serializes simultaneous source-file saves without losing either edit', async () => {
+		it('serializes source-file saves across service instances without losing either edit', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
 				{ title: 'NB', description: 'D', code: 'old code', deps: 'old deps' },
 				ACTOR,
 			);
+			const otherNotebooks = new NotebookService(bucket, catalog);
 
 			await Promise.all([
 				notebooks.workspace.write(projectId, created.id, 'notebook.py', enc('new code'), ACTOR),
-				notebooks.workspace.write(projectId, created.id, 'pyproject.toml', enc('new deps'), ACTOR),
+				otherNotebooks.workspace.write(
+					projectId,
+					created.id,
+					'pyproject.toml',
+					enc('new deps'),
+					ACTOR,
+				),
 			]);
 
 			const nb = paths.project(projectId).notebook(created.id);

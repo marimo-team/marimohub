@@ -724,7 +724,7 @@ const readWorkspaceFile = createRoute({
 	request: { params: NotebookIdParam, query: WorkspaceFilePathQuery },
 	responses: {
 		200: {
-			content: { 'application/octet-stream': { schema: WorkspaceFileBinary } },
+			content: { '*/*': { schema: WorkspaceFileBinary } },
 			description: 'Raw workspace file bytes',
 		},
 		...commonErrors(),

@@ -56,6 +56,7 @@ describe('paths', () => {
 			  "source": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/source.json",
 			  "version": [Function],
 			  "workspaceFile": [Function],
+			  "workspaceMutationClaim": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/workspace_mutation_claim.json",
 			  "workspacePrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/workspace/",
 			}
 		`);

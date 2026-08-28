@@ -5515,7 +5515,7 @@ paths:
         '200':
           description: Raw workspace file bytes
           content:
-            application/octet-stream:
+            '*/*':
               schema:
                 type: string
                 format: binary

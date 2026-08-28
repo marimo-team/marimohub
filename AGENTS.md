@@ -132,6 +132,8 @@ These CAS-managed records also have one writer each:
   `_system/integrations/{iid}/integration.json`.
 - `SandboxDiagnosticLease` owns each per-admin diagnostic lease at
   `_system/sandbox-diagnostics/{user-id}.json`.
+- `NotebookWorkspaceService` owns each short-lived workspace mutation claim at
+  `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`.
 
 Each integration store also owns its immutable `versions/{n}.json` history and
 its `integrations/_names/{name}.json` uniqueness claim. Version writes use

@@ -5314,7 +5314,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/octet-stream': string;
+					'*/*': string;
 				};
 			};
 			/** @description Bad request */

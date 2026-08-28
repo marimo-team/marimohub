@@ -990,10 +990,19 @@ describe('Notebook routes', () => {
 				403,
 				'FORBIDDEN',
 			);
-			await expectError(
+			const spacedSourcePath = `/api/v1${workspace}/files?path=${encodeURIComponent('/notebook.py ')}`;
+			await expectOk(
+				await app.request(`${spacedSourcePath}&create=true`, {
+					method: 'PUT',
+					body: 'auxiliary',
+				}),
+			);
+			expect(await (await app.request(spacedSourcePath)).text()).toBe('auxiliary');
+			await expectOk(
 				await request('DELETE', `${workspace}/entries?path=${encodeURIComponent('/notebook.py ')}`),
-				403,
-				'FORBIDDEN',
+			);
+			expect((await expectOk<any>(await request('GET', nb(`/${created.id}/content`)))).code).toBe(
+				'print(1)',
 			);
 		});
 

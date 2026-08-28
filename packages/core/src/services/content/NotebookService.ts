@@ -135,9 +135,6 @@ export interface CommitSessionResult {
 export class NotebookService {
 	readonly synced: SyncedNotebookService;
 	readonly workspace: NotebookWorkspaceService;
-	// A source-file save rebuilds one version from both protected files. Keep those
-	// reads and the version write in one per-notebook sequence so cross-file edits compose.
-	private readonly sourceFileSaveQueues = new Map<string, Promise<void>>();
 
 	constructor(
 		private bucket: Bucket,
@@ -164,42 +161,24 @@ export class NotebookService {
 		content: string,
 		actor: UserId,
 	): Promise<void> {
-		const queueKey = `${projectId}/${notebookId}`;
-		const previous = this.sourceFileSaveQueues.get(queueKey) ?? Promise.resolve();
-		const save = previous
-			.catch(() => {})
-			.then(async () => {
-				const detail = await this.getNotebook(projectId, notebookId);
-				const nb = paths.project(projectId).notebook(notebookId);
-				const [code, deps] = await Promise.all([
-					path === 'notebook.py'
-						? content
-						: this.getContentForSource(projectId, notebookId, detail.source),
-					path === 'pyproject.toml'
-						? content
-						: this.bucket.get(nb.deps).then((object) => (object ? object.text() : '')),
-				]);
-				await this.updateNotebookFrom(
-					detail,
-					projectId,
-					notebookId,
-					{ code, deps, message: `Edit ${path}` },
-					actor,
-					detail.meta.updated_at,
-				);
-			});
-		const settled = save.then(
-			() => {},
-			() => {},
+		const detail = await this.getNotebook(projectId, notebookId);
+		const nb = paths.project(projectId).notebook(notebookId);
+		const [code, deps] = await Promise.all([
+			path === 'notebook.py'
+				? content
+				: this.getContentForSource(projectId, notebookId, detail.source),
+			path === 'pyproject.toml'
+				? content
+				: this.bucket.get(nb.deps).then((object) => (object ? object.text() : '')),
+		]);
+		await this.updateNotebookFrom(
+			detail,
+			projectId,
+			notebookId,
+			{ code, deps, message: `Edit ${path}` },
+			actor,
+			detail.meta.updated_at,
 		);
-		this.sourceFileSaveQueues.set(queueKey, settled);
-		try {
-			await save;
-		} finally {
-			if (this.sourceFileSaveQueues.get(queueKey) === settled) {
-				this.sourceFileSaveQueues.delete(queueKey);
-			}
-		}
 	}
 
 	async listNotebooks(

@@ -112,6 +112,11 @@ describe('remote workspace helpers', () => {
 		);
 	});
 
+	it('preserves leading and trailing spaces in workspace file paths', () => {
+		expect(normalizeWorkspaceFilePath(' report.txt ')).toBe(' report.txt ');
+		expect(normalizeWorkspaceFilePath('data/report.txt ')).toBe('data/report.txt ');
+	});
+
 	it('isSafeWorkspacePath rejects a null byte, a backslash, and a single-dot segment', () => {
 		expect(isSafeWorkspacePath('data/\0.csv')).toBe(false);
 		expect(isSafeWorkspacePath('data\\cars.csv')).toBe(false);
