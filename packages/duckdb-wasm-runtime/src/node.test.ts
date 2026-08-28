@@ -168,6 +168,29 @@ describe.concurrent('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
 	}, 30_000);
 
+	it('clears the active HTTP session when its close method fails', async ({
+		expect,
+		onTestFinished,
+	}) => {
+		const close = vi.fn().mockImplementationOnce(() => {
+			throw new Error('session close failed');
+		});
+		const runtime = track(
+			await createNodeDuckDBWasmRuntimeFactory('worker', () => ({ fetch: vi.fn(), close }))(),
+			onTestFinished,
+		);
+		await runtime.initialize({ memoryLimitMb: 64 });
+		const program = {
+			setup: [],
+			query: { text: 'SELECT 1 AS value' },
+			httpAccess: { kind: 'http-database' as const, url: 'https://data.example.test/a.duckdb' },
+		};
+
+		await expect(runtime.execute(program)).rejects.toThrow('session close failed');
+		await expect(runtime.execute(program)).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+		expect(close).toHaveBeenCalledTimes(2);
+	}, 30_000);
+
 	it('builds virtual-hosted S3 requests with the packaged HTTP extension', async ({
 		expect,
 		onTestFinished,

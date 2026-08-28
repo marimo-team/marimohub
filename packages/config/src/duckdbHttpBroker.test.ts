@@ -22,6 +22,7 @@ import {
 	VENDED_ICEBERG_LOAD_TABLE_BASE64,
 	VENDED_ICEBERG_OBJECTS_BASE64,
 } from './duckdbHttpBroker.fixture';
+import { rangedObjectResponse } from './rangedObject.testUtils';
 
 const NOW = Date.parse('2026-08-13T12:00:00Z');
 const OAUTH_TRANSPORT_ERROR =
@@ -747,26 +748,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
 			calls.push(request);
-			const headers = {
-				'accept-ranges': 'bytes',
-				'content-length': String(bytes.byteLength),
-				etag: '"fixture-1"',
-			};
-			if (request.method === 'HEAD') return { status: 200, headers, body: new Uint8Array() };
-			const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers?.range ?? '');
-			if (!range) return { status: 200, headers, body: bytes };
-			const start = Number(range[1]);
-			const end = Math.min(Number(range[2]), bytes.byteLength - 1);
-			const body = bytes.slice(start, end + 1);
-			return {
-				status: 206,
-				headers: {
-					...headers,
-					'content-length': String(body.byteLength),
-					'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
-				},
-				body,
-			};
+			return rangedObjectResponse(request, bytes, '"fixture-1"');
 		});
 		const config = s3.configSchema.parse({
 			endpoint_url: 'https://objects.example.test',
@@ -828,26 +810,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
 			calls.push(request);
-			const headers = {
-				'accept-ranges': 'bytes',
-				'content-length': String(bytes.byteLength),
-				etag: '"anonymous-fixture"',
-			};
-			if (request.method === 'HEAD') return { status: 200, headers, body: new Uint8Array() };
-			const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers?.range ?? '');
-			if (!range) return { status: 200, headers, body: bytes };
-			const start = Number(range[1]);
-			const end = Math.min(Number(range[2]), bytes.byteLength - 1);
-			const body = bytes.slice(start, end + 1);
-			return {
-				status: 206,
-				headers: {
-					...headers,
-					'content-length': String(body.byteLength),
-					'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
-				},
-				body,
-			};
+			return rangedObjectResponse(request, bytes, '"anonymous-fixture"');
 		});
 		const config = s3.configSchema.parse({
 			endpoint_url: 'https://objects.example.test',

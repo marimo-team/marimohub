@@ -38,6 +38,7 @@ export {
 	type IcebergHttpBrokerTransportRequest,
 } from './icebergHttpBroker';
 export { HTTP_BRIDGE_BODY_BYTES } from './httpBridge';
+export { DUCKLAKE_SPEC_VERSION } from './extensionManifest';
 
 export type DuckDBWasmRuntimeMode = 'auto' | 'worker' | 'inline';
 
@@ -226,16 +227,20 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (this.closed) return;
 		this.closed = true;
 		this.httpReady = false;
-		this.activeHttpSession?.close();
-		this.activeHttpSession = undefined;
-		this.activeHttpNonce = undefined;
-		this.activeHttpFatalError = undefined;
+		const session = this.detachHttpSession();
+		let closeError: Error | undefined;
+		try {
+			session?.close();
+		} catch (error) {
+			closeError = asError(error);
+		}
 		this.metrics.increment('duckdb_wasm.worker_termination', 1, { reason: 'requested' });
 		try {
 			await this.worker.terminate();
 		} finally {
-			this.rejectAll(new Error('DuckDB-Wasm worker is closed.'));
+			this.rejectAll(closeError ?? new Error('DuckDB-Wasm worker is closed.'));
 		}
+		if (closeError) throw closeError;
 	}
 
 	private request<T>(request: RuntimeRequestInput): Promise<T> {
@@ -330,19 +335,38 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		this.activeHttpSession = session;
 		this.activeHttpNonce = executionNonce;
 		this.activeHttpFatalError = undefined;
-		const onAbort = () => session.close();
+		const onAbort = () => {
+			try {
+				this.detachHttpSession(session)?.close();
+			} catch {}
+		};
 		signal?.addEventListener('abort', onAbort, { once: true });
+		let result: T | undefined;
+		let primaryError: unknown;
 		try {
-			return await abortable(work(executionNonce), signal);
+			result = await abortable(work(executionNonce), signal);
+		} catch (error) {
+			primaryError = error;
 		} finally {
 			signal?.removeEventListener('abort', onAbort);
-			session.close();
-			if (this.activeHttpSession === session) {
-				this.activeHttpSession = undefined;
-				this.activeHttpNonce = undefined;
-				this.activeHttpFatalError = undefined;
+			const active = this.detachHttpSession(session);
+			try {
+				active?.close();
+			} catch (error) {
+				if (primaryError === undefined) primaryError = error;
 			}
 		}
+		if (primaryError !== undefined) throw asError(primaryError);
+		return result as T;
+	}
+
+	private detachHttpSession(expected?: DuckDBHttpSession): DuckDBHttpSession | undefined {
+		if (expected && this.activeHttpSession !== expected) return;
+		const session = this.activeHttpSession;
+		this.activeHttpSession = undefined;
+		this.activeHttpNonce = undefined;
+		this.activeHttpFatalError = undefined;
+		return session;
 	}
 
 	private rejectAll(error: Error): void {
@@ -354,10 +378,9 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (this.closed) return;
 		this.closed = true;
 		this.httpReady = false;
-		this.activeHttpSession?.close();
-		this.activeHttpSession = undefined;
-		this.activeHttpNonce = undefined;
-		this.activeHttpFatalError = undefined;
+		try {
+			this.detachHttpSession()?.close();
+		} catch {}
 		this.metrics.increment('duckdb_wasm.worker_termination', 1, { reason: 'failure' });
 		this.rejectAll(error);
 		try {

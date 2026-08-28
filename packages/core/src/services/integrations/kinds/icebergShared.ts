@@ -6,6 +6,7 @@ import { INTEGRATIONS_DIR } from '../bundle';
 import {
 	awsStaticCredentials,
 	httpUrlField,
+	isIpAddressHost,
 	isValidS3Bucket,
 	s3BrokerReadLocationsSchema,
 } from './common';
@@ -186,15 +187,6 @@ const vendedS3Storage = z
 			});
 		}
 	});
-
-function isIpAddressHost(hostname: string): boolean {
-	if (hostname.includes(':')) return true;
-	const octets = hostname.split('.');
-	return (
-		octets.length === 4 &&
-		octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
-	);
-}
 
 const catalogStorage = z.strictObject({
 	scheme: z.literal('catalog'),

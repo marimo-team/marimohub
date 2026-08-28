@@ -8,6 +8,7 @@ import type {
 } from '@marimo-hub/duckdb-wasm-runtime/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
+import { rangedObjectResponse } from './rangedObject.testUtils';
 
 const REMOTE_URL = 'https://data.example.test/snapshots/fixture.duckdb';
 const ETAG = '"fixture-v1"';
@@ -43,47 +44,7 @@ function queryPlan() {
 }
 
 function fixtureResponse(request: IcebergHttpBrokerTransportRequest, etag = ETAG) {
-	const headers = { etag, 'accept-ranges': 'bytes' };
-	const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers?.range ?? '');
-	if (!range) {
-		return {
-			status: 200,
-			headers: { ...headers, 'content-length': String(fixture.byteLength) },
-			body: request.method === 'HEAD' ? new Uint8Array() : fixture,
-		};
-	}
-	const start = Number(range[1]);
-	const end = range[2]
-		? Math.min(Number(range[2]), fixture.byteLength - 1)
-		: fixture.byteLength - 1;
-	if (start >= fixture.byteLength || end < start) {
-		return {
-			status: 416,
-			headers: { ...headers, 'content-range': `bytes */${fixture.byteLength}` },
-			body: new Uint8Array(),
-		};
-	}
-	if (request.method === 'HEAD') {
-		return {
-			status: 206,
-			headers: {
-				...headers,
-				'content-length': String(end - start + 1),
-				'content-range': `bytes ${start}-${end}/${fixture.byteLength}`,
-			},
-			body: new Uint8Array(),
-		};
-	}
-	const body = fixture.slice(start, end + 1);
-	return {
-		status: 206,
-		headers: {
-			...headers,
-			'content-length': String(body.byteLength),
-			'content-range': `bytes ${start}-${end}/${fixture.byteLength}`,
-		},
-		body,
-	};
+	return rangedObjectResponse(request, fixture, etag);
 }
 
 describe('packaged remote DuckDB database', () => {

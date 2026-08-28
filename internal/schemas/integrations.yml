@@ -268,6 +268,42 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/ducklake/config:
+    summary: DuckLake
+    description: Query an immutable DuckLake metadata snapshot with guarded S3 data access.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#FFF000'
+    x-secret-paths:
+      - metadata.auth.token
+      - metadata.auth.password
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_ducklake_config
+      summary: Stored ducklake config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ducklake_stored'
+    put:
+      operationId: write_ducklake_config
+      summary: Input ducklake config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ducklake'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/gcs/config:
     summary: Google Cloud Storage
     description: GCS buckets for gcsfs, polars, and duckdb, with ADC or a
@@ -2023,6 +2059,309 @@ components:
         - url
         - auth
         - allow_non_duckdb_suffix
+      additionalProperties: false
+    ducklake:
+      type: object
+      properties:
+        metadata:
+          type: object
+          properties:
+            type:
+              type: string
+              const: duckdb
+            url:
+              type: string
+              minLength: 1
+              description: Exact HTTPS URL of one immutable DuckLake metadata file
+            auth:
+              oneOf:
+                - type: object
+                  properties:
+                    method:
+                      type: string
+                      const: none
+                  required:
+                    - method
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    method:
+                      type: string
+                      const: bearer_token
+                    token:
+                      type: string
+                      minLength: 1
+                      x-marimohub-secret: true
+                      writeOnly: true
+                  required:
+                    - method
+                    - token
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    method:
+                      type: string
+                      const: basic
+                    username:
+                      type: string
+                      minLength: 1
+                      pattern: ^[^:]+$
+                    password:
+                      type: string
+                      minLength: 1
+                      x-marimohub-secret: true
+                      writeOnly: true
+                  required:
+                    - method
+                    - username
+                    - password
+                  additionalProperties: false
+              discriminator:
+                propertyName: method
+            allow_non_database_suffix:
+              default: false
+              type: boolean
+          required:
+            - type
+            - url
+            - auth
+          additionalProperties: false
+        storage:
+          type: object
+          properties:
+            scheme:
+              type: string
+              const: s3
+            endpoint:
+              type: string
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
+              format: uri
+              x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+            region:
+              type: string
+              pattern: ^[a-z0-9-]+$
+            force_virtual_addressing:
+              default: true
+              type: boolean
+            credentials:
+              type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+              additionalProperties: false
+            broker_read_locations:
+              minItems: 1
+              type: array
+              items:
+                type: object
+                properties:
+                  bucket:
+                    type: string
+                    minLength: 1
+                    maxLength: 255
+                  prefix:
+                    type: string
+                    minLength: 1
+                required:
+                  - bucket
+                  - prefix
+                additionalProperties: false
+          required:
+            - scheme
+            - endpoint
+            - region
+            - credentials
+            - broker_read_locations
+          additionalProperties: false
+        snapshot:
+          default: {}
+          type: object
+          properties:
+            version:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            timestamp:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          additionalProperties: false
+      required:
+        - metadata
+        - storage
+      additionalProperties: false
+    ducklake_stored:
+      type: object
+      properties:
+        metadata:
+          type: object
+          properties:
+            type:
+              type: string
+              const: duckdb
+            url:
+              type: string
+              minLength: 1
+              description: Exact HTTPS URL of one immutable DuckLake metadata file
+            auth:
+              oneOf:
+                - type: object
+                  properties:
+                    method:
+                      type: string
+                      const: none
+                  required:
+                    - method
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    method:
+                      type: string
+                      const: bearer_token
+                    token:
+                      oneOf:
+                        - $ref: '#/components/schemas/ManagedStoredSecret'
+                        - $ref: '#/components/schemas/ReferenceStoredSecret'
+                      x-marimohub-secret: true
+                  required:
+                    - method
+                    - token
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    method:
+                      type: string
+                      const: basic
+                    username:
+                      type: string
+                      minLength: 1
+                      pattern: ^[^:]+$
+                    password:
+                      oneOf:
+                        - $ref: '#/components/schemas/ManagedStoredSecret'
+                        - $ref: '#/components/schemas/ReferenceStoredSecret'
+                      x-marimohub-secret: true
+                  required:
+                    - method
+                    - username
+                    - password
+                  additionalProperties: false
+              discriminator:
+                propertyName: method
+            allow_non_database_suffix:
+              default: false
+              type: boolean
+          required:
+            - type
+            - url
+            - auth
+            - allow_non_database_suffix
+          additionalProperties: false
+        storage:
+          type: object
+          properties:
+            scheme:
+              type: string
+              const: s3
+            endpoint:
+              type: string
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
+              format: uri
+              x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+            region:
+              type: string
+              pattern: ^[a-z0-9-]+$
+            force_virtual_addressing:
+              default: true
+              type: boolean
+            credentials:
+              type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+                secret_access_key:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+                session_token:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+              additionalProperties: false
+            broker_read_locations:
+              minItems: 1
+              type: array
+              items:
+                type: object
+                properties:
+                  bucket:
+                    type: string
+                    minLength: 1
+                    maxLength: 255
+                  prefix:
+                    type: string
+                    minLength: 1
+                required:
+                  - bucket
+                  - prefix
+                additionalProperties: false
+          required:
+            - scheme
+            - endpoint
+            - region
+            - force_virtual_addressing
+            - credentials
+            - broker_read_locations
+          additionalProperties: false
+        snapshot:
+          default: {}
+          type: object
+          properties:
+            version:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            timestamp:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          additionalProperties: false
+      required:
+        - metadata
+        - storage
+        - snapshot
       additionalProperties: false
     gcs:
       type: object

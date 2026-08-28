@@ -13,6 +13,7 @@ import type { IntegrationDefinition, RenderInput } from '../sdk';
 import { athena } from './awsQueryEngines';
 import { bigquery } from './bigquery';
 import { customEnv } from './customEnv';
+import { isIpAddressHost, isValidS3Bucket } from './common';
 import { databricks } from './databricks';
 import {
 	icebergBigQuery,
@@ -252,6 +253,24 @@ const FIXTURES: Record<string, unknown> = {
 	duckdb_http: {
 		url: 'https://data.example.test/snapshots/analytics.duckdb',
 		auth: { method: 'none' },
+	},
+	ducklake: {
+		metadata: {
+			type: 'duckdb',
+			url: 'https://data.example.test/releases/catalog.ducklake',
+			auth: { method: 'none' },
+		},
+		storage: {
+			scheme: 's3',
+			endpoint: 'https://s3.example.test',
+			region: 'us-east-1',
+			credentials: {
+				method: 'static',
+				access_key_id: 'AKIAEXAMPLE',
+				secret_access_key: 's3-secret',
+			},
+			broker_read_locations: [{ bucket: 'warehouse', prefix: 'ducklake/data/' }],
+		},
 	},
 };
 
@@ -822,7 +841,6 @@ describe('kind renders (golden)', () => {
 				version: 1,
 			},
 		});
-
 		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 		expect(programs?.duckdbWasm?.setup.at(-1)?.params).toEqual([
 			'https://catalog.example.com/api',
@@ -3152,6 +3170,16 @@ describe('connection kinds (golden)', () => {
 	])('object stores reject the invalid bucket name %s', (bucket, valid) => {
 		expect(s3.configSchema.safeParse({ bucket }).success).toBe(valid);
 		expect(gcs.configSchema.safeParse({ bucket }).success).toBe(valid);
+	});
+
+	it.each([
+		['192.168.1.1', false, true],
+		['999.999.999.999', true, false],
+		['warehouse', true, false],
+		['warehouse_name', false, false],
+	] as const)('applies the shared S3 DNS policy to %s', (value, validBucket, ipHost) => {
+		expect(isValidS3Bucket(value)).toBe(validBucket);
+		expect(isIpAddressHost(value)).toBe(ipHost);
 	});
 
 	// Validated apart because the provider rules genuinely differ; a shared

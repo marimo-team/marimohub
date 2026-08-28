@@ -4,9 +4,6 @@
  * prevents DNS rebinding between validation and connection.
  */
 import { lookup } from 'node:dns/promises';
-import { request as httpRequest } from 'node:http';
-import type { RequestOptions } from 'node:http';
-import { request as httpsRequest } from 'node:https';
 import { BlockList, connect as netConnect, isIP } from 'node:net';
 import type { TcpSocketConnectOpts } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
@@ -27,6 +24,7 @@ import type {
 } from '@marimo-hub/core';
 import { createPinnedLookup } from '@marimo-hub/object-browser-commons';
 import type { GuardedHostResolver, PinnedAddress } from '@marimo-hub/object-browser-commons';
+import { pinnedHttpRequest } from './pinnedHttpTransport';
 
 export interface GuardedProbeOptions {
 	/** Allow private and loopback targets for deployments with on-prem services. */
@@ -198,66 +196,20 @@ function consumeProbeBudget(budget: ReturnType<typeof createSlidingWindowBudget<
 	}
 }
 
-const nodeTransport: ProbeTransport = (probeRequest) =>
-	new Promise((resolve, reject) => {
-		let settled = false;
-		const settle = (fn: () => void) => {
-			if (!settled) {
-				settled = true;
-				fn();
-			}
-		};
-		// The pin: every connect for this request goes to an address that was just
-		// validated, regardless of what DNS would say on a second lookup.
-		// `autoSelectFamily` (a net.connect option http forwards; missing from
-		// @types/node's RequestOptions) keeps Happy-Eyeballs fallback available
-		// across the validated set.
-		const requestOptions: RequestOptions & { autoSelectFamily?: boolean } = {
-			method: probeRequest.method,
-			headers: probeRequest.headers,
-			lookup: createPinnedLookup(probeRequest.pinned),
-			autoSelectFamily: true,
-			signal: probeRequest.signal
-				? AbortSignal.any([probeRequest.signal, AbortSignal.timeout(probeRequest.timeoutMs)])
-				: AbortSignal.timeout(probeRequest.timeoutMs),
-		};
-		const request = (probeRequest.url.protocol === 'https:' ? httpsRequest : httpRequest)(
-			probeRequest.url,
-			requestOptions,
-			(response) => {
-				const headers = Object.fromEntries(
-					Object.entries(response.headers).flatMap(([name, value]) =>
-						value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]],
-					),
-				);
-				const chunks: Buffer[] = [];
-				let total = 0;
-				response.on('data', (chunk: Buffer) => {
-					total += chunk.length;
-					if (total > probeRequest.maxResponseBytes) {
-						// Truncated bodies parse as "not JSON"; the status is already known.
-						response.destroy();
-						settle(() => resolve({ status: response.statusCode ?? 0, body: '', headers }));
-						return;
-					}
-					chunks.push(chunk);
-				});
-				response.on('end', () =>
-					settle(() =>
-						resolve({
-							status: response.statusCode ?? 0,
-							body: Buffer.concat(chunks).toString('utf8'),
-							headers,
-						}),
-					),
-				);
-				response.on('error', (err) => settle(() => reject(err)));
-			},
-		);
-		request.on('error', (err) => settle(() => reject(err)));
-		if (probeRequest.body !== undefined) request.write(probeRequest.body);
-		request.end();
+const nodeTransport: ProbeTransport = async (request) => {
+	const response = await pinnedHttpRequest({
+		...request,
+		signal: request.signal
+			? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
+			: AbortSignal.timeout(request.timeoutMs),
+		overflow: 'empty',
 	});
+	return {
+		status: response.status,
+		headers: response.headers,
+		body: new TextDecoder().decode(response.body),
+	};
+};
 
 const nodeConnectionTransport: ProbeConnectionTransport = (request) =>
 	new Promise((resolve, reject) => {

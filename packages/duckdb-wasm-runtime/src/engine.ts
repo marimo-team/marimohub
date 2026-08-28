@@ -86,21 +86,7 @@ export class BlockingDuckDBEngine {
 		} catch (error) {
 			primaryError = error;
 		} finally {
-			try {
-				if (transactionOpen) connection.query('ROLLBACK');
-				for (const statement of [...(program.cleanup ?? [])].reverse()) {
-					runStatement(connection, statement);
-				}
-			} catch (error) {
-				if (transactionOpen) {
-					try {
-						connection.query('ROLLBACK');
-					} catch {}
-				}
-				cleanupError = error;
-			} finally {
-				connection.close();
-			}
+			cleanupError = closeReadOnlyConnection(connection, transactionOpen, program.cleanup ?? []);
 		}
 		if (primaryError !== undefined) throw asError(primaryError);
 		if (cleanupError !== undefined) throw asError(cleanupError);
@@ -161,25 +147,7 @@ export class BlockingDuckDBEngine {
 				// failures of the user's own statement are classified as user errors.
 				primaryError = userStatementStarted ? classifyUserStatementError(error) : error;
 			} finally {
-				try {
-					if (transactionOpen) connection.query('ROLLBACK');
-					for (const cleanup of [...(plan?.cleanup ?? [])].reverse()) {
-						runStatement(connection, cleanup);
-					}
-				} catch (error) {
-					if (transactionOpen) {
-						try {
-							connection.query('ROLLBACK');
-						} catch {}
-					}
-					cleanupError = error;
-				} finally {
-					try {
-						connection.close();
-					} catch (error) {
-						cleanupError ??= error;
-					}
-				}
+				cleanupError = closeReadOnlyConnection(connection, transactionOpen, plan?.cleanup ?? []);
 			}
 		} catch (error) {
 			primaryError ??= error;
@@ -242,6 +210,31 @@ async function defaultDatabase(): Promise<Database> {
 }
 
 type Connection = ReturnType<Database['connect']>;
+
+function closeReadOnlyConnection(
+	connection: Connection,
+	transactionOpen: boolean,
+	cleanup: NonNullable<DuckDBPreviewProgram['cleanup']>,
+): unknown {
+	let cleanupError: unknown;
+	try {
+		if (transactionOpen) connection.query('ROLLBACK');
+		for (const statement of [...cleanup].reverse()) runStatement(connection, statement);
+	} catch (error) {
+		if (transactionOpen) {
+			try {
+				connection.query('ROLLBACK');
+			} catch {}
+		}
+		cleanupError = error;
+	}
+	try {
+		connection.close();
+	} catch (error) {
+		cleanupError ??= error;
+	}
+	return cleanupError;
+}
 
 function runStatement(
 	connection: Connection,

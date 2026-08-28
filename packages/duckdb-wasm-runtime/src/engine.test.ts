@@ -128,6 +128,40 @@ describe('BlockingDuckDBEngine initialization', () => {
 		expect(database.reset).toHaveBeenCalledOnce();
 	});
 
+	it('preserves a preview query error when connection close also fails', async () => {
+		const initializationConnection = {
+			query: vi.fn(),
+			prepare: vi.fn(() => ({ query: vi.fn(), close: vi.fn() })),
+			close: vi.fn(),
+		};
+		const queryConnection = {
+			query: vi.fn((sql: string) => {
+				if (sql === 'SELECT broken') throw new Error('query failed');
+			}),
+			prepare: vi.fn(() => ({ query: vi.fn(), close: vi.fn() })),
+			close: vi.fn(() => {
+				throw new Error('close failed');
+			}),
+		};
+		const database = {
+			instantiate: vi.fn(),
+			open: vi.fn(),
+			connect: vi
+				.fn()
+				.mockReturnValueOnce(initializationConnection)
+				.mockReturnValueOnce(queryConnection),
+			reset: vi.fn(),
+		};
+		const engine = new BlockingDuckDBEngine(async () => database as never);
+
+		await engine.initialize(64);
+
+		expect(() => engine.execute({ setup: [], query: { text: 'SELECT broken' } })).toThrow(
+			'query failed',
+		);
+		expect(queryConnection.close).toHaveBeenCalledOnce();
+	});
+
 	it('materializes query files and environment only for the request lifetime', async () => {
 		const existingName = 'MARIMOHUB_ENGINE_TEST_EXISTING';
 		const newName = 'MARIMOHUB_ENGINE_TEST_NEW';
