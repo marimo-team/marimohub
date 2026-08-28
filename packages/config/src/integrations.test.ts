@@ -306,7 +306,7 @@ describe('makeIntegrations data browser', () => {
 		await wired.dataBrowser?.close?.();
 	});
 
-	it('advertises PostgreSQL browsing only when its rollout flag is on', () => {
+	it('advertises PostgreSQL testing by default and browsing only behind its rollout flag', () => {
 		const dark = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'off' },
 			new MemoryBucket(),
@@ -330,10 +330,12 @@ describe('makeIntegrations data browser', () => {
 		);
 
 		expect(dark.integrations?.listKinds().find((kind) => kind.kind === 'postgres')).toMatchObject({
+			supports_test: true,
 			supports_browse: false,
 			browse_surfaces: [],
 		});
 		expect(wired.integrations?.listKinds().find((kind) => kind.kind === 'postgres')).toMatchObject({
+			supports_test: true,
 			supports_browse: false,
 			browse_surfaces: [],
 		});
@@ -344,6 +346,30 @@ describe('makeIntegrations data browser', () => {
 			browse_surfaces: ['tables'],
 		});
 	});
+
+	it.each(['disable', 'prefer', 'require'] as const)(
+		'blocks PostgreSQL %s connection tests without the insecure-transport override',
+		async (mode) => {
+			const integrations = makeIntegrations(
+				{
+					MARIMOHUB_DATA_BROWSER: 'off',
+					MARIMOHUB_INTEGRATIONS_PROBE: 'private',
+				},
+				new MemoryBucket(),
+			).integrations!;
+
+			await expect(
+				integrations.test(createProjectId(), {
+					source: 'draft',
+					kind: 'postgres',
+					config: { ...PG_CONFIG, ssl: { mode } },
+				}),
+			).resolves.toEqual({
+				ok: false,
+				details: 'MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT is not on',
+			});
+		},
+	);
 
 	it('enables bounded vended S3 queries without rollout configuration', () => {
 		const config = {

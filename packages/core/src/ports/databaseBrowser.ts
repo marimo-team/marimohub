@@ -5,6 +5,7 @@ import type {
 	TablePreview,
 	TablePreviewRequest,
 	TableSchema,
+	TestResult,
 } from './integrations';
 
 export type PostgresTlsCapability =
@@ -26,8 +27,16 @@ export interface PostgresConnectionCapability {
 
 export type DatabaseSource = PostgresConnectionCapability;
 
-export interface DatabaseBrowser {
+export interface DatabaseConnectionTester {
 	readonly provider: DatabaseSource['provider'];
+	testConnection(source: DatabaseSource): Promise<TestResult>;
+}
+
+export type DatabaseConnectionTesterRegistry = Partial<
+	Record<DatabaseSource['provider'], DatabaseConnectionTester>
+>;
+
+export interface DatabaseBrowser extends DatabaseConnectionTester {
 	readonly preview: boolean;
 	listNamespaces(
 		source: DatabaseSource,

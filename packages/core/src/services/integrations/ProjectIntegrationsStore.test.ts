@@ -1974,6 +1974,47 @@ describe('ProjectIntegrationsStore', () => {
 			'objects',
 		);
 	});
+
+	it('tests PostgreSQL drafts through the wired database adapter', async () => {
+		const testConnection = vi.fn(async () => ({
+			ok: true,
+			latency_ms: 4,
+			details: 'PostgreSQL connection succeeded.',
+		}));
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			probe: stubProbe,
+			databaseTesters: { postgres: { provider: 'postgres', testConnection } },
+		});
+
+		expect(store.listKinds().find(({ kind }) => kind === 'postgres')?.supports_test).toBe(true);
+		await expect(
+			store.test(pid, {
+				source: 'draft',
+				kind: 'postgres',
+				config: {
+					host: 'database.example.test',
+					database: 'analytics',
+					username: 'reader',
+					password: 'database-secret',
+				},
+			}),
+		).resolves.toEqual({
+			ok: true,
+			latency_ms: 4,
+			details: 'PostgreSQL connection succeeded.',
+		});
+		expect(testConnection).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider: 'postgres',
+				host: 'database.example.test',
+				database: 'analytics',
+				password: 'database-secret',
+			}),
+		);
+	});
 });
 
 describe('OrgIntegrationsStore + project inheritance', () => {

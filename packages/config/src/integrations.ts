@@ -21,7 +21,11 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
-import { postgresDataAccessFeatures, postgresDataAccessGate } from './postgresFeatures';
+import {
+	postgresDataAccessFeatures,
+	postgresDataAccessGate,
+	postgresTransportGate,
+} from './postgresFeatures';
 
 export function integrationsEnabled(env: Env): boolean {
 	return parseOnOff(env, 'MARIMOHUB_INTEGRATIONS', {
@@ -85,28 +89,41 @@ export function makeIntegrations(
 						azure_blob: new AzureBlobObjectBrowser(browserOptions),
 					};
 				})();
+	const postgresRuntime =
+		policy === 'off'
+			? undefined
+			: (() => {
+					const mode = dataBrowser === 'full' ? 'full' : 'metadata';
+					const deadlines =
+						dataBrowser === 'off'
+							? {
+									metadataTimeoutMs: 10_000,
+									previewTimeoutMs: DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs,
+									resolveTimeoutMs: 10_000,
+								}
+							: objectBrowserDeadlinesFromEnv(env, mode);
+					const limits =
+						dataBrowser === 'off'
+							? DEFAULT_S3_OBJECT_BROWSER_LIMITS
+							: objectBrowserLimitsFromEnv(env, mode);
+					return new PostgresDatabaseBrowser({
+						mode,
+						metrics,
+						resolveHost: createGuardedHostResolver({
+							allowPrivate: policy === 'private',
+							timeoutMs: deadlines.resolveTimeoutMs,
+						}),
+						metadataTimeoutMs: deadlines.metadataTimeoutMs,
+						previewTimeoutMs: deadlines.previewTimeoutMs,
+						previewMaxBytes: limits.previewMaxBytes,
+					});
+				})();
 	// dataBrowser !== 'off' implies policy !== 'off': the default degrades above
 	// and an explicit setting fails fast in makeBrowseProbe.
 	const databaseBrowsers =
-		dataBrowser === 'off' || !postgresFeatures.enabled
+		dataBrowser === 'off' || !postgresFeatures.enabled || !postgresRuntime
 			? undefined
-			: (() => {
-					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);
-					const limits = objectBrowserLimitsFromEnv(env, dataBrowser);
-					return {
-						postgres: new PostgresDatabaseBrowser({
-							mode: dataBrowser,
-							metrics,
-							resolveHost: createGuardedHostResolver({
-								allowPrivate: policy === 'private',
-								timeoutMs: deadlines.resolveTimeoutMs,
-							}),
-							metadataTimeoutMs: deadlines.metadataTimeoutMs,
-							previewTimeoutMs: deadlines.previewTimeoutMs,
-							previewMaxBytes: limits.previewMaxBytes,
-						}),
-					};
-				})();
+			: { postgres: postgresRuntime };
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
@@ -115,10 +132,12 @@ export function makeIntegrations(
 		probe: makeProbe(policy),
 		browseProbe: makeBrowseProbe(env, policy, dataBrowser),
 		...(objectBrowsers ? { objectBrowsers } : {}),
+		...(postgresRuntime ? { databaseTesters: { postgres: postgresRuntime } } : {}),
 		...(databaseBrowsers ? { databaseBrowsers } : {}),
 		metrics,
 		dataPreview,
 		dataQuery: enabledDataQuery,
+		databaseTestGate: postgresTransportGate(postgresFeatures),
 		queryGate: postgresDataAccessGate(postgresFeatures),
 	};
 	return {

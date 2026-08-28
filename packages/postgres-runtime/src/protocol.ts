@@ -12,6 +12,7 @@ export interface PinnedAddress {
 }
 
 export type PostgresOperation =
+	| { type: 'test' }
 	| { type: 'namespaces'; after?: string; limit: number }
 	| { type: 'tables'; schema: string; after?: string; limit: number }
 	| { type: 'schema'; schema: string; table: string }
@@ -38,6 +39,7 @@ export interface PostgresWorkerRequest {
 }
 
 export type PostgresWorkerValue =
+	| { connected: true }
 	| BrowsePage<string[]>
 	| BrowsePage<string>
 	| TableSchema

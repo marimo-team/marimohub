@@ -76,7 +76,10 @@ export class IntegrationRegistry {
 			schema_version: def.schemaVersion,
 			json_schema: this.jsonSchema(kind),
 			ui_hints: def.uiHints ?? {},
-			supports_test: def.testConnection !== undefined || def.objectBrowse !== undefined,
+			supports_test:
+				def.testConnection !== undefined ||
+				def.databaseBrowse !== undefined ||
+				def.objectBrowse !== undefined,
 			supports_browse: browse_surfaces.length > 0,
 			browse_surfaces,
 			secret_sources: { inline: false, references: [] },

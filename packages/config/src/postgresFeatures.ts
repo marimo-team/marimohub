@@ -23,7 +23,9 @@ export function postgresDataAccessFeatures(env: Env): PostgresDataAccessFeatures
 export function postgresDataAccessGate(
 	features: Readonly<PostgresDataAccessFeatures>,
 ): IntegrationQueryGate {
-	return ({ kind, config }) => {
+	const transportGate = postgresTransportGate(features);
+	return (input) => {
+		const { kind } = input;
 		if (kind !== 'postgres') return;
 		if (!features.enabled) {
 			return blocked(
@@ -32,6 +34,15 @@ export function postgresDataAccessGate(
 				'MARIMOHUB_POSTGRES_DATA_ACCESS is not on',
 			);
 		}
+		return transportGate(input);
+	};
+}
+
+export function postgresTransportGate(
+	features: Pick<PostgresDataAccessFeatures, 'allowInsecureTransport'>,
+): IntegrationQueryGate {
+	return ({ kind, config }) => {
+		if (kind !== 'postgres') return;
 		const mode = (config as { ssl?: { mode?: unknown } } | null)?.ssl?.mode;
 		if (
 			(mode === 'disable' || mode === 'prefer' || mode === 'require') &&
