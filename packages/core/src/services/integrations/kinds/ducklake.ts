@@ -235,7 +235,7 @@ function validateRouteOwnership(config: DuckLakeConfig): void {
 function decodePathSegments(pathname: string): string[] {
 	return pathname
 		.split('/')
-		.filter(Boolean)
+		.slice(1)
 		.map((segment) => decodeURIComponent(segment));
 }
 

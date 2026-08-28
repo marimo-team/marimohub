@@ -171,6 +171,24 @@ describe('ducklake schema', () => {
 		).not.toThrow();
 	});
 
+	it('preserves empty path segments when checking route overlap', () => {
+		const base = parse();
+		const metadata = {
+			...base.metadata,
+			url: 'https://warehouse.s3.us-east-1.amazonaws.com/ducklake//data/catalog.ducklake',
+		};
+		expect(() =>
+			parse({
+				metadata,
+				storage: {
+					...base.storage,
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'ducklake//data' }],
+				},
+			}),
+		).toThrow(/must not overlap/);
+		expect(() => parse({ metadata })).not.toThrow();
+	});
+
 	it('marks metadata and S3 credentials as secrets', () => {
 		expect(
 			defaultRegistry()
