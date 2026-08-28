@@ -73,7 +73,16 @@ export interface DuckDBIcebergRestHttpAccess extends DuckDBHttpTransportPolicy {
 		  };
 }
 
-export type DuckDBHttpAccess = DuckDBIcebergRestHttpAccess | DuckDBS3HttpAccess;
+export interface DuckDBDatabaseHttpAccess {
+	kind: 'http-database';
+	url: string;
+	authorization?: string;
+}
+
+export type DuckDBHttpAccess =
+	| DuckDBDatabaseHttpAccess
+	| DuckDBIcebergRestHttpAccess
+	| DuckDBS3HttpAccess;
 
 export interface DuckDBPreviewProgram {
 	setup: readonly DuckDBPreviewStatement[];

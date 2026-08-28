@@ -234,6 +234,25 @@ describe('createFromEnv auth backend selection', () => {
 		).toBe(true);
 	});
 
+	it('always enables remote DuckDB database queries', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+		};
+		const config = {
+			url: 'https://data.example.test/snapshots/analytics.duckdb',
+			auth: { method: 'none' },
+		};
+
+		expect(
+			createFromEnv(env)
+				.integrations!.queryReadiness({ kind: 'duckdb_http', config })
+				.every(({ ready }) => ready),
+		).toBe(true);
+	});
+
 	it('wires DuckDB-Wasm pool and idle lifecycle settings', () => {
 		const deps = createFromEnv({
 			...baseEnv,

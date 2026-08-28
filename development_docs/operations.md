@@ -230,6 +230,7 @@ Signals emitted today:
 | `duckdb_http_broker.bridge_failure`                                      | counter   | guarded DuckDB HTTP broker      |
 | `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`        | histogram | guarded DuckDB HTTP broker      |
 | `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`  | counter   | guarded DuckDB OAuth2 provider  |
+| `duckdb_http_database.policy`                                            | counter   | remote DuckDB object validation |
 | Per-cycle: `sessions_expired`, `snapshots_pruned`, …                     | fields    | the `maintenance_cycle` event   |
 
 Object-browser metric attributes are deliberately low-cardinality: operation,

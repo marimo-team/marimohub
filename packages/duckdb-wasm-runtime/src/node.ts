@@ -160,6 +160,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	private httpReady = false;
 	private activeHttpSession: DuckDBHttpSession | undefined;
 	private activeHttpNonce: string | undefined;
+	private activeHttpFatalError: Error | undefined;
 
 	constructor(
 		private readonly httpSessionFactory?: DuckDBHttpSessionFactory,
@@ -228,6 +229,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		this.activeHttpSession?.close();
 		this.activeHttpSession = undefined;
 		this.activeHttpNonce = undefined;
+		this.activeHttpFatalError = undefined;
 		this.metrics.increment('duckdb_wasm.worker_termination', 1, { reason: 'requested' });
 		try {
 			await this.worker.terminate();
@@ -274,6 +276,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (!pending) return;
 		this.pending.delete(response.id);
 		if (response.ok) pending.resolve(response.value);
+		else if (this.activeHttpFatalError) pending.reject(this.activeHttpFatalError);
 		else if (response.kind === 'user-sql') pending.reject(new DataQueryUserError(response.error));
 		else pending.reject(new Error(response.error));
 	}
@@ -293,6 +296,9 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 			resolveHttpBridge(message, await session.fetch(message.request));
 		} catch (error) {
 			const code = error instanceof IcebergHttpBrokerError ? error.code : 'transport_failed';
+			if (error instanceof IcebergHttpBrokerError && isFatalDatabaseReadError(error)) {
+				this.activeHttpFatalError = new Error(error.message);
+			}
 			this.metrics.increment('duckdb_http_broker.bridge_failure', 1, { reason: code });
 			try {
 				const detail =
@@ -323,6 +329,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		const executionNonce = randomUUID();
 		this.activeHttpSession = session;
 		this.activeHttpNonce = executionNonce;
+		this.activeHttpFatalError = undefined;
 		const onAbort = () => session.close();
 		signal?.addEventListener('abort', onAbort, { once: true });
 		try {
@@ -333,6 +340,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 			if (this.activeHttpSession === session) {
 				this.activeHttpSession = undefined;
 				this.activeHttpNonce = undefined;
+				this.activeHttpFatalError = undefined;
 			}
 		}
 	}
@@ -349,12 +357,22 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		this.activeHttpSession?.close();
 		this.activeHttpSession = undefined;
 		this.activeHttpNonce = undefined;
+		this.activeHttpFatalError = undefined;
 		this.metrics.increment('duckdb_wasm.worker_termination', 1, { reason: 'failure' });
 		this.rejectAll(error);
 		try {
 			void this.worker.terminate().catch(() => {});
 		} catch {}
 	}
+}
+
+function isFatalDatabaseReadError(error: IcebergHttpBrokerError): boolean {
+	return (
+		error.code === 'object_changed' ||
+		error.code === 'strong_etag_required' ||
+		error.code === 'range_invalid' ||
+		error.code === 'redirect_denied'
+	);
 }
 
 function isHttpBridgeEnvelope(message: unknown): boolean {

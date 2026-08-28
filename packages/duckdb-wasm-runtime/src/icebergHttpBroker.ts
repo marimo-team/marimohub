@@ -22,7 +22,7 @@ export interface IcebergHttpBrokerRoute {
 }
 
 export interface IcebergHttpBrokerObservedResponse {
-	request: Pick<IcebergHttpBrokerRequest, 'url' | 'method'>;
+	request: IcebergHttpBrokerRequest;
 	status: number;
 	headers: Readonly<Record<string, string>>;
 	body: Uint8Array;
@@ -84,9 +84,13 @@ export type IcebergHttpBrokerErrorCode =
 	| 'invalid_capability'
 	| 'invalid_request'
 	| 'method_denied'
+	| 'object_changed'
+	| 'range_invalid'
+	| 'redirect_denied'
 	| 'redirect_budget_exceeded'
 	| 'request_budget_exceeded'
 	| 'response_budget_exceeded'
+	| 'strong_etag_required'
 	| 'target_denied';
 
 export class IcebergHttpBrokerError extends Error {
@@ -312,6 +316,7 @@ export class IcebergHttpBroker {
 							request: {
 								url: authorized.request.url,
 								method: authorized.request.method,
+								headers: authorized.request.headers,
 							},
 							status: response.status,
 							headers,
