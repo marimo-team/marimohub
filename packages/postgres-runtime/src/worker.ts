@@ -1,5 +1,5 @@
-import { connect as netConnect } from 'node:net';
-import type { LookupFunction, Socket } from 'node:net';
+import { connect as netConnect, Socket } from 'node:net';
+import type { LookupFunction } from 'node:net';
 import { Transform } from 'node:stream';
 import type { Duplex } from 'node:stream';
 import { connect as tlsConnect } from 'node:tls';
@@ -84,15 +84,21 @@ async function connect(
 		if (typeof options === 'object' && options.all) callback(null, request.pinned);
 		else callback(null, request.pinned[0].address, request.pinned[0].family);
 	};
-	let stream: ReturnType<typeof netConnect> | undefined;
+	let stream: Socket | undefined;
 	const ssl = postgresSslOptions(request.connection.tls, mode);
 	const connection = new BoundedConnection({
 		stream: () => {
-			stream ??= netConnect({
-				host: request.connection.host,
-				port: request.connection.port,
-				lookup,
-			});
+			// pg calls `stream.connect(port, host)` itself, so hand it an idle socket
+			// rather than one that is already connecting (a second connect() on the
+			// same socket fails with EALREADY). Intercept that call to keep the pinned
+			// lookup, which pg's positional connect() cannot carry.
+			if (!stream) {
+				const socket = new Socket();
+				const connectOnce = socket.connect.bind(socket);
+				socket.connect = ((port: number, host: string) =>
+					connectOnce({ port, host, lookup })) as Socket['connect'];
+				stream = socket;
+			}
 			activeSocket = stream;
 			return stream;
 		},

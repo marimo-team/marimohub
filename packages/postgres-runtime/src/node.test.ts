@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import type { DataQueryExecution, PostgresConnectionCapability } from '@marimo-hub/core';
 import { createPostgresDataQueryExecutorFactory, PostgresDatabaseBrowser } from './node';
 
@@ -196,5 +198,92 @@ describe('PostgresDatabaseBrowser', () => {
 			'full data-browser mode',
 		);
 		expect(runtime.resolveHost).not.toHaveBeenCalled();
+	});
+});
+
+// A minimal wire-protocol server: accepts the startup message, authenticates,
+// and answers every simple or extended query with one `SELECT 1` row.
+function fakePostgres(): Promise<{ port: number; connections: number; close: () => void }> {
+	const state = { port: 0, connections: 0, close: () => {} };
+	const server = createServer((socket) => {
+		state.connections += 1;
+		let buffered = Buffer.alloc(0);
+		let started = false;
+		const frame = (type: string, body: Buffer) => {
+			const header = Buffer.alloc(5);
+			header.write(type, 0, 'latin1');
+			header.writeInt32BE(body.length + 4, 1);
+			return Buffer.concat([header, body]);
+		};
+		const readyForQuery = frame('Z', Buffer.from('I', 'latin1'));
+		const rowDescription = frame(
+			'T',
+			Buffer.concat([
+				Buffer.from([0, 1]),
+				Buffer.from('?column?\0', 'latin1'),
+				Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 4, 255, 255, 255, 255, 0, 0]),
+			]),
+		);
+		const dataRow = frame(
+			'D',
+			Buffer.concat([Buffer.from([0, 1, 0, 0, 0, 1]), Buffer.from('1', 'latin1')]),
+		);
+		const commandComplete = frame('C', Buffer.from('SELECT 1\0', 'latin1'));
+		const selectOne = Buffer.concat([rowDescription, dataRow, commandComplete, readyForQuery]);
+		socket.on('data', (chunk: Buffer) => {
+			buffered = Buffer.concat([buffered, chunk]);
+			for (;;) {
+				if (!started) {
+					if (buffered.length < 4) return;
+					const length = buffered.readInt32BE(0);
+					if (buffered.length < length) return;
+					buffered = buffered.subarray(length);
+					started = true;
+					socket.write(Buffer.concat([frame('R', Buffer.from([0, 0, 0, 0])), readyForQuery]));
+					continue;
+				}
+				if (buffered.length < 5) return;
+				const type = buffered.subarray(0, 1).toString('latin1');
+				const length = buffered.readInt32BE(1) + 1;
+				if (buffered.length < length) return;
+				buffered = buffered.subarray(length);
+				if (type === 'Q') socket.write(selectOne);
+				else if (type === 'P') socket.write(frame('1', Buffer.alloc(0)));
+				else if (type === 'B') socket.write(frame('2', Buffer.alloc(0)));
+				else if (type === 'D') socket.write(rowDescription);
+				else if (type === 'E') socket.write(Buffer.concat([dataRow, commandComplete]));
+				else if (type === 'S') socket.write(readyForQuery);
+				else if (type === 'X') socket.end();
+			}
+		});
+		socket.on('error', () => {});
+	});
+	return new Promise((resolve) => {
+		server.listen(0, '127.0.0.1', () => {
+			state.port = (server.address() as AddressInfo).port;
+			state.close = () => server.close();
+			resolve(state);
+		});
+	});
+}
+
+describe('PostgresDatabaseBrowser worker transport', () => {
+	it('connects the pinned socket exactly once', async () => {
+		const server = await fakePostgres();
+		try {
+			const runtime = new PostgresDatabaseBrowser({
+				resolveHost: async () => [{ address: '127.0.0.1', family: 4 }],
+				mode: 'metadata',
+				metadataTimeoutMs: 5_000,
+				previewTimeoutMs: 5_000,
+				previewMaxBytes: 1024,
+			});
+			await expect(
+				runtime.testConnection({ ...source, port: server.port, tls: { mode: 'disable' } }),
+			).resolves.toMatchObject({ ok: true });
+			expect(server.connections).toBe(1);
+		} finally {
+			server.close();
+		}
 	});
 });
