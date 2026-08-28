@@ -33,6 +33,8 @@ export interface KubernetesApi {
 }
 
 const SA_DIR = '/var/run/secrets/kubernetes.io/serviceaccount';
+/** Socket-inactivity cap so a hung API server cannot stall expose/teardown. */
+const REQUEST_TIMEOUT_MS = 10_000;
 
 /** In-cluster client: the pod's ServiceAccount token against the API server. */
 export function inClusterKubernetesApi(): KubernetesApi {
@@ -64,6 +66,7 @@ export function inClusterKubernetesApi(): KubernetesApi {
 						port,
 						path,
 						ca,
+						timeout: REQUEST_TIMEOUT_MS,
 						headers: {
 							authorization: `Bearer ${token}`,
 							accept: 'application/json',
@@ -84,6 +87,9 @@ export function inClusterKubernetesApi(): KubernetesApi {
 					},
 				);
 				req.on('error', reject);
+				req.on('timeout', () =>
+					req.destroy(new Error(`Kubernetes API request timed out after ${REQUEST_TIMEOUT_MS}ms`)),
+				);
 				if (payload) req.write(payload);
 				req.end();
 			});
@@ -102,6 +108,16 @@ export interface KernelIngressOptions {
 }
 
 const SANDBOX_ID_LABEL = 'sandbox.coreweave.com/sandbox-id';
+
+/**
+ * The id is provider-generated and DNS-safe in practice, but it flows into
+ * API paths and the Ingress name — refuse anything else defensively.
+ */
+function assertSandboxId(sandboxId: string): void {
+	if (!/^[a-z0-9][a-z0-9-]*$/.test(sandboxId)) {
+		throw new Error(`unexpected sandbox id shape: ${JSON.stringify(sandboxId)}`);
+	}
+}
 
 export function createKernelIngressPublisher(
 	options: KernelIngressOptions,
@@ -125,6 +141,11 @@ export function createKernelIngressPublisher(
 			const list = JSON.parse(res.body) as {
 				items: { metadata: { name: string; uid: string } }[];
 			};
+			if (list.items.length > 1) {
+				throw new Error(
+					`expected one Service for sandbox ${sandboxId} in ${ns}, found ${list.items.length}`,
+				);
+			}
 			const svc = list.items[0];
 			if (svc) return { name: svc.metadata.name, uid: svc.metadata.uid };
 			if (attempt >= retries) {
@@ -136,6 +157,7 @@ export function createKernelIngressPublisher(
 
 	return {
 		async publish({ sandboxId, host, port }) {
+			assertSandboxId(sandboxId);
 			const svc = await findService(sandboxId);
 			const res = await api.request(
 				'POST',
@@ -168,12 +190,16 @@ export function createKernelIngressPublisher(
 					},
 				},
 			);
-			if (res.status === 409) return; // already published (resume / retry)
+			// Resume/retry: assumes the existing Ingress still matches (the hostname
+			// template and ingress class are deploy-stable within a sandbox's short
+			// lifetime; a redeploy-spanning change is out of scope).
+			if (res.status === 409) return;
 			if (res.status < 200 || res.status >= 300) {
 				throw new Error(`creating kernel Ingress failed (HTTP ${res.status}): ${res.body}`);
 			}
 		},
 		async remove(sandboxId) {
+			assertSandboxId(sandboxId);
 			const res = await api.request(
 				'DELETE',
 				`/apis/networking.k8s.io/v1/namespaces/${ns}/ingresses/${ingressName(sandboxId)}`,

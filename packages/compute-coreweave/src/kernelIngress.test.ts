@@ -96,6 +96,39 @@ describe('createKernelIngressPublisher', () => {
 		await expect(publisher.publish(target)).rejects.toThrow(/no Service for sandbox/);
 	});
 
+	it('rejects a sandbox id that is not a bare DNS label (path/name injection guard)', async () => {
+		const { api, calls } = fakeApi({});
+		const publisher = createKernelIngressPublisher({
+			namespace: 'org-ns',
+			ingressClassName: 'traefik',
+			api,
+		});
+		await expect(publisher.publish({ ...target, sandboxId: '../other-ns/evil' })).rejects.toThrow(
+			/unexpected sandbox id shape/,
+		);
+		await expect(publisher.remove('kernel-x/../../y')).rejects.toThrow(
+			/unexpected sandbox id shape/,
+		);
+		expect(calls).toHaveLength(0);
+	});
+
+	it('fails loudly when the sandbox label matches more than one Service', async () => {
+		const { api } = fakeApi({
+			services: () => ({
+				items: [
+					{ metadata: { name: 'svc-a', uid: 'uid-a' } },
+					{ metadata: { name: 'svc-b', uid: 'uid-b' } },
+				],
+			}),
+		});
+		const publisher = createKernelIngressPublisher({
+			namespace: 'org-ns',
+			ingressClassName: 'traefik',
+			api,
+		});
+		await expect(publisher.publish(target)).rejects.toThrow(/expected one Service/);
+	});
+
 	it('treats an existing Ingress as published and a missing one as removed', async () => {
 		const { api } = fakeApi({
 			services: () => ({ items: [{ metadata: { name: 'svc', uid: 'u' } }] }),

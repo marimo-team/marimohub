@@ -857,6 +857,17 @@ describe('createFromEnv default role', () => {
 		}
 	});
 
+	it('rejects an ingress class without an ingress namespace (inert otherwise)', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS: 'traefik',
+			}),
+		).toThrow(/INGRESS_CLASS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
+	});
+
 	it('requires exclusive CoreWeave editors when a user-home template is configured', () => {
 		const coreweave = {
 			...baseEnv,

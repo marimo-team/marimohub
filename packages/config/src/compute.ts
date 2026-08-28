@@ -293,6 +293,22 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			// URL, whose hostname scheme is CoreWeave backend specific — set
 			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (and, if needed, a HOSTNAME_TEMPLATE).
 			rejectUnsupportedCoreWeaveVars(env);
+			if (
+				env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS?.trim() &&
+				!env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()
+			) {
+				// The class only feeds the hub-published kernel Ingress, which the
+				// namespace enables — reject the inert combination.
+				throw new ConfigError(
+					'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
+					{
+						variable: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS',
+						remediation:
+							'Set the ingress namespace to enable hub-published kernel Ingresses, or remove the class.',
+						docs: 'docs/deploying/cks.md',
+					},
+				);
+			}
 			return new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
