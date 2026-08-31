@@ -19,6 +19,8 @@ import {
 	isRepoInput,
 	REPO_INPUT_HINT,
 } from '@/lib/git';
+import { baseImageOptions, DEFAULT_BASE_IMAGE } from './baseImage';
+import { computeProfileOptions, DEFAULT_COMPUTE_PROFILE } from './computeProfiles';
 
 export interface SyncedNotebookCreated {
 	notebookId: string;
@@ -43,6 +45,8 @@ const syncedSchema = z
 		branch: requiredText('Branch'),
 		rootPath: optionalText(),
 		entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
+		baseImage: z.string(),
+		computeProfile: z.string(),
 	})
 	.superRefine((value, context) => {
 		if (value.syncMode === 'pull' && isRepoInput(value.repo) && !isGitHubRepoInput(value.repo)) {
@@ -61,6 +65,8 @@ const emptyValues = (syncMode: 'push' | 'pull') => ({
 	branch: 'main',
 	rootPath: '',
 	entryNotebook: '',
+	baseImage: DEFAULT_BASE_IMAGE,
+	computeProfile: DEFAULT_COMPUTE_PROFILE,
 });
 
 export function SyncedNotebookDialog({
@@ -73,6 +79,11 @@ export function SyncedNotebookDialog({
 	const pullAvailable = (capabilities?.source_control?.pull_source_providers ?? []).includes(
 		'github',
 	);
+	const sandboxImages = capabilities?.sandbox_images ?? [];
+	const offersImageChoice = sandboxImages.length > 1;
+	const computeProfiles = capabilities?.compute_profiles ?? [];
+	const offersComputeChoice =
+		capabilities?.compute_profile_override === 'editors' && computeProfiles.length > 1;
 	const initialValues = emptyValues(pullAvailable ? 'pull' : 'push');
 	const createSynced = useCreateSyncedNotebook(projectId);
 	const form = useAppForm({
@@ -88,6 +99,10 @@ export function SyncedNotebookDialog({
 					root_path: value.syncMode === 'pull' ? '' : value.rootPath.trim() || undefined,
 					entry_notebook: value.entryNotebook.trim(),
 					sync_mode: value.syncMode,
+					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
+					...(value.computeProfile !== DEFAULT_COMPUTE_PROFILE
+						? { compute_profile: value.computeProfile }
+						: {}),
 				});
 				if (data.sync_error) {
 					toast.warning(`Created "${data.notebook.title}", but the first sync failed`, {
@@ -149,6 +164,20 @@ export function SyncedNotebookDialog({
 			<form.AppField name="title">
 				{(f) => <f.TextField label="Notebook name" placeholder="my_dashboard" autoFocus />}
 			</form.AppField>
+			{offersImageChoice && (
+				<form.AppField name="baseImage">
+					{(f) => (
+						<f.RadioGroupField label="Base image" options={baseImageOptions(sandboxImages)} />
+					)}
+				</form.AppField>
+			)}
+			{offersComputeChoice && (
+				<form.AppField name="computeProfile">
+					{(f) => (
+						<f.RadioGroupField label="Compute" options={computeProfileOptions(computeProfiles)} />
+					)}
+				</form.AppField>
+			)}
 			<form.AppField name="repo">
 				{(f) => (
 					<f.TextField

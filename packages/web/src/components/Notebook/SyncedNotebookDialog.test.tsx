@@ -6,7 +6,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { SyncedNotebookDialog } from './SyncedNotebookDialog';
 
-function renderDialog(fetchImpl = vi.fn(), pullAvailable: boolean | Promise<boolean> = false) {
+interface ResourceOptions {
+	sandboxImages?: string[];
+	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
+	computeProfileOverride?: 'none' | 'editors';
+}
+
+function renderDialog(
+	fetchImpl = vi.fn(),
+	pullAvailable: boolean | Promise<boolean> = false,
+	resources: ResourceOptions = {},
+) {
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -19,6 +29,9 @@ function renderDialog(fetchImpl = vi.fn(), pullAvailable: boolean | Promise<bool
 							source_control: {
 								pull_source_providers: available ? ['github'] : [],
 							},
+							sandbox_images: resources.sandboxImages ?? [],
+							compute_profiles: resources.computeProfiles ?? [],
+							compute_profile_override: resources.computeProfileOverride ?? 'none',
 						},
 					}),
 					{ headers: { 'content-type': 'application/json' } },
@@ -131,6 +144,53 @@ describe('SyncedNotebookDialog', () => {
 			token: 'mhsync_secret',
 			syncMode: 'push',
 		});
+	});
+
+	it('stores selected container and compute options', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = vi.fn(
+			async (_url: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: { notebook: { id: 'nb-9', title: 'Dash' } },
+					}),
+					{ headers: { 'content-type': 'application/json' } },
+				),
+		);
+		renderDialog(fetchImpl, false, {
+			sandboxImages: ['registry.example.com/marimo:cpu', 'registry.example.com/marimo:gpu'],
+			computeProfiles: [
+				{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+				{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+			],
+			computeProfileOverride: 'editors',
+		});
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
+		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
+		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
+		await user.click(await screen.findByRole('radio', { name: /gpu/ }));
+		await user.click(screen.getByRole('radio', { name: /large/ }));
+		await user.click(screen.getByRole('button', { name: 'Create' }));
+
+		const [, init] = fetchImpl.mock.calls[0];
+		expect(JSON.parse(init!.body as string)).toMatchObject({
+			base_image: 'registry.example.com/marimo:gpu',
+			compute_profile: 'large',
+		});
+	});
+
+	it('hides container and compute fields when there is no alternative option', async () => {
+		renderDialog(vi.fn(), true, {
+			sandboxImages: ['registry.example.com/marimo:cpu'],
+			computeProfiles: [{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 }],
+			computeProfileOverride: 'editors',
+		});
+
+		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
+		expect(screen.queryByText('Base image')).not.toBeInTheDocument();
+		expect(screen.queryByText('Compute')).not.toBeInTheDocument();
 	});
 
 	it('offers GitHub pull mode and creates without CI credentials', async () => {
