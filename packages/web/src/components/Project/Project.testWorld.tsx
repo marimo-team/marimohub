@@ -5,6 +5,7 @@ import { Route, Routes } from 'react-router-dom';
 import { Project } from './Project';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import type { NotebookEntry, ProjectDetail, Session } from '@/types';
+import type { WorkspaceItem } from '@marimo-hub/client';
 
 export const PID = 'proj-x';
 
@@ -54,6 +55,7 @@ export function makeFetch(
 		capabilities?: unknown;
 		role?: ProjectDetail['your_role'];
 		sessionDeleteError?: boolean;
+		workspaceEntries?: Record<string, WorkspaceItem[]>;
 	} = {},
 ) {
 	const notebooks = options.notebooks ?? [notebook()];
@@ -135,7 +137,7 @@ export function makeFetch(
 			parsedUrl.pathname.endsWith(`/projects/${PID}/notebooks/nb-1/workspace/entries`)
 		)
 			return jsonOk({
-				items: [
+				items: options.workspaceEntries?.[parsedUrl.searchParams.get('path') ?? '/'] ?? [
 					{
 						path: '/notebook.py',
 						name: 'notebook.py',

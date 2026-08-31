@@ -48,10 +48,162 @@ describe('Project — Notebook Actions: configuration', () => {
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByText('Browse files · Forecast')).toBeInTheDocument();
 		expect(
-			await within(dialog).findByText(
-				'notebook.py and pyproject.toml can be edited, but cannot be moved or deleted.',
-			),
-		).toBeInTheDocument();
+			within(dialog).queryByText(/notebook.py and pyproject.toml can be edited/),
+		).not.toBeInTheDocument();
+		expect(await within(dialog).findAllByText('notebook.py')).toHaveLength(2);
+	});
+
+	it('shows hidden entries, working layout toggles, metadata, and icon tooltips', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			workspaceEntries: {
+				'/': [
+					{
+						path: '/.gitignore',
+						name: '.gitignore',
+						kind: 'file',
+						size: 12,
+						modified_at: 1_741_183_200_000,
+						mime_type: 'text/plain',
+					},
+					{
+						path: '/notebook.py',
+						name: 'notebook.py',
+						kind: 'file',
+						size: 18,
+						modified_at: 1_741_183_200_000,
+						mime_type: 'text/x-python',
+					},
+				],
+			},
+		});
+		await renderProject();
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		const tree = await within(dialog).findByRole('treegrid', { name: 'Workspace tree' });
+		expect(await within(tree).findByText('.gitignore')).toBeInTheDocument();
+		expect(within(dialog).getByRole('button', { name: 'List view' })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
+		expect(within(dialog).getByRole('button', { name: 'List view' }).parentElement).toHaveAttribute(
+			'title',
+			'List view',
+		);
+		expect(within(dialog).getByRole('button', { name: 'Back' }).parentElement).toHaveAttribute(
+			'title',
+			'Back',
+		);
+
+		expect(within(dialog).getByRole('button', { name: 'Refresh' })).toHaveAccessibleName('Refresh');
+
+		await user.click(within(dialog).getByRole('button', { name: 'Table view' }));
+		expect(within(dialog).getByRole('button', { name: 'Table view' })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
+		const table = await within(dialog).findByRole('grid', { name: 'Workspace files' });
+		expect(within(table).getByRole('columnheader', { name: /Name/ })).toBeInTheDocument();
+		expect(within(table).getByRole('columnheader', { name: /Type/ })).toBeInTheDocument();
+		expect(within(table).getByText('text/x-python')).toBeInTheDocument();
+		expect(within(table).getByText('18 B')).toBeInTheDocument();
+	});
+
+	it('navigates a sidebar file to its parent and keeps the file selected', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			workspaceEntries: {
+				'/': [{ path: '/data', name: 'data', kind: 'directory' }],
+				'/data': [
+					{
+						path: '/data/analysis.py',
+						name: 'analysis.py',
+						kind: 'file',
+						size: 24,
+						modified_at: 1_741_183_200_000,
+						mime_type: 'text/x-python',
+					},
+				],
+			},
+		});
+		await renderProject();
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		const tree = await within(dialog).findByRole('treegrid', { name: 'Workspace tree' });
+		const expand = tree.querySelector<HTMLButtonElement>('button[slot="chevron"]');
+		expect(expand).not.toBeNull();
+		await user.click(expand!);
+		await user.click(await within(tree).findByText('analysis.py'));
+
+		await waitFor(() => expect(within(dialog).getByText('/data')).toBeInTheDocument());
+		expect(within(dialog).queryByText('This folder is empty.')).not.toBeInTheDocument();
+		expect(
+			calls.some((call) => {
+				const url = new URL(call.url, 'http://localhost');
+				return (
+					url.pathname.endsWith('/workspace/entries') &&
+					url.searchParams.get('path') === '/data/analysis.py'
+				);
+			}),
+		).toBe(false);
+		const content = within(dialog).getByRole('grid', { name: 'Workspace files' });
+		expect(within(content).getByRole('row', { name: /analysis.py/ })).toHaveAttribute(
+			'data-selected',
+			'true',
+		);
+	});
+
+	it('keeps the shared file Open action enabled', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderProject();
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		const content = await within(dialog).findByRole('grid', { name: 'Workspace files' });
+		const file = await within(content).findByRole('row', { name: /notebook.py/ });
+		await user.click(file);
+		const shortcut = new KeyboardEvent('keydown', {
+			key: 'o',
+			metaKey: true,
+			bubbles: true,
+			cancelable: true,
+		});
+		file.dispatchEvent(shortcut);
+		expect(shortcut.defaultPrevented).toBe(true);
+
+		await user.pointer({ target: file, keys: '[MouseRight]' });
+
+		const menu = await screen.findByRole('menu', { name: 'Context menu' });
+		expect(within(menu).getByRole('menuitem', { name: 'Open' })).toBeEnabled();
+	});
+
+	it('clears sidebar directory selection after navigation', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			workspaceEntries: {
+				'/': [{ path: '/data', name: 'data', kind: 'directory' }],
+				'/data': [{ path: '/data/analysis.py', name: 'analysis.py', kind: 'file' }],
+			},
+		});
+		await renderProject();
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		const tree = await within(dialog).findByRole('treegrid', { name: 'Workspace tree' });
+		const directory = await within(tree).findByText('data');
+		await user.click(directory);
+
+		await waitFor(() => expect(within(dialog).getByText('/data')).toBeInTheDocument());
+		expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled();
+		expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeDisabled();
+		expect(within(dialog).queryByText('1 selected')).not.toBeInTheDocument();
+
+		await user.click(directory);
+		expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled();
+		expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeDisabled();
 	});
 
 	it('"View static outputs" opens the sandbox-free snapshot page', async () => {

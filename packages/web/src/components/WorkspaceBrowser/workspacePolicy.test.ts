@@ -26,10 +26,8 @@ describe('workspace policy helpers', () => {
 		);
 	});
 
-	it('describes protected anchors for writable workspaces', () => {
-		expect(workspaceAccessMessage(writable)).toContain(
-			'notebook.py and pyproject.toml can be edited',
-		);
+	it('does not show a banner for writable workspaces', () => {
+		expect(workspaceAccessMessage(writable)).toBeNull();
 	});
 
 	it('matches only the exact protected path and denied operation', () => {
