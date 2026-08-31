@@ -58,6 +58,7 @@ interface GitSandboxOptions {
 	gitAvailable?: boolean;
 	baseCommitAvailable?: boolean;
 	baseCommitOutput?: string;
+	baseCommitStderr?: string;
 	diffFails?: boolean;
 	sizes?: Record<string, number>;
 	secureReadFailures?: readonly string[];
@@ -71,12 +72,12 @@ function makeGitSandbox(options: GitSandboxOptions) {
 				? execResult(false, '', 'not a repository')
 				: execResult(true, 'git-working-tree', '');
 		}
-		if (command.includes('git rev-parse --verify')) {
+		if (command.includes('rev-parse --verify')) {
 			return options.baseCommitAvailable === false
-				? execResult(false, '', 'unknown revision')
+				? execResult(false, '', options.baseCommitStderr ?? 'unknown revision')
 				: execResult(true, options.baseCommitOutput ?? `${GIT_COMMIT}\n`, '');
 		}
-		if (command.includes('git diff --name-status')) {
+		if (command.includes('diff --name-status')) {
 			const output =
 				options.diffOutput ??
 				(options.diff ?? [])
@@ -87,7 +88,7 @@ function makeGitSandbox(options: GitSandboxOptions) {
 				? execResult(false, '', 'diff failed')
 				: execResult(true, output, '');
 		}
-		if (command.includes('git ls-files --others')) {
+		if (command.includes('ls-files --others')) {
 			return execResult(
 				true,
 				options.untrackedOutput ?? (options.untracked ?? []).map((path) => `${path}\0`).join(''),
@@ -290,6 +291,13 @@ describe('NotebookProposalService', () => {
 			{ path: 'old.txt', operation: 'delete' },
 		]);
 		expect(exec).toHaveBeenCalledWith(expect.stringContaining('--exclude-standard'));
+		const gitCommands = exec.mock.calls
+			.map(([command]) => command)
+			.filter((command) => command.includes('git -c'));
+		expect(gitCommands.length).toBeGreaterThan(0);
+		expect(gitCommands.every((command) => command.includes('safe.directory=/workspace'))).toBe(
+			true,
+		);
 		const proposalPaths = paths
 			.project(projectId)
 			.notebook(notebookId)
@@ -419,7 +427,9 @@ describe('NotebookProposalService', () => {
 			diffFails: true,
 		});
 
-		await expect(capture(instance)).rejects.toThrow('Could not inspect the Git working tree');
+		await expect(capture(instance)).rejects.toThrow(
+			'Could not inspect the Git working tree: diff failed',
+		);
 	});
 
 	it('does not silently fall back when the pinned commit is absent from a Git working tree', async () => {
@@ -428,8 +438,22 @@ describe('NotebookProposalService', () => {
 			baseCommitAvailable: false,
 		});
 
-		await expect(capture(instance)).rejects.toThrow('does not contain the pinned source commit');
+		await expect(capture(instance)).rejects.toThrow(
+			'does not contain the pinned source commit: unknown revision',
+		);
 		expect(calls.readFile).toHaveLength(0);
+	});
+
+	it('includes git stderr when the working tree is untrusted', async () => {
+		const { instance, calls, exec } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("after")' },
+			baseCommitAvailable: false,
+			baseCommitStderr: "fatal: detected dubious ownership in repository at '/workspace'",
+		});
+
+		await expect(capture(instance)).rejects.toThrow('dubious ownership');
+		expect(calls.readFile).toHaveLength(0);
+		expect(exec).toHaveBeenCalledWith(expect.stringContaining('safe.directory=/workspace'));
 	});
 
 	it('rejects an invalid commit returned by Git', async () => {

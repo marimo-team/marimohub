@@ -53,7 +53,10 @@ Pull-mode GitHub sources store a shallow Git directory for the exact synced
 commit. The control plane restores it when the session starts. Repository
 credentials never enter the sandbox. Pull sources therefore use
 `git-working-tree`. Push sources use this strategy only when the uploaded archive
-contains `.git`.
+contains `.git`. Restored `.git` metadata may be owned by a different uid than
+the kernel user (Modal filesystem writes), so capture passes
+`-c safe.directory=<workdir>` and provision marks that directory in the sandbox
+gitconfig.
 
 The Git strategy uses Git only to discover paths and operations. The control plane reads the final
 file bytes through the sandbox port, hashes them, and stores normal provider-neutral proposal
