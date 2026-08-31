@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+	createFinderStore,
+	dirname,
 	Finder,
 	formatDate,
 	formatFileSize,
@@ -8,17 +10,23 @@ import {
 } from '@marimo-team/react-finder';
 import type { FileItem, FinderError } from '@marimo-team/react-finder';
 import {
+	ArrowLeft,
+	ArrowRight,
+	ArrowUp,
 	ChevronDown,
 	ChevronRight,
 	File,
 	FileCode2,
+	FilePlus2,
 	Folder,
 	FolderOpen,
+	FolderPlus,
 	Grid2X2,
 	List,
+	RefreshCw,
 	TableProperties,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import {
 	Button as AriaButton,
@@ -31,9 +39,8 @@ import {
 	ModalOverlay,
 	Size,
 	ToggleButton,
-	ToggleButtonGroup,
 } from 'react-aria-components';
-import { Button, DialogModal } from '@/components/ui';
+import { Button, DialogModal, Tooltip } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import { fetchWorkspaceAccess, workspaceAdapter } from './workspaceAdapter';
 import { WorkspaceFilePreview } from './WorkspaceFilePreview';
@@ -47,12 +54,15 @@ import type { WorkspaceAccess } from './workspacePolicy';
 type ViewMode = 'list' | 'grid' | 'table';
 
 const controlClass =
-	'h-8 rounded-md border border-input bg-background px-2.5 text-xs font-medium outline-none hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40';
-const itemClass =
-	'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[hovered]:bg-accent data-[selected]:bg-primary data-[selected]:text-primary-foreground data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring data-[cut]:opacity-50 data-[drop-target]:ring-2 data-[drop-target]:ring-primary';
+	'inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground outline-none hover:bg-accent hover:text-accent-foreground data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring disabled:cursor-not-allowed disabled:opacity-40';
+const iconControlClass = cn(controlClass, 'w-8 justify-center px-0');
+const viewToggleClass =
+	'flex size-8 items-center justify-center bg-background text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground data-[selected]:bg-primary/15 data-[selected]:text-primary data-[focus-visible]:z-10 data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring';
+const itemStateClass =
+	'data-[hovered]:bg-accent/70 data-[selected]:bg-primary/10 data-[selected]:text-foreground data-[selected]:ring-1 data-[selected]:ring-inset data-[selected]:ring-primary/40 data-[selected]:data-[hovered]:bg-primary/15 data-[focus-visible]:ring-2 data-[focus-visible]:ring-inset data-[focus-visible]:ring-ring data-[dragging]:opacity-45 data-[cut]:opacity-50 data-[drop-target]:bg-primary/15 data-[drop-target]:ring-2 data-[drop-target]:ring-inset data-[drop-target]:ring-primary';
+const itemClass = `group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none ${itemStateClass}`;
 const treeItemClass = `${itemClass} py-1`;
-const gridItemClass =
-	'group flex h-24 flex-col items-center justify-center gap-2 rounded-lg border border-transparent p-2 text-center outline-none data-[hovered]:bg-accent data-[selected]:border-primary data-[selected]:bg-primary/10 data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring data-[drop-target]:ring-2 data-[drop-target]:ring-primary';
+const gridItemClass = `group flex h-28 flex-col items-center justify-center gap-1.5 rounded-lg border border-transparent p-2 text-center outline-none ${itemStateClass}`;
 const menuClass = 'min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-lg';
 const menuItemClass =
 	'cursor-default rounded-sm px-2 py-1.5 text-sm outline-none data-[focused]:bg-accent data-[disabled]:opacity-40';
@@ -97,14 +107,37 @@ function EditableItemName({
 	);
 }
 
-function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAccess }) {
+function TableItemName({ item, access }: { item: FileItem; access: WorkspaceAccess }) {
+	const isEditing = useFinder((state) => state.editingPath === item.path);
+	return <EditableItemName item={item} isEditing={isEditing} access={access} className="flex-1" />;
+}
+
+function itemType(item: FileItem): string {
+	if (item.kind === 'directory') return 'Folder';
+	return item.mimeType ?? 'File';
+}
+
+function itemModifiedAt(item: FileItem): string {
+	return item.modifiedAt === undefined ? '—' : formatDate(item.modifiedAt);
+}
+
+function ExplorerItems({
+	view,
+	access,
+	onOpen,
+}: {
+	view: ViewMode;
+	access: WorkspaceAccess;
+	onOpen: (item: FileItem) => void;
+}) {
 	if (view === 'table') {
 		return (
 			<Finder.Table
+				aria-label="Workspace files"
 				dragAndDrop={access.writable}
 				virtualized
 				layoutOptions={{ rowHeight: 36, headingHeight: 36 }}
-				className="block h-full overflow-auto border-separate border-spacing-0 outline-none"
+				className="block h-full w-full overflow-auto border-separate border-spacing-0 outline-none"
 				style={{ scrollPaddingTop: 36 }}
 			>
 				<Finder.TableHeader className="w-full">
@@ -115,6 +148,13 @@ function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAcce
 						className="sticky top-0 bg-card p-2 text-left text-xs"
 					>
 						Name
+					</Finder.Column>
+					<Finder.Column
+						id="kind"
+						allowsSorting
+						className="sticky top-0 w-36 bg-card p-2 text-left text-xs"
+					>
+						Type
 					</Finder.Column>
 					<Finder.Column
 						id="size"
@@ -131,34 +171,31 @@ function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAcce
 						Modified
 					</Finder.Column>
 				</Finder.TableHeader>
-				<Finder.TableBody renderEmptyState={() => <EmptyFolder />}>
+				<Finder.TableBody
+					renderEmptyState={(status) => <EmptyFolder isLoading={status.isLoading} />}
+				>
 					{(item) => (
 						<Finder.Item
 							item={item}
-							className="outline-none data-[selected]:bg-primary/10 data-[hovered]:bg-accent"
+							onAction={() => onOpen(item)}
+							className={cn('outline-none', itemStateClass)}
 							style={{ width: 'inherit', height: 'inherit' }}
 						>
-							{({ isEditing }) => (
-								<>
-									<Finder.Cell className="border-b p-2 text-sm">
-										<span className="flex items-center gap-2">
-											<ItemIcon item={item} />
-											<EditableItemName
-												item={item}
-												isEditing={isEditing}
-												access={access}
-												className="flex-1"
-											/>
-										</span>
-									</Finder.Cell>
-									<Finder.Cell className="border-b p-2 text-right text-xs text-muted-foreground">
-										{item.kind === 'file' ? formatFileSize(item.size) : '—'}
-									</Finder.Cell>
-									<Finder.Cell className="border-b p-2 text-xs text-muted-foreground">
-										{formatDate(item.modifiedAt)}
-									</Finder.Cell>
-								</>
-							)}
+							<Finder.Cell className="border-b p-2 text-sm">
+								<span className="flex min-w-0 items-center gap-2">
+									<ItemIcon item={item} />
+									<TableItemName item={item} access={access} />
+								</span>
+							</Finder.Cell>
+							<Finder.Cell className="truncate border-b p-2 text-xs text-muted-foreground">
+								{itemType(item)}
+							</Finder.Cell>
+							<Finder.Cell className="border-b p-2 text-right text-xs text-muted-foreground tabular-nums">
+								{item.kind === 'file' ? formatFileSize(item.size) : '—'}
+							</Finder.Cell>
+							<Finder.Cell className="border-b p-2 text-xs text-muted-foreground tabular-nums">
+								{itemModifiedAt(item)}
+							</Finder.Cell>
 						</Finder.Item>
 					)}
 				</Finder.TableBody>
@@ -170,29 +207,54 @@ function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAcce
 	return (
 		<Finder.List
 			key={view}
+			aria-label="Workspace files"
 			layout={grid ? 'grid' : 'stack'}
 			dragAndDrop={access.writable}
 			virtualized
 			layoutOptions={
-				grid ? { minItemSize: new Size(112, 96), minSpace: new Size(8, 8) } : { rowSize: 36 }
+				grid ? { minItemSize: new Size(112, 112), minSpace: new Size(8, 8) } : { rowSize: 44 }
 			}
 			className={cn('block h-full overflow-auto outline-none', grid && 'p-3')}
-			renderEmptyState={() => <EmptyFolder />}
+			renderEmptyState={(status) => <EmptyFolder isLoading={status.isLoading} />}
 		>
 			{(item) => (
-				<Finder.Item item={item} className={grid ? gridItemClass : itemClass}>
+				<Finder.Item
+					item={item}
+					onAction={() => onOpen(item)}
+					className={grid ? gridItemClass : itemClass}
+				>
 					{({ isEditing }) => (
 						<>
 							<ItemIcon item={item} className={grid ? 'size-8' : undefined} />
-							<EditableItemName
-								item={item}
-								isEditing={isEditing}
-								access={access}
-								className={grid ? 'w-full text-xs' : 'flex-1'}
-							/>
-							{!grid && item.kind === 'file' ? (
-								<span className="text-xs text-muted-foreground">{formatFileSize(item.size)}</span>
-							) : null}
+							{grid ? (
+								<>
+									<EditableItemName
+										item={item}
+										isEditing={isEditing}
+										access={access}
+										className="w-full text-xs font-medium"
+									/>
+									<span className="w-full truncate text-[11px] text-muted-foreground">
+										{item.kind === 'file' ? formatFileSize(item.size) : itemType(item)}
+									</span>
+									<span className="w-full truncate text-[10px] text-muted-foreground tabular-nums">
+										{itemModifiedAt(item)}
+									</span>
+								</>
+							) : (
+								<>
+									<div className="min-w-0 flex-1">
+										<EditableItemName item={item} isEditing={isEditing} access={access} />
+										<div className="truncate text-[11px] text-muted-foreground">
+											{itemType(item)}
+										</div>
+									</div>
+									<div className="shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
+										<div>{item.kind === 'file' ? formatFileSize(item.size) : '—'}</div>
+										<div>{itemModifiedAt(item)}</div>
+									</div>
+								</>
+							)}
 						</>
 					)}
 				</Finder.Item>
@@ -201,8 +263,12 @@ function ExplorerItems({ view, access }: { view: ViewMode; access: WorkspaceAcce
 	);
 }
 
-function EmptyFolder() {
-	return <div className="p-8 text-center text-sm text-muted-foreground">Empty folder</div>;
+function EmptyFolder({ isLoading }: { isLoading: boolean }) {
+	return (
+		<div className="p-8 text-center text-sm text-muted-foreground">
+			{isLoading ? 'Loading folder…' : 'This folder is empty.'}
+		</div>
+	);
 }
 
 function Toolbar({
@@ -219,24 +285,36 @@ function Toolbar({
 	const canDelete = canApplyWorkspaceOperation(access, selection, 'delete');
 	return (
 		<Finder.Toolbar className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/30 p-2">
-			<Finder.Button action="back" className={controlClass}>
-				←
-			</Finder.Button>
-			<Finder.Button action="forward" className={controlClass}>
-				→
-			</Finder.Button>
-			<Finder.Button action="up" className={controlClass}>
-				↑
-			</Finder.Button>
-			<Finder.Button action="refresh" className={controlClass}>
-				Refresh
-			</Finder.Button>
+			<div className="flex items-center gap-1">
+				<span title="Back">
+					<Finder.Button action="back" aria-label="Back" className={iconControlClass}>
+						<ArrowLeft className="size-4" aria-hidden />
+					</Finder.Button>
+				</span>
+				<span title="Forward">
+					<Finder.Button action="forward" aria-label="Forward" className={iconControlClass}>
+						<ArrowRight className="size-4" aria-hidden />
+					</Finder.Button>
+				</span>
+				<span title="Parent folder">
+					<Finder.Button action="up" aria-label="Parent folder" className={iconControlClass}>
+						<ArrowUp className="size-4" aria-hidden />
+					</Finder.Button>
+				</span>
+				<Tooltip content="Refresh">
+					<Finder.Button action="refresh" aria-label="Refresh" className={iconControlClass}>
+						<RefreshCw className="size-4" aria-hidden />
+					</Finder.Button>
+				</Tooltip>
+			</div>
 			<span className="mx-1 h-5 w-px bg-border" />
 			<Finder.Button action="newFile" className={controlClass}>
-				New file
+				<FilePlus2 className="mr-1.5 size-3.5" aria-hidden />
+				New File
 			</Finder.Button>
 			<Finder.Button action="newFolder" className={controlClass}>
-				New folder
+				<FolderPlus className="mr-1.5 size-3.5" aria-hidden />
+				New Folder
 			</Finder.Button>
 			<Finder.Button action="rename" className={controlClass} isDisabled={!canMove}>
 				Rename
@@ -248,26 +326,38 @@ function Toolbar({
 					placeholder="Search workspace…"
 				/>
 			</Finder.SearchInput>
-			<ToggleButtonGroup
-				selectionMode="single"
-				disallowEmptySelection
-				selectedKeys={[view]}
-				onSelectionChange={(keys) => {
-					const next = [...keys][0];
-					if (next === 'list' || next === 'grid' || next === 'table') setView(next);
-				}}
-				className="flex gap-1"
-			>
-				<ToggleButton id="list" aria-label="List view" className={controlClass}>
-					<List className="size-4" />
-				</ToggleButton>
-				<ToggleButton id="grid" aria-label="Grid view" className={controlClass}>
-					<Grid2X2 className="size-4" />
-				</ToggleButton>
-				<ToggleButton id="table" aria-label="Table view" className={controlClass}>
-					<TableProperties className="size-4" />
-				</ToggleButton>
-			</ToggleButtonGroup>
+			<fieldset aria-label="Layout" className="flex overflow-hidden rounded-md border border-input">
+				<span className="inline-flex" title="List view">
+					<ToggleButton
+						isSelected={view === 'list'}
+						onPress={() => setView('list')}
+						aria-label="List view"
+						className={viewToggleClass}
+					>
+						<List className="size-4" aria-hidden />
+					</ToggleButton>
+				</span>
+				<span className="inline-flex" title="Grid view">
+					<ToggleButton
+						isSelected={view === 'grid'}
+						onPress={() => setView('grid')}
+						aria-label="Grid view"
+						className={viewToggleClass}
+					>
+						<Grid2X2 className="size-4" aria-hidden />
+					</ToggleButton>
+				</span>
+				<span className="inline-flex" title="Table view">
+					<ToggleButton
+						isSelected={view === 'table'}
+						onPress={() => setView('table')}
+						aria-label="Table view"
+						className={viewToggleClass}
+					>
+						<TableProperties className="size-4" aria-hidden />
+					</ToggleButton>
+				</span>
+			</fieldset>
 		</Finder.Toolbar>
 	);
 }
@@ -410,9 +500,11 @@ function ConfirmedDeleteShortcut({ access }: { access: WorkspaceAccess }) {
 }
 
 function AccessBanner({ access }: { access: WorkspaceAccess }) {
+	const message = workspaceAccessMessage(access);
+	if (!message) return null;
 	return (
 		<div className="shrink-0 border-b bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
-			{workspaceAccessMessage(access)}
+			{message}
 		</div>
 	);
 }
@@ -436,6 +528,15 @@ function Explorer({
 	const [openPath, setOpenPath] = useState<string | null>(null);
 	const [dirty, setDirty] = useState(false);
 	const [error, setError] = useState<FinderError | null>(null);
+	const activeCollection = useRef<'tree' | 'content'>('content');
+	const [store] = useState(() =>
+		createFinderStore({
+			adapter,
+			showHidden: true,
+			onError: setError,
+		}),
+	);
+	useEffect(() => () => store.destroy(), [store]);
 	const setDirtyState = useCallback(
 		(next: boolean) => {
 			setDirty(next);
@@ -449,18 +550,35 @@ function Explorer({
 		setDirtyState(false);
 		setOpenPath(item.path);
 	};
+	const navigateFromTreeSelection = useCallback(
+		(items: FileItem[]) => {
+			if (activeCollection.current !== 'tree') return;
+			const item = items[0];
+			if (!item) return;
+			const targetPath = item.kind === 'directory' ? item.path : dirname(item.path);
+			if (store.getState().currentPath === targetPath) return;
+			void store
+				.getState()
+				.navigate(targetPath)
+				.then(() => store.getState().setSelection([item.path]));
+		},
+		[store],
+	);
 
 	return (
 		<Finder
-			adapter={adapter}
-			onOpen={open}
-			onError={setError}
+			store={store}
+			onSelectionChange={navigateFromTreeSelection}
 			shortcuts={{ delete: null }}
 			className="grid h-full min-h-0 grid-cols-[220px_minmax(0,1fr)_minmax(280px,38%)]"
 		>
-			<aside className="min-h-0 overflow-hidden border-r bg-muted/20 p-2">
+			<aside
+				className="min-h-0 overflow-hidden border-r bg-muted/20 p-2"
+				onFocusCapture={() => (activeCollection.current = 'tree')}
+				onPointerDownCapture={() => (activeCollection.current = 'tree')}
+			>
 				<Finder.Tree
-					navigateOnSelect
+					aria-label="Workspace tree"
 					dragAndDrop={access.writable}
 					virtualized
 					layoutOptions={{ rowSize: 28 }}
@@ -474,13 +592,17 @@ function Explorer({
 									style={{ paddingInlineStart: (level - 1) * 12 }}
 								>
 									{hasChildItems ? (
-										<AriaButton slot="chevron" className="rounded outline-none">
+										<AriaButton
+											slot="chevron"
+											aria-label={isExpanded ? 'Collapse folder' : 'Expand folder'}
+											className="rounded outline-none data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring"
+										>
 											{isLoading ? (
 												'…'
 											) : isExpanded ? (
-												<ChevronDown className="size-3" />
+												<ChevronDown className="size-3" aria-hidden />
 											) : (
-												<ChevronRight className="size-3" />
+												<ChevronRight className="size-3" aria-hidden />
 											)}
 										</AriaButton>
 									) : (
@@ -494,7 +616,11 @@ function Explorer({
 					)}
 				</Finder.Tree>
 			</aside>
-			<section className="flex min-h-0 min-w-0 flex-col border-r">
+			<section
+				className="flex min-h-0 min-w-0 flex-col border-r"
+				onFocusCapture={() => (activeCollection.current = 'content')}
+				onPointerDownCapture={() => (activeCollection.current = 'content')}
+			>
 				<Toolbar view={view} setView={setView} access={access} />
 				<Breadcrumbs />
 				{error ? (
@@ -505,8 +631,8 @@ function Explorer({
 						</AriaButton>
 					</div>
 				) : null}
-				<Finder.DropZone className="min-h-0 flex-1 overflow-hidden data-[drop-target]:ring-2 data-[drop-target]:ring-inset data-[drop-target]:ring-primary">
-					<ExplorerItems view={view} access={access} />
+				<Finder.DropZone className="min-h-0 flex-1 overflow-hidden data-[drop-target]:bg-primary/5 data-[drop-target]:ring-2 data-[drop-target]:ring-inset data-[drop-target]:ring-primary">
+					<ExplorerItems view={view} access={access} onOpen={open} />
 				</Finder.DropZone>
 				<Finder.State>
 					{({ items, selectedItems, clipboard, currentPath, isLoading, hasMore }) => (

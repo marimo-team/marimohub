@@ -8,13 +8,8 @@ const READ_ONLY_MESSAGES = {
 	active_session: 'Workspace changes are disabled while an edit session is active.',
 } satisfies Record<NonNullable<WorkspaceAccess['read_only_reason']>, string>;
 
-const PROTECTED_PATH_MESSAGE =
-	'notebook.py and pyproject.toml can be edited, but cannot be moved or deleted.';
-
-export function workspaceAccessMessage(access: WorkspaceAccess): string {
-	return access.read_only_reason
-		? READ_ONLY_MESSAGES[access.read_only_reason]
-		: PROTECTED_PATH_MESSAGE;
+export function workspaceAccessMessage(access: WorkspaceAccess): string | null {
+	return access.read_only_reason ? READ_ONLY_MESSAGES[access.read_only_reason] : null;
 }
 
 export function isWorkspacePathProtected(
