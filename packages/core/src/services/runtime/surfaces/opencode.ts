@@ -24,7 +24,7 @@ function openCodeConfig(managedAi: OpenCodeManagedAiOptions | undefined): string
 						provider: {
 							marimohub: {
 								npm: '@ai-sdk/openai-compatible',
-								name: 'marimo Hub',
+								name: 'marimohub',
 								options: {
 									baseURL: managedAi.baseUrl,
 									apiKey: managedAi.apiKey,
@@ -55,21 +55,28 @@ async function findOrCreateSession(
 	instance: SandboxInstance,
 	port: number,
 	workspaceDir: string,
+	initialModel?: string,
 ): Promise<string | undefined> {
+	const createBody = JSON.stringify(
+		initialModel ? { model: { id: initialModel, providerID: 'marimohub' } } : {},
+	);
 	const script = [
 		'import json,sys,urllib.parse,urllib.request',
 		'base=sys.argv[1]+"/session"',
 		'headers={"x-opencode-directory":urllib.parse.quote(sys.argv[2], safe="")}',
-		'list_request=urllib.request.Request(base+"?limit=1", headers=headers)',
-		'with urllib.request.urlopen(list_request, timeout=10) as response: sessions=json.load(response)',
-		'if sessions: print(sessions[0]["id"])',
-		'else:',
-		' headers["content-type"]="application/json"',
-		' request=urllib.request.Request(base, data=b"{}", headers=headers, method="POST")',
-		' with urllib.request.urlopen(request, timeout=10) as response: print(json.load(response)["id"])',
+		...(initialModel
+			? []
+			: [
+					'list_request=urllib.request.Request(base+"?limit=1", headers=headers)',
+					'with urllib.request.urlopen(list_request, timeout=10) as response: sessions=json.load(response)',
+					'if sessions: print(sessions[0]["id"]); sys.exit(0)',
+				]),
+		'headers["content-type"]="application/json"',
+		'request=urllib.request.Request(base, data=sys.argv[3].encode(), headers=headers, method="POST")',
+		'with urllib.request.urlopen(request, timeout=10) as response: print(json.load(response)["id"])',
 	].join('\n');
 	const result = await instance.exec(
-		`python3 -c ${shellQuote(script)} ${shellQuote(`http://127.0.0.1:${port}`)} ${shellQuote(workspaceDir)}`,
+		`python3 -c ${shellQuote(script)} ${shellQuote(`http://127.0.0.1:${port}`)} ${shellQuote(workspaceDir)} ${shellQuote(createBody)}`,
 		{ timeout: 15_000 },
 	);
 	if (!result.success) return undefined;
@@ -135,7 +142,12 @@ export function opencodeSurface(options: OpenCodeSurfaceOptions = {}): SurfaceSp
 			return workspaceSessionUrl(base, ctx.processWorkspaceDir);
 		},
 		async resolveOpenUrl(instance, base, ctx, { port }) {
-			const sessionId = await findOrCreateSession(instance, port, ctx.processWorkspaceDir);
+			const sessionId = await findOrCreateSession(
+				instance,
+				port,
+				ctx.processWorkspaceDir,
+				options.managedAi?.model,
+			);
 			return workspaceSessionUrl(base, ctx.processWorkspaceDir, sessionId);
 		},
 	};

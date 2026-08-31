@@ -84,7 +84,7 @@ describe('opencodeSurface', () => {
 			small_model: 'marimohub/gpt-test',
 			provider: {
 				marimohub: {
-					name: 'marimo Hub',
+					name: 'marimohub',
 					npm: '@ai-sdk/openai-compatible',
 					options: {
 						baseURL: 'https://hub.example/api/ai/v1',
@@ -114,6 +114,32 @@ describe('opencodeSurface', () => {
 		expect(url).toEqual(new URL('https://surface.example/L3dvcmtzcGFjZQ/session/ses_existing123'));
 		expect(calls.exec[0]).toContain('127.0.0.1:4096');
 		expect(calls.exec[0]).toContain("'/workspace'");
+	});
+
+	it('creates a managed-AI chat with the configured model', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		instance.exec = async (cmd) => {
+			calls.exec.push(cmd);
+			return { success: true, stdout: 'ses_managed123\n', stderr: '' };
+		};
+		const surface = opencodeSurface({
+			managedAi: {
+				baseUrl: 'https://hub.example/api/ai/v1',
+				apiKey: 'session-token',
+				model: 'gpt-test',
+			},
+		});
+
+		const url = await surface.resolveOpenUrl?.(
+			instance,
+			new URL('https://surface.example/'),
+			context,
+			{ port: 4096 },
+		);
+
+		expect(url).toEqual(new URL('https://surface.example/L3dvcmtzcGFjZQ/session/ses_managed123'));
+		expect(calls.exec[0]).not.toContain('?limit=1');
+		expect(calls.exec[0]).toContain(`'{"model":{"id":"gpt-test","providerID":"marimohub"}}'`);
 	});
 
 	it('falls back to the workspace composer when chat bootstrap fails', async () => {
@@ -180,7 +206,7 @@ describe('opencodeSurface', () => {
 			provider: {
 				marimohub: {
 					npm: '@ai-sdk/openai-compatible',
-					name: 'marimo Hub',
+					name: 'marimohub',
 					models: { [model]: { name: model } },
 					options: {
 						baseURL: 'https://hub.example/api/ai/v1?tenant="one"',
