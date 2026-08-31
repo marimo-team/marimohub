@@ -155,6 +155,57 @@ describe('Project — Notebook Actions: configuration', () => {
 		);
 	});
 
+	it('keeps the shared file Open action enabled', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderProject();
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		const content = await within(dialog).findByRole('grid', { name: 'Workspace files' });
+		const file = await within(content).findByRole('row', { name: /notebook.py/ });
+		await user.click(file);
+		const shortcut = new KeyboardEvent('keydown', {
+			key: 'o',
+			metaKey: true,
+			bubbles: true,
+			cancelable: true,
+		});
+		file.dispatchEvent(shortcut);
+		expect(shortcut.defaultPrevented).toBe(true);
+
+		await user.pointer({ target: file, keys: '[MouseRight]' });
+
+		const menu = await screen.findByRole('menu', { name: 'Context menu' });
+		expect(within(menu).getByRole('menuitem', { name: 'Open' })).toBeEnabled();
+	});
+
+	it('clears sidebar directory selection after navigation', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			workspaceEntries: {
+				'/': [{ path: '/data', name: 'data', kind: 'directory' }],
+				'/data': [{ path: '/data/analysis.py', name: 'analysis.py', kind: 'file' }],
+			},
+		});
+		await renderProject();
+		await chooseNotebookAction(user, 'Browse files');
+
+		const dialog = await screen.findByRole('dialog');
+		const tree = await within(dialog).findByRole('treegrid', { name: 'Workspace tree' });
+		const directory = await within(tree).findByText('data');
+		await user.click(directory);
+
+		await waitFor(() => expect(within(dialog).getByText('/data')).toBeInTheDocument());
+		expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled();
+		expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeDisabled();
+		expect(within(dialog).queryByText('1 selected')).not.toBeInTheDocument();
+
+		await user.click(directory);
+		expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled();
+		expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeDisabled();
+	});
+
 	it('"View static outputs" opens the sandbox-free snapshot page', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();

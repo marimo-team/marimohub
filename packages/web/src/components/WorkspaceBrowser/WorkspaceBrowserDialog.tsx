@@ -107,11 +107,6 @@ function EditableItemName({
 	);
 }
 
-function TableItemName({ item, access }: { item: FileItem; access: WorkspaceAccess }) {
-	const isEditing = useFinder((state) => state.editingPath === item.path);
-	return <EditableItemName item={item} isEditing={isEditing} access={access} className="flex-1" />;
-}
-
 function itemType(item: FileItem): string {
 	if (item.kind === 'directory') return 'Folder';
 	return item.mimeType ?? 'File';
@@ -130,6 +125,7 @@ function ExplorerItems({
 	access: WorkspaceAccess;
 	onOpen: (item: FileItem) => void;
 }) {
+	const editingPath = useFinder((state) => state.editingPath);
 	if (view === 'table') {
 		return (
 			<Finder.Table
@@ -184,7 +180,12 @@ function ExplorerItems({
 							<Finder.Cell className="border-b p-2 text-sm">
 								<span className="flex min-w-0 items-center gap-2">
 									<ItemIcon item={item} />
-									<TableItemName item={item} access={access} />
+									<EditableItemName
+										item={item}
+										isEditing={editingPath === item.path}
+										access={access}
+										className="flex-1"
+									/>
 								</span>
 							</Finder.Cell>
 							<Finder.Cell className="truncate border-b p-2 text-xs text-muted-foreground">
@@ -544,18 +545,29 @@ function Explorer({
 		},
 		[onDirtyChange],
 	);
-	const open = (item: FileItem) => {
-		if (item.kind !== 'file') return;
-		if (dirty && !window.confirm('Discard unsaved changes and open another file?')) return;
-		setDirtyState(false);
-		setOpenPath(item.path);
-	};
+	const open = useCallback(
+		(item: FileItem) => {
+			if (item.kind !== 'file') return;
+			if (dirty && !window.confirm('Discard unsaved changes and open another file?')) return;
+			setDirtyState(false);
+			setOpenPath(item.path);
+		},
+		[dirty, setDirtyState],
+	);
 	const navigateFromTreeSelection = useCallback(
 		(items: FileItem[]) => {
 			if (activeCollection.current !== 'tree') return;
 			const item = items[0];
 			if (!item) return;
-			const targetPath = item.kind === 'directory' ? item.path : dirname(item.path);
+			if (item.kind === 'directory') {
+				if (store.getState().currentPath === item.path) {
+					store.getState().clearSelection();
+					return;
+				}
+				void store.getState().navigate(item.path);
+				return;
+			}
+			const targetPath = dirname(item.path);
 			if (store.getState().currentPath === targetPath) return;
 			void store
 				.getState()
@@ -568,6 +580,7 @@ function Explorer({
 	return (
 		<Finder
 			store={store}
+			onOpen={open}
 			onSelectionChange={navigateFromTreeSelection}
 			shortcuts={{ delete: null }}
 			className="grid h-full min-h-0 grid-cols-[220px_minmax(0,1fr)_minmax(280px,38%)]"
