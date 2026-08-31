@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 83);
+        assert_eq!(manifest.operations.len(), 90);
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest

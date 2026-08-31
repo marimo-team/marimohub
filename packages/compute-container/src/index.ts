@@ -535,8 +535,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 }
 
 export class ContainerCompute implements SandboxProvider, SandboxPortConnector {
-	readonly capabilities = { multiPort: false } as const;
-	readonly brokeredPortConnectionsEnabled: boolean;
+	readonly capabilities: { readonly multiPort: false; readonly brokeredTcp: boolean };
 	private readonly config: ResolvedConfig;
 
 	constructor(
@@ -549,7 +548,7 @@ export class ContainerCompute implements SandboxProvider, SandboxPortConnector {
 			: inheritedDaemonHost(engine);
 		// An unset endpoint can inherit a persisted Docker context or Podman connection.
 		// Only an explicit local transport proves that loopback-published ports are on this host.
-		this.brokeredPortConnectionsEnabled = isLocalDaemon(daemonHost);
+		this.capabilities = { multiPort: false, brokeredTcp: isLocalDaemon(daemonHost) };
 		this.config = {
 			engine,
 			image: config.image || DEFAULT_IMAGE,
@@ -572,7 +571,7 @@ export class ContainerCompute implements SandboxProvider, SandboxPortConnector {
 	}
 
 	async connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection> {
-		if (!this.brokeredPortConnectionsEnabled) {
+		if (!this.capabilities.brokeredTcp) {
 			throw new Error(
 				`${this.config.engine} brokered ports require an explicitly configured local daemon`,
 			);

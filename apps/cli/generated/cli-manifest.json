@@ -3845,6 +3845,56 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "sessions.remoteDevelopment.ssh.prepare",
+			"command": ["sessions", "remoteDevelopment", "ssh", "prepare"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/remote-development/ssh/prepare",
+			"summary": "Prepare short-lived SSH access to a running sandbox",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "public_key",
+						"cli_name": "public-key",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "sessions.surfaces.ensure",
 			"command": ["sessions", "surfaces", "ensure"],
 			"method": "POST",

@@ -28,7 +28,7 @@ describe('sshAvailability', () => {
 
 		deps.compute = {
 			...noopCompute,
-			brokeredPortConnectionsEnabled: true,
+			capabilities: { multiPort: false, brokeredTcp: true },
 			connectPort: async () => {
 				throw new Error('not used');
 			},
@@ -91,7 +91,7 @@ async function createAuthorizationWorld(userId = ACTOR, authorizationExpiresAt?:
 		},
 		compute: {
 			...noopCompute,
-			brokeredPortConnectionsEnabled: true,
+			capabilities: { multiPort: false, brokeredTcp: true },
 			connectPort: async () => {
 				throw new Error('not used');
 			},

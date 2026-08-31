@@ -303,6 +303,7 @@ export { SessionService } from './runtime/SessionService';
 export { SessionRetirer, TakeoverRetirementError } from './runtime/SessionRetirer';
 export type { SessionRetirerDeps } from './runtime/SessionRetirer';
 export * from './runtime/surfaces';
+export { shellQuote } from './runtime/shell';
 
 // Attribute allowlists for the traced wrappers below: stable identifiers and
 // bucket keys only — never raw arguments, which can carry secrets (the PAT

@@ -56,7 +56,7 @@ describe('DockerCompute', () => {
 		const { runner, calls } = fakeRunner(defaultHandler);
 		const compute = new DockerCompute({ daemonHost: 'tcp://docker.example:2376' }, runner);
 
-		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
+		expect(compute.capabilities.brokeredTcp).toBe(false);
 		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(/local daemon/);
 		expect(calls).toHaveLength(0);
 	});
@@ -64,14 +64,14 @@ describe('DockerCompute', () => {
 	it('keeps brokered ports enabled for an explicit local daemon socket', () => {
 		const compute = new DockerCompute({ daemonHost: 'unix:///var/run/docker.sock' });
 
-		expect(compute.brokeredPortConnectionsEnabled).toBe(true);
+		expect(compute.capabilities.brokeredTcp).toBe(true);
 	});
 
 	it('disables brokered ports when daemon selection is implicit', async () => {
 		const { runner, calls } = fakeRunner(defaultHandler);
 		const compute = new DockerCompute({ daemonHost: undefined }, runner);
 
-		expect(compute.brokeredPortConnectionsEnabled).toBe(false);
+		expect(compute.capabilities.brokeredTcp).toBe(false);
 		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(/local daemon/);
 		expect(calls).toHaveLength(0);
 	});

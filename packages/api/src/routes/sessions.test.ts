@@ -188,7 +188,7 @@ describe('Session routes', () => {
 			return originalExec(command, options);
 		};
 		const compute = Object.assign(fakeComputeFrom(sb.instance), {
-			brokeredPortConnectionsEnabled: true as const,
+			capabilities: { multiPort: false, brokeredTcp: true } as const,
 			connectPort: vi.fn(),
 		});
 		const request = exclusiveApi(ACTOR, compute, {
@@ -243,7 +243,7 @@ describe('Session routes', () => {
 	it('requires a restart when SSH is enabled after a matching sandbox was launched', async () => {
 		const image = 'registry.example/marimo:remote-development';
 		const compute = Object.assign(makeFakeCompute(), {
-			brokeredPortConnectionsEnabled: true as const,
+			capabilities: { multiPort: false, brokeredTcp: true } as const,
 			connectPort: vi.fn(),
 		});
 		const startedWithoutSsh = exclusiveApi(ACTOR, compute, {
@@ -296,7 +296,7 @@ describe('Session routes', () => {
 		};
 		const compute = {
 			...fakeComputeFrom(sb.instance),
-			brokeredPortConnectionsEnabled: true as const,
+			capabilities: { multiPort: false, brokeredTcp: true } as const,
 			connectPort: vi.fn(),
 		};
 		const request = exclusiveApi(ACTOR, compute, {

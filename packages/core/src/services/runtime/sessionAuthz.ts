@@ -94,7 +94,7 @@ export function sessionCan(
 	);
 }
 
-/** Both grants at once — the `can` object shipped on every session response. */
+/** All session grants shipped in the `can` object on every session response. */
 export function sessionGrants(
 	actor: SessionActor,
 	session: SessionAuthorizationTarget,

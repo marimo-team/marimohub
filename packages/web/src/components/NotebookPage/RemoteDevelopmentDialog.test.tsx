@@ -32,7 +32,7 @@ describe('RemoteDevelopmentDialog', () => {
 				persistence="workspace"
 			/>,
 		);
-		await user.click(screen.getByText('Connect from VS Code'));
+		await user.click(screen.getByText('Connect desktop VS Code'));
 		expect(screen.getByLabelText('CLI command')).toHaveValue(
 			'mohub sessions code --pid 01JPROJECT --nid 01JNOTEBOOK --sid 01JSESSION',
 		);
@@ -51,7 +51,7 @@ describe('RemoteDevelopmentDialog', () => {
 				persistence="source"
 			/>,
 		);
-		expect(screen.queryByText('Connect from VS Code')).not.toBeInTheDocument();
+		expect(screen.queryByText('Connect desktop VS Code')).not.toBeInTheDocument();
 	});
 
 	it('has distinct persistence warnings', () => {

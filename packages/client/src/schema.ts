@@ -911,6 +911,23 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/remote-development/ssh/prepare': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Prepare short-lived SSH access to a running sandbox */
+		post: operations['sessions.remoteDevelopment.ssh.prepare'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/integrations/kinds': {
 		parameters: {
 			query?: never;
@@ -1624,6 +1641,15 @@ export interface components {
 				query: boolean;
 				ai_query: boolean;
 			};
+			remote_development: {
+				ssh: {
+					available: boolean;
+					/** @enum {string|null} */
+					transport: 'websocket' | null;
+					/** @enum {string|null} */
+					persistence: 'workspace' | 'source' | null;
+				};
+			};
 			/** @enum {string} */
 			viewer_mode: 'static' | 'applications' | 'ephemeral-sandbox';
 			viewer_session_modes: ('edit' | 'app')[];
@@ -2258,12 +2284,26 @@ export interface components {
 			can: {
 				attach: boolean;
 				stop: boolean;
+				develop: boolean;
 				surfaces?: {
 					vscode: boolean;
 				};
 			};
 			surfaces?: {
 				[key: string]: components['schemas']['Surface'];
+			};
+			remote_development: {
+				ssh:
+					| {
+							/** @enum {boolean} */
+							available: true;
+					  }
+					| {
+							/** @enum {boolean} */
+							available: false;
+							/** @enum {string} */
+							reason: 'disabled' | 'unsupported_backend' | 'unsupported_image' | 'restart_required';
+					  };
 			};
 			active_connections?: number;
 			/**
@@ -2351,6 +2391,18 @@ export interface components {
 		};
 		SurfaceStartBody: {
 			open?: string;
+		};
+		PreparedSshAccess: {
+			username: string;
+			workspace_path: string;
+			host_key: string;
+			/** Format: date-time */
+			key_expires_at: string;
+			/** @enum {string} */
+			persistence: 'workspace' | 'source' | 'none';
+		};
+		PrepareSshBody: {
+			public_key: string;
 		};
 		IntegrationKind: {
 			/** @example postgres */
@@ -9278,6 +9330,121 @@ export interface operations {
 				};
 				content: {
 					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.remoteDevelopment.ssh.prepare': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['PrepareSshBody'];
+			};
+		};
+		responses: {
+			/** @description SSH access prepared */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PreparedSshAccess'];
+					};
 				};
 			};
 			/** @description Bad request */

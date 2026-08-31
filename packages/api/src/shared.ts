@@ -882,13 +882,10 @@ export const SessionResponseSchema = z
 		 */
 		source_version_id: z.string().optional(),
 		/**
-		 * The caller's grants on this session, evaluated server-side (the same
-		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,
-		 * heartbeat; `sandbox_url` is present iff true), `stop` — may stop or
-		 * restart it, `surfaces.vscode` — may use the secondary editor. Clients
-		 * `develop` — may use brokered remote development,
-		 * `surfaces.vscode` — may use the secondary browser editor. Clients render
-		 * from these instead of re-deriving policy.
+		 * The caller's session grants, evaluated by the same `sessionCan` gates:
+		 * `attach` reaches the kernel, `stop` stops or restarts it, `develop` uses
+		 * brokered remote development, and `surfaces.vscode` uses the browser editor.
+		 * Clients use these grants instead of deriving policy.
 		 */
 		can: z.object({
 			attach: z.boolean(),

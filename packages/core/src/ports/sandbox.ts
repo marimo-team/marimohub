@@ -283,6 +283,7 @@ export interface CreateSandboxOptions {
 export interface SandboxProvider {
 	readonly capabilities?: {
 		multiPort: boolean;
+		brokeredTcp?: boolean;
 	};
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/**
@@ -311,13 +312,12 @@ export interface SandboxDuplexConnection {
 
 /** Optional compute capability for control-plane-brokered raw TCP connections. */
 export interface SandboxPortConnector {
-	readonly brokeredPortConnectionsEnabled: boolean;
 	connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection>;
 }
 
 export function asSandboxPortConnector(p: SandboxProvider): SandboxPortConnector | undefined {
 	const connector = p as Partial<SandboxPortConnector>;
-	return connector.brokeredPortConnectionsEnabled && typeof connector.connectPort === 'function'
+	return p.capabilities?.brokeredTcp === true && typeof connector.connectPort === 'function'
 		? (connector as SandboxPortConnector)
 		: undefined;
 }

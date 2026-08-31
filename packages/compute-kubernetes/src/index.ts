@@ -609,8 +609,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 }
 
 export class KubernetesCompute implements SandboxProvider, SandboxPortConnector {
-	readonly capabilities = { multiPort: false } as const;
-	readonly brokeredPortConnectionsEnabled = true;
+	readonly capabilities = { multiPort: false, brokeredTcp: true } as const;
 	private client?: K8sClient;
 
 	constructor(

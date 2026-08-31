@@ -38,12 +38,12 @@ export function RemoteDevelopmentDialog({
 				onPress={dialog.open}
 			>
 				<MonitorUp className="size-3" />
-				Connect from VS Code
+				Connect desktop VS Code
 			</Button>
 			<DialogModal
 				isOpen={dialog.isOpen}
 				onClose={dialog.close}
-				title="Connect from VS Code"
+				title="Connect desktop VS Code"
 				width="lg"
 			>
 				<div className="flex flex-col gap-4">

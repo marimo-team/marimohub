@@ -7,21 +7,29 @@ describe('asSandboxPortConnector', () => {
 		expect(asSandboxPortConnector(noopCompute)).toBeUndefined();
 	});
 
-	it('requires both the feature flag and connect method', () => {
+	it('requires both the capability and connect method', () => {
 		expect(
 			asSandboxPortConnector({
 				...noopCompute,
-				brokeredPortConnectionsEnabled: true,
+				capabilities: { multiPort: false, brokeredTcp: true },
 			} as never),
 		).toBeUndefined();
 		expect(
 			asSandboxPortConnector({
 				...noopCompute,
-				brokeredPortConnectionsEnabled: false,
+				capabilities: { multiPort: false, brokeredTcp: false },
 				connectPort: async () => {
 					throw new Error('not used');
 				},
 			} as never),
 		).toBeUndefined();
+		const connector = {
+			...noopCompute,
+			capabilities: { multiPort: false, brokeredTcp: true },
+			connectPort: async () => {
+				throw new Error('not used');
+			},
+		};
+		expect(asSandboxPortConnector(connector)).toBe(connector);
 	});
 });

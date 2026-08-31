@@ -4,6 +4,8 @@ marimohub can broker SSH access to an exclusive editor sandbox. The CLI sends SS
 
 The relay does not return the provider address or the sandbox ID to the client. Remote development is off by default.
 
+Remote development is separate from a [session surface](./surfaces.md). A surface is an HTTP application that opens in a browser and has start and stop state. Remote development brokers a private TCP stream and reauthorizes each live connection. Both features use compute-provider capabilities, but they do not share exposure or lifecycle semantics.
+
 ## Requirements
 
 Remote development requires all of these conditions:
@@ -53,7 +55,7 @@ If the configuration is unsafe or inconsistent, the server stops during startup.
 
 Install the `mohub` CLI, OpenSSH, VS Code, and the VS Code Remote-SSH extension.
 
-Open the notebook session menu in marimohub. Select **Connect from VS Code**, then run the displayed command.
+Open the notebook session menu in marimohub. Select **Connect desktop VS Code**, then run the displayed command. The separate **Open in VS Code** action opens the browser-based VS Code session surface when that surface is configured.
 
 ```sh
 mohub sessions code --pid PROJECT_ID --nid NOTEBOOK_ID --sid SESSION_ID

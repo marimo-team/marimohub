@@ -46,7 +46,7 @@ async function createRelayWorld(
 		authenticator: { authenticate: async () => ({ id: ACTOR, email: 'actor@example.com' }) },
 		compute: {
 			...base.compute,
-			brokeredPortConnectionsEnabled: true,
+			capabilities: { multiPort: false, brokeredTcp: true },
 			connectPort: connector,
 		} as typeof base.compute & SandboxPortConnector,
 		policy: { editorSandboxSharing: 'exclusive' },

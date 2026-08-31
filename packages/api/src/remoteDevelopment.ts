@@ -7,6 +7,7 @@ import {
 	NotFoundError,
 	ProjectId,
 	SessionId,
+	shellQuote,
 	UnavailableError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
@@ -42,10 +43,6 @@ export function sshAvailability(deps: ApiDeps, session: Session): SshAvailabilit
 		return { available: false, reason: 'restart_required' };
 	}
 	return { available: true };
-}
-
-function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function isEd25519PublicKey(publicKey: string): boolean {
