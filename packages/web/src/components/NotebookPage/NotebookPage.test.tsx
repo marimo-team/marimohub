@@ -31,6 +31,7 @@ describe('NotebookPage viewer modes', () => {
 		});
 		renderPage();
 
+		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
 		await user.click(await screen.findByRole('button', { name: 'Surfaces' }));
 		expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).toBeInTheDocument();
 		expect(screen.queryByRole('menuitem', { name: 'Stop VS Code' })).toBeNull();
@@ -39,9 +40,11 @@ describe('NotebookPage viewer modes', () => {
 			'src',
 			'https://vscode.example/?folder=/workspace',
 		);
+		expect(screen.getByRole('tablist', { name: 'Notebook applications' })).toBeVisible();
 
 		await chooseSurfaceAction(user, 'Stop VS Code');
 		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
+		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
 	});
 
 	it('keeps surface iframes mounted while the most recent split replaces the previous one', async () => {

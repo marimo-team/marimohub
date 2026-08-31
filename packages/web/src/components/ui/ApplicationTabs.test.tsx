@@ -37,6 +37,26 @@ function applicationTabs(): ApplicationTabItem[] {
 }
 
 describe('ApplicationTabs', () => {
+	it('hides its tab bar until a second application is present', () => {
+		const { rerender } = render(
+			<ApplicationTabs
+				ariaLabel="Workspace applications"
+				tabs={applicationTabs().slice(0, 1)}
+				hideTabListWhenSingle
+			/>,
+		);
+
+		expect(screen.queryByRole('tablist', { name: 'Workspace applications' })).toBeNull();
+		rerender(
+			<ApplicationTabs
+				ariaLabel="Workspace applications"
+				tabs={applicationTabs().slice(0, 2)}
+				hideTabListWhenSingle
+			/>,
+		);
+		expect(screen.getByRole('tablist', { name: 'Workspace applications' })).toBeVisible();
+	});
+
 	it('keeps every panel mounted while the selection changes', async () => {
 		const user = userEvent.setup();
 		render(

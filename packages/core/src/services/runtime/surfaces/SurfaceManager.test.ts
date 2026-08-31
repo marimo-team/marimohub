@@ -98,6 +98,31 @@ describe('SurfaceManager', () => {
 		]);
 	});
 
+	it('lets a ready surface resolve its application URL from sandbox state', async () => {
+		const resolveOpenUrl = vi.fn(async (_instance: unknown, base: URL) => {
+			const url = new URL(base);
+			url.pathname = '/workspace/session/ses_test';
+			return url;
+		});
+		const { manager, session, sessions } = await setup(undefined, {
+			...vscodeSurface(),
+			resolveOpenUrl,
+		});
+
+		const result = await manager.ensure(session, 'vscode', { ...options(), open: undefined });
+
+		expect(result.state.url).toBe('https://sandbox.example/workspace/session/ses_test');
+		expect(resolveOpenUrl).toHaveBeenCalledWith(
+			expect.anything(),
+			new URL('https://sandbox.example/kernel'),
+			expect.objectContaining({ processWorkspaceDir: '/workspace' }),
+			{ open: undefined, port: 8443 },
+		);
+		expect(
+			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode?.url,
+		).toBe('https://sandbox.example/workspace/session/ses_test');
+	});
+
 	it.each([
 		'/secrets.txt',
 		'../secrets.txt',

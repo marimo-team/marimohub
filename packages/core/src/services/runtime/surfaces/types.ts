@@ -38,5 +38,11 @@ export interface SurfaceSpec {
 	command(ctx: SurfaceContext, port: number): { cmd: string[]; env?: Record<string, string> };
 	readiness: { path: string; timeoutMs: number };
 	openUrl(base: URL, ctx: SurfaceContext, opts: { open?: string }): URL;
+	resolveOpenUrl?(
+		instance: SandboxInstance,
+		base: URL,
+		ctx: SurfaceContext,
+		opts: { open?: string; port: number },
+	): Promise<URL>;
 	resources?: { memoryMb: number };
 }

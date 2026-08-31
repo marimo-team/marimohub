@@ -386,10 +386,13 @@ describe('Session surface routes', () => {
 		});
 		expect(calls.exposePort.at(-1)?.port).toBe(4096);
 		expect(calls.startProcess.at(-1)?.cmd).toContain("'opencode' 'web'");
-		const configWrite = calls.writeFile.find((file) => file.path.endsWith('/config/opencode.json'));
+		const configWrite = calls.writeFile.find((file) =>
+			file.path.endsWith('/config/opencode/opencode.json'),
+		);
 		const config = JSON.parse(String(configWrite?.content));
 		expect(config).toMatchObject({
 			model: 'marimohub/gpt-test',
+			small_model: 'marimohub/gpt-test',
 			provider: {
 				marimohub: {
 					options: {
@@ -418,7 +421,7 @@ describe('Session surface routes', () => {
 			const { instance, calls } = makeFakeSandbox();
 			const writeFiles = instance.writeFiles.bind(instance);
 			instance.writeFiles = async (files) => {
-				if (files.some((file) => file.path.endsWith('/opencode/config/opencode.json'))) {
+				if (files.some((file) => file.path.endsWith('/config/opencode/opencode.json'))) {
 					throw new Error('private sandbox path and credential details');
 				}
 				return writeFiles(files);

@@ -58,6 +58,7 @@ export interface ApplicationTabsProps {
 	className?: string;
 	tabListClassName?: string;
 	panelsClassName?: string;
+	hideTabListWhenSingle?: boolean;
 }
 
 type DropPosition = 'before' | 'after';
@@ -369,6 +370,7 @@ export function ApplicationTabs({
 	className,
 	tabListClassName,
 	panelsClassName,
+	hideTabListWhenSingle = false,
 }: ApplicationTabsProps) {
 	const instanceId = useId();
 	const tabKeys = useMemo(() => tabs.map((tab) => tab.id), [tabs]);
@@ -406,6 +408,7 @@ export function ApplicationTabs({
 	const [isClosePending, setIsClosePending] = useState(false);
 	const closingTab = closeKey ? tabsById.get(closeKey) : undefined;
 	const isReorderable = tabs.length > 1;
+	const showTabList = !hideTabListWhenSingle || tabs.length > 1;
 
 	const changeSplitKey = (nextKey: string | null) => {
 		if (splitKey === undefined) setInternalSplitKey(nextKey);
@@ -453,44 +456,46 @@ export function ApplicationTabs({
 				keyboardActivation="automatic"
 				className={cn('flex min-h-0 flex-1 flex-col bg-background', className)}
 			>
-				<div className="flex h-9 shrink-0 items-end border-b bg-muted/50">
-					<TabList
-						aria-label={ariaLabel}
-						className={cn(
-							'flex h-full min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
-							tabListClassName,
-						)}
-					>
-						{visibleOrder.map((key) => {
-							const tab = tabsById.get(key);
-							return tab ? (
-								<ApplicationTab
-									key={tab.id}
-									tab={tab}
-									order={visibleOrder}
-									tabDomId={`${instanceId}-tab-${tab.id}`}
-									panelDomId={`${instanceId}-panel-${tab.id}`}
-									isReorderable={isReorderable}
-									isPrimary={tab.id === primaryKey}
-									isSplit={tab.id === activeSplitKey}
-									canSplit={
-										allowsSplitView &&
-										tab.isSplittable !== false &&
-										!tab.isDisabled &&
-										tabs.length > 1
-									}
-									canClose={!!onClose}
-									onMove={changeOrder}
-									onRequestSplit={changeSplitKey}
-									onRequestClose={(item) => setCloseKey(item.id)}
-								/>
-							) : null;
-						})}
-					</TabList>
-					{actions ? (
-						<div className="flex h-full shrink-0 items-center border-l px-1">{actions}</div>
-					) : null}
-				</div>
+				{showTabList ? (
+					<div className="flex h-9 shrink-0 items-end border-b bg-muted/50">
+						<TabList
+							aria-label={ariaLabel}
+							className={cn(
+								'flex h-full min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+								tabListClassName,
+							)}
+						>
+							{visibleOrder.map((key) => {
+								const tab = tabsById.get(key);
+								return tab ? (
+									<ApplicationTab
+										key={tab.id}
+										tab={tab}
+										order={visibleOrder}
+										tabDomId={`${instanceId}-tab-${tab.id}`}
+										panelDomId={`${instanceId}-panel-${tab.id}`}
+										isReorderable={isReorderable}
+										isPrimary={tab.id === primaryKey}
+										isSplit={tab.id === activeSplitKey}
+										canSplit={
+											allowsSplitView &&
+											tab.isSplittable !== false &&
+											!tab.isDisabled &&
+											tabs.length > 1
+										}
+										canClose={!!onClose}
+										onMove={changeOrder}
+										onRequestSplit={changeSplitKey}
+										onRequestClose={(item) => setCloseKey(item.id)}
+									/>
+								) : null;
+							})}
+						</TabList>
+						{actions ? (
+							<div className="flex h-full shrink-0 items-center border-l px-1">{actions}</div>
+						) : null}
+					</div>
+				) : null}
 				<div
 					ref={panelsRef}
 					data-application-panels=""

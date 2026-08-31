@@ -290,7 +290,12 @@ export class SurfaceManager {
 				name: id,
 			});
 			const publicBase = options.clientBaseUrl ?? exposed.url;
-			const url = spec.openUrl(new URL(publicBase), context, { open: options.open }).toString();
+			const openOptions = { open: options.open, port };
+			const url = (
+				spec.resolveOpenUrl
+					? await spec.resolveOpenUrl(instance, new URL(publicBase), context, openOptions)
+					: spec.openUrl(new URL(publicBase), context, openOptions)
+			).toString();
 			const state = {
 				status: 'ready' as const,
 				port,

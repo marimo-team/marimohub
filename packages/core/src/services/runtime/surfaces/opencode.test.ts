@@ -27,7 +27,7 @@ describe('opencodeSurface', () => {
 		expect(surface.supportedExposures).toEqual(['subdomain']);
 		expect(surface.resources).toEqual({ memoryMb: 1024 });
 		expect(surface.readiness.path).toBe('/global/health');
-		expect(calls.writeFile[0].path).toBe(`${context.userDataDir}/config/opencode.json`);
+		expect(calls.writeFile[0].path).toBe(`${context.userDataDir}/config/opencode/opencode.json`);
 		expect(JSON.parse(String(calls.writeFile[0].content))).toEqual({
 			$schema: 'https://opencode.ai/config.json',
 		});
@@ -38,12 +38,12 @@ describe('opencodeSurface', () => {
 				XDG_DATA_HOME: `${context.userDataDir}/data`,
 				XDG_CACHE_HOME: `${context.userDataDir}/cache`,
 				XDG_STATE_HOME: `${context.userDataDir}/state`,
-				OPENCODE_CONFIG: `${context.userDataDir}/config/opencode.json`,
+				OPENCODE_CONFIG: `${context.userDataDir}/config/opencode/opencode.json`,
 				OPENCODE_DISABLE_AUTOUPDATE: 'true',
 			},
 		});
 		expect(surface.openUrl(new URL('https://surface.example/'), context, {})).toEqual(
-			new URL('https://surface.example/'),
+			new URL('https://surface.example/L3dvcmtzcGFjZQ/session'),
 		);
 	});
 
@@ -77,8 +77,10 @@ describe('opencodeSurface', () => {
 
 		expect(JSON.parse(String(calls.writeFile[0].content))).toMatchObject({
 			model: 'marimohub/gpt-test',
+			small_model: 'marimohub/gpt-test',
 			provider: {
 				marimohub: {
+					name: 'marimo Hub',
 					npm: '@ai-sdk/openai-compatible',
 					options: {
 						baseURL: 'https://hub.example/api/ai/v1',
@@ -88,6 +90,43 @@ describe('opencodeSurface', () => {
 				},
 			},
 		});
+	});
+
+	it('opens the most recent workspace chat session', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		instance.exec = async (cmd) => {
+			calls.exec.push(cmd);
+			return { success: true, stdout: 'ses_existing123\n', stderr: '' };
+		};
+		const surface = opencodeSurface();
+
+		const url = await surface.resolveOpenUrl?.(
+			instance,
+			new URL('https://surface.example/'),
+			context,
+			{ port: 4096 },
+		);
+
+		expect(url).toEqual(new URL('https://surface.example/L3dvcmtzcGFjZQ/session/ses_existing123'));
+		expect(calls.exec[0]).toContain('127.0.0.1:4096');
+		expect(calls.exec[0]).toContain("'/workspace'");
+	});
+
+	it('falls back to the workspace composer when chat bootstrap fails', async () => {
+		const { instance } = makeFakeSandbox();
+		instance.exec = async () => ({
+			success: false,
+			stdout: '',
+			stderr: 'private failure',
+			error: { code: 'COMMAND_FAILED' },
+		});
+		const surface = opencodeSurface();
+
+		await expect(
+			surface.resolveOpenUrl?.(instance, new URL('https://surface.example/'), context, {
+				port: 4096,
+			}),
+		).resolves.toEqual(new URL('https://surface.example/L3dvcmtzcGFjZQ/session'));
 	});
 
 	it('reports a missing binary without exposing command output', async () => {
@@ -133,10 +172,11 @@ describe('opencodeSurface', () => {
 		expect(config).toEqual({
 			$schema: 'https://opencode.ai/config.json',
 			model: `marimohub/${model}`,
+			small_model: `marimohub/${model}`,
 			provider: {
 				marimohub: {
 					npm: '@ai-sdk/openai-compatible',
-					name: 'marimohub',
+					name: 'marimo Hub',
 					models: { [model]: { name: model } },
 					options: {
 						baseURL: 'https://hub.example/api/ai/v1?tenant="one"',

@@ -756,6 +756,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 								splitKey={splitApplicationKey}
 								onSplitKeyChange={setSplitApplicationKey}
 								onClose={stopApplicationTab}
+								hideTabListWhenSingle
 								className="size-full"
 							/>
 						)}
