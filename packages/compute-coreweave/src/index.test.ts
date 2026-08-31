@@ -767,6 +767,37 @@ describe('CoreWeaveCompute', () => {
 		});
 	});
 
+	describe('extra surface ports', () => {
+		it('advertises multiPort exactly when extra ports are configured', () => {
+			const world = makeWorld();
+			expect(makeCompute(world, baseConfig).capabilities).toEqual({ multiPort: false });
+			expect(makeCompute(world, { ...baseConfig, extraPorts: [8443] }).capabilities).toEqual({
+				multiPort: true,
+			});
+		});
+
+		it('reserves extra ports as create-time services beside the kernel', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, extraPorts: [8443], kernelVisibility: 'custom' })
+				.create(SANDBOX_ID)
+				.exec('true');
+			const opts = world.created[0];
+			expect(opts.services).toEqual([
+				{ name: 'kernel', port: 2718, protocol: 'tcp', visibility: 'custom' },
+				{ name: 'port-8443', port: 8443, protocol: 'tcp', visibility: 'custom' },
+			]);
+		});
+
+		it('reserves extra ports on the template overlay too', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, extraPorts: [8443], templateId: 'tmpl-marimohub' })
+				.create(SANDBOX_ID)
+				.exec('true');
+			const { options } = world.createdFromTemplate[0];
+			expect(options.services?.map((s) => s.port)).toEqual([2718, 8443]);
+		});
+	});
+
 	describe('provider surface', () => {
 		it('proxy() is a no-op (kernel reached via public ingress)', async () => {
 			const world = makeWorld();
