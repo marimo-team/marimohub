@@ -9,7 +9,11 @@ import {
 	MemoryBucket,
 	RecordingBucket,
 } from '../../testing';
-import { listFilesFailure } from '../../ports/sandbox';
+import { execResult, listFilesFailure } from '../../ports/sandbox';
+import {
+	WORKSPACE_DIRECTORY_MARKER,
+	workspaceDirectoryMarkerPath,
+} from '../../integrations/remoteWorkspace';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 
 // `makeFsSandbox`'s default root — every test mounts the notebook here.
@@ -80,6 +84,34 @@ describe('restoreWorkspace', () => {
 
 		// Nothing is written, so nothing else would create the cwd.
 		expect(calls.exec.filter((c) => c.startsWith('mkdir -p '))).toEqual([`mkdir -p '${MOUNT}'`]);
+		expect(stats).toEqual({ objectCount: 0, bytes: 0 });
+	});
+
+	it('fails after retrying an empty-directory mkdir error', async () => {
+		const { nb } = nbCtx();
+		const { instance } = makeFsSandbox();
+		const exec = vi.fn(async () => execResult(false, '', 'permission denied'));
+		const failing = { ...instance, exec };
+
+		await expect(
+			restoreWorkspace(failing, new MemoryBucket(), nb.workspacePrefix, MOUNT),
+		).rejects.toThrow('sandbox mkdir failed: permission denied');
+		expect(exec).toHaveBeenCalledTimes(3);
+	});
+
+	it('restores portable and legacy empty-directory markers without treating them as files', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile(workspaceDirectoryMarkerPath('empty/new')), new Uint8Array());
+		await bucket.put(`${nb.workspacePrefix}empty/legacy/`, new Uint8Array());
+		const { instance, calls } = makeFsSandbox();
+
+		const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
+
+		expect(calls.exec).toHaveLength(1);
+		expect(calls.exec[0]).toContain(`'${MOUNT}/empty/new'`);
+		expect(calls.exec[0]).toContain(`'${MOUNT}/empty/legacy'`);
+		expect(calls.writeFiles).toHaveLength(0);
 		expect(stats).toEqual({ objectCount: 0, bytes: 0 });
 	});
 
@@ -258,6 +290,83 @@ describe('restoreWorkspace', () => {
 });
 
 describe('captureWorkspace', () => {
+	it('does not follow symlinks or capture other special filesystem entries', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const { instance, calls } = makeFsSandbox({ files: { 'ordinary.txt': 'safe' } });
+		const listFiles = vi.fn(async () => ({
+			success: true as const,
+			files: [
+				{
+					name: 'ordinary.txt',
+					absolutePath: `${MOUNT}/ordinary.txt`,
+					relativePath: 'ordinary.txt',
+					type: 'file' as const,
+					size: 4,
+				},
+				{
+					name: 'outside',
+					absolutePath: `${MOUNT}/outside`,
+					relativePath: 'outside',
+					type: 'symlink' as const,
+					size: 100,
+				},
+				{
+					name: 'socket',
+					absolutePath: `${MOUNT}/socket`,
+					relativePath: 'socket',
+					type: 'other' as const,
+					size: 0,
+				},
+			],
+		}));
+
+		await captureWorkspace(
+			{ ...instance, listFiles },
+			bucket,
+			projectId,
+			notebookId,
+			MOUNT,
+			'workspace',
+		);
+
+		expect(await bucket.get(nb.workspaceFile('ordinary.txt'))).not.toBeNull();
+		expect(await bucket.get(nb.workspaceFile('outside'))).toBeNull();
+		expect(await bucket.get(nb.workspaceFile('socket'))).toBeNull();
+		expect(calls.exec.some((command) => command.includes('outside'))).toBe(false);
+		expect(calls.exec.some((command) => command.includes('socket'))).toBe(false);
+	});
+
+	it('captures empty directories as portable marker objects', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const { instance } = makeFsSandbox({ directories: ['empty', 'nested/empty'] });
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		for (const directory of ['empty', 'nested/empty']) {
+			expect(
+				await bucket.get(nb.workspaceFile(workspaceDirectoryMarkerPath(directory))),
+			).not.toBeNull();
+		}
+		const keys = (await bucket.list({ prefix: nb.workspacePrefix })).objects.map(
+			(object) => object.key,
+		);
+		expect(keys.every((key) => !key.endsWith('/'))).toBe(true);
+	});
+
+	it('removes obsolete portable and legacy markers during mirror cleanup', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile(`old/${WORKSPACE_DIRECTORY_MARKER}`), new Uint8Array());
+		await bucket.put(`${nb.workspacePrefix}legacy/`, new Uint8Array());
+		const { instance } = makeFsSandbox();
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		expect(await bucket.get(nb.workspaceFile(`old/${WORKSPACE_DIRECTORY_MARKER}`))).toBeNull();
+		expect(await bucket.get(`${nb.workspacePrefix}legacy/`)).toBeNull();
+	});
 	it('source mode: uploads no runtime files (commitSession owns the source files)', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
 		const bucket = new MemoryBucket();
@@ -581,6 +690,18 @@ describe('sandboxFiles security', () => {
 		for (const cmd of calls.exec) {
 			if (cmd.startsWith('mkdir -p ')) expect(cmd).not.toContain('/../');
 		}
+	});
+
+	it('restoreWorkspace rejects reserved internal paths in complete snapshots', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('data/.marimohub-directory/file.txt'), 'poison');
+		const { instance, calls } = makeFsSandbox();
+
+		await expect(
+			restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, { requireComplete: true }),
+		).rejects.toThrow('unsafe workspace path');
+		expect(calls.writeFiles).toHaveLength(0);
 	});
 
 	it('rejects an unsafe path when a complete restore is required', async () => {

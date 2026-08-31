@@ -12,7 +12,13 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, afterAll } from 'vitest';
-import { PreconditionFailedError } from '@marimo-hub/core';
+import {
+	createNotebookId,
+	createProjectId,
+	createVersionId,
+	NotebookWorkspaceService,
+	PreconditionFailedError,
+} from '@marimo-hub/core';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { FsStorage } from './index';
 
@@ -30,6 +36,32 @@ function makeRoot(): string {
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
 
 describe('FsStorage', () => {
+	it('round-trips empty workspace directories through portable marker objects', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		const projectId = createProjectId();
+		const notebookId = createNotebookId();
+		const service = new NotebookWorkspaceService(bucket, {
+			getNotebook: async () => ({
+				meta: { status: 'active' } as never,
+				readme: null,
+				source: {
+					schema_version: 1,
+					type: 'local',
+					current_version_id: createVersionId(),
+				},
+			}),
+			saveSourceFile: async () => {},
+		});
+
+		await service.createDirectory(projectId, notebookId, 'empty/nested');
+
+		expect(await service.stat(projectId, notebookId, 'empty/nested')).toMatchObject({
+			path: 'empty/nested',
+			kind: 'directory',
+		});
+		expect((await service.list(projectId, notebookId, 'empty/nested')).items).toEqual([]);
+	});
+
 	describe('key validation / path traversal', () => {
 		const badKeys = [
 			'',

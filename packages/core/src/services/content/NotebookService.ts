@@ -5,7 +5,10 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { Millis } from '../../duration';
 import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR, VersionId } from '../../ids';
-import { remoteWorkspaceEntry } from '../../integrations/remoteWorkspace';
+import {
+	isWorkspaceDirectoryMarkerPath,
+	remoteWorkspaceEntry,
+} from '../../integrations/remoteWorkspace';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -45,6 +48,7 @@ import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from '..
 import { loadNotebookCatalogPatch } from './catalogProjection';
 import { createListFilter } from './listFilters';
 import type { ListFilters } from './listFilters';
+import { NotebookWorkspaceService } from './NotebookWorkspaceService';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -130,6 +134,7 @@ export interface CommitSessionResult {
 
 export class NotebookService {
 	readonly synced: SyncedNotebookService;
+	readonly workspace: NotebookWorkspaceService;
 
 	constructor(
 		private bucket: Bucket,
@@ -142,6 +147,38 @@ export class NotebookService {
 			pruneVersions: (projectId, notebookId, keep) =>
 				this.pruneVersions(projectId, notebookId, MAX_VERSIONS, keep),
 		});
+		this.workspace = new NotebookWorkspaceService(bucket, {
+			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
+			saveSourceFile: (projectId, notebookId, path, content, actor) =>
+				this.saveWorkspaceSourceFile(projectId, notebookId, path, content, actor),
+		});
+	}
+
+	private async saveWorkspaceSourceFile(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		path: 'notebook.py' | 'pyproject.toml',
+		content: string,
+		actor: UserId,
+	): Promise<void> {
+		const detail = await this.getNotebook(projectId, notebookId);
+		const nb = paths.project(projectId).notebook(notebookId);
+		const [code, deps] = await Promise.all([
+			path === 'notebook.py'
+				? content
+				: this.getContentForSource(projectId, notebookId, detail.source),
+			path === 'pyproject.toml'
+				? content
+				: this.bucket.get(nb.deps).then((object) => (object ? object.text() : '')),
+		]);
+		await this.updateNotebookFrom(
+			detail,
+			projectId,
+			notebookId,
+			{ code, deps, message: `Edit ${path}` },
+			actor,
+			detail.meta.updated_at,
+		);
 	}
 
 	async listNotebooks(
@@ -243,6 +280,7 @@ export class NotebookService {
 
 		// Read the workspace files in bounded-parallel (download-to-zip path).
 		const read = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async ({ key }) => {
+			if (isWorkspaceDirectoryMarkerPath(key.slice(prefix.length))) return;
 			const obj = await this.bucket.get(key);
 			if (!obj) return; // listed-then-deleted race; skip rather than fail.
 			return { path: key.slice(prefix.length), bytes: await obj.bytes() };

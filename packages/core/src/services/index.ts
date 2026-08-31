@@ -37,6 +37,11 @@ export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/Maint
 export { MaintenanceLock } from './catalog/MaintenanceLock';
 export { MAX_VERSIONS, NotebookService } from './content/NotebookService';
 export {
+	MAX_WORKSPACE_SEARCH_RESULTS,
+	NotebookWorkspaceService,
+} from './content/NotebookWorkspaceService';
+export type { WorkspaceFileItem, WorkspaceListResult } from './content/NotebookWorkspaceService';
+export {
 	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
 	DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS,
 	NotebookProposalService,

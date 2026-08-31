@@ -30,10 +30,10 @@ import {
 } from '../shared';
 import type { ApiDeps } from '../shared';
 import { appendAudit, logEvent } from '../log';
+import { objectContentDisposition } from '../contentDisposition';
 import {
 	acquireDownload,
 	makeObjectBrowseContext,
-	objectContentDisposition,
 	runObjectBrowse,
 	safeObjectContentType,
 	streamObjectBody,

@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
-import { createNotebookId, createServices, createVersionId } from '@marimo-hub/core';
+import {
+	createNotebookId,
+	createServices,
+	createVersionId,
+	MAX_WORKSPACE_FILE_BYTES,
+} from '@marimo-hub/core';
 import type { ProjectId } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -16,6 +21,7 @@ describe('Notebook routes', () => {
 	let bucket: MemoryBucket;
 	let app: ReturnType<typeof createTestApi>['app'];
 	let request: ReturnType<typeof createTestApi>['request'];
+	let services: ReturnType<typeof createServices>;
 	let projectId: ProjectId;
 
 	beforeEach(async () => {
@@ -28,6 +34,7 @@ describe('Notebook routes', () => {
 		const api = createTestApi({ bucket });
 		app = api.app;
 		request = api.request;
+		services = api.deps.services;
 	});
 
 	const nb = (path: string) => `/projects/${projectId}/notebooks${path}`;
@@ -902,6 +909,398 @@ describe('Notebook routes', () => {
 		const files = unzipSync(new Uint8Array(await res.arrayBuffer()));
 		expect(strFromU8(files['notebook.py'])).toBe('import marimo');
 		expect(strFromU8(files['pyproject.toml'])).toBe('[project]\nname = "x"\n');
+	});
+
+	describe('workspace browser', () => {
+		it('supports binary file CRUD, search, copy, move, and source-file versions', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), {
+					title: 'NB',
+					description: 'D',
+					code: 'print(1)',
+				}),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+
+			const access = await expectOk<any>(await request('GET', `${workspace}/access`));
+			expect(access).toMatchObject({ writable: true, read_only_reason: null });
+			expect(access.protected_paths.map((rule: any) => rule.path)).toEqual([
+				'/notebook.py',
+				'/pyproject.toml',
+			]);
+
+			await expectOk(
+				await app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/data/raw.bin')}&create=true`,
+					{ method: 'PUT', body: new Uint8Array([0, 1, 2, 255]) },
+				),
+			);
+			const file = await app.request(
+				`/api/v1${workspace}/files?path=${encodeURIComponent('/data/raw.bin')}`,
+			);
+			expect(file.headers.get('cache-control')).toBe('private, no-store');
+			expect(file.headers.get('content-disposition')).toContain('attachment;');
+			expect(file.headers.get('x-content-type-options')).toBe('nosniff');
+			expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([0, 1, 2, 255]));
+
+			const root = await expectOk<any>(await request('GET', `${workspace}/entries?path=/`));
+			expect(root.items).toContainEqual(
+				expect.objectContaining({ path: '/data', kind: 'directory' }),
+			);
+			const search = await expectOk<any>(
+				await request('GET', `${workspace}/search?path=/&query=raw`),
+			);
+			expect(search.items[0].path).toBe('/data/raw.bin');
+
+			await expectOk(
+				await request('POST', `${workspace}/copy`, {
+					from: '/data/raw.bin',
+					to: '/data/copy.bin',
+				}),
+			);
+			await expectOk(
+				await request('POST', `${workspace}/move`, {
+					from: '/data/copy.bin',
+					to: '/moved.bin',
+				}),
+			);
+			await expectOk(
+				await request('DELETE', `${workspace}/entries?path=${encodeURIComponent('/moved.bin')}`),
+			);
+
+			await expectOk(
+				await app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/pyproject.toml')}`,
+					{ method: 'PUT', body: '[project]\nname = "changed"\n' },
+				),
+			);
+			expect(await expectPage(await request('GET', nb(`/${created.id}/versions`)))).toHaveLength(2);
+
+			await expectError(
+				await request('DELETE', `${workspace}/entries?path=${encodeURIComponent('/notebook.py')}`),
+				403,
+				'FORBIDDEN',
+			);
+			await expectError(
+				await request('POST', `${workspace}/move`, {
+					from: '/data/raw.bin',
+					to: '/pyproject.toml',
+				}),
+				403,
+				'FORBIDDEN',
+			);
+			const spacedSourcePath = `/api/v1${workspace}/files?path=${encodeURIComponent('/notebook.py ')}`;
+			await expectOk(
+				await app.request(`${spacedSourcePath}&create=true`, {
+					method: 'PUT',
+					body: 'auxiliary',
+				}),
+			);
+			expect(await (await app.request(spacedSourcePath)).text()).toBe('auxiliary');
+			await expectOk(
+				await request('DELETE', `${workspace}/entries?path=${encodeURIComponent('/notebook.py ')}`),
+			);
+			expect((await expectOk<any>(await request('GET', nb(`/${created.id}/content`)))).code).toBe(
+				'print(1)',
+			);
+		});
+
+		it('returns stable errors for collisions, traversal, and oversized uploads', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+			const fileUrl = `/api/v1${workspace}/files?path=${encodeURIComponent('/data.txt')}&create=true`;
+
+			await expectOk(await app.request(fileUrl, { method: 'PUT', body: 'first' }));
+			await expectError(
+				await app.request(fileUrl, { method: 'PUT', body: 'second' }),
+				409,
+				'CONFLICT',
+			);
+			await expectError(
+				await app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/../secret.txt')}`,
+					{ method: 'PUT', body: 'blocked' },
+				),
+				400,
+				'BAD_REQUEST',
+			);
+			await expectError(
+				await app.request(`/api/v1${workspace}/files?path=${encodeURIComponent('/large.bin')}`, {
+					method: 'PUT',
+					body: 'x',
+					headers: { 'content-length': String(MAX_WORKSPACE_FILE_BYTES + 1) },
+				}),
+				413,
+				'PAYLOAD_TOO_LARGE',
+			);
+			await expectError(
+				await app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/other.txt')}&create=sometimes`,
+					{ method: 'PUT', body: 'x' },
+				),
+				400,
+				'BAD_REQUEST',
+			);
+		});
+
+		it('rejects ambiguous, control-character, and malformed workspace inputs', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+
+			for (const path of [
+				'//server/share',
+				'/data/../secret',
+				'/data/a\0b',
+				'/data/a\nb',
+				'/.marimohub-directory',
+				'/data/.marimohub-directory/file',
+			]) {
+				await expectError(
+					await app.request(`/api/v1${workspace}/files?path=${encodeURIComponent(path)}`, {
+						method: 'PUT',
+						body: 'blocked',
+					}),
+					400,
+					'BAD_REQUEST',
+				);
+			}
+			await expectError(await app.request(`/api/v1${workspace}/files`), 400, 'BAD_REQUEST');
+			await expectError(
+				await request('POST', `${workspace}/move`, { from: '/notebook.py' }),
+				422,
+				'VALIDATION_ERROR',
+			);
+			await expectError(
+				await request('GET', `${workspace}/search?path=/&query=`),
+				422,
+				'VALIDATION_ERROR',
+			);
+
+			await expectError(
+				await app.request(`/api/v1${workspace}/files?path=${encodeURIComponent('/notebook.py')}`, {
+					method: 'PUT',
+					body: Uint8Array.from([0xc3, 0x28]),
+				}),
+				400,
+				'BAD_REQUEST',
+			);
+			expect((await expectOk<any>(await request('GET', nb(`/${created.id}/content`)))).code).toBe(
+				'print(1)',
+			);
+			expect(await expectPage(await request('GET', nb(`/${created.id}/versions`)))).toHaveLength(1);
+		});
+
+		it('forces browser-executable files to download instead of rendering inline', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+			const filename = "payload!o'clock(x)*.html";
+			const url = `/api/v1${workspace}/files?path=${encodeURIComponent(`/${filename}`)}`;
+			await expectOk(await app.request(url, { method: 'PUT', body: '<script>alert(1)</script>' }));
+
+			const response = await app.request(url);
+			expect(response.headers.get('content-type')).toContain('text/html');
+			expect(response.headers.get('content-disposition')).toBe(
+				`attachment; filename="${filename}"; filename*=UTF-8''payload%21o%27clock%28x%29%2A.html`,
+			);
+			expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+			expect(response.headers.get('cache-control')).toBe('private, no-store');
+			expect(await response.text()).toBe('<script>alert(1)</script>');
+		});
+
+		it('exposes git workspaces as read-only', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb('/git'), {
+					title: 'Git',
+					description: 'D',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: 'app.py',
+				}),
+				201,
+			);
+			const workspace = nb(`/${created.notebook.id}/workspace`);
+			expect(await expectOk<any>(await request('GET', `${workspace}/access`))).toMatchObject({
+				writable: false,
+				read_only_reason: 'git_source',
+			});
+			await expectError(
+				await app.request(`/api/v1${workspace}/files?path=${encodeURIComponent('/app.py')}`, {
+					method: 'PUT',
+					body: 'print(2)',
+				}),
+				403,
+				'FORBIDDEN',
+			);
+			for (const [method, path, body] of [
+				['POST', `${workspace}/directories`, { path: '/blocked' }],
+				['DELETE', `${workspace}/entries?path=${encodeURIComponent('/app.py')}`, undefined],
+				['POST', `${workspace}/copy`, { from: '/app.py', to: '/copy.py' }],
+				['POST', `${workspace}/move`, { from: '/app.py', to: '/moved.py' }],
+			] as const) {
+				await expectError(await request(method, path, body), 403, 'FORBIDDEN');
+			}
+		});
+
+		it('blocks local mutations during edit sessions but not app sessions', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+			const sessions = services.sessions;
+			const appSession = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: created.id,
+				user_id: ACTOR,
+				mode: 'app',
+			});
+
+			expect(await expectOk<any>(await request('GET', `${workspace}/access`))).toMatchObject({
+				writable: true,
+				read_only_reason: null,
+			});
+			await expectOk(
+				await request('POST', `${workspace}/directories`, { path: '/created-by-app-session' }),
+				201,
+			);
+			await expectOk(
+				await app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/data.txt')}&create=true`,
+					{ method: 'PUT', body: 'data' },
+				),
+			);
+			await sessions.terminate(projectId, appSession.session_id);
+			await sessions.createSession({
+				project_id: projectId,
+				notebook_id: created.id,
+				user_id: ACTOR,
+				mode: 'edit',
+			});
+
+			expect(await expectOk<any>(await request('GET', `${workspace}/access`))).toMatchObject({
+				writable: false,
+				read_only_reason: 'active_session',
+			});
+			await expectOk(await request('GET', `${workspace}/entries?path=/`));
+			await expectError(
+				await request('POST', `${workspace}/directories`, { path: '/blocked' }),
+				409,
+				'CONFLICT',
+			);
+			await expectError(
+				await app.request(`/api/v1${workspace}/files?path=${encodeURIComponent('/blocked.txt')}`, {
+					method: 'PUT',
+					body: 'blocked',
+				}),
+				409,
+				'CONFLICT',
+			);
+			await expectError(
+				await request('POST', `${workspace}/copy`, {
+					from: '/data.txt',
+					to: '/copy.txt',
+				}),
+				409,
+				'CONFLICT',
+			);
+			await expectError(
+				await request('POST', `${workspace}/move`, {
+					from: '/data.txt',
+					to: '/moved.txt',
+				}),
+				409,
+				'CONFLICT',
+			);
+			await expectError(
+				await request('DELETE', `${workspace}/entries?path=${encodeURIComponent('/data.txt')}`),
+				409,
+				'CONFLICT',
+			);
+		});
+
+		it('allows viewers to browse and download but rejects mutations', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const viewer = uid('workspace-viewer');
+			await createServices(bucket).projects.addMember(
+				projectId,
+				{ user_id: viewer },
+				'viewer',
+				ACTOR,
+			);
+			const viewerApi = createTestApi({ bucket, userId: viewer });
+			const workspace = nb(`/${created.id}/workspace`);
+
+			expect(
+				await expectOk<any>(await viewerApi.request('GET', `${workspace}/access`)),
+			).toMatchObject({ writable: false, read_only_reason: 'viewer' });
+			const source = await viewerApi.app.request(
+				`/api/v1${workspace}/files?path=${encodeURIComponent('/notebook.py')}`,
+			);
+			expect(source.status).toBe(200);
+			expect(await source.text()).toBe('print(1)');
+			await expectError(
+				await viewerApi.request('POST', `${workspace}/directories`, { path: '/blocked' }),
+				403,
+				'FORBIDDEN',
+			);
+			await expectError(
+				await viewerApi.app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/notebook.py')}`,
+					{ method: 'PUT', body: 'blocked' },
+				),
+				403,
+				'FORBIDDEN',
+			);
+			for (const [method, path, body] of [
+				['DELETE', `${workspace}/entries?path=${encodeURIComponent('/notebook.py')}`, undefined],
+				['POST', `${workspace}/copy`, { from: '/notebook.py', to: '/copy.py' }],
+				['POST', `${workspace}/move`, { from: '/notebook.py', to: '/moved.py' }],
+			] as const) {
+				await expectError(await viewerApi.request(method, path, body), 403, 'FORBIDDEN');
+			}
+		});
+
+		it('does not reveal workspace contents to project non-members', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'secret = 1' }),
+				201,
+			);
+			const outsider = createTestApi({ bucket, userId: uid('workspace-outsider') });
+			const workspace = nb(`/${created.id}/workspace`);
+
+			for (const path of [
+				`${workspace}/access`,
+				`${workspace}/entries?path=/`,
+				`${workspace}/search?path=/&query=notebook`,
+			]) {
+				await expectError(await outsider.request('GET', path), 404, 'NOT_FOUND');
+			}
+			await expectError(
+				await outsider.app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/notebook.py')}`,
+				),
+				404,
+				'NOT_FOUND',
+			);
+			await expectError(
+				await outsider.request('POST', `${workspace}/directories`, { path: '/blocked' }),
+				403,
+				'FORBIDDEN',
+			);
+		});
 	});
 
 	it('GET /{nid}/workspace.zip returns 404 for a missing notebook', async () => {

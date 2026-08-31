@@ -179,6 +179,8 @@ export interface FsSandboxOptions {
 	root?: string;
 	/** Initial files, keyed by path relative to `root` (string or raw bytes). */
 	files?: Record<string, string | Uint8Array>;
+	/** Initial directories, keyed by path relative to `root`. */
+	directories?: readonly string[];
 	/** Overrides the size `listFiles` reports for a relative path. */
 	sizes?: Record<string, number>;
 }
@@ -264,6 +266,16 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 					type: 'file' as const,
 					size: opts.sizes?.[rel] ?? bytes.length,
 				}));
+			for (const directory of opts.directories ?? []) {
+				if (!directory.startsWith(prefix)) continue;
+				files.push({
+					name: directory.split('/').pop() ?? directory,
+					absolutePath: `${root}/${directory}`,
+					relativePath: directory,
+					type: 'directory',
+					size: 0,
+				});
+			}
 			return { success: true, files };
 		},
 		async writeFiles(files: readonly SandboxFileWrite[]) {

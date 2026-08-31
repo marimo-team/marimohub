@@ -122,6 +122,10 @@ export const MARIMO_PORT = 2718;
  * memory, where it would also be base64-inflated ~1.33×.
  */
 export const MAX_WORKSPACE_FILE_BYTES = 25 * 1024 * 1024; // 25MB
+/** Total bytes retained in one mutable local workspace mirror. */
+export const MAX_WORKSPACE_BYTES = 100 * 1024 * 1024; // 100MB
+/** Files retained in one mutable local workspace mirror. Directory markers do not count. */
+export const MAX_WORKSPACE_FILES = 1000;
 
 /**
  * Per-file cap for session artifacts read off the sandbox on teardown (marimo's

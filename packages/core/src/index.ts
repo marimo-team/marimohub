@@ -25,13 +25,25 @@ export * from './services';
 export {
 	isSafeWorkspacePath,
 	remoteWorkspaceEntry,
+	WORKSPACE_LIMITS,
+	WORKSPACE_OPERATIONS,
+	workspaceOperationDenied,
 	workspaceSourcePolicy,
 } from './integrations/remoteWorkspace';
 export type {
 	SyncedWorkspaceFile,
 	WorkspaceLoadMode,
+	WorkspaceOperation,
+	WorkspacePathRule,
+	WorkspaceReadOnlyReason,
 	WorkspaceSourcePolicy,
 } from './integrations/remoteWorkspace';
+export {
+	normalizeWorkspaceDirectoryInput,
+	normalizeWorkspacePathInput,
+	workspaceMimeType,
+	workspacePathName,
+} from './integrations/workspaceFiles';
 export {
 	MAX_DECOMPRESSED_ARCHIVE_BYTES,
 	parseWorkspaceArchive,

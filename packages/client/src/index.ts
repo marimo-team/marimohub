@@ -15,6 +15,10 @@ export type SnapshotProjectEntry = components['schemas']['SnapshotProjectEntry']
 export type SnapshotNotebookEntry = components['schemas']['SnapshotNotebookEntry'];
 export type NotebookMeta = components['schemas']['NotebookMeta'];
 export type NotebookDetail = components['schemas']['NotebookDetail'];
+export type WorkspaceAccess = components['schemas']['WorkspaceAccess'];
+export type WorkspaceItem = components['schemas']['WorkspaceItem'];
+export type WorkspaceOperation =
+	WorkspaceAccess['protected_paths'][number]['denied_operations'][number];
 /** Result of creating a git-synced notebook: the notebook plus its sync credentials. */
 export type GitNotebookCreateResult = components['schemas']['GitNotebookCreateResult'];
 /** A freshly minted sync URL + write-once token (from creation or rotation). */

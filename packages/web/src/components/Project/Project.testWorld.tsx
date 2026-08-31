@@ -65,9 +65,10 @@ export function makeFetch(
 		const url = String(input);
 		const parsedUrl = new URL(url, 'http://localhost');
 		const method = init?.method ?? 'GET';
-		const body = init?.body
-			? (JSON.parse(init.body as string) as Record<string, unknown>)
-			: undefined;
+		const body =
+			typeof init?.body === 'string'
+				? (JSON.parse(init.body) as Record<string, unknown>)
+				: undefined;
 		calls.push({ url, method, body });
 
 		if (method === 'DELETE' && url.endsWith(`/projects/${PID}`)) return jsonOk(null);
@@ -117,6 +118,34 @@ export function makeFetch(
 			return jsonOk({ code: 'print("download")' });
 		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1/workspace.zip`))
 			return new Response(new Blob(['zip']), { status: 200 });
+		if (
+			method === 'GET' &&
+			parsedUrl.pathname.endsWith(`/projects/${PID}/notebooks/nb-1/workspace/access`)
+		)
+			return jsonOk({
+				writable: true,
+				read_only_reason: null,
+				protected_paths: [
+					{ path: '/notebook.py', denied_operations: ['move', 'delete'] },
+					{ path: '/pyproject.toml', denied_operations: ['move', 'delete'] },
+				],
+			});
+		if (
+			method === 'GET' &&
+			parsedUrl.pathname.endsWith(`/projects/${PID}/notebooks/nb-1/workspace/entries`)
+		)
+			return jsonOk({
+				items: [
+					{
+						path: '/notebook.py',
+						name: 'notebook.py',
+						kind: 'file',
+						size: 18,
+						modified_at: 1_741_183_200_000,
+						mime_type: 'text/x-python',
+					},
+				],
+			});
 		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1/html`))
 			return new Response('<html>outputs</html>', {
 				status: 200,

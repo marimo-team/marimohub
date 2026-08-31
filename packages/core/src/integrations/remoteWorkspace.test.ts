@@ -4,10 +4,15 @@ import { BadRequestError } from '../errors';
 import type { Source } from '../schema';
 import {
 	isSafeWorkspacePath,
+	isWorkspaceDirectoryMarkerPath,
 	normalizeEntryNotebook,
+	normalizeWorkspaceFilePath,
 	normalizeWorkspaceRootPath,
 	remoteWorkspaceEntry,
 	toSyncedWorkspaceFileMap,
+	workspaceOperationDenied,
+	workspaceDirectoryFromMarkerPath,
+	workspaceDirectoryMarkerPath,
 	workspaceSourcePolicy,
 } from './remoteWorkspace';
 
@@ -24,7 +29,17 @@ describe('remote workspace helpers', () => {
 			loadMode: 'mount-or-copy',
 			persistSessionEdits: true,
 			restoreFilesystemSnapshot: true,
+			workspaceWritable: true,
+			allowedOperations: ['create', 'write', 'move', 'copy', 'delete'],
+			protectedPaths: [
+				{ path: 'notebook.py', deniedOperations: ['move', 'delete'] },
+				{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
+			],
 		});
+		expect(workspaceOperationDenied(source, 'write', 'notebook.py')).toBe(false);
+		expect(workspaceOperationDenied(source, 'move', 'notebook.py')).toBe(true);
+		expect(workspaceOperationDenied(source, 'delete', 'pyproject.toml')).toBe(true);
+		expect(workspaceOperationDenied(source, 'move', 'data.csv')).toBe(false);
 		expect(remoteWorkspaceEntry(source)).toBeNull();
 	});
 
@@ -48,7 +63,11 @@ describe('remote workspace helpers', () => {
 			loadMode: 'copy-only',
 			persistSessionEdits: false,
 			restoreFilesystemSnapshot: false,
+			workspaceWritable: false,
+			allowedOperations: [],
+			protectedPaths: [],
 		});
+		expect(workspaceOperationDenied(source, 'write', 'my_app.py')).toBe(true);
 		expect(remoteWorkspaceEntry(source)).toBe('my_app.py');
 	});
 
@@ -82,11 +101,33 @@ describe('remote workspace helpers', () => {
 		).toThrow(BadRequestError);
 	});
 
+	it('keeps directory markers internal and recognizes legacy marker keys', () => {
+		expect(workspaceDirectoryMarkerPath('data/empty')).toBe('data/empty/.marimohub-directory');
+		expect(workspaceDirectoryFromMarkerPath('data/empty/.marimohub-directory')).toBe('data/empty');
+		expect(workspaceDirectoryFromMarkerPath('data/legacy/')).toBe('data/legacy');
+		expect(isWorkspaceDirectoryMarkerPath('data/file.txt')).toBe(false);
+		expect(() => normalizeWorkspaceFilePath('.marimohub-directory')).toThrow(BadRequestError);
+		expect(() => normalizeWorkspaceFilePath('data/.marimohub-directory/file')).toThrow(
+			BadRequestError,
+		);
+	});
+
+	it('preserves leading and trailing spaces in workspace file paths', () => {
+		expect(normalizeWorkspaceFilePath(' report.txt ')).toBe(' report.txt ');
+		expect(normalizeWorkspaceFilePath('data/report.txt ')).toBe('data/report.txt ');
+	});
+
 	it('isSafeWorkspacePath rejects a null byte, a backslash, and a single-dot segment', () => {
 		expect(isSafeWorkspacePath('data/\0.csv')).toBe(false);
 		expect(isSafeWorkspacePath('data\\cars.csv')).toBe(false);
 		expect(isSafeWorkspacePath('data/./cars.csv')).toBe(false);
 		expect(isSafeWorkspacePath('.')).toBe(false);
+	});
+
+	it('rejects ASCII control characters anywhere in a workspace path', () => {
+		for (const codePoint of [...Array.from({ length: 32 }, (_, index) => index), 127]) {
+			expect(isSafeWorkspacePath(`data/a${String.fromCharCode(codePoint)}b.txt`)).toBe(false);
+		}
 	});
 
 	it('normalizeEntryNotebook rejects a non-notebook path', () => {
