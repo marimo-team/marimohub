@@ -43,6 +43,8 @@ export function vscodeSurface(options: VscodeSurfaceOptions = {}): SurfaceSpec {
 		id: 'vscode',
 		primary: false,
 		defaultPort: options.port ?? 8443,
+		supportedExposures: ['proxy', 'subdomain'],
+		supportsOpenPath: true,
 		proxyPath: flavor === 'code-server' ? 'strip-prefix' : 'preserve-prefix',
 		async probe(instance) {
 			const result = await instance.exec(

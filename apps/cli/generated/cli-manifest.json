@@ -3628,6 +3628,13 @@
 						"required": false,
 						"value_type": "string",
 						"repeatable": false
+					},
+					{
+						"name": "surfaces",
+						"cli_name": "surfaces",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
 					}
 				]
 			},
@@ -3891,6 +3898,7 @@
 						"name": "open",
 						"cli_name": "open",
 						"required": false,
+						"description": "Workspace-relative file to open. Supported only by the VS Code surface.",
 						"value_type": "string",
 						"repeatable": false
 					}

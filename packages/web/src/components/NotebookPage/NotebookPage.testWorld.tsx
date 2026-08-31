@@ -65,8 +65,11 @@ interface FetchOptions {
 	meFailures?: number;
 	sourceControlProviders?: string[];
 	vscode?: { embed: 'tab' | 'iframe' };
+	opencode?: { embed: 'tab' | 'iframe' };
 	vscodeStartError?: { code: string; message: string; status: number };
 	vscodeStopError?: { code: string; message: string; status: number };
+	opencodeStartError?: { code: string; message: string; status: number };
+	opencodeStopError?: { code: string; message: string; status: number };
 	omitSourceControlCapability?: boolean;
 	changeRequestFailures?: number;
 	changeRequestFailOn?: number[];
@@ -127,9 +130,33 @@ export function makeFetch(opts: FetchOptions) {
 				url: 'https://vscode.example/?folder=/workspace',
 			});
 		}
+		if (method === 'POST' && url.endsWith('/surfaces/opencode')) {
+			if (opts.opencodeStartError) {
+				const { code, message, status } = opts.opencodeStartError;
+				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
+					status,
+					headers: { 'content-type': 'application/json' },
+				});
+			}
+			return ok({
+				id: 'opencode',
+				status: 'ready',
+				url: 'https://opencode.example/',
+			});
+		}
 		if (method === 'DELETE' && url.endsWith('/surfaces/vscode')) {
 			if (opts.vscodeStopError) {
 				const { code, message, status } = opts.vscodeStopError;
+				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
+					status,
+					headers: { 'content-type': 'application/json' },
+				});
+			}
+			return ok(undefined);
+		}
+		if (method === 'DELETE' && url.endsWith('/surfaces/opencode')) {
+			if (opts.opencodeStopError) {
+				const { code, message, status } = opts.opencodeStopError;
 				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
 					status,
 					headers: { 'content-type': 'application/json' },
@@ -240,16 +267,28 @@ export function makeFetch(opts: FetchOptions) {
 				compute_profiles: opts.computeProfiles ?? [],
 				compute_profile_override: opts.computeProfileOverride ?? 'none',
 				editor_sandbox_sharing: opts.editorSharing ?? 'shared',
-				surfaces: opts.vscode
-					? [
-							{
-								id: 'vscode',
-								flavor: 'code-server',
-								start: 'on-demand',
-								embed: opts.vscode.embed,
-							},
-						]
-					: [],
+				surfaces: [
+					...(opts.vscode
+						? [
+								{
+									id: 'vscode' as const,
+									flavor: 'code-server' as const,
+									start: 'on-demand' as const,
+									embed: opts.vscode.embed,
+								},
+							]
+						: []),
+					...(opts.opencode
+						? [
+								{
+									id: 'opencode' as const,
+									start: 'on-demand' as const,
+									embed: opts.opencode.embed,
+									managed_ai: true,
+								},
+							]
+						: []),
+				],
 			});
 		}
 		if (url.endsWith('/me')) {

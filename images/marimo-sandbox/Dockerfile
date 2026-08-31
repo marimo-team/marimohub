@@ -104,4 +104,37 @@ RUN code-server --extensions-dir /opt/marimohub/vscode-extensions --install-exte
  && code-server --extensions-dir /opt/marimohub/vscode-extensions --install-extension charliermarsh.ruff@2026.74.0 \
  && code-server --extensions-dir /opt/marimohub/vscode-extensions --install-extension tamasfe.even-better-toml@0.21.2
 
+FROM base AS opencode
+
+USER root
+ARG OPENCODE_VERSION=1.18.17
+ARG OPENCODE_AMD64_SHA256=3f14a4c61c7f6b0d3b6d933d1d212e64e19683eba6fa453ad98e46303afe144a
+ARG OPENCODE_ARM64_SHA256=7531c1a110546aaf04b465d98a3bf54018e1740f769077c2526fec6add5fc230
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) arch=x64; checksum="${OPENCODE_AMD64_SHA256}" ;; \
+      arm64) arch=arm64; checksum="${OPENCODE_ARM64_SHA256}" ;; \
+      *) exit 1 ;; \
+    esac \
+ && archive=/tmp/opencode.tar.gz \
+ && curl -fsSL -o "${archive}" "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-${arch}.tar.gz" \
+ && printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum -c - \
+ && tar -xzf "${archive}" -C /usr/local/bin opencode \
+ && rm "${archive}" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep \
+ && rm -rf /var/lib/apt/lists/*
+
+USER appuser
+
+FROM vscode AS tools
+
+USER root
+COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep \
+ && rm -rf /var/lib/apt/lists/*
+
+USER appuser
+
 FROM base AS release

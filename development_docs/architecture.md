@@ -162,8 +162,10 @@ An edit sandbox can also expose secondary **surfaces**. `SurfaceRegistry` owns
 the provider-neutral process specification, and `SurfaceManager` probes,
 prepares, starts, and exposes the process. Surface state lives on the session
 record and every transition goes through `SessionService` CAS mutation. The
-`vscode` surface runs beside the primary `marimo` process and shares its
-workspace; it is not a second session mode or sandbox.
+The `vscode` and `opencode` surfaces run beside `marimo` and share its workspace.
+Each surface has independent CAS-fenced lifecycle state. A surface is not a
+session mode or sandbox. OpenCode supports only subdomain exposure because its
+client uses root-relative paths.
 
 **Lifecycle (provider-independent):**
 
@@ -237,8 +239,8 @@ from one pure evaluator in core (`sessionCan`/`canStartSessionMode` in
 `services/runtime/sessionAuthz.ts`, over the `VIEWER_SESSION_MODES` admission
 table in `constants.ts`): the API's throwing gates (`assertSessionControl`,
 `assertSessionAccess`), the `sandbox_url` projection, and the per-caller
-`can: { attach, stop, surfaces: { vscode } }` grants shipped on every session response are the same
-function applied to the same facts — and the web renders from `session.can`
+`can: { attach, stop, surfaces: { vscode, opencode } }` grants in each session response use the same
+function and facts. The web renders from `session.can`
 and `capabilities.viewer_session_modes` instead of re-deriving policy, so
 client and server cannot disagree. Apps skip
 managed-AI injection (no editor surface). They are excluded from the per-user

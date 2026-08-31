@@ -50,7 +50,10 @@ Persistent edit sandboxes use a per-notebook editor claim. See
    ways, set by `MARIMOHUB_SANDBOX_EXPOSURE`: **directly** on a separate domain
    (`subdomain`, the default), or **through the app** at `/proxy/<token>/`
    (`proxy`). See [Security → Kernel exposure](/security#kernel-exposure).
-5. On teardown, source (and optionally the whole workspace) is persisted back to
+5. An authorized edit session can start [VS Code or OpenCode](/surfaces) in its
+   sandbox. Each surface shares the workspace and has an independent lifecycle.
+   OpenCode supports only subdomain exposure.
+6. On teardown, source (and optionally the whole workspace) is persisted back to
    storage. A single background maintenance loop reaps idle sessions and orphaned
    sandboxes.
 

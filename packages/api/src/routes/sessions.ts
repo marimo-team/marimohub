@@ -52,14 +52,8 @@ import {
 	kernelActiveConnections,
 	joinUrlPath,
 	ValidationError,
-	SurfaceManager,
-	SurfaceRegistry,
-	marimoSurface,
-	vscodeSurface,
-	signProxyToken,
-	ProxyExposure,
-	SurfaceNotEnabledError,
-	SurfaceUnsupportedProviderError,
+	SECONDARY_SURFACE_IDS,
+	SurfaceForbiddenError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
@@ -73,7 +67,6 @@ import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
 	assertSessionControl,
-	assertSessionSurfaceAccess,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -92,6 +85,13 @@ import {
 	toComputeResourcesResponse,
 } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import {
+	beginSessionSurface,
+	beginSessionSurfaces,
+	loadSurfaceSession,
+	surfaceConfig,
+	surfaceStopManager,
+} from './sessionSurfaces';
 
 function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
 	return {
@@ -157,6 +157,14 @@ const SessionCreateBodySchema = z
 		compute_profile: z.literal('default').optional(),
 		/** Request a discard-only editor sandbox. Valid only with exclusive sharing. */
 		edit_intent: z.literal('temporary').optional(),
+		/** Secondary editor surfaces to start with this edit session. */
+		surfaces: z
+			.array(z.enum(SECONDARY_SURFACE_IDS))
+			.max(SECONDARY_SURFACE_IDS.length)
+			.refine((surfaces) => new Set(surfaces).size === surfaces.length, {
+				message: 'Duplicate session surfaces are not allowed',
+			})
+			.optional(),
 	})
 	.openapi('SessionCreateBody');
 
@@ -240,15 +248,21 @@ const heartbeatSession = createRoute({
 });
 
 const SurfaceParam = SessionIdParam.extend({
-	surface: z.literal('vscode').openapi({ param: { name: 'surface', in: 'path' } }),
+	surface: z.enum(SECONDARY_SURFACE_IDS).openapi({ param: { name: 'surface', in: 'path' } }),
 });
 
 const SurfaceStartBodySchema = z
-	.object({ open: z.string().max(4096).optional() })
+	.object({
+		open: z
+			.string()
+			.max(4096)
+			.optional()
+			.describe('Workspace-relative file to open. Supported only by the VS Code surface.'),
+	})
 	.openapi('SurfaceStartBody');
 
 const SurfaceResultSchema = SurfaceResponseSchema.extend({
-	id: z.literal('vscode'),
+	id: z.enum(SECONDARY_SURFACE_IDS),
 });
 
 const ensureSurfaceRoute = createRoute({
@@ -419,7 +433,11 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; su
 		user_id: s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
-		can: { attach: can.attach, stop: can.stop, surfaces: { vscode: can.surface } },
+		can: {
+			attach: can.attach,
+			stop: can.stop,
+			surfaces: { vscode: can.surface, opencode: can.surface },
+		},
 		surfaces: publicSurfaces(s, can),
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
@@ -441,78 +459,6 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; su
 		// withholding `sandbox_url` protects — so it rides the same grant.
 		error: can.attach ? s.error : undefined,
 	};
-}
-
-function surfaceManager(deps: ApiDeps): SurfaceManager {
-	const config = deps.sandbox.surfaces?.vscode;
-	if (!config) throw new SurfaceNotEnabledError('The VS Code surface is not enabled');
-	if (deps.compute.capabilities?.multiPort !== true) {
-		throw new SurfaceUnsupportedProviderError(
-			'The compute backend cannot expose a second sandbox port',
-		);
-	}
-	return new SurfaceManager(
-		deps.compute,
-		deps.services.sessions,
-		new SurfaceRegistry([
-			marimoSurface,
-			vscodeSurface({
-				flavor: config.flavor,
-				port: config.port,
-				settings: config.settings,
-				extensionGallery: config.extensionGallery,
-			}),
-		]),
-	);
-}
-
-function surfaceStopManager(deps: ApiDeps): SurfaceManager {
-	return new SurfaceManager(
-		deps.compute,
-		deps.services.sessions,
-		new SurfaceRegistry([marimoSurface, vscodeSurface()]),
-	);
-}
-
-function deferSurfaceCompletion(
-	deps: ApiDeps,
-	completion: Promise<unknown> | undefined,
-	context: { projectId: string; notebookId: string; sessionId: string },
-): void {
-	if (!completion) return;
-	const task = completion.catch((error) => logSurfaceStartFailure(context, error));
-	if (deps.backgroundTasks) deps.backgroundTasks.defer(task);
-	else void task;
-}
-
-function logSurfaceStartFailure(
-	context: { projectId: string; notebookId: string; sessionId: string },
-	error: unknown,
-): void {
-	logEvent({
-		level: 'warn',
-		event: 'surface_start_failed',
-		project_id: context.projectId,
-		notebook_id: context.notebookId,
-		session_id: context.sessionId,
-		surface: 'vscode',
-		error: errorMetadata(error),
-	});
-}
-
-async function loadSurfaceSession(
-	deps: ApiDeps,
-	user: AuthUser,
-	params: { pid: ProjectId; nid: string; sid: SessionId },
-	permission: 'attach' | 'control' = 'attach',
-) {
-	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps.policy);
-	const session = await deps.services.sessions.getSession(params.pid, params.sid);
-	if (session.notebook_id !== params.nid)
-		throw new NotFoundError(`Session ${params.sid} not found`);
-	if (permission === 'control') assertSessionControl(project, session, user, deps.policy);
-	else assertSessionSurfaceAccess(project, session, user, deps.policy);
-	return session;
 }
 
 /**
@@ -1068,6 +1014,16 @@ app.openapi(createSession, async (c) => {
 		},
 		deps.policy,
 	).surface;
+	const requestedSurfaces = body?.surfaces ?? [];
+	if (requestedSurfaces.length > 0 && mode !== 'edit') {
+		throw new BadRequestError('Session surfaces are only valid for edit sessions');
+	}
+	if (requestedSurfaces.length > 0 && !surfaceGrant) {
+		throw new SurfaceForbiddenError();
+	}
+	for (const id of requestedSurfaces) {
+		surfaceConfig(deps, id);
+	}
 	const userHome =
 		mode === 'edit' && sharing === 'exclusive' && roleAtLeast(authorization.role, 'editor')
 			? deps.sandbox.userHome?.resolve(user)
@@ -1131,6 +1087,9 @@ app.openapi(createSession, async (c) => {
 		});
 
 	const { compute, bucket: bucketHandle, sandbox } = deps;
+	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
+	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
+	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
 		logStoredConfigFallback('base_image'),
 	);
@@ -1160,7 +1119,7 @@ app.openapi(createSession, async (c) => {
 	const reusableCandidate =
 		mode === 'edit' ? editorReuse?.session : await sessions.findReusable(pid, nid, user.id, mode);
 	if (reusableCandidate) {
-		const reusable = await tightenAuthorizationDeadline(reusableCandidate);
+		let reusable = await tightenAuthorizationDeadline(reusableCandidate);
 		const authorizationExpired =
 			reusable.authorization_expires_at !== undefined &&
 			Date.now() >= Date.parse(reusable.authorization_expires_at);
@@ -1183,6 +1142,18 @@ app.openapi(createSession, async (c) => {
 		const dead =
 			!!kernelUrl && !!deps.kernelProbe && (await deps.kernelProbe(kernelUrl)) === 'dead';
 		if (!authorizationExpired && (!mayRetire || (!dead && !classMismatch))) {
+			if (reusable.status === 'running' && requestedSurfaces.length > 0) {
+				reusable = await beginSessionSurfaces({
+					deps,
+					session: reusable,
+					user,
+					ids: requestedSurfaces,
+					workspaceDir: sandbox.workdir,
+					exposure: sandboxExposure,
+					hostname,
+					appBaseUrl,
+				});
+			}
 			return c.json(
 				{
 					success: true,
@@ -1225,8 +1196,6 @@ app.openapi(createSession, async (c) => {
 
 	const sandboxId = createSandboxId();
 
-	// createApi defaults this; the fallback satisfies the type for direct callers.
-	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
 	const restoreFilesystemSnapshot =
 		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
 			? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
@@ -1243,9 +1212,6 @@ app.openapi(createSession, async (c) => {
 				name: requestedComputeProfile.name,
 				resources: toComputeResourcesResponse(requestedComputeProfile.resources),
 			};
-
-	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
-	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
 
 	// Provision as a saga: if a later step fails, completed steps compensate in
 	// reverse — the session record is terminated (so it does not linger in
@@ -1489,7 +1455,9 @@ app.openapi(createSession, async (c) => {
 						assetUrl: sandbox.assetUrl,
 						startupTimeoutMs: sandbox.startupTimeoutMs,
 						baseUrl,
-						marimoWatch: mode === 'edit' && Boolean(sandbox.surfaces?.vscode?.marimoWatch),
+						marimoWatch:
+							mode === 'edit' &&
+							Object.values(sandbox.surfaces ?? {}).some((surface) => surface.marimoWatch),
 						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
 						image,
 						resources: requestedComputeProfile.resources,
@@ -1701,40 +1669,21 @@ app.openapi(createSession, async (c) => {
 		});
 	}
 
-	const eagerVscode =
-		mode === 'edit' &&
-		Boolean(sandbox.surfaces?.vscode) &&
-		surfaceGrant &&
-		sandbox.surfaces?.vscode?.start === 'eager';
-	if (eagerVscode && updated) {
-		const surfaceContext = {
-			projectId: pid,
-			notebookId: nid,
-			sessionId: updated.session_id,
-		};
-		try {
-			const config = sandbox.surfaces!.vscode!;
-			let surfaceBasePath: string | undefined;
-			let surfaceClientUrl: string | undefined;
-			if (sandboxExposure instanceof ProxyExposure) {
-				const token = await signProxyToken(pid, updated.session_id, sandboxExposure.signingSecret);
-				surfaceBasePath = `/surface-proxy/${token}/vscode`;
-				surfaceClientUrl = `${joinUrlPath(appBaseUrl, surfaceBasePath)}/`;
-			}
-			const begun = await surfaceManager(deps).begin(updated, 'vscode', {
-				user,
-				workspaceDir: sandbox.workdir,
-				port: config.port,
-				exposure: sandboxExposure.mode,
-				hostname,
-				clientBaseUrl: surfaceClientUrl,
-				basePath: surfaceBasePath,
-			});
-			deferSurfaceCompletion(deps, begun.completion, surfaceContext);
-			updated = await sessions.getSession(pid, updated.session_id);
-		} catch (error) {
-			logSurfaceStartFailure(surfaceContext, error);
-		}
+	const eagerSurfaces = SECONDARY_SURFACE_IDS.filter((id) => {
+		const config = sandbox.surfaces?.[id];
+		return config && (config.start === 'eager' || requestedSurfaces.includes(id));
+	});
+	if (mode === 'edit' && surfaceGrant && eagerSurfaces.length > 0 && updated) {
+		updated = await beginSessionSurfaces({
+			deps,
+			session: updated,
+			user,
+			ids: eagerSurfaces,
+			workspaceDir: sandbox.workdir,
+			exposure: sandboxExposure,
+			hostname,
+			appBaseUrl,
+		});
 	}
 
 	// An app start can put integration secrets and WIF credentials in front of the
@@ -1849,31 +1798,18 @@ app.openapi(ensureSurfaceRoute, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, sid, surface } = c.req.valid('param');
 	const session = await loadSurfaceSession(deps, user, { pid, nid, sid });
-	const config = deps.sandbox.surfaces?.vscode;
-	if (!config) throw new SurfaceNotEnabledError('The VS Code surface is not enabled');
-
-	const exposure = deps.sandbox.exposure;
-	let basePath: string | undefined;
-	let clientBaseUrl: string | undefined;
-	if (exposure instanceof ProxyExposure) {
-		const token = await signProxyToken(pid, sid, exposure.signingSecret);
-		basePath = `/surface-proxy/${token}/${surface}`;
-		clientBaseUrl = `${joinUrlPath(resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl), basePath)}/`;
-	}
-	const begun = await surfaceManager(deps).begin(session, surface, {
+	const exposure = deps.sandbox.exposure ?? new SubdomainExposure();
+	const appBaseUrl = resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl);
+	const begun = await beginSessionSurface({
+		deps,
+		session,
 		user,
+		id: surface,
 		workspaceDir: deps.sandbox.workdir,
-		port: config.port,
-		exposure: exposure?.mode ?? 'subdomain',
+		exposure,
 		hostname: deps.sandbox.hostname,
-		clientBaseUrl,
-		basePath,
+		appBaseUrl,
 		open: c.req.valid('json')?.open,
-	});
-	deferSurfaceCompletion(deps, begun.completion, {
-		projectId: pid,
-		notebookId: nid,
-		sessionId: sid,
 	});
 	const result = begun.result;
 	if (result.status === 'starting') c.header('Retry-After', '1');

@@ -87,13 +87,18 @@ the `kubernetes`/`coreweave` backends) in front.
 
 ## Secondary editor surfaces
 
-The optional VS Code surface runs in the existing edit sandbox. Its terminal
-can read the same session credentials and project integrations as the marimo
-kernel, so only an editor who can attach to that edit session may start or reach
-it. App sessions and viewer-owned ephemeral sessions are denied. Proxy exposure
-rechecks this grant on every HTTP request and WebSocket upgrade; subdomain
-exposure treats the returned URL as a capability and withholds it from other
-callers.
+VS Code and OpenCode run in the edit sandbox. Their terminals and agents can run
+shell commands and read the notebook credentials. Only users who can attach to
+the edit session can use these surfaces. App sessions and viewer-owned ephemeral
+sessions cannot use them.
+
+VS Code proxy exposure authorizes each HTTP request and WebSocket upgrade.
+OpenCode supports only subdomain exposure because its client requires root
+paths. Each subdomain URL is an access capability. Do not publish these URLs.
+
+OpenCode stores `/connect` credentials and state in its temporary surface
+directory. Managed AI stores an expiring session token there, not the upstream
+API key. Project configuration and bring-your-own-key providers can override it.
 
 ## Authentication fails closed
 

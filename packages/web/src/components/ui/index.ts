@@ -71,3 +71,10 @@ export type { CopyFieldProps } from './CopyField';
 export { WriteOnceWarning } from './WriteOnceWarning';
 
 export { ErrorBoundary } from './ErrorBoundary';
+
+export { ApplicationTabs } from './ApplicationTabs';
+export type {
+	ApplicationTabCloseConfirmation,
+	ApplicationTabItem,
+	ApplicationTabsProps,
+} from './ApplicationTabs';

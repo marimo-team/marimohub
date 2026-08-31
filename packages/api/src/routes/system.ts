@@ -142,16 +142,28 @@ app.openapi(capabilitiesRoute, (c) => {
 			...toComputeResourcesResponse(profile.resources),
 		})),
 		compute_profile_override: deps.sandbox.computeProfileOverride ?? 'none',
-		surfaces: deps.sandbox.surfaces?.vscode
-			? [
-					{
-						id: 'vscode' as const,
-						flavor: deps.sandbox.surfaces.vscode.flavor,
-						start: deps.sandbox.surfaces.vscode.start,
-						embed: deps.sandbox.surfaces.vscode.embed,
-					},
-				]
-			: [],
+		surfaces: [
+			...(deps.sandbox.surfaces?.vscode
+				? [
+						{
+							id: 'vscode' as const,
+							flavor: deps.sandbox.surfaces.vscode.flavor,
+							start: deps.sandbox.surfaces.vscode.start,
+							embed: deps.sandbox.surfaces.vscode.embed,
+						},
+					]
+				: []),
+			...(deps.sandbox.surfaces?.opencode
+				? [
+						{
+							id: 'opencode' as const,
+							start: deps.sandbox.surfaces.opencode.start,
+							embed: deps.sandbox.surfaces.opencode.embed,
+							managed_ai: Boolean(deps.ai),
+						},
+					]
+				: []),
+		],
 	});
 });
 

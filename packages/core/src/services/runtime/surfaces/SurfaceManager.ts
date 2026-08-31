@@ -131,6 +131,14 @@ export class SurfaceManager {
 			throw new ConflictError('The sandbox must be running before a surface can start');
 		}
 		const spec = this.secondary(id);
+		if (!spec.supportedExposures.includes(options.exposure)) {
+			throw new SurfaceUnavailableError(
+				`Surface ${id} does not support ${options.exposure} exposure`,
+			);
+		}
+		if (options.open && !spec.supportsOpenPath) {
+			throw new SurfaceOpenInvalidError(`Surface ${id} does not support an open path`);
+		}
 		validateOpenPath(options.open);
 		const instance = this.provider.create(session.sandbox_id);
 		const context: SurfaceContext = {

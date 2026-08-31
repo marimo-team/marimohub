@@ -215,6 +215,41 @@ describe('GET /api/v1/capabilities', () => {
 		});
 	});
 
+	it('reports VS Code and managed OpenCode independently', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		deps.sandbox.surfaces = {
+			vscode: {
+				flavor: 'openvscode',
+				start: 'on-demand',
+				port: 8443,
+				settings: {},
+				extensionGallery: 'openvsx',
+				embed: 'tab',
+				marimoWatch: true,
+			},
+			opencode: {
+				start: 'eager',
+				port: 4096,
+				memoryMb: 1024,
+				embed: 'iframe',
+				marimoWatch: true,
+			},
+		};
+		deps.ai = {
+			upstreamBaseUrl: 'https://provider.example/v1',
+			upstreamApiKey: 'secret',
+			model: 'gpt-test',
+			signingSecret: 'signing-secret',
+		};
+
+		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+			surfaces: [
+				{ id: 'vscode', flavor: 'openvscode', start: 'on-demand', embed: 'tab' },
+				{ id: 'opencode', start: 'eager', embed: 'iframe', managed_ai: true },
+			],
+		});
+	});
+
 	it('requires authentication (not a public endpoint)', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { wif: stubWif });
 		const res = await createApi(deps).request('/api/v1/capabilities');

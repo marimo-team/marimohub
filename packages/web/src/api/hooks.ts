@@ -1785,63 +1785,6 @@ export function useStopSession(
 	);
 }
 
-const SURFACE_POLL_INTERVAL_MS = 1_000;
-export const SURFACE_START_TIMEOUT_MS = 180_000;
-
-export function useEnsureVscodeSurface(projectId: string, notebookId: string) {
-	return useMutation({
-		mutationFn: async ({ sessionId, open }: { sessionId: string; open?: string }) => {
-			const params = {
-				path: { pid: projectId, nid: notebookId, sid: sessionId, surface: 'vscode' as const },
-			};
-			let surface = await apiData(
-				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}', {
-					params,
-					body: open ? { open } : {},
-				}),
-			);
-			const deadline = Date.now() + SURFACE_START_TIMEOUT_MS;
-			while (surface.status === 'starting' && Date.now() < deadline) {
-				await new Promise<void>((resolve) => {
-					setTimeout(resolve, SURFACE_POLL_INTERVAL_MS);
-				});
-				surface = await apiData(
-					apiClient.GET(
-						'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}',
-						{ params },
-					),
-				);
-			}
-			if (surface.status !== 'ready' || !surface.url) {
-				throw new Error(surface.last_error ?? 'VS Code did not become ready');
-			}
-			return surface;
-		},
-	});
-}
-
-export function useStopVscodeSurface(projectId: string, notebookId: string) {
-	return useApiMutation(
-		(sessionId: string) =>
-			apiData(
-				apiClient.DELETE(
-					'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}',
-					{
-						params: {
-							path: {
-								pid: projectId,
-								nid: notebookId,
-								sid: sessionId,
-								surface: 'vscode',
-							},
-						},
-					},
-				),
-			),
-		() => [sessionKeys.listByProject(projectId)],
-	);
-}
-
 export function useEditorSessionQuery(
 	projectId: string,
 	notebookId: string,

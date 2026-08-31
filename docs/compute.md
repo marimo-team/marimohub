@@ -10,8 +10,8 @@ on-demand sandbox created by the selected compute backend.
 See [Editor sessions](./editor-sessions.md) to choose shared or exclusive access
 to persistent editor sandboxes.
 
-See [VS Code surface](./surfaces.md) to attach a browser editor to the existing
-edit sandbox.
+See [Session surfaces](./surfaces.md) to attach VS Code or OpenCode to the
+existing edit sandbox.
 
 Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 [Configuration -> Compute](./configuration.md#compute).
@@ -59,7 +59,8 @@ stop the sandbox. For Modal, the adapter sets the provider-side idle timeout to
 - `proxy`: kernel traffic is forwarded through the app origin.
 
 See [Security -> Kernel exposure](./security.md#kernel-exposure) for the trust
-model.
+OpenCode supports only `subdomain` exposure. Configuration fails when OpenCode
+and `proxy` mode are both enabled.
 
 ## Compute profiles
 

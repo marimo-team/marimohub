@@ -1646,16 +1646,27 @@ export interface components {
 			})[];
 			/** @enum {string} */
 			compute_profile_override: 'none' | 'editors';
-			surfaces: {
-				/** @enum {string} */
-				id: 'vscode';
-				/** @enum {string} */
-				flavor: 'code-server' | 'openvscode';
-				/** @enum {string} */
-				start: 'on-demand' | 'eager';
-				/** @enum {string} */
-				embed: 'tab' | 'iframe';
-			}[];
+			surfaces: (
+				| {
+						/** @enum {string} */
+						id: 'vscode';
+						/** @enum {string} */
+						flavor: 'code-server' | 'openvscode';
+						/** @enum {string} */
+						start: 'on-demand' | 'eager';
+						/** @enum {string} */
+						embed: 'tab' | 'iframe';
+				  }
+				| {
+						/** @enum {string} */
+						id: 'opencode';
+						/** @enum {string} */
+						start: 'on-demand' | 'eager';
+						/** @enum {string} */
+						embed: 'tab' | 'iframe';
+						managed_ai: boolean;
+				  }
+			)[];
 		};
 		ComputeResources: {
 			cpu?: number;
@@ -2260,6 +2271,7 @@ export interface components {
 				stop: boolean;
 				surfaces?: {
 					vscode: boolean;
+					opencode: boolean;
 				};
 			};
 			surfaces?: {
@@ -2348,8 +2360,10 @@ export interface components {
 			compute_profile?: 'default';
 			/** @enum {string} */
 			edit_intent?: 'temporary';
+			surfaces?: ('vscode' | 'opencode')[];
 		};
 		SurfaceStartBody: {
+			/** @description Workspace-relative file to open. Supported only by the VS Code surface. */
 			open?: string;
 		};
 		IntegrationKind: {
@@ -9033,7 +9047,7 @@ export interface operations {
 				pid: string;
 				nid: string;
 				sid: string;
-				surface: 'vscode';
+				surface: 'vscode' | 'opencode';
 			};
 			cookie?: never;
 		};
@@ -9050,7 +9064,7 @@ export interface operations {
 						success: true;
 						data: components['schemas']['Surface'] & {
 							/** @enum {string} */
-							id: 'vscode';
+							id: 'vscode' | 'opencode';
 						};
 					};
 				};
@@ -9130,7 +9144,7 @@ export interface operations {
 				pid: string;
 				nid: string;
 				sid: string;
-				surface: 'vscode';
+				surface: 'vscode' | 'opencode';
 			};
 			cookie?: never;
 		};
@@ -9151,7 +9165,7 @@ export interface operations {
 						success: true;
 						data: components['schemas']['Surface'] & {
 							/** @enum {string} */
-							id: 'vscode';
+							id: 'vscode' | 'opencode';
 						};
 					};
 				};
@@ -9167,7 +9181,7 @@ export interface operations {
 						success: true;
 						data: components['schemas']['Surface'] & {
 							/** @enum {string} */
-							id: 'vscode';
+							id: 'vscode' | 'opencode';
 						};
 					};
 				};
@@ -9265,7 +9279,7 @@ export interface operations {
 				pid: string;
 				nid: string;
 				sid: string;
-				surface: 'vscode';
+				surface: 'vscode' | 'opencode';
 			};
 			cookie?: never;
 		};

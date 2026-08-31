@@ -307,9 +307,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SURFACES',
 						name: 'Sandbox surfaces',
 						description:
-							'Comma-separated editor surfaces enabled in notebook sandboxes. `marimo` is always available; add `vscode` to enable browser VS Code.',
+							'Comma-separated editor surfaces enabled in notebook sandboxes. `marimo` is always available; add `vscode`, `opencode`, or both.',
 						default: 'marimo',
-						example: 'marimo,vscode',
+						example: 'marimo,vscode,opencode',
 						optIn: true,
 					},
 					{
@@ -353,7 +353,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_SURFACE_VSCODE_EMBED',
 						name: 'VS Code presentation',
-						description: 'Open VS Code in a new tab or an iframe (`tab` or `iframe`).',
+						description: 'Open VS Code in an application tab or split view (`tab` or `iframe`).',
 						default: 'tab',
 						optIn: true,
 					},
@@ -361,6 +361,42 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH',
 						name: 'Watch VS Code edits in marimo',
 						description: 'Pass `--watch` to marimo edit when the VS Code surface is enabled.',
+						default: 'true',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_OPENCODE_START',
+						name: 'OpenCode start policy',
+						description: 'Start OpenCode on demand or with every authorized edit session.',
+						default: 'on-demand',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_OPENCODE_PORT',
+						name: 'OpenCode port',
+						description:
+							'Logical sandbox port used by OpenCode. Must differ from marimo port 2718 and all other enabled surface ports.',
+						default: '4096',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB',
+						name: 'OpenCode memory (MiB)',
+						description: 'Memory requirement declared for the OpenCode surface.',
+						default: '1024',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_OPENCODE_EMBED',
+						name: 'OpenCode presentation',
+						description: 'Open OpenCode in an application tab or split view (`tab` or `iframe`).',
+						default: 'tab',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH',
+						name: 'Watch OpenCode edits in marimo',
+						description: 'Pass `--watch` to marimo edit when OpenCode is enabled.',
 						default: 'true',
 						optIn: true,
 					},

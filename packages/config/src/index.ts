@@ -547,9 +547,14 @@ export function createFromEnv(
 		libraries: options?.libraries,
 	});
 	const surfaces = surfacesFromEnv(env);
-	if (surfaces?.vscode && compute.capabilities?.multiPort !== true) {
+	if (surfaces?.opencode && exposure.mode === 'proxy') {
+		throw new ConfigError('OpenCode does not support proxy sandbox exposure', {
+			variable: 'MARIMOHUB_SURFACES',
+		});
+	}
+	if (surfaces && compute.capabilities?.multiPort !== true) {
 		throw new ConfigError(
-			`The ${computeBackendValue} compute backend cannot expose a second sandbox port for VS Code`,
+			`The ${computeBackendValue} compute backend cannot expose secondary sandbox surfaces`,
 			{ variable: 'MARIMOHUB_SURFACES' },
 		);
 	}

@@ -326,32 +326,56 @@ components:
         surfaces:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-                enum:
-                  - vscode
-              flavor:
-                type: string
-                enum:
-                  - code-server
-                  - openvscode
-              start:
-                type: string
-                enum:
-                  - on-demand
-                  - eager
-              embed:
-                type: string
-                enum:
-                  - tab
-                  - iframe
-            required:
-              - id
-              - flavor
-              - start
-              - embed
+            oneOf:
+              - type: object
+                properties:
+                  id:
+                    type: string
+                    enum:
+                      - vscode
+                  flavor:
+                    type: string
+                    enum:
+                      - code-server
+                      - openvscode
+                  start:
+                    type: string
+                    enum:
+                      - on-demand
+                      - eager
+                  embed:
+                    type: string
+                    enum:
+                      - tab
+                      - iframe
+                required:
+                  - id
+                  - flavor
+                  - start
+                  - embed
+              - type: object
+                properties:
+                  id:
+                    type: string
+                    enum:
+                      - opencode
+                  start:
+                    type: string
+                    enum:
+                      - on-demand
+                      - eager
+                  embed:
+                    type: string
+                    enum:
+                      - tab
+                      - iframe
+                  managed_ai:
+                    type: boolean
+                required:
+                  - id
+                  - start
+                  - embed
+                  - managed_ai
       required:
         - federation
         - integrations
@@ -1658,8 +1682,11 @@ components:
               properties:
                 vscode:
                   type: boolean
+                opencode:
+                  type: boolean
               required:
                 - vscode
+                - opencode
           required:
             - attach
             - stop
@@ -1884,6 +1911,14 @@ components:
           type: string
           enum:
             - temporary
+        surfaces:
+          type: array
+          items:
+            type: string
+            enum:
+              - vscode
+              - opencode
+          maxItems: 2
       additionalProperties: false
     SurfaceStartBody:
       type: object
@@ -1891,6 +1926,8 @@ components:
         open:
           type: string
           maxLength: 4096
+          description: Workspace-relative file to open. Supported only by the VS Code
+            surface.
     IntegrationKind:
       type: object
       properties:
@@ -9371,6 +9408,7 @@ paths:
             type: string
             enum:
               - vscode
+              - opencode
           required: true
           name: surface
           in: path
@@ -9401,6 +9439,7 @@ paths:
                             type: string
                             enum:
                               - vscode
+                              - opencode
                         required:
                           - id
                 required:
@@ -9426,6 +9465,7 @@ paths:
                             type: string
                             enum:
                               - vscode
+                              - opencode
                         required:
                           - id
                 required:
@@ -9524,6 +9564,7 @@ paths:
             type: string
             enum:
               - vscode
+              - opencode
           required: true
           name: surface
           in: path
@@ -9548,6 +9589,7 @@ paths:
                             type: string
                             enum:
                               - vscode
+                              - opencode
                         required:
                           - id
                 required:
@@ -9634,6 +9676,7 @@ paths:
             type: string
             enum:
               - vscode
+              - opencode
           required: true
           name: surface
           in: path

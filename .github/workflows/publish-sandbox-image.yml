@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths:
       - 'images/marimo-sandbox/Dockerfile'
+      - '.github/workflows/publish-sandbox-image.yml'
   pull_request:
     paths:
       - 'images/marimo-sandbox/Dockerfile'
+      - '.github/workflows/publish-sandbox-image.yml'
 
 permissions:
   contents: read
@@ -53,6 +55,47 @@ jobs:
             done
           '
 
+      - name: Build OpenCode variant
+        run: docker build --target opencode -t marimo-sandbox:opencode-ci images/marimo-sandbox
+
+      - name: Verify OpenCode variant
+        run: |
+          docker run --rm marimo-sandbox:opencode-ci opencode --version | grep -F '1.18.17'
+          docker run --rm marimo-sandbox:opencode-ci sh -ec '
+            opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
+            pid=$!
+            trap "kill $pid 2>/dev/null || true" EXIT
+            attempts=0
+            until curl -fsS http://127.0.0.1:4096/global/health; do
+              attempts=$((attempts + 1))
+              if [ "$attempts" -ge 30 ]; then
+                cat /tmp/opencode.log
+                exit 1
+              fi
+              sleep 1
+            done
+          '
+
+      - name: Build and verify combined tools variant
+        run: |
+          docker build --target tools -t marimo-sandbox:tools-ci images/marimo-sandbox
+          docker run --rm marimo-sandbox:tools-ci code-server --version
+          docker run --rm marimo-sandbox:tools-ci opencode --version | grep -F '1.18.17'
+          docker run --rm marimo-sandbox:tools-ci sh -ec '
+            opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
+            pid=$!
+            trap "kill $pid 2>/dev/null || true" EXIT
+            attempts=0
+            until curl -fsS http://127.0.0.1:4096/global/health; do
+              attempts=$((attempts + 1))
+              if [ "$attempts" -ge 30 ]; then
+                cat /tmp/opencode.log
+                exit 1
+              fi
+              sleep 1
+            done
+          '
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         if: github.event_name == 'push'
 
@@ -88,3 +131,29 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-vscode
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-vscode
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-vscode
+
+      - name: Publish OpenCode variant
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/marimo-sandbox
+          target: opencode
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-opencode
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-opencode
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-opencode
+
+      - name: Publish combined tools variant
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/marimo-sandbox
+          target: tools
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-tools
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-tools
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-tools
