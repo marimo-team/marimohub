@@ -89,10 +89,17 @@ export function createWandbCompute(
 	if (!apiKey.trim()) {
 		throw new Error('W&B API key is missing or blank');
 	}
-	// Eager construction is safe — grpc-js channels dial lazily. An empty
-	// baseUrl falls back to the SDK's default gateway inside createSandboxClient.
-	const sdk = createSandboxClient({ apiKey, entity, project, baseUrl, env: {} });
-	const gatewayUrl = baseUrl?.trim() || DEFAULT_WANDB_SANDBOX_BASE_URL;
+	// Normalize once so the SDK and the tracing endpoint label agree (the SDK
+	// would trim/default internally, but only for its own use). Eager
+	// construction is safe — grpc-js channels dial lazily.
+	const gatewayUrl = baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_WANDB_SANDBOX_BASE_URL;
+	const sdk = createSandboxClient({
+		apiKey: apiKey.trim(),
+		entity,
+		project,
+		baseUrl: gatewayUrl,
+		env: {},
+	});
 	// Same controlled cast as `CoreWeaveCompute.getClient()`: the SDK client
 	// exposes the CoreWeaveClient surface at runtime.
 	// oxlint-disable-next-line anti-slop/no-chained-type-assertions

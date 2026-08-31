@@ -416,8 +416,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS',
 						name: 'CoreWeave kernel Ingress class',
-						description: 'IngressClass for hub-published kernel Ingresses.',
-						default: 'traefik',
+						description:
+							'IngressClass for hub-published kernel Ingresses. Only meaningful with `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` (rejected at boot without it).',
+						default: 'traefik (with the ingress namespace)',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID',
