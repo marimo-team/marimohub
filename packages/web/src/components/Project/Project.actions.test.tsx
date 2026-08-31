@@ -8,6 +8,7 @@ import {
 	makeFetch,
 	renderProject,
 	runningSession,
+	stoppableSession,
 } from './Project.testWorld';
 
 describe('Project — Notebook Actions: configuration', () => {
@@ -111,7 +112,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		expect(screen.queryByText('small')).not.toBeInTheDocument();
 	});
 
-	it('lets editors change compute from the notebook overflow menu', async () => {
+	it('lets editors change compute from the notebook list chip button', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({
 			role: 'editor',
@@ -126,7 +127,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 		await renderProject();
 
-		await chooseNotebookAction(user, 'Change compute…');
+		await user.click(screen.getByRole('button', { name: 'Change compute for Forecast' }));
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByRole('radio', { name: /Default \(small\)/ })).toBeChecked();
 		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
@@ -142,6 +143,29 @@ describe('Project — Notebook Actions: configuration', () => {
 				),
 			).toBe(true),
 		);
+	});
+
+	it('keeps change compute in the overflow menu when a session is running', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			sessions: [stoppableSession()],
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		expect(
+			screen.queryByRole('button', { name: 'Change compute for Forecast' }),
+		).not.toBeInTheDocument();
+		await chooseNotebookAction(user, 'Change compute…');
+		expect(await screen.findByRole('dialog')).toBeInTheDocument();
 	});
 
 	it('labels and restarts the edit session when edit and app are both live', async () => {
@@ -264,6 +288,9 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 		await renderProject();
 
+		expect(
+			screen.queryByRole('button', { name: 'Change compute for Forecast' }),
+		).not.toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
 		expect(await screen.findByText('Rename')).toBeInTheDocument();
 		expect(screen.queryByText('Change compute…')).not.toBeInTheDocument();

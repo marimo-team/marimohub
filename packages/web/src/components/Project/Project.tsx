@@ -821,6 +821,17 @@ export function Project() {
 											<Power className="size-4" />
 										</IconButton>
 									)}
+									{/* Idle notebooks: change compute without opening the overflow menu. */}
+									{offersComputeChoice && !stoppableEdit && !live?.app && (
+										<IconButton
+											label={`Change compute for ${nb.title}`}
+											tooltip="Change compute…"
+											className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
+											onPress={() => computeProfileModal.open(nb)}
+										>
+											<Cpu className="size-4" />
+										</IconButton>
+									)}
 									<DropdownMenu
 										label={`Notebook actions for ${nb.title}`}
 										icon={<MoreHorizontal className="size-4" />}
