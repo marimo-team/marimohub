@@ -33,7 +33,6 @@ describe('surfacesFromEnv', () => {
 				MARIMOHUB_SURFACES: 'marimo,vscode,opencode',
 				MARIMOHUB_SURFACE_OPENCODE_START: 'eager',
 				MARIMOHUB_SURFACE_OPENCODE_PORT: '5096',
-				MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB: '1536',
 				MARIMOHUB_SURFACE_OPENCODE_EMBED: 'iframe',
 				MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH: 'false',
 			}),
@@ -42,7 +41,6 @@ describe('surfacesFromEnv', () => {
 			opencode: {
 				start: 'eager',
 				port: 5096,
-				memoryMb: 1536,
 				embed: 'iframe',
 				marimoWatch: false,
 			},
@@ -54,7 +52,6 @@ describe('surfacesFromEnv', () => {
 			opencode: {
 				start: 'on-demand',
 				port: 4096,
-				memoryMb: 1024,
 				embed: 'tab',
 				marimoWatch: true,
 			},
@@ -88,19 +85,13 @@ describe('surfacesFromEnv', () => {
 		).toThrow(new RegExp(variable));
 	});
 
-	it('rejects a shared secondary port and invalid OpenCode memory', () => {
+	it('rejects a shared secondary port', () => {
 		expect(() =>
 			surfacesFromEnv({
 				MARIMOHUB_SURFACES: 'marimo,vscode,opencode',
 				MARIMOHUB_SURFACE_VSCODE_PORT: '4096',
 			}),
 		).toThrow(/cannot share sandbox port/);
-		expect(() =>
-			surfacesFromEnv({
-				MARIMOHUB_SURFACES: 'marimo,opencode',
-				MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB: '0',
-			}),
-		).toThrow(/MEMORY_MB/);
 	});
 
 	it.each([
@@ -109,8 +100,6 @@ describe('surfacesFromEnv', () => {
 		['MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH', 'yes'],
 		['MARIMOHUB_SURFACE_OPENCODE_PORT', '4096.5'],
 		['MARIMOHUB_SURFACE_OPENCODE_PORT', '65536'],
-		['MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB', '1.5'],
-		['MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB', '9007199254740992'],
 	] as const)('rejects invalid OpenCode value %s=%s', (variable, value) => {
 		expect(() =>
 			surfacesFromEnv({
@@ -134,7 +123,7 @@ describe('surfacesFromEnv', () => {
 		expect(
 			surfacesFromEnv({
 				MARIMOHUB_SURFACES: 'marimo,vscode',
-				MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB: '0',
+				MARIMOHUB_SURFACE_OPENCODE_PORT: '0',
 			}),
 		).toHaveProperty('vscode');
 		expect(

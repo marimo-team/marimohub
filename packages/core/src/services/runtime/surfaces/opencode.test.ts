@@ -25,7 +25,6 @@ describe('opencodeSurface', () => {
 		await surface.prepare?.(instance, context);
 
 		expect(surface.supportedExposures).toEqual(['subdomain']);
-		expect(surface.resources).toEqual({ memoryMb: 1024 });
 		expect(surface.readiness.path).toBe('/global/health');
 		expect(calls.writeFile[0].path).toBe(`${context.userDataDir}/config/opencode/opencode.json`);
 		expect(JSON.parse(String(calls.writeFile[0].content))).toEqual({
@@ -47,20 +46,19 @@ describe('opencodeSurface', () => {
 		);
 	});
 
-	it('reports the installed version and configured memory', async () => {
+	it('reports the installed version', async () => {
 		const { instance } = makeFakeSandbox();
 		instance.exec = async () => ({
 			success: true,
 			stdout: '1.18.17\n',
 			stderr: '',
 		});
-		const surface = opencodeSurface({ memoryMb: 1536 });
+		const surface = opencodeSurface();
 
 		await expect(surface.probe(instance)).resolves.toEqual({
 			available: true,
 			version: '1.18.17',
 		});
-		expect(surface.resources).toEqual({ memoryMb: 1536 });
 	});
 
 	it('writes managed AI as an overridable custom provider', async () => {

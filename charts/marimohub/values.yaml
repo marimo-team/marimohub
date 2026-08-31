@@ -44,6 +44,8 @@ surfaces:
   sandboxImage: ''
   vscode:
     enabled: false
+    # Deprecated: use surfaces.sandboxImage. This remains an upgrade fallback.
+    sandboxImage: ''
     flavor: code-server
     start: on-demand
     port: 8443
@@ -55,7 +57,6 @@ surfaces:
     enabled: false
     start: on-demand
     port: 4096
-    memoryMb: 1024
     embed: tab
     marimoWatch: true
 

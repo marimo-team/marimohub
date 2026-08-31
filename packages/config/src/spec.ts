@@ -380,13 +380,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB',
-						name: 'OpenCode memory (MiB)',
-						description: 'Memory requirement declared for the OpenCode surface.',
-						default: '1024',
-						optIn: true,
-					},
-					{
 						id: 'MARIMOHUB_SURFACE_OPENCODE_EMBED',
 						name: 'OpenCode presentation',
 						description: 'Open OpenCode in an application tab or split view (`tab` or `iframe`).',

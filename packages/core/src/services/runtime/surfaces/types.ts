@@ -44,5 +44,4 @@ export interface SurfaceSpec {
 		ctx: SurfaceContext,
 		opts: { open?: string; port: number },
 	): Promise<URL>;
-	resources?: { memoryMb: number };
 }

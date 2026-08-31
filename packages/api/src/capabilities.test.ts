@@ -230,7 +230,6 @@ describe('GET /api/v1/capabilities', () => {
 			opencode: {
 				start: 'eager',
 				port: 4096,
-				memoryMb: 1024,
 				embed: 'iframe',
 				marimoWatch: true,
 			},

@@ -156,7 +156,6 @@ export interface SandboxConfig {
 		opencode?: {
 			start: 'on-demand' | 'eager';
 			port: number;
-			memoryMb: number;
 			embed: 'tab' | 'iframe';
 			marimoWatch: boolean;
 		};

@@ -67,12 +67,6 @@ function vscodeFromEnv(env: Env, port: number): VscodeConfig {
 }
 
 function openCodeFromEnv(env: Env, port: number): OpenCodeConfig {
-	const memoryMb = parseIntEnv(env, 'MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB') ?? 1024;
-	if (!Number.isSafeInteger(memoryMb) || memoryMb < 1) {
-		throw new ConfigError(`Invalid MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB: ${memoryMb}`, {
-			variable: 'MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB',
-		});
-	}
 	return {
 		start: parseEnumOr(
 			env,
@@ -81,7 +75,6 @@ function openCodeFromEnv(env: Env, port: number): OpenCodeConfig {
 			'on-demand',
 		),
 		port,
-		memoryMb,
 		embed: parseEnumOr(env, 'MARIMOHUB_SURFACE_OPENCODE_EMBED', ['tab', 'iframe'], 'tab'),
 		marimoWatch:
 			env.MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH === undefined

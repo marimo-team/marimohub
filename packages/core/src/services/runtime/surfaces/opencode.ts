@@ -11,7 +11,6 @@ export interface OpenCodeManagedAiOptions {
 
 export interface OpenCodeSurfaceOptions {
 	port?: number;
-	memoryMb?: number;
 	managedAi?: OpenCodeManagedAiOptions;
 }
 
@@ -85,7 +84,6 @@ export function opencodeSurface(options: OpenCodeSurfaceOptions = {}): SurfaceSp
 		defaultPort: options.port ?? 4096,
 		supportedExposures: ['subdomain'],
 		proxyPath: 'strip-prefix',
-		resources: { memoryMb: options.memoryMb ?? 1024 },
 		async probe(instance) {
 			const result = await instance.exec(
 				`command -v opencode >/dev/null 2>&1 && opencode --version`,

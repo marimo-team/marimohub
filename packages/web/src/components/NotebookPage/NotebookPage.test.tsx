@@ -89,6 +89,42 @@ describe('NotebookPage viewer modes', () => {
 		).toBe(true);
 	});
 
+	it('opens and closes each surface when concurrent actions settle out of order', async () => {
+		let resolveVscodeStart!: () => void;
+		let resolveOpenCodeStart!: () => void;
+		let resolveVscodeStop!: () => void;
+		let resolveOpenCodeStop!: () => void;
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			vscode: { embed: 'iframe' },
+			opencode: { embed: 'iframe' },
+			vscodeStartPromise: new Promise((resolve) => (resolveVscodeStart = resolve)),
+			opencodeStartPromise: new Promise((resolve) => (resolveOpenCodeStart = resolve)),
+			vscodeStopPromise: new Promise((resolve) => (resolveVscodeStop = resolve)),
+			opencodeStopPromise: new Promise((resolve) => (resolveOpenCodeStop = resolve)),
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: true } },
+			}),
+		});
+		renderPage();
+
+		await chooseSurfaceAction(user, 'Start VS Code');
+		await chooseSurfaceAction(user, 'Start OpenCode');
+		resolveOpenCodeStart();
+		expect(await screen.findByTitle('Forecast in OpenCode')).toBeInTheDocument();
+		resolveVscodeStart();
+		expect(await screen.findByTitle('Forecast in VS Code')).toBeInTheDocument();
+
+		await chooseSurfaceAction(user, 'Stop VS Code');
+		await chooseSurfaceAction(user, 'Stop OpenCode');
+		resolveOpenCodeStop();
+		await waitFor(() => expect(screen.queryByTitle('Forecast in OpenCode')).toBeNull());
+		expect(screen.getByTitle('Forecast in VS Code')).toBeInTheDocument();
+		resolveVscodeStop();
+		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
+	});
+
 	it('opens a tab surface locally and only pops it out on request', async () => {
 		const user = userEvent.setup();
 		const open = vi.spyOn(window, 'open').mockReturnValue(null);

@@ -113,10 +113,14 @@ export function SurfaceMenu({
 			if (!notebook) return;
 			open = control.openPath(notebook);
 		}
-		actions.start.mutate(
-			{ surfaceId: control.id, sessionId: session.session_id, ...(open ? { open } : {}) },
-			{
-				onSuccess: (surface) => {
+		void actions.start
+			.mutateAsync({
+				surfaceId: control.id,
+				sessionId: session.session_id,
+				...(open ? { open } : {}),
+			})
+			.then(
+				(surface) => {
 					onOpenFrame({
 						sessionId: session.session_id,
 						surfaceId: control.id,
@@ -125,18 +129,16 @@ export function SurfaceMenu({
 						embed: control.capability.embed,
 					});
 				},
-			},
-		);
+				() => null,
+			);
 	};
 
 	const stop = (control: (typeof controls)[number]) => {
 		if (!session) return;
 		const sessionId = session.session_id;
-		actions.stop.mutate(
-			{ surfaceId: control.id, sessionId },
-			{
-				onSuccess: () => onCloseFrame(control.id, sessionId),
-			},
+		void actions.stop.mutateAsync({ surfaceId: control.id, sessionId }).then(
+			() => onCloseFrame(control.id, sessionId),
+			() => null,
 		);
 	};
 

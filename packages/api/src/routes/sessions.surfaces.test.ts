@@ -322,7 +322,6 @@ describe('Session surface routes', () => {
 						opencode: {
 							start: 'on-demand',
 							port: 4096,
-							memoryMb: 1024,
 							embed: 'tab',
 							marimoWatch: true,
 						},
@@ -366,7 +365,6 @@ describe('Session surface routes', () => {
 						opencode: {
 							start: 'on-demand',
 							port: 4096,
-							memoryMb: 1024,
 							embed: 'tab',
 							marimoWatch: true,
 						},
@@ -438,7 +436,6 @@ describe('Session surface routes', () => {
 							opencode: {
 								start: 'on-demand',
 								port: 4096,
-								memoryMb: 1024,
 								embed: 'tab',
 								marimoWatch: true,
 							},
@@ -498,7 +495,6 @@ describe('Session surface routes', () => {
 						opencode: {
 							start: 'on-demand',
 							port: 4096,
-							memoryMb: 1024,
 							embed: 'tab',
 							marimoWatch: true,
 						},
@@ -587,7 +583,6 @@ describe('Session surface routes', () => {
 						opencode: {
 							start: 'eager',
 							port: 4096,
-							memoryMb: 1024,
 							embed: 'tab',
 							marimoWatch: true,
 						},

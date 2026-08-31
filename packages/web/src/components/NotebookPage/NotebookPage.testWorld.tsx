@@ -70,6 +70,10 @@ interface FetchOptions {
 	vscodeStopError?: { code: string; message: string; status: number };
 	opencodeStartError?: { code: string; message: string; status: number };
 	opencodeStopError?: { code: string; message: string; status: number };
+	vscodeStartPromise?: Promise<void>;
+	vscodeStopPromise?: Promise<void>;
+	opencodeStartPromise?: Promise<void>;
+	opencodeStopPromise?: Promise<void>;
 	omitSourceControlCapability?: boolean;
 	changeRequestFailures?: number;
 	changeRequestFailOn?: number[];
@@ -117,6 +121,7 @@ export function makeFetch(opts: FetchOptions) {
 			return ok({ ...response, reused: false });
 		}
 		if (method === 'POST' && url.endsWith('/surfaces/vscode')) {
+			await opts.vscodeStartPromise;
 			if (opts.vscodeStartError) {
 				const { code, message, status } = opts.vscodeStartError;
 				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
@@ -131,6 +136,7 @@ export function makeFetch(opts: FetchOptions) {
 			});
 		}
 		if (method === 'POST' && url.endsWith('/surfaces/opencode')) {
+			await opts.opencodeStartPromise;
 			if (opts.opencodeStartError) {
 				const { code, message, status } = opts.opencodeStartError;
 				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
@@ -145,6 +151,7 @@ export function makeFetch(opts: FetchOptions) {
 			});
 		}
 		if (method === 'DELETE' && url.endsWith('/surfaces/vscode')) {
+			await opts.vscodeStopPromise;
 			if (opts.vscodeStopError) {
 				const { code, message, status } = opts.vscodeStopError;
 				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
@@ -155,6 +162,7 @@ export function makeFetch(opts: FetchOptions) {
 			return ok(undefined);
 		}
 		if (method === 'DELETE' && url.endsWith('/surfaces/opencode')) {
+			await opts.opencodeStopPromise;
 			if (opts.opencodeStopError) {
 				const { code, message, status } = opts.opencodeStopError;
 				return new Response(JSON.stringify({ success: false, error: { code, message } }), {

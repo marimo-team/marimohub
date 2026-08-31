@@ -6,6 +6,7 @@
 {{- $secondarySurfaces = append $secondarySurfaces "opencode" -}}
 {{- end -}}
 {{- $surfacesEnabled := gt (len $secondarySurfaces) 0 -}}
+{{- $surfaceSandboxImage := .Values.surfaces.sandboxImage | default .Values.surfaces.vscode.sandboxImage -}}
 {{- if or .Values.config .Values.compute.profiles (ne .Values.compute.profileOverride "none") $surfacesEnabled }}
 apiVersion: v1
 kind: ConfigMap
@@ -19,7 +20,7 @@ data:
     (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES"))
     (and (ne $.Values.compute.profileOverride "none") (eq $k "MARIMOHUB_COMPUTE_PROFILE_OVERRIDE"))
     (and $surfacesEnabled (eq $k "MARIMOHUB_SURFACES"))
-    (and $surfacesEnabled $.Values.surfaces.sandboxImage (eq $k "MARIMOHUB_COMPUTE_IMAGE"))
+    (and $surfacesEnabled $surfaceSandboxImage (eq $k "MARIMOHUB_COMPUTE_IMAGE"))
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_FLAVOR"))
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_START"))
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_PORT"))
@@ -29,7 +30,6 @@ data:
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_START"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_PORT"))
-    (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_EMBED"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH"))
   ) }}
@@ -44,7 +44,7 @@ data:
   {{- end }}
   {{- if $surfacesEnabled }}
   MARIMOHUB_SURFACES: {{ prepend $secondarySurfaces "marimo" | join "," | quote }}
-  {{- with .Values.surfaces.sandboxImage }}
+  {{- with $surfaceSandboxImage }}
   MARIMOHUB_COMPUTE_IMAGE: {{ . | quote }}
   {{- end }}
   {{- end }}
@@ -60,7 +60,6 @@ data:
   {{- if .Values.surfaces.opencode.enabled }}
   MARIMOHUB_SURFACE_OPENCODE_START: {{ .Values.surfaces.opencode.start | quote }}
   MARIMOHUB_SURFACE_OPENCODE_PORT: {{ .Values.surfaces.opencode.port | quote }}
-  MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB: {{ .Values.surfaces.opencode.memoryMb | quote }}
   MARIMOHUB_SURFACE_OPENCODE_EMBED: {{ .Values.surfaces.opencode.embed | quote }}
   MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH: {{ .Values.surfaces.opencode.marimoWatch | quote }}
   {{- end }}

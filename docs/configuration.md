@@ -127,7 +127,6 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH` | Pass `--watch` to marimo edit when the VS Code surface is enabled. | — | `true` | — |
 | `MARIMOHUB_SURFACE_OPENCODE_START` | Start OpenCode on demand or with every authorized edit session. | — | `on-demand` | — |
 | `MARIMOHUB_SURFACE_OPENCODE_PORT` | Logical sandbox port used by OpenCode. Must differ from marimo port 2718 and all other enabled surface ports. | — | `4096` | — |
-| `MARIMOHUB_SURFACE_OPENCODE_MEMORY_MB` | Memory requirement declared for the OpenCode surface. | — | `1024` | — |
 | `MARIMOHUB_SURFACE_OPENCODE_EMBED` | Open OpenCode in an application tab or split view (`tab` or `iframe`). | — | `tab` | — |
 | `MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH` | Pass `--watch` to marimo edit when OpenCode is enabled. | — | `true` | — |
 

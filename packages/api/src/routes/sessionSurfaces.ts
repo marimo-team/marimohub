@@ -87,7 +87,6 @@ async function createSurfaceManager(
 		specs.push(
 			opencodeSurface({
 				port: openCodeConfig.port,
-				memoryMb: openCodeConfig.memoryMb,
 				managedAi,
 			}),
 		);

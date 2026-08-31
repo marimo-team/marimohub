@@ -67,6 +67,7 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `compute.profiles` | `""` | Ordered sandbox CPU/memory profiles; first is the default |
 | `compute.profileOverride` | `none` | Set to `editors` to allow per-notebook profile selection |
 | `surfaces.sandboxImage` | `""` | Sandbox image with the enabled surface tools |
+| `surfaces.vscode.sandboxImage` | `""` | Deprecated fallback for `surfaces.sandboxImage` |
 | `surfaces.vscode.enabled` | `false` | Enable the VS Code surface |
 | `surfaces.opencode.enabled` | `false` | Enable the subdomain-only OpenCode surface |
 | `maintenance.enabled` | `true` | Singleton session reaper |
