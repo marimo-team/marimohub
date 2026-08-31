@@ -1,28 +1,21 @@
-import type {
-	CommandProcess,
-	DeleteSandboxRequest,
-	ExecRequest,
-	GetSandboxRequest,
-	ListSandboxesResult,
-	LogEntryStream,
-	LogRawStream,
-	LogStream,
-	ProcessResult,
-	ReadFileRequest,
-	ReadFileResult,
-	SandboxTransport,
-	StartCommandRequest,
-	StartSandboxRequest,
-	StartSandboxResult,
-	StopSandboxRequest,
-	StreamLogsRequest,
-	WriteFileRequest,
-} from '@coreweave/cwsandbox';
+/**
+ * OTEL client spans for the CoreWeave Sandbox SDK, wrapped around the
+ * `CoreWeaveClient` / `CoreWeaveSandbox` seam. The SDK exports no transport
+ * to intercept, so spans cover the adapter's client operations rather than
+ * individual gRPC
+ * requests — `Sandbox/wait` is one span over the whole poll loop, and
+ * `Sandbox/writeFiles` one span over the batched AddFile fan-out.
+ *
+ * Attribute hygiene: spans carry the endpoint and sandbox id but never command
+ * argv or file paths/contents (notebook names and code are user data).
+ */
+import type { CommandProcess } from '@coreweave/cwsandbox';
 import type { Attributes, Span } from '@opentelemetry/api';
 import { SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import type { CoreWeaveClient, CoreWeaveSandbox } from './index';
 
-const GATEWAY_SERVICE = 'coreweave.sandbox.v1beta2.GatewayService';
-const STREAMING_SERVICE = 'coreweave.sandbox.v1beta2.GatewayStreamingService';
+const CLIENT_SCOPE = 'cwsandbox.SandboxClient';
+const SANDBOX_SCOPE = 'cwsandbox.Sandbox';
 
 function endpointAttributes(baseUrl: string): Attributes {
 	try {
@@ -64,36 +57,22 @@ function spanLifecycle(span: Span): SpanLifecycle {
 	};
 }
 
-function startRpcSpan<T>(
-	method: string,
-	endpoint: Attributes,
+function startClientSpan<T>(
+	name: string,
 	attributes: Attributes,
 	request: (span: Span) => Promise<T>,
 ): Promise<T> {
 	const tracer = trace.getTracer('@marimo-hub/compute-coreweave');
-	return tracer.startActiveSpan(
-		method,
-		{
-			kind: SpanKind.CLIENT,
-			attributes: {
-				'rpc.system.name': 'grpc',
-				'rpc.method': method,
-				...endpoint,
-				...attributes,
-			},
-		},
-		request,
-	);
+	return tracer.startActiveSpan(name, { kind: SpanKind.CLIENT, attributes }, request);
 }
 
-async function rpcRequest<T>(
-	method: string,
-	endpoint: Attributes,
+async function opRequest<T>(
+	name: string,
+	attributes: Attributes,
 	request: () => Promise<T>,
-	attributes: Attributes = {},
 	onResult?: (span: Span, result: T) => void,
 ): Promise<T> {
-	return startRpcSpan(method, endpoint, attributes, async (span) => {
+	return startClientSpan(name, attributes, async (span) => {
 		const lifecycle = spanLifecycle(span);
 		try {
 			const result = await request();
@@ -108,17 +87,25 @@ async function rpcRequest<T>(
 	});
 }
 
-function streamingRpcRequest<T>(
-	method: string,
-	endpoint: Attributes,
-	request: () => Promise<T>,
+/**
+ * `commands.start` returns after the stream handshake but the command keeps
+ * running; the span stays open until the process settles so a mid-stream
+ * fault (e.g. a gRPC reset) is recorded on it.
+ */
+function streamingOpRequest(
+	name: string,
 	attributes: Attributes,
-	observe: (result: T, lifecycle: SpanLifecycle) => T,
-): Promise<T> {
-	return startRpcSpan(method, endpoint, attributes, async (span) => {
+	request: () => Promise<CommandProcess>,
+): Promise<CommandProcess> {
+	return startClientSpan(name, attributes, async (span) => {
 		const lifecycle = spanLifecycle(span);
 		try {
-			return observe(await request(), lifecycle);
+			const process = await request();
+			void process.wait().then(
+				() => lifecycle.end(),
+				(error: unknown) => lifecycle.fail(error),
+			);
+			return process;
 		} catch (error) {
 			lifecycle.fail(error);
 			throw error;
@@ -126,173 +113,65 @@ function streamingRpcRequest<T>(
 	});
 }
 
-function observeCommandProcess(process: CommandProcess, lifecycle: SpanLifecycle): CommandProcess {
-	void process.wait().then(
-		() => lifecycle.end(),
-		(error: unknown) => lifecycle.fail(error),
-	);
-	return process;
-}
-
-function observeIterator(
-	iterator: AsyncIterator<unknown>,
-	lifecycle: SpanLifecycle,
-): AsyncIterator<unknown> & AsyncIterable<unknown> {
+function instrumentSandbox(sandbox: CoreWeaveSandbox, endpoint: Attributes): CoreWeaveSandbox {
+	const attributes = { ...endpoint, 'coreweave.sandbox_id': sandbox.sandboxId };
+	const op = (method: string) => `${SANDBOX_SCOPE}/${method}`;
 	return {
-		async next() {
-			try {
-				const result = await iterator.next();
-				if (result.done) lifecycle.end();
-				return result;
-			} catch (error) {
-				lifecycle.fail(error);
-				throw error;
-			}
+		get sandboxId() {
+			return sandbox.sandboxId;
 		},
-		async return(value) {
-			try {
-				const result =
-					iterator.return === undefined
-						? { done: true as const, value }
-						: await iterator.return(value);
-				lifecycle.end();
-				return result;
-			} catch (error) {
-				lifecycle.fail(error);
-				throw error;
-			}
+		get serviceUrls() {
+			return sandbox.serviceUrls;
 		},
-		[Symbol.asyncIterator]() {
-			return this;
+		get status() {
+			return sandbox.status;
 		},
+		wait: () => opRequest(op('wait'), attributes, () => sandbox.wait()),
+		commands: {
+			run: (command, options) =>
+				opRequest(op('exec'), attributes, () => sandbox.commands.run(command, options)),
+			start: (command, options) =>
+				streamingOpRequest(op('startCommand'), attributes, () =>
+					sandbox.commands.start(command, options),
+				),
+		},
+		files: {
+			readText: (path) => opRequest(op('readFile'), attributes, () => sandbox.files.readText(path)),
+			write: (files) => opRequest(op('writeFiles'), attributes, () => sandbox.files.write(files)),
+		},
+		delete: () => opRequest(op('delete'), attributes, () => sandbox.delete()),
 	};
 }
 
-type CoreWeaveLogStream = LogEntryStream | LogRawStream | LogStream;
-
-function observeLogStream<T extends CoreWeaveLogStream>(stream: T, lifecycle: SpanLifecycle): T {
-	return new Proxy(stream, {
-		get(target, property) {
-			if (property === Symbol.asyncIterator) {
-				return () => observeIterator(target[Symbol.asyncIterator](), lifecycle);
-			}
-			const value: unknown = Reflect.get(target, property, target);
-			if ((property === 'cancel' || property === 'close') && typeof value === 'function') {
-				return (...args: unknown[]) => {
-					let pending: Promise<unknown>;
-					try {
-						pending = Reflect.apply(value, target, args);
-					} catch (error) {
-						lifecycle.fail(error);
-						throw error;
-					}
-					return pending.then(
-						(result) => {
-							lifecycle.end();
-							return result;
-						},
-						(error: unknown) => {
-							lifecycle.fail(error);
-							throw error;
-						},
-					);
-				};
-			}
-			return typeof value === 'function' ? value.bind(target) : value;
-		},
-	});
-}
-
-function sandboxAttributes(sandboxId: string): Attributes {
-	return { 'coreweave.sandbox_id': sandboxId };
-}
-
-export function instrumentCoreWeaveTransport(
-	transport: SandboxTransport,
+export function instrumentCoreWeaveClient(
+	client: CoreWeaveClient,
 	baseUrl: string,
-): SandboxTransport {
+): CoreWeaveClient {
 	const endpoint = endpointAttributes(baseUrl);
-	const gateway = (method: string) => `${GATEWAY_SERVICE}/${method}`;
-	const streaming = (method: string) => `${STREAMING_SERVICE}/${method}`;
-
+	const op = (method: string) => `${CLIENT_SCOPE}/${method}`;
 	return {
-		start(request: StartSandboxRequest): Promise<StartSandboxResult> {
-			return rpcRequest(
-				gateway('Start'),
+		create: (options) =>
+			opRequest(
+				op('create'),
 				endpoint,
-				() => transport.start(request),
-				{},
-				(span, result) => span.setAttribute('coreweave.sandbox_id', result.sandboxId),
-			);
-		},
-		get(request: GetSandboxRequest) {
-			return rpcRequest(
-				gateway('Get'),
-				endpoint,
-				() => transport.get(request),
-				sandboxAttributes(request.sandboxId),
-			);
-		},
-		list(options): Promise<ListSandboxesResult> {
-			return rpcRequest(gateway('List'), endpoint, () => transport.list(options));
-		},
-		delete(request: DeleteSandboxRequest): Promise<void> {
-			return rpcRequest(
-				gateway('Delete'),
-				endpoint,
-				() => transport.delete(request),
-				sandboxAttributes(request.sandboxId),
-			);
-		},
-		exec(request: ExecRequest): Promise<ProcessResult> {
-			return rpcRequest(
-				gateway('Exec'),
-				endpoint,
-				() => transport.exec(request),
-				sandboxAttributes(request.sandboxId),
-			);
-		},
-		startCommand(request: StartCommandRequest): Promise<CommandProcess> {
-			return streamingRpcRequest(
-				streaming('StreamExec'),
-				endpoint,
-				() => transport.startCommand(request),
-				sandboxAttributes(request.sandboxId),
-				observeCommandProcess,
-			);
-		},
-		streamLogs(request: StreamLogsRequest): Promise<LogEntryStream | LogRawStream | LogStream> {
-			return streamingRpcRequest(
-				streaming('StreamLogs'),
-				endpoint,
-				() => transport.streamLogs(request),
-				sandboxAttributes(request.sandboxId),
-				observeLogStream,
-			);
-		},
-		stop(request: StopSandboxRequest): Promise<void> {
-			return rpcRequest(
-				gateway('Stop'),
-				endpoint,
-				() => transport.stop(request),
-				sandboxAttributes(request.sandboxId),
-			);
-		},
-		writeFile(request: WriteFileRequest): Promise<void> {
-			return rpcRequest(
-				gateway('AddFile'),
-				endpoint,
-				() => transport.writeFile(request),
-				sandboxAttributes(request.sandboxId),
-			);
-		},
-		readFile(request: ReadFileRequest): Promise<ReadFileResult> {
-			return rpcRequest(
-				gateway('RetrieveFile'),
-				endpoint,
-				() => transport.readFile(request),
-				sandboxAttributes(request.sandboxId),
-			);
-		},
+				() => client.create(options),
+				(span, sandbox) => span.setAttribute('coreweave.sandbox_id', sandbox.sandboxId),
+			).then((sandbox) => instrumentSandbox(sandbox, endpoint)),
+		runFromTemplate: (templateId, options) =>
+			opRequest(
+				op('runFromTemplate'),
+				{ ...endpoint, 'coreweave.template_id': templateId },
+				() => client.runFromTemplate(templateId, options),
+				(span, sandbox) => span.setAttribute('coreweave.sandbox_id', sandbox.sandboxId),
+			).then((sandbox) => instrumentSandbox(sandbox, endpoint)),
+		fromId: (sandboxId) =>
+			opRequest(op('fromId'), { ...endpoint, 'coreweave.sandbox_id': sandboxId }, () =>
+				client.fromId(sandboxId),
+			).then((sandbox) => instrumentSandbox(sandbox, endpoint)),
+		list: (options) => opRequest(op('list'), endpoint, () => client.list(options)),
+		delete: (sandboxId) =>
+			opRequest(op('delete'), { ...endpoint, 'coreweave.sandbox_id': sandboxId }, () =>
+				client.delete(sandboxId),
+			),
 	};
 }

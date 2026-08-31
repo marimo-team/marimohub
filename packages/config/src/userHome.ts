@@ -2,10 +2,11 @@ import { BadRequestError } from '@marimo-hub/core';
 import type { EditorSandboxSharing } from '@marimo-hub/core';
 import type { SandboxUserHomeResolver } from '@marimo-hub/api';
 import { computeBackend } from './compute';
-import { parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
+export const COREWEAVE_USER_HOME_TEMPLATE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID';
+/** Unsupported selector; rejected with a pointer at the template replacement. */
 export const COREWEAVE_USER_HOME_PROFILE = 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE';
 
 function canonicalEmail(email: string): string {
@@ -26,23 +27,36 @@ function canonicalEmail(email: string): string {
 /**
  * Personal homes are composed behind a resolver so a future identity mapping can
  * replace email without changing session provisioning or compute adapters.
+ *
+ * Editor sandboxes are created from the org-scoped sandbox template named
+ * here, which mounts the per-user volume.
  */
 export function makeSandboxUserHome(
 	env: Env,
 	sharing: EditorSandboxSharing,
 ): SandboxUserHomeResolver | undefined {
-	const profiles = parseList(env[COREWEAVE_USER_HOME_PROFILE]);
-	if (!profiles) return undefined;
+	if (env[COREWEAVE_USER_HOME_PROFILE] !== undefined) {
+		throw new ConfigError(
+			`${COREWEAVE_USER_HOME_PROFILE} is not supported: Sandbox v1 has no per-create profile selection`,
+			{
+				variable: COREWEAVE_USER_HOME_PROFILE,
+				remediation: `Create a sandbox template with the user-home mounts and set ${COREWEAVE_USER_HOME_TEMPLATE} to its id.`,
+				docs: 'docs/deploying/cks.md',
+			},
+		);
+	}
+	const template = env[COREWEAVE_USER_HOME_TEMPLATE]?.trim();
+	if (!template) return undefined;
 	if (computeBackend(env) !== 'coreweave') {
-		throw new ConfigError(`${COREWEAVE_USER_HOME_PROFILE} requires the coreweave backend`, {
-			variable: COREWEAVE_USER_HOME_PROFILE,
-			remediation: 'Set MARIMOHUB_COMPUTE_BACKEND=coreweave or remove the user-home profile.',
+		throw new ConfigError(`${COREWEAVE_USER_HOME_TEMPLATE} requires the coreweave backend`, {
+			variable: COREWEAVE_USER_HOME_TEMPLATE,
+			remediation: 'Set MARIMOHUB_COMPUTE_BACKEND=coreweave or remove the user-home template.',
 			docs: 'docs/deploying/cks.md',
 		});
 	}
 	if (sharing !== 'exclusive') {
 		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_PROFILE} requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`,
+			`${COREWEAVE_USER_HOME_TEMPLATE} requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`,
 			{
 				variable: 'MARIMOHUB_EDITOR_SANDBOX_SHARING',
 				remediation: 'Set MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive.',
@@ -50,14 +64,13 @@ export function makeSandboxUserHome(
 			},
 		);
 	}
-	const normalProfiles = parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE) ?? [];
-	const overlap = profiles.filter((profile) => normalProfiles.includes(profile));
-	if (overlap.length > 0) {
+	if (template === env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID?.trim()) {
 		throw new ConfigError(
-			`${COREWEAVE_USER_HOME_PROFILE} must not overlap MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: ${overlap.join(', ')}`,
+			`${COREWEAVE_USER_HOME_TEMPLATE} must differ from MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID: ${template}`,
 			{
-				variable: COREWEAVE_USER_HOME_PROFILE,
-				remediation: 'Use a separate, non-default profile for editor personal storage.',
+				variable: COREWEAVE_USER_HOME_TEMPLATE,
+				remediation:
+					'Use a dedicated template for editor personal storage; apps and viewer sandboxes must not receive the mount.',
 				docs: 'docs/deploying/cks.md',
 			},
 		);

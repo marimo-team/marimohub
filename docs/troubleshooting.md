@@ -92,8 +92,8 @@ ingress/DNS/TLS:
 
 - Wildcard DNS `*.{host}` must point at your ingress, with a matching wildcard
   TLS secret (`MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`).
-- For CoreWeave, the URL scheme is profile-specific — set
-  `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE` / `…_HOSTNAME_TEMPLATE`.
+- For CoreWeave, the URL scheme depends on the runner's default policy — set
+  `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE`.
 
 See [Deploying → Kubernetes](/deploying/kubernetes) and [CKS](/deploying/cks).
 

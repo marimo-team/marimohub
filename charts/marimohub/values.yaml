@@ -24,6 +24,12 @@ serviceAccount:
   name: ''
   automountServiceAccountToken: true
 
+# CoreWeave Sandbox v1 only: namespace the sandbox runner creates kernel pods
+# and Services in. When set, the hub gets a Role there to publish each kernel's
+# Ingress (pair with MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE).
+sandboxIngress:
+  namespace: ''
+
 # The API tier is stateless, so it scales freely.
 replicaCount: 2
 

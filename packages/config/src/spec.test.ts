@@ -30,6 +30,11 @@ const IGNORED = new Set([
 	'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS',
 	'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
 	'MARIMOHUB_DUCKDB_WASM_RUNTIME',
+	// Removed by CoreWeave Sandbox v1; read only to reject them with a
+	// migration-pointing ConfigError at boot.
+	'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
+	'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
+	'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
 ]);
 
 function scanReferencedIds(): Set<string> {

@@ -97,8 +97,8 @@ export interface FakeSandbox {
 	batchWrites: { path: string; content: unknown }[][];
 	reads: Record<string, string>;
 	deleted: number;
-	/** One entry per `wait()` call, carrying the options the adapter passed. */
-	waitCalls: { intervalMs?: number }[];
+	/** Number of `wait()` calls the adapter issued. */
+	waitCalls: number;
 }
 
 // `FileWrites` also admits a path→content record, but the adapter only ever
@@ -121,6 +121,10 @@ export function makeWorld(opts?: {
 	proc?: FakeProcessState;
 }) {
 	const created: NonNullable<Parameters<CoreWeaveClient['create']>[0]>[] = [];
+	const createdFromTemplate: {
+		templateId: string;
+		options: NonNullable<Parameters<CoreWeaveClient['runFromTemplate']>[1]>;
+	}[] = [];
 	const deleted: string[] = [];
 	const listCalls: (readonly string[])[] = [];
 	const registry = new Map<string, { fake: FakeSandbox; tags: string[] }>();
@@ -136,12 +140,12 @@ export function makeWorld(opts?: {
 			batchWrites: [],
 			reads: {},
 			deleted: 0,
-			waitCalls: [],
+			waitCalls: 0,
 		};
 		const sandbox = {
 			sandboxId,
-			wait: async (options?: { intervalMs?: number }) => {
-				fake.waitCalls.push(options ?? {});
+			wait: async () => {
+				fake.waitCalls++;
 				await waitImpl();
 			},
 			commands: {
@@ -178,6 +182,13 @@ export function makeWorld(opts?: {
 			registry.set(cwId, { fake, tags: [...(options?.tags ?? [])] });
 			return sandbox;
 		},
+		runFromTemplate: async (templateId, options) => {
+			createdFromTemplate.push({ templateId, options: options ?? {} });
+			const cwId = `cw-${++seq}`;
+			const { fake, sandbox } = build(cwId);
+			registry.set(cwId, { fake, tags: [...(options?.tags ?? [])] });
+			return sandbox;
+		},
 		fromId: async (cwId) => {
 			const entry = registry.get(cwId);
 			if (!entry) throw new Error(`no sandbox ${cwId}`);
@@ -204,8 +215,8 @@ export function makeWorld(opts?: {
 	function reconnect(entry: { fake: FakeSandbox }, cwId: string) {
 		return {
 			sandboxId: cwId,
-			wait: async (options?: { intervalMs?: number }) => {
-				entry.fake.waitCalls.push(options ?? {});
+			wait: async () => {
+				entry.fake.waitCalls++;
 			},
 			commands: {
 				run: async (command: readonly string[]) => {
@@ -232,5 +243,5 @@ export function makeWorld(opts?: {
 		};
 	}
 
-	return { client, created, deleted, listCalls, registry };
+	return { client, created, createdFromTemplate, deleted, listCalls, registry };
 }

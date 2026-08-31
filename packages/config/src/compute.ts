@@ -2,7 +2,7 @@ import { Millis, Seconds } from '@marimo-hub/core';
 import type { SandboxExposureMode, SandboxProvider } from '@marimo-hub/core';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
-import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import { CoreWeaveCompute, createKernelIngressPublisher } from '@marimo-hub/compute-coreweave';
 import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
@@ -203,6 +203,34 @@ export function usesSandboxNativeObjectStorage(env: Env): boolean {
 	);
 }
 
+/**
+ * Sandbox v1 has no per-create profile selection or network modes; the SDK
+ * rejects those options client-side. Fail at boot with the replacement rather
+ * than at the first provision with a cryptic validation error. (The user-home
+ * profile var is rejected in `userHome.ts`, next to the feature it
+ * configures.)
+ */
+function rejectUnsupportedCoreWeaveVars(env: Env): void {
+	const unsupported = [
+		'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
+		'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
+		'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
+	] as const;
+	for (const variable of unsupported) {
+		if (env[variable] !== undefined) {
+			throw new ConfigError(
+				`${variable} is not supported: Sandbox v1 has no per-create profile selection or network modes`,
+				{
+					variable,
+					remediation:
+						"Remove the variable. Sandboxes run under the runner's default policy; for custom specs create a sandbox template and set MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID.",
+					docs: 'docs/setup/compute/coreweave.md',
+				},
+			);
+		}
+	}
+}
+
 function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
 	const raw = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION;
 	if (raw === undefined || raw === 'read' || raw === 'read-write') return raw;
@@ -259,24 +287,57 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			});
 		}
 		case 'coreweave':
-			// CoreWeave Sandboxes via the vendored @coreweave/cwsandbox SDK (Node gRPC).
-			// A marimo-capable image (marimo + uv + python) should be supplied via
-			// MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress URL,
-			// whose hostname scheme is CoreWeave backend/profile specific — set
+			// CoreWeave Sandboxes via the @coreweave/cwsandbox SDK (Sandbox v1, Node
+			// gRPC). A marimo-capable image (marimo + uv + python) should be supplied
+			// via MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress
+			// URL, whose hostname scheme is CoreWeave backend specific — set
 			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (and, if needed, a HOSTNAME_TEMPLATE).
+			rejectUnsupportedCoreWeaveVars(env);
+			if (
+				env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS?.trim() &&
+				!env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()
+			) {
+				// The class only feeds the hub-published kernel Ingress, which the
+				// namespace enables — reject the inert combination.
+				throw new ConfigError(
+					'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
+					{
+						variable: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS',
+						remediation:
+							'Set the ingress namespace to enable hub-published kernel Ingresses, or remove the class.',
+						docs: 'docs/deploying/cks.md',
+					},
+				);
+			}
 			return new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE,
-				// Profile + exposure modes are CoreWeave-side concepts; the profile names
-				// the exposure levels (`ingressMode`) and egress modes a sandbox selects.
-				// Defaults (`public`/`internet`) match the canonical CoreWeave profile.
-				profileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE),
-				userHomeProfileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE),
-				ingressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE,
-				egressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE,
+				// A bare v1 create schedules on the managed serverless pool, so the
+				// runner id defaults on: set-but-empty opts out for serverless.
+				runnerId:
+					env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID === undefined
+						? 'marimohub'
+						: env.MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID.trim() || undefined,
+				// CKS runners without endpoint routes reject a `public` kernel service
+				// and expose a `custom` one as a bare ClusterIP Service; the hub then
+				// publishes the Ingress itself. Both follow from the namespace being set.
+				...(env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()
+					? {
+							kernelVisibility: 'custom' as const,
+							kernelIngress: createKernelIngressPublisher({
+								namespace: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE.trim(),
+								ingressClassName:
+									env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS?.trim() || 'traefik',
+							}),
+						}
+					: {}),
+				// Per-create specs come from a sandbox template; without one, sandboxes
+				// run under the runner's default policy.
+				templateId: env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID,
+				userHomeTemplateId: env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID,
 				maxLifetimeSeconds: resolveLifetimeBackstop(
 					env,
 					'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',

@@ -106,6 +106,9 @@ minimumReleaseAgeExclude:
   - '@algolia/*'
   - algoliasearch
   - '@marimo-team/*'
+  # Exact-pinned prerelease of the CoreWeave Sandbox SDK (the only published
+  # channel is beta, so every usable version is younger than the cooldown).
+  - '@coreweave/cwsandbox@0.4.0-beta.0'
   # Security fixes take precedence over the release-age cooldown.
   - brace-expansion
   - nanoid

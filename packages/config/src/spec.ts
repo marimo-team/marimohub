@@ -370,7 +370,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'CoreWeave Sandbox',
 				selectorValue: 'coreweave',
 				supportsComputeProfiles: true,
-				description: 'CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.',
+				description: 'CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1).',
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY',
@@ -399,31 +399,41 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'https://{sandboxId}-{port}.{host}',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
-						name: 'CoreWeave profile names',
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID',
+						name: 'CoreWeave runner id',
 						description:
-							"Comma-separated CoreWeave sandbox profile name(s) applied at create (the `profile_name` of a runner binding). Omit to use the runner's default profile.",
-						example: 'marimohub',
+							'Runner (by operator-assigned id) sandboxes schedule on — must name your CKS sandbox runner. A create without a runner id schedules on the CoreWeave-managed serverless pool, not your cluster. Set to an empty value to opt into serverless.',
+						default: 'marimohub',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE',
-						name: 'CoreWeave user-home profile names',
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
+						name: 'CoreWeave kernel Ingress namespace',
 						description:
-							'Comma-separated CoreWeave profile name(s) used only for editor-or-higher edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile.',
-						example: 'marimohub-user-home',
+							"Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. Omit on runners that publish `public` kernel services themselves.",
+						example: 'org-ns-ab12cd',
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
-						name: 'CoreWeave ingress mode',
-						description: 'Network ingress mode (backend/profile specific).',
-						default: 'public',
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS',
+						name: 'CoreWeave kernel Ingress class',
+						description:
+							'IngressClass for hub-published kernel Ingresses. Only meaningful with `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` (rejected at boot without it).',
+						default: 'traefik (with the ingress namespace)',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
-						name: 'CoreWeave egress mode',
-						description: 'Network egress mode (backend/profile specific).',
-						default: 'internet',
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID',
+						name: 'CoreWeave sandbox template id',
+						description:
+							"Org-scoped sandbox template every sandbox is created from — custom specs such as GPU placement, egress rules, or pod shape. Omit to use the runner's default policy.",
+						example: 'tmpl-marimohub',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID',
+						name: 'CoreWeave user-home template id',
+						description:
+							'Sandbox template used only for editor-or-higher edit sandboxes; must differ from `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`. The template must mount the per-user volume at `/var/run/marimohub/user-home` (`subPathExpr: $(MARIMOHUB_USER_HOME_KEY)`) and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes use the normal template.',
+						example: 'tmpl-marimohub-user-home',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
@@ -437,7 +447,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS',
 						name: 'CoreWeave object-storage buckets',
 						description:
-							'Comma-separated CAIOS bucket names every sandbox gets automatic, auto-refreshing credentials for (vended in-sandbox by a CoreWeave sidecar). Requires the org wif-config on the Sandbox Gateway; creates fail with NOT_FOUND without it. Setting this disables hub-minted WIF. See docs/workload-identity-federation.md, "CoreWeave Object Storage (Automatic)".',
+							'Comma-separated CAIOS bucket names every sandbox gets automatic, auto-refreshing credentials for (vended in-sandbox by a CoreWeave sidecar). Requires the org wif-config on the Sandbox Gateway; creates fail with NOT_FOUND without it. Setting this disables hub-minted WIF. With `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`, the create-time overlay cannot carry object-storage access — the sandbox template MUST declare a matching `object_storage_access` itself, or sandboxes get neither credential source. See docs/workload-identity-federation.md, "CoreWeave Object Storage (Automatic)".',
 						example: 'my-org-data,my-org-models',
 					},
 					{

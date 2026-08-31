@@ -832,12 +832,48 @@ describe('createFromEnv default role', () => {
 		).toThrow(/Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING.*shared, exclusive/);
 	});
 
-	it('requires exclusive CoreWeave editors when a user-home profile is configured', () => {
+	it('rejects the CoreWeave vars Sandbox v1 cannot honor', () => {
+		// Set on any backend for the user-home var (its successor is runner-based)…
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+			}),
+		).toThrow(/USER_HOME_PROFILE is not supported/);
+		// …and on the coreweave backend for the profile / network-mode vars.
+		for (const variable of [
+			'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
+			'MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE',
+		]) {
+			expect(() =>
+				createFromEnv({
+					...baseEnv,
+					MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+					MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+					[variable]: 'some-value',
+				}),
+			).toThrow(new RegExp(`${variable} is not supported`));
+		}
+	});
+
+	it('rejects an ingress class without an ingress namespace (inert otherwise)', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS: 'traefik',
+			}),
+		).toThrow(/INGRESS_CLASS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
+	});
+
+	it('requires exclusive CoreWeave editors when a user-home template is configured', () => {
 		const coreweave = {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 		};
 		expect(() => createFromEnv(coreweave)).toThrow(
 			/requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive/,
@@ -845,23 +881,23 @@ describe('createFromEnv default role', () => {
 		expect(() =>
 			createFromEnv({
 				...baseEnv,
-				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 			}),
 		).toThrow(/requires the coreweave backend/);
 	});
 
-	it('requires normal and user-home CoreWeave profiles to be disjoint', () => {
+	it('requires the normal and user-home CoreWeave templates to differ', () => {
 		expect(() =>
 			createFromEnv({
 				...baseEnv,
 				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-				MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: 'network, personal-storage',
-				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'personal-storage, personal-storage-egress',
+				MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID: 'tmpl-shared',
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-shared',
 				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 			}),
-		).toThrow(/must not overlap.*personal-storage/);
+		).toThrow(/must differ.*tmpl-shared/);
 	});
 
 	it('resolves exclusive CoreWeave user homes from canonical email', () => {
@@ -869,7 +905,7 @@ describe('createFromEnv default role', () => {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: ' CoreWeave ',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 		});
 		expect(
@@ -882,7 +918,7 @@ describe('createFromEnv default role', () => {
 			...baseEnv,
 			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
-			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID: 'tmpl-user-home',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 		});
 		const resolve = () =>

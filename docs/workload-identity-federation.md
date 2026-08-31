@@ -394,9 +394,10 @@ applies unchanged.
 
 - **The identity belongs to the ServiceAccount.** Kernels from one profile share
   one CAIOS identity. Use hub-minted federation for per-project identities.
-- **Different tiers need different profiles.** To give one class of notebooks
-  more access, create a second profile with its own ServiceAccount and select it
-  with `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`.
+- **Different tiers need different templates.** To give one class of
+  notebooks more access, create a sandbox template with its own
+  ServiceAccount and select it via
+  `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`.
 - **Use the `per-org` or `static` namespace strategy.** The `per-user` and
   `per-profile` strategies create namespaces dynamically. Each namespace would
   need the ServiceAccount before pod admission.
