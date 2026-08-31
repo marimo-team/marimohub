@@ -63,6 +63,8 @@ const itemStateClass =
 const itemClass = `group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none ${itemStateClass}`;
 const treeItemClass = `${itemClass} py-1`;
 const gridItemClass = `group flex h-28 flex-col items-center justify-center gap-1.5 rounded-lg border border-transparent p-2 text-center outline-none ${itemStateClass}`;
+const tableColumnHeaderClass =
+	'border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground';
 const menuClass = 'min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-lg';
 const menuItemClass =
 	'cursor-default rounded-sm px-2 py-1.5 text-sm outline-none data-[focused]:bg-accent data-[disabled]:opacity-40';
@@ -141,28 +143,32 @@ function ExplorerItems({
 						id="name"
 						isRowHeader
 						allowsSorting
-						className="sticky top-0 bg-card p-2 text-left text-xs"
+						width="2fr"
+						className={cn(tableColumnHeaderClass, 'text-left')}
 					>
 						Name
 					</Finder.Column>
 					<Finder.Column
 						id="kind"
 						allowsSorting
-						className="sticky top-0 w-36 bg-card p-2 text-left text-xs"
+						width="1.25fr"
+						className={cn(tableColumnHeaderClass, 'text-left')}
 					>
 						Type
 					</Finder.Column>
 					<Finder.Column
 						id="size"
 						allowsSorting
-						className="sticky top-0 w-24 bg-card p-2 text-right text-xs"
+						width={88}
+						className={cn(tableColumnHeaderClass, 'text-right')}
 					>
 						Size
 					</Finder.Column>
 					<Finder.Column
 						id="modifiedAt"
 						allowsSorting
-						className="sticky top-0 w-44 bg-card p-2 text-left text-xs"
+						width={176}
+						className={cn(tableColumnHeaderClass, 'text-left')}
 					>
 						Modified
 					</Finder.Column>
@@ -177,7 +183,7 @@ function ExplorerItems({
 							className={cn('outline-none', itemStateClass)}
 							style={{ width: 'inherit', height: 'inherit' }}
 						>
-							<Finder.Cell className="border-b p-2 text-sm">
+							<Finder.Cell className="border-b px-3 py-2 text-sm">
 								<span className="flex min-w-0 items-center gap-2">
 									<ItemIcon item={item} />
 									<EditableItemName
@@ -188,13 +194,13 @@ function ExplorerItems({
 									/>
 								</span>
 							</Finder.Cell>
-							<Finder.Cell className="truncate border-b p-2 text-xs text-muted-foreground">
+							<Finder.Cell className="truncate border-b px-3 py-2 text-xs text-muted-foreground">
 								{itemType(item)}
 							</Finder.Cell>
-							<Finder.Cell className="border-b p-2 text-right text-xs text-muted-foreground tabular-nums">
+							<Finder.Cell className="border-b px-3 py-2 text-right text-xs text-muted-foreground tabular-nums">
 								{item.kind === 'file' ? formatFileSize(item.size) : '—'}
 							</Finder.Cell>
-							<Finder.Cell className="border-b p-2 text-xs text-muted-foreground tabular-nums">
+							<Finder.Cell className="border-b px-3 py-2 text-xs text-muted-foreground tabular-nums">
 								{itemModifiedAt(item)}
 							</Finder.Cell>
 						</Finder.Item>
