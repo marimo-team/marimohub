@@ -5,6 +5,7 @@ export type {
 	ApiDeps,
 	ConfigSummary,
 	HonoEnv,
+	SandboxConfig,
 	SandboxUserHomeResolver,
 	Services,
 	SessionLifetimeConfig,

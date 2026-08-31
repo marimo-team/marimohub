@@ -12,6 +12,126 @@ import {
 } from './NotebookPage.testWorld';
 
 describe('NotebookPage viewer modes', () => {
+	it('opens and stops the configured VS Code iframe for an authorized editor', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			vscode: { embed: 'iframe' },
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true } },
+			}),
+		});
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		expect(await screen.findByTitle('Forecast in VS Code')).toHaveAttribute(
+			'src',
+			'https://vscode.example/?folder=/workspace',
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Stop VS Code' }));
+		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
+	});
+
+	it('opens the configured entry notebook for a synced source', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			entryNotebook: 'apps/main.py',
+			vscode: { embed: 'iframe' },
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true } },
+			}),
+		});
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		await waitFor(() => {
+			const call = fetch.mock.calls.find(
+				([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'POST',
+			);
+			expect(JSON.parse(String(call?.[1]?.body))).toEqual({ open: 'apps/main.py' });
+		});
+	});
+
+	it('waits for synced notebook metadata before offering VS Code', async () => {
+		let releaseNotebook!: () => void;
+		const notebookPromise = new Promise<void>((resolve) => {
+			releaseNotebook = resolve;
+		});
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			entryNotebook: 'reports/weekly report.qmd',
+			notebookPromise,
+			vscode: { embed: 'iframe' },
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true } },
+			}),
+		});
+		renderPage();
+
+		await screen.findByRole('button', { name: 'Stop' });
+		expect(screen.queryByRole('button', { name: 'Open in VS Code' })).toBeNull();
+		releaseNotebook();
+		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		await waitFor(() => {
+			const call = fetch.mock.calls.find(
+				([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'POST',
+			);
+			expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+				open: 'reports/weekly report.qmd',
+			});
+		});
+	});
+
+	it('keeps the editor usable when starting VS Code fails', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			vscode: { embed: 'iframe' },
+			vscodeStartError: {
+				code: 'SURFACE_UNAVAILABLE',
+				message: 'code-server is unavailable',
+				status: 409,
+			},
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true } },
+			}),
+		});
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
+		expect(screen.getByRole('button', { name: 'Open in VS Code' })).toBeEnabled();
+		expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+	});
+
+	it('keeps the VS Code frame open when stopping the surface fails', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			vscode: { embed: 'iframe' },
+			vscodeStopError: {
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'sandbox is unavailable',
+				status: 503,
+			},
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true } },
+			}),
+		});
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		const frame = await screen.findByTitle('Forecast in VS Code');
+		await user.click(screen.getByRole('button', { name: 'Stop VS Code' }));
+		await waitFor(() => expect(screen.getByTitle('Forecast in VS Code')).toBe(frame));
+		expect(screen.getByRole('button', { name: 'Stop VS Code' })).toBeEnabled();
+	});
+
 	it('starts shared editing without requesting exclusive ownership state', async () => {
 		const fetch = makeFetch({ role: 'editor', editorSharing: 'shared', editorStateFailures: 1 });
 		renderPage();

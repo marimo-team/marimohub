@@ -22,7 +22,7 @@ export interface SessionActor {
  * heartbeats, and seeing `sandbox_url` (in `subdomain` exposure the URL is
  * the capability). `stop` — terminate or restart it.
  */
-export type SessionAction = 'attach' | 'stop';
+export type SessionAction = 'attach' | 'stop' | 'surface';
 
 /**
  * May the actor START a session of `mode`? Editor+ always; a viewer exactly
@@ -53,6 +53,10 @@ export function sessionCan(
 	actor: SessionActor,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 ): boolean {
+	if (action === 'surface') {
+		if (!roleAtLeast(actor.role, 'editor') || sessionMode(session) !== 'edit') return false;
+		return sessionCan('attach', actor, session);
+	}
 	if (roleAtLeast(actor.role, 'editor')) {
 		if (sessionMode(session) !== 'edit') return true;
 		const sharing = session.editor_sandbox_sharing ?? actor.editorSandboxSharing ?? 'shared';
@@ -79,9 +83,10 @@ export function sessionCan(
 export function sessionGrants(
 	actor: SessionActor,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
-): { attach: boolean; stop: boolean } {
+): { attach: boolean; stop: boolean; surface: boolean } {
 	return {
 		attach: sessionCan('attach', actor, session),
 		stop: sessionCan('stop', actor, session),
+		surface: sessionCan('surface', actor, session),
 	};
 }

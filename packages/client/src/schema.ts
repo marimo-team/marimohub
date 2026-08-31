@@ -771,6 +771,25 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get a session surface */
+		get: operations['sessions.surfaces.get'];
+		put?: never;
+		/** Start or reuse a session surface */
+		post: operations['sessions.surfaces.ensure'];
+		/** Stop a secondary session surface */
+		delete: operations['sessions.surfaces.stop'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/integrations/kinds': {
 		parameters: {
 			query?: never;
@@ -1397,6 +1416,12 @@ export interface components {
 					| 'SERVICE_UNAVAILABLE'
 					| 'PYTHON_ENV_SETUP_FAILED'
 					| 'RESOURCE_EXHAUSTED'
+					| 'SURFACE_NOT_ENABLED'
+					| 'SURFACE_UNAVAILABLE'
+					| 'SURFACE_FORBIDDEN'
+					| 'SURFACE_PRIMARY'
+					| 'SURFACE_UNSUPPORTED_PROVIDER'
+					| 'SURFACE_OPEN_INVALID'
 					| 'UNAUTHORIZED'
 					| 'USER_SUSPENDED'
 					| 'GONE'
@@ -1500,6 +1525,16 @@ export interface components {
 			})[];
 			/** @enum {string} */
 			compute_profile_override: 'none' | 'editors';
+			surfaces: {
+				/** @enum {string} */
+				id: 'vscode';
+				/** @enum {string} */
+				flavor: 'code-server' | 'openvscode';
+				/** @enum {string} */
+				start: 'on-demand' | 'eager';
+				/** @enum {string} */
+				embed: 'tab' | 'iframe';
+			}[];
 		};
 		ComputeResources: {
 			cpu?: number;
@@ -2084,6 +2119,12 @@ export interface components {
 			can: {
 				attach: boolean;
 				stop: boolean;
+				surfaces?: {
+					vscode: boolean;
+				};
+			};
+			surfaces?: {
+				[key: string]: components['schemas']['Surface'];
 			};
 			active_connections?: number;
 			/**
@@ -2104,6 +2145,23 @@ export interface components {
 				code: string;
 				message: string;
 			};
+		};
+		Surface: {
+			/** @enum {string} */
+			status: 'starting' | 'ready' | 'stopping' | 'stopped' | 'failed' | 'unavailable';
+			port?: number;
+			url?: string;
+			/**
+			 * Format: date-time
+			 * @example 2025-03-05T14:00:00Z
+			 */
+			started_at?: string;
+			probe?: {
+				available: boolean;
+				reason?: string;
+				version?: string;
+			};
+			last_error?: string;
 		};
 		EditorSessionState: {
 			/** @enum {string} */
@@ -2151,6 +2209,9 @@ export interface components {
 			compute_profile?: 'default';
 			/** @enum {string} */
 			edit_intent?: 'temporary';
+		};
+		SurfaceStartBody: {
+			open?: string;
 		};
 		IntegrationKind: {
 			/** @example postgres */
@@ -7799,6 +7860,346 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.surfaces.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+				surface: 'vscode';
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Surface status */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Surface'] & {
+							/** @enum {string} */
+							id: 'vscode';
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.surfaces.ensure': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+				surface: 'vscode';
+			};
+			cookie?: never;
+		};
+		requestBody?: {
+			content: {
+				'application/json': components['schemas']['SurfaceStartBody'];
+			};
+		};
+		responses: {
+			/** @description Surface ready */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Surface'] & {
+							/** @enum {string} */
+							id: 'vscode';
+						};
+					};
+				};
+			};
+			/** @description Surface starting */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Surface'] & {
+							/** @enum {string} */
+							id: 'vscode';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.surfaces.stop': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+				surface: 'vscode';
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Surface stopped */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

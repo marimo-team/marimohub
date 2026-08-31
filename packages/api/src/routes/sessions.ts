@@ -52,6 +52,14 @@ import {
 	kernelActiveConnections,
 	joinUrlPath,
 	ValidationError,
+	SurfaceManager,
+	SurfaceRegistry,
+	marimoSurface,
+	vscodeSurface,
+	signProxyToken,
+	ProxyExposure,
+	SurfaceNotEnabledError,
+	SurfaceUnsupportedProviderError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
@@ -65,6 +73,7 @@ import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
 	assertSessionControl,
+	assertSessionSurfaceAccess,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -77,6 +86,7 @@ import {
 	SessionIdParam,
 	sessionGrantsFor,
 	SessionResponseSchema,
+	SurfaceResponseSchema,
 	sessionRetirer,
 	SuccessResponseSchema,
 	toComputeResourcesResponse,
@@ -135,7 +145,7 @@ const listSessions = createRoute({
 
 // Optional body: absent (or `{}`) = `edit`, so pre-`mode` clients are untouched.
 const SessionCreateBodySchema = z
-	.object({
+	.strictObject({
 		/**
 		 * `edit` (default): a persistent or temporary editor sandbox according to
 		 * the editor sandbox-sharing policy. `app`: the notebook served as a
@@ -229,6 +239,76 @@ const heartbeatSession = createRoute({
 	},
 });
 
+const SurfaceParam = SessionIdParam.extend({
+	surface: z.literal('vscode').openapi({ param: { name: 'surface', in: 'path' } }),
+});
+
+const SurfaceStartBodySchema = z
+	.object({ open: z.string().max(4096).optional() })
+	.openapi('SurfaceStartBody');
+
+const SurfaceResultSchema = SurfaceResponseSchema.extend({
+	id: z.literal('vscode'),
+});
+
+const ensureSurfaceRoute = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}',
+	operationId: 'sessions.surfaces.ensure',
+	tags: ['Sessions'],
+	summary: 'Start or reuse a session surface',
+	request: {
+		params: SurfaceParam,
+		body: {
+			content: { 'application/json': { schema: SurfaceStartBodySchema } },
+			required: false,
+		},
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: SurfaceResultSchema }),
+			'Surface ready',
+		),
+		202: jsonContent(
+			z.object({ success: z.literal(true), data: SurfaceResultSchema }),
+			'Surface starting',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409, 503),
+	},
+});
+
+const getSurfaceRoute = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}',
+	operationId: 'sessions.surfaces.get',
+	tags: ['Sessions'],
+	summary: 'Get a session surface',
+	request: { params: SurfaceParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: SurfaceResultSchema }),
+			'Surface status',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const deleteSurfaceRoute = createRoute({
+	method: 'delete',
+	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}',
+	operationId: 'sessions.surfaces.stop',
+	tags: ['Sessions'],
+	summary: 'Stop a secondary session surface',
+	request: { params: SurfaceParam },
+	responses: {
+		200: jsonContent(SuccessResponseSchema, 'Surface stopped'),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409),
+	},
+});
+
 const EditorActivitySchema = z.enum(['active', 'idle', 'unknown', 'starting']);
 const EditorSessionStateSchema = z
 	.object({
@@ -297,6 +377,30 @@ const takeoverEditorSession = createRoute({
 
 // --- App ---
 
+function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) {
+	if (!s.surfaces) return;
+	return Object.fromEntries(
+		Object.entries(s.surfaces).map(([id, state]) => [
+			id,
+			{
+				status: state.status,
+				port: state.port,
+				url:
+					id === 'marimo'
+						? can.attach
+							? state.url
+							: undefined
+						: can.surface
+							? state.url
+							: undefined,
+				started_at: state.started_at,
+				probe: state.probe,
+				last_error: can.surface ? state.last_error : undefined,
+			},
+		]),
+	);
+}
+
 /**
  * Project a stored Session onto the public Session response envelope, carrying
  * the caller's evaluated grants (`sessionGrantsFor`). `sandbox_url` rides on
@@ -307,7 +411,7 @@ const takeoverEditorSession = createRoute({
  * already list the project's sessions. Internal infra fields (`sandbox_id`,
  * `used_fallback`) stay private.
  */
-function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) {
+function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; surface: boolean }) {
 	return {
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
@@ -315,7 +419,8 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) 
 		user_id: s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
-		can,
+		can: { attach: can.attach, stop: can.stop, surfaces: { vscode: can.surface } },
+		surfaces: publicSurfaces(s, can),
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
 		ephemeral: s.ephemeral,
@@ -336,6 +441,78 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) 
 		// withholding `sandbox_url` protects — so it rides the same grant.
 		error: can.attach ? s.error : undefined,
 	};
+}
+
+function surfaceManager(deps: ApiDeps): SurfaceManager {
+	const config = deps.sandbox.surfaces?.vscode;
+	if (!config) throw new SurfaceNotEnabledError('The VS Code surface is not enabled');
+	if (deps.compute.capabilities?.multiPort !== true) {
+		throw new SurfaceUnsupportedProviderError(
+			'The compute backend cannot expose a second sandbox port',
+		);
+	}
+	return new SurfaceManager(
+		deps.compute,
+		deps.services.sessions,
+		new SurfaceRegistry([
+			marimoSurface,
+			vscodeSurface({
+				flavor: config.flavor,
+				port: config.port,
+				settings: config.settings,
+				extensionGallery: config.extensionGallery,
+			}),
+		]),
+	);
+}
+
+function surfaceStopManager(deps: ApiDeps): SurfaceManager {
+	return new SurfaceManager(
+		deps.compute,
+		deps.services.sessions,
+		new SurfaceRegistry([marimoSurface, vscodeSurface()]),
+	);
+}
+
+function deferSurfaceCompletion(
+	deps: ApiDeps,
+	completion: Promise<unknown> | undefined,
+	context: { projectId: string; notebookId: string; sessionId: string },
+): void {
+	if (!completion) return;
+	const task = completion.catch((error) => logSurfaceStartFailure(context, error));
+	if (deps.backgroundTasks) deps.backgroundTasks.defer(task);
+	else void task;
+}
+
+function logSurfaceStartFailure(
+	context: { projectId: string; notebookId: string; sessionId: string },
+	error: unknown,
+): void {
+	logEvent({
+		level: 'warn',
+		event: 'surface_start_failed',
+		project_id: context.projectId,
+		notebook_id: context.notebookId,
+		session_id: context.sessionId,
+		surface: 'vscode',
+		error: errorMetadata(error),
+	});
+}
+
+async function loadSurfaceSession(
+	deps: ApiDeps,
+	user: AuthUser,
+	params: { pid: ProjectId; nid: string; sid: SessionId },
+	permission: 'attach' | 'control' = 'attach',
+) {
+	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps.policy);
+	const session = await deps.services.sessions.getSession(params.pid, params.sid);
+	if (session.notebook_id !== params.nid)
+		throw new NotFoundError(`Session ${params.sid} not found`);
+	if (permission === 'control') assertSessionControl(project, session, user, deps.policy);
+	else assertSessionSurfaceAccess(project, session, user, deps.policy);
+	return session;
 }
 
 /**
@@ -880,6 +1057,17 @@ app.openapi(createSession, async (c) => {
 		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
 	}
 	const ephemeral = authorization.ephemeral || editorTemporary;
+	const surfaceGrant = sessionGrantsFor(
+		project,
+		user,
+		{
+			mode,
+			ephemeral,
+			user_id: user.id,
+			editor_sandbox_sharing: sharing,
+		},
+		deps.policy,
+	).surface;
 	const userHome =
 		mode === 'edit' && sharing === 'exclusive' && roleAtLeast(authorization.role, 'editor')
 			? deps.sandbox.userHome?.resolve(user)
@@ -1301,6 +1489,7 @@ app.openapi(createSession, async (c) => {
 						assetUrl: sandbox.assetUrl,
 						startupTimeoutMs: sandbox.startupTimeoutMs,
 						baseUrl,
+						marimoWatch: mode === 'edit' && Boolean(sandbox.surfaces?.vscode?.marimoWatch),
 						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
 						image,
 						resources: requestedComputeProfile.resources,
@@ -1512,6 +1701,42 @@ app.openapi(createSession, async (c) => {
 		});
 	}
 
+	const eagerVscode =
+		mode === 'edit' &&
+		Boolean(sandbox.surfaces?.vscode) &&
+		surfaceGrant &&
+		sandbox.surfaces?.vscode?.start === 'eager';
+	if (eagerVscode && updated) {
+		const surfaceContext = {
+			projectId: pid,
+			notebookId: nid,
+			sessionId: updated.session_id,
+		};
+		try {
+			const config = sandbox.surfaces!.vscode!;
+			let surfaceBasePath: string | undefined;
+			let surfaceClientUrl: string | undefined;
+			if (sandboxExposure instanceof ProxyExposure) {
+				const token = await signProxyToken(pid, updated.session_id, sandboxExposure.signingSecret);
+				surfaceBasePath = `/surface-proxy/${token}/vscode`;
+				surfaceClientUrl = `${joinUrlPath(appBaseUrl, surfaceBasePath)}/`;
+			}
+			const begun = await surfaceManager(deps).begin(updated, 'vscode', {
+				user,
+				workspaceDir: sandbox.workdir,
+				port: config.port,
+				exposure: sandboxExposure.mode,
+				hostname,
+				clientBaseUrl: surfaceClientUrl,
+				basePath: surfaceBasePath,
+			});
+			deferSurfaceCompletion(deps, begun.completion, surfaceContext);
+			updated = await sessions.getSession(pid, updated.session_id);
+		} catch (error) {
+			logSurfaceStartFailure(surfaceContext, error);
+		}
+	}
+
 	// An app start can put integration secrets and WIF credentials in front of the
 	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
@@ -1617,6 +1842,82 @@ app.openapi(heartbeatSession, async (c) => {
 		},
 		200,
 	);
+});
+
+app.openapi(ensureSurfaceRoute, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid, sid, surface } = c.req.valid('param');
+	const session = await loadSurfaceSession(deps, user, { pid, nid, sid });
+	const config = deps.sandbox.surfaces?.vscode;
+	if (!config) throw new SurfaceNotEnabledError('The VS Code surface is not enabled');
+
+	const exposure = deps.sandbox.exposure;
+	let basePath: string | undefined;
+	let clientBaseUrl: string | undefined;
+	if (exposure instanceof ProxyExposure) {
+		const token = await signProxyToken(pid, sid, exposure.signingSecret);
+		basePath = `/surface-proxy/${token}/${surface}`;
+		clientBaseUrl = `${joinUrlPath(resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl), basePath)}/`;
+	}
+	const begun = await surfaceManager(deps).begin(session, surface, {
+		user,
+		workspaceDir: deps.sandbox.workdir,
+		port: config.port,
+		exposure: exposure?.mode ?? 'subdomain',
+		hostname: deps.sandbox.hostname,
+		clientBaseUrl,
+		basePath,
+		open: c.req.valid('json')?.open,
+	});
+	deferSurfaceCompletion(deps, begun.completion, {
+		projectId: pid,
+		notebookId: nid,
+		sessionId: sid,
+	});
+	const result = begun.result;
+	if (result.status === 'starting') c.header('Retry-After', '1');
+	const data = {
+		id: surface,
+		status: result.state.status,
+		port: result.state.port,
+		url: result.state.url,
+		started_at: result.state.started_at,
+		probe: result.state.probe,
+		last_error: result.state.last_error,
+	};
+	return c.json({ success: true, data }, result.status === 'ready' ? 200 : 202);
+});
+
+app.openapi(getSurfaceRoute, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid, sid, surface } = c.req.valid('param');
+	const session = await loadSurfaceSession(deps, c.get('user'), { pid, nid, sid });
+	const state = session.surfaces?.[surface];
+	if (!state) throw new NotFoundError(`Surface ${surface} not found`);
+	return c.json(
+		{
+			success: true,
+			data: {
+				id: surface,
+				status: state.status,
+				port: state.port,
+				url: state.url,
+				started_at: state.started_at,
+				probe: state.probe,
+				last_error: state.last_error,
+			},
+		},
+		200,
+	);
+});
+
+app.openapi(deleteSurfaceRoute, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid, sid, surface } = c.req.valid('param');
+	const session = await loadSurfaceSession(deps, c.get('user'), { pid, nid, sid }, 'control');
+	await surfaceStopManager(deps).stop(session, surface);
+	return c.json({ success: true }, 200);
 });
 
 export default app;

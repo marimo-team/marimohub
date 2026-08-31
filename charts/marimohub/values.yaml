@@ -33,6 +33,19 @@ compute:
   profiles: ''
   profileOverride: none
 
+surfaces:
+  vscode:
+    enabled: false
+    # Use a published `-vscode` sandbox image tag when enabled.
+    sandboxImage: ''
+    flavor: code-server
+    start: on-demand
+    port: 8443
+    extensionGallery: openvsx
+    settingsJson: '{}'
+    embed: tab
+    marimoWatch: true
+
 # Singleton session reaper. Exactly one must run; the chart pins it to one
 # replica + Recreate. Don't scale it.
 maintenance:

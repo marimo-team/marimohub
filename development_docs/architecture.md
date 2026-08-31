@@ -158,6 +158,13 @@ the Compute port.
 | **Adapters**      | **Cloudflare Containers** (Durable Object-backed) · **Modal** · **CoreWeave** (CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK, Node/gRPC) · **Kubernetes** (a Pod + Service + Ingress per session via the cluster API) · **Docker** / **Podman** (a container per kernel through the engine CLI) · **E2B** (E2B sandboxes; bring-your-own `e2b` SDK) · **local** (host subprocess via `uv run marimo edit`, dev only) |
 | **Orchestration** | `SandboxProvisioner` is provider-agnostic: it creates a sandbox, makes notebook files available (mount the bucket, or fall back to copying files in), starts marimo, waits for the port, and exposes a URL. Teardown reverses it.                                                                                                                                                                                                      |
 
+An edit sandbox can also expose secondary **surfaces**. `SurfaceRegistry` owns
+the provider-neutral process specification, and `SurfaceManager` probes,
+prepares, starts, and exposes the process. Surface state lives on the session
+record and every transition goes through `SessionService` CAS mutation. The
+`vscode` surface runs beside the primary `marimo` process and shares its
+workspace; it is not a second session mode or sandbox.
+
 **Lifecycle (provider-independent):**
 
 ```
@@ -230,7 +237,7 @@ from one pure evaluator in core (`sessionCan`/`canStartSessionMode` in
 `services/runtime/sessionAuthz.ts`, over the `VIEWER_SESSION_MODES` admission
 table in `constants.ts`): the API's throwing gates (`assertSessionControl`,
 `assertSessionAccess`), the `sandbox_url` projection, and the per-caller
-`can: { attach, stop }` grants shipped on every session response are the same
+`can: { attach, stop, surfaces: { vscode } }` grants shipped on every session response are the same
 function applied to the same facts — and the web renders from `session.can`
 and `capabilities.viewer_session_modes` instead of re-deriving policy, so
 client and server cannot disagree. Apps skip

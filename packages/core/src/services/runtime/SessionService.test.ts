@@ -293,9 +293,23 @@ describe('SessionService', () => {
 			const key = paths.session(projectId, session.session_id);
 			const raw = await (await bucket.get(key))?.json<Record<string, unknown>>();
 			const pin = [{ id: 'intg-0000000000000000', name: 'prod', kind: 'postgres', version: 3 }];
+			const futureSurface = {
+				status: 'starting',
+				attempt_id: 'attempt-newer',
+				attempt_started_at: new Date().toISOString(),
+				future_routing_field: 'from-a-newer-replica',
+			};
 			await bucket.put(
 				key,
-				JSON.stringify({ ...raw, integrations: pin, future_field: 'from-a-newer-replica' }),
+				JSON.stringify({
+					...raw,
+					integrations: pin,
+					future_field: 'from-a-newer-replica',
+					surfaces: {
+						...(raw?.surfaces as Record<string, unknown> | undefined),
+						vscode: futureSurface,
+					},
+				}),
 			);
 
 			advanceTime(61 * 1000);
@@ -303,9 +317,11 @@ describe('SessionService', () => {
 			restoreClock();
 
 			const rewritten = await (await bucket.get(key))?.json<Record<string, unknown>>();
+			const rewrittenSurfaces = rewritten?.surfaces as Record<string, unknown> | undefined;
 			expect(rewritten?.status).toBe('running');
 			expect(rewritten?.integrations).toEqual(pin);
 			expect(rewritten?.future_field).toBe('from-a-newer-replica');
+			expect(rewrittenSurfaces?.vscode).toEqual(futureSurface);
 		});
 	});
 
@@ -600,6 +616,66 @@ describe('SessionService', () => {
 
 			const stopped = await sessions.markTerminated(projectId, created.session_id);
 			expect(stopped.status).toBe('terminated');
+		});
+
+		it('atomically fences a secondary surface start when termination begins', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const running = await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'https://sandbox.example',
+			);
+			const starting = await sessions.beginSurfaceStart(projectId, created.session_id, 'vscode');
+
+			const terminating = await sessions.beginTerminating(projectId, created.session_id);
+
+			expect(terminating.session).toMatchObject({
+				status: 'terminating',
+				surfaces: {
+					marimo: running.surfaces?.marimo,
+					vscode: {
+						status: 'stopping',
+						attempt_id: expect.any(String),
+						attempt_started_at: expect.any(String),
+						cancelled_attempt_id: starting.attemptId,
+					},
+				},
+			});
+			expect(terminating.session.surfaces?.vscode?.attempt_id).not.toBe(starting.attemptId);
+			await expect(
+				sessions.setSurfaceStateForAttempt(
+					projectId,
+					created.session_id,
+					'vscode',
+					starting.attemptId!,
+					{ status: 'ready', port: 8443 },
+				),
+			).resolves.toMatchObject({ transitioned: false });
+		});
+
+		it('gives only one concurrent surface stop ownership of the attempt', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
+			await sessions.setSurfaceState(projectId, created.session_id, 'vscode', {
+				status: 'ready',
+				port: 8443,
+			});
+
+			const attempts = await Promise.all([
+				sessions.beginSurfaceStop(projectId, created.session_id, 'vscode'),
+				sessions.beginSurfaceStop(projectId, created.session_id, 'vscode'),
+			]);
+
+			expect(attempts.filter((attempt) => attempt.transitioned)).toHaveLength(1);
+			expect(attempts.filter((attempt) => !attempt.transitioned)).toHaveLength(1);
 		});
 
 		it('markFailed marks a live session failed, but never overrides a terminal/terminating one', async () => {

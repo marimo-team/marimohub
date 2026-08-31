@@ -61,6 +61,7 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- define "marimohub.podTemplate" -}}
 {{- $root := .root -}}
 {{- $v := $root.Values -}}
+{{- $hasConfigMap := or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") $v.surfaces.vscode.enabled -}}
 {{- $res := $v.resources -}}
 {{- if .maintenance -}}{{- $res = $v.maintenance.resources -}}{{- end }}
 metadata:
@@ -70,9 +71,9 @@ metadata:
     {{- with $v.podLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- if or $v.podAnnotations $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
+  {{- if or $v.podAnnotations $hasConfigMap }}
   annotations:
-    {{- if or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
+    {{- if $hasConfigMap }}
     checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
     {{- end }}
     {{- with $v.podAnnotations }}
@@ -131,7 +132,7 @@ spec:
         {{- end }}
       {{- end }}
       envFrom:
-        {{- if or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
+        {{- if $hasConfigMap }}
         - configMapRef:
             name: {{ include "marimohub.fullname" $root }}-config
         {{- end }}

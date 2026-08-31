@@ -58,6 +58,24 @@ describe('sessionCan', () => {
 		expect(sessionCan('stop', actor({ role: 'admin' }), exclusive)).toBe(true);
 	});
 
+	it('allows surfaces only for editors who may attach to edit sessions', () => {
+		expect(sessionCan('surface', actor({ role: 'editor' }), otherEdit)).toBe(true);
+		expect(
+			sessionCan(
+				'surface',
+				actor({ role: 'viewer', viewerMode: 'ephemeral-sandbox' }),
+				ownEphemeral,
+			),
+		).toBe(false);
+		expect(sessionCan('surface', actor({ role: 'admin' }), app)).toBe(false);
+		expect(
+			sessionCan('surface', actor({ role: 'manager' }), {
+				...otherEdit,
+				editor_sandbox_sharing: 'exclusive',
+			}),
+		).toBe(false);
+	});
+
 	it('a viewer fully controls their own ephemeral session while the tier grants it', () => {
 		expect(sessionCan('attach', actor({ viewerMode: 'ephemeral-sandbox' }), ownEphemeral)).toBe(
 			true,
@@ -107,7 +125,12 @@ describe('sessionGrants', () => {
 		expect(sessionGrants(actor({ viewerMode: 'applications' }), app)).toEqual({
 			attach: true,
 			stop: false,
+			surface: false,
 		});
-		expect(sessionGrants(actor({ role: 'editor' }), app)).toEqual({ attach: true, stop: true });
+		expect(sessionGrants(actor({ role: 'editor' }), app)).toEqual({
+			attach: true,
+			stop: true,
+			surface: false,
+		});
 	});
 });

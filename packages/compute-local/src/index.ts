@@ -116,6 +116,8 @@ async function waitForChildren(
 }
 
 const WORKSPACE = '/workspace';
+const PORT_OPTION = /(['"]?)--port\1(\s+)(['"]?)(\d+)\3/;
+const BIND_ADDR_OPTION = /(['"]?)--bind-addr\1(\s+)(['"]?)([^\s'"]+):(\d+)\3/;
 
 export interface PortRange {
 	start: number;
@@ -300,9 +302,30 @@ class LocalSandboxInstance implements SandboxInstance {
 		return abs;
 	}
 
+	resolveProcessPath(p: string): string {
+		return this.mapPath(p);
+	}
+
+	async isPortReady(port: number, options?: Omit<WaitForPortOptions, 'timeout'>): Promise<boolean> {
+		const real = this.portMap.get(port) ?? port;
+		const host = this.bindHost === '0.0.0.0' ? '127.0.0.1' : this.bindHost;
+		try {
+			await fetch(`http://${host}:${real}${options?.path ?? '/'}`, {
+				redirect: 'manual',
+				signal: AbortSignal.timeout(2_000),
+			});
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	/** Rewrite `/workspace` references in a shell command to the real root. */
 	private rewriteCmd(cmd: string): string {
-		return rewriteWorkspace(cmd, this.root);
+		return rewriteWorkspace(cmd, this.root).replaceAll(
+			'/tmp/.marimohub',
+			path.join(this.root, 'tmp/.marimohub'),
+		);
 	}
 
 	/** Adjust a `uv run … marimo …` command for local execution (see {@link prepareMarimoCommand}). */
@@ -487,13 +510,30 @@ class LocalSandboxInstance implements SandboxInstance {
 
 		// Map the logical port in the command (e.g. 2718) to a real free port so
 		// concurrent sandboxes don't collide on the same host.
-		const logicalMatch = cmd.match(/--port\s+(\d+)/);
+		const portMatch = PORT_OPTION.exec(cmd);
+		const bindAddrMatch = BIND_ADDR_OPTION.exec(cmd);
+		const logical = portMatch
+			? Number(portMatch[4])
+			: bindAddrMatch
+				? Number(bindAddrMatch[5])
+				: undefined;
 		let command = this.prepareMarimoCmd(this.rewriteCmd(cmd));
-		if (logicalMatch) {
-			const logical = Number(logicalMatch[1]);
+		if (logical !== undefined) {
 			const real = await allocatePort(this.bindHost, this.ports);
 			this.portMap.set(logical, real);
-			command = command.replace(/--port\s+\d+/, `--port ${real}`);
+			if (portMatch) {
+				command = command.replace(
+					PORT_OPTION,
+					(_match, flagQuote, spacing, valueQuote) =>
+						`${flagQuote}--port${flagQuote}${spacing}${valueQuote}${real}${valueQuote}`,
+				);
+			} else {
+				command = command.replace(
+					BIND_ADDR_OPTION,
+					(_match, flagQuote, spacing, valueQuote, address) =>
+						`${flagQuote}--bind-addr${flagQuote}${spacing}${valueQuote}${address}:${real}${valueQuote}`,
+				);
+			}
 			if (command.includes('__MARIMOHUB_LAUNCH_')) {
 				command = command.replace(new RegExp(`'${logical}'$`), `'${real}'`);
 			}
@@ -598,6 +638,7 @@ class LocalSandboxInstance implements SandboxInstance {
 }
 
 export class LocalCompute implements SandboxProvider {
+	readonly capabilities = { multiPort: true } as const;
 	private readonly root: string;
 	private readonly host: string;
 	private readonly bindHost: string;

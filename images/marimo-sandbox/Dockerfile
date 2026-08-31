@@ -2,7 +2,7 @@
 
 # Held at 3.13: pyiceberg (in the acceptance image) has no cp314 wheel yet, so
 # 3.14 forces a source build that needs a compiler absent from -slim.
-FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS base
 
 ARG MARIMO_VERSION=0.24.0
 ENV MARIMO_VERSION=${MARIMO_VERSION}
@@ -76,3 +76,32 @@ USER appuser
 WORKDIR /workspace
 
 CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--no-token", "--host", "0.0.0.0", "--port", "2718"]
+
+FROM base AS vscode
+
+USER root
+ARG CODE_SERVER_VERSION=4.133.0
+ARG CODE_SERVER_AMD64_SHA256=a4e0f8f8c76e7de8e7424289f74e507af4c97bfe104c3e8ee272b8cc7b46c6f1
+ARG CODE_SERVER_ARM64_SHA256=d999d8b0256e5537f3b62e6c09f624220026e19107a04a876c0cef62d1c71147
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) arch=amd64; checksum="${CODE_SERVER_AMD64_SHA256}" ;; \
+      arm64) arch=arm64; checksum="${CODE_SERVER_ARM64_SHA256}" ;; \
+      *) exit 1 ;; \
+    esac \
+ && archive=/tmp/code-server.tar.gz \
+ && curl -fsSL -o "${archive}" "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${arch}.tar.gz" \
+ && printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum -c - \
+ && tar -xzf "${archive}" -C /opt \
+ && rm "${archive}" \
+ && ln -s "/opt/code-server-${CODE_SERVER_VERSION}-linux-${arch}/bin/code-server" /usr/local/bin/code-server \
+ && mkdir -p /opt/marimohub/vscode-extensions \
+ && chown -R appuser:appuser /opt/marimohub/vscode-extensions
+
+USER appuser
+RUN code-server --extensions-dir /opt/marimohub/vscode-extensions --install-extension marimo-team.vscode-marimo@0.17.2 \
+ && code-server --extensions-dir /opt/marimohub/vscode-extensions --install-extension detachhead.basedpyright@1.39.10 \
+ && code-server --extensions-dir /opt/marimohub/vscode-extensions --install-extension charliermarsh.ruff@2026.74.0 \
+ && code-server --extensions-dir /opt/marimohub/vscode-extensions --install-extension tamasfe.even-better-toml@0.21.2
+
+FROM base AS release

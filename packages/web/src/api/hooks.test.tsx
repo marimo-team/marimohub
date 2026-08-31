@@ -6,6 +6,7 @@ import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys'
 import {
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
+	SURFACE_START_TIMEOUT_MS,
 	useBrowseCapabilityQuery,
 	useBrowseTablePreview,
 	useBrowseTablesQuery,
@@ -32,6 +33,10 @@ import {
 
 const PID = 'proj-1';
 const NID = 'nb-1';
+
+it('keeps the VS Code polling window beyond the server startup phase budgets', () => {
+	expect(SURFACE_START_TIMEOUT_MS).toBeGreaterThan(150_000);
+});
 
 type FetchHandler = (url: RequestInfo | URL, init?: RequestInit | Request) => Promise<Response>;
 

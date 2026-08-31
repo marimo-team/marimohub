@@ -814,6 +814,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 }
 
 export class CoreWeaveCompute implements SandboxProvider {
+	readonly capabilities = { multiPort: false } as const;
 	private client?: CoreWeaveClient;
 
 	constructor(

@@ -620,6 +620,7 @@ class ModalSandboxInstance implements SandboxInstance {
 }
 
 export class ModalCompute implements SandboxProvider {
+	readonly capabilities = { multiPort: false } as const;
 	private readonly client: ModalClientLike;
 
 	constructor(

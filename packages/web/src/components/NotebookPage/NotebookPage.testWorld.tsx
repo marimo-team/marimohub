@@ -48,6 +48,8 @@ interface FetchOptions {
 	headVersion?: string;
 	/** The notebook's source type; `git` models a GitHub-synced notebook. */
 	sourceType?: 'local' | 'git';
+	entryNotebook?: string;
+	notebookPromise?: Promise<void>;
 	/** When set, POST .../sessions fails with this error code at this status. */
 	createError?: { code: string; message: string; status: number };
 	sessionResponses?: Session[];
@@ -62,6 +64,9 @@ interface FetchOptions {
 	editorStateFailOn?: number[];
 	meFailures?: number;
 	sourceControlProviders?: string[];
+	vscode?: { embed: 'tab' | 'iframe' };
+	vscodeStartError?: { code: string; message: string; status: number };
+	vscodeStopError?: { code: string; message: string; status: number };
 	omitSourceControlCapability?: boolean;
 	changeRequestFailures?: number;
 	changeRequestFailOn?: number[];
@@ -107,6 +112,30 @@ export function makeFetch(opts: FetchOptions) {
 				opts.sessionResponses?.[sessionPostCount] ?? opts.session ?? runningSession();
 			sessionPostCount += 1;
 			return ok({ ...response, reused: false });
+		}
+		if (method === 'POST' && url.endsWith('/surfaces/vscode')) {
+			if (opts.vscodeStartError) {
+				const { code, message, status } = opts.vscodeStartError;
+				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
+					status,
+					headers: { 'content-type': 'application/json' },
+				});
+			}
+			return ok({
+				id: 'vscode',
+				status: 'ready',
+				url: 'https://vscode.example/?folder=/workspace',
+			});
+		}
+		if (method === 'DELETE' && url.endsWith('/surfaces/vscode')) {
+			if (opts.vscodeStopError) {
+				const { code, message, status } = opts.vscodeStopError;
+				return new Response(JSON.stringify({ success: false, error: { code, message } }), {
+					status,
+					headers: { 'content-type': 'application/json' },
+				});
+			}
+			return ok(undefined);
 		}
 		if (method === 'POST' && url.endsWith('/change-requests')) {
 			changeRequestCount += 1;
@@ -165,6 +194,7 @@ export function makeFetch(opts: FetchOptions) {
 			});
 		}
 		if (url.endsWith(`/notebooks/${NID}`)) {
+			await opts.notebookPromise;
 			return ok({
 				meta: {
 					id: NID,
@@ -180,7 +210,7 @@ export function makeFetch(opts: FetchOptions) {
 								repo: 'org/repo',
 								branch: 'main',
 								root_path: '',
-								entry_notebook: 'app.py',
+								entry_notebook: opts.entryNotebook ?? 'app.py',
 								commit: 'deadbeefcafe0123',
 								last_synced_at: '2026-07-01T10:00:00Z',
 								current_version_id: opts.headVersion ?? 'ver-head',
@@ -210,6 +240,16 @@ export function makeFetch(opts: FetchOptions) {
 				compute_profiles: opts.computeProfiles ?? [],
 				compute_profile_override: opts.computeProfileOverride ?? 'none',
 				editor_sandbox_sharing: opts.editorSharing ?? 'shared',
+				surfaces: opts.vscode
+					? [
+							{
+								id: 'vscode',
+								flavor: 'code-server',
+								start: 'on-demand',
+								embed: opts.vscode.embed,
+							},
+						]
+					: [],
 			});
 		}
 		if (url.endsWith('/me')) {

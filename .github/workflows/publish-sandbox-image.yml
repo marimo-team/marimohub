@@ -40,6 +40,19 @@ jobs:
       - name: Build and run acceptance tests
         run: examples/sandbox-image/acceptance-test.sh marimo-sandbox:ci images/marimo-sandbox
 
+      - name: Build VS Code variant
+        run: docker build --target vscode -t marimo-sandbox:vscode-ci images/marimo-sandbox
+
+      - name: Verify VS Code variant
+        run: |
+          docker run --rm marimo-sandbox:vscode-ci code-server --version
+          docker run --rm marimo-sandbox:vscode-ci sh -c '
+            installed="$(code-server --list-extensions --extensions-dir /opt/marimohub/vscode-extensions)"
+            for extension in marimo-team.vscode-marimo detachhead.basedpyright charliermarsh.ruff tamasfe.even-better-toml; do
+              printf "%s\n" "$installed" | grep -Fx "$extension"
+            done
+          '
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         if: github.event_name == 'push'
 
@@ -62,3 +75,16 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}
             ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}
+
+      - name: Publish VS Code variant
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/marimo-sandbox
+          target: vscode
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-vscode
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-vscode
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-vscode

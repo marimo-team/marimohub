@@ -4,6 +4,7 @@ import {
 	AlertTriangle,
 	AppWindow,
 	ArrowLeft,
+	Code2,
 	Eye,
 	GitBranch,
 	Pencil,
@@ -27,6 +28,8 @@ import {
 	useProjectSessionsQuery,
 	useEditorSessionQuery,
 	useTakeoverEditorSession,
+	useEnsureVscodeSurface,
+	useStopVscodeSurface,
 	useUserQuery,
 	useUsersQuery,
 } from '@/api/hooks';
@@ -117,6 +120,8 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const confirmEditStop = useDisclosure();
 	const confirmTakeover = useDisclosure();
 	const [editIntent, setEditIntent] = useState<'temporary' | undefined>();
+	const [stoppedVscodeSessionId, setStoppedVscodeSessionId] = useState<string>();
+	const [vscodeFrame, setVscodeFrame] = useState<{ sessionId: string; url: string }>();
 
 	// The viewer branch (server-enforced regardless): editors get a session as
 	// always; a viewer gets an edit kernel only when the deployment's evaluated
@@ -164,6 +169,8 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const identityStateFailed =
 		needsEditorState && editorStateQuery.isSuccess && !!editorState?.holder && userQuery.isError;
 	const takeover = useTakeoverEditorSession(pid!, nid!);
+	const ensureVscode = useEnsureVscodeSurface(pid!, nid!);
+	const stopVscode = useStopVscodeSurface(pid!, nid!);
 
 	const {
 		session,
@@ -286,6 +293,21 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		computeProfiles.length > 0 &&
 		error?.kind === 'startup' &&
 		error.generic === true;
+	const vscodeCapability = capabilities?.surfaces?.find((surface) => surface.id === 'vscode');
+	const ensuredVscodeState =
+		ensureVscode.variables?.sessionId === session?.session_id ? ensureVscode.data : undefined;
+	const vscodeState =
+		stoppedVscodeSessionId === session?.session_id
+			? { status: 'stopped' as const }
+			: (ensuredVscodeState ?? session?.surfaces?.vscode);
+	const vscodeFrameUrl =
+		vscodeFrame && vscodeFrame.sessionId === session?.session_id ? vscodeFrame.url : undefined;
+	const canUseVscode =
+		!isApp &&
+		!!notebook &&
+		!!session?.can.surfaces?.vscode &&
+		!!vscodeCapability &&
+		session.status === 'running';
 
 	const backToProject = () => {
 		void navigate(`/projects/${pid}`);
@@ -300,6 +322,37 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const handleStop = () => {
 		stop();
 		backToProject();
+	};
+	const openVscode = () => {
+		if (!session || !notebook) return;
+		const entryNotebook =
+			notebook.source.type === 'git' ? notebook.source.entry_notebook : 'notebook.py';
+		setStoppedVscodeSessionId(undefined);
+		const embed = vscodeCapability?.embed === 'iframe';
+		const tab = embed ? null : window.open('about:blank', '_blank');
+		if (tab) tab.opener = null;
+		ensureVscode.mutate(
+			{ sessionId: session.session_id, open: entryNotebook },
+			{
+				onSuccess: (surface) => {
+					if (embed) setVscodeFrame({ sessionId: session.session_id, url: surface.url! });
+					else if (tab) tab.location.href = surface.url!;
+					else window.open(surface.url, '_blank', 'noopener,noreferrer');
+				},
+				onError: () => tab?.close(),
+			},
+		);
+	};
+	const closeVscode = () => {
+		if (!session) return;
+		const sessionId = session.session_id;
+		stopVscode.mutate(sessionId, {
+			onSuccess: () => {
+				setStoppedVscodeSessionId(sessionId);
+				setVscodeFrame(undefined);
+				ensureVscode.reset();
+			},
+		});
 	};
 	const takeOver = () => {
 		const holder = editorState?.holder;
@@ -455,6 +508,27 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 							}
 						>
 							Stop
+						</Button>
+					)}
+					{canUseVscode && (
+						<Button
+							variant="unstyled"
+							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
+							isDisabled={ensureVscode.isPending}
+							onPress={openVscode}
+						>
+							<Code2 className="size-3" />
+							{ensureVscode.isPending ? 'Starting VS Code...' : 'Open in VS Code'}
+						</Button>
+					)}
+					{canUseVscode && vscodeState?.status === 'ready' && (
+						<Button
+							variant="unstyled"
+							className="flex h-[26px] items-center rounded-md px-2 text-xs text-muted-foreground hover:text-destructive max-md:min-h-11"
+							isDisabled={stopVscode.isPending}
+							onPress={closeVscode}
+						>
+							Stop VS Code
 						</Button>
 					)}
 				</div>
@@ -622,7 +696,11 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						</div>
 					)}
 					<div
-						className={cn('flex-1 overflow-hidden', takeover.isPending && 'pointer-events-none')}
+						className={cn(
+							'flex-1 overflow-hidden',
+							vscodeFrameUrl && 'grid grid-cols-2',
+							takeover.isPending && 'pointer-events-none',
+						)}
 						aria-hidden={takeover.isPending || undefined}
 					>
 						<iframe
@@ -632,6 +710,15 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 							allow="clipboard-read; clipboard-write"
 							title={title}
 						/>
+						{vscodeFrameUrl && (
+							<iframe
+								className="size-full border-0 border-l"
+								src={vscodeFrameUrl}
+								sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+								allow="clipboard-read; clipboard-write"
+								title={`${title} in VS Code`}
+							/>
+						)}
 					</div>
 				</>
 			)}

@@ -230,6 +230,7 @@ export interface CloudflareSandboxProviderOptions {
 }
 
 export class CloudflareSandboxProvider implements SandboxProvider {
+	readonly capabilities = { multiPort: true } as const;
 	private namespace: DurableObjectNamespace<SandboxType>;
 	private useTunnel: boolean;
 

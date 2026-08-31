@@ -14,12 +14,13 @@ import type { MiddlewareHandler } from 'hono';
 import {
 	ForbiddenError,
 	ProxyExposure,
+	SurfaceForbiddenError,
 	UnavailableError,
 	verifyProxyToken,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
-import { assertSessionAccess, fail } from './shared';
+import { assertSessionAccess, assertSessionSurfaceAccess, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -44,6 +45,7 @@ export type ProxyDecision =
 	  };
 
 const PROXY_PREFIX = /^\/proxy\/([^/]+)/;
+const SURFACE_PROXY_PREFIX = /^\/surface-proxy\/([^/]+)\/([^/]+)/;
 
 /** Strip a trailing slash so we can concatenate an origin with a path cleanly. */
 function trimTrailingSlash(s: string): string {
@@ -63,8 +65,9 @@ export async function authorizeProxyRequest(
 	deps: ApiDeps,
 ): Promise<ProxyDecision> {
 	const url = new URL(request.url);
-	const match = PROXY_PREFIX.exec(url.pathname);
-	if (!match) return { kind: 'pass' };
+	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
+	const surfaceMatch = SURFACE_PROXY_PREFIX.exec(url.pathname);
+	if (!kernelMatch && !surfaceMatch) return { kind: 'pass' };
 
 	// The proxy signing secret travels with the ProxyExposure (subdomain mode has none).
 	const exposure = deps.sandbox.exposure;
@@ -75,7 +78,7 @@ export async function authorizeProxyRequest(
 		return { kind: 'pass' };
 	}
 
-	const token = match[1];
+	const token = (kernelMatch ?? surfaceMatch)![1];
 	const verified = await verifyProxyToken(token, secret);
 	if (!verified) {
 		return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: 'Invalid sandbox token' };
@@ -137,7 +140,13 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	const originUrl = session.sandbox_origin_url;
+	const surfaceId = surfaceMatch?.[2];
+	const surfaceState = surfaceId ? session.surfaces?.[surfaceId] : undefined;
+	const originUrl = surfaceId
+		? surfaceState?.status === 'ready'
+			? surfaceState.origin_url
+			: undefined
+		: session.sandbox_origin_url;
 	if (!originUrl) {
 		// Running but no origin recorded — the session was provisioned under a
 		// different exposure mode. Not reachable via the proxy.
@@ -145,7 +154,9 @@ export async function authorizeProxyRequest(
 			kind: 'reject',
 			status: 503,
 			code: 'SERVICE_UNAVAILABLE',
-			message: 'Session is not reachable via the proxy',
+			message: surfaceId
+				? 'Session surface is not reachable via the proxy'
+				: 'Session is not reachable via the proxy',
 		};
 	}
 
@@ -164,16 +175,24 @@ export async function authorizeProxyRequest(
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
 	try {
-		assertSessionAccess(project, session, user, deps.policy);
+		if (surfaceId) assertSessionSurfaceAccess(project, session, user, deps.policy);
+		else assertSessionAccess(project, session, user, deps.policy);
 	} catch (err) {
-		if (err instanceof ForbiddenError) {
+		if (err instanceof ForbiddenError || err instanceof SurfaceForbiddenError) {
 			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };
 		}
 		throw err;
 	}
 
-	// Forward the FULL path unchanged (marimo runs under --base-url=/proxy/<token>).
-	const targetUrl = `${trimTrailingSlash(originUrl)}${url.pathname}${url.search}`;
+	const upstreamPath =
+		surfaceId === 'vscode' &&
+		(surfaceState?.proxy_path ??
+			(deps.sandbox.surfaces?.vscode?.flavor === 'openvscode'
+				? 'preserve-prefix'
+				: 'strip-prefix')) === 'strip-prefix'
+			? url.pathname.slice(surfaceMatch![0].length) || '/'
+			: url.pathname;
+	const targetUrl = `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}`;
 	return {
 		kind: 'forward',
 		targetUrl,

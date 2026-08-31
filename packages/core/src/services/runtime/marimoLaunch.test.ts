@@ -24,6 +24,12 @@ describe('buildMarimoLaunch', () => {
 		expect(start).toContain('--base-url="/proxy/tok"');
 	});
 
+	it('adds file watching only when an edit surface requests it', () => {
+		expect(buildMarimoLaunch({ ...BASE, mode: 'edit', watch: true }).start).toContain('--watch');
+		expect(buildMarimoLaunch({ ...BASE, mode: 'edit' }).start).not.toContain('--watch');
+		expect(buildMarimoLaunch({ ...BASE, mode: 'app', watch: true }).start).not.toContain('--watch');
+	});
+
 	// --convert's fallback can rewrite a file as Python, so it must never reach a
 	// markdown-family notebook.
 	for (const file of ['docs/page.md', 'page.markdown', 'reports/q3.qmd']) {

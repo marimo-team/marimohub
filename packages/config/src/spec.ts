@@ -303,6 +303,67 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value.',
 						default: '120',
 					},
+					{
+						id: 'MARIMOHUB_SURFACES',
+						name: 'Sandbox surfaces',
+						description:
+							'Comma-separated editor surfaces enabled in notebook sandboxes. `marimo` is always available; add `vscode` to enable browser VS Code.',
+						default: 'marimo',
+						example: 'marimo,vscode',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_FLAVOR',
+						name: 'VS Code flavor',
+						description: 'Browser editor implementation (`code-server` or `openvscode`).',
+						default: 'code-server',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_START',
+						name: 'VS Code start policy',
+						description: 'Start VS Code on demand or with every edit session.',
+						default: 'on-demand',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_PORT',
+						name: 'VS Code port',
+						description:
+							'Logical sandbox port used by the VS Code surface. Must differ from marimo port 2718.',
+						default: '8443',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY',
+						name: 'VS Code extension gallery',
+						description:
+							'Extension gallery (`openvsx`, `none`, or the HTTP(S) service URL of a mirror).',
+						default: 'openvsx',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON',
+						name: 'VS Code settings',
+						description: 'JSON object merged over the safe browser-editor defaults.',
+						default: '{}',
+						example: '{"editor.fontSize":14}',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_EMBED',
+						name: 'VS Code presentation',
+						description: 'Open VS Code in a new tab or an iframe (`tab` or `iframe`).',
+						default: 'tab',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH',
+						name: 'Watch VS Code edits in marimo',
+						description: 'Pass `--watch` to marimo edit when the VS Code surface is enabled.',
+						default: 'true',
+						optIn: true,
+					},
 				],
 			},
 			{

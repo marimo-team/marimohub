@@ -10,6 +10,9 @@ on-demand sandbox created by the selected compute backend.
 See [Editor sessions](./editor-sessions.md) to choose shared or exclusive access
 to persistent editor sandboxes.
 
+See [VS Code surface](./surfaces.md) to attach a browser editor to the existing
+edit sandbox.
+
 Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 [Configuration -> Compute](./configuration.md#compute).
 

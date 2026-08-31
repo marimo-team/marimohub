@@ -28,6 +28,7 @@ import {
 	SOURCE_TYPES,
 	EDITOR_SANDBOX_SHARING_VALUES,
 	VIEWER_MODES,
+	SurfaceForbiddenError,
 } from '@marimo-hub/core';
 import type {
 	AuthSubject,
@@ -166,7 +167,7 @@ export function sessionGrantsFor(
 	subject: AuthSubject,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	policy: SessionPolicy,
-): { attach: boolean; stop: boolean } {
+): { attach: boolean; stop: boolean; surface: boolean } {
 	return sessionGrants(sessionActorFor(project, subject, policy), session);
 }
 
@@ -208,6 +209,16 @@ export function assertSessionAccess(
 	policy: SessionPolicy,
 ): void {
 	assertSession('attach', project, session, subject, policy);
+}
+
+export function assertSessionSurfaceAccess(
+	project: Project,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	subject: AuthSubject,
+	policy: SessionPolicy,
+): void {
+	if (sessionCan('surface', sessionActorFor(project, subject, policy), session)) return;
+	throw new SurfaceForbiddenError();
 }
 
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
@@ -794,6 +805,23 @@ export const ComputeResourcesResponseSchema = z
 	})
 	.openapi('ComputeResources');
 
+export const SurfaceResponseSchema = z
+	.object({
+		status: z.enum(['starting', 'ready', 'stopping', 'stopped', 'failed', 'unavailable']),
+		port: z.number().int().positive().optional(),
+		url: z.string().optional(),
+		started_at: dt().optional(),
+		probe: z
+			.object({
+				available: z.boolean(),
+				reason: z.string().optional(),
+				version: z.string().optional(),
+			})
+			.optional(),
+		last_error: z.string().optional(),
+	})
+	.openapi('Surface');
+
 export function toComputeResourcesResponse(
 	resources: ComputeResources | undefined,
 ): z.infer<typeof ComputeResourcesResponseSchema> | undefined {
@@ -847,9 +875,15 @@ export const SessionResponseSchema = z
 		 * The caller's grants on this session, evaluated server-side (the same
 		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,
 		 * heartbeat; `sandbox_url` is present iff true), `stop` — may stop or
-		 * restart it. Clients render from these instead of re-deriving policy.
+		 * restart it, `surfaces.vscode` — may use the secondary editor. Clients
+		 * render from these instead of re-deriving policy.
 		 */
-		can: z.object({ attach: z.boolean(), stop: z.boolean() }),
+		can: z.object({
+			attach: z.boolean(),
+			stop: z.boolean(),
+			surfaces: z.object({ vscode: z.boolean() }).optional(),
+		}),
+		surfaces: z.record(z.string(), SurfaceResponseSchema).optional(),
 		/**
 		 * Shared app/editor kernel connection count as of the lifecycle sweep's last
 		 * probe (approximate). Drives the "~N connected" stop-confirm hint.
@@ -1087,5 +1121,13 @@ export const CapabilitiesResponseSchema = z
 			}),
 		),
 		compute_profile_override: z.enum(['none', 'editors']),
+		surfaces: z.array(
+			z.object({
+				id: z.literal('vscode'),
+				flavor: z.enum(['code-server', 'openvscode']),
+				start: z.enum(['on-demand', 'eager']),
+				embed: z.enum(['tab', 'iframe']),
+			}),
+		),
 	})
 	.openapi('Capabilities');
