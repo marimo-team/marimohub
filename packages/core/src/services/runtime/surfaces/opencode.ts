@@ -109,16 +109,25 @@ export function opencodeSurface(options: OpenCodeSurfaceOptions = {}): SurfaceSp
 		},
 		command(ctx, port) {
 			const configPath = `${ctx.userDataDir}/config/opencode/opencode.json`;
+			const environment = {
+				XDG_CONFIG_HOME: `${ctx.userDataDir}/config`,
+				XDG_DATA_HOME: `${ctx.userDataDir}/data`,
+				XDG_CACHE_HOME: `${ctx.userDataDir}/cache`,
+				XDG_STATE_HOME: `${ctx.userDataDir}/state`,
+				OPENCODE_CONFIG: configPath,
+				OPENCODE_DISABLE_AUTOUPDATE: 'true',
+			};
 			return {
-				cmd: ['opencode', 'web', '--hostname', '0.0.0.0', '--port', String(port)],
-				env: {
-					XDG_CONFIG_HOME: `${ctx.userDataDir}/config`,
-					XDG_DATA_HOME: `${ctx.userDataDir}/data`,
-					XDG_CACHE_HOME: `${ctx.userDataDir}/cache`,
-					XDG_STATE_HOME: `${ctx.userDataDir}/state`,
-					OPENCODE_CONFIG: configPath,
-					OPENCODE_DISABLE_AUTOUPDATE: 'true',
-				},
+				cmd: [
+					'env',
+					...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
+					'opencode',
+					'web',
+					'--hostname',
+					'0.0.0.0',
+					'--port',
+					String(port),
+				],
 			};
 		},
 		readiness: { path: '/global/health', timeoutMs: 120_000 },

@@ -31,15 +31,21 @@ describe('opencodeSurface', () => {
 			$schema: 'https://opencode.ai/config.json',
 		});
 		expect(surface.command(context, 4096)).toEqual({
-			cmd: ['opencode', 'web', '--hostname', '0.0.0.0', '--port', '4096'],
-			env: {
-				XDG_CONFIG_HOME: `${context.userDataDir}/config`,
-				XDG_DATA_HOME: `${context.userDataDir}/data`,
-				XDG_CACHE_HOME: `${context.userDataDir}/cache`,
-				XDG_STATE_HOME: `${context.userDataDir}/state`,
-				OPENCODE_CONFIG: `${context.userDataDir}/config/opencode/opencode.json`,
-				OPENCODE_DISABLE_AUTOUPDATE: 'true',
-			},
+			cmd: [
+				'env',
+				`XDG_CONFIG_HOME=${context.userDataDir}/config`,
+				`XDG_DATA_HOME=${context.userDataDir}/data`,
+				`XDG_CACHE_HOME=${context.userDataDir}/cache`,
+				`XDG_STATE_HOME=${context.userDataDir}/state`,
+				`OPENCODE_CONFIG=${context.userDataDir}/config/opencode/opencode.json`,
+				'OPENCODE_DISABLE_AUTOUPDATE=true',
+				'opencode',
+				'web',
+				'--hostname',
+				'0.0.0.0',
+				'--port',
+				'4096',
+			],
 		});
 		expect(surface.openUrl(new URL('https://surface.example/'), context, {})).toEqual(
 			new URL('https://surface.example/L3dvcmtzcGFjZQ/session'),

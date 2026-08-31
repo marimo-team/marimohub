@@ -384,6 +384,10 @@ describe('Session surface routes', () => {
 		});
 		expect(calls.exposePort.at(-1)?.port).toBe(4096);
 		expect(calls.startProcess.at(-1)?.cmd).toContain("'opencode' 'web'");
+		expect(calls.startProcess.at(-1)?.cmd).toContain(
+			`'OPENCODE_CONFIG=/tmp/.marimohub/surfaces/${session.session_id}/opencode/config/opencode/opencode.json'`,
+		);
+		expect(calls.startProcess.at(-1)?.options?.env).toBeUndefined();
 		const configWrite = calls.writeFile.find((file) =>
 			file.path.endsWith('/config/opencode/opencode.json'),
 		);
