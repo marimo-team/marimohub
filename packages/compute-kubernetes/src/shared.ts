@@ -3,7 +3,7 @@
  * (`index.ts`) and the production client (`client.ts`). Kept in its own module so
  * the two can depend on it without forming an import cycle.
  */
-import type { Millis, SandboxId } from '@marimo-hub/core';
+import type { Millis, SandboxExposureMode, SandboxId } from '@marimo-hub/core';
 
 /** Label marking resources THIS deployment owns (selection + discovery/cleanup). */
 export const MANAGED_BY_LABEL = 'app.kubernetes.io/managed-by';
@@ -131,23 +131,24 @@ export interface KubernetesResources {
 }
 
 export interface KubernetesConfig {
-	/** Namespace the kernel Pod/Service/Ingress are created in. Default `default`. */
+	/** How the kernel is exposed. Proxy mode routes through the internal Service. */
+	exposureMode?: SandboxExposureMode;
+	/** Namespace the kernel Pod/Service and optional Ingress are created in. Default `default`. */
 	namespace?: string;
 	/** Container image with marimo + uv + python. Default `ghcr.io/marimo-team/marimo:latest`. */
 	image?: string;
 	/**
 	 * Public hostname kernels are exposed under (`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`).
-	 * REQUIRED for routing: each session gets a `{id}.{hostname}` Ingress host. When
-	 * empty, no Ingress is created and the returned URL is unroutable.
+	 * In subdomain exposure, each session gets a `{id}.{hostname}` Ingress host.
+	 * Proxy exposure ignores this value and does not create an Ingress.
 	 */
 	hostname?: string;
 	/** Port marimo binds inside the Pod. Default 2718. */
 	kernelPort?: number;
 	/**
-	 * Template for the public kernel URL. `{id}`, `{port}`, `{host}`, and `{token}`
-	 * are substituted. Default `https://{id}.{host}` (a per-session subdomain routed
-	 * by the per-session Ingress), where `{host}` is the `hostname` the provisioner
-	 * passes (`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`).
+	 * Template for the kernel URL. `{id}`, `{name}`, `{namespace}`, `{port}`, `{host}`,
+	 * and `{token}` are substituted. Subdomain exposure defaults to
+	 * `https://{id}.{host}`. Proxy exposure defaults to the in-cluster Service URL.
 	 */
 	hostnameTemplate?: string;
 	/** `ingressClassName` for the per-session Ingress (e.g. `traefik`, `nginx`). */
@@ -177,7 +178,7 @@ export interface K8sExecResult {
 	exitCode: number;
 }
 
-/** Everything `ensure()` needs to materialise a session's Pod/Service/Ingress. */
+/** Everything `ensure()` needs to materialise a session's Pod/Service and optional Ingress. */
 export interface EnsureSandboxOptions {
 	/** Deterministic resource name (`mh-<sanitized id>`); also the Pod name for exec. */
 	name: string;
@@ -238,7 +239,7 @@ export interface K8sExecOptions {
  */
 export interface K8sClient {
 	/**
-	 * Create the Pod + Service + Ingress for a session if they don't already
+	 * Create the Pod + Service and optional Ingress for a session if they don't already
 	 * exist. `createdPod` is false when the Pod pre-existed (a reconnect).
 	 */
 	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
@@ -259,8 +260,8 @@ export interface K8sClient {
 		stdin?: string | Uint8Array,
 		options?: K8sExecOptions,
 	): Promise<K8sExecResult>;
-	/** Delete the Pod + Service + Ingress for a session. Idempotent (tolerates 404). */
-	delete(name: string): Promise<void>;
+	/** Delete the managed resources for a session. Idempotent (tolerates 404). */
+	delete(name: string, options: { ingress: boolean }): Promise<void>;
 	/** List sandboxes THIS deployment owns (label-scoped), for the reconciler. */
 	list(): Promise<K8sSandboxInfo[]>;
 }

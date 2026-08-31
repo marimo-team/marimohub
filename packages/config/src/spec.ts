@@ -657,12 +657,12 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'kubernetes',
 				supportsComputeProfiles: true,
 				description:
-					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. A TLS secret requires `secret` mode; `controller-default` and `disabled` cannot be combined with one. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
+					'Native Kubernetes creates one keep-alive Pod and Service per session through `@kubernetes/client-node`. Subdomain exposure adds an Ingress for the direct `{id}.{host}` URL. It requires `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`, an ingress class, and TLS. Proxy exposure uses the internal Service URL and creates no Ingress. Plaintext subdomain exposure requires `disabled` TLS mode and an `http://` hostname template.',
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE',
 						name: 'Kubernetes namespace',
-						description: 'Namespace the kernel Pod/Service/Ingress are created in.',
+						description: 'Namespace for each kernel Pod, Service, and optional Ingress.',
 						example: 'marimo-kernels',
 						default: 'default',
 					},
@@ -670,20 +670,21 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE',
 						name: 'Kubernetes hostname template',
 						description:
-							'Template for the public kernel URL. Substitutes `{id}`, `{port}`, `{host}`, `{token}`.',
+							'Kernel URL template. Supports `{id}`, `{name}`, `{namespace}`, `{port}`, `{host}`, and `{token}`. Proxy exposure defaults to the internal Service URL. Set this only for a different cluster DNS domain.',
 						default: 'https://{id}.{host}',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS',
 						name: 'Kubernetes ingress class',
-						description: '`ingressClassName` for the per-session Ingress.',
+						description:
+							'`ingressClassName` for each subdomain-mode Ingress. Ignored in proxy mode.',
 						example: 'traefik',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS',
 						name: 'Kubernetes ingress annotations',
 						description:
-							'JSON object of string annotations copied to every per-session Ingress. Keys must use Kubernetes annotation syntax, and the combined keys and values cannot exceed 256 KiB.',
+							'JSON string map for each subdomain-mode Ingress. Proxy mode ignores it. Keys must use Kubernetes annotation syntax. The total size cannot exceed 256 KiB.',
 						example: '{"route.openshift.io/termination":"edge"}',
 						optIn: true,
 					},
@@ -691,7 +692,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE',
 						name: 'Kubernetes ingress TLS mode',
 						description:
-							'How each per-session Ingress declares TLS: `controller-default` emits `tls: [{}]` for an ingress-controller default certificate, `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`, and `disabled` explicitly opts into plaintext and requires an `http://` hostname template. The legacy `default` value remains an alias for `controller-default`. When unset, a configured secret selects `secret`; otherwise the controller default is used.',
+							'TLS mode for each subdomain-mode Ingress. `controller-default` emits `tls: [{}]`. `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`. `disabled` requires an `http://` hostname template. Proxy mode ignores this value. `default` aliases `controller-default`. When unset, a configured secret selects `secret`. Otherwise, the controller default applies.',
 						default: 'secret when TLS secret is set, else controller-default',
 						example: 'controller-default',
 					},
@@ -699,7 +700,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET',
 						name: 'Kubernetes TLS secret',
 						description:
-							'TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. Requires `secret` mode; when the mode is unset, providing this secret selects `secret` automatically.',
+							'Wildcard TLS secret for each subdomain-mode Ingress. Proxy mode ignores it. This value requires `secret` mode and selects that mode when unset.',
 						example: 'marimo-kernels-wildcard-tls',
 						optIn: true,
 					},

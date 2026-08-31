@@ -4,11 +4,9 @@ description: Deploy marimohub and isolated notebook kernels on a Kubernetes clus
 
 # Deploying on Kubernetes (native kernels)
 
-Run marimohub on any Kubernetes cluster with the **`kubernetes`** compute
-backend: each notebook kernel becomes a native **Pod + Service + Ingress** that
-marimohub creates through the cluster API. This is the portable, cluster-agnostic
-alternative to the CoreWeave-Sandbox backend (see [CKS](./cks.md)); it works on
-EKS, GKE, AKS, or self-managed clusters.
+The **`kubernetes`** compute backend runs each kernel in a native **Pod** behind a
+**Service**. Subdomain exposure also creates an **Ingress**. This backend works
+on EKS, GKE, AKS, and self-managed clusters. For CoreWeave, see [CKS](./cks.md).
 
 > **Why native Pods and not the marimo-operator CRD?** marimohub copies notebook
 > files into the kernel and runs `uv run marimo edit` itself, which requires a Pod
@@ -23,14 +21,17 @@ kernel namespace:
 - a **Pod** `mh-<id>` running the sandbox image with a keep-alive command;
   marimo is started later by `exec`-ing `uv run marimo edit` into it,
 - a **ClusterIP Service** `mh-<id>` targeting the kernel port (2718),
-- an **Ingress** `mh-<id>` with host `<id>.<hostname>` routing to the Service.
+- in `subdomain` exposure, an **Ingress** `mh-<id>` with host
+  `<id>.<hostname>` routing to the Service.
 
-In `subdomain` exposure (the default) the browser connects **directly** to
-`https://<id>.<hostname>` (websockets included) through your ingress controller —
-marimohub does not proxy kernel traffic. (With `proxy` exposure it forwards kernel
-traffic through the app instead; see [Security → Kernel exposure](/security#kernel-exposure).)
-Teardown deletes all three objects; background maintenance lists Pods by
-the `app.kubernetes.io/managed-by=marimohub` label to find leaked ones.
+In default `subdomain` exposure, the browser connects directly to
+`https://<id>.<hostname>` through the ingress controller. In `proxy` exposure,
+the app forwards traffic to
+`http://mh-<id>.<namespace>.svc.cluster.local:2718`. Proxy exposure creates no
+Ingress. See [Security → Kernel exposure](/security#kernel-exposure).
+
+Teardown deletes the resources for the selected mode. Maintenance finds leaked
+Pods by the `app.kubernetes.io/managed-by=marimohub` label.
 
 ## Prerequisites
 
@@ -39,13 +40,12 @@ the `app.kubernetes.io/managed-by=marimohub` label to find leaked ones.
    image build: `pnpm add @kubernetes/client-node`.
 2. **A sandbox image** with marimo + uv + python3 + git on the PATH
    (`MARIMOHUB_COMPUTE_IMAGE`).
-3. **An ingress controller** (Traefik, nginx, …), a **wildcard DNS** record
-   `*.<hostname>` pointing at it, and either a **wildcard TLS secret** for
-   `*.<hostname>` or an ingress-controller default certificate so each
-   `<id>.<hostname>` kernel URL resolves over HTTPS.
+3. For `subdomain` exposure, configure an **ingress controller** and a
+   `*.<hostname>` DNS record. Use a matching wildcard certificate or the
+   controller default.
 4. **RBAC**: marimohub's ServiceAccount needs create/get/list/update/delete on
-   `pods`, `services`, `pods/exec`, and `ingresses` in the kernel namespace (see
-   the manifests in `examples/kubernetes`).
+   `pods`, `services`, and `pods/exec` in the kernel namespace. Subdomain
+   exposure also needs the listed `ingresses` permissions.
 
 ## Configuration
 
@@ -71,6 +71,42 @@ MARIMOHUB_EDITOR_SANDBOX_SHARING=shared                     # shared | exclusive
 # MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY=IfNotPresent   # default: Always for :latest, else IfNotPresent
 # MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
 ```
+
+For proxy exposure, omit the hostname and all Ingress/TLS settings:
+
+```bash
+MARIMOHUB_COMPUTE_BACKEND=kubernetes
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
+MARIMOHUB_SANDBOX_EXPOSURE=proxy
+MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED=true
+```
+
+The internal URL defaults to the Kubernetes DNS suffix `svc.cluster.local`.
+Set `MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE` only if the cluster uses a
+different DNS domain.
+
+### Changing from subdomain to proxy
+
+::: danger Drain all sessions first
+Proxy mode does not query or delete Ingresses.
+
+1. Keep subdomain exposure and Ingress RBAC active.
+2. Stop all editor, app, and temporary sessions.
+3. Make sure that this command returns no resources:
+
+```bash
+kubectl -n marimo-kernels get pods,svc,ingress \
+  -l app.kubernetes.io/managed-by=marimohub
+```
+
+4. Set `MARIMOHUB_SANDBOX_EXPOSURE=proxy`.
+5. Restart all API and maintenance replicas.
+6. Remove the Ingress RBAC rule.
+
+If a session survives the change, its tokenless Ingress stays public and becomes
+orphaned.
+:::
 
 See [Configuration → Compute → Kubernetes](../configuration.md#compute) for every
 variable. Before you change the sharing mode, follow the drain procedure in
@@ -154,16 +190,18 @@ with the
   bound to the kernel-namespace Role.
 - **Maintenance** — a single-replica Deployment with `MARIMOHUB_RUN_MAINTENANCE=true`
   cleans up finished kernel Pods.
-- **Kernel namespace** — `marimo-kernels`, where per-session Pods/Services/Ingresses
-  live (isolated from marimohub via RBAC and, optionally, NetworkPolicy).
+- **Kernel namespace** — `marimo-kernels`, where per-session Pods, Services, and
+  subdomain-mode Ingresses live (isolated from marimohub via RBAC and, optionally,
+  NetworkPolicy).
 
 ## Validate
 
 1. Check API Deployment readiness and `/api/health`.
 2. Create a notebook and start a kernel.
-3. Confirm the kernel Pod, Service, and Ingress appear in the kernel namespace.
-4. Confirm `https://<id>.<hostname>` resolves and serves the kernel.
-5. Stop the session and confirm the per-session objects are deleted.
+3. Make sure that the kernel Pod and Service appear. For subdomain exposure,
+   make sure that the Ingress appears.
+4. Open the kernel through the configured exposure URL.
+5. Stop the session. Make sure that Kubernetes deletes its resources.
 
 ## Caveats (validate before production)
 
@@ -172,9 +210,9 @@ with the
   is treated as terminal.
 - marimo runs **tokenless** behind marimohub's own auth (the provisioner passes
   `--no-token`); do not expose `*.<hostname>` without marimohub in front.
-- The Ingress/TLS scheme is cluster-specific — confirm your ingress controller
-  honours per-host rules and the wildcard certificate.
-- The per-session Ingress route is created but not waited on, so the kernel
+- In subdomain exposure, the Ingress/TLS scheme is cluster-specific. Confirm
+  your ingress controller honours per-host rules and the wildcard certificate.
+- A subdomain-mode Ingress route is created but not waited on, so the kernel
   URL can 404/502 briefly after a session starts. If the window is long, check
   your ingress controller's sync latency.
 

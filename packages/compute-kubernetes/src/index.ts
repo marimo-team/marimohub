@@ -1,9 +1,10 @@
 /**
  * Kubernetes compute adapter — a `SandboxProvider` backed by NATIVE Kubernetes
- * resources (a Pod + Service + Ingress per session) created through the cluster
- * API with `@kubernetes/client-node`. Like the Modal and CoreWeave adapters, this
- * targets the Node control plane (`apps/server`); the client speaks the cluster
- * API over HTTP/websockets, so it is NOT usable from a Workers runtime.
+ * resources (a Pod + Service, plus an Ingress in subdomain exposure) created
+ * through the cluster API with `@kubernetes/client-node`. Like the Modal and
+ * CoreWeave adapters, this targets the Node control plane (`apps/server`); the
+ * client speaks the cluster API over HTTP/websockets, so it is NOT usable from a
+ * Workers runtime.
  *
  * Why native k8s (and not the marimo-operator CRD): marimohub's `SandboxInstance`
  * port is imperative — the provisioner copies notebook files in and runs
@@ -15,7 +16,7 @@
  *
  * Bridging the port to the cluster:
  *  - `create(id)` is synchronous and id-addressed. We return a lazy instance and
- *    materialise the Pod/Service/Ingress on first use (`ensure()`), naming every
+ *    materialise the Pod/Service and optional Ingress on first use (`ensure()`), naming every
  *    resource deterministically `mh-<sanitized id>` and labelling it
  *    `app.kubernetes.io/managed-by=marimohub` so a re-resolved instance (teardown's
  *    `compute.create(id)`) reconnects to the SAME Pod and `listActive()` can map a
@@ -27,9 +28,8 @@
  *  - `exec`/`readFile`/`writeFiles`/`listFiles` all go through the Pod `exec`
  *    subresource, so `mountBucket` THROWS and the provisioner falls back to copying
  *    notebook files in/out (the intended path here, like Modal/CoreWeave/local).
- *  - The kernel is reached DIRECTLY at its Ingress host (`{id}.{host}`), so
- *    `proxy()` is a no-op and `exposePort` returns that URL. Websockets reach the
- *    Pod through the ingress controller, not through the Node process.
+ *  - Subdomain exposure returns the per-session Ingress URL. Proxy exposure
+ *    returns the in-cluster Service URL for the app's HTTP/websocket forwarder.
  *
  * INTEGRATION SURFACE (validate against a live cluster before production, the same
  * caveat the Modal/CoreWeave adapters carry): the Ingress host scheme and TLS are
@@ -187,6 +187,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly image: string;
 	private readonly hostname: string;
 	private readonly kernelPort: number;
+	private readonly subdomainExposure: boolean;
 	private resolved = false;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
@@ -205,19 +206,26 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		this.image = config.image ?? DEFAULT_IMAGE;
 		this.hostname = config.hostname ?? '';
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
+		this.subdomainExposure = (config.exposureMode ?? 'subdomain') === 'subdomain';
 	}
 
-	/** The per-session ingress host the rule should match (`{id}.{host}` by default). */
+	/** The per-session Ingress host, or empty when this deployment does not manage one. */
 	private ingressHost(): string {
-		if (!this.hostname) return '';
+		if (!this.subdomainExposure || !this.hostname) return '';
 		// Reuse the URL template, then keep just its host component.
 		return new URL(this.urlFrom(this.hostname, '')).host;
 	}
 
 	private urlFrom(hostname: string, token: string): string {
-		const template = this.config.hostnameTemplate ?? 'https://{id}.{host}';
+		const template =
+			this.config.hostnameTemplate ??
+			(this.config.exposureMode === 'proxy'
+				? 'http://{name}.{namespace}.svc.cluster.local:{port}'
+				: 'https://{id}.{host}');
 		return template
 			.replaceAll('{id}', String(this.id))
+			.replaceAll('{name}', this.name)
+			.replaceAll('{namespace}', this.namespace)
 			.replaceAll('{port}', String(this.kernelPort))
 			.replaceAll('{host}', hostname)
 			.replaceAll('{token}', token);
@@ -579,16 +587,16 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 
 	async exposePort(_port: number, options: ExposePortOptions): Promise<ExposePortResult> {
-		// The kernel is reached directly at its Ingress host (created in ensure()).
-		// Build the public URL from the template; nothing to expose at request time.
-		// Prefer the deploy-time hostname (what the Ingress rule matches); the
-		// provisioner passes the same value as options.hostname.
+		// Prefer the deploy-time hostname for subdomain routing. Proxy mode's default
+		// template does not use it and resolves the Service inside the cluster.
 		await this.ensure();
 		return { url: this.urlFrom(this.hostname || options.hostname, options.token ?? '') };
 	}
 
 	async destroy(): Promise<void> {
-		await this.client.delete(this.name);
+		// A removed hostname can leave an Ingress from earlier subdomain config.
+		// Proxy mode remains free of Ingress API access.
+		await this.client.delete(this.name, { ingress: this.subdomainExposure });
 		this.resolved = false;
 	}
 }
@@ -601,9 +609,11 @@ export class KubernetesCompute implements SandboxProvider {
 		private readonly config: KubernetesConfig,
 		client?: K8sClient,
 	) {
-		const template = config.hostnameTemplate ?? 'https://{id}.{host}';
-		const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
-		if (config.hostname) validateIngressTlsHostnameTemplate(template, tlsMode);
+		if ((config.exposureMode ?? 'subdomain') === 'subdomain' && config.hostname) {
+			const template = config.hostnameTemplate ?? 'https://{id}.{host}';
+			const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
+			validateIngressTlsHostnameTemplate(template, tlsMode);
+		}
 		this.client = client;
 	}
 
@@ -639,8 +649,7 @@ export class KubernetesCompute implements SandboxProvider {
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {
-		// Kernels are reached directly via their per-session Ingress host; nothing to
-		// proxy at the control-plane edge (same as the Modal/CoreWeave backends).
+		// Request-time forwarding belongs to the exposure layer, not the compute provider.
 		return null;
 	}
 

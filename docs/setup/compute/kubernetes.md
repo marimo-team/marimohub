@@ -5,11 +5,12 @@ the cluster is ready:
 
 1. **Bake the client in:** `pnpm add @kubernetes/client-node` (bring-your-own
    dependency) and rebuild your server image.
-2. **Grant RBAC:** marimohub's ServiceAccount needs `pods`, `services`, and
-   `ingresses` in the kernel namespace.
-3. **Wildcard ingress + TLS:** an ingress controller, a `*.{host}` DNS record,
-   and either a matching wildcard TLS secret or an ingress-controller default
-   certificate so each `{id}.{host}` kernel URL is HTTPS.
+2. **Grant RBAC:** marimohub's ServiceAccount needs `pods` and `services` in the
+   kernel namespace. Subdomain exposure also needs `ingresses`.
+3. **For subdomain exposure, configure ingress + TLS:** an ingress controller, a
+   `*.{host}` DNS record, and either a matching wildcard TLS secret or an
+   ingress-controller default certificate so each `{id}.{host}` kernel URL is
+   HTTPS.
 4. **Set the env:**
 
 ```bash
@@ -31,6 +32,23 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 # MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
 ```
 
+For proxy exposure, omit `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and the Ingress/TLS
+settings. marimohub uses the internal Service URL and does not manage Ingresses:
+
+```bash
+MARIMOHUB_COMPUTE_BACKEND=kubernetes
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
+MARIMOHUB_SANDBOX_EXPOSURE=proxy
+MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED=true
+```
+
+::: danger Existing subdomain deployment
+Before you select proxy exposure, complete the required
+[session drain](/deploying/kubernetes#changing-from-subdomain-to-proxy). Proxy
+mode cannot delete an Ingress from an old subdomain session.
+:::
+
 See [Deploying → Kubernetes](/deploying/kubernetes) for the full RBAC + ingress recipe.
 
 ::: tip Most control, runs on your own cluster
@@ -39,9 +57,8 @@ network with your own resource limits and GPUs.
 :::
 
 ::: warning The most setup of any backend
-You own the ingress, DNS, TLS, and RBAC. If kernels never become reachable, the
-wildcard DNS/TLS is the usual culprit. For a single host without a cluster,
-`docker` is far simpler; for zero infra, use `modal`.
+Subdomain exposure requires ingress, DNS, TLS, and RBAC. For one host without a
+cluster, use `docker`. For hosted compute, use `modal`.
 :::
 
 ::: tip Slow kernel starts?
