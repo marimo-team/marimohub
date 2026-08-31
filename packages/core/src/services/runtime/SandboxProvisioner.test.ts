@@ -1127,6 +1127,11 @@ describe('SandboxProvisioner', () => {
 			expect(calls.writeFile.some((file) => file.path.endsWith('app.py'))).toBe(false);
 			expect(calls.exec.some((command) => command.startsWith('python3 '))).toBe(true);
 			expect(calls.exec.find((command) => command.startsWith('python3 '))).toMatch(/ 1$/);
+			expect(
+				calls.exec.some((command) =>
+					command.includes("git config --global --add safe.directory '/workspace'"),
+				),
+			).toBe(true);
 			expect(result.counters).toMatchObject({
 				files_objects: 1,
 				files_bytes: archive.byteLength,
@@ -1328,6 +1333,11 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`);
 			expect(result.counters).toMatchObject({ files_objects: 3 });
+			expect(
+				calls.exec.some((command) =>
+					command.includes("git config --global --add safe.directory '/workspace'"),
+				),
+			).toBe(true);
 		});
 
 		it('preserves Git metadata stored in an ordinary copied workspace', async () => {

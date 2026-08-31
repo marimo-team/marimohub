@@ -673,6 +673,19 @@ export class SandboxProvisioner {
 		mountPath: string,
 		workspacePrefix: string,
 	): Promise<WorkspaceLoadResult> {
+		const loaded = await this.restoreWorkspaceFiles(sandbox, options, mountPath, workspacePrefix);
+		if (options.gitPrefix) {
+			await this.markGitWorkdirTrusted(sandbox, mountPath);
+		}
+		return loaded;
+	}
+
+	private async restoreWorkspaceFiles(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		mountPath: string,
+		workspacePrefix: string,
+	): Promise<WorkspaceLoadResult> {
 		if (
 			options.workspaceLoadMode === 'copy-only' &&
 			options.workspaceArchive &&
@@ -718,6 +731,13 @@ export class SandboxProvisioner {
 			};
 		}
 		return this.loadWorkspaceObjects(sandbox, options, mountPath, workspacePrefix);
+	}
+
+	private async markGitWorkdirTrusted(sandbox: SandboxInstance, workdir: string): Promise<void> {
+		// Restored `.git` is often a different uid than the kernel user (Modal).
+		await sandbox.exec(
+			`if command -v git >/dev/null 2>&1; then git config --global --add safe.directory ${shellQuote(workdir)}; fi`,
+		);
 	}
 
 	private async loadWorkspaceObjects(

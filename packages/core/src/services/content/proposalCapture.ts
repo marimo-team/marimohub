@@ -131,6 +131,20 @@ function gitPathspec(): string {
 	return ['.', ...GIT_EXCLUDE_PATHS].map(shellQuote).join(' ');
 }
 
+function gitInWorkdir(workdir: string, args: string): string {
+	// Modal restores `.git` as a different uid than the kernel user. Git 2.35+
+	// then refuses the worktree unless this directory is trusted; `-c` keeps
+	// capture working on sessions provisioned before gitconfig was updated.
+	return `cd ${shellQuote(workdir)} && git -c ${shellQuote(`safe.directory=${workdir}`)} ${args}`;
+}
+
+function gitConflict(message: string, result: { stdout: string; stderr: string }): ConflictError {
+	const detail = (result.stderr.trim() || result.stdout.trim())
+		.replaceAll(/\s+/g, ' ')
+		.slice(0, 1000);
+	return new ConflictError(detail ? `${message}: ${detail}` : message);
+}
+
 async function hasGitWorkingTree(sandbox: SandboxInstance, workdir: string): Promise<boolean> {
 	const result = await sandbox.exec(
 		`cd ${shellQuote(workdir)} && test -e .git && command -v git >/dev/null 2>&1 && printf git-working-tree`,
@@ -144,10 +158,10 @@ async function resolvedGitBase(
 	commit: string,
 ): Promise<string> {
 	const result = await sandbox.exec(
-		`cd ${shellQuote(workdir)} && git rev-parse --verify ${shellQuote(`${commit}^{commit}`)}`,
+		gitInWorkdir(workdir, `rev-parse --verify ${shellQuote(`${commit}^{commit}`)}`),
 	);
 	if (!result.success) {
-		throw new ConflictError('The Git working tree does not contain the pinned source commit');
+		throw gitConflict('The Git working tree does not contain the pinned source commit', result);
 	}
 	const resolved = result.stdout.trim();
 	if (!/^[0-9a-fA-F]{40,64}$/.test(resolved)) {
@@ -234,14 +248,15 @@ async function captureGitWorkingTree(
 	const pathspec = gitPathspec();
 	const [diff, untracked] = await Promise.all([
 		sandbox.exec(
-			`cd ${shellQuote(workdir)} && git diff --name-status -z --no-renames ${shellQuote(resolvedBase)} -- ${pathspec}`,
+			gitInWorkdir(
+				workdir,
+				`diff --name-status -z --no-renames ${shellQuote(resolvedBase)} -- ${pathspec}`,
+			),
 		),
-		sandbox.exec(
-			`cd ${shellQuote(workdir)} && git ls-files --others --exclude-standard -z -- ${pathspec}`,
-		),
+		sandbox.exec(gitInWorkdir(workdir, `ls-files --others --exclude-standard -z -- ${pathspec}`)),
 	]);
 	if (!diff.success || !untracked.success) {
-		throw new ConflictError('Could not inspect the Git working tree');
+		throw gitConflict('Could not inspect the Git working tree', !diff.success ? diff : untracked);
 	}
 	const operations = parseGitDiff(diff.stdout);
 	for (const path of parseNullTerminated(untracked.stdout, 'untracked-file output')) {
