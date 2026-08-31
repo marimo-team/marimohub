@@ -41,6 +41,7 @@ import type {
 	Session,
 	SessionAction,
 	SessionActor,
+	SessionAuthorizationTarget,
 	ViewerMode,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
@@ -165,16 +166,16 @@ export function sessionActorFor(
 export function sessionGrantsFor(
 	project: Project,
 	subject: AuthSubject,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAuthorizationTarget,
 	policy: SessionPolicy,
-): { attach: boolean; stop: boolean; surface: boolean } {
+): { attach: boolean; stop: boolean; surface: boolean; develop: boolean } {
 	return sessionGrants(sessionActorFor(project, subject, policy), session);
 }
 
 function assertSession(
 	action: SessionAction,
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAuthorizationTarget,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): void {
@@ -189,7 +190,7 @@ function assertSession(
  */
 export function assertSessionControl(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAuthorizationTarget,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): void {
@@ -204,7 +205,7 @@ export function assertSessionControl(
  */
 export function assertSessionAccess(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAuthorizationTarget,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): void {
@@ -219,6 +220,15 @@ export function assertSessionSurfaceAccess(
 ): void {
 	if (sessionCan('surface', sessionActorFor(project, subject, policy), session)) return;
 	throw new SurfaceForbiddenError();
+}
+
+export function assertSessionDevelopmentAccess(
+	project: Project,
+	session: SessionAuthorizationTarget,
+	subject: AuthSubject,
+	policy: SessionPolicy,
+): void {
+	assertSession('develop', project, session, subject, policy);
 }
 
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
@@ -872,18 +882,32 @@ export const SessionResponseSchema = z
 		 */
 		source_version_id: z.string().optional(),
 		/**
-		 * The caller's grants on this session, evaluated server-side (the same
-		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,
-		 * heartbeat; `sandbox_url` is present iff true), `stop` — may stop or
-		 * restart it, `surfaces.vscode` — may use the secondary editor. Clients
-		 * render from these instead of re-deriving policy.
+		 * The caller's session grants, evaluated by the same `sessionCan` gates:
+		 * `attach` reaches the kernel, `stop` stops or restarts it, `develop` uses
+		 * brokered remote development, and `surfaces.vscode` uses the browser editor.
+		 * Clients use these grants instead of deriving policy.
 		 */
 		can: z.object({
 			attach: z.boolean(),
 			stop: z.boolean(),
+			develop: z.boolean(),
 			surfaces: z.object({ vscode: z.boolean() }).optional(),
 		}),
 		surfaces: z.record(z.string(), SurfaceResponseSchema).optional(),
+		remote_development: z.object({
+			ssh: z.discriminatedUnion('available', [
+				z.object({ available: z.literal(true) }),
+				z.object({
+					available: z.literal(false),
+					reason: z.enum([
+						'disabled',
+						'unsupported_backend',
+						'unsupported_image',
+						'restart_required',
+					]),
+				}),
+			]),
+		}),
 		/**
 		 * Shared app/editor kernel connection count as of the lifecycle sweep's last
 		 * probe (approximate). Drives the "~N connected" stop-confirm hint.
@@ -1077,6 +1101,13 @@ export const CapabilitiesResponseSchema = z
 			preview: z.boolean(),
 			query: z.boolean(),
 			ai_query: z.boolean(),
+		}),
+		remote_development: z.object({
+			ssh: z.object({
+				available: z.boolean(),
+				transport: z.literal('websocket').nullable(),
+				persistence: z.enum(['workspace', 'source']).nullable(),
+			}),
 		}),
 		/**
 		 * What an effective `viewer` sees when opening a notebook

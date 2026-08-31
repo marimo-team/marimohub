@@ -53,6 +53,7 @@ catalog:
   '@types/node': ^25.9.3
   '@types/pg': ^8.15.5
   '@types/pg-cursor': ^2.7.2
+  '@types/ws': ^8.18.1
   '@vitest/coverage-v8': 4.1.8
   ai: ^7.0.42
   better-all: ^0.0.7
@@ -93,6 +94,7 @@ catalog:
   vitepress-plugin-llms: ^1.13.2
   vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
   yaml: ^2.9.0
+  ws: ^8.18.3
   zod: ^4.3.6
 
 catalogMode: prefer

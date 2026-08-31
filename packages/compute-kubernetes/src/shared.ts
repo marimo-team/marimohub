@@ -188,6 +188,7 @@ export interface EnsureSandboxOptions {
 	host: string;
 	image: string;
 	port: number;
+	brokeredPorts?: readonly number[];
 	namespace: string;
 	ingressClassName?: string;
 	ingressAnnotations?: Record<string, string>;

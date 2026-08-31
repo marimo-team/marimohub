@@ -242,6 +242,33 @@ fn deploy_command() -> Command {
         )
 }
 
+fn remote_session_command(name: &'static str, about: &'static str) -> Command {
+    Command::new(name)
+        .about(about)
+        .arg(
+            Arg::new("remote-pid")
+                .long("pid")
+                .required(true)
+                .value_name("PROJECT_ID"),
+        )
+        .arg(
+            Arg::new("remote-nid")
+                .long("nid")
+                .required(true)
+                .value_name("NOTEBOOK_ID"),
+        )
+        .arg(
+            Arg::new("remote-sid")
+                .long("sid")
+                .required(true)
+                .value_name("SESSION_ID"),
+        )
+}
+
+fn proxy_ssh_command() -> Command {
+    remote_session_command("proxy-ssh", "Relay SSH to a sandbox").hide(true)
+}
+
 pub fn build(manifest: &Manifest) -> Command {
     let mut root = Node::default();
     for operation in &manifest.operations {
@@ -336,7 +363,8 @@ pub fn build(manifest: &Manifest) -> Command {
                     "powershell",
                     "zsh",
                 ])),
-        );
+        )
+        .subcommand(proxy_ssh_command());
 
     for (name, node) in &root.children {
         let mut child = command_from_node(name, node);
@@ -346,6 +374,25 @@ pub fn build(manifest: &Manifest) -> Command {
                 "generated API manifest now defines notebooks deploy"
             );
             child = child.subcommand(deploy_command());
+        }
+        if *name == "sessions" {
+            assert!(
+                !node.children.contains_key("ssh"),
+                "generated API manifest now defines sessions ssh"
+            );
+            assert!(
+                !node.children.contains_key("code"),
+                "generated API manifest now defines sessions code"
+            );
+            child = child
+                .subcommand(remote_session_command(
+                    "ssh",
+                    "Open an SSH terminal in a running sandbox",
+                ))
+                .subcommand(remote_session_command(
+                    "code",
+                    "Open a running sandbox in VS Code",
+                ));
         }
         command = command.subcommand(child);
     }
@@ -407,5 +454,22 @@ mod tests {
 
         assert!(notebooks.find_subcommand("update").is_some());
         assert!(notebooks.find_subcommand("deploy").is_some());
+    }
+
+    #[test]
+    fn sessions_include_native_ssh_and_code_commands() {
+        let command = build(&crate::manifest::load());
+        let sessions = command
+            .find_subcommand("sessions")
+            .expect("sessions command");
+        for name in ["ssh", "code"] {
+            let remote = sessions.find_subcommand(name).expect("remote command");
+            for flag in ["pid", "nid", "sid"] {
+                assert!(remote
+                    .get_arguments()
+                    .any(|argument| argument.get_long() == Some(flag)));
+            }
+        }
+        assert!(command.find_subcommand("proxy-ssh").is_some());
     }
 }

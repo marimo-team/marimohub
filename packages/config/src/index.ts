@@ -27,6 +27,7 @@ import {
 	SubdomainExposure,
 	SandboxDataPreview,
 	VIEWER_MODES,
+	asSandboxPortConnector,
 } from '@marimo-hub/core';
 import {
 	createNodeDataQueryExecutorFactory,
@@ -419,6 +420,70 @@ function parsePersistWorkspace(env: Env): 'source' | 'workspace' {
 	);
 }
 
+function parseRemoteDevelopment(
+	env: Env,
+	sandboxImages: readonly string[],
+	sharing: EditorSandboxSharing,
+	compute: SandboxProvider,
+	backend: string,
+): { mode: 'ssh'; images: readonly string[]; port: number; backend: string } | undefined {
+	const mode = env.MARIMOHUB_REMOTE_DEVELOPMENT?.trim().toLowerCase() ?? 'disabled';
+	if (mode === 'disabled') return undefined;
+	if (mode !== 'ssh') {
+		throw new ConfigError(
+			`Invalid MARIMOHUB_REMOTE_DEVELOPMENT: ${env.MARIMOHUB_REMOTE_DEVELOPMENT} (expected disabled or ssh)`,
+			{ variable: 'MARIMOHUB_REMOTE_DEVELOPMENT', docs: 'docs/remote-development.md' },
+		);
+	}
+	if (sharing !== 'exclusive') {
+		throw new ConfigError(
+			'MARIMOHUB_REMOTE_DEVELOPMENT=ssh requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive',
+			{
+				variable: 'MARIMOHUB_EDITOR_SANDBOX_SHARING',
+				remediation: 'Set MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive.',
+				docs: 'docs/remote-development.md',
+			},
+		);
+	}
+	const images = parseList(env.MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES) ?? [];
+	if (images.length === 0) {
+		throw new ConfigError(
+			'MARIMOHUB_REMOTE_DEVELOPMENT=ssh requires MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES',
+			{
+				variable: 'MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES',
+				remediation: 'List the configured images that implement the remote-development contract.',
+				docs: 'docs/remote-development.md',
+			},
+		);
+	}
+	const unknown = images.filter((image) => !sandboxImages.includes(image));
+	if (unknown.length > 0) {
+		throw new ConfigError(
+			`MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES contains unconfigured images: ${unknown.join(', ')}`,
+			{
+				variable: 'MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES',
+				remediation: 'Use exact references from MARIMOHUB_COMPUTE_IMAGE.',
+				docs: 'docs/remote-development.md',
+			},
+		);
+	}
+	if (!asSandboxPortConnector(compute)) {
+		const containerEndpointVariable =
+			backend === 'docker' ? 'DOCKER_HOST' : backend === 'podman' ? 'CONTAINER_HOST' : undefined;
+		throw new ConfigError(
+			'The selected compute backend does not support brokered SSH connections',
+			{
+				variable: 'MARIMOHUB_REMOTE_DEVELOPMENT',
+				remediation: containerEndpointVariable
+					? `Set ${containerEndpointVariable} to an explicit local socket endpoint, or disable remote development.`
+					: 'Disable remote development or select a supported compute backend.',
+				docs: 'docs/remote-development.md',
+			},
+		);
+	}
+	return { mode: 'ssh', images, port: 2222, backend };
+}
+
 /**
  * Reject a sandbox hostname that shares an origin or parent domain with the app.
  * Notebook kernels run untrusted user code; if they are served same-origin (or on
@@ -553,6 +618,13 @@ export function createFromEnv(
 			{ variable: 'MARIMOHUB_SURFACES' },
 		);
 	}
+	const remoteDevelopment = parseRemoteDevelopment(
+		env,
+		sandboxImages,
+		editorSandboxSharing,
+		compute,
+		computeBackendValue,
+	);
 	const brokerPolicy =
 		integrationsEnabled(env) && env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
@@ -603,6 +675,7 @@ export function createFromEnv(
 			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
 			userHome,
 			surfaces,
+			remoteDevelopment,
 		},
 		policy: {
 			defaultRole: parseDefaultRole(env),

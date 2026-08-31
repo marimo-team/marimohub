@@ -276,11 +276,14 @@ export interface CreateSandboxOptions {
 	resources?: ComputeResources;
 	/** Optional personal directory for an owner-isolated editor sandbox. */
 	userHome?: SandboxUserHome;
+	/** TCP ports provisioned for control-plane-only byte-stream access. */
+	brokeredPorts?: readonly number[];
 }
 
 export interface SandboxProvider {
 	readonly capabilities?: {
 		multiPort: boolean;
+		brokeredTcp?: boolean;
 	};
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/**
@@ -299,6 +302,24 @@ export interface SandboxProvider {
 	 */
 	listActive?(): Promise<ActiveSandbox[]>;
 	[Symbol.asyncDispose]?(): PromiseLike<void>;
+}
+
+export interface SandboxDuplexConnection {
+	readable: ReadableStream<Uint8Array>;
+	writable: WritableStream<Uint8Array>;
+	close(): Promise<void>;
+}
+
+/** Optional compute capability for control-plane-brokered raw TCP connections. */
+export interface SandboxPortConnector {
+	connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection>;
+}
+
+export function asSandboxPortConnector(p: SandboxProvider): SandboxPortConnector | undefined {
+	const connector = p as Partial<SandboxPortConnector>;
+	return p.capabilities?.brokeredTcp === true && typeof connector.connectPort === 'function'
+		? (connector as SandboxPortConnector)
+		: undefined;
 }
 
 /**

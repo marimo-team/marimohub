@@ -92,6 +92,7 @@ import {
 	toComputeResourcesResponse,
 } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import { prepareSshAccess, sshAvailability } from '../remoteDevelopment';
 
 function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
 	return {
@@ -309,6 +310,42 @@ const deleteSurfaceRoute = createRoute({
 	},
 });
 
+const PrepareSshBodySchema = z
+	.object({
+		public_key: z.string().min(1).max(1_024),
+	})
+	.openapi('PrepareSshBody');
+
+const PreparedSshAccessSchema = z
+	.object({
+		username: z.string(),
+		workspace_path: z.string(),
+		host_key: z.string(),
+		key_expires_at: z.iso.datetime(),
+		persistence: z.enum(['workspace', 'source', 'none']),
+	})
+	.openapi('PreparedSshAccess');
+
+const prepareSsh = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/remote-development/ssh/prepare',
+	operationId: 'sessions.remoteDevelopment.ssh.prepare',
+	tags: ['Sessions'],
+	summary: 'Prepare short-lived SSH access to a running sandbox',
+	request: {
+		params: SessionIdParam,
+		body: { content: { 'application/json': { schema: PrepareSshBodySchema } }, required: true },
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: PreparedSshAccessSchema }),
+			'SSH access prepared',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409, 503),
+	},
+});
+
 const EditorActivitySchema = z.enum(['active', 'idle', 'unknown', 'starting']);
 const EditorSessionStateSchema = z
 	.object({
@@ -411,7 +448,11 @@ function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) 
  * already list the project's sessions. Internal infra fields (`sandbox_id`,
  * `used_fallback`) stay private.
  */
-function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; surface: boolean }) {
+function toSessionResponse(
+	s: Session,
+	can: { attach: boolean; stop: boolean; surface: boolean; develop: boolean },
+	deps: ApiDeps,
+) {
 	return {
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
@@ -419,8 +460,14 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; su
 		user_id: s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
-		can: { attach: can.attach, stop: can.stop, surfaces: { vscode: can.surface } },
+		can: {
+			attach: can.attach,
+			stop: can.stop,
+			develop: can.develop,
+			surfaces: { vscode: can.surface },
+		},
 		surfaces: publicSurfaces(s, can),
+		remote_development: { ssh: sshAvailability(deps, s) },
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
 		ephemeral: s.ephemeral,
@@ -724,7 +771,7 @@ app.openapi(listSessions, async (c) => {
 	const project = await loadVisibleProject(projects, pid, user, deps.policy);
 	const active = await sessions.listActiveByProject(pid);
 	const data = paginate(
-		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
+		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy), deps)),
 		c.req.valid('query'),
 		{
 			key: (s) => s.started_at,
@@ -750,7 +797,7 @@ app.openapi(getSession, async (c) => {
 	return c.json(
 		{
 			success: true,
-			data: toSessionResponse(session, sessionGrantsFor(project, user, session, deps.policy)),
+			data: toSessionResponse(session, sessionGrantsFor(project, user, session, deps.policy), deps),
 		},
 		200,
 	);
@@ -1187,7 +1234,7 @@ app.openapi(createSession, async (c) => {
 				{
 					success: true,
 					data: {
-						...toSessionResponse(reusable, grants(reusable)),
+						...toSessionResponse(reusable, grants(reusable), deps),
 						reused: true,
 						...(mode === 'edit'
 							? {
@@ -1243,6 +1290,16 @@ app.openapi(createSession, async (c) => {
 				name: requestedComputeProfile.name,
 				resources: toComputeResourcesResponse(requestedComputeProfile.resources),
 			};
+	const resolvedSandboxImage = restoreFilesystemSnapshot ? restoreFilesystemSnapshot.image : image;
+	const remoteDevelopmentEligible =
+		!!resolvedSandboxImage &&
+		(deps.sandbox.remoteDevelopment?.images.includes(resolvedSandboxImage) ?? false) &&
+		mode === 'edit' &&
+		sharing === 'exclusive' &&
+		!ephemeral;
+	const sandboxBrokeredPorts = remoteDevelopmentEligible
+		? [deps.sandbox.remoteDevelopment!.port]
+		: undefined;
 
 	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
 	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
@@ -1279,6 +1336,8 @@ app.openapi(createSession, async (c) => {
 					project_id: pid,
 					user_id: user.id,
 					sandbox_id: sandboxId,
+					sandbox_image: resolvedSandboxImage,
+					sandbox_brokered_ports: sandboxBrokeredPorts,
 					compute_profile: appliedComputeProfile.name,
 					compute_resources: appliedComputeProfile.resources,
 					compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
@@ -1494,6 +1553,7 @@ app.openapi(createSession, async (c) => {
 						image,
 						resources: requestedComputeProfile.resources,
 						userHome,
+						brokeredPorts: sandboxBrokeredPorts,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
 						launchStrategy: resolvedLaunchStrategy.strategy,
@@ -1620,7 +1680,7 @@ app.openapi(createSession, async (c) => {
 					{
 						success: true,
 						data: {
-							...toSessionResponse(winner, grants(winner)),
+							...toSessionResponse(winner, grants(winner), deps),
 							reused: true,
 							editor_session: {
 								sharing,
@@ -1652,7 +1712,10 @@ app.openapi(createSession, async (c) => {
 					throw new ConflictError('The app session authorization expired. Retry shortly.');
 				}
 				return c.json(
-					{ success: true, data: { ...toSessionResponse(winner, grants(winner)), reused: true } },
+					{
+						success: true,
+						data: { ...toSessionResponse(winner, grants(winner), deps), reused: true },
+					},
 					200,
 				);
 			}
@@ -1759,7 +1822,7 @@ app.openapi(createSession, async (c) => {
 		{
 			success: true,
 			data: {
-				...toSessionResponse(updated!, grants(updated!)),
+				...toSessionResponse(updated!, grants(updated!), deps),
 				reused: false,
 				...(mode === 'edit'
 					? {
@@ -1838,7 +1901,7 @@ app.openapi(heartbeatSession, async (c) => {
 	return c.json(
 		{
 			success: true,
-			data: toSessionResponse(updated, sessionGrantsFor(project, user, updated, deps.policy)),
+			data: toSessionResponse(updated, sessionGrantsFor(project, user, updated, deps.policy), deps),
 		},
 		200,
 	);
@@ -1918,6 +1981,27 @@ app.openapi(deleteSurfaceRoute, async (c) => {
 	const session = await loadSurfaceSession(deps, c.get('user'), { pid, nid, sid }, 'control');
 	await surfaceStopManager(deps).stop(session, surface);
 	return c.json({ success: true }, 200);
+});
+
+app.openapi(prepareSsh, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid, sid } = c.req.valid('param');
+	await loadVisibleProject(deps.services.projects, pid, user, deps.policy);
+	const session = await deps.services.sessions.getSession(pid, sid);
+	if (session.notebook_id !== nid) throw new NotFoundError(`Session ${sid} not found`);
+	const prepared = await prepareSshAccess(deps, user, session, c.req.valid('json').public_key);
+	logEvent({
+		level: 'info',
+		event: 'sandbox_ssh_prepared',
+		project_id: pid,
+		notebook_id: nid,
+		session_id: sid,
+		user_id: user.id,
+		backend: deps.sandbox.remoteDevelopment?.backend ?? deps.compute.constructor.name,
+		failure_category: 'none',
+	});
+	return c.json({ success: true, data: prepared }, 200);
 });
 
 export default app;

@@ -20,6 +20,7 @@ Every deployment picks storage, compute, and auth.
 - [Storage](./storage.md) - where notebooks live.
 - [Compute](./compute.md) - where kernels run.
 - [Editor sessions](./editor-sessions.md) - choose shared or exclusive editor sandboxes.
+- [Remote development](./remote-development.md) - connect SSH and VS Code through the Hub.
 - [Auth](./auth.md) - who can sign in and what they can do.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.

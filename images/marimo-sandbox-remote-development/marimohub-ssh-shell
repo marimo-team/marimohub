@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+runtime=/tmp/marimohub-ssh
+if [ -r "$runtime/session-env" ]; then
+	. "$runtime/session-env"
+fi
+workspace=$(cat "$runtime/workspace" 2>/dev/null || printf /workspace)
+cd "$workspace"
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+	exec /bin/sh -lc "$SSH_ORIGINAL_COMMAND"
+fi
+exec "${SHELL:-/bin/sh}" -l

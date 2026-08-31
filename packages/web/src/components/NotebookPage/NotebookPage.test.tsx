@@ -18,7 +18,7 @@ describe('NotebookPage viewer modes', () => {
 			role: 'editor',
 			vscode: { embed: 'iframe' },
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, develop: false, surfaces: { vscode: true } },
 			}),
 		});
 		renderPage();
@@ -41,7 +41,7 @@ describe('NotebookPage viewer modes', () => {
 			entryNotebook: 'apps/main.py',
 			vscode: { embed: 'iframe' },
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, develop: false, surfaces: { vscode: true } },
 			}),
 		});
 		renderPage();
@@ -68,7 +68,7 @@ describe('NotebookPage viewer modes', () => {
 			notebookPromise,
 			vscode: { embed: 'iframe' },
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, develop: false, surfaces: { vscode: true } },
 			}),
 		});
 		renderPage();
@@ -98,7 +98,7 @@ describe('NotebookPage viewer modes', () => {
 				status: 409,
 			},
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, develop: false, surfaces: { vscode: true } },
 			}),
 		});
 		renderPage();
@@ -120,7 +120,7 @@ describe('NotebookPage viewer modes', () => {
 				status: 503,
 			},
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, develop: false, surfaces: { vscode: true } },
 			}),
 		});
 		renderPage();

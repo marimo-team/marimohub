@@ -151,6 +151,25 @@ describe('GET /api/v1/capabilities', () => {
 		).toMatchObject({ editor_sandbox_sharing: 'exclusive' });
 	});
 
+	it('advertises the brokered SSH transport and persistence policy', async () => {
+		const disabled = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		expect(await expectOk(await createApi(disabled).request('/api/v1/capabilities'))).toMatchObject(
+			{
+				remote_development: {
+					ssh: { available: false, transport: null, persistence: null },
+				},
+			},
+		);
+		const enabled = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		enabled.sandbox.remoteDevelopment = { mode: 'ssh', images: ['image'], port: 2222 };
+		enabled.sandbox.persistWorkspace = 'workspace';
+		expect(await expectOk(await createApi(enabled).request('/api/v1/capabilities'))).toMatchObject({
+			remote_development: {
+				ssh: { available: true, transport: 'websocket', persistence: 'workspace' },
+			},
+		});
+	});
+
 	it('reports deployment limits', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), {
 			authenticator: authed,

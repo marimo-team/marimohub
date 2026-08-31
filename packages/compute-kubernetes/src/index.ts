@@ -55,6 +55,9 @@ import {
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId, Timings } from '@marimo-hub/core';
+import { createConnection } from 'node:net';
+import type { Socket } from 'node:net';
+import { Readable, Writable } from 'node:stream';
 import { createK8sClient } from './client';
 import { resolveIngressTlsMode, validateIngressTlsHostnameTemplate } from './shared';
 import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
@@ -78,6 +81,8 @@ import type {
 	SandboxFileWrite,
 	SandboxLaunchResult,
 	SandboxInstance,
+	SandboxDuplexConnection,
+	SandboxPortConnector,
 	SandboxProcess,
 	SandboxProvider,
 	StartProcessOptions,
@@ -200,6 +205,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: KubernetesConfig,
 		private readonly client: K8sClient,
+		private readonly brokeredPorts: readonly number[] = [],
 	) {
 		this.name = resourceName(id);
 		this.namespace = config.namespace ?? 'default';
@@ -247,6 +253,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			host: this.ingressHost(),
 			image: this.image,
 			port: this.kernelPort,
+			brokeredPorts: this.brokeredPorts,
 			namespace: this.namespace,
 			ingressClassName: this.config.ingressClassName,
 			ingressAnnotations: this.config.ingressAnnotations,
@@ -601,13 +608,17 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 }
 
-export class KubernetesCompute implements SandboxProvider {
-	readonly capabilities = { multiPort: false } as const;
+export class KubernetesCompute implements SandboxProvider, SandboxPortConnector {
+	readonly capabilities = { multiPort: false, brokeredTcp: true } as const;
 	private client?: K8sClient;
 
 	constructor(
 		private readonly config: KubernetesConfig,
 		client?: K8sClient,
+		private readonly connectSocket: (options: {
+			host: string;
+			port: number;
+		}) => Socket = createConnection,
 	) {
 		if ((config.exposureMode ?? 'subdomain') === 'subdomain' && config.hostname) {
 			const template = config.hostnameTemplate ?? 'https://{id}.{host}';
@@ -645,7 +656,24 @@ export class KubernetesCompute implements SandboxProvider {
 							: {}),
 					}
 				: this.config;
-		return new KubernetesSandboxInstance(id, config, this.getClient());
+		return new KubernetesSandboxInstance(id, config, this.getClient(), options?.brokeredPorts);
+	}
+
+	async connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection> {
+		const namespace = this.config.namespace ?? 'default';
+		const host = `${resourceName(id)}.${namespace}.svc`;
+		const socket = this.connectSocket({ host, port });
+		await new Promise<void>((resolve, reject) => {
+			socket.once('connect', resolve);
+			socket.once('error', reject);
+		});
+		return {
+			readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
+			writable: Writable.toWeb(socket) as WritableStream<Uint8Array>,
+			close: async () => {
+				socket.destroy();
+			},
+		};
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

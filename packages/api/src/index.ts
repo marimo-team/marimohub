@@ -12,6 +12,7 @@ export type {
 } from './context';
 export { createApp, assertProjectRole } from './shared';
 export { scheduleProjectAlert } from './notifications';
+export { authorizeRemoteDevelopmentRequest, DEVELOPMENT_LEASE_MS } from './remoteDevelopment';
 export {
 	authorizeProxyRequest,
 	CREDENTIAL_HEADERS,

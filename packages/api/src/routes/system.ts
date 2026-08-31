@@ -119,6 +119,13 @@ app.openapi(capabilitiesRoute, (c) => {
 			query: deps.dataBrowser?.query ?? false,
 			ai_query: Boolean(deps.dataBrowser?.query && deps.ai?.generateSql),
 		},
+		remote_development: {
+			ssh: {
+				available: Boolean(deps.sandbox.remoteDevelopment),
+				transport: deps.sandbox.remoteDevelopment ? ('websocket' as const) : null,
+				persistence: deps.sandbox.remoteDevelopment ? deps.sandbox.persistWorkspace : null,
+			},
+		},
 		// createApi defaults this; the fallback satisfies the optional type for
 		// direct callers (mirrors the sandbox.exposure pattern).
 		viewer_mode: deps.policy.viewerMode ?? 'static',

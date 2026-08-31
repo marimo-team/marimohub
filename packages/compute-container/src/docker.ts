@@ -19,6 +19,7 @@ export interface DockerConfig {
 	bindHost?: string;
 	network?: string;
 	labelKey?: string;
+	daemonHost?: string;
 }
 
 export function spawnDockerRunner(bin = 'docker'): DockerRunner {

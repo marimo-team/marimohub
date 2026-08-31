@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { createConnection } from 'node:net';
 import { posix } from 'node:path';
+import { Readable, Writable } from 'node:stream';
 import {
 	ModalClient,
 	NotFoundError as ModalNotFoundError,
@@ -42,6 +44,8 @@ import type {
 	SandboxFileWrite,
 	SandboxLaunchResult,
 	SandboxInstance,
+	SandboxDuplexConnection,
+	SandboxPortConnector,
 	SandboxProcess,
 	SandboxProvider,
 	SetEnvVarsOptions,
@@ -97,7 +101,9 @@ export interface ModalSandboxLike {
 	): Promise<ModalProcessLike>;
 	getTags(): Promise<Record<string, string>>;
 	terminate(): Promise<void>;
-	tunnels(timeoutMs?: number): Promise<Record<number, { url: string }>>;
+	tunnels(
+		timeoutMs?: number,
+	): Promise<Record<number, { url: string; tcpSocket?: readonly [string, number] }>>;
 }
 
 export interface ModalClientLike {
@@ -116,6 +122,7 @@ export interface ModalClientLike {
 				command: string[];
 				tags: Record<string, string>;
 				encryptedPorts: number[];
+				unencryptedPorts?: number[];
 				timeoutMs: number;
 				idleTimeoutMs?: number;
 				cpu?: number;
@@ -227,6 +234,7 @@ class ModalSandboxInstance implements SandboxInstance {
 		private readonly client: ModalClientLike,
 		private readonly resources: ReturnType<typeof modalProfileResources>,
 		private readonly reuse: boolean,
+		private readonly brokeredPorts: readonly number[] = [],
 	) {}
 
 	private createSandbox(): Promise<ModalSandboxLike> {
@@ -244,6 +252,7 @@ class ModalSandboxInstance implements SandboxInstance {
 					[SANDBOX_ID_TAG]: this.id,
 				},
 				encryptedPorts: [KERNEL_PORT],
+				unencryptedPorts: [...this.brokeredPorts],
 				timeoutMs: MAX_SANDBOX_LIFETIME_MS,
 				...(this.config.idleFallbackMs !== undefined
 					? { idleTimeoutMs: this.config.idleFallbackMs }
@@ -610,6 +619,25 @@ class ModalSandboxInstance implements SandboxInstance {
 		return { url: tunnel.url };
 	}
 
+	async connectPort(port: number): Promise<SandboxDuplexConnection> {
+		const tunnel = (await (await this.getSandbox()).tunnels())[port];
+		if (!tunnel?.tcpSocket)
+			throw new Error(`Modal sandbox ${this.id} has no TCP tunnel for port ${port}`);
+		const [host, remotePort] = tunnel.tcpSocket;
+		const socket = createConnection({ host, port: remotePort });
+		await new Promise<void>((resolve, reject) => {
+			socket.once('connect', resolve);
+			socket.once('error', reject);
+		});
+		return {
+			readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
+			writable: Writable.toWeb(socket) as WritableStream<Uint8Array>,
+			close: async () => {
+				socket.destroy();
+			},
+		};
+	}
+
 	async destroy(): Promise<void> {
 		try {
 			await (await this.getSandbox(false)).terminate();
@@ -619,8 +647,8 @@ class ModalSandboxInstance implements SandboxInstance {
 	}
 }
 
-export class ModalCompute implements SandboxProvider {
-	readonly capabilities = { multiPort: false } as const;
+export class ModalCompute implements SandboxProvider, SandboxPortConnector {
+	readonly capabilities = { multiPort: false, brokeredTcp: true } as const;
 	private readonly client: ModalClientLike;
 
 	constructor(
@@ -646,7 +674,18 @@ export class ModalCompute implements SandboxProvider {
 			this.client,
 			modalProfileResources(options?.resources),
 			options?.reuse ?? true,
+			options?.brokeredPorts,
 		);
+	}
+
+	async connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection> {
+		return new ModalSandboxInstance(
+			id,
+			this.config,
+			this.client,
+			modalProfileResources(undefined),
+			true,
+		).connectPort(port);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

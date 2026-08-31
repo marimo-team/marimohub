@@ -73,6 +73,13 @@ export interface SandboxUserHomeResolver {
 	resolve(user: AuthUser): SandboxUserHome;
 }
 
+export interface RemoteDevelopmentConfig {
+	mode: 'ssh';
+	images: readonly string[];
+	port: number;
+	backend?: string;
+}
+
 /** Everything about how a notebook sandbox is mounted, exposed, and persisted. */
 export interface SandboxConfig {
 	/** Bucket connection info the sandbox mounts for notebook files (was `c.env.R2_*`). */
@@ -154,6 +161,7 @@ export interface SandboxConfig {
 			marimoWatch: boolean;
 		};
 	};
+	remoteDevelopment?: RemoteDevelopmentConfig;
 }
 
 /**

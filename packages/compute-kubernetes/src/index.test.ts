@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createConnection } from 'node:net';
 import {
 	NOT_A_DIRECTORY_EXIT_CODE,
 	NOT_A_DIRECTORY_MARKER,
@@ -13,6 +14,7 @@ import {
 	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
 import type { ContractLaunchScript } from '@marimo-hub/core/testing/compute-contract';
+import { portConnectorContract } from '@marimo-hub/core/testing/port-connector-contract';
 import {
 	expectExecResult,
 	expectFileResult,
@@ -1007,3 +1009,10 @@ computeContract(
 	},
 	{ mountFallsBack: true, semantics: { failingCommand: 'false', launch: {} } },
 );
+
+portConnectorContract('KubernetesCompute', (publishedPort) => {
+	const world = makeWorld();
+	return new KubernetesCompute(baseConfig, world.client, () =>
+		createConnection({ host: '127.0.0.1', port: publishedPort }),
+	);
+});

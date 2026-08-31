@@ -612,6 +612,7 @@ export type ComputeResourceRecord = z.infer<typeof ComputeResourceRecordSchema>;
 export const FsSnapshotSchema = z.object({
 	snapshot_id: z.string(),
 	captured_at: z.iso.datetime(),
+	image: z.string().optional(),
 	size_bytes: z.number().int().nonnegative().optional(),
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),
@@ -763,9 +764,15 @@ export const SessionSchema = z.looseObject({
 	 */
 	active_connections: z.number().int().nonnegative().optional(),
 	connections_checked_at: z.iso.datetime().optional(),
+	/** Short lease refreshed by an authenticated remote-development relay. */
+	development_active_until: z.iso.datetime().optional(),
 	runtime: RuntimeSchema.optional(),
 	sandbox_id: SandboxIdSchema.optional(),
 	sandbox_url: z.string().optional(),
+	/** Resolved image actually used by the running sandbox; never exposed directly. */
+	sandbox_image: z.string().optional(),
+	/** Brokered ports requested at sandbox creation; absent on older sessions. */
+	sandbox_brokered_ports: z.array(z.number().int().min(1).max(65_535)).optional(),
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),
 	compute_from_snapshot: z.boolean().optional(),

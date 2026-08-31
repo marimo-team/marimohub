@@ -101,12 +101,13 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|storage|compute|editor-sessions|surfaces|sandbox-image|apps|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
+					'^/(auth|storage|compute|editor-sessions|surfaces|remote-development|sandbox-image|apps|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
 					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'VS Code surface', link: '/surfaces' },
+					{ text: 'Remote development', link: '/remote-development' },
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
@@ -162,6 +163,7 @@ export default defineConfig({
 					{ text: 'Compute', link: '/compute' },
 					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'VS Code surface', link: '/surfaces' },
+					{ text: 'Remote development', link: '/remote-development' },
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },

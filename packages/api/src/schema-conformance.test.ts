@@ -135,12 +135,15 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'expires_at',
 			'authorization_expires_at',
 			'last_snapshot_at',
+			'development_active_until',
+			'sandbox_image',
+			'sandbox_brokered_ports',
 			'sandbox_reclaimed_at',
 			'takeover_capture_completed_at',
 		];
 		// `can` is response-only: the caller's evaluated grants, computed per
 		// request — never stored on the record.
-		const responseOnlyFields = ['can'];
+		const responseOnlyFields = ['can', 'remote_development'];
 		const coreKeys = shapeKeys(CoreSessionSchema);
 		const apiKeys = shapeKeys(SessionResponseSchema);
 		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(

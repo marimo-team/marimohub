@@ -10,6 +10,7 @@ import {
 	CONTRACT_VISIBLE_FILE,
 	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
+import { portConnectorContract } from '@marimo-hub/core/testing/port-connector-contract';
 import { modalProfileResources, ModalCompute } from './index';
 import type {
 	ModalClientLike,
@@ -64,6 +65,7 @@ class FakeSandbox implements ModalSandboxLike {
 	}[] = [];
 	readonly tags: Record<string, string>;
 	terminated = false;
+	tunnelOverrides: Record<number, { url: string; tcpSocket?: readonly [string, number] }> = {};
 	execImpl: (command: string[]) => ModalProcessLike = () => processResult();
 
 	constructor(tags: Record<string, string> = {}) {
@@ -119,8 +121,8 @@ class FakeSandbox implements ModalSandboxLike {
 		this.terminated = true;
 	}
 
-	async tunnels(): Promise<Record<number, { url: string }>> {
-		return { 2718: { url: 'https://sandbox.modal.host' } };
+	async tunnels(): Promise<Record<number, { url: string; tcpSocket?: readonly [string, number] }>> {
+		return { 2718: { url: 'https://sandbox.modal.host' }, ...this.tunnelOverrides };
 	}
 }
 
@@ -202,6 +204,7 @@ describe('ModalCompute', () => {
 		await makeCompute(world)
 			.create(SANDBOX_ID, {
 				reuse: false,
+				brokeredPorts: [2222],
 				resources: { cpu: 1.5, memoryBytes: 2 * 1024 ** 3, gpu: 'A100:2' },
 			})
 			.exec('true');
@@ -213,6 +216,7 @@ describe('ModalCompute', () => {
 			memoryMiB: 2048,
 			gpu: 'A100:2',
 			encryptedPorts: [2718],
+			unencryptedPorts: [2222],
 			idleTimeoutMs: 45 * 60_000,
 			timeoutMs: 24 * 60 * 60_000,
 			tags: {
@@ -689,6 +693,16 @@ describe('ModalCompute', () => {
 		).rejects.toThrow(/file copy fallback/);
 		expect(await compute.proxy(new Request('https://example.com'))).toBeNull();
 	});
+
+	it('rejects a brokered connection when Modal did not provision a raw TCP tunnel', async () => {
+		const world = makeWorld();
+		const compute = makeCompute(world);
+		await compute.create(SANDBOX_ID, { reuse: false }).exec('true');
+
+		await expect(compute.connectPort(SANDBOX_ID, 2222)).rejects.toThrow(
+			/no TCP tunnel for port 2222/,
+		);
+	});
 });
 
 function contractWorld() {
@@ -739,4 +753,15 @@ computeContract('ModalCompute', () => makeCompute(contractWorld()), {
 				]),
 		},
 	},
+});
+
+portConnectorContract('ModalCompute', async (publishedPort, sandboxId) => {
+	const world = makeWorld();
+	const compute = makeCompute(world);
+	await compute.create(sandboxId, { reuse: false, brokeredPorts: [2222] }).exec('true');
+	world.created[0].sandbox.tunnelOverrides[2222] = {
+		url: 'http://private-endpoint.invalid',
+		tcpSocket: ['127.0.0.1', publishedPort],
+	};
+	return compute;
 });

@@ -225,6 +225,8 @@ export interface ProvisionOptions {
 	resources?: ComputeResources;
 	/** Personal directory selected for an owner-isolated editor sandbox. */
 	userHome?: SandboxUserHome;
+	/** Control-plane-only TCP ports requested for this sandbox. */
+	brokeredPorts?: readonly number[];
 	/**
 	 * Environment + files to inject into the sandbox BEFORE the kernel starts — the
 	 * assembled output of the workload-identity broker (federated S3 creds) and/or
@@ -549,6 +551,7 @@ export class SandboxProvisioner {
 			options.image,
 			options.resources,
 			options.userHome,
+			options.brokeredPorts,
 		);
 		const createMs = Date.now() - createStart;
 		try {
@@ -806,6 +809,12 @@ export class SandboxProvisioner {
 						? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
 						: undefined,
 				]);
+				if (options.brokeredPorts?.length) {
+					const captured = await sandbox.exec(
+						'umask 077; mkdir -p /tmp/marimohub-ssh; export -p > /tmp/marimohub-ssh/session-env',
+					);
+					if (!captured.success) throw new Error('could not capture the remote shell environment');
+				}
 			} catch (err) {
 				throw provisionFailure('injecting session credentials', err);
 			}

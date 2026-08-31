@@ -248,6 +248,34 @@ components:
             - preview
             - query
             - ai_query
+        remote_development:
+          type: object
+          properties:
+            ssh:
+              type: object
+              properties:
+                available:
+                  type: boolean
+                transport:
+                  type:
+                    - string
+                    - 'null'
+                  enum:
+                    - websocket
+                persistence:
+                  type:
+                    - string
+                    - 'null'
+                  enum:
+                    - workspace
+                    - source
+                    - null
+              required:
+                - available
+                - transport
+                - persistence
+          required:
+            - ssh
         viewer_mode:
           type: string
           enum:
@@ -358,6 +386,7 @@ components:
         - source_control
         - project_alerts
         - data_browser
+        - remote_development
         - viewer_mode
         - viewer_session_modes
         - editor_sandbox_sharing
@@ -1653,6 +1682,8 @@ components:
               type: boolean
             stop:
               type: boolean
+            develop:
+              type: boolean
             surfaces:
               type: object
               properties:
@@ -1663,10 +1694,42 @@ components:
           required:
             - attach
             - stop
+            - develop
         surfaces:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/Surface'
+        remote_development:
+          type: object
+          properties:
+            ssh:
+              oneOf:
+                - type: object
+                  properties:
+                    available:
+                      type: boolean
+                      enum:
+                        - true
+                  required:
+                    - available
+                - type: object
+                  properties:
+                    available:
+                      type: boolean
+                      enum:
+                        - false
+                    reason:
+                      type: string
+                      enum:
+                        - disabled
+                        - unsupported_backend
+                        - unsupported_image
+                        - restart_required
+                  required:
+                    - available
+                    - reason
+          required:
+            - ssh
         active_connections:
           type: number
         connections_checked_at:
@@ -1717,6 +1780,7 @@ components:
         - last_heartbeat
         - mode
         - can
+        - remote_development
     Surface:
       type: object
       properties:
@@ -1891,6 +1955,39 @@ components:
         open:
           type: string
           maxLength: 4096
+    PreparedSshAccess:
+      type: object
+      properties:
+        username:
+          type: string
+        workspace_path:
+          type: string
+        host_key:
+          type: string
+        key_expires_at:
+          type: string
+          format: date-time
+        persistence:
+          type: string
+          enum:
+            - workspace
+            - source
+            - none
+      required:
+        - username
+        - workspace_path
+        - host_key
+        - key_expires_at
+        - persistence
+    PrepareSshBody:
+      type: object
+      properties:
+        public_key:
+          type: string
+          minLength: 1
+          maxLength: 1024
+      required:
+        - public_key
     IntegrationKind:
       type: object
       properties:
@@ -9644,6 +9741,119 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/remote-development/ssh/prepare:
+    post:
+      operationId: sessions.remoteDevelopment.ssh.prepare
+      tags:
+        - Sessions
+      summary: Prepare short-lived SSH access to a running sandbox
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrepareSshBody'
+      responses:
+        '200':
+          description: SSH access prepared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PreparedSshAccess'
+                required:
+                  - success
+                  - data
         '400':
           description: Bad request
           content:

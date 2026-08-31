@@ -4,6 +4,8 @@
  * and teardown continues to work across server restarts.
  */
 import { spawn } from 'node:child_process';
+import { createConnection } from 'node:net';
+import { Readable, Writable } from 'node:stream';
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -40,10 +42,12 @@ import type {
 	MountBucketOptions,
 	ReadFileResult,
 	SandboxFileWrite,
+	SandboxDuplexConnection,
 	SandboxLaunchResult,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SandboxPortConnector,
 	StartProcessOptions,
 	SetEnvVarsOptions,
 	WaitForPortOptions,
@@ -158,10 +162,31 @@ export interface ContainerConfig {
 	network?: string;
 	/** Label key used to tag + enumerate our containers. Default `marimohub.sandbox`. */
 	labelKey?: string;
+	/** Container daemon endpoint. Network endpoints cannot broker loopback-only ports. */
+	daemonHost?: string;
 }
 
-type ResolvedConfig = Required<Omit<ContainerConfig, 'network'>> &
+type ResolvedConfig = Required<Omit<ContainerConfig, 'network' | 'daemonHost'>> &
 	Pick<ContainerConfig, 'network'> & { engine: string };
+
+function isLocalDaemon(host: string | undefined): boolean {
+	return /^(?:unix|npipe|fd):\/\//i.test(host?.trim() ?? '');
+}
+
+function inheritedDaemonHost(engine: string): string | undefined {
+	if (engine === 'docker') {
+		if (process.env.DOCKER_CONTEXT) {
+			return `context://${process.env.DOCKER_CONTEXT}`;
+		}
+		return process.env.DOCKER_HOST;
+	}
+	return (
+		process.env.CONTAINER_HOST ??
+		(process.env.CONTAINER_CONNECTION
+			? `connection://${process.env.CONTAINER_CONNECTION}`
+			: undefined)
+	);
+}
 
 export function containerResourceArgs(resources: ComputeResources = {}): string[] {
 	return [
@@ -185,6 +210,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		private readonly config: ResolvedConfig,
 		private readonly runner: ContainerRunner,
 		private readonly resources: ComputeResources,
+		private readonly brokeredPorts: readonly number[],
 	) {
 		this.name = `${NAME_PREFIX}${id}`;
 	}
@@ -210,6 +236,9 @@ class ContainerSandboxInstance implements SandboxInstance {
 			'-p',
 			`${this.config.bindHost}::${KERNEL_PORT}`,
 		];
+		for (const port of this.brokeredPorts) {
+			if (port !== KERNEL_PORT) args.push('-p', `127.0.0.1::${port}`);
+		}
 		args.push(...containerResourceArgs(this.resources));
 		if (this.config.network) args.push('--network', this.config.network);
 		args.push(this.config.image, 'sleep', 'infinity');
@@ -505,8 +534,8 @@ class ContainerSandboxInstance implements SandboxInstance {
 	}
 }
 
-export class ContainerCompute implements SandboxProvider {
-	readonly capabilities = { multiPort: false } as const;
+export class ContainerCompute implements SandboxProvider, SandboxPortConnector {
+	readonly capabilities: { readonly multiPort: false; readonly brokeredTcp: boolean };
 	private readonly config: ResolvedConfig;
 
 	constructor(
@@ -514,6 +543,12 @@ export class ContainerCompute implements SandboxProvider {
 		config: ContainerConfig = {},
 		private readonly runner: ContainerRunner = spawnContainerRunner(engine),
 	) {
+		const daemonHost = Object.hasOwn(config, 'daemonHost')
+			? config.daemonHost
+			: inheritedDaemonHost(engine);
+		// An unset endpoint can inherit a persisted Docker context or Podman connection.
+		// Only an explicit local transport proves that loopback-published ports are on this host.
+		this.capabilities = { multiPort: false, brokeredTcp: isLocalDaemon(daemonHost) };
 		this.config = {
 			engine,
 			image: config.image || DEFAULT_IMAGE,
@@ -526,7 +561,42 @@ export class ContainerCompute implements SandboxProvider {
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		const config = options?.image ? { ...this.config, image: options.image } : this.config;
-		return new ContainerSandboxInstance(id, config, this.runner, options?.resources ?? {});
+		return new ContainerSandboxInstance(
+			id,
+			config,
+			this.runner,
+			options?.resources ?? {},
+			options?.brokeredPorts ?? [],
+		);
+	}
+
+	async connectPort(id: SandboxId, port: number): Promise<SandboxDuplexConnection> {
+		if (!this.capabilities.brokeredTcp) {
+			throw new Error(
+				`${this.config.engine} brokered ports require an explicitly configured local daemon`,
+			);
+		}
+		const name = `${NAME_PREFIX}${id}`;
+		const published = await this.runner.run(['port', name, `${port}/tcp`]);
+		if (published.exitCode !== 0) {
+			throw new Error(
+				`${this.config.engine} port failed for ${name}: ${published.stderr || published.stdout}`,
+			);
+		}
+		const match = published.stdout.match(/^127\.0\.0\.1:(\d+)\s*$/m);
+		if (!match) throw new Error(`could not resolve a loopback host port from: ${published.stdout}`);
+		const socket = createConnection({ host: '127.0.0.1', port: Number(match[1]) });
+		await new Promise<void>((resolve, reject) => {
+			socket.once('connect', resolve);
+			socket.once('error', reject);
+		});
+		return {
+			readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
+			writable: Writable.toWeb(socket) as WritableStream<Uint8Array>,
+			async close() {
+				socket.destroy();
+			},
+		};
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

@@ -43,6 +43,7 @@ import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
 import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
+import { RemoteDevelopmentDialog } from '@/components/NotebookPage/RemoteDevelopmentDialog';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import type { Theme } from '@/context/ThemeContext';
@@ -391,6 +392,10 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		!!sourceProvider &&
 		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
 		canManageProject(project.your_role);
+	const remotePersistence =
+		notebook?.source.type === 'git'
+			? 'none'
+			: (capabilities?.remote_development?.ssh.persistence ?? 'source');
 	return (
 		<div className="flex h-dvh flex-col">
 			<title>{`${title} · marimohub`}</title>
@@ -442,6 +447,14 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
+					{!isApp && (
+						<RemoteDevelopmentDialog
+							projectId={pid!}
+							notebookId={nid!}
+							session={session}
+							persistence={remotePersistence}
+						/>
+					)}
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}

@@ -98,6 +98,7 @@ describe('createK8sClient', () => {
 				host: 'sb.example.com',
 				image: 'kernel-image:v1',
 				port: 2718,
+				brokeredPorts: [2222],
 				namespace: 'kernels',
 				ingressClassName: 'nginx',
 				ingressAnnotations: {
@@ -131,7 +132,7 @@ describe('createK8sClient', () => {
 						image: 'kernel-image:v1',
 						// Pinned tag → cached nodes skip the registry round-trip.
 						imagePullPolicy: 'IfNotPresent',
-						ports: [{ containerPort: 2718 }],
+						ports: [{ containerPort: 2718 }, { containerPort: 2222 }],
 						resources: {
 							requests: { cpu: '2', memory: '4Gi' },
 							limits: { 'nvidia.com/gpu': '1' },
@@ -141,7 +142,13 @@ describe('createK8sClient', () => {
 			},
 		});
 		expect(k8sMock.core.createNamespacedService.mock.calls[0]?.[0].body).toMatchObject({
-			spec: { selector: { 'marimohub.io/sandbox-name': 'mh-sb' } },
+			spec: {
+				selector: { 'marimohub.io/sandbox-name': 'mh-sb' },
+				ports: [
+					{ name: 'tcp-2718', port: 2718, targetPort: 2718, protocol: 'TCP' },
+					{ name: 'tcp-2222', port: 2222, targetPort: 2222, protocol: 'TCP' },
+				],
+			},
 		});
 		expect(k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body).toMatchObject({
 			metadata: {

@@ -910,6 +910,114 @@ describe('createFromEnv default role', () => {
 			/Invalid MARIMOHUB_PERSIST_WORKSPACE/,
 		);
 	});
+
+	it('wires SSH remote development only for exclusive editors and marked images', () => {
+		const image = 'ghcr.io/acme/marimo:remote-dev';
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_IMAGE: image,
+			DOCKER_HOST: 'unix:///var/run/docker.sock',
+			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
+			MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: image,
+		});
+		expect(deps.sandbox.remoteDevelopment).toEqual({
+			mode: 'ssh',
+			images: [image],
+			port: 2222,
+			backend: 'docker',
+		});
+	});
+
+	it('rejects unsafe or inconsistent remote-development configuration', () => {
+		const image = 'ghcr.io/acme/marimo:remote-dev';
+		const configured = {
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_IMAGE: image,
+			DOCKER_HOST: 'unix:///var/run/docker.sock',
+			MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
+			MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: image,
+		};
+		expect(() => createFromEnv(configured)).toThrow(/requires.*exclusive/);
+		expect(() =>
+			createFromEnv({
+				...configured,
+				DOCKER_HOST: undefined,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/does not support brokered SSH/);
+		expect(() =>
+			createFromEnv({
+				...configured,
+				MARIMOHUB_COMPUTE_BACKEND: 'podman',
+				DOCKER_HOST: undefined,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/does not support brokered SSH/);
+		expect(() =>
+			createFromEnv({
+				...configured,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+				MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: 'ghcr.io/acme/other:latest',
+			}),
+		).toThrow(/unconfigured images/);
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'e2b',
+				MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
+				MARIMOHUB_COMPUTE_E2B_TEMPLATE: image,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+				MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
+				MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: image,
+			}),
+		).toThrow(/does not support brokered SSH/);
+		for (const remoteDaemon of [
+			{ MARIMOHUB_COMPUTE_BACKEND: 'docker', DOCKER_HOST: 'tcp://docker.example:2376' },
+			{ MARIMOHUB_COMPUTE_BACKEND: 'docker', DOCKER_CONTEXT: 'default' },
+			{ MARIMOHUB_COMPUTE_BACKEND: 'docker', DOCKER_CONTEXT: 'production' },
+			{
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				DOCKER_CONTEXT: 'production',
+				DOCKER_HOST: 'unix:///var/run/docker.sock',
+			},
+			{
+				MARIMOHUB_COMPUTE_BACKEND: 'podman',
+				CONTAINER_HOST: 'ssh://podman.example/run/podman.sock',
+			},
+			{ MARIMOHUB_COMPUTE_BACKEND: 'podman', CONTAINER_CONNECTION: 'production' },
+		]) {
+			expect(() =>
+				createFromEnv({
+					...baseEnv,
+					...remoteDaemon,
+					MARIMOHUB_COMPUTE_IMAGE: image,
+					MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+					MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
+					MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: image,
+				}),
+			).toThrow(/does not support brokered SSH/);
+		}
+	});
+
+	it('rejects an unknown remote-development mode and an empty image allowlist', () => {
+		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_REMOTE_DEVELOPMENT: 'telnet' })).toThrow(
+			/expected disabled or ssh/,
+		);
+
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				MARIMOHUB_COMPUTE_IMAGE: 'ghcr.io/acme/marimo:remote-dev',
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+				MARIMOHUB_REMOTE_DEVELOPMENT: 'ssh',
+				MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES: ' , ',
+			}),
+		).toThrow(/requires MARIMOHUB_REMOTE_DEVELOPMENT_IMAGES/);
+	});
 });
 
 describe('createFromEnv storage selection', () => {
