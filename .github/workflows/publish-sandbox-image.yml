@@ -61,6 +61,8 @@ jobs:
       - name: Verify OpenCode variant
         run: |
           docker run --rm marimo-sandbox:opencode-ci opencode --version | grep -F '1.18.17'
+          docker run --rm marimo-sandbox:opencode-ci jq --version
+          docker run --rm marimo-sandbox:opencode-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
           docker run --rm marimo-sandbox:opencode-ci sh -ec '
             opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
             pid=$!
@@ -74,6 +76,8 @@ jobs:
               fi
               sleep 1
             done
+            curl -fsS -H "x-opencode-directory: /workspace" http://127.0.0.1:4096/skill \
+              | jq -e ".[] | select(.name == \"marimo-pair\")" >/dev/null
           '
 
       - name: Build and verify combined tools variant
@@ -81,6 +85,8 @@ jobs:
           docker build --target tools -t marimo-sandbox:tools-ci images/marimo-sandbox
           docker run --rm marimo-sandbox:tools-ci code-server --version
           docker run --rm marimo-sandbox:tools-ci opencode --version | grep -F '1.18.17'
+          docker run --rm marimo-sandbox:tools-ci jq --version
+          docker run --rm marimo-sandbox:tools-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
           docker run --rm marimo-sandbox:tools-ci sh -ec '
             opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
             pid=$!
@@ -94,6 +100,8 @@ jobs:
               fi
               sleep 1
             done
+            curl -fsS -H "x-opencode-directory: /workspace" http://127.0.0.1:4096/skill \
+              | jq -e ".[] | select(.name == \"marimo-pair\")" >/dev/null
           '
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

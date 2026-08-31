@@ -122,17 +122,25 @@ RUN case "${TARGETARCH:-amd64}" in \
  && tar -xzf "${archive}" -C /usr/local/bin opencode \
  && rm "${archive}" \
  && apt-get update \
- && apt-get install -y --no-install-recommends ripgrep \
+ && apt-get install -y --no-install-recommends jq ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 USER appuser
+ARG SKILLS_CLI_VERSION=1.5.23
+RUN UV_CACHE_DIR=/tmp/marimo-pair-uv-cache \
+    DENO_DIR=/tmp/marimo-pair-deno-cache \
+    uvx deno -A "npm:skills@${SKILLS_CLI_VERSION}" add marimo-team/marimo-pair \
+      --global --agent opencode --skill marimo-pair --yes --copy \
+ && test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md \
+ && rm -rf /tmp/marimo-pair-uv-cache /tmp/marimo-pair-deno-cache
 
 FROM vscode AS tools
 
 USER root
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
+COPY --from=opencode --chown=appuser:appuser /home/appuser/.agents/skills /home/appuser/.agents/skills
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ripgrep \
+ && apt-get install -y --no-install-recommends jq ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 USER appuser

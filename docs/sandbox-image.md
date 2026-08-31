@@ -22,11 +22,11 @@ host and needs no image; `e2b` uses an E2B template instead — see
 The repository image also publishes optional [session surface](./surfaces.md)
 targets:
 
-| Target     | Published tag suffix | Included tools                    |
-| ---------- | -------------------- | --------------------------------- |
-| `vscode`   | `-vscode`            | code-server and pinned extensions |
-| `opencode` | `-opencode`          | OpenCode and ripgrep              |
-| `tools`    | `-tools`             | VS Code, OpenCode, and ripgrep    |
+| Target     | Published tag suffix | Included tools                         |
+| ---------- | -------------------- | -------------------------------------- |
+| `vscode`   | `-vscode`            | code-server and pinned extensions      |
+| `opencode` | `-opencode`          | OpenCode, ripgrep, jq, and marimo-pair |
+| `tools`    | `-tools`             | VS Code plus the OpenCode tools        |
 
 OpenCode is pinned to 1.18.17 with separate SHA-256 checksums for Linux x64 and
 arm64 builds.
