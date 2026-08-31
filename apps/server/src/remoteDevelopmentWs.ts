@@ -175,7 +175,13 @@ export function attachRemoteDevelopmentUpgrade(
 	const active = new Map<string, number>();
 
 	server.on('upgrade', (req, socket, head) => {
-		const request = toWebRequest(req);
+		let request: Request;
+		try {
+			request = toWebRequest(req);
+		} catch {
+			rejectUpgrade(socket, 400, 'Bad Request');
+			return;
+		}
 		authorizeRemoteDevelopmentRequest(request, deps)
 			.then(async (decision) => {
 				if (decision.kind === 'pass') return;

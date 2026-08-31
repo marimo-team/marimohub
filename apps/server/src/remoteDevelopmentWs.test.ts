@@ -146,6 +146,37 @@ describe('attachRemoteDevelopmentUpgrade', () => {
 		await closeServer(world.server);
 	});
 
+	it('rejects a malformed upgrade host without crashing the server', async () => {
+		const world = await createRelayWorld();
+		const parsed = new URL(world.url);
+		const socket = createConnection(Number(parsed.port), parsed.hostname);
+		let response = '';
+		socket.setEncoding('utf8');
+		socket.on('data', (chunk) => (response += chunk));
+		await new Promise<void>((resolve, reject) => {
+			socket.once('connect', resolve);
+			socket.once('error', reject);
+		});
+		socket.write(
+			[
+				`GET ${parsed.pathname} HTTP/1.1`,
+				'Host: [',
+				'Connection: Upgrade',
+				'Upgrade: websocket',
+				'Sec-WebSocket-Version: 13',
+				'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+				'',
+				'',
+			].join('\r\n'),
+		);
+		await new Promise<void>((resolve) => socket.once('close', () => resolve()));
+
+		expect(response).toMatch(/^HTTP\/1\.1 400 /);
+		expect(world.connector).not.toHaveBeenCalled();
+		await expectUpgradeStatus(world.url, 401);
+		await closeServer(world.server);
+	});
+
 	it('returns bad gateway when the sandbox port cannot be reached', async () => {
 		const world = await createRelayWorld(async () => {
 			throw new Error('connection refused');
