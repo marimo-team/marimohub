@@ -1352,6 +1352,8 @@ export function useCreateSyncedNotebook(projectId: string) {
 			root_path?: string;
 			entry_notebook: string;
 			sync_mode?: 'push' | 'pull';
+			base_image?: string;
+			compute_profile?: string;
 		}) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/git', {
