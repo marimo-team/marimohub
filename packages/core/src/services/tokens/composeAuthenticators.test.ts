@@ -37,11 +37,13 @@ describe('composeAuthenticators', () => {
 	});
 
 	it('resolves a valid PAT without consulting SSO', async () => {
-		const { token } = await tokens.create({ name: 'ci' }, OWNER);
+		const { token, record } = await tokens.create({ name: 'ci' }, OWNER);
 		const auth = composeAuthenticators(tokens, sso);
 
 		const user = await auth.authenticate(req({ authorization: `Bearer ${token}` }));
 		expect(user?.id).toBe(OWNER);
+		// PAT provenance survives composition — consumers key off it, never headers.
+		expect(user?.credential).toEqual({ kind: 'personal-access-token', id: record.id });
 		expect(ssoAuthenticate).not.toHaveBeenCalled();
 	});
 

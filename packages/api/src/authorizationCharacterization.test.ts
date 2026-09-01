@@ -215,3 +215,137 @@ describe('authorization characterization: list filtering and pagination', () => 
 		expect(strangerList.items).toEqual([]);
 	});
 });
+
+describe('authorization characterization: unhappy paths', () => {
+	it('reveals existence with 403 (not 404) for a non-member write on a hidden project', async () => {
+		// Pins today's asymmetry: reads mask as 404, but a write guard answers 403
+		// even for a caller with no role at all.
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		await expectError(
+			await apiFor(bucket, STRANGER).request('PATCH', `/projects/${pid}`, { name: 'x' }),
+			403,
+			'FORBIDDEN',
+		);
+	});
+
+	it('answers 404 on session routes for a deleted project before any session rule', async () => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const owner = apiFor(bucket, OWNER);
+		const notebook = await expectOk<{ id: string }>(
+			await owner.request('POST', `/projects/${pid}/notebooks`, {
+				title: 'nb',
+				description: '',
+				code: 'import marimo as mo',
+			}),
+			201,
+		);
+		await expectOk(await owner.request('DELETE', `/projects/${pid}`));
+
+		await expectError(
+			await owner.request('POST', `/projects/${pid}/notebooks/${notebook.id}/sessions`, {}),
+			404,
+			'NOT_FOUND',
+		);
+		await expectError(
+			await owner.request(
+				'DELETE',
+				`/projects/${pid}/notebooks/${notebook.id}/sessions/sess-9qm4xz7rp3w8h2k9`,
+			),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('refuses group-derived authorization that carries no expiry', async () => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const owner = apiFor(bucket, OWNER);
+		const notebook = await expectOk<{ id: string }>(
+			await owner.request('POST', `/projects/${pid}/notebooks`, {
+				title: 'nb',
+				description: '',
+				code: 'import marimo as mo',
+			}),
+			201,
+		);
+
+		const unbounded: Authenticator = {
+			authenticate: async () => ({
+				id: OWNER,
+				email: `${OWNER}@example.com`,
+				entitlements: ['default-role:editor'],
+				credential: { kind: 'sso' },
+			}),
+		};
+		const api = createTestApi({ bucket, userId: OWNER, deps: { authenticator: unbounded } });
+		const res = await api.request('POST', `/projects/${pid}/notebooks/${notebook.id}/sessions`, {});
+		const error = await expectError(res, 403, 'FORBIDDEN');
+		expect(error.message).toContain('no credential expiry');
+	});
+
+	it('admits a pending email invite by login email, never by an id collision', async () => {
+		const bucket = new MemoryBucket();
+		const owner = apiFor(bucket, OWNER);
+		const project = await expectOk<{ id: string }>(
+			await owner.request('POST', '/projects', { name: 'invites', description: '' }),
+			201,
+		);
+		await expectOk(
+			await owner.request('POST', `/projects/${project.id}/members`, {
+				email: 'invitee@example.com',
+				role: 'viewer',
+			}),
+			201,
+		);
+
+		const invitee: Authenticator = {
+			authenticate: async () => ({
+				id: UserId.parse('some-idp-sub'),
+				email: 'Invitee@Example.COM',
+				credential: { kind: 'sso' },
+			}),
+		};
+		const inviteeApi = createTestApi({ bucket, deps: { authenticator: invitee } });
+		await expectOk(await inviteeApi.request('GET', `/projects/${project.id}`));
+
+		// An id equal to the invite email must not be admitted: invite rows bind to
+		// the IdP-asserted login email, not the opaque subject id.
+		const collision: Authenticator = {
+			authenticate: async () => ({
+				id: UserId.parse('invitee@example.com'),
+				email: 'attacker@example.com',
+				credential: { kind: 'sso' },
+			}),
+		};
+		const collisionApi = createTestApi({ bucket, deps: { authenticator: collision } });
+		await expectError(
+			await collisionApi.request('GET', `/projects/${project.id}`),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('hides pending-invite emails from members below manager', async () => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const owner = apiFor(bucket, OWNER);
+		await expectOk(
+			await owner.request('POST', `/projects/${pid}/members`, {
+				email: 'pending@example.com',
+				role: 'viewer',
+			}),
+			201,
+		);
+
+		const asViewer = await expectOk<{ members: { email?: string }[] }>(
+			await apiFor(bucket, VIEWER).request('GET', `/projects/${pid}`),
+		);
+		expect(asViewer.members.some((m) => m.email === 'pending@example.com')).toBe(false);
+		const asOwner = await expectOk<{ members: { email?: string }[] }>(
+			await owner.request('GET', `/projects/${pid}`),
+		);
+		expect(asOwner.members.some((m) => m.email === 'pending@example.com')).toBe(true);
+	});
+});

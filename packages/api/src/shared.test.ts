@@ -13,6 +13,7 @@ import {
 	assertSessionAccess,
 	assertSessionControl,
 	createApp,
+	loadVisibleProject,
 	ErrorResponseSchema,
 	extensibleResponseEnum,
 	jsonBody,
@@ -159,7 +160,23 @@ describe('assertProjectRole', () => {
 				{ id: uid('viewer-1'), email: 'viewer-1@example.com' },
 				'notebook.write',
 			),
-		).rejects.toBeInstanceOf(ForbiddenError);
+		).rejects.toThrow(new ForbiddenError(`Requires 'editor' role on project ${id}`));
+	});
+
+	it('names the action tier and masks hidden projects with the canonical messages', async () => {
+		const bucket = new MemoryBucket();
+		const { id } = await seedProject(bucket, { owner: uid('someone-else'), members: [] });
+		const { projects } = createServices(bucket);
+		const stranger = { id: uid('stranger'), email: 'stranger@example.com' };
+
+		// 403 messages carry the rule tier, not the action name.
+		await expect(assertProjectRole(projects, id, stranger, 'project.update')).rejects.toThrow(
+			`Requires 'manager' role on project ${id}`,
+		);
+		// 404 masking uses the same message as a truly nonexistent project.
+		await expect(loadVisibleProject(projects, id, stranger)).rejects.toThrow(
+			`Project ${id} not found`,
+		);
 	});
 
 	it('throws ForbiddenError for a non-member', async () => {

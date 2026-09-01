@@ -157,6 +157,19 @@ describe('TokenService', () => {
 			});
 		});
 
+		it('carries the token expiry as bounded credential provenance', async () => {
+			const { token, record } = await tokens.create({ name: 'short', expiresInDays: 7 }, OWNER);
+			const principal = await tokens.verify(token);
+			expect(principal?.credential).toEqual({
+				kind: 'personal-access-token',
+				id: record.id,
+				expiresAt: record.expires_at,
+			});
+			// A PAT principal never carries session-only entitlements or their expiry.
+			expect(principal).not.toHaveProperty('entitlements');
+			expect(principal).not.toHaveProperty('entitlementsExpiresAt');
+		});
+
 		it('rejects a wrong secret for a real token id', async () => {
 			const { record } = await tokens.create({ name: 'ci' }, OWNER);
 			expect(await tokens.verify(`${PAT_PREFIX}${record.id}_${'x'.repeat(32)}`)).toBeNull();

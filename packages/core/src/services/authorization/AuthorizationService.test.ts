@@ -297,3 +297,194 @@ describe('AuthorizationService: contract', () => {
 		for (const rule of projectRules) expect(rule.scope).toBe('project');
 	});
 });
+
+describe('AuthorizationService: identity-matching edge cases', () => {
+	it('matches an email invite row case- and whitespace-insensitively', async () => {
+		const invited = makeProject({
+			owner: OWNER.id,
+			members: [{ email: '  Invitee@Example.COM ', role: 'editor' }],
+		});
+		const bySameEmail = subject('user_other_id', 'invitee@example.com');
+		await expect(
+			service().authorize(bySameEmail, 'notebook.write', onProject(invited)),
+		).resolves.toEqual({ allowed: true, role: 'editor' });
+		// A different email with an id that HAPPENS to equal the invite email must
+		// not match — invite rows bind to the asserted login email only.
+		const idCollision = subject('invitee@example.com', 'attacker@example.com');
+		await expect(
+			service().authorize(idCollision, 'notebook.write', onProject(invited)),
+		).resolves.toEqual({ allowed: false, category: 'role', role: null });
+	});
+
+	it('keeps the highest role when id and email rows both match the caller', async () => {
+		const doubled = makeProject({
+			owner: OWNER.id,
+			members: [
+				{ user_id: VIEWER.id, role: 'viewer' },
+				{ email: VIEWER.email, role: 'manager' },
+			],
+		});
+		await expect(
+			service().authorize(VIEWER, 'project.update', onProject(doubled)),
+		).resolves.toEqual({ allowed: true, role: 'manager' });
+	});
+
+	it('applies the super-admin namespace rule: @ entries match email only, others id only', async () => {
+		const byEmail = service({ superAdmins: ['Stranger@Example.com'] });
+		await expect(
+			byEmail.authorize(
+				subject('user_stranger', 'stranger@example.com'),
+				'project.delete',
+				onProject(),
+			),
+		).resolves.toMatchObject({ allowed: true, role: 'admin' });
+		// An id equal to that email string must not be elevated by the email entry.
+		await expect(
+			byEmail.authorize(
+				subject('Stranger@Example.com', 'other@example.com'),
+				'project.delete',
+				onProject(),
+			),
+		).resolves.toMatchObject({ allowed: false });
+		// And a plain id entry never matches by email.
+		const byId = service({ superAdmins: ['user_stranger'] });
+		await expect(
+			byId.authorize(subject('user_x', 'user_stranger'), 'project.delete', onProject()),
+		).resolves.toMatchObject({ allowed: false });
+	});
+
+	it('decides with no policy at all (undefined) as members-only', async () => {
+		const bare = new AuthorizationService(undefined);
+		await expect(bare.authorize(VIEWER, 'project.read', onProject())).resolves.toEqual({
+			allowed: true,
+			role: 'viewer',
+		});
+		await expect(bare.authorize(STRANGER, 'project.read', onProject())).resolves.toEqual({
+			allowed: false,
+			category: 'visibility',
+			role: null,
+		});
+		await expect(
+			bare.authorize(STRANGER, 'project.create', { kind: 'deployment' }),
+		).resolves.toEqual({ allowed: true, role: null });
+	});
+});
+
+describe('AuthorizationService: session edge cases', () => {
+	it('treats a stored session without a mode as an edit session', async () => {
+		// Legacy records omit `mode`; exclusive sharing must still bind to it.
+		const session = { user_id: EDITOR.id, editor_sandbox_sharing: 'exclusive' as const };
+		await expect(
+			service().authorize(MANAGER, 'session.attach', { kind: 'session', project, session }),
+		).resolves.toMatchObject({ allowed: false, category: 'session' });
+		await expect(
+			service().authorize(EDITOR, 'session.attach', { kind: 'session', project, session }),
+		).resolves.toMatchObject({ allowed: true });
+	});
+
+	it('falls back to the deployment sharing policy when the session omits it', async () => {
+		const session = { mode: 'edit' as const, user_id: EDITOR.id };
+		await expect(
+			service({ editorSandboxSharing: 'exclusive' }).authorize(MANAGER, 'session.attach', {
+				kind: 'session',
+				project,
+				session,
+			}),
+		).resolves.toMatchObject({ allowed: false, category: 'session' });
+		await expect(
+			service().authorize(MANAGER, 'session.attach', { kind: 'session', project, session }),
+		).resolves.toMatchObject({ allowed: true });
+	});
+
+	it("cuts a viewer's own ephemeral kernel on a viewer-mode downgrade, but not their stop", async () => {
+		const throwaway = { mode: 'edit' as const, ephemeral: true, user_id: VIEWER.id };
+		const downgraded = service({ viewerMode: 'static' });
+		await expect(
+			downgraded.authorize(VIEWER, 'session.attach', {
+				kind: 'session',
+				project,
+				session: throwaway,
+			}),
+		).resolves.toMatchObject({ allowed: false, category: 'session' });
+		await expect(
+			downgraded.authorize(VIEWER, 'session.stop', {
+				kind: 'session',
+				project,
+				session: throwaway,
+			}),
+		).resolves.toMatchObject({ allowed: true });
+		// Another viewer never reaches someone else's throwaway.
+		const otherViewer = subject('user_viewer_2');
+		const withOther = makeProject({
+			owner: OWNER.id,
+			members: [
+				{ user_id: VIEWER.id, role: 'viewer' },
+				{ user_id: otherViewer.id, role: 'viewer' },
+			],
+		});
+		await expect(
+			service({ viewerMode: 'ephemeral-sandbox' }).authorize(otherViewer, 'session.attach', {
+				kind: 'session',
+				project: withOther,
+				session: throwaway,
+			}),
+		).resolves.toMatchObject({ allowed: false, category: 'session' });
+	});
+
+	it('never grants a viewer stop on a shared app', async () => {
+		const app = { mode: 'app' as const, user_id: OWNER.id };
+		await expect(
+			service({ viewerMode: 'applications' }).authorize(VIEWER, 'session.stop', {
+				kind: 'session',
+				project,
+				session: app,
+			}),
+		).resolves.toMatchObject({ allowed: false, category: 'session' });
+	});
+
+	it('fails closed to static viewer admission when viewer mode is unset', async () => {
+		await expect(
+			service().authorize(VIEWER, 'session.start', { kind: 'session-start', project, mode: 'app' }),
+		).resolves.toMatchObject({ allowed: false, category: 'session' });
+	});
+
+	it('denies session starts on a deleted project as lifecycle', async () => {
+		await expect(
+			service().authorize(OWNER, 'session.start', {
+				kind: 'session-start',
+				project: deletedProject,
+				mode: 'edit',
+			}),
+		).resolves.toEqual({ allowed: false, category: 'lifecycle', role: null });
+	});
+});
+
+describe('AuthorizationService: list-entry edge cases', () => {
+	it('fails closed (not indeterminate) when member_emails is missing', async () => {
+		// An email-pending invitee may briefly miss the project in listings; this
+		// must never surface as `null`, which would trigger a per-entry fallback.
+		const entry = { owner: OWNER.id, member_ids: [VIEWER.id] };
+		expect(service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry)).toBe(
+			false,
+		);
+	});
+
+	it('normalizes stored invite emails before comparing', async () => {
+		const entry = {
+			owner: OWNER.id,
+			member_ids: [],
+			member_emails: ['  Invitee@Example.COM '],
+		};
+		expect(service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry)).toBe(
+			true,
+		);
+	});
+
+	it('rejects the whole batch when any resource kind mismatches the action scope', async () => {
+		// authorizeMany is Promise.all: a scope mismatch is a programming error and
+		// must not silently drop to a per-item denial.
+		await expect(
+			service().authorizeMany(OWNER, 'project.read', [onProject(), { kind: 'deployment' }]),
+		).rejects.toThrow(/requires a project resource/);
+	});
+});
