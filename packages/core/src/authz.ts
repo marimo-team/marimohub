@@ -63,6 +63,8 @@ export interface AuthzPolicy {
 	defaultRole?: AssignableRole | null;
 	/** MARIMOHUB_SUPER_ADMINS entries: emails (contain `@`) or user ids. */
 	superAdmins?: readonly string[];
+	/** Whether project creation requires super-admin or OIDC project-creator entitlement. */
+	projectCreationRestricted?: boolean;
 }
 
 /**
@@ -75,6 +77,14 @@ export function isSuperAdmin(subject: AuthSubject, superAdmins?: readonly string
 	return (
 		subject.entitlements?.includes('super-admin') === true ||
 		anyRefMatchesSubject(superAdmins, subject)
+	);
+}
+
+export function canCreateProject(subject: AuthSubject, policy?: AuthzPolicy): boolean {
+	if (!policy?.projectCreationRestricted) return true;
+	return (
+		isSuperAdmin(subject, policy.superAdmins) ||
+		subject.entitlements?.includes('project-creator') === true
 	);
 }
 

@@ -127,11 +127,14 @@ components:
             - 'null'
         is_super_admin:
           type: boolean
+        can_create_projects:
+          type: boolean
       required:
         - id
         - email
         - logout_url
         - is_super_admin
+        - can_create_projects
     DeploymentInfo:
       type: object
       properties:

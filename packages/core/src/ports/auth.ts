@@ -11,6 +11,7 @@ import type { UserId } from '../ids';
 
 export const AUTH_ENTITLEMENTS = [
 	'super-admin',
+	'project-creator',
 	'default-role:viewer',
 	'default-role:editor',
 	'default-role:manager',

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+	canCreateProject,
 	canAct,
 	canSeeProjectEntry,
 	effectiveRole,
@@ -180,6 +181,35 @@ describe('authz', () => {
 					entitlements: ['default-role:manager'],
 				}),
 			).toBe(false);
+		});
+	});
+
+	describe('canCreateProject', () => {
+		it('allows all authenticated users when project creation is unrestricted', () => {
+			expect(canCreateProject(STRANGER)).toBe(true);
+			expect(canCreateProject(STRANGER, { projectCreationRestricted: false })).toBe(true);
+		});
+
+		it('allows project creators and super admins when project creation is restricted', () => {
+			expect(canCreateProject(STRANGER, { projectCreationRestricted: true })).toBe(false);
+			expect(
+				canCreateProject(
+					{ ...STRANGER, entitlements: ['project-creator'] },
+					{ projectCreationRestricted: true },
+				),
+			).toBe(true);
+			expect(
+				canCreateProject(STRANGER, {
+					projectCreationRestricted: true,
+					superAdmins: [STRANGER.id],
+				}),
+			).toBe(true);
+			expect(
+				canCreateProject(
+					{ ...STRANGER, entitlements: ['super-admin'] },
+					{ projectCreationRestricted: true },
+				),
+			).toBe(true);
 		});
 	});
 

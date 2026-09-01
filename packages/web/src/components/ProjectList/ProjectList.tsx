@@ -22,6 +22,7 @@ import {
 import { useProjectsQuery, useCreateProject } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
+import { useAuth } from '@/context/AuthContext';
 import type { ProjectSummary } from '@/types';
 
 const PROJECT_STATUS_FILTERS = [
@@ -37,6 +38,8 @@ const projectSchema = z.object({
 const EMPTY_PROJECT = { name: '', description: '' };
 
 export function ProjectList() {
+	const { user } = useAuth();
+	const canCreateProjects = user?.can_create_projects ?? user !== null;
 	const { filters, setFilters, filtersActive } = useListFilters(PROJECT_STATUS_FILTERS);
 	const createModal = useDisclosure();
 
@@ -65,10 +68,12 @@ export function ProjectList() {
 			<title>Projects · marimohub</title>
 			<PageHeader
 				actions={
-					<Button variant="primary" onPress={createModal.open}>
-						<Plus className="size-4" />
-						New Project
-					</Button>
+					canCreateProjects ? (
+						<Button variant="primary" onPress={createModal.open}>
+							<Plus className="size-4" />
+							New Project
+						</Button>
+					) : null
 				}
 			>
 				<div className="flex min-w-0 flex-col gap-0.5">
@@ -97,10 +102,12 @@ export function ProjectList() {
 						message="No projects yet"
 						description="Projects group related notebooks and their collaborators."
 						action={
-							<Button variant="default" onPress={createModal.open}>
-								<Plus className="size-4" />
-								Create your first project
-							</Button>
+							canCreateProjects ? (
+								<Button variant="default" onPress={createModal.open}>
+									<Plus className="size-4" />
+									Create your first project
+								</Button>
+							) : null
 						}
 					/>
 				}
@@ -116,22 +123,24 @@ export function ProjectList() {
 				))}
 			</ListResults>
 
-			<FormDialog
-				form={createForm}
-				isPending={createProject.isPending}
-				isOpen={createModal.isOpen}
-				onClose={createModal.close}
-				title="Create New Project"
-				submitLabel="Create"
-				pendingLabel="Creating..."
-			>
-				<createForm.AppField name="name">
-					{(f) => <f.TextField label="Project Name" placeholder="My Analysis" autoFocus />}
-				</createForm.AppField>
-				<createForm.AppField name="description">
-					{(f) => <f.TextField label="Description" placeholder="Optional description" />}
-				</createForm.AppField>
-			</FormDialog>
+			{canCreateProjects ? (
+				<FormDialog
+					form={createForm}
+					isPending={createProject.isPending}
+					isOpen={createModal.isOpen}
+					onClose={createModal.close}
+					title="Create New Project"
+					submitLabel="Create"
+					pendingLabel="Creating..."
+				>
+					<createForm.AppField name="name">
+						{(f) => <f.TextField label="Project Name" placeholder="My Analysis" autoFocus />}
+					</createForm.AppField>
+					<createForm.AppField name="description">
+						{(f) => <f.TextField label="Description" placeholder="Optional description" />}
+					</createForm.AppField>
+				</FormDialog>
+			) : null}
 		</PageContainer>
 	);
 }

@@ -200,11 +200,14 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 	const claim = env.MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM?.trim();
 	const allowed = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
 	const superAdmin = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS');
+	const projectCreation = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS');
 	const viewer = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS');
 	const editor = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS');
 	const manager = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS');
-	const configured = Boolean(claim || allowed || superAdmin || viewer || editor || manager);
-	if (!configured) return undefined;
+	const mappedPolicy = Boolean(
+		allowed || superAdmin || projectCreation || viewer || editor || manager,
+	);
+	if (!claim && !mappedPolicy) return undefined;
 	if (
 		!claim ||
 		!claim.startsWith('/') ||
@@ -221,7 +224,7 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 			},
 		);
 	}
-	if (!allowed && !superAdmin && !viewer && !editor && !manager) {
+	if (!mappedPolicy) {
 		throw new ConfigError('An OIDC groups claim requires at least one group policy.', {
 			variable: 'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
 		});
@@ -230,6 +233,7 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 		claim,
 		...(allowed ? { allowed } : {}),
 		...(superAdmin ? { superAdmin } : {}),
+		...(projectCreation ? { projectCreation } : {}),
 		...(viewer || editor || manager
 			? {
 					defaultRoles: {
@@ -240,6 +244,14 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 				}
 			: {}),
 	};
+}
+
+export function projectCreationRestricted(env: Env): boolean {
+	// Raw presence is intentional: checkedGroups collapses empty and omitted values,
+	// but this policy needs that distinction. createFromEnv calls makeAuth first to validate it.
+	return (
+		authBackend(env) === 'oidc' && env.MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS !== undefined
+	);
 }
 
 export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?: Hono } {
