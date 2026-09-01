@@ -852,3 +852,41 @@ describe('authorization characterization: deadline instant comparison', () => {
 		expect(Date.parse(record.authorization_expires_at ?? '')).toBe(baseMs);
 	});
 });
+
+describe('authorization characterization: start-gate ordering', () => {
+	it.each([
+		['nonexistent', 'nb-0000000000000000'],
+		['deleted', null],
+	])('keeps the canonical 403 for a viewer on a %s notebook', async (_name, explicitNid) => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const owner = apiFor(bucket, OWNER);
+		let nid = explicitNid;
+		if (nid === null) {
+			nid = await createNotebook(owner, pid);
+			await expectOk(await owner.request('DELETE', `/projects/${pid}/notebooks/${nid}`));
+		}
+		// A role denial must not be masked as 404 by the notebook load — the
+		// caller learns "you may not start sessions", not whether the id exists.
+		await expectError(
+			await apiFor(bucket, VIEWER).request(
+				'POST',
+				`/projects/${pid}/notebooks/${nid}/sessions`,
+				{},
+			),
+			403,
+			'FORBIDDEN',
+		);
+	});
+
+	it('still answers 404 for an admitted caller on a nonexistent notebook', async () => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const owner = createTestApi({ bucket, userId: OWNER, compute: makeFakeCompute() });
+		await expectError(
+			await owner.request('POST', `/projects/${pid}/notebooks/nb-0000000000000000/sessions`, {}),
+			404,
+			'NOT_FOUND',
+		);
+	});
+});

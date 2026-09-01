@@ -178,6 +178,12 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	 * project labels AND the override, so an override can only add restrictions.
 	 */
 	security_labels: ResourceSecurityLabelsSchema.nullable().optional(),
+	/**
+	 * Set while a label mutation is in flight. Routine projections preserve it
+	 * and keep `security_labels` indeterminate; only the mutation's own
+	 * finalization clears it (see `catalogProjection.ts`).
+	 */
+	security_labels_pending: z.literal(true).optional(),
 	key_prefix: z.string(),
 });
 
@@ -228,6 +234,12 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	 * fail closed.
 	 */
 	security_labels: ResourceSecurityLabelsSchema.nullable().optional(),
+	/**
+	 * Set while a label mutation is in flight. Routine projections preserve it
+	 * and keep `security_labels` indeterminate; only the mutation's own
+	 * finalization clears it (see `catalogProjection.ts`).
+	 */
+	security_labels_pending: z.literal(true).optional(),
 });
 
 export type SnapshotProjectEntry = z.infer<typeof SnapshotProjectEntrySchema>;

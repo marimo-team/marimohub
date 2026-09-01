@@ -1144,6 +1144,9 @@ components:
                             - compartments
                           additionalProperties: false
                         - type: 'null'
+                    security_labels_pending:
+                      type: boolean
+                      const: true
                     key_prefix:
                       type: string
                   required:
@@ -1189,6 +1192,9 @@ components:
                       - compartments
                     additionalProperties: false
                   - type: 'null'
+              security_labels_pending:
+                type: boolean
+                const: true
             required:
               - id
               - name

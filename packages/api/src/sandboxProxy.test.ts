@@ -191,6 +191,50 @@ describe('authorizeProxyRequest', () => {
 		expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
 	});
 
+	it('tightens the forward deadline to a context expiry earlier than the stored one', async () => {
+		const services = createServices(bucket);
+		await services.projects.setSecurityLabels(
+			pid,
+			{ classification: 'SECRET', compartments: [] },
+			ACTOR,
+		);
+		// A session stamped with a FAR deadline at start...
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		const far = await services.sessions.createSession({
+			notebook_id: notebooks[0].id,
+			project_id: pid,
+			user_id: ACTOR,
+			authorization_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+		});
+		await services.sessions.setRunning(pid, far.session_id, '/proxy/x/', false, ORIGIN);
+		const farToken = await signProxyToken(pid, far.session_id, SECRET);
+		// ...whose subject context now expires much sooner.
+		const contextExpiry = new Date(Date.now() + 60_000).toISOString();
+		const d = await authorizeProxyRequest(req(`/proxy/${farToken}/`), {
+			...deps(ACTOR),
+			resourceSecurity: {
+				constraints: new LocalResourceConstraintPolicy({
+					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+				}),
+				subjectContext: {
+					resolve: async () =>
+						({
+							schemaVersion: 1,
+							classification: 'SECRET',
+							compartments: [],
+							policyVersion: 'p1',
+							expiresAt: contextExpiry,
+						}) as never,
+				},
+			},
+		});
+		expect(d).toMatchObject({ kind: 'forward' });
+		// The CURRENT context expiry wins over the deadline stamped at start.
+		expect((d as { authorizationDeadline?: number }).authorizationDeadline).toBe(
+			Date.parse(contextExpiry),
+		);
+	});
+
 	it('rejects a non-owner editor from an exclusive editor kernel', async () => {
 		const services = createServices(bucket);
 		const notebooks = await services.notebooks.listNotebooks(pid);

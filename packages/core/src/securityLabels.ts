@@ -1,6 +1,7 @@
 /**
- * Resource security labels: an optional classification plus required
- * compartments attached to a project (and, by override, a notebook). Labels
+ * Resource security labels: a required classification plus required
+ * compartments, optionally attached to a project (and, by override, a
+ * notebook). Labels
  * only ever ADD restrictions on top of the role matrix — satisfying them never
  * grants a role, and the classification ORDER is deliberately not defined
  * here: the resource constraint adapter owns the lattice, so core can compare

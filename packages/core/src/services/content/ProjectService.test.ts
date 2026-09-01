@@ -1050,6 +1050,40 @@ describe('ProjectService security labels', () => {
 	const entryFor = async (id: string) =>
 		(await catalog.getCurrentSnapshot()).projects.find((e) => e.id === id);
 
+	it('routine projections never resurrect labels while a mutation is pending', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		await projects.setSecurityLabels(p.id, LABELS, ACTOR);
+
+		// Freeze the state a crashed (or in-flight) mutation leaves behind: the
+		// pending marker is set, the authoritative record still holds the OLD
+		// labels — exactly the window a routine projection used to race.
+		await catalog.updateProjectEntry('test.pending', ACTOR, p.id, () => ({
+			security_labels: undefined,
+			security_labels_pending: true,
+		}));
+
+		// A routine projection (rename) must keep the entry indeterminate — NOT
+		// re-project the stale authoritative labels — and preserve the marker.
+		await projects.updateProject(p.id, { name: 'renamed' }, ACTOR);
+		const during = await entryFor(p.id);
+		expect(during?.name).toBe('renamed');
+		expect(during?.security_labels).toBeUndefined();
+		expect(during?.security_labels_pending).toBe(true);
+
+		// Only the label mutation's own finalization clears the marker.
+		await projects.setSecurityLabels(
+			p.id,
+			{ classification: 'SECRET', compartments: ['element-a'] },
+			ACTOR,
+		);
+		const after = await entryFor(p.id);
+		expect(after?.security_labels).toEqual({
+			classification: 'SECRET',
+			compartments: ['element-a'],
+		});
+		expect(after?.security_labels_pending).toBeUndefined();
+	});
+
 	it('sets normalized labels on the record and projects them into the snapshot', async () => {
 		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
 		const updated = await projects.setSecurityLabels(p.id, LABELS, ACTOR);

@@ -222,8 +222,9 @@ export class NotebookService {
 		const states = await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (entry) => {
 			if (entry.security_labels !== undefined) return { labels: entry.security_labels };
 			try {
-				const detail = await this.getNotebook(projectId, entry.id);
-				return { labels: detail.meta.security_labels ?? null };
+				// Meta-only read: an unavailable readme/source blob must not hide a
+				// notebook whose label state is perfectly resolvable.
+				return { labels: await this.getSecurityLabels(projectId, entry.id) };
 			} catch {
 				return null;
 			}
@@ -491,12 +492,15 @@ export class NotebookService {
 		actor: UserId,
 	): Promise<NotebookMeta> {
 		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
+		// Park the projection at indeterminate AND mark the mutation in flight:
+		// the marker keeps concurrent routine projections from resurrecting the
+		// pre-mutation labels before finalization clears it.
 		await this.catalog.updateNotebookEntry(
 			'notebook.security_labels.pending',
 			actor,
 			projectId,
 			notebookId,
-			() => ({ security_labels: undefined }),
+			() => ({ security_labels: undefined, security_labels_pending: true }),
 		);
 
 		const nb = paths.project(projectId).notebook(notebookId);
@@ -525,7 +529,10 @@ export class NotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
+			(entry) =>
+				loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry, {
+					finalizeSecurityLabels: true,
+				}),
 			undefined,
 			{
 				project_id: projectId,
@@ -635,8 +642,12 @@ export class NotebookService {
 			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
 		}
 
-		await this.catalog.updateNotebookEntry('notebook.update', actor, projectId, notebookId, () =>
-			loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
+		await this.catalog.updateNotebookEntry(
+			'notebook.update',
+			actor,
+			projectId,
+			notebookId,
+			(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
 		);
 
 		return updated;
@@ -887,9 +898,9 @@ export class NotebookService {
 			actor,
 			projectId,
 			notebookId,
-			async () =>
-				(await loadNotebookCatalogPatch(this.bucket, projectId, notebookId)) ??
-				notebookCatalogPatch(updated),
+			async (entry) =>
+				(await loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry)) ??
+				notebookCatalogPatch(updated, entry),
 			(p) => ({
 				notebook_count: Math.max(0, p.notebook_count - 1),
 			}),

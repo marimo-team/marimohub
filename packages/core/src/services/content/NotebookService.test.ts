@@ -2291,6 +2291,48 @@ describe('NotebookService security labels', () => {
 			.find((p) => p.id === pid)
 			?.notebooks.find((n) => n.id === nid);
 
+	it('routine projections never resurrect an override while a mutation is pending', async () => {
+		const nid = await createLabeled();
+		// Freeze the crashed/in-flight window: pending marker set, authoritative
+		// record still carrying the OLD override.
+		await catalog.updateNotebookEntry('test.pending', ACTOR, pid, nid, () => ({
+			security_labels: undefined,
+			security_labels_pending: true,
+		}));
+
+		await notebooks.updateNotebook(pid, nid, { title: 'renamed' }, ACTOR);
+		const during = await entryFor(nid);
+		expect(during?.title).toBe('renamed');
+		expect(during?.security_labels).toBeUndefined();
+		expect(during?.security_labels_pending).toBe(true);
+
+		await notebooks.setSecurityLabels(
+			pid,
+			nid,
+			{ classification: 'SECRET', compartments: ['element-a'] },
+			ACTOR,
+		);
+		const after = await entryFor(nid);
+		expect(after?.security_labels).toEqual({
+			classification: 'SECRET',
+			compartments: ['element-a'],
+		});
+		expect(after?.security_labels_pending).toBeUndefined();
+	});
+
+	it('resolves an indeterminate override from meta even when the source blob is unreadable', async () => {
+		const nid = await createLabeled();
+		await catalog.updateNotebookEntry('test.strip', ACTOR, pid, nid, () => ({
+			security_labels: undefined,
+		}));
+		await bucket.delete(paths.project(pid).notebook(nid).source);
+		const list = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
+		expect(list.map((n) => n.id)).toEqual([nid]);
+	});
+
 	it('sets a normalized override on the record and projects it into the snapshot', async () => {
 		const nid = await createLabeled();
 		const detail = await notebooks.getNotebook(pid, nid);

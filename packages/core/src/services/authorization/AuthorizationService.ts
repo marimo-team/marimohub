@@ -33,6 +33,7 @@ import { withDeadline } from '../../async';
 import { logEvent } from '../../logs';
 import type { AuthenticatedPrincipal } from '../../ports/auth';
 import type {
+	ConstraintDecision,
 	ConstraintDenialReason,
 	ResourceConstraintPolicy,
 } from '../../ports/resourceConstraints';
@@ -169,7 +170,33 @@ const SECURITY_EVENTS = {
 	constraintTimeout: 'authz_constraint_timeout',
 	constraintFailed: 'authz_constraint_failed',
 	constraintMiscount: 'authz_constraint_miscount',
+	constraintInvalid: 'authz_constraint_invalid',
 } as const;
+
+const CONSTRAINT_DENIAL_REASONS: ReadonlySet<string> = new Set([
+	'missing-context',
+	'constraint',
+	'unavailable',
+]);
+
+/**
+ * Shape-validate an adapter's decision — external output, not a trusted type.
+ * A truthy-but-not-`true` `satisfied` or an unknown denial reason yields
+ * `null`, which the caller treats as an `unavailable` denial.
+ */
+function parseConstraintDecision(value: unknown): ConstraintDecision | null {
+	if (typeof value !== 'object' || value === null) return null;
+	const decision = value as { satisfied?: unknown; reason?: unknown };
+	if (decision.satisfied === true) return { satisfied: true };
+	if (
+		decision.satisfied === false &&
+		typeof decision.reason === 'string' &&
+		CONSTRAINT_DENIAL_REASONS.has(decision.reason)
+	) {
+		return { satisfied: false, reason: decision.reason as ConstraintDenialReason };
+	}
+	return null;
+}
 
 /** A catalog snapshot entry as list visibility reads it (denormalized members). */
 export interface ProjectEntryVisibilityInput {
@@ -189,45 +216,104 @@ export class AuthorizationService {
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
 	): Promise<AuthorizationDecision> {
-		return this.decide(subject, action, resource, this.contextResolver(subject));
+		const { decision, labelSets } = this.decideBaseline(subject, action, resource);
+		if (!decision.allowed || labelSets.length === 0) return decision;
+		const constraint = await this.evaluateLabelSets(
+			action,
+			labelSets,
+			this.contextResolver(subject),
+		);
+		if (!constraint.satisfied) {
+			return {
+				allowed: false,
+				category: 'constraint',
+				role: decision.role,
+				constraintReason: constraint.reason,
+			};
+		}
+		return { ...decision, subjectContextExpiresAt: constraint.contextExpiresAt };
 	}
 
 	/**
-	 * Batch form of {@link authorize} for list and sweep paths. The subject
-	 * context is resolved at most once for the whole batch — a decision per
-	 * resource must never cost one provider call per resource.
+	 * Batch form of {@link authorize} for list and sweep paths: one subject
+	 * context resolution AND one constraint-adapter round-trip for the whole
+	 * batch — a decision per resource must never cost one call per resource.
+	 * Label sets of role-allowed resources are flattened into a single
+	 * `evaluateMany` and correlated back by per-resource set counts.
 	 */
 	async authorizeMany(
 		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resources: readonly AuthorizationResource[],
 	): Promise<AuthorizationDecision[]> {
-		const getContext = this.contextResolver(subject);
-		return Promise.all(
-			resources.map((resource) => this.decide(subject, action, resource, getContext)),
+		const baselines = resources.map((resource) => this.decideBaseline(subject, action, resource));
+		const labeled = baselines.flatMap((baseline, index) =>
+			baseline.decision.allowed && baseline.labelSets.length > 0
+				? [{ index, decision: baseline.decision, labelSets: baseline.labelSets }]
+				: [],
 		);
+		const out = baselines.map((baseline) => baseline.decision);
+		if (labeled.length === 0) return out;
+		const batch = await this.constraintBatch(
+			action,
+			labeled.flatMap((entry) => entry.labelSets),
+			this.contextResolver(subject),
+		);
+		let cursor = 0;
+		for (const { index, decision, labelSets } of labeled) {
+			const deny = (reason: ConstraintDenialReason): void => {
+				out[index] = {
+					allowed: false,
+					category: 'constraint',
+					role: decision.role,
+					constraintReason: reason,
+				};
+			};
+			if (!batch.ok) {
+				deny(batch.reason);
+				continue;
+			}
+			const slice = batch.decisions.slice(cursor, cursor + labelSets.length);
+			cursor += labelSets.length;
+			const denied = slice.find((entry) => !entry.satisfied);
+			if (denied?.satisfied === false) {
+				deny(denied.reason);
+			} else {
+				out[index] = { ...decision, subjectContextExpiresAt: batch.contextExpiresAt };
+			}
+		}
+		return out;
 	}
 
-	private async decide(
+	/**
+	 * The synchronous half of a decision: lifecycle, role, standing, and session
+	 * admission — plus the label sets a constraint pass must then satisfy.
+	 * `roleAllowed AND constraintsSatisfied`: labels only ever restrict, a role
+	 * denial never consults constraints, and a notebook override is evaluated IN
+	 * ADDITION to the project labels so it can never lower them.
+	 */
+	private decideBaseline(
 		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
-		getContext: () => Promise<SubjectSecurityContext | null>,
-	): Promise<AuthorizationDecision> {
+	): { decision: AuthorizationDecision; labelSets: readonly ResourceSecurityLabels[] } {
 		const rule = ACTION_RULES[action];
 		if (resource.kind !== rule.scope) {
 			throw new Error(`Action ${action} requires a ${rule.scope} resource, got ${resource.kind}`);
 		}
 		if (resource.kind === 'deployment') {
-			return this.decideDeployment(subject, action as DeploymentAction);
+			return {
+				decision: this.decideDeployment(subject, action as DeploymentAction),
+				labelSets: [],
+			};
 		}
 		// Lifecycle precedes every project-scoped rule on purpose: a soft-deleted
 		// project is unreachable for everyone, super admins included.
 		if (resource.project.status === 'deleted') {
-			return { allowed: false, category: 'lifecycle', role: null };
+			return { decision: { allowed: false, category: 'lifecycle', role: null }, labelSets: [] };
 		}
 		const role = effectiveRole(resource.project, subject, this.policy);
-		const baseline = ((): AuthorizationDecision => {
+		const decision = ((): AuthorizationDecision => {
 			switch (resource.kind) {
 				case 'project': {
 					const projectRule = ACTION_RULES[action as ProjectAction];
@@ -253,23 +339,11 @@ export class AuthorizationService {
 						: { allowed: false, category: 'session', role };
 			}
 		})();
-		if (!baseline.allowed) return baseline;
-		// `roleAllowed AND constraintsSatisfied`: labels only ever restrict. A
-		// role denial above never consults constraints, a satisfied constraint
-		// never upgrades the baseline, and a notebook override is evaluated IN
-		// ADDITION to the project labels so it can never lower them.
 		const labelSets = [
 			resource.project.security_labels ?? null,
 			resource.notebookLabels ?? null,
 		].filter((labels): labels is ResourceSecurityLabels => labels !== null);
-		if (labelSets.length === 0) return baseline;
-		const constraint = await this.evaluateLabelSets(action, labelSets, getContext);
-		if (!constraint.satisfied) {
-			return { allowed: false, category: 'constraint', role, constraintReason: constraint.reason };
-		}
-		return constraint.contextExpiresAt !== undefined
-			? { ...baseline, subjectContextExpiresAt: constraint.contextExpiresAt }
-			: baseline;
+		return { decision, labelSets };
 	}
 
 	/** The baseline role for display (`your_role`) and derived projections. */
@@ -348,6 +422,11 @@ export class AuthorizationService {
 			return labelStates.map((labels) => labels === null);
 		}
 		const context = await this.contextResolver(subject)();
+		// No valid context: labeled entries are denied without consulting the
+		// adapter — same trust boundary as {@link constraintBatch}.
+		if (context === null) {
+			return labelStates.map((labels) => labels === null);
+		}
 		try {
 			const decisions = await this.withSecurityDeadline(security, (signal) =>
 				Promise.resolve(
@@ -364,8 +443,9 @@ export class AuthorizationService {
 				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, 'project.read');
 				return labelStates.map((labels) => labels === null);
 			}
-			return decisions.map((decision, index) =>
-				labelStates[index] === null ? true : decision.satisfied,
+			return decisions.map(
+				(decision, index) =>
+					labelStates[index] === null || parseConstraintDecision(decision)?.satisfied === true,
 			);
 		} catch (error) {
 			this.emitConstraintFailure(error, 'project.read');
@@ -415,29 +495,54 @@ export class AuthorizationService {
 	}
 
 	/**
-	 * One adapter round-trip for a decision's full label set (project labels
-	 * plus any notebook override) — a network PDP must not pay double latency
-	 * per decision. Every set must be satisfied.
+	 * All of a decision's label sets (project labels plus any notebook override)
+	 * through {@link constraintBatch}; every set must be satisfied.
 	 */
 	private async evaluateLabelSets(
 		action: AuthorizationAction,
 		labelSets: readonly ResourceSecurityLabels[],
 		getContext: () => Promise<SubjectSecurityContext | null>,
 	): Promise<
-		| { satisfied: true; contextExpiresAt?: string }
+		| { satisfied: true; contextExpiresAt: string }
 		| { satisfied: false; reason: ConstraintDenialReason }
+	> {
+		const batch = await this.constraintBatch(action, labelSets, getContext);
+		if (!batch.ok) return { satisfied: false, reason: batch.reason };
+		const denied = batch.decisions.find((decision) => !decision.satisfied);
+		if (denied?.satisfied === false) return denied;
+		return { satisfied: true, contextExpiresAt: batch.contextExpiresAt };
+	}
+
+	/**
+	 * One adapter round-trip for a batch of label sets — a network PDP must not
+	 * pay one call per resource (or per set). The adapter is a trust boundary:
+	 * a labeled set is never delegated without a valid subject context (even an
+	 * adapter that would wrongly satisfy it cannot open access), a wrong-length
+	 * result discards the whole batch, and each decision is shape-validated
+	 * rather than trusted from the TypeScript type.
+	 */
+	private async constraintBatch(
+		action: AuthorizationAction,
+		labelSets: readonly ResourceSecurityLabels[],
+		getContext: () => Promise<SubjectSecurityContext | null>,
+	): Promise<
+		| { ok: true; decisions: readonly ConstraintDecision[]; contextExpiresAt: string }
+		| { ok: false; reason: ConstraintDenialReason }
 	> {
 		const security = this.security;
 		// Labeled resources without wiring fail closed: labels must never open
 		// up because the deployment forgot an adapter.
 		if (!security) {
 			this.emitSecurityEvent(SECURITY_EVENTS.constraintUnwired, action);
-			return { satisfied: false, reason: 'unavailable' };
+			return { ok: false, reason: 'unavailable' };
 		}
 		const context = await getContext();
+		if (context === null) {
+			return { ok: false, reason: 'missing-context' };
+		}
 		const resources = labelSets.map((labels) => ({ labels }));
 		try {
-			const decisions =
+			const raw =
 				resources.length === 1
 					? [
 							await this.withSecurityDeadline(security, (signal) =>
@@ -451,19 +556,21 @@ export class AuthorizationService {
 								security.constraints.evaluateMany(context, action, resources, signal),
 							),
 						);
-			if (decisions.length !== resources.length) {
+			if (raw.length !== resources.length) {
 				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, action);
-				return { satisfied: false, reason: 'unavailable' };
+				return { ok: false, reason: 'unavailable' };
 			}
-			for (const decision of decisions) {
-				if (!decision.satisfied) return decision;
-			}
-			return context !== null
-				? { satisfied: true, contextExpiresAt: context.expiresAt }
-				: { satisfied: true };
+			let invalid = false;
+			const decisions = raw.map((decision) => {
+				const parsed = parseConstraintDecision(decision);
+				if (parsed === null) invalid = true;
+				return parsed ?? { satisfied: false as const, reason: 'unavailable' as const };
+			});
+			if (invalid) this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, action);
+			return { ok: true, decisions, contextExpiresAt: context.expiresAt };
 		} catch (error) {
 			this.emitConstraintFailure(error, action);
-			return { satisfied: false, reason: 'unavailable' };
+			return { ok: false, reason: 'unavailable' };
 		}
 	}
 

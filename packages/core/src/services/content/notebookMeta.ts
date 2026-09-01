@@ -1,5 +1,6 @@
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import type { NotebookMeta, SnapshotNotebookEntry, Source, Version } from '../../schema';
+import type { SecurityLabelProjectionOptions } from './catalogProjection';
 
 interface BuildNotebookMetaArgs {
 	notebookId: NotebookId;
@@ -102,17 +103,9 @@ export function buildNotebookEntry(
 
 export function notebookCatalogPatch(
 	meta: NotebookMeta,
-): Pick<
-	SnapshotNotebookEntry,
-	| 'title'
-	| 'description'
-	| 'status'
-	| 'updated_at'
-	| 'tags'
-	| 'last_run_at'
-	| 'compute_profile'
-	| 'security_labels'
-> {
+	entry: Pick<SnapshotNotebookEntry, 'security_labels_pending'>,
+	options?: SecurityLabelProjectionOptions,
+): Partial<SnapshotNotebookEntry> {
 	return {
 		title: meta.title,
 		description: meta.description,
@@ -121,6 +114,12 @@ export function notebookCatalogPatch(
 		tags: meta.tags,
 		last_run_at: meta.last_run_at,
 		compute_profile: meta.compute_profile,
-		security_labels: meta.security_labels ?? null,
+		// While a label mutation is pending, the override projection stays
+		// indeterminate — see SecurityLabelProjectionOptions.
+		...(options?.finalizeSecurityLabels
+			? { security_labels: meta.security_labels ?? null, security_labels_pending: undefined }
+			: entry.security_labels_pending
+				? { security_labels: undefined }
+				: { security_labels: meta.security_labels ?? null }),
 	};
 }

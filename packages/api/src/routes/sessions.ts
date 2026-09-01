@@ -1076,25 +1076,33 @@ app.openapi(createSession, async (c) => {
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
+	// The start gate runs BEFORE the notebook load so a role denial keeps its
+	// canonical 403 even for a bogus or deleted notebook id — only admitted
+	// callers learn whether the notebook exists.
+	let authorization = await authorizeSessionStart(project, user, mode, deps);
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
-	// otherwise. Loaded before the start gate so a notebook security-label
-	// override joins the authorization decision. Prevents provisioning a
-	// billable sandbox for a bogus notebook id. A soft-deleted notebook is
-	// treated as missing: getNotebook still serves it (the delete/GC paths need
-	// that), but starting a session on it would serve deleted content — and,
-	// for `app`, recreate the singleton claim that deleteNotebook just cleaned
-	// up, permanently (its cleanup never runs again).
+	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook
+	// id. A soft-deleted notebook is treated as missing: getNotebook still
+	// serves it (the delete/GC paths need that), but starting a session on it
+	// would serve deleted content — and, for `app`, recreate the singleton
+	// claim that deleteNotebook just cleaned up, permanently (its cleanup never
+	// runs again).
 	const notebook = await notebooks.getNotebook(pid, nid);
 	if (notebook.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
-	const authorization = await authorizeSessionStart(
-		project,
-		user,
-		mode,
-		deps,
-		notebook.meta.security_labels ?? null,
-	);
+	// A notebook security-label override joins the decision only once one
+	// exists — re-run the gate with it (the label-free pass above already
+	// settled role and project labels).
+	if (notebook.meta.security_labels !== undefined) {
+		authorization = await authorizeSessionStart(
+			project,
+			user,
+			mode,
+			deps,
+			notebook.meta.security_labels,
+		);
+	}
 	// The session deadline is the earliest of the entitlement credential expiry
 	// and the subject security context expiry that satisfied any labels — an
 	// active session must not outlive either.

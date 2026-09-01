@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LocalResourceConstraintPolicy } from '@marimo-hub/core';
 import { ConfigError } from './errors';
-import { makeResourceSecurity } from './resourceSecurity';
+import { makeResourceSecurity, validateResourceSecurityEnv } from './resourceSecurity';
 
 function getConfigError(run: () => unknown): ConfigError {
 	try {
@@ -82,5 +82,50 @@ describe('makeResourceSecurity', () => {
 		const provider = { resolve: async () => null };
 		const security = makeResourceSecurity(env, { subjectContext: provider });
 		expect(security?.subjectContext).toBe(provider);
+	});
+});
+
+describe('makeResourceSecurity provider wiring', () => {
+	const provider = { resolve: async () => null };
+
+	it('ignores a preloaded provider that was never selected', () => {
+		// Passing a loaded provider must not wire it in: explicit configuration
+		// stays required, so a stale library in the bundle cannot resolve
+		// contexts for a deployment that did not ask for one.
+		const security = makeResourceSecurity(
+			{ MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER: 'CUI,SECRET' },
+			{ subjectContext: provider },
+		);
+		expect(security?.constraints).toBeInstanceOf(LocalResourceConstraintPolicy);
+		expect(security?.subjectContext).toBeUndefined();
+	});
+});
+
+describe('validateResourceSecurityEnv', () => {
+	it('rejects orphaned subject-context configuration before any provider load', () => {
+		// loadAdapterLibraries calls this BEFORE importing the module, so invalid
+		// configuration can never execute adapter code.
+		const error = getConfigError(() =>
+			validateResourceSecurityEnv({
+				MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND: 'library',
+				MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY: '/etc/marimohub/subject-context.mjs',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND');
+		expect(error.message).toMatch(/CLASSIFICATION_ORDER/);
+	});
+
+	it('reports the selection only for a complete, valid configuration', () => {
+		expect(validateResourceSecurityEnv({})).toEqual({
+			order: undefined,
+			subjectContextSelected: false,
+		});
+		expect(
+			validateResourceSecurityEnv({
+				MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER: 'CUI,SECRET',
+				MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND: 'library',
+				MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY: '/etc/marimohub/subject-context.mjs',
+			}),
+		).toEqual({ order: ['CUI', 'SECRET'], subjectContextSelected: true });
 	});
 });

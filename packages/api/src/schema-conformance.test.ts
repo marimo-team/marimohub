@@ -107,7 +107,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	it('SnapshotNotebookEntry omits exactly the internal fields from the core entry', () => {
 		const coreKeys = shapeKeys(CoreSnapshotNotebookEntrySchema);
 		const apiKeys = shapeKeys(SnapshotNotebookEntrySchema);
-		const internal = ['key_prefix', 'security_labels'];
+		const internal = ['key_prefix', 'security_labels', 'security_labels_pending'];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});
@@ -119,7 +119,14 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	it('SnapshotProjectEntry omits internal list-filter fields from the core entry', () => {
 		const coreKeys = shapeKeys(CoreSnapshotProjectEntrySchema);
 		const apiKeys = shapeKeys(SnapshotProjectEntrySchema);
-		const internal = ['notebooks', 'tags', 'member_ids', 'member_emails', 'security_labels'];
+		const internal = [
+			'notebooks',
+			'tags',
+			'member_ids',
+			'member_emails',
+			'security_labels',
+			'security_labels_pending',
+		];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});

@@ -21,7 +21,7 @@ import type {
 import { isOidcLoginPolicy, OIDC_LOGIN_POLICY_API_VERSION } from '@marimo-hub/auth-oidc';
 import type { OidcLoginPolicy } from '@marimo-hub/auth-oidc';
 import { authBackend, oidcLoginPolicySelected } from './auth';
-import { subjectContextBackendSelected } from './resourceSecurity';
+import { validateResourceSecurityEnv } from './resourceSecurity';
 import { computeBackend } from './compute';
 import { parseSecondsEnv, requiredVar } from './env';
 import type { Env } from './env';
@@ -456,7 +456,10 @@ export async function loadAdapterLibraries(env: Env): Promise<LoadedAdapterLibra
 	// Gated on the oidc backend so a stale login-policy selector on another auth
 	// backend never runs module code; makeAuth still rejects that configuration.
 	const loginPolicySelected = oidcLoginPolicySelected(env) && authBackend(env) === 'oidc';
-	const subjectContextSelected = subjectContextBackendSelected(env);
+	// Full validation BEFORE the selector: an orphaned or invalid
+	// resource-security configuration must never import (and initialize) the
+	// provider module — makeResourceSecurity would only reject it afterwards.
+	const { subjectContextSelected } = validateResourceSecurityEnv(env);
 	if (!storageSelected && !computeSelected && !loginPolicySelected && !subjectContextSelected) {
 		return {};
 	}

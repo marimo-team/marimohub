@@ -433,11 +433,14 @@ export class ProjectService {
 		const key = paths.project(id).meta;
 		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
 
+		// Park the projection at indeterminate AND mark the mutation in flight:
+		// the marker keeps concurrent routine projections from resurrecting the
+		// pre-mutation labels before finalization clears it.
 		await this.catalog.updateProjectEntry(
 			'project.security_labels.pending',
 			actor,
 			id,
-			() => ({ security_labels: undefined }),
+			() => ({ security_labels: undefined, security_labels_pending: true }),
 			{ project_id: id },
 		);
 
@@ -465,7 +468,7 @@ export class ProjectService {
 			'project.security_labels',
 			actor,
 			id,
-			(entry) => loadProjectCatalogPatch(this.bucket, id, entry),
+			(entry) => loadProjectCatalogPatch(this.bucket, id, entry, { finalizeSecurityLabels: true }),
 			{
 				project_id: id,
 				previous_labels: previous,

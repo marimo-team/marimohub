@@ -41,6 +41,13 @@ export interface ResourceConstraintPolicy {
 		signal: AbortSignal,
 	): Promise<ConstraintDecision>;
 
+	/**
+	 * MUST return exactly one decision per input resource, in input order —
+	 * the caller correlates decisions to resources by index. A wrong-length
+	 * result is discarded wholesale (every entry fails closed), but a
+	 * same-length reordering is undetectable and would attach decisions to the
+	 * wrong resources.
+	 */
 	evaluateMany(
 		context: SubjectSecurityContext | null,
 		action: AuthorizationAction,

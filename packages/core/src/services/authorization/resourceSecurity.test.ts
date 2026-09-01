@@ -379,3 +379,83 @@ describe('AuthorizationService: label constraints', () => {
 		).resolves.toBe(false);
 	});
 });
+
+describe('AuthorizationService: adapter trust boundary', () => {
+	const read = { kind: 'project', project: labeled } as const;
+
+	it('batches authorizeMany label sets into one adapter round-trip', async () => {
+		const evaluate = vi.fn(async () => ({ satisfied: true as const }));
+		const evaluateMany = vi.fn(async (_ctx, _action, resources: readonly unknown[]) =>
+			resources.map(() => ({ satisfied: true as const })),
+		);
+		const authz = service({
+			constraints: { evaluate, evaluateMany },
+			subjectContext: providerOf(context()),
+		});
+		const decisions = await authz.authorizeMany(principal(), 'project.read', [
+			read,
+			{ kind: 'project', project: unlabeled },
+			{
+				kind: 'project',
+				project: labeled,
+				notebookLabels: { classification: 'SECRET', compartments: ['element-a'] },
+			},
+			{ kind: 'project', project: labeled },
+		]);
+		expect(decisions.map((d) => d.allowed)).toEqual([true, true, true, true]);
+		expect(evaluate).not.toHaveBeenCalled();
+		// One call for four resources (1 + 0 + 2 + 1 label sets), input order kept.
+		expect(evaluateMany).toHaveBeenCalledTimes(1);
+		expect(evaluateMany.mock.calls[0][2]).toHaveLength(4);
+	});
+
+	it.each([
+		['a truthy non-boolean satisfied', { satisfied: 1 }],
+		['an unknown denial reason', { satisfied: false, reason: 'because' }],
+		['a non-object decision', true],
+	])('denies when the adapter returns %s', async (_name, malformed) => {
+		const authz = service({
+			constraints: {
+				evaluate: async () => malformed as never,
+				evaluateMany: async (_ctx, _action, resources) => resources.map(() => malformed as never),
+			},
+			subjectContext: providerOf(context()),
+		});
+		await expect(authz.authorize(principal(), 'project.read', read)).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'unavailable',
+		});
+		await expect(
+			authz.projectLabelConstraints(principal(), [
+				null,
+				{ classification: 'SECRET', compartments: [] },
+			]),
+		).resolves.toEqual([true, false]);
+	});
+
+	it('never delegates a labeled resource to the adapter without a context', async () => {
+		// A hostile or buggy adapter that satisfies everything must still be
+		// unable to open a labeled resource for a context-less subject.
+		const evaluate = vi.fn(async () => ({ satisfied: true as const }));
+		const evaluateMany = vi.fn(async (_ctx, _action, resources: readonly unknown[]) =>
+			resources.map(() => ({ satisfied: true as const })),
+		);
+		const authz = service({ constraints: { evaluate, evaluateMany } });
+		await expect(authz.authorize(principal(), 'project.read', read)).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'missing-context',
+		});
+		await expect(
+			authz.projectLabelConstraints(principal(), [
+				null,
+				{ classification: 'SECRET', compartments: [] },
+			]),
+		).resolves.toEqual([true, false]);
+		expect(evaluate).not.toHaveBeenCalled();
+		expect(evaluateMany).not.toHaveBeenCalled();
+	});
+});
