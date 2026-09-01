@@ -32,6 +32,18 @@ export function makeResourceSecurity(
 	libraries?: LoadedAdapterLibraries,
 ): ResourceSecurityPolicy | undefined {
 	const order = parseList(env.MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER);
+	if (order === undefined && env.MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER?.trim()) {
+		// Set but empty is a broken configuration, not a disable: refusing here
+		// beats silently running without resource security.
+		throw new ConfigError(
+			'MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER is set but lists no classifications.',
+			{
+				variable: 'MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER',
+				remediation:
+					'List distinct classification tokens from lowest to highest, or unset the variable.',
+			},
+		);
+	}
 	if (order === undefined) {
 		// Subject-context configuration without a classification order is copied
 		// or stale config; fail closed instead of silently ignoring it.
