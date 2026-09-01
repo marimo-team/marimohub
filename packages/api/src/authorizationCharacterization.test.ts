@@ -442,3 +442,227 @@ describe('authorization characterization: resource security labels', () => {
 		await expectOk(await full.request('GET', `/projects/${pid}/notebooks/${nid}`));
 	});
 });
+
+describe('authorization characterization: label mutation unhappy paths', () => {
+	const LABELS = { classification: 'SECRET', compartments: ['element-a'] };
+	const wired = (extra: Record<string, unknown> = {}) => ({
+		policy: {
+			superAdmins: [OWNER],
+			resourceSecurity: {
+				constraints: new LocalResourceConstraintPolicy({
+					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+				}),
+			},
+			...extra,
+		},
+	});
+
+	it('answers 404 for labels on a nonexistent or deleted project', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(bucket, OWNER, wired());
+		await expectError(
+			await god.request('PUT', '/projects/proj-7h2k9qm4xz7rp3w8/security-labels', LABELS),
+			404,
+			'NOT_FOUND',
+		);
+		const pid = await createProject(god);
+		await expectOk(await god.request('DELETE', `/projects/${pid}`));
+		await expectError(
+			await god.request('PUT', `/projects/${pid}/security-labels`, LABELS),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it.each([
+		['whitespace classification', { classification: 'TOP SECRET', compartments: [] }],
+		['empty classification', { classification: '', compartments: [] }],
+		[
+			'too many compartments',
+			{ classification: 'SECRET', compartments: Array.from({ length: 65 }, (_, i) => `c${i}`) },
+		],
+		['non-array compartments', { classification: 'SECRET', compartments: 'element-a' }],
+	])('rejects an out-of-bounds label body: %s', async (_name, body) => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(bucket, OWNER, wired());
+		const pid = await createProject(god);
+		await expectError(
+			await god.request('PUT', `/projects/${pid}/security-labels`, body),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
+	it('refuses label mutations from a personal access token, super admin included', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(bucket, OWNER, wired());
+		const pid = await createProject(god);
+		const pat: Authenticator = {
+			authenticate: async () => ({
+				id: OWNER,
+				email: `${OWNER}@example.com`,
+				credential: { kind: 'personal-access-token', id: 'tok-1' },
+			}),
+		};
+		const viaPat = createTestApi({ bucket, deps: { authenticator: pat, ...wired() } });
+		const error = await expectError(
+			await viaPat.request('PUT', `/projects/${pid}/security-labels`, LABELS),
+			403,
+			'FORBIDDEN',
+		);
+		expect(error.message).toContain('Personal access tokens cannot');
+	});
+
+	it('keeps a labeled project failing closed when resource security is unwired — no clearing escape hatch', async () => {
+		// Removing the classification order does NOT unlock labeled projects:
+		// clearing requires passing authorization on the still-labeled project,
+		// which fails closed without an evaluator. Remediation is restoring the
+		// configuration, not a bypass.
+		const bucket = new MemoryBucket();
+		const god = apiFor(bucket, OWNER, wired());
+		const pid = await createProject(god);
+		await expectOk(await god.request('PUT', `/projects/${pid}/security-labels`, LABELS));
+		const unwired = apiFor(bucket, OWNER, { policy: { superAdmins: [OWNER] } });
+		await expectError(
+			await unwired.request('DELETE', `/projects/${pid}/security-labels`),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('lets a super admin with a dominating context clear labels', async () => {
+		const bucket = new MemoryBucket();
+		const ctx = {
+			schemaVersion: 1,
+			classification: 'SECRET',
+			compartments: ['element-a'],
+			policyVersion: 'p1',
+			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+		};
+		const god = apiFor(
+			bucket,
+			OWNER,
+			wired({
+				resourceSecurity: {
+					constraints: new LocalResourceConstraintPolicy({
+						classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+					}),
+					subjectContext: { resolve: async () => ctx as never },
+				},
+			}),
+		);
+		const pid = await createProject(god);
+		await expectOk(await god.request('PUT', `/projects/${pid}/security-labels`, LABELS));
+		const cleared = await expectOk<{ security_labels?: unknown }>(
+			await god.request('DELETE', `/projects/${pid}/security-labels`),
+		);
+		expect(cleared.security_labels).toBeUndefined();
+	});
+
+	it('answers 404 for labels on a deleted notebook', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(bucket, OWNER, wired());
+		const pid = await createProject(god);
+		const nid = await createNotebook(god, pid);
+		await expectOk(await god.request('DELETE', `/projects/${pid}/notebooks/${nid}`));
+		await expectError(
+			await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, LABELS),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('masks deep notebook reads behind an unsatisfied override', async () => {
+		const bucket = new MemoryBucket();
+		const ctx = {
+			schemaVersion: 1,
+			classification: 'SECRET',
+			compartments: [],
+			policyVersion: 'p1',
+			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+		};
+		const god = apiFor(bucket, OWNER, {
+			policy: {
+				superAdmins: [OWNER],
+				resourceSecurity: {
+					constraints: new LocalResourceConstraintPolicy({
+						classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+					}),
+					subjectContext: { resolve: async () => ctx as never },
+				},
+			},
+		});
+		const pid = await createProject(god);
+		const nid = await createNotebook(god, pid);
+		await expectOk(
+			await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, {
+				classification: 'SECRET',
+				compartments: ['element-z'],
+			}),
+		);
+		await expectError(
+			await god.request('GET', `/projects/${pid}/notebooks/${nid}/content`),
+			404,
+			'NOT_FOUND',
+		);
+		await expectError(
+			await god.request('GET', `/projects/${pid}/notebooks/${nid}/versions`),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('bounds the session to the entitlement expiry when it is earlier than the context', async () => {
+		const bucket = new MemoryBucket();
+		const contextExpiry = new Date(Date.now() + 3_600_000).toISOString();
+		const entitlementExpiry = new Date(Date.now() + 600_000).toISOString();
+		const ctx = {
+			schemaVersion: 1,
+			classification: 'SECRET',
+			compartments: ['element-a'],
+			policyVersion: 'p1',
+			expiresAt: contextExpiry,
+		};
+		const security = {
+			constraints: new LocalResourceConstraintPolicy({
+				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+			}),
+			subjectContext: { resolve: async () => ctx as never },
+		};
+		const god = apiFor(bucket, OWNER, {
+			policy: { superAdmins: [OWNER], resourceSecurity: security },
+		});
+		const pid = await createProject(god);
+		const nid = await createNotebook(god, pid);
+		await expectOk(
+			await god.request('PUT', `/projects/${pid}/security-labels`, {
+				classification: 'SECRET',
+				compartments: ['element-a'],
+			}),
+		);
+
+		const entitled: Authenticator = {
+			authenticate: async () => ({
+				id: OWNER,
+				email: `${OWNER}@example.com`,
+				entitlements: ['default-role:editor'],
+				entitlementsExpiresAt: entitlementExpiry,
+				credential: { kind: 'sso' },
+			}),
+		};
+		const api = createTestApi({
+			bucket,
+			userId: OWNER,
+			compute: makeFakeCompute(),
+			deps: { authenticator: entitled, policy: { resourceSecurity: security } },
+		});
+		const session = await expectOk<{ session_id: string }>(
+			await api.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {}),
+		);
+		const record = await api.deps.services.sessions.getSession(
+			pid as never,
+			session.session_id as never,
+		);
+		expect(record.authorization_expires_at).toBe(entitlementExpiry);
+	});
+});

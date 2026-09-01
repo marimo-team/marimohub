@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
+	LocalResourceConstraintPolicy,
 	ProxyExposure,
 	signProxyToken,
 	SubdomainExposure,
@@ -145,6 +146,28 @@ describe('authorizeProxyRequest', () => {
 			policy: { superAdmins: [STRANGER] },
 		});
 		expect(d.kind).toBe('forward');
+	});
+
+	it('masks a labeled project as 404 when the caller has no satisfying context — owner included', async () => {
+		const services = createServices(bucket);
+		await services.projects.setSecurityLabels(
+			pid,
+			{ classification: 'SECRET', compartments: ['element-a'] },
+			ACTOR,
+		);
+		const security = {
+			constraints: new LocalResourceConstraintPolicy({
+				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+			}),
+		};
+		// Wired but contextless, and unwired entirely: both fail closed and mask.
+		for (const policy of [{ resourceSecurity: security }, {}]) {
+			const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+				...deps(ACTOR),
+				policy,
+			});
+			expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
+		}
 	});
 
 	it('rejects a non-owner editor from an exclusive editor kernel', async () => {
