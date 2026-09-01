@@ -1,4 +1,4 @@
-export { useAppForm, withForm } from './useAppForm';
+export { useAppForm } from './useAppForm';
 export { useSeedOnOpen } from './useSeedOnOpen';
 export { schemaValidators } from './validators';
 export { requiredText, optionalText } from './schema';

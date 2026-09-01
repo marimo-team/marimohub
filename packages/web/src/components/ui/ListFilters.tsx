@@ -42,6 +42,11 @@ export function ListFilters<Status extends string>({
 	const searchRef = useRef<HTMLInputElement>(null);
 	const active = hasListFilters(values);
 	const [isOpen, setIsOpen] = useState(active);
+	const [wasActive, setWasActive] = useState(active);
+	if (active !== wasActive) {
+		setWasActive(active);
+		if (active) setIsOpen(true);
+	}
 	const focusSearchOnOpen = useRef(false);
 	const openFilters = useCallback(() => {
 		if (searchRef.current) return;
@@ -49,9 +54,6 @@ export function ListFilters<Status extends string>({
 		setIsOpen(true);
 	}, []);
 	useSearchHotkey(searchRef, openFilters);
-	useEffect(() => {
-		if (active) setIsOpen(true);
-	}, [active]);
 	useEffect(() => {
 		const input = searchRef.current;
 		if (!isOpen || !focusSearchOnOpen.current || !input) return;

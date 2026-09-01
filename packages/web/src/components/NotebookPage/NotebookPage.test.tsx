@@ -36,10 +36,9 @@ describe('NotebookPage viewer modes', () => {
 		expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).toBeInTheDocument();
 		expect(screen.queryByRole('menuitem', { name: 'Stop VS Code' })).toBeNull();
 		await user.click(screen.getByRole('menuitem', { name: 'Start VS Code' }));
-		expect(await screen.findByTitle('Forecast in VS Code')).toHaveAttribute(
-			'src',
-			'https://vscode.example/?folder=/workspace',
-		);
+		const vscodeFrame = await screen.findByTitle('Forecast in VS Code');
+		expect(vscodeFrame).toHaveAttribute('src', 'https://vscode.example/?folder=/workspace');
+		expect(vscodeFrame.getAttribute('sandbox')).toContain('allow-same-origin');
 		expect(screen.getByRole('tablist', { name: 'Notebook applications' })).toBeVisible();
 
 		await chooseSurfaceAction(user, 'Stop VS Code');
@@ -501,6 +500,9 @@ describe('NotebookPage viewer modes', () => {
 				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
 			).not.toBeNull(),
 		);
+		expect(container.querySelector('iframe')?.getAttribute('sandbox')).toContain(
+			'allow-same-origin',
+		);
 		expect(document.title).toBe('Forecast · marimohub');
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.queryByText(/won't be saved/)).toBeNull();
@@ -583,7 +585,7 @@ describe('NotebookPage viewer modes', () => {
 		const iframe = container.querySelector('iframe');
 		expect(iframe).not.toBeNull();
 		expect(iframe!.getAttribute('srcdoc')).toContain('outputs');
-		// Opaque origin: no allow-same-origin, unlike the live-kernel iframe.
+		// Opaque origin prevents snapshot scripts from reaching the hub document.
 		expect(iframe!.getAttribute('sandbox')).toBe('allow-scripts');
 		expect(sessionPosts(impl)).toHaveLength(0);
 	});

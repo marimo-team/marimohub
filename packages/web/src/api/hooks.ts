@@ -9,7 +9,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation, useInvalidate } from './mutation';
-import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
+import { isApiErrorCode, isNotFoundError, notebookPath, workspaceArchivePath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
 import { withBasePath } from '../lib/basePath';
 import {
@@ -831,12 +831,9 @@ function refetchCost(query: { state: { data?: unknown } }): number {
 }
 
 /**
- * Refresh the browse view. Mounted queries refetch with `fresh=true`
- * SEQUENTIALLY while their page cost fits the remaining rolling budget; the
- * overflow refetches without the flag (server-cached, still current within
- * its TTL). Unmounted results (collapsed nodes, other integrations) cannot be
- * refetched, so they are dropped outright: their next expansion fetches
- * instead of replaying a stale client entry.
+ * Refresh the browse view. Mounted queries refetch with `fresh=true` while
+ * their page cost fits the remaining rolling budget; overflow uses the server
+ * cache. Inactive results are dropped so their next expansion fetches again.
  */
 export async function refreshBrowseQueries(queryClient: QueryClient): Promise<void> {
 	queryClient.removeQueries({ queryKey: browseKeys.all, type: 'inactive' });
@@ -866,12 +863,14 @@ export async function refreshBrowseQueries(queryClient: QueryClient): Promise<vo
 
 	bypassBrowseCache += 1;
 	try {
-		for (const query of freshRound) {
-			const cost = refetchCost(query);
-			await queryClient.refetchQueries({ queryKey: query.queryKey, exact: true });
-			const at = Date.now();
-			for (let i = 0; i < cost; i++) freshSpend.push(at);
-		}
+		await Promise.all(
+			freshRound.map(async (query) => {
+				const cost = refetchCost(query);
+				await queryClient.refetchQueries({ queryKey: query.queryKey, exact: true });
+				const at = Date.now();
+				for (let i = 0; i < cost; i++) freshSpend.push(at);
+			}),
+		);
 	} finally {
 		bypassBrowseCache -= 1;
 	}
@@ -988,8 +987,8 @@ function useAbortableBrowseMutation<TInput, TData>(
 		},
 		[identityKey],
 	);
-	return useMutation({
-		mutationFn: (input: TInput) => {
+	return useApiMutation(
+		(input: TInput) => {
 			active.current?.abort();
 			const controller = new AbortController();
 			active.current = controller;
@@ -997,10 +996,11 @@ function useAbortableBrowseMutation<TInput, TData>(
 				if (active.current === controller) active.current = undefined;
 			});
 		},
+		undefined,
 		// Consumers render preview failures inline; aborts (unmount, supersede)
 		// must not surface as toasts either.
-		meta: { suppressErrorToast: true },
-	});
+		{ suppressErrorToast: true },
+	);
 }
 
 export function useBrowseTablePreview(projectId: string, integrationId: string) {
@@ -1052,10 +1052,8 @@ export function useDataQuerySchemaQuery(
 }
 
 export function useRunDataQuery(projectId: string, integrationId: string) {
-	return useMutation({
-		// SqlWorkspace renders failures inline next to the results.
-		meta: { suppressErrorToast: true },
-		mutationFn: ({ sql, signal }: { sql: string; signal?: AbortSignal }) =>
+	return useApiMutation(
+		({ sql, signal }: { sql: string; signal?: AbortSignal }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/query', {
 					params: { path: browsePath(projectId, integrationId) },
@@ -1063,21 +1061,23 @@ export function useRunDataQuery(projectId: string, integrationId: string) {
 					signal,
 				}),
 			),
-	});
+		undefined,
+		{ suppressErrorToast: true },
+	);
 }
 
 export function useGenerateDataQuerySql(projectId: string, integrationId: string) {
-	return useMutation({
-		// SqlWorkspace renders failures inline next to the results.
-		meta: { suppressErrorToast: true },
-		mutationFn: (body: { mode: 'generate' | 'revise'; instruction: string; sql?: string }) =>
+	return useApiMutation(
+		(body: { mode: 'generate' | 'revise'; instruction: string; sql?: string }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/query/generate', {
 					params: { path: browsePath(projectId, integrationId) },
 					body,
 				}),
 			),
-	});
+		undefined,
+		{ suppressErrorToast: true },
+	);
 }
 
 export function useObjectBucketsQuery(projectId: string, integrationId: string, enabled = true) {
@@ -1367,14 +1367,15 @@ export function useCreateSyncedNotebook(projectId: string) {
 
 /** Rotate a synced notebook's sync token, invalidating the old one. */
 export function useRotateSyncToken(projectId: string) {
-	return useMutation({
-		mutationFn: (notebookId: string) =>
+	return useApiMutation(
+		(notebookId: string) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate', {
 					params: { path: { pid: projectId, nid: notebookId } },
 				}),
 			),
-	});
+		(notebookId) => [notebookKeys.detail(projectId, notebookId)],
+	);
 }
 
 export function useUpdateGitSource(projectId: string) {
@@ -1495,7 +1496,7 @@ export function useDownloadNotebookFile(projectId: string) {
 export function useDownloadWorkspace(projectId: string) {
 	return useMutation({
 		mutationFn: async ({ notebookId, title }: { notebookId: string; title: string }) => {
-			const res = await fetch(`${notebookPath(projectId, notebookId)}/workspace.zip`);
+			const res = await fetch(workspaceArchivePath(projectId, notebookId));
 			if (!res.ok) {
 				throw new Error(`Failed to download workspace (${res.status})`);
 			}
@@ -1720,11 +1721,11 @@ function useStartSessionRequest(
 	computeProfile?: 'default',
 	editIntent?: 'temporary',
 ) {
-	return useMutation({
-		mutationFn: () => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
-		// useNotebookSession renders start failures as the inline session panel.
-		meta: { suppressErrorToast: true },
-	});
+	return useApiMutation(
+		() => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
+		() => [sessionKeys.listByProject(projectId)],
+		{ suppressErrorToast: true },
+	);
 }
 
 export function useStartSession(

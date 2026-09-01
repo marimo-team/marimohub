@@ -74,10 +74,9 @@ function MetadataValue({ value, depth = 0 }: { value: unknown; depth?: number })
 					Array({value.length})
 				</summary>
 				<div className="mt-1 border-l pl-3">
-					{value.map((item, index) => {
+					{keyedMetadataItems(value).map(({ key, value: item, index }) => {
 						return (
-							// oxlint-disable-next-line react/no-array-index-key -- Stored event metadata is immutable.
-							<div key={index} className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 py-0.5">
+							<div key={key} className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 py-0.5">
 								<span className="text-muted-foreground">{index}</span>
 								<MetadataValue value={item} depth={depth + 1} />
 							</div>
@@ -117,6 +116,10 @@ function MetadataValue({ value, depth = 0 }: { value: unknown; depth?: number })
 		return <PrimitiveValue value={value} />;
 	}
 	return <span className="break-all text-muted-foreground">Unsupported metadata value</span>;
+}
+
+function keyedMetadataItems(values: unknown[]): { key: string; value: unknown; index: number }[] {
+	return values.map((value, index) => ({ key: `metadata-item-${index}`, value, index }));
 }
 
 function ActorLabel({

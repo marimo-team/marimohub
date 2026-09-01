@@ -4,61 +4,10 @@ import { toast } from 'sonner';
 import { useApproveCliAuthorization } from '@/api/hooks';
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
-
-const STATE_RE = /^[A-Za-z0-9_-]{32,128}$/;
-const CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/;
-
-export interface CliLoginRequest {
-	callbackUri: string;
-	state: string;
-	codeChallenge: string;
-}
+import { cancellationUrl, parseCliLoginRequest } from './cliLoginRequest';
 
 export interface CliLoginPageProps {
 	navigate?: (url: string) => void;
-}
-
-function isLoopbackCallback(raw: string): boolean {
-	try {
-		const url = new URL(raw);
-		return (
-			url.protocol === 'http:' &&
-			(url.hostname === '127.0.0.1' || url.hostname === '[::1]') &&
-			Boolean(url.port) &&
-			!url.username &&
-			!url.password &&
-			url.pathname === '/callback' &&
-			!url.search &&
-			!url.hash
-		);
-	} catch {
-		return false;
-	}
-}
-
-export function parseCliLoginRequest(search: string): CliLoginRequest | null {
-	const params = new URLSearchParams(search);
-	const callbackUri = params.get('callback_uri');
-	const state = params.get('state');
-	const codeChallenge = params.get('code_challenge');
-	if (
-		!callbackUri ||
-		!state ||
-		!codeChallenge ||
-		!isLoopbackCallback(callbackUri) ||
-		!STATE_RE.test(state) ||
-		!CHALLENGE_RE.test(codeChallenge)
-	) {
-		return null;
-	}
-	return { callbackUri, state, codeChallenge };
-}
-
-function cancellationUrl(request: CliLoginRequest): string {
-	const callback = new URL(request.callbackUri);
-	callback.searchParams.set('error', 'access_denied');
-	callback.searchParams.set('state', request.state);
-	return callback.toString();
 }
 
 export function CliLoginPage({
@@ -93,7 +42,7 @@ export function CliLoginPage({
 		}
 		try {
 			const result = await approve.mutateAsync({
-				callback_uri: request.callbackUri,
+				callback_uri: request.callback.toString(),
 				state: request.state,
 				code_challenge: request.codeChallenge,
 				token_name: 'mohub CLI',

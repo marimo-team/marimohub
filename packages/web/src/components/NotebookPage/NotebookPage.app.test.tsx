@@ -17,6 +17,9 @@ describe('NotebookPage app variant', () => {
 				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
 			).not.toBeNull(),
 		);
+		expect(container.querySelector('iframe')?.getAttribute('sandbox')).toContain(
+			'allow-same-origin',
+		);
 		const [, init] = sessionPosts(impl)[0];
 		expect(String(init?.body)).toContain('"mode":"app"');
 		expect(screen.getByText('App')).toBeInTheDocument();

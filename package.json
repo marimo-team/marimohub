@@ -17,6 +17,8 @@
 		"test:coverage": "pnpm test:coverage:root && pnpm test:coverage:web",
 		"test:coverage:root": "vp test --coverage",
 		"test:coverage:web": "pnpm --filter @marimo-hub/web test --coverage",
+		"react:doctor": "react-doctor",
+		"react:doctor:changed": "react-doctor --scope changed --base origin/main --include-untracked",
 		"audit:prod": "node scripts/audit-production.mjs",
 		"e2e": "pnpm --filter @marimo-hub/e2e e2e",
 		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/api cli:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas && pnpm --filter @marimo-hub/client generate && pnpm --filter @marimo-hub/docs integrations:generate",
@@ -29,6 +31,7 @@
 		"@oxlint/plugins": "catalog:",
 		"@vitest/coverage-v8": "catalog:",
 		"oxlint": "catalog:",
+		"react-doctor": "catalog:",
 		"vite-plus": "catalog:"
 	},
 	"engines": {

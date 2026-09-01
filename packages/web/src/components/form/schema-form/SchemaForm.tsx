@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronRight, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { TextField as AriaTextField, FieldError, Label, TextArea } from 'react-aria-components';
@@ -378,11 +378,13 @@ function SecretField({
 	label,
 }: SchemaFieldProps & { hint?: FieldHint; error?: string; label: string }) {
 	const reference = referenceSecret(value);
-	const initialManaged = useRef(isKeepMarker(value));
+	const [initialManaged] = useState(() => isKeepMarker(value));
 	const lastInline = useRef<unknown>(isKeepMarker(value) || typeof value === 'string' ? value : '');
 	const lastReference = useRef(reference);
-	if (reference) lastReference.current = reference;
-	else if (isKeepMarker(value) || typeof value === 'string') lastInline.current = value;
+	useEffect(() => {
+		if (reference) lastReference.current = reference;
+		else if (isKeepMarker(value) || typeof value === 'string') lastInline.current = value;
+	}, [reference, value]);
 	const options = [
 		...(secretSources.inline ? ['inline'] : []),
 		...(secretSources.references.length > 0 ? ['reference'] : []),
@@ -486,7 +488,7 @@ function SecretField({
 								rel="noreferrer"
 								className="font-medium text-primary hover:underline"
 							>
-								Learn more
+								Read the secret manager documentation
 							</a>
 						)}
 					</p>
@@ -511,7 +513,7 @@ function SecretField({
 							error={error}
 						/>
 					</div>
-					{editing && initialManaged.current && !isKeepMarker(value) && (
+					{editing && initialManaged && !isKeepMarker(value) && (
 						<IconButton
 							label="Restore stored encrypted value"
 							tooltip="Restore stored encrypted value"
@@ -546,9 +548,14 @@ function KvPairsField({
 	};
 	// `Object.fromEntries` silently keeps only the LAST value per key, so rows
 	// that would collapse must be called out before the user submits.
-	const duplicateKeys = [
-		...new Set(rows.map((r) => r.k).filter((k, i, all) => k !== '' && all.indexOf(k) !== i)),
-	];
+	const seenKeys = new Set<string>();
+	const duplicateKeySet = new Set<string>();
+	for (const row of rows) {
+		if (!row.k) continue;
+		if (seenKeys.has(row.k)) duplicateKeySet.add(row.k);
+		else seenKeys.add(row.k);
+	}
+	const duplicateKeys = [...duplicateKeySet];
 	const hasBlankKey = rows.some((r) => r.k === '' && r.v !== '');
 	return (
 		<div className="flex flex-col gap-1.5">

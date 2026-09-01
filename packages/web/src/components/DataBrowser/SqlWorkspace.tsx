@@ -7,22 +7,12 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from 'react';
 import type { Ref } from 'react';
-import { basicSetup } from 'codemirror';
-import { indentWithTab } from '@codemirror/commands';
-import { lintGutter } from '@codemirror/lint';
-import type { EditorState } from '@codemirror/state';
-import { Compartment, EditorSelection, Prec } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
-import { PostgreSQL, sql } from '@codemirror/lang-sql';
-import {
-	NodeSqlParser,
-	QueryContextAnalyzer,
-	sqlCompletion,
-	sqlExtension,
-} from '@marimo-team/codemirror-sql';
-import { DuckDBDialect } from '@marimo-team/codemirror-sql/dialects';
+import type { EditorView } from '@codemirror/view';
+import type { Compartment } from '@codemirror/state';
+import type { NodeSqlParser, QueryContextAnalyzer } from '@marimo-team/codemirror-sql';
 import { format as formatSql } from 'sql-formatter';
 import {
 	Bot,
@@ -50,6 +40,16 @@ import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { triggerDownload } from '@/lib/download';
 import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
+import {
+	allSqlStatements,
+	applySqlTarget,
+	completionSchemaSummary,
+	csvCell,
+	defaultSql,
+	sqlDialectSettings,
+	sqlTargetAtState,
+} from './sqlWorkspaceUtils';
+import type { QueryDialect, SqlTarget } from './sqlWorkspaceUtils';
 
 interface Selection {
 	namespace: string[];
@@ -85,25 +85,66 @@ interface SqlEditorHandle {
 	focus(): void;
 }
 
-interface SqlTarget {
-	from: number;
-	to: number;
-	sql: string;
-	document: string;
+interface EditorReadinessStore {
+	getSnapshot(): boolean;
+	setReady(ready: boolean): void;
+	subscribe(listener: () => void): () => void;
+}
+
+function createEditorReadinessStore(): EditorReadinessStore {
+	let ready = false;
+	const listeners = new Set<() => void>();
+	return {
+		getSnapshot: () => ready,
+		setReady: (nextReady) => {
+			if (ready === nextReady) return;
+			ready = nextReady;
+			for (const listener of listeners) listener();
+		},
+		subscribe: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+	};
 }
 
 const MAX_HISTORY = 20;
 
-export type QueryDialect = 'duckdb' | 'postgresql';
+async function importSqlEditorRuntime() {
+	const [core, commands, lint, state, view, langSql, marimoSql, dialects] = await Promise.all([
+		import('codemirror'),
+		import('@codemirror/commands'),
+		import('@codemirror/lint'),
+		import('@codemirror/state'),
+		import('@codemirror/view'),
+		import('@codemirror/lang-sql'),
+		import('@marimo-team/codemirror-sql'),
+		import('@marimo-team/codemirror-sql/dialects'),
+	]);
+	return {
+		...core,
+		...commands,
+		...lint,
+		...state,
+		...view,
+		...langSql,
+		...marimoSql,
+		...dialects,
+	};
+}
 
-export function sqlDialectSettings(dialect: QueryDialect) {
-	return dialect === 'postgresql'
-		? ({
-				parserDatabase: 'PostgreSQL',
-				formatterLanguage: 'postgresql',
-				name: 'PostgreSQL',
-			} as const)
-		: ({ parserDatabase: 'DuckDB', formatterLanguage: 'duckdb', name: 'DuckDB' } as const);
+type SqlEditorRuntime = Awaited<ReturnType<typeof importSqlEditorRuntime>>;
+let sqlEditorRuntimePromise: Promise<SqlEditorRuntime> | undefined;
+
+function loadSqlEditorRuntime(): Promise<SqlEditorRuntime> {
+	if (!sqlEditorRuntimePromise) {
+		const pending = importSqlEditorRuntime();
+		sqlEditorRuntimePromise = pending;
+		void pending.catch(() => {
+			if (sqlEditorRuntimePromise === pending) sqlEditorRuntimePromise = undefined;
+		});
+	}
+	return sqlEditorRuntimePromise;
 }
 
 interface SqlWorkspaceProps {
@@ -142,6 +183,12 @@ function SqlWorkspaceSession({
 	const [instruction, setInstruction] = useState('');
 	const [showHistory, setShowHistory] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const editorReadiness = useMemo(createEditorReadinessStore, []);
+	const editorReady = useSyncExternalStore(
+		editorReadiness.subscribe,
+		editorReadiness.getSnapshot,
+		editorReadiness.getSnapshot,
+	);
 	const [lastLoadedSchema, setLastLoadedSchema] = useState<typeof schemaQuery.data>(undefined);
 	const [fullscreen, setFullscreen] = useState(false);
 	const { copy, copied } = useCopyToClipboard();
@@ -177,42 +224,42 @@ function SqlWorkspaceSession({
 			setError(null);
 			setExecutions([]);
 			setActiveResultIndex(0);
-			let completedCount = 0;
 			try {
-				for (const sqlText of sqlTexts) {
-					if (!sqlText.trim()) continue;
+				const statements = sqlTexts.filter((sqlText) => sqlText.trim());
+				let completed: QueryExecution[] = [];
+				let nextHistory = historyItems;
+				const executeStatement = async (index: number): Promise<void> => {
+					const sqlText = statements[index];
+					if (sqlText === undefined) return;
+					if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
 					const data = await query.mutateAsync({ sql: sqlText, signal: controller.signal });
-					if (controller.signal.aborted) return;
-					const executionIndex = completedCount;
-					completedCount++;
-					setExecutions((current) => [
-						...current,
-						{ id: executionIndex, sql: sqlText, result: data as QueryResult },
-					]);
-					setActiveResultIndex(executionIndex);
-					setHistoryItems((current) => {
-						const next = [sqlText, ...current.filter((item) => item !== sqlText)].slice(
-							0,
-							MAX_HISTORY,
-						);
-						writeStoredWorkspace(storageKey, {
-							draft: editorRef.current?.getSql() ?? sqlText,
-							history: next,
-						});
-						return next;
+					if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+					completed = [...completed, { id: index, sql: sqlText, result: data as QueryResult }];
+					setExecutions(completed);
+					setActiveResultIndex(index);
+					nextHistory = [sqlText, ...nextHistory.filter((item) => item !== sqlText)].slice(
+						0,
+						MAX_HISTORY,
+					);
+					setHistoryItems(nextHistory);
+					writeStoredWorkspace(storageKey, {
+						draft: editorRef.current?.getSql() ?? sqlText,
+						history: nextHistory,
 					});
-				}
+					return executeStatement(index + 1);
+				};
+				await executeStatement(0);
 			} catch (cause) {
 				if (!controller.signal.aborted) setError(errorMessage(cause));
 			} finally {
 				if (abortRef.current === controller) abortRef.current = null;
 			}
 		},
-		[query, storageKey],
+		[historyItems, query, storageKey],
 	);
 
 	const generateSql = async () => {
-		if (!instruction.trim()) return;
+		if (!editorReady || !instruction.trim()) return;
 		setError(null);
 		try {
 			const target = editorRef.current?.getRunTarget();
@@ -263,11 +310,15 @@ function SqlWorkspaceSession({
 					size="sm"
 					variant="primary"
 					onPress={() => void run(false)}
-					isDisabled={query.isPending}
+					isDisabled={!editorReady || query.isPending}
 				>
 					<Play className="size-3.5" /> Run
 				</Button>
-				<Button size="sm" onPress={() => void run(true)} isDisabled={query.isPending}>
+				<Button
+					size="sm"
+					onPress={() => void run(true)}
+					isDisabled={!editorReady || query.isPending}
+				>
 					Run all
 				</Button>
 				{query.isPending ? (
@@ -275,20 +326,31 @@ function SqlWorkspaceSession({
 						<Square className="size-3.5" /> Cancel
 					</Button>
 				) : null}
-				<Button size="sm" variant="ghost" onPress={() => editorRef.current?.format()}>
+				<Button
+					size="sm"
+					variant="ghost"
+					onPress={() => editorRef.current?.format()}
+					isDisabled={!editorReady}
+				>
 					<WandSparkles className="size-3.5" /> Format
 				</Button>
 				<Button
 					size="sm"
 					variant="ghost"
 					onPress={() => void copy(editorRef.current?.getSql() ?? '')}
+					isDisabled={!editorReady}
 				>
 					<Clipboard className="size-3.5" /> {copied ? 'Copied' : 'Copy SQL'}
 				</Button>
 				<Button size="sm" variant="ghost" onPress={() => setShowHistory((value) => !value)}>
 					<HistoryIcon className="size-3.5" /> History
 				</Button>
-				<Button size="sm" variant="ghost" onPress={() => editorRef.current?.replaceSql('')}>
+				<Button
+					size="sm"
+					variant="ghost"
+					onPress={() => editorRef.current?.replaceSql('')}
+					isDisabled={!editorReady}
+				>
 					<Eraser className="size-3.5" /> Clear
 				</Button>
 				<span className="ml-auto text-xs text-muted-foreground">
@@ -322,7 +384,7 @@ function SqlWorkspaceSession({
 					<Button
 						size="sm"
 						onPress={() => void generateSql()}
-						isDisabled={generate.isPending || !instruction.trim()}
+						isDisabled={!editorReady || generate.isPending || !instruction.trim()}
 					>
 						<Sparkles className="size-3.5" /> {generate.isPending ? 'Generating…' : 'Apply SQL'}
 					</Button>
@@ -335,6 +397,7 @@ function SqlWorkspaceSession({
 							type="button"
 							key={item}
 							onClick={() => editorRef.current?.replaceSql(item)}
+							disabled={!editorReady}
 							className="block w-full truncate rounded px-2 py-1 text-left font-mono text-xs hover:bg-muted"
 						>
 							{item.replaceAll(/\s+/g, ' ')}
@@ -350,6 +413,7 @@ function SqlWorkspaceSession({
 				dialect={dialect}
 				onRun={() => void run(false)}
 				onChange={persistDraft}
+				readiness={editorReadiness}
 			/>
 			{schemaQuery.isFetching ? (
 				<output className="block border-t px-3 py-2 text-xs text-muted-foreground">
@@ -402,6 +466,7 @@ const SqlEditor = forwardRef(function SqlEditor(
 		dialect,
 		onRun,
 		onChange,
+		readiness,
 	}: {
 		initialSql: string;
 		tables: QueryTable[];
@@ -409,27 +474,39 @@ const SqlEditor = forwardRef(function SqlEditor(
 		dialect: QueryDialect;
 		onRun: () => void;
 		onChange: (sql: string) => void;
+		readiness: EditorReadinessStore;
 	},
 	ref: Ref<SqlEditorHandle>,
 ) {
 	const parentRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView>(null);
+	const runtimeRef = useRef<SqlEditorRuntime>(null);
+	const schemaCompartmentRef = useRef<Compartment>(null);
+	const themeCompartmentRef = useRef<Compartment>(null);
 	const analyzersRef = useRef<{ parser: NodeSqlParser; contextAnalyzer: QueryContextAnalyzer }>(
 		null,
 	);
 	const onRunRef = useRef(onRun);
 	const onChangeRef = useRef(onChange);
-	const schemaCompartment = useRef(new Compartment()).current;
-	const themeCompartment = useRef(new Compartment()).current;
+	const [loadError, setLoadError] = useState<string | null>(null);
+	const [loadAttempt, setLoadAttempt] = useState(0);
 	const { theme } = useTheme();
 	const schema = useMemo(
 		() => completionSchema(tables, integrationName),
 		[tables, integrationName],
 	);
-	const initialSchemaRef = useRef(schema);
-	const initialThemeRef = useRef(theme);
-	onRunRef.current = onRun;
-	onChangeRef.current = onChange;
+	const latestSchemaRef = useRef(schema);
+	const latestThemeRef = useRef(theme);
+	useEffect(() => {
+		onRunRef.current = onRun;
+		onChangeRef.current = onChange;
+	}, [onChange, onRun]);
+	useEffect(() => {
+		latestSchemaRef.current = schema;
+	}, [schema]);
+	useEffect(() => {
+		latestThemeRef.current = theme;
+	}, [theme]);
 
 	useImperativeHandle(ref, () => ({
 		getSql: () => viewRef.current?.state.doc.toString() ?? '',
@@ -441,20 +518,26 @@ const SqlEditor = forwardRef(function SqlEditor(
 			viewRef.current ? allSqlStatements(viewRef.current.state.doc.toString()) : [],
 		replaceSql: (next) => {
 			const view = viewRef.current;
-			if (!view) return;
+			const runtime = runtimeRef.current;
+			if (!view || !runtime) return;
 			view.dispatch({
 				changes: { from: 0, to: view.state.doc.length, insert: next },
-				selection: EditorSelection.cursor(next.length),
+				selection: runtime.EditorSelection.cursor(next.length),
 			});
 		},
 		replaceTarget: (target, next) => {
 			const view = viewRef.current;
-			if (!view || applySqlTarget(view.state.doc.toString(), target, next) === undefined) {
+			const runtime = runtimeRef.current;
+			if (
+				!view ||
+				!runtime ||
+				applySqlTarget(view.state.doc.toString(), target, next) === undefined
+			) {
 				return false;
 			}
 			view.dispatch({
 				changes: { from: target.from, to: target.to, insert: next },
-				selection: EditorSelection.cursor(target.from + next.length),
+				selection: runtime.EditorSelection.cursor(target.from + next.length),
 			});
 			return true;
 		},
@@ -474,50 +557,73 @@ const SqlEditor = forwardRef(function SqlEditor(
 
 	useEffect(() => {
 		if (!parentRef.current) return;
-		const parser = new NodeSqlParser({
-			getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
-		});
-		const contextAnalyzer = new QueryContextAnalyzer(parser);
-		analyzersRef.current = { parser, contextAnalyzer };
-		const view = new EditorView({
-			parent: parentRef.current,
-			doc: initialSql,
-			extensions: [
-				basicSetup,
-				lintGutter(),
-				// basicSetup's defaultKeymap binds Mod-Enter to insertBlankLine; Prec.high keeps Run first.
-				Prec.high(
-					keymap.of([
-						{
-							key: 'Mod-Enter',
-							run: () => {
-								onRunRef.current();
-								return true;
-							},
-						},
-						indentWithTab,
-					]),
-				),
-				EditorView.updateListener.of((update) => {
-					if (update.docChanged) onChangeRef.current(update.state.doc.toString());
-				}),
-				schemaCompartment.of(
-					schemaExtensions(initialSchemaRef.current, dialect, parser, contextAnalyzer),
-				),
-				themeCompartment.of(editorTheme(initialThemeRef.current)),
-			],
-		});
-		viewRef.current = view;
+		let cancelled = false;
+		let loadedView: EditorView | undefined;
+		setLoadError(null);
+		readiness.setReady(false);
+		void loadSqlEditorRuntime()
+			.then((runtime) => {
+				if (cancelled || !parentRef.current) return;
+				const parser = new runtime.NodeSqlParser({
+					getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
+				});
+				const contextAnalyzer = new runtime.QueryContextAnalyzer(parser);
+				const schemaCompartment = new runtime.Compartment();
+				const themeCompartment = new runtime.Compartment();
+				runtimeRef.current = runtime;
+				schemaCompartmentRef.current = schemaCompartment;
+				themeCompartmentRef.current = themeCompartment;
+				analyzersRef.current = { parser, contextAnalyzer };
+				loadedView = new runtime.EditorView({
+					parent: parentRef.current,
+					doc: initialSql,
+					extensions: [
+						runtime.basicSetup,
+						runtime.lintGutter(),
+						// basicSetup binds Mod-Enter to insertBlankLine; this keeps Run first.
+						runtime.Prec.high(
+							runtime.keymap.of([
+								{
+									key: 'Mod-Enter',
+									run: () => {
+										onRunRef.current();
+										return true;
+									},
+								},
+								runtime.indentWithTab,
+							]),
+						),
+						runtime.EditorView.updateListener.of((update) => {
+							if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+						}),
+						schemaCompartment.of(
+							schemaExtensions(runtime, latestSchemaRef.current, dialect, parser, contextAnalyzer),
+						),
+						themeCompartment.of(editorTheme(runtime, latestThemeRef.current)),
+					],
+				});
+				viewRef.current = loadedView;
+				readiness.setReady(true);
+			})
+			.catch((cause: unknown) => {
+				if (!cancelled) setLoadError(errorMessage(cause));
+			});
 		return () => {
-			view.destroy();
-			viewRef.current = null;
+			cancelled = true;
+			loadedView?.destroy();
+			if (viewRef.current === loadedView) viewRef.current = null;
 		};
-	}, [dialect, initialSql, schemaCompartment, themeCompartment]);
+	}, [dialect, initialSql, loadAttempt, readiness]);
 
 	useEffect(() => {
-		viewRef.current?.dispatch({
-			effects: schemaCompartment.reconfigure(
+		const runtime = runtimeRef.current;
+		const view = viewRef.current;
+		const compartment = schemaCompartmentRef.current;
+		if (!runtime || !view || !compartment) return;
+		view.dispatch({
+			effects: compartment.reconfigure(
 				schemaExtensions(
+					runtime,
 					schema,
 					dialect,
 					analyzersRef.current?.parser,
@@ -525,28 +631,45 @@ const SqlEditor = forwardRef(function SqlEditor(
 				),
 			),
 		});
-	}, [dialect, schema, schemaCompartment]);
+	}, [dialect, schema]);
 
 	useEffect(() => {
-		viewRef.current?.dispatch({ effects: themeCompartment.reconfigure(editorTheme(theme)) });
-	}, [theme, themeCompartment]);
+		const runtime = runtimeRef.current;
+		const view = viewRef.current;
+		const compartment = themeCompartmentRef.current;
+		if (!runtime || !view || !compartment) return;
+		view.dispatch({ effects: compartment.reconfigure(editorTheme(runtime, theme)) });
+	}, [theme]);
 
-	return <div ref={parentRef} className="min-h-56 overflow-auto font-mono text-sm" />;
+	return (
+		<div className="min-h-56 overflow-auto font-mono text-sm">
+			{loadError ? (
+				<div role="alert" className="flex min-h-56 flex-col items-center justify-center gap-3 p-4">
+					<p className="text-destructive">Couldn’t load the SQL editor: {loadError}</p>
+					<Button size="sm" onPress={() => setLoadAttempt((attempt) => attempt + 1)}>
+						Retry
+					</Button>
+				</div>
+			) : null}
+			<div ref={parentRef} className={loadError ? 'hidden' : undefined} />
+		</div>
+	);
 });
 
 function schemaExtensions(
+	runtime: SqlEditorRuntime,
 	schema: Record<string, string[]>,
 	dialect: QueryDialect,
-	parser = new NodeSqlParser({
+	parser = new runtime.NodeSqlParser({
 		getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
 	}),
-	contextAnalyzer = new QueryContextAnalyzer(parser),
+	contextAnalyzer = new runtime.QueryContextAnalyzer(parser),
 ) {
-	const sqlDialect = dialect === 'postgresql' ? PostgreSQL : DuckDBDialect;
+	const sqlDialect = dialect === 'postgresql' ? runtime.PostgreSQL : runtime.DuckDBDialect;
 	return [
-		sql({ dialect: sqlDialect, schema, upperCaseKeywords: true }),
-		...sqlCompletion({ dialect: sqlDialect, schema, parser, contextAnalyzer }),
-		...sqlExtension({
+		runtime.sql({ dialect: sqlDialect, schema, upperCaseKeywords: true }),
+		...runtime.sqlCompletion({ dialect: sqlDialect, schema, parser, contextAnalyzer }),
+		...runtime.sqlExtension({
 			schema,
 			linterConfig: { delay: 250, parser },
 			semanticLinterConfig: {
@@ -566,13 +689,8 @@ function schemaExtensions(
 	];
 }
 
-export function defaultSql(dialect: QueryDialect): string {
-	const { name } = sqlDialectSettings(dialect);
-	return `-- Select a table or write a ${name} query\nSELECT 1 AS ready;`;
-}
-
-function editorTheme(theme: 'light' | 'dark') {
-	return EditorView.theme(
+function editorTheme(runtime: SqlEditorRuntime, theme: 'light' | 'dark') {
+	return runtime.EditorView.theme(
 		{
 			'&': { backgroundColor: 'hsl(var(--card))', color: 'hsl(var(--foreground))' },
 			'.cm-content': { minHeight: '14rem', padding: '0.75rem' },
@@ -588,24 +706,6 @@ function editorTheme(theme: 'light' | 'dark') {
 	);
 }
 
-export function completionSchemaSummary(counts: {
-	tables: number;
-	discovered_tables: number;
-	columns: number;
-	discovery_complete: boolean;
-}): string {
-	// discovered_tables is a lower bound when discovery was cut short.
-	const discovered = counts.discovery_complete
-		? `${counts.discovered_tables}`
-		: `${counts.discovered_tables}+`;
-	const tables = counts.discovered_tables === 1 && counts.discovery_complete ? 'table' : 'tables';
-	const columns = counts.columns === 1 ? 'column' : 'columns';
-	return (
-		`Loaded ${counts.tables} of ${discovered} ${tables} (${counts.columns} ${columns}) for autocomplete. ` +
-		'The selected table is always included, and queries against omitted tables still run.'
-	);
-}
-
 function completionSchema(tables: QueryTable[], integrationName: string): Record<string, string[]> {
 	const schema: Record<string, string[]> = {};
 	for (const table of tables) {
@@ -615,129 +715,6 @@ function completionSchema(tables: QueryTable[], integrationName: string): Record
 		schema[[integrationName, ...table.namespace, table.name].join('.')] = columns;
 	}
 	return schema;
-}
-
-export function selectedOrCurrentStatement(state: EditorState): string {
-	return sqlTargetAtState(state).sql;
-}
-
-export function sqlTargetAtState(state: EditorState): SqlTarget {
-	const document = state.doc.toString();
-	const selection = state.selection.main;
-	if (state.sliceDoc(selection.from, selection.to).trim()) {
-		return {
-			from: selection.from,
-			to: selection.to,
-			sql: state.sliceDoc(selection.from, selection.to),
-			document,
-		};
-	}
-	const range = sqlStatementRangeAtCursor(document, selection.head);
-	let from = range.from;
-	let to = range.to;
-	while (from < to && /\s/.test(document[from])) from++;
-	while (to > from && /\s/.test(document[to - 1])) to--;
-	if (document[to - 1] === ';') to--;
-	return { from, to, sql: document.slice(from, to).trim(), document };
-}
-
-export function applySqlTarget(
-	document: string,
-	target: SqlTarget,
-	replacement: string,
-): string | undefined {
-	if (document !== target.document) return undefined;
-	return `${document.slice(0, target.from)}${replacement}${document.slice(target.to)}`;
-}
-
-function sqlStatementRangeAtCursor(sql: string, cursor: number): { from: number; to: number } {
-	const ranges = sqlStatementRanges(sql);
-	for (const range of ranges) {
-		if (cursor <= range.to) return range;
-	}
-	return ranges.at(-1) ?? { from: 0, to: sql.length };
-}
-
-function sqlStatementRanges(sql: string): { from: number; to: number }[] {
-	let start = 0;
-	const ranges: { from: number; to: number }[] = [];
-	let hasToken = false;
-	let mode: 'normal' | 'single' | 'double' | 'backtick' | 'line-comment' | 'block-comment' =
-		'normal';
-	let blockDepth = 0;
-	let dollarDelimiter: string | undefined;
-	for (let index = 0; index < sql.length; index++) {
-		const character = sql[index];
-		const next = sql[index + 1];
-		if (dollarDelimiter !== undefined) {
-			if (sql.startsWith(dollarDelimiter, index)) {
-				index += dollarDelimiter.length - 1;
-				dollarDelimiter = undefined;
-			}
-			continue;
-		}
-		if (mode === 'line-comment') {
-			if (character === '\n' || character === '\r') mode = 'normal';
-			continue;
-		}
-		if (mode === 'block-comment') {
-			if (character === '/' && next === '*') {
-				blockDepth++;
-				index++;
-			} else if (character === '*' && next === '/') {
-				blockDepth--;
-				index++;
-				if (blockDepth === 0) mode = 'normal';
-			}
-			continue;
-		}
-		if (mode !== 'normal') {
-			const quote = mode === 'single' ? "'" : mode === 'double' ? '"' : '`';
-			if (character === quote) {
-				if (next === quote) index++;
-				else mode = 'normal';
-			}
-			continue;
-		}
-		if (character === '-' && next === '-') {
-			mode = 'line-comment';
-			index++;
-			continue;
-		}
-		if (character === '/' && next === '*') {
-			mode = 'block-comment';
-			blockDepth = 1;
-			index++;
-			continue;
-		}
-		if (character === "'" || character === '"' || character === '`') {
-			hasToken = true;
-			mode = character === "'" ? 'single' : character === '"' ? 'double' : 'backtick';
-			continue;
-		}
-		if (character === '$') {
-			const delimiter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index))?.[0];
-			if (delimiter !== undefined) {
-				hasToken = true;
-				dollarDelimiter = delimiter;
-				index += delimiter.length - 1;
-				continue;
-			}
-		}
-		if (character === ';') {
-			if (hasToken) ranges.push({ from: start, to: index + 1 });
-			start = index + 1;
-			hasToken = false;
-		} else if (!/\s/.test(character)) {
-			hasToken = true;
-		}
-	}
-	if (hasToken) ranges.push({ from: start, to: sql.length });
-	return ranges;
-}
-
-export function allSqlStatements(sql: string): string[] {
-	return sqlStatementRanges(sql).map(({ from, to }) => sql.slice(from, to).trim());
 }
 
 export function QueryExecutionResults({
@@ -892,16 +869,18 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 								{headers.map(({ key: columnKey }, columnIndex) => {
 									const rendered = renderCell(row[columnIndex]);
 									return (
-										<td
-											key={columnKey}
-											title="Click to copy"
-											onClick={() => void navigator.clipboard.writeText(rendered)}
-											className={cn(
-												'max-w-96 cursor-copy truncate px-3 py-1.5 font-mono',
-												rendered === 'null' && 'italic text-muted-foreground',
-											)}
-										>
-											{rendered}
+										<td key={columnKey} className="max-w-96 p-0 font-mono">
+											<button
+												type="button"
+												title="Copy cell"
+												onClick={() => void navigator.clipboard.writeText(rendered)}
+												className={cn(
+													'w-full cursor-copy truncate px-3 py-1.5 text-left',
+													rendered === 'null' && 'italic text-muted-foreground',
+												)}
+											>
+												{rendered}
+											</button>
 										</td>
 									);
 								})}
@@ -924,13 +903,6 @@ function renderCell(value: unknown): string {
 	} catch {
 		return '[unserializable]';
 	}
-}
-
-export function csvCell(value: unknown): string {
-	const rendered = renderCell(value);
-	const text =
-		typeof value === 'string' && /^[\t\r ]*[=+\-@]/.test(rendered) ? `'${rendered}` : rendered;
-	return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 function keyedValues(values: string[]): { key: string; value: string }[] {

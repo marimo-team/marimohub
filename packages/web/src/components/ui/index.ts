@@ -59,7 +59,8 @@ export type { TooltipProps } from './Tooltip';
 
 export { SessionStatusDot } from './SessionStatusDot';
 
-export { UserLabel, displayName } from './UserLabel';
+export { UserLabel } from './UserLabel';
+export { displayName } from './userLabelText';
 export type { UserLabelProps } from './UserLabel';
 
 export { UserAvatar } from './UserAvatar';

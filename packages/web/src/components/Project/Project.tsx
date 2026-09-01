@@ -150,11 +150,13 @@ const NOTEBOOK_EXPORT_ACTIONS: DropdownMenuOption[] = [
 ];
 
 function groupedMenuOptions(groups: DropdownMenuOption[][]): DropdownMenuOption[] {
-	return groups
-		.filter((group) => group.length > 0)
-		.flatMap((group, index) =>
-			index === 0 ? group : [{ ...group[0], separatorBefore: true }, ...group.slice(1)],
-		);
+	const options: DropdownMenuOption[] = [];
+	for (const group of groups) {
+		if (group.length === 0) continue;
+		if (options.length === 0) options.push(...group);
+		else options.push({ ...group[0], separatorBefore: true }, ...group.slice(1));
+	}
+	return options;
 }
 
 const DELETED_NOTEBOOK_ACTIONS = groupedMenuOptions([
@@ -239,7 +241,7 @@ const NEW_NOTEBOOK_CODE = (name: string) => {
 	return `import marimo\n\napp = marimo.App(width="medium", sql_output="native")\n\n\n@app.cell\ndef _():\n    import marimo as mo\n    return (mo,)\n\n\n@app.cell(hide_code=True)\ndef _(mo):\n    mo.md(${heading})\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
 };
 
-export function Project() {
+function useProjectContent() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
 	const { filters, setFilters, filtersActive } = useListFilters(NOTEBOOK_STATUS_FILTERS);
@@ -1145,4 +1147,8 @@ export function Project() {
 			</FormConfirmDialog>
 		</PageContainer>
 	);
+}
+
+export function Project() {
+	return useProjectContent();
 }

@@ -97,7 +97,7 @@ function expandedWithAncestry(
  * `/projects/:pid/data/:iid?ns=…&table=…&q=…`. The tree is lazy and paged;
  * selection and search live in the URL so a view can be shared or restored.
  */
-export default function DataBrowserPage() {
+function useDataBrowserPageState() {
 	const { pid, iid } = useParams<{ pid: string; iid?: string }>();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -238,6 +238,67 @@ export default function DataBrowserPage() {
 			return next;
 		});
 	};
+	return {
+		available,
+		capabilities,
+		dataIntegrations,
+		iid,
+		isExpanded,
+		kindsByName,
+		pid,
+		project,
+		query,
+		querySurface,
+		querySurfaceAvailable,
+		refresh,
+		refreshing,
+		selected,
+		selectedCapability,
+		selectedKind,
+		selectedNotebookInfo,
+		selectedObjectCapability,
+		selectedSurface,
+		selectedTableCapability,
+		selection,
+		selectIntegration,
+		selectSurface,
+		selectTable,
+		setQuery,
+		showQuerySurface,
+		toggleExpanded,
+	};
+}
+
+export default function DataBrowserPage() {
+	const {
+		available,
+		capabilities,
+		dataIntegrations,
+		iid,
+		isExpanded,
+		kindsByName,
+		pid,
+		project,
+		query,
+		querySurface,
+		querySurfaceAvailable,
+		refresh,
+		refreshing,
+		selected,
+		selectedCapability,
+		selectedKind,
+		selectedNotebookInfo,
+		selectedObjectCapability,
+		selectedSurface,
+		selectedTableCapability,
+		selection,
+		selectIntegration,
+		selectSurface,
+		selectTable,
+		setQuery,
+		showQuerySurface,
+		toggleExpanded,
+	} = useDataBrowserPageState();
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-6 max-md:overflow-y-auto max-md:p-3">
@@ -313,7 +374,7 @@ export default function DataBrowserPage() {
 					<p>
 						<span className="font-medium">Run SQL unavailable.</span>{' '}
 						<span className="text-muted-foreground">
-							{querySurface.reason ?? 'This integration is not SQL-ready.'}
+							{querySurface?.reason ?? 'This integration is not SQL-ready.'}
 						</span>
 					</p>
 					<p className="mt-1 text-xs text-muted-foreground">

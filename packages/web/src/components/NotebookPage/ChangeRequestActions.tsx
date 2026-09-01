@@ -1,5 +1,5 @@
 import { ChevronDown, GitPullRequest, RefreshCw } from 'lucide-react';
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import {
 	notebookChangeRequestScope,
@@ -74,7 +74,9 @@ export function ChangeRequestActions({
 }: ChangeRequestActionsProps) {
 	const scope = notebookChangeRequestScope(projectId, notebookId);
 	const currentScope = useRef(scope);
-	currentScope.current = scope;
+	useLayoutEffect(() => {
+		currentScope.current = scope;
+	}, [scope]);
 	const publisher = useNotebookChangeRequestPublisher(projectId, notebookId);
 	const activeChangeRequest = publisher.activeChangeRequest;
 	const publishingAvailable = canPublish && !!sessionId && !!provider;

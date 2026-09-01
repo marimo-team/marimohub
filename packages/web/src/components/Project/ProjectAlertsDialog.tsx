@@ -31,7 +31,9 @@ function knownKinds(values: readonly string[]): ProjectAlertKind[] {
 }
 
 function sameKinds(a: readonly ProjectAlertKind[], b: readonly ProjectAlertKind[]): boolean {
-	return a.length === b.length && b.every((kind) => a.includes(kind));
+	if (a.length !== b.length) return false;
+	const values = new Set(a);
+	return b.every((kind) => values.has(kind));
 }
 
 const GROUPS: { label: string; kinds: ProjectAlertKind[] }[] = [
@@ -64,13 +66,11 @@ function fresh(kinds: readonly string[]): EditorState {
 	return { type: 'slack', name: '', kinds: knownKinds(kinds), endpoint: '', secret: '' };
 }
 
-export function ProjectAlertsDialog({
+function useProjectAlertsDialogState({
 	isOpen,
-	onClose,
 	projectId,
 	selectableKinds,
-	maxDestinations,
-}: Props) {
+}: Pick<Props, 'isOpen' | 'projectId' | 'selectableKinds'>) {
 	const { data: destinations = [], isLoading } = useProjectAlertsQuery(projectId, isOpen);
 	const create = useCreateProjectAlert(projectId);
 	const update = useUpdateProjectAlert(projectId);
@@ -102,6 +102,12 @@ export function ProjectAlertsDialog({
 	const unknownKinds =
 		editor?.destination?.kinds.filter((kind) => !Object.hasOwn(LABELS, kind)) ?? [];
 	const hasSelectedKinds = (editor?.kinds.length ?? 0) > 0 || unknownKinds.length > 0;
+	const selectableKindSet = new Set(selectableKinds);
+	const selectedKindSet = new Set(editor?.kinds ?? []);
+	const visibleGroups = GROUPS.map((group) => ({
+		...group,
+		kinds: group.kinds.filter((kind) => selectableKindSet.has(kind)),
+	}));
 
 	const save = async () => {
 		if (!editor?.name.trim() || (!hasSelectedKinds && !kindsPristine)) return;
@@ -161,6 +167,48 @@ export function ProjectAlertsDialog({
 			toastError(error);
 		}
 	};
+	return {
+		confirmDelete,
+		deleteDestination,
+		destinations,
+		edit,
+		editor,
+		hasSelectedKinds,
+		isLoading,
+		kindsPristine,
+		pending,
+		remove,
+		save,
+		selectedKindSet,
+		setEditor,
+		test,
+		testKeys,
+		update,
+		visibleGroups,
+	};
+}
+
+export function ProjectAlertsDialog(props: Props) {
+	const { isOpen, onClose, selectableKinds, maxDestinations } = props;
+	const {
+		confirmDelete,
+		deleteDestination,
+		destinations,
+		edit,
+		editor,
+		hasSelectedKinds,
+		isLoading,
+		kindsPristine,
+		pending,
+		remove,
+		save,
+		selectedKindSet,
+		setEditor,
+		test,
+		testKeys,
+		update,
+		visibleGroups,
+	} = useProjectAlertsDialogState(props);
 
 	return (
 		<DialogModal isOpen={isOpen} onClose={onClose} title="Project alerts" width="lg">
@@ -225,31 +273,29 @@ export function ProjectAlertsDialog({
 							/>
 						)}
 						<div className="grid gap-4 sm:grid-cols-3">
-							{GROUPS.map((group) => (
+							{visibleGroups.map((group) => (
 								<fieldset key={group.label} className="space-y-2">
 									<legend className="text-xs font-semibold text-muted-foreground">
 										{group.label}
 									</legend>
-									{group.kinds
-										.filter((kind) => selectableKinds.includes(kind))
-										.map((kind) => (
-											<label key={kind} className="flex items-center gap-2 text-xs">
-												<input
-													type="checkbox"
-													aria-label={LABELS[kind]}
-													checked={editor.kinds.includes(kind)}
-													onChange={(event) =>
-														setEditor({
-															...editor,
-															kinds: event.target.checked
-																? [...editor.kinds, kind]
-																: editor.kinds.filter((value) => value !== kind),
-														})
-													}
-												/>
-												{LABELS[kind]}
-											</label>
-										))}
+									{group.kinds.map((kind) => (
+										<label key={kind} className="flex items-center gap-2 text-xs">
+											<input
+												type="checkbox"
+												aria-label={LABELS[kind]}
+												checked={selectedKindSet.has(kind)}
+												onChange={(event) =>
+													setEditor({
+														...editor,
+														kinds: event.target.checked
+															? [...editor.kinds, kind]
+															: editor.kinds.filter((value) => value !== kind),
+													})
+												}
+											/>
+											{LABELS[kind]}
+										</label>
+									))}
 								</fieldset>
 							))}
 						</div>

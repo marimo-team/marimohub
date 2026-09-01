@@ -9,7 +9,7 @@ import {
 	selectedOrCurrentStatement,
 	sqlDialectSettings,
 	sqlTargetAtState,
-} from './SqlWorkspace';
+} from './sqlWorkspaceUtils';
 
 describe('SQL dialect selection', () => {
 	it('selects PostgreSQL parsing, formatting, and starter text', () => {
@@ -72,6 +72,19 @@ describe('SQL statement selection', () => {
 		expect(allSqlStatements("SELECT 'a;b'; -- separator ;\nSELECT 2;\n-- tail only")).toEqual([
 			"SELECT 'a;b';",
 			'-- separator ;\nSELECT 2;',
+		]);
+	});
+
+	it('does not split PostgreSQL escape strings at escaped quotes or semicolons', () => {
+		const sql = String.raw`SELECT E'it\'s;a';
+SELECT 2;`;
+		expect(allSqlStatements(sql)).toEqual([String.raw`SELECT E'it\'s;a';`, 'SELECT 2;']);
+	});
+
+	it('does not treat dollar-tag-shaped identifier suffixes as quoted strings', () => {
+		expect(allSqlStatements('SELECT column$tag$; SELECT 2;')).toEqual([
+			'SELECT column$tag$;',
+			'SELECT 2;',
 		]);
 	});
 

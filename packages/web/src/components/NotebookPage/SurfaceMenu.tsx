@@ -55,26 +55,27 @@ export function SurfaceMenu({
 	onOpenFrame,
 	onCloseFrame,
 }: SurfaceMenuProps) {
-	const controls = (capabilities?.surfaces ?? [])
-		.map((capability) => {
-			const definition: SurfaceDefinition = SURFACE_DEFINITIONS[capability.id];
-			const actionState = actions.states[definition.id];
-			const state =
-				actionState && actionState.sessionId === session?.session_id
-					? actionState.surface
-					: session?.surfaces?.[definition.id];
-			return {
+	const controls = (capabilities?.surfaces ?? []).flatMap((capability) => {
+		const definition: SurfaceDefinition = SURFACE_DEFINITIONS[capability.id];
+		const actionState = actions.states[definition.id];
+		const state =
+			actionState && actionState.sessionId === session?.session_id
+				? actionState.surface
+				: session?.surfaces?.[definition.id];
+		if (isApp || !session?.can.surfaces?.[definition.id] || session.status !== 'running') {
+			return [];
+		}
+		return [
+			{
 				...definition,
 				capability,
 				state,
 				canStart: !definition.openPath || !!notebook,
 				isStarting: actions.starting.has(definition.id),
 				isStopping: actions.stopping.has(definition.id),
-			};
-		})
-		.filter(
-			(control) => !isApp && !!session?.can.surfaces?.[control.id] && session.status === 'running',
-		);
+			},
+		];
+	});
 
 	if (controls.length === 0) return null;
 

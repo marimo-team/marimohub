@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ApiRequestError } from './client';
-import { isApiErrorCode, isNotFoundError, notebookPath, projectPath } from './request';
+import {
+	isApiErrorCode,
+	isNotFoundError,
+	notebookPath,
+	projectPath,
+	workspaceArchivePath,
+} from './request';
 
 const PID = 'proj-1';
 const NID = 'nb-1';
@@ -9,6 +15,15 @@ describe('raw path builders', () => {
 	it('composes the project and notebook roots', () => {
 		expect(projectPath(PID)).toBe('/api/v1/projects/proj-1');
 		expect(notebookPath(PID, NID)).toBe('/api/v1/projects/proj-1/notebooks/nb-1');
+		expect(workspaceArchivePath(PID, NID)).toBe(
+			'/api/v1/projects/proj-1/notebooks/nb-1/workspace.zip',
+		);
+	});
+
+	it('encodes path segments', () => {
+		expect(notebookPath('project/one', 'notebook/two')).toBe(
+			'/api/v1/projects/project%2Fone/notebooks/notebook%2Ftwo',
+		);
 	});
 });
 

@@ -71,6 +71,7 @@ export function useSurfaceActions(projectId: string, notebookId: string) {
 		},
 		onSuccess: (surface, { surfaceId, sessionId }) => {
 			setStates((current) => ({ ...current, [surfaceId]: { sessionId, surface } }));
+			invalidate(sessionKeys.listByProject(projectId));
 		},
 	});
 	const stop = useMutation({

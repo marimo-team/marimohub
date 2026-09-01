@@ -37,13 +37,13 @@ describe('SqlReadinessChecklist', () => {
 		await user.click(screen.getByText('Run SQL readiness').closest('summary')!);
 
 		expect(disclosure).toHaveAttribute('open');
-		expect(screen.getByRole('link', { name: /Set access delegation to none/ })).toHaveAttribute(
-			'href',
-			'#integration-field-access_delegation',
+		expect(screen.getByRole('button', { name: /Set access delegation to none/ })).toHaveAttribute(
+			'aria-controls',
+			'integration-field-access_delegation',
 		);
 	});
 
-	it('links header and extra-property blockers to separate fields', async () => {
+	it('maps header and extra-property blockers to separate fields', async () => {
 		const user = userEvent.setup();
 		render(
 			createElement(SqlReadinessChecklist, {
@@ -57,13 +57,13 @@ describe('SqlReadinessChecklist', () => {
 		);
 		await user.click(screen.getByText('Run SQL readiness').closest('summary')!);
 
-		expect(screen.getByRole('link', { name: /Remove custom headers/ })).toHaveAttribute(
-			'href',
-			'#integration-field-headers',
+		expect(screen.getByRole('button', { name: /Remove custom headers/ })).toHaveAttribute(
+			'aria-controls',
+			'integration-field-headers',
 		);
-		expect(screen.getByRole('link', { name: /Remove extra properties/ })).toHaveAttribute(
-			'href',
-			'#integration-field-extra_properties',
+		expect(screen.getByRole('button', { name: /Remove extra properties/ })).toHaveAttribute(
+			'aria-controls',
+			'integration-field-extra_properties',
 		);
 	});
 });

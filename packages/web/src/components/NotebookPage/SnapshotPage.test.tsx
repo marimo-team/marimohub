@@ -58,7 +58,7 @@ describe('SnapshotPage', () => {
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		const iframe = container.querySelector('iframe')!;
 		expect(iframe.getAttribute('srcdoc')).toContain('outputs');
-		// Opaque origin: no allow-same-origin, unlike the live-kernel iframe.
+		// Opaque origin prevents snapshot scripts from reaching the hub document.
 		expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
 		expect(screen.getByText(/captured when the last editing session ended/)).toBeInTheDocument();
 		// Compute-free by design: reads only, no session create.

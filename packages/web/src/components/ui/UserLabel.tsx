@@ -1,6 +1,7 @@
 import type { ResolvedUser } from '@/types';
 import { cn } from '@/lib/utils';
 import { Skeleton } from './Skeleton';
+import { displayName } from './userLabelText';
 
 export interface UserLabelProps {
 	/** Resolved identity, when available from the user directory. */
@@ -10,14 +11,6 @@ export interface UserLabelProps {
 	/** Directory lookup in flight: show a skeleton instead of the raw id. */
 	loading?: boolean;
 	className?: string;
-}
-
-/**
- * How a user is named in prose. Exported so confirmation copy ("Remove <name>?")
- * names them the same way as the row it was opened from.
- */
-export function displayName(user: ResolvedUser | undefined, fallbackId: string): string {
-	return user?.name || user?.email || fallbackId;
 }
 
 /**

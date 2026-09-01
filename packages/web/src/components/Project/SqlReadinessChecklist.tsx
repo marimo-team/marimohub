@@ -67,13 +67,11 @@ export function SqlReadinessChecklist({
 				<ul className="grid gap-1.5 border-t px-3 py-2 sm:grid-cols-2">
 					{checks.map((check) => (
 						<li key={check.id}>
-							<a
-								href={`#${schemaFieldId(check.field)}`}
-								onClick={(event) => {
-									event.preventDefault();
-									revealField(check.field);
-								}}
-								className="flex items-start gap-1.5 rounded px-1.5 py-1 text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							<button
+								type="button"
+								aria-controls={schemaFieldId(check.field)}
+								onClick={() => revealField(check.field)}
+								className="flex w-full items-start gap-1.5 rounded px-1.5 py-1 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
 								{check.ready ? (
 									<Check className="mt-0.5 size-3.5 shrink-0 text-emerald-600" aria-hidden />
@@ -83,7 +81,7 @@ export function SqlReadinessChecklist({
 								<span className={check.ready ? 'text-muted-foreground' : 'text-foreground'}>
 									{check.label}
 								</span>
-							</a>
+							</button>
 						</li>
 					))}
 				</ul>

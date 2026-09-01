@@ -1,7 +1,9 @@
 import { useMutation } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { NotebookChangeRequest } from '../types';
 import { apiClient, apiData } from './client';
+import { useInvalidate } from './mutation';
+import { notebookKeys } from './queryKeys';
 import { isApiErrorCode } from './request';
 
 export type PublishChangeRequestAction = 'open' | 'update' | 'create-new';
@@ -61,10 +63,13 @@ function prunePublishAttempts(attempts: Map<string, PublishAttempt>, now: number
 export function useNotebookChangeRequestPublisher(projectId: string, notebookId: string) {
 	const scope = notebookChangeRequestScope(projectId, notebookId);
 	const currentScope = useRef(scope);
-	currentScope.current = scope;
+	useLayoutEffect(() => {
+		currentScope.current = scope;
+	}, [scope]);
 	const [published, setPublished] = useState<ScopedChangeRequest>();
 	const [mutationScope, setMutationScope] = useState<string>();
 	const attempts = useRef(new Map<string, PublishAttempt>());
+	const invalidate = useInvalidate();
 	const mutation = useMutation({
 		mutationFn: async ({ sessionId, title, action }: PublishNotebookChangeRequestInput) => {
 			const now = Date.now();
@@ -135,6 +140,12 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 		},
 		onMutate: () => {
 			setMutationScope(scope);
+		},
+		onSuccess: () => {
+			invalidate(
+				notebookKeys.detail(projectId, notebookId),
+				notebookKeys.versions(projectId, notebookId),
+			);
 		},
 	});
 	const activeChangeRequest = published?.scope === scope ? published.value : undefined;
