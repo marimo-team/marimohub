@@ -5,7 +5,11 @@ import { createApi } from './createApi';
 import { expectError, expectOk, makeTestDeps } from './testing';
 
 const authed: Authenticator = {
-	authenticate: async () => ({ id: uid('u'), email: 'u@example.com' }),
+	authenticate: async () => ({
+		id: uid('u'),
+		email: 'u@example.com',
+		credential: { kind: 'development' },
+	}),
 };
 
 describe('GET /api/v1/version', () => {

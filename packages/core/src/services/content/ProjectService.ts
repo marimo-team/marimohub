@@ -1,12 +1,7 @@
 import type { Bucket } from '../../ports/bucket';
-import {
-	canAct,
-	canSeeProjectEntry,
-	isSuperAdmin,
-	roleAtLeast,
-	subjectDefaultRole,
-} from '../../authz';
+import { roleAtLeast } from '../../authz';
 import type { AuthSubject, AuthzPolicy } from '../../authz';
+import { AuthorizationService } from '../authorization/AuthorizationService';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -236,30 +231,41 @@ export class ProjectService {
 			);
 			matching = matching.filter((_, index) => tagMatches[index]);
 		}
-		if (
-			!filter ||
-			subjectDefaultRole(filter.subject, filter.policy) != null ||
-			isSuperAdmin(filter.subject, filter.policy?.superAdmins)
-		) {
+		if (!filter) return matching.map(toPublicProjectEntry);
+		// Visibility routes through the authorization service so listings and
+		// direct reads cannot drift. The filter runs BEFORE pagination (the caller
+		// pages the returned entries), so a hidden project never leaks through
+		// page counts or cursors.
+		const authz = new AuthorizationService(filter.policy);
+		if (authz.listsAllProjects(filter.subject)) {
 			return matching.map(toPublicProjectEntry);
 		}
 		const visibility = await mapWithConcurrency(
 			matching,
 			BUCKET_SCAN_CONCURRENCY,
 			async (entry) => {
-				const seen = canSeeProjectEntry(entry, filter.subject, filter.policy);
+				const seen = authz.projectEntryVisibility(filter.subject, entry);
 				// `null` = the entry predates `member_ids`, so visibility can't be decided
 				// from the snapshot alone; fall back to the authoritative project.json.
-				return seen ?? (await this.canSeeProject(entry.id, filter.subject));
+				return seen ?? (await this.canSeeProject(authz, entry.id, filter.subject));
 			},
 		);
 		return matching.filter((_, i) => visibility[i]).map(toPublicProjectEntry);
 	}
 
 	// Only reached when the fast path above didn't return, i.e. the caller is
-	// neither a super admin nor covered by a defaultRole — so no policy here.
-	private async canSeeProject(id: ProjectId, subject: AuthSubject): Promise<boolean> {
-		return canAct(await this.getProject(id), subject, 'viewer', undefined);
+	// neither a super admin nor covered by a defaultRole. The service applies
+	// the same policy either way; membership alone decides here.
+	private async canSeeProject(
+		authz: AuthorizationService,
+		id: ProjectId,
+		subject: AuthSubject,
+	): Promise<boolean> {
+		const decision = await authz.authorize(subject, 'project.read', {
+			kind: 'project',
+			project: await this.getProject(id),
+		});
+		return decision.allowed;
 	}
 
 	async getProject(id: ProjectId): Promise<Project> {

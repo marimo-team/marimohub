@@ -626,6 +626,7 @@ describe('OIDC routes', () => {
 			id: 'user-1',
 			email: 'user@example.com',
 			name: 'Ada Lovelace',
+			credential: { kind: 'sso', expiresAt: expect.any(String) },
 		});
 		expect(res.headers.get('set-cookie') ?? '').toContain(`${TXN_COOKIE}=`);
 	});
@@ -1100,6 +1101,7 @@ describe('OIDC routes', () => {
 			email: 'fresh@example.com',
 			name: 'Fresh Name',
 			pictureUrl: 'https://images.example.com/ada.png',
+			credential: { kind: 'sso', expiresAt: expect.any(String) },
 		});
 	});
 
@@ -1561,14 +1563,23 @@ describe('OIDC authenticate (cookie session)', () => {
 		const auth = makeAuthenticator();
 		const token = await signSession({ sub: 'user-1', email: 'user@example.com' });
 		const user = await auth.authenticate(requestWithCookie(token));
-		expect(user).toEqual({ id: 'user-1', email: 'user@example.com' });
+		expect(user).toEqual({
+			id: 'user-1',
+			email: 'user@example.com',
+			credential: { kind: 'sso', expiresAt: expect.any(String) },
+		});
 	});
 
 	it('surfaces the display name from the session cookie when present', async () => {
 		const auth = makeAuthenticator();
 		const token = await signSession({ sub: 'user-1', email: 'user@example.com', name: 'Ada L.' });
 		const user = await auth.authenticate(requestWithCookie(token));
-		expect(user).toEqual({ id: 'user-1', email: 'user@example.com', name: 'Ada L.' });
+		expect(user).toEqual({
+			id: 'user-1',
+			email: 'user@example.com',
+			name: 'Ada L.',
+			credential: { kind: 'sso', expiresAt: expect.any(String) },
+		});
 	});
 
 	it('trims the display name and drops control characters', async () => {
@@ -1654,6 +1665,7 @@ describe('OIDC authenticate (cookie session)', () => {
 		expect(await auth.authenticate(requestWithCookie(token))).toEqual({
 			id: 'user-1',
 			email: 'user@example.com',
+			credential: { kind: 'sso', expiresAt: expect.any(String) },
 		});
 	});
 

@@ -21,6 +21,7 @@ describe('GET /api/v1/me', () => {
 	it('returns optional profile fields and group-derived super-admin status', async () => {
 		const authenticator: Authenticator = {
 			authenticate: async () => ({
+				credential: { kind: 'development' },
 				id: ACTOR,
 				email: `${ACTOR}@example.com`,
 				name: 'Ada',
@@ -47,6 +48,7 @@ describe('GET /api/v1/me', () => {
 
 		const authenticator: Authenticator = {
 			authenticate: async () => ({
+				credential: { kind: 'development' },
 				id: ACTOR,
 				email: `${ACTOR}@example.com`,
 				entitlements: ['project-creator'],
@@ -60,7 +62,11 @@ describe('GET /api/v1/me', () => {
 
 	it('surfaces the authenticator logout URL when one is provided', async () => {
 		const authenticator: Authenticator = {
-			authenticate: async () => ({ id: ACTOR, email: `${ACTOR}@example.com` }),
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				credential: { kind: 'development' },
+			}),
 			logoutUrl: () => 'https://idp.example/logout',
 		};
 		const { request } = createTestApi({ deps: { authenticator } });

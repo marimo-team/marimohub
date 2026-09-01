@@ -118,6 +118,29 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC          |
 | ✅     | OIDC login policy (external module)              | `auth-oidc`              | `oidc-login-policy` library: login-time claim mapping   |
 
+Every adapter returns an `AuthenticatedPrincipal`: the user plus a required
+`credential` with bounded provenance (`sso` | `personal-access-token` |
+`service-account` | `development`, optional id and expiry). Consumers key
+credential-scoped behavior (e.g. the API's PAT-only route guard) off this
+field, never off request-header inference.
+
+## Subject security context (`SubjectSecurityContextProvider`)
+
+`packages/core/src/ports/subjectContext.ts`. Resolves a principal into a
+bounded runtime security context (`schemaVersion`, `classification`,
+`compartments`, `policyVersion`, `expiresAt` — strict schema, token-bounded
+values, at most 64 compartments) for future resource-security constraints.
+`null` means the subject has no context: an unlabeled resource is unaffected; a
+labeled resource must fail closed. The raw JWT, UserInfo response, or a
+login-policy result is never a valid source — implementations live in adapter
+packages and every value is re-validated with
+`validateSubjectSecurityContext()` (fail-closed on malformed, unknown-field,
+and expired contexts). No adapter is built yet.
+
+| Status | Provider          | Adapter | Notes                                |
+| ------ | ----------------- | ------- | ------------------------------------ |
+| ⬜     | Agency / IdP sync | —       | Candidate once resource labels exist |
+
 ## Object browsing (`ObjectBrowser`)
 
 | Status | Provider             | Adapter                  | Notes                                      |

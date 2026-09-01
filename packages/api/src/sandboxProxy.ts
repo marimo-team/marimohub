@@ -175,8 +175,8 @@ export async function authorizeProxyRequest(
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
 	try {
-		if (surfaceId) assertSessionSurfaceAccess(project, session, user, deps.policy);
-		else assertSessionAccess(project, session, user, deps.policy);
+		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps.policy);
+		else await assertSessionAccess(project, session, user, deps.policy);
 	} catch (err) {
 		if (err instanceof ForbiddenError || err instanceof SurfaceForbiddenError) {
 			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };

@@ -439,7 +439,7 @@ app.openapi(listUsers, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	assertSessionAuthenticated(c, 'access admin endpoints');
-	assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps.policy);
 
 	const all = await deps.services.identities.list();
 	const items = all
@@ -454,7 +454,7 @@ app.openapi(suspendUser, async (c) => {
 	const deps = c.get('deps');
 	const actor = c.get('user');
 	assertSessionAuthenticated(c, 'suspend users');
-	assertSuperAdmin(actor, deps.policy);
+	await assertSuperAdmin(actor, deps.policy);
 	const targetId = UserId.parse(c.req.valid('param').id);
 	if (targetId === actor.id) throw new ForbiddenError('You cannot suspend your own account');
 
@@ -476,7 +476,7 @@ app.openapi(unsuspendUser, async (c) => {
 	const deps = c.get('deps');
 	const actor = c.get('user');
 	assertSessionAuthenticated(c, 'reactivate users');
-	assertSuperAdmin(actor, deps.policy);
+	await assertSuperAdmin(actor, deps.policy);
 	const targetId = UserId.parse(c.req.valid('param').id);
 
 	const identity = await deps.services.identities.setSuspension(targetId, false);
@@ -497,7 +497,7 @@ app.openapi(testSandboxStartup, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	assertSessionAuthenticated(c, 'run sandbox startup diagnostics');
-	assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps.policy);
 
 	const body = c.req.valid('json') ?? {};
 	const image = selectedImage(deps.sandbox.images ?? [], body.image);
@@ -698,11 +698,11 @@ app.openapi(testSandboxStartup, async (c) => {
 	return c.json({ success: true, data: report }, 200);
 });
 
-app.openapi(getConfig, (c) => {
+app.openapi(getConfig, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	assertSessionAuthenticated(c, 'access admin endpoints');
-	assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps.policy);
 
 	const v = deps.version;
 	return c.json(

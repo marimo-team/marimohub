@@ -1019,7 +1019,13 @@ async function resolveAuthorizedObjectAccess(
 	iid: IntegrationId,
 	signal?: AbortSignal,
 ) {
-	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'integration.use',
+		deps.policy,
+	);
 	return resolveObjectAccess(deps, project, user, integrations, pid, iid, signal);
 }
 
@@ -1273,7 +1279,7 @@ app.openapi(browseNamespaces, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const { limit, cursor, parent, fresh } = c.req.valid('query');
 	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps.policy);
 	const stateToken = await assertBrowsable(integrations, pid, iid);
 	const request = {
 		limit,
@@ -1302,7 +1308,7 @@ app.openapi(browseTables, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const { limit, cursor, namespace, fresh } = c.req.valid('query');
 	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps.policy);
 	const stateToken = await assertBrowsable(integrations, pid, iid);
 	const request = {
 		limit,
@@ -1330,7 +1336,7 @@ app.openapi(browseTableSchema, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const { namespace, table, fresh } = c.req.valid('query');
 	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps.policy);
 	const stateToken = await assertBrowsable(integrations, pid, iid);
 	const data = await browseEndpoint({
 		deps,
@@ -1357,7 +1363,13 @@ app.openapi(browseTablePreview, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const { namespace, table, limit } = c.req.valid('json');
 	const { integrations, preview } = requireDataBrowser(deps);
-	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'integration.use',
+		deps.policy,
+	);
 	const wif = deps.wif;
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
 	assertIntegrationBudget(deps, 'browse', user.id);
@@ -1402,7 +1414,7 @@ app.openapi(runDataQuery, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const { sql } = c.req.valid('json');
 	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
 	if (deps.dataBrowser?.query !== true) {
 		throw new NotFoundError('Run SQL is not enabled on this deployment');
 	}
@@ -1443,7 +1455,7 @@ app.openapi(getDataQuerySchema, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const focus = c.req.valid('query');
 	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
 	if (deps.dataBrowser?.query !== true) {
 		throw new NotFoundError('Run SQL is not enabled on this deployment');
 	}
@@ -1477,7 +1489,7 @@ app.openapi(generateDataQuerySql, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const body = c.req.valid('json');
 	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
 	const generateSql = deps.ai?.generateSql;
 	if (deps.dataBrowser?.query !== true || !generateSql) {
 		throw new NotFoundError('Managed AI SQL is not enabled on this deployment');
@@ -1770,7 +1782,13 @@ app.openapi(browseObjectContent, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const { bucket, key, version_id, inline, etag } = c.req.valid('query');
 	const { integrations } = requireDataBrowser(deps);
-	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'integration.use',
+		deps.policy,
+	);
 	const operation = inline === 'true' ? 'inline' : 'download';
 	const release = acquireDownload(deps, user.id, operation);
 	const controller = new AbortController();

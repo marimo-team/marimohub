@@ -252,6 +252,29 @@ export {
 	sessionCan,
 	sessionGrants,
 } from './runtime/sessionAuthz';
+export { AuthorizationService } from './authorization/AuthorizationService';
+export type {
+	AuthorizationDecision,
+	AuthorizationDenialCategory,
+	AuthorizationPolicy,
+	AuthorizationResource,
+	ProjectEntryVisibilityInput,
+	SessionAdmissionRecord,
+} from './authorization/AuthorizationService';
+export {
+	ACTION_RULES,
+	AUTHORIZATION_ACTIONS,
+	DEPLOYMENT_ACTIONS,
+	PROJECT_ACTIONS,
+	projectActionMinRole,
+	SESSION_ACTIONS,
+} from './authorization/actions';
+export type {
+	AuthorizationAction,
+	DeploymentAction,
+	ProjectAction,
+	SessionScopedAction,
+} from './authorization/actions';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
 export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';

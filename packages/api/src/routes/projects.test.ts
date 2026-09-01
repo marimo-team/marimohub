@@ -203,6 +203,7 @@ describe('Project routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: ACTOR,
 						email: `${ACTOR}@example.com`,
 						entitlements,
@@ -346,6 +347,7 @@ describe('Project member routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: groupManager,
 						email: 'group-manager@example.com',
 						entitlements: ['default-role:manager'],
@@ -999,7 +1001,13 @@ describe('Super admin (MARIMOHUB_SUPER_ADMINS)', () => {
 		return createTestApi({
 			bucket,
 			deps: {
-				authenticator: { authenticate: async () => ({ id: uid(id), email }) },
+				authenticator: {
+					authenticate: async () => ({
+						id: uid(id),
+						email,
+						credential: { kind: 'development' },
+					}),
+				},
 				policy: { superAdmins },
 			},
 		}).request;

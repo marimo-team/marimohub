@@ -36,8 +36,9 @@ describe('User routes', () => {
 	});
 
 	it('GET /users returns a persisted profile picture', async () => {
-		const authenticator = {
+		const authenticator: Authenticator = {
 			authenticate: async () => ({
+				credential: { kind: 'development' },
 				id: ACTOR,
 				email: `${ACTOR}@example.com`,
 				pictureUrl: 'https://images.example.com/ada.png',
@@ -137,6 +138,7 @@ describe('User routes', () => {
 		it('a group-derived default role opens directory search under members-only', async () => {
 			const authenticator: Authenticator = {
 				authenticate: async () => ({
+					credential: { kind: 'development' },
 					id: uid('ada'),
 					email: 'ada@example.com',
 					entitlements: ['default-role:viewer'],
@@ -159,6 +161,7 @@ describe('User routes', () => {
 		it('a group-derived super admin may search under members-only', async () => {
 			const authenticator: Authenticator = {
 				authenticate: async () => ({
+					credential: { kind: 'development' },
 					id: uid('ada'),
 					email: 'ada@example.com',
 					entitlements: ['super-admin'],

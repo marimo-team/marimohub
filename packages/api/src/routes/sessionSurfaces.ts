@@ -218,7 +218,7 @@ export async function loadSurfaceSession(
 	if (session.notebook_id !== params.nid) {
 		throw new NotFoundError(`Session ${params.sid} not found`);
 	}
-	if (permission === 'control') assertSessionControl(project, session, user, deps.policy);
-	else assertSessionSurfaceAccess(project, session, user, deps.policy);
+	if (permission === 'control') await assertSessionControl(project, session, user, deps.policy);
+	else await assertSessionSurfaceAccess(project, session, user, deps.policy);
 	return session;
 }

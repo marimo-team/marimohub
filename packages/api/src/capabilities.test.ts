@@ -5,7 +5,11 @@ import { createApi } from './createApi';
 import { expectError, expectOk, makeTestDeps, stubSourceControl } from './testing';
 
 const authed: Authenticator = {
-	authenticate: async () => ({ id: uid('u'), email: 'u@example.com' }),
+	authenticate: async () => ({
+		id: uid('u'),
+		email: 'u@example.com',
+		credential: { kind: 'development' },
+	}),
 };
 
 /** A minimal stub of the WIF issuer — capabilities only checks for its presence. */
@@ -106,6 +110,7 @@ describe('GET /api/v1/capabilities', () => {
 	it('reports the role derived from the current OIDC session', async () => {
 		const authenticator: Authenticator = {
 			authenticate: async () => ({
+				credential: { kind: 'development' },
 				id: uid('group-user'),
 				email: 'group-user@example.com',
 				entitlements: ['default-role:editor'],
@@ -121,6 +126,7 @@ describe('GET /api/v1/capabilities', () => {
 	it('reports a group-derived manager without treating them as a super admin', async () => {
 		const authenticator: Authenticator = {
 			authenticate: async () => ({
+				credential: { kind: 'development' },
 				id: uid('group-manager'),
 				email: 'group-manager@example.com',
 				entitlements: ['default-role:manager'],

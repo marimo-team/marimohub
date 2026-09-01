@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { UserId } from '@marimo-hub/core';
-import type { Authenticator, AuthUser } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core';
 
 const DEFAULT_HEADERS = ['X-Forwarded-Email', 'X-Forwarded-User'] as const;
 const DEFAULT_IAP_HEADER = 'X-Goog-IAP-JWT-Assertion';
@@ -86,7 +86,7 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 		}
 	}
 
-	async authenticate(request: Request): Promise<AuthUser | null> {
+	async authenticate(request: Request): Promise<AuthenticatedPrincipal | null> {
 		if (this.config.mode === 'headers') {
 			const [emailHeader, userIdHeader] = this.config.headers ?? DEFAULT_HEADERS;
 			const email = request.headers.get(emailHeader)?.trim() ?? '';
@@ -112,7 +112,11 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 			) {
 				return null;
 			}
-			return this.user(payload.email.trim(), payload.sub.trim());
+			return this.user(
+				payload.email.trim(),
+				payload.sub.trim(),
+				new Date(payload.exp * 1000).toISOString(),
+			);
 		} catch (error) {
 			console.error(
 				'Proxy JWT verification failed',
@@ -122,10 +126,14 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 		}
 	}
 
-	private user(email: string, userId: string): AuthUser | null {
+	private user(email: string, userId: string, expiresAt?: string): AuthenticatedPrincipal | null {
 		if (!validEmail(email) || !validUserId(userId) || !emailAllowed(email, this.allowedDomains)) {
 			return null;
 		}
-		return { id: UserId.parse(userId), email };
+		return {
+			id: UserId.parse(userId),
+			email,
+			credential: { kind: 'sso', ...(expiresAt !== undefined ? { expiresAt } : {}) },
+		};
 	}
 }

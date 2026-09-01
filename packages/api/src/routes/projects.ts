@@ -345,7 +345,7 @@ app.openapi(updateProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.update', deps.policy);
 	const body = c.req.valid('json');
 	const project = await projects.updateProject(pid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(project.updated_at));
@@ -357,7 +357,7 @@ app.openapi(deleteProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.delete', deps.policy);
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const deleted = await projects.deleteProjectWithMutation(pid, user.id, ifMatchToken(c));
 	if (deleted) {
@@ -388,7 +388,7 @@ app.openapi(addMember, async (c) => {
 	const { projects, identities } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.members.manage', deps.policy);
 	const body = c.req.valid('json');
 	// Both identifiers are passed to the service whenever both are known, so the
 	// duplicate check spans a person's id row AND any pending invite row — one
@@ -459,7 +459,7 @@ app.openapi(updateMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.members.manage', deps.policy);
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const body = c.req.valid('json');
 	const result = await projects.updateMemberRoleWithMutation(pid, uid, body.role, user.id);
@@ -486,7 +486,7 @@ app.openapi(removeMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.members.manage', deps.policy);
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const result = await projects.removeMemberWithMutation(pid, uid, user.id);
 	scheduleProjectAlert(deps, pid, 'member.removed', { project_id: pid, user: user.id }, () =>

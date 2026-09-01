@@ -147,12 +147,13 @@ describe('TokenService', () => {
 	});
 
 	describe('verify', () => {
-		it('resolves a valid token to the issuing user', async () => {
-			const { token } = await tokens.create({ name: 'ci' }, OWNER);
+		it('resolves a valid token to the issuing principal with PAT provenance', async () => {
+			const { token, record } = await tokens.create({ name: 'ci' }, OWNER);
 			expect(await tokens.verify(token)).toEqual({
 				id: OWNER,
 				email: 'owner@x.io',
 				name: 'Owner',
+				credential: { kind: 'personal-access-token', id: record.id },
 			});
 		});
 

@@ -2,12 +2,11 @@ import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
-	canAct,
 	ASSIGNABLE_ROLES,
+	AuthorizationService,
 	DOMAIN_ERROR_CODES,
 	effectiveRole,
 	ForbiddenError,
-	isSuperAdmin,
 	NotebookId,
 	NotFoundError,
 	NOTEBOOK_STATUSES,
@@ -15,12 +14,11 @@ import {
 	PROJECT_ALERT_KINDS,
 	PROJECT_STATUSES,
 	ProjectId,
-	requireRole,
+	projectActionMinRole,
 	ROLES,
 	SESSION_MODES,
 	SESSION_STATUSES,
 	SessionId,
-	sessionCan,
 	sessionGrants,
 	sessionPersistsEdits,
 	subjectDefaultRole,
@@ -31,15 +29,16 @@ import {
 	SurfaceForbiddenError,
 } from '@marimo-hub/core';
 import type {
+	AuthorizationPolicy,
 	AuthSubject,
 	AuthzPolicy,
 	ComputeResources,
 	EditorSandboxSharing,
 	Project,
+	ProjectAction,
 	ProjectService,
-	Role,
+	SessionScopedAction,
 	Session,
-	SessionAction,
 	SessionActor,
 	ViewerMode,
 } from '@marimo-hub/core';
@@ -79,29 +78,53 @@ export function extensibleResponseEnum<const Values extends readonly [string, ..
 }
 
 /**
- * Enforce that the caller holds at least `min` role on the project. Loads
- * `project.json` (404 if the project does not exist) and throws ForbiddenError
- * (403) on insufficient role. Used to gate write routes. Returns the loaded
- * project so callers can reuse it without a second fetch. The subject is the
- * request's `AuthUser` — membership matches by user id or (invite) email.
- *
- * A soft-deleted project is treated as **404**, before the role check — the
- * same lifecycle guard `loadVisibleProject` applies to reads. Its bytes linger
- * until the GC sweep, but nothing about it stays mutable, so no caller (a super
- * admin or a lingering member included) can reach its secrets/notebooks/events.
+ * The one `AuthorizationService` per deployment policy object. `deps.policy`
+ * is stable for a server's lifetime, so every guard shares one instance; the
+ * WeakMap only matters for tests that build many dep bundles.
+ */
+const AUTHZ_SERVICES = new WeakMap<object, AuthorizationService>();
+
+export function authorizationService(
+	policy: AuthorizationPolicy | undefined,
+): AuthorizationService {
+	if (!policy) return new AuthorizationService(undefined);
+	let service = AUTHZ_SERVICES.get(policy);
+	if (!service) {
+		service = new AuthorizationService(policy);
+		AUTHZ_SERVICES.set(policy, service);
+	}
+	return service;
+}
+
+/**
+ * Enforce a project-scoped action. Loads `project.json` (404 if the project
+ * does not exist) and maps the service's decision to the transport: a
+ * `lifecycle` or `visibility` denial is **404** (a soft-deleted or hidden
+ * project is indistinguishable from a nonexistent one — super admins
+ * included), a `role` denial is **403**. Returns the loaded project so callers
+ * can reuse it without a second fetch. The subject is the request's principal —
+ * membership matches by user id or (invite) email.
  */
 export async function assertProjectRole(
 	projects: ProjectService,
 	pid: ProjectId,
 	subject: AuthSubject,
-	min: Role,
+	action: ProjectAction,
 	policy?: AuthzPolicy,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	if (project.status === 'deleted') {
+	const decision = await authorizationService(policy).authorize(subject, action, {
+		kind: 'project',
+		project,
+	});
+	if (!decision.allowed) {
+		if (decision.category === 'role') {
+			throw new ForbiddenError(
+				`Requires '${projectActionMinRole(action)}' role on project ${project.id}`,
+			);
+		}
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	requireRole(project, subject, min, policy);
 	return project;
 }
 
@@ -109,8 +132,11 @@ export async function assertProjectRole(
  * Enforce that the caller is a deployment super admin (`MARIMOHUB_SUPER_ADMINS`).
  * Gates org-scoped resources, which no project role can reach.
  */
-export function assertSuperAdmin(subject: AuthSubject, policy?: AuthzPolicy): void {
-	if (!isSuperAdmin(subject, policy?.superAdmins)) {
+export async function assertSuperAdmin(subject: AuthSubject, policy?: AuthzPolicy): Promise<void> {
+	const decision = await authorizationService(policy).authorize(subject, 'admin.access', {
+		kind: 'deployment',
+	});
+	if (!decision.allowed) {
 		throw new ForbiddenError('Requires super admin');
 	}
 }
@@ -171,53 +197,64 @@ export function sessionGrantsFor(
 	return sessionGrants(sessionActorFor(project, subject, policy), session);
 }
 
-function assertSession(
-	action: SessionAction,
+async function assertSession(
+	action: SessionScopedAction,
+	message: 'attach' | 'stop',
 	project: Project,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
-): void {
-	if (sessionCan(action, sessionActorFor(project, subject, policy), session)) return;
-	throw new ForbiddenError(`Not authorized to ${action} this session`);
+): Promise<void> {
+	const decision = await authorizationService(policy).authorize(subject, action, {
+		kind: 'session',
+		project,
+		session,
+	});
+	if (decision.allowed) return;
+	throw new ForbiddenError(`Not authorized to ${message} this session`);
 }
 
 /**
- * Gate control of a live session (stop / terminate) — `sessionCan('stop')` as
- * a thrower. Applies the shared, exclusive, temporary, administrator, and
- * viewer rules from `sessionCan`.
+ * Gate control of a live session (stop / terminate) — the `session.stop`
+ * decision as a thrower. Applies the shared, exclusive, temporary,
+ * administrator, and viewer rules from `sessionCan`.
  */
-export function assertSessionControl(
+export async function assertSessionControl(
 	project: Project,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
-): void {
-	assertSession('stop', project, session, subject, policy);
+): Promise<void> {
+	await assertSession('session.stop', 'stop', project, session, subject, policy);
 }
 
 /**
  * Gate *reaching* a live session's kernel (proxy traffic, keep-alive
- * heartbeats) — `sessionCan('attach')` as a thrower. Everything the control
- * gate admits, plus any viewer for a shared-mode session their viewer mode
- * grants.
+ * heartbeats) — the `session.attach` decision as a thrower. Everything the
+ * control gate admits, plus any viewer for a shared-mode session their viewer
+ * mode grants.
  */
-export function assertSessionAccess(
+export async function assertSessionAccess(
 	project: Project,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
-): void {
-	assertSession('attach', project, session, subject, policy);
+): Promise<void> {
+	await assertSession('session.attach', 'attach', project, session, subject, policy);
 }
 
-export function assertSessionSurfaceAccess(
+export async function assertSessionSurfaceAccess(
 	project: Project,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
-): void {
-	if (sessionCan('surface', sessionActorFor(project, subject, policy), session)) return;
+): Promise<void> {
+	const decision = await authorizationService(policy).authorize(subject, 'session.surface', {
+		kind: 'session',
+		project,
+		session,
+	});
+	if (decision.allowed) return;
 	throw new SurfaceForbiddenError();
 }
 
@@ -298,9 +335,13 @@ export async function loadVisibleProject(
 	policy?: AuthzPolicy,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	// The deleted check precedes role logic on purpose: soft-deleted projects
-	// are unreachable for everyone, super admins included.
-	if (project.status === 'deleted' || !canAct(project, subject, 'viewer', policy)) {
+	// `project.read` denials are all masked: lifecycle (deleted precedes role,
+	// super admins included) and visibility both present as nonexistent.
+	const decision = await authorizationService(policy).authorize(subject, 'project.read', {
+		kind: 'project',
+		project,
+	});
+	if (!decision.allowed) {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
 	return project;

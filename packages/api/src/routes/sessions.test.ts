@@ -1347,6 +1347,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -1381,6 +1382,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -1408,6 +1410,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -1444,6 +1447,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -1780,6 +1784,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -1821,6 +1826,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -1875,6 +1881,7 @@ describe('Session routes', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: STRANGER,
 						email: `${STRANGER}@example.com`,
 						entitlements: ['default-role:editor'],

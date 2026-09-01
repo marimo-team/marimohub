@@ -27,7 +27,13 @@ import {
 	logOperationalError,
 	UserId,
 } from '@marimo-hub/core';
-import type { AssignableRole, AuthEntitlement, Authenticator, AuthUser } from '@marimo-hub/core';
+import type {
+	AssignableRole,
+	AuthenticatedPrincipal,
+	AuthEntitlement,
+	Authenticator,
+	AuthUser,
+} from '@marimo-hub/core';
 import { evaluateLoginPolicy } from './loginPolicy';
 import type { OidcLoginPolicy } from './loginPolicy';
 
@@ -489,7 +495,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	}
 
 	const authenticator: Authenticator = {
-		async authenticate(request: Request): Promise<AuthUser | null> {
+		async authenticate(request: Request): Promise<AuthenticatedPrincipal | null> {
 			const cookie = request.headers.get('cookie') ?? '';
 			const match = cookie.match(new RegExp(`(?:^|; )${SESSION_COOKIE}=([^;]+)`));
 			if (!match) return null;
@@ -524,6 +530,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 					...(pictureUrl ? { pictureUrl } : {}),
 					...(entitlements?.length ? { entitlements } : {}),
 					...(entitlementsExpiresAt ? { entitlementsExpiresAt } : {}),
+					credential: {
+						kind: 'sso',
+						...(typeof payload.exp === 'number'
+							? { expiresAt: new Date(payload.exp * 1000).toISOString() }
+							: {}),
+					},
 				};
 			} catch (err) {
 				// Expired sessions are routine (every request until re-auth); anything
