@@ -1295,21 +1295,19 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER',
 						name: 'Classification order',
 						description:
-							'Comma-separated classification lattice, lowest to highest, enabling resource ' +
-							'security labels on projects and notebooks. A labeled resource requires a ' +
-							'subject security context that dominates its classification and holds every ' +
-							'required compartment; labels only add restrictions on top of role checks. ' +
-							'Unset: labels cannot be set, and any that exist fail closed.',
-						example: 'UNCLASSIFIED,CUI,SECRET,TOP_SECRET',
+							'Comma-separated classification order, lowest to highest. A subject context must ' +
+							'include the required classification or a higher one, plus every required compartment. Labels ' +
+							'only restrict access. If unset, new labels are rejected and existing labels fail closed.',
+						example: 'PUBLIC,INTERNAL,CONFIDENTIAL,RESTRICTED',
 						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND',
 						name: 'Subject-context backend',
 						description:
-							'Set `library` to load a trusted external subject-security-context provider ' +
-							'that resolves per-principal clearance and compartments. Requires the ' +
-							'classification order. Without a provider, every labeled resource is denied.',
+							'Set `library` to load a trusted subject-context provider. The provider resolves ' +
+							'clearance and compartments for each principal. A classification order is required. ' +
+							'Without a provider, all labeled resources are denied.',
 						example: 'library',
 						optIn: true,
 					},
@@ -1317,9 +1315,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY',
 						name: 'Subject-context module',
 						description:
-							'The provider module: an npm package installed in the image, an ESM path, or a ' +
-							'file URL. Required with the `library` subject-context backend. The module runs ' +
-							'in-process with server privileges — load only trusted, pinned code.',
+							'The provider module as an npm package, ESM path, or file URL. This value is ' +
+							'required for the `library` backend. The module runs with server privileges. ' +
+							'Use only trusted, pinned code.',
 						example: '/etc/marimohub/subject-context.mjs',
 						optIn: true,
 					},

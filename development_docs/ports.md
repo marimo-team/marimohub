@@ -5,10 +5,9 @@ and verification status of each adapter.
 
 ## External adapter libraries
 
-The Node server can load external storage and compute adapters, an external
-OIDC login-policy module, and an external subject-security-context provider at
-startup. Set the port selector to `library`. Set its library variable to an npm
-package, an ESM file path, or a `file://` URL:
+The Node server can load external storage, compute, login-policy, and
+subject-context adapters at startup. Set the applicable backend to `library`.
+Set its library variable to an npm package, ESM file path, or `file://` URL:
 
 ```sh
 MARIMOHUB_STORAGE_BACKEND=library
@@ -35,15 +34,14 @@ export default {
 ```
 
 `apiVersion` must equal `1`. A storage factory returns a `Bucket`. A compute
-factory returns a `SandboxProvider`. An `oidc-login-policy` factory returns an
-object with `evaluate(input)`; its contract lives in `@marimo-hub/auth-oidc`
-(`loginPolicy.ts`), not in `core` — the module maps validated OIDC claims to a
-bounded login decision and entitlements, and is not a runtime authorization
-port. A `subject-security-context` factory returns an object with
-`resolve(principal, signal)` implementing the `SubjectSecurityContextProvider`
-port. Each factory receives the full `MARIMOHUB_*` environment. A compute
-factory also receives `sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in
-`context.compute`.
+factory returns a `SandboxProvider`. An `oidc-login-policy` factory returns
+`evaluate(input)`. Its contract lives in `@marimo-hub/auth-oidc/loginPolicy.ts`,
+not in `core`. It maps validated OIDC claims to a bounded login decision and
+entitlements. It does not authorize runtime resources. A
+`subject-security-context` factory returns `resolve(principal, signal)` and
+implements `SubjectSecurityContextProvider`. Each factory receives the full
+`MARIMOHUB_*` environment. A compute factory also receives
+`sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in `context.compute`.
 
 At startup, the loader validates the five required `Bucket` methods and its CAS
 safety contract. For compute, it validates `create` and `proxy`, plus optional
@@ -131,20 +129,24 @@ field, never off request-header inference.
 
 ## Subject security context (`SubjectSecurityContextProvider`)
 
-`packages/core/src/ports/subjectContext.ts`. Resolves a principal into a
-bounded runtime security context (`schemaVersion`, `classification`,
-`compartments`, `policyVersion`, `expiresAt` — strict schema, token-bounded
-values, at most 64 compartments) for future resource-security constraints.
-`null` means the subject has no context: an unlabeled resource is unaffected; a
-labeled resource must fail closed. The raw JWT, UserInfo response, or a
-login-policy result is never a valid source — implementations live in adapter
-packages and every value is re-validated with
-`validateSubjectSecurityContext()` (fail-closed on malformed, unknown-field,
-and expired contexts). No adapter is built yet.
+`packages/core/src/ports/subjectContext.ts` defines the strict runtime context:
+`schemaVersion`, `classification`, `compartments`, `policyVersion`, and
+`expiresAt`. Values use bounded tokens and contain at most 64 compartments.
 
-| Status | Provider          | Adapter | Notes                                |
-| ------ | ----------------- | ------- | ------------------------------------ |
-| ⬜     | Agency / IdP sync | —       | Candidate once resource labels exist |
+The provider resolves one context for each principal. `null` means that the
+principal has no context. Unlabeled resources are unaffected. Labeled resources
+fail closed. Raw JWT claims, UserInfo data, and login-policy results are not
+valid sources.
+
+The hub validates every result with `validateSubjectSecurityContext()`. It
+rejects expired contexts, malformed values, and unknown fields. Deployments can
+load a trusted provider through the `subject-security-context` library
+interface.
+
+| Status | Provider          | Adapter           | Notes                    |
+| ------ | ----------------- | ----------------- | ------------------------ |
+| ✅     | External library  | Configured module | Loaded at server startup |
+| ⬜     | Built-in IdP sync | —                 | Not implemented          |
 
 ## Object browsing (`ObjectBrowser`)
 
