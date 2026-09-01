@@ -21,6 +21,7 @@ const policy = manifest.create({ env: {} });
 // so a policy emitting it would silently lock everyone out with `auth_failed`.
 const KNOWN_ENTITLEMENTS = new Set([
 	'super-admin',
+	'project-creator',
 	'default-role:viewer',
 	'default-role:editor',
 	'default-role:manager',

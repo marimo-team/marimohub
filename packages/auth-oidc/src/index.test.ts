@@ -1215,6 +1215,7 @@ describe('OIDC routes', () => {
 				claim: '/realm_access/roles',
 				allowed: ['hub-users'],
 				superAdmin: ['hub-admins'],
+				projectCreation: ['hub-users'],
 				defaultRoles: { editor: ['hub-editors'], manager: ['hub-admins'] },
 			},
 		});
@@ -1228,8 +1229,29 @@ describe('OIDC routes', () => {
 		await expect(
 			authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1])),
 		).resolves.toMatchObject({
-			entitlements: ['super-admin', 'default-role:manager'],
+			entitlements: ['super-admin', 'project-creator', 'default-role:manager'],
 		});
+	});
+
+	it('does not grant project creation without an exact group match', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			groups: ['project-creators-child'],
+		});
+		const { authenticator, routes } = makeOidc({
+			groups: { claim: '/groups', projectCreation: ['project-creators'] },
+		});
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		const sessionCookie = cookiePair(res, SESSION_COOKIE);
+		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
+
+		expect(user).not.toHaveProperty('entitlements');
 	});
 
 	it('maps a manager-only group without granting super-admin', async () => {

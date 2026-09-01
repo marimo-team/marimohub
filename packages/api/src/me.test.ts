@@ -14,6 +14,7 @@ describe('GET /api/v1/me', () => {
 			picture_url: null,
 			logout_url: null,
 			is_super_admin: false,
+			can_create_projects: true,
 		});
 	});
 
@@ -38,6 +39,23 @@ describe('GET /api/v1/me', () => {
 	it('flags a configured super admin', async () => {
 		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
 		expect((await expectOk(await request('GET', '/me'))).is_super_admin).toBe(true);
+	});
+
+	it('reports the effective project-creation capability', async () => {
+		const denied = createTestApi({ deps: { policy: { projectCreationRestricted: true } } });
+		expect((await expectOk(await denied.request('GET', '/me'))).can_create_projects).toBe(false);
+
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				entitlements: ['project-creator'],
+			}),
+		};
+		const allowed = createTestApi({
+			deps: { authenticator, policy: { projectCreationRestricted: true } },
+		});
+		expect((await expectOk(await allowed.request('GET', '/me'))).can_create_projects).toBe(true);
 	});
 
 	it('surfaces the authenticator logout URL when one is provided', async () => {

@@ -64,7 +64,8 @@ export default {
 				return {
 					decision: 'allow',
 					// Only the built-in entitlements are accepted: 'super-admin',
-					// 'default-role:viewer', 'default-role:editor', 'default-role:manager'.
+					// 'project-creator', 'default-role:viewer', 'default-role:editor',
+					// 'default-role:manager'.
 					entitlements: ['default-role:editor'],
 				};
 			},

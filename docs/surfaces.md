@@ -42,8 +42,8 @@ another surface.
 ## Availability
 
 The compute adapter must expose multiple ports from one sandbox. The `local`,
-`e2b`, and `cloudflare` adapters support this feature. Configuration fails for
-other adapters. Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B need
+`e2b`, `cloudflare`, and `coreweave` adapters support this feature. Configuration
+fails for other adapters. Docker, Podman, Kubernetes, Modal, and W&B need
 create-time port reservation support.
 
 Port 2718 belongs to marimo. Each secondary surface must use a unique port. If

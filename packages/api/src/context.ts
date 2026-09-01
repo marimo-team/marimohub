@@ -249,6 +249,8 @@ export interface PolicyConfig {
 	 * session-only OIDC group entitlements do not. Unset = no super admins.
 	 */
 	superAdmins?: string[];
+	/** Require super-admin or OIDC project-creator entitlement for project creation. */
+	projectCreationRestricted?: boolean;
 }
 
 export interface ConfigSettingSummary {

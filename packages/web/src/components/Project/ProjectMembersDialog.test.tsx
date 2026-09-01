@@ -41,6 +41,7 @@ const OWNER_USER: User = {
 	email: DIRECTORY[OWNER].email,
 	logout_url: null,
 	is_super_admin: false,
+	can_create_projects: true,
 };
 let currentTestUser = OWNER_USER;
 
@@ -321,6 +322,7 @@ describe('ProjectMembersDialog — admin', () => {
 				email: DIRECTORY[EDITOR].email,
 				logout_url: null,
 				is_super_admin: false,
+				can_create_projects: true,
 			},
 			members: MEMBERS.map((member) =>
 				member.user_id === EDITOR ? { ...member, role: 'manager' } : member,
@@ -400,7 +402,13 @@ describe('ProjectMembersDialog — admin', () => {
 describe('ProjectMembersDialog — non-admin', () => {
 	it('renders a read-only list: no role selects, no remove, no add picker', async () => {
 		makeFetch({
-			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null, is_super_admin: false },
+			currentUser: {
+				id: 'u-invitee',
+				email: INVITED,
+				logout_url: null,
+				is_super_admin: false,
+				can_create_projects: true,
+			},
 			directory: {
 				...DIRECTORY,
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
@@ -422,6 +430,7 @@ describe('ProjectMembersDialog — non-admin', () => {
 				email: DIRECTORY[EDITOR].email,
 				logout_url: null,
 				is_super_admin: false,
+				can_create_projects: true,
 			},
 			members: [...MEMBERS, { user_id: legacy, role: 'admin' }],
 			directory: {
@@ -438,7 +447,13 @@ describe('ProjectMembersDialog — non-admin', () => {
 describe('ProjectMembersDialog — current access', () => {
 	it('recognizes the current user through a matching email invite', async () => {
 		makeFetch({
-			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null, is_super_admin: false },
+			currentUser: {
+				id: 'u-invitee',
+				email: INVITED,
+				logout_url: null,
+				is_super_admin: false,
+				can_create_projects: true,
+			},
 			directory: {
 				...DIRECTORY,
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
@@ -453,7 +468,13 @@ describe('ProjectMembersDialog — current access', () => {
 
 	it('shows default access without inserting a synthetic member row', async () => {
 		makeFetch({
-			currentUser: { id: NINA.id, email: NINA.email, logout_url: null, is_super_admin: false },
+			currentUser: {
+				id: NINA.id,
+				email: NINA.email,
+				logout_url: null,
+				is_super_admin: false,
+				can_create_projects: true,
+			},
 			capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities,
 			directory: { ...DIRECTORY, [NINA.id]: NINA },
 		});
@@ -467,7 +488,13 @@ describe('ProjectMembersDialog — current access', () => {
 
 	it('labels a non-member super admin as a deployment super admin', async () => {
 		makeFetch({
-			currentUser: { id: NINA.id, email: NINA.email, logout_url: null, is_super_admin: true },
+			currentUser: {
+				id: NINA.id,
+				email: NINA.email,
+				logout_url: null,
+				is_super_admin: true,
+				can_create_projects: true,
+			},
 			directory: { ...DIRECTORY, [NINA.id]: NINA },
 		});
 		// A super admin sees `your_role: admin` even without a member row.
@@ -492,7 +519,13 @@ describe('ProjectMembersDialog — current access', () => {
 	it('shows deployment-aware role details on focus', async () => {
 		const user = userEvent.setup();
 		makeFetch({
-			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null, is_super_admin: false },
+			currentUser: {
+				id: 'u-invitee',
+				email: INVITED,
+				logout_url: null,
+				is_super_admin: false,
+				can_create_projects: true,
+			},
 			capabilities: {
 				...CAPABILITIES,
 				viewer_mode: 'ephemeral-sandbox',

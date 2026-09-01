@@ -42,6 +42,8 @@ export interface OidcGroupPolicy {
 	allowed?: string[];
 	/** Groups mapped to deployment super-admin. */
 	superAdmin?: string[];
+	/** Groups permitted to create projects. */
+	projectCreation?: string[];
 	/** Groups mapped to a per-user deployment-wide default project role. */
 	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
 	/** Maximum accepted group count (default 200, maximum 200). */
@@ -232,6 +234,7 @@ function validateGroupPolicy(policy: OidcGroupPolicy): void {
 	const lists = [
 		policy.allowed,
 		policy.superAdmin,
+		policy.projectCreation,
 		...ASSIGNABLE_ROLES.map((role) => policy.defaultRoles?.[role]),
 	].filter((list): list is string[] => list !== undefined);
 	if (lists.length === 0) throw new Error('OIDC groups claim requires at least one group policy');
@@ -275,6 +278,9 @@ function mappedEntitlements(groups: readonly string[], policy: OidcGroupPolicy):
 	const entitlements = new Set<AuthEntitlement>();
 	if (policy.superAdmin?.some((group) => memberships.has(group))) {
 		entitlements.add('super-admin');
+	}
+	if (policy.projectCreation?.some((group) => memberships.has(group))) {
+		entitlements.add('project-creator');
 	}
 	for (const role of ASSIGNABLE_ROLES) {
 		if (policy.defaultRoles?.[role]?.some((group) => memberships.has(group))) {

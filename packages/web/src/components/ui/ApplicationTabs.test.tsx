@@ -77,6 +77,29 @@ describe('ApplicationTabs', () => {
 		expect(notebookFrame.closest('[role="tabpanel"]')).toHaveAttribute('inert');
 	});
 
+	it('renders tab actions outside the ARIA tab controls', () => {
+		render(
+			<ApplicationTabs
+				ariaLabel="Workspace applications"
+				tabs={applicationTabs()}
+				onClose={() => {}}
+			/>,
+		);
+
+		const notebookTab = screen.getByRole('tab', { name: 'Notebook' });
+		const vscodeTab = screen.getByRole('tab', { name: 'VS Code' });
+		expect(notebookTab).not.toContainElement(
+			screen.getByRole('button', { name: 'Reorder Notebook' }),
+		);
+		expect(notebookTab).not.toContainElement(
+			screen.getByRole('button', { name: 'Open Notebook in a new browser tab' }),
+		);
+		expect(vscodeTab).not.toContainElement(
+			screen.getByRole('button', { name: 'Open VS Code to the side' }),
+		);
+		expect(vscodeTab).not.toContainElement(screen.getByRole('button', { name: 'Close VS Code' }));
+	});
+
 	it('shows at most one secondary panel and never remounts an iframe', async () => {
 		const user = userEvent.setup();
 		const onSplitKeyChange = vi.fn();

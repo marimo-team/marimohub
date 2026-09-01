@@ -116,7 +116,7 @@ describe('opencodeSurface', () => {
 		expect(calls.exec[0]).toContain("'/workspace'");
 	});
 
-	it('creates a managed-AI chat with the configured model', async () => {
+	it('lets existing history and merged config select the managed-AI chat', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		instance.exec = async (cmd) => {
 			calls.exec.push(cmd);
@@ -138,8 +138,9 @@ describe('opencodeSurface', () => {
 		);
 
 		expect(url).toEqual(new URL('https://surface.example/L3dvcmtzcGFjZQ/session/ses_managed123'));
-		expect(calls.exec[0]).not.toContain('?limit=1');
-		expect(calls.exec[0]).toContain(`'{"model":{"id":"gpt-test","providerID":"marimohub"}}'`);
+		expect(calls.exec[0]).toContain('?limit=1');
+		expect(calls.exec[0]).toContain("'/workspace' '{}'");
+		expect(calls.exec[0]).not.toContain('providerID');
 	});
 
 	it('falls back to the workspace composer when chat bootstrap fails', async () => {

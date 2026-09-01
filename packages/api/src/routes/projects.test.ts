@@ -174,6 +174,49 @@ describe('Project routes', () => {
 		expect(data.id).toMatch(/^proj-/);
 	});
 
+	it('POST /projects rejects users without restricted project-creation access', async () => {
+		const restricted = createTestApi({
+			bucket,
+			deps: { policy: { projectCreationRestricted: true } },
+		});
+		await expectError(
+			await restricted.request(
+				'POST',
+				'/projects',
+				{ name: 'Denied', description: 'Denied' },
+				{ 'Idempotency-Key': 'denied-project' },
+			),
+			403,
+			'FORBIDDEN',
+		);
+		expect(await expectPage(await restricted.request('GET', '/projects'))).toEqual([]);
+		expect((await bucket.list({ prefix: paths.idempotencyPrefix })).objects).toEqual([]);
+	});
+
+	it.each([
+		['project creator', ['project-creator'], []],
+		['group-derived super admin', ['super-admin'], []],
+		['static super admin', [], [ACTOR]],
+	] as const)('POST /projects allows a restricted %s', async (_name, entitlements, superAdmins) => {
+		const allowed = createTestApi({
+			bucket,
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: ACTOR,
+						email: `${ACTOR}@example.com`,
+						entitlements,
+					}),
+				},
+				policy: { projectCreationRestricted: true, superAdmins: [...superAdmins] },
+			},
+		});
+		await expectOk(
+			await allowed.request('POST', '/projects', { name: 'Allowed', description: 'Allowed' }),
+			201,
+		);
+	});
+
 	it('POST /projects validates body — name required', async () => {
 		const res = await request('POST', '/projects', { description: 'no name' });
 		await expectError(res, 422);

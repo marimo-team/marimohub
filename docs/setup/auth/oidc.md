@@ -45,6 +45,7 @@ Pointer to the provider array. Then set at least one group policy:
 MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM=/groups
 MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS=hub-users
 MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS=hub-platform-admins
+MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS=hub-project-creators
 MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS=hub-viewers
 MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS=hub-editors
 MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
@@ -53,6 +54,16 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 Nested claims use JSON Pointer syntax, such as `/realm_access/roles`.
 `ALLOWED_GROUPS` controls login. The other lists map groups to internal
 entitlements. The session cookie stores mapped entitlements, not raw groups.
+
+`PROJECT_CREATION_GROUPS` controls who can create projects:
+
+- If the variable is not set, all authenticated users can create projects.
+- If the value is empty, only super admins can create projects.
+- If the value contains group IDs, super admins and matching users can create projects.
+
+If no super admin is configured, an empty value prevents every user from creating projects.
+
+An empty value does not require `GROUPS_CLAIM`. A non-empty value requires the claim and creates a group-derived session entitlement.
 
 Group sessions last at most one hour by default. This limit bounds the delay
 after an IdP removes a user from a group. Kernels inherit the session JWT expiry
@@ -66,8 +77,11 @@ Missing, malformed, or oversized group data cannot satisfy the login policy.
 marimohub accepts at most 200 group IDs. It does not resolve group-overage
 references from the provider. Configure the IdP to emit only the groups that
 marimohub needs.
-Group-derived roles apply only to the browser session. They do not transfer to
-personal access tokens.
+Group-derived roles and project-creation access apply only to the browser session. They do not transfer to personal access tokens.
+
+After you enable project-creation groups, matching users must sign in again. Existing sessions do not contain the new entitlement.
+
+For a strict rollout, first deploy the new version without the variable. Then set the variable after all replicas run the new version.
 
 The user ID is the OIDC `sub` within the configured issuer. The same `sub` from
 another issuer can identify a different person. Therefore, an issuer URL change
@@ -94,7 +108,8 @@ verification, and the email-domain allowlist. The module runs after that
 validation and before session signing. It receives the validated ID-token and
 UserInfo claims as separate read-only objects and returns one bounded result: an
 allow or deny decision, plus the built-in entitlements (`super-admin`,
-`default-role:viewer`, `default-role:editor`, `default-role:manager`).
+`project-creator`, `default-role:viewer`, `default-role:editor`,
+`default-role:manager`).
 
 Login-policy configuration is mutually exclusive with the group variables
 above. A module can reproduce any group rule in code. The module applies to

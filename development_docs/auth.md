@@ -42,18 +42,19 @@ The adapter then mints the `mh_session` cookie. Protocol code uses
 [`oauth4webapi`](https://github.com/panva/oauth4webapi). Cookie signing uses
 [`jose`](https://github.com/panva/jose).
 
-| Variable                                   | Req | Description                                                    |
-| ------------------------------------------ | --- | -------------------------------------------------------------- |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`               | ✓   | For example, `https://accounts.google.com`.                    |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`            | ✓   | OAuth client ID.                                               |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`        | ✓   | OAuth client secret (sent via `client_secret_post`).           |
-| `MARIMOHUB_AUTH_OIDC_REDIRECT_URI`         | ✓   | **Must be** `<your-origin>/api/auth/callback`.                 |
-| `MARIMOHUB_AUTH_SESSION_SECRET`            | ✓   | HS256 cookie-signing key with ≥32 random bytes.                |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`             |     | Deprecated and ignored; `aud` must contain the client ID.      |
-| `MARIMOHUB_AUTH_OIDC_SCOPES`               |     | Defaults to `openid email profile`. Keep `openid` and `email`. |
-| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION`   |     | `required` (default) or explicit `trusted-issuer`.             |
-| `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`         |     | JSON Pointer for opt-in group policy and entitlement mapping.  |
-| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND` |     | `library` loads a trusted external login-policy module.        |
+| Variable                                      | Req | Description                                                               |
+| --------------------------------------------- | --- | ------------------------------------------------------------------------- |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`                  | ✓   | For example, `https://accounts.google.com`.                               |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`               | ✓   | OAuth client ID.                                                          |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`           | ✓   | OAuth client secret (sent via `client_secret_post`).                      |
+| `MARIMOHUB_AUTH_OIDC_REDIRECT_URI`            | ✓   | **Must be** `<your-origin>/api/auth/callback`.                            |
+| `MARIMOHUB_AUTH_SESSION_SECRET`               | ✓   | HS256 cookie-signing key with ≥32 random bytes.                           |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`                |     | Deprecated and ignored; `aud` must contain the client ID.                 |
+| `MARIMOHUB_AUTH_OIDC_SCOPES`                  |     | Defaults to `openid email profile`. Keep `openid` and `email`.            |
+| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION`      |     | `required` (default) or explicit `trusted-issuer`.                        |
+| `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`            |     | JSON Pointer for opt-in group policy and entitlement mapping.             |
+| `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` |     | Exact groups permitted to create projects. Empty means super admins only. |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND`    |     | `library` loads a trusted external login-policy module.                   |
 
 **Routes** are public and mount before the authentication guard.
 `GET /api/auth/login` starts the flow. `/api/auth/callback` exchanges the code
@@ -82,9 +83,9 @@ Each deployment supports one issuer. Stored user IDs use that issuer's `sub`.
 An issuer change is an identity migration. Reconcile stored owners and members
 before the change.
 
-The session stores mapped entitlements, not raw groups. Group-derived roles do
-not transfer to personal access tokens. Group-authorized kernels use the session
-JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
+The session stores mapped entitlements, not raw groups. Group-derived roles and
+project-creation access do not transfer to personal access tokens.
+Group-authorized kernels use the session JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
 Session reuse keeps the earliest credential deadline presented by any caller.
 At expiry, the lifecycle destroys the kernel and the proxy closes WebSockets.
 This teardown skips the final capture so that the kernel stops promptly.
