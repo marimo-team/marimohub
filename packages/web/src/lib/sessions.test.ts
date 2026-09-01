@@ -34,12 +34,16 @@ describe('rankSession', () => {
 });
 
 describe('isSessionStale', () => {
-	it('is stale only when both versions are known and differ', () => {
+	it('is stale only when both versions are known and the notebook head is newer', () => {
 		expect(isSessionStale({ source_version_id: 'a' }, 'b')).toBe(true);
 		expect(isSessionStale({ source_version_id: 'a' }, 'a')).toBe(false);
 		expect(isSessionStale({ source_version_id: undefined }, 'b')).toBe(false);
 		expect(isSessionStale({ source_version_id: 'a' }, null)).toBe(false);
 		expect(isSessionStale({ source_version_id: 'a' }, undefined)).toBe(false);
+	});
+
+	it('does not mark a newer session stale when notebook detail still has an older head', () => {
+		expect(isSessionStale({ source_version_id: 'b' }, 'a')).toBe(false);
 	});
 });
 

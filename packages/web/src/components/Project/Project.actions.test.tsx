@@ -376,7 +376,7 @@ describe('Project — Notebook Actions: configuration', () => {
 					...runningSession(),
 					session_id: 'sess-app',
 					mode: 'app',
-					source_version_id: 'ver-old',
+					source_version_id: 'ver-0',
 					can: { attach: true, stop: true },
 				} as Session,
 			],

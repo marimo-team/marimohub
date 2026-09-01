@@ -12,14 +12,14 @@ import {
 
 describe('NotebookPage git-synced editor', () => {
 	const gitEditSession = (overrides: Partial<Session> = {}) =>
-		runningSession({ source_version_id: 'ver-head', ...overrides });
+		runningSession({ source_version_id: 'ver-2', ...overrides });
 
 	it('shows the updated-on-GitHub banner when the session trails the head', async () => {
 		makeFetch({
 			role: 'editor',
 			sourceType: 'git',
-			session: gitEditSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: gitEditSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 		});
 		renderPage();
 
@@ -79,10 +79,10 @@ describe('NotebookPage git-synced editor', () => {
 			role: 'editor',
 			sourceType: 'git',
 			session: gitEditSession({
-				source_version_id: 'ver-old',
+				source_version_id: 'ver-1',
 				can: { attach: true, stop: false },
 			}),
-			headVersion: 'ver-head',
+			headVersion: 'ver-2',
 		});
 		renderPage();
 
@@ -95,8 +95,8 @@ describe('NotebookPage git-synced editor', () => {
 	it('shows no banner on a local notebook even when versions differ', async () => {
 		makeFetch({
 			role: 'editor',
-			session: gitEditSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: gitEditSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 		});
 		const { container } = renderPage();
 
@@ -109,8 +109,8 @@ describe('NotebookPage git-synced editor', () => {
 		const impl = makeFetch({
 			role: 'editor',
 			sourceType: 'git',
-			session: gitEditSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: gitEditSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 		});
 		const { container } = renderPage();
 		await waitFor(() => expect(screen.getByText('Restart to update')).toBeInTheDocument());

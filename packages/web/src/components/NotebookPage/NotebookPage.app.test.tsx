@@ -6,7 +6,7 @@ import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookP
 
 describe('NotebookPage app variant', () => {
 	const appSession = (overrides: Partial<Session> = {}) =>
-		runningSession({ mode: 'app', source_version_id: 'ver-head', ...overrides });
+		runningSession({ mode: 'app', source_version_id: 'ver-2', ...overrides });
 
 	it('starts a run session, shows app chrome, and hides edit-only affordances', async () => {
 		const impl = makeFetch({ role: 'editor', session: appSession() });
@@ -31,8 +31,8 @@ describe('NotebookPage app variant', () => {
 	it('shows the staleness banner when the app trails the notebook head', async () => {
 		makeFetch({
 			role: 'editor',
-			session: appSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: appSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 		});
 		renderPage('app');
 
@@ -43,8 +43,8 @@ describe('NotebookPage app variant', () => {
 	it('suppresses the staleness banner while the notebook is being edited', async () => {
 		makeFetch({
 			role: 'editor',
-			session: appSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: appSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 			projectSessions: [runningSession({ session_id: 'sess-edit', mode: 'edit' })],
 		});
 		const { container } = renderPage('app');
@@ -56,8 +56,8 @@ describe('NotebookPage app variant', () => {
 	it('does not suppress the staleness banner for a temporary editor', async () => {
 		makeFetch({
 			role: 'editor',
-			session: appSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: appSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 			projectSessions: [runningSession({ session_id: 'sess-edit', mode: 'edit', ephemeral: true })],
 		});
 		renderPage('app');
@@ -69,8 +69,8 @@ describe('NotebookPage app variant', () => {
 		makeFetch({
 			role: 'editor',
 			sourceType: 'git',
-			session: appSession({ source_version_id: 'ver-old' }),
-			headVersion: 'ver-head',
+			session: appSession({ source_version_id: 'ver-1' }),
+			headVersion: 'ver-2',
 			projectSessions: [runningSession({ session_id: 'sess-edit', mode: 'edit' })],
 		});
 		renderPage('app');
@@ -80,7 +80,21 @@ describe('NotebookPage app variant', () => {
 
 	it('shows no staleness banner when the app serves the head version', async () => {
 		const { container } = (() => {
-			makeFetch({ role: 'editor', session: appSession(), headVersion: 'ver-head' });
+			makeFetch({ role: 'editor', session: appSession(), headVersion: 'ver-2' });
+			return renderPage('app');
+		})();
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.queryByText(/serving an older version/)).toBeNull();
+	});
+
+	it('shows no staleness banner when notebook detail trails the app version', async () => {
+		const { container } = (() => {
+			makeFetch({
+				role: 'editor',
+				session: appSession({ source_version_id: 'ver-2' }),
+				headVersion: 'ver-1',
+			});
 			return renderPage('app');
 		})();
 
@@ -111,8 +125,8 @@ describe('NotebookPage app variant', () => {
 		makeFetch({
 			role: 'viewer',
 			viewerMode: 'applications',
-			session: appSession({ source_version_id: 'ver-old', can: { attach: true, stop: false } }),
-			headVersion: 'ver-head',
+			session: appSession({ source_version_id: 'ver-1', can: { attach: true, stop: false } }),
+			headVersion: 'ver-2',
 		});
 		renderPage('app');
 
