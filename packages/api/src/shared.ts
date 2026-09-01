@@ -34,6 +34,7 @@ import type {
 	AuthorizationPolicy,
 	AuthSubject,
 	AuthzPolicy,
+	ResourceSecurityLabels,
 	ResourceSecurityPolicy,
 	NotebookDetail,
 	ComputeResources,
@@ -187,6 +188,32 @@ export async function loadAuthorizedNotebook(
 }
 
 /**
+ * Mask-before-gate for session routes: a session whose notebook's security-label
+ * override the caller does not satisfy is nonexistent to them, and the 404 must
+ * land BEFORE any session-tier 403 could confirm the session exists. Returns
+ * the labels so the follow-up session gate can carry them too.
+ */
+export async function assertSessionNotebookVisible(
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	project: Project,
+	session: { notebook_id: NotebookId },
+	subject: AuthSubject,
+): Promise<ResourceSecurityLabels | null> {
+	const labels = await deps.services.notebooks.getSecurityLabels(project.id, session.notebook_id);
+	if (labels !== null) {
+		const decision = await authorizationService(deps).authorize(subject, 'project.read', {
+			kind: 'project',
+			project,
+			notebookLabels: labels,
+		});
+		if (!decision.allowed) {
+			throw new NotFoundError('Session not found');
+		}
+	}
+	return labels;
+}
+
+/**
  * Enforce that the caller is a deployment super admin (`MARIMOHUB_SUPER_ADMINS`).
  * Gates org-scoped resources, which no project role can reach.
  */
@@ -262,13 +289,22 @@ async function assertSession(
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<void> {
 	const decision = await authorizationService(deps).authorize(subject, action, {
 		kind: 'session',
 		project,
 		session,
+		notebookLabels,
 	});
-	if (!decision.allowed) throw error();
+	if (!decision.allowed) {
+		// A security-label denial masks the session as nonexistent, like every
+		// other constraint denial; only role/session denials use the gate's 403.
+		if (decision.category === 'constraint') {
+			throw new NotFoundError('Session not found');
+		}
+		throw error();
+	}
 }
 
 /**
@@ -281,6 +317,7 @@ export async function assertSessionControl(
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<void> {
 	await assertSession(
 		'session.stop',
@@ -289,6 +326,7 @@ export async function assertSessionControl(
 		session,
 		subject,
 		deps,
+		notebookLabels,
 	);
 }
 
@@ -303,6 +341,7 @@ export async function assertSessionAccess(
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<void> {
 	await assertSession(
 		'session.attach',
@@ -311,6 +350,7 @@ export async function assertSessionAccess(
 		session,
 		subject,
 		deps,
+		notebookLabels,
 	);
 }
 
@@ -325,6 +365,7 @@ export async function assertSessionProxyAccess(
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<void> {
 	await assertSession(
 		'session.proxy',
@@ -333,6 +374,7 @@ export async function assertSessionProxyAccess(
 		session,
 		subject,
 		deps,
+		notebookLabels,
 	);
 }
 
@@ -341,6 +383,7 @@ export async function assertSessionSurfaceAccess(
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<void> {
 	await assertSession(
 		'session.surface',
@@ -349,6 +392,7 @@ export async function assertSessionSurfaceAccess(
 		session,
 		subject,
 		deps,
+		notebookLabels,
 	);
 }
 

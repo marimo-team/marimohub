@@ -23,7 +23,12 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { errorMetadata, logEvent } from '../log';
-import { assertSessionControl, assertSessionSurfaceAccess, loadVisibleProject } from '../shared';
+import {
+	assertSessionControl,
+	assertSessionNotebookVisible,
+	assertSessionSurfaceAccess,
+	loadVisibleProject,
+} from '../shared';
 
 export function surfaceConfig(deps: ApiDeps, id: SecondarySurfaceId) {
 	const config = deps.sandbox.surfaces?.[id];
@@ -218,7 +223,8 @@ export async function loadSurfaceSession(
 	if (session.notebook_id !== params.nid) {
 		throw new NotFoundError(`Session ${params.sid} not found`);
 	}
-	if (permission === 'control') await assertSessionControl(project, session, user, deps);
-	else await assertSessionSurfaceAccess(project, session, user, deps);
+	const labels = await assertSessionNotebookVisible(deps, project, session, user);
+	if (permission === 'control') await assertSessionControl(project, session, user, deps, labels);
+	else await assertSessionSurfaceAccess(project, session, user, deps, labels);
 	return session;
 }

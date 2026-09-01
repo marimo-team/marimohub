@@ -170,6 +170,27 @@ describe('authorizeProxyRequest', () => {
 		}
 	});
 
+	it('masks the kernel behind a notebook override the caller does not satisfy', async () => {
+		const services = createServices(bucket);
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		// Project stays unlabeled; only the notebook carries an override.
+		await services.notebooks.setSecurityLabels(
+			pid,
+			notebooks[0].id,
+			{ classification: 'SECRET', compartments: ['element-x'] },
+			ACTOR,
+		);
+		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+			...deps(ACTOR),
+			resourceSecurity: {
+				constraints: new LocalResourceConstraintPolicy({
+					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+				}),
+			},
+		});
+		expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
+	});
+
 	it('rejects a non-owner editor from an exclusive editor kernel', async () => {
 		const services = createServices(bucket);
 		const notebooks = await services.notebooks.listNotebooks(pid);

@@ -5,6 +5,7 @@ import type {
 	AuthUser,
 	EditorClaim,
 	EditorSandboxSharing,
+	NotebookId,
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
@@ -67,6 +68,7 @@ import {
 	assertProjectRole,
 	assertSessionAccess,
 	assertSessionControl,
+	assertSessionNotebookVisible,
 	authorizationService,
 	commonErrors,
 	createApp,
@@ -551,10 +553,14 @@ async function authorizeSessionStart(
 
 /** The earlier of two ISO deadlines; undefined entries do not bound. */
 function earliestDeadline(...deadlines: (string | undefined)[]): string | undefined {
+	// Compare as instants, not strings: ISO timestamps with mixed fractional
+	// seconds do not sort lexicographically ('…00.900Z' < '…00Z' as text).
 	let earliest: string | undefined;
 	for (const deadline of deadlines) {
 		if (deadline === undefined) continue;
-		if (earliest === undefined || deadline < earliest) earliest = deadline;
+		if (earliest === undefined || Date.parse(deadline) < Date.parse(earliest)) {
+			earliest = deadline;
+		}
 	}
 	return earliest;
 }
@@ -688,6 +694,47 @@ async function assertCapAfterCreate(
 
 const app = createApp();
 
+/**
+ * Notebook-override enforcement for session read paths: sessions of a notebook
+ * whose security-label override the caller does not satisfy are
+ * indistinguishable from nonexistent — they must not leak existence or a
+ * kernel URL through listings. One meta read and one batched decision per
+ * distinct notebook; an unreadable meta fails closed (hidden, not leaked).
+ */
+async function admittedSessionNotebooks(
+	deps: ApiDeps,
+	user: AuthUser,
+	project: Project,
+	notebookIds: readonly NotebookId[],
+): Promise<Set<NotebookId>> {
+	const distinct = [...new Set(notebookIds)];
+	const states = await Promise.all(
+		distinct.map(async (nid) => {
+			try {
+				return { nid, labels: await deps.services.notebooks.getSecurityLabels(project.id, nid) };
+			} catch {
+				return null;
+			}
+		}),
+	);
+	const admitted = new Set(states.flatMap((s) => (s?.labels === null ? [s.nid] : [])));
+	const labeled = states.filter(
+		(s): s is { nid: NotebookId; labels: ResourceSecurityLabels } =>
+			s !== null && s.labels !== null,
+	);
+	if (labeled.length > 0) {
+		const decisions = await authorizationService(deps).authorizeMany(
+			user,
+			'project.read',
+			labeled.map((s) => ({ kind: 'project' as const, project, notebookLabels: s.labels })),
+		);
+		decisions.forEach((decision, index) => {
+			if (decision.allowed) admitted.add(labeled[index].nid);
+		});
+	}
+	return admitted;
+}
+
 app.openapi(listSessions, async (c) => {
 	const deps = c.get('deps');
 	const { sessions, projects } = deps.services;
@@ -699,8 +746,15 @@ app.openapi(listSessions, async (c) => {
 	// kernel URL and `can` grants by the caller's role (see sessionGrantsFor).
 	const project = await loadVisibleProject(projects, pid, user, deps);
 	const active = await sessions.listActiveByProject(pid);
+	const admitted = await admittedSessionNotebooks(
+		deps,
+		user,
+		project,
+		active.map((s) => s.notebook_id),
+	);
+	const visible = active.filter((s) => admitted.has(s.notebook_id));
 	const data = paginate(
-		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
+		visible.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
 		c.req.valid('query'),
 		{
 			key: (s) => s.started_at,
@@ -723,6 +777,7 @@ app.openapi(getSession, async (c) => {
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
+	await assertSessionNotebookVisible(deps, project, session, user);
 	return c.json(
 		{
 			success: true,
@@ -1796,9 +1851,11 @@ app.openapi(deleteSession, async (c) => {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
+	const labels = await assertSessionNotebookVisible(deps, project, existing, user);
+
 	// Terminating a session tears down a running kernel — editor+, or the owner of
 	// their own ephemeral session (role re-checked; see assertSessionControl).
-	await assertSessionControl(project, existing, user, deps);
+	await assertSessionControl(project, existing, user, deps, labels);
 
 	// Mark `terminating` first (atomic): pollers immediately see `Stopping…` while
 	// the retire below runs, instead of a stale `running`. The CAS in the service
@@ -1828,9 +1885,11 @@ app.openapi(heartbeatSession, async (c) => {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
+	const labels = await assertSessionNotebookVisible(deps, project, existing, user);
+
 	// Access-level gate, not control: an admitted viewer watching the shared app
 	// must keep it alive too (see assertSessionAccess).
-	await assertSessionAccess(project, existing, user, deps);
+	await assertSessionAccess(project, existing, user, deps, labels);
 
 	const updated = await sessions.heartbeat(pid, sid);
 

@@ -253,6 +253,25 @@ export class NotebookService {
 		return { meta, readme, source };
 	}
 
+	/**
+	 * The notebook's security-label override from `meta` alone — one object read
+	 * for the hot session/proxy gates, which must apply overrides without paying
+	 * a full `getNotebook`. `null` = unlabeled. Deleted notebooks still return
+	 * their labels; lifecycle is the caller's rule.
+	 */
+	async getSecurityLabels(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<ResourceSecurityLabels | null> {
+		const nb = paths.project(projectId).notebook(notebookId);
+		const metaObj = await this.bucket.get(nb.meta);
+		if (!metaObj) {
+			throw new NotFoundError(`Notebook ${notebookId} not found`);
+		}
+		const meta = await readStored(NotebookMetaSchema, metaObj, nb.meta);
+		return meta.security_labels ?? null;
+	}
+
 	async getNotebookContent(projectId: ProjectId, notebookId: NotebookId): Promise<string> {
 		const { source } = await this.getNotebook(projectId, notebookId);
 		return this.getContentForSource(projectId, notebookId, source);

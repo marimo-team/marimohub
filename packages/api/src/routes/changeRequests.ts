@@ -15,6 +15,7 @@ import {
 	errorResponses,
 	jsonBody,
 	jsonContent,
+	loadAuthorizedNotebook,
 	RequiredIdempotencyKeyHeader,
 	SessionIdParam,
 } from '../shared';
@@ -108,6 +109,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 		'change-request.publish',
 		deps,
 	);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);

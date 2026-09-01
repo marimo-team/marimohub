@@ -13,11 +13,13 @@
 import type { MiddlewareHandler } from 'hono';
 import {
 	ForbiddenError,
+	NotFoundError,
 	ProxyExposure,
 	SurfaceForbiddenError,
 	UnavailableError,
 	verifyProxyToken,
 } from '@marimo-hub/core';
+import type { ResourceSecurityLabels } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import {
@@ -174,6 +176,27 @@ export async function authorizeProxyRequest(
 		// A session whose project is gone is unreachable, like a missing session.
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
+	// The notebook's label override rides on every proxy decision: a caller who
+	// satisfies the project labels but not the override must not reach the
+	// kernel. A missing notebook masks; a transient meta failure fails closed as
+	// unavailable rather than pretending the session is gone.
+	let notebookLabels: ResourceSecurityLabels | null;
+	try {
+		notebookLabels = await deps.services.notebooks.getSecurityLabels(
+			projectId,
+			session.notebook_id,
+		);
+	} catch (err) {
+		if (err instanceof NotFoundError) {
+			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+		}
+		return {
+			kind: 'reject',
+			status: 503,
+			code: 'SERVICE_UNAVAILABLE',
+			message: 'Session authorization could not be verified',
+		};
+	}
 	// A soft-deleted or security-label-denied project's kernels go dark
 	// immediately: this gate is the only thing in the browser→kernel path, and
 	// the sandbox may still be alive. Both mask as a missing session; a plain
@@ -182,6 +205,7 @@ export async function authorizeProxyRequest(
 	const projectDecision = await authorizationService(deps).authorize(user, 'project.read', {
 		kind: 'project',
 		project,
+		notebookLabels,
 	});
 	if (
 		!projectDecision.allowed &&
@@ -190,11 +214,14 @@ export async function authorizeProxyRequest(
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
 	try {
-		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps);
-		else await assertSessionProxyAccess(project, session, user, deps);
+		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps, notebookLabels);
+		else await assertSessionProxyAccess(project, session, user, deps, notebookLabels);
 	} catch (err) {
 		if (err instanceof ForbiddenError || err instanceof SurfaceForbiddenError) {
 			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };
+		}
+		if (err instanceof NotFoundError) {
+			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 		}
 		throw err;
 	}

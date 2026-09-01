@@ -839,6 +839,7 @@ async function workspaceState(
 			: loadVisibleProject(projects, pid, user, deps),
 		sessions.listActiveByProject(pid),
 	]);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const editorActive = active.some(
 		(session) => session.notebook_id === nid && sessionMode(session) === 'edit',
 	);
@@ -1132,7 +1133,8 @@ app.openapi(rotateSyncToken, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const { sync_token } = await notebooks.synced.rotateToken(pid, nid);
 	return c.json({ success: true, data: { sync_url: syncUrl(c, pid, nid), sync_token } }, 200);
 });
@@ -1174,6 +1176,7 @@ app.openapi(syncSourceNow, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const outcome = await pullSourceToHead(deps, project, nid, user.id, user);
 	if (outcome.synced) {
 		await appendAudit(
@@ -1267,7 +1270,8 @@ app.openapi(updateNotebook, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image);
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile);
@@ -1288,6 +1292,7 @@ app.openapi(deleteNotebook, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const deleted = await notebooks.deleteNotebookWithMutation(pid, nid, user.id, ifMatchToken(c));
 	if (deleted) {
 		scheduleProjectAlert(deps, pid, 'notebook.deleted', { project_id: pid, user: user.id }, () =>
@@ -1386,7 +1391,8 @@ app.openapi(restoreVersion, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid, vid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const meta = await notebooks.restoreVersion(pid, nid, vid, user.id);
 	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 201);
 });
@@ -1396,7 +1402,8 @@ app.openapi(duplicateNotebook, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(
 		c,

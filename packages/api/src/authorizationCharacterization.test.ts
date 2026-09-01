@@ -663,3 +663,192 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 		expect(record.authorization_expires_at).toBe(entitlementExpiry);
 	});
 });
+
+describe('authorization characterization: notebook overrides on mutations and sessions', () => {
+	const OVERRIDE = { classification: 'SECRET', compartments: ['element-x'] };
+	const ctxWith = (compartments: string[]) => ({
+		schemaVersion: 1,
+		classification: 'SECRET',
+		compartments,
+		policyVersion: 'p1',
+		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+	});
+	// Per-principal contexts: the owner clears the override, the viewer does not.
+	const perUserSecurity = () => ({
+		constraints: new LocalResourceConstraintPolicy({
+			classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+		}),
+		subjectContext: {
+			resolve: async (principal: { id: string }) =>
+				(principal.id === OWNER ? ctxWith(['element-x']) : ctxWith([])) as never,
+		},
+	});
+
+	async function seedOverriddenNotebook(bucket: MemoryBucket) {
+		const god = apiFor(bucket, OWNER, {
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: perUserSecurity(),
+		});
+		const pid = await createProject(god);
+		await addMember(god, pid, { user_id: VIEWER, role: 'viewer' });
+		await addMember(god, pid, { user_id: EDITOR, role: 'editor' });
+		const nid = await createNotebook(god, pid);
+		await expectOk(
+			await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, OVERRIDE),
+		);
+		return { god, pid, nid };
+	}
+
+	function editorApi(bucket: MemoryBucket) {
+		return apiFor(bucket, EDITOR, { resourceSecurity: perUserSecurity() });
+	}
+
+	it.each([
+		[
+			'metadata update',
+			'PATCH',
+			(pid: string, nid: string) => `/projects/${pid}/notebooks/${nid}`,
+			{ title: 'renamed' },
+		],
+		[
+			'delete',
+			'DELETE',
+			(pid: string, nid: string) => `/projects/${pid}/notebooks/${nid}`,
+			undefined,
+		],
+		[
+			'duplicate',
+			'POST',
+			(pid: string, nid: string) => `/projects/${pid}/notebooks/${nid}/duplicate`,
+			{},
+		],
+		[
+			'version restore',
+			'POST',
+			(pid: string, nid: string) =>
+				`/projects/${pid}/notebooks/${nid}/versions/ver_01HXYZ33333ABCDEF000000000/restore`,
+			undefined,
+		],
+		[
+			'workspace directory create',
+			'POST',
+			(pid: string, nid: string) => `/projects/${pid}/notebooks/${nid}/workspace/directories`,
+			{ path: '/data' },
+		],
+		[
+			'workspace access probe',
+			'GET',
+			(pid: string, nid: string) => `/projects/${pid}/notebooks/${nid}/workspace/access`,
+			undefined,
+		],
+	])('masks a %s against an unsatisfied override', async (_name, method, path, body) => {
+		const bucket = new MemoryBucket();
+		const { pid, nid } = await seedOverriddenNotebook(bucket);
+		await expectError(
+			await editorApi(bucket).request(method, path(pid, nid), body),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('still allows mutations for a caller whose context satisfies the override', async () => {
+		const bucket = new MemoryBucket();
+		const { god, pid, nid } = await seedOverriddenNotebook(bucket);
+		await expectOk(
+			await god.request('PATCH', `/projects/${pid}/notebooks/${nid}`, { title: 'renamed' }),
+		);
+	});
+
+	it('hides an override-masked notebook’s sessions from list, get, heartbeat, and delete', async () => {
+		const bucket = new MemoryBucket();
+		const { pid, nid } = await seedOverriddenNotebook(bucket);
+		const ownerApi = createTestApi({
+			bucket,
+			userId: OWNER,
+			compute: makeFakeCompute(),
+			deps: { policy: { superAdmins: [OWNER] }, resourceSecurity: perUserSecurity() },
+		});
+		const session = await expectOk<{ session_id: string }>(
+			await ownerApi.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {}),
+		);
+		const sid = session.session_id;
+		const base = `/projects/${pid}/notebooks/${nid}/sessions/${sid}`;
+
+		// The owner still sees their session (sanity for the filter below).
+		const ownerList = await expectOk<{ items: { session_id: string }[] }>(
+			await ownerApi.request('GET', `/projects/${pid}/sessions`),
+		);
+		expect(ownerList.items.map((s) => s.session_id)).toContain(sid);
+
+		const viewer = apiFor(bucket, VIEWER, { resourceSecurity: perUserSecurity() });
+		const viewerList = await expectOk<{ items: { session_id: string }[] }>(
+			await viewer.request('GET', `/projects/${pid}/sessions`),
+		);
+		expect(viewerList.items).toEqual([]);
+		await expectError(await viewer.request('GET', base), 404, 'NOT_FOUND');
+		await expectError(await viewer.request('POST', `${base}/heartbeat`), 404, 'NOT_FOUND');
+		await expectError(await viewer.request('DELETE', base), 404, 'NOT_FOUND');
+	});
+});
+
+describe('authorization characterization: deadline instant comparison', () => {
+	it('takes the chronologically earliest deadline across fractional-second formats', async () => {
+		const bucket = new MemoryBucket();
+		// Lexicographically '…00.900Z' < '…00Z', but as an instant it is LATER:
+		// string-min would let the session outlive the entitlement deadline.
+		const baseMs = Math.floor((Date.now() + 600_000) / 1000) * 1000;
+		const entitlementExpiry = new Date(baseMs).toISOString().replace('.000Z', 'Z');
+		const contextExpiry = new Date(baseMs + 900).toISOString();
+		const ctx = {
+			schemaVersion: 1,
+			classification: 'SECRET',
+			compartments: [],
+			policyVersion: 'p1',
+			expiresAt: contextExpiry,
+		};
+		const security = {
+			constraints: new LocalResourceConstraintPolicy({
+				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+			}),
+			subjectContext: { resolve: async () => ctx as never },
+		};
+		const god = apiFor(bucket, OWNER, {
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: security,
+		});
+		const pid = await createProject(god);
+		const nid = await createNotebook(god, pid);
+		await expectOk(
+			await god.request('PUT', `/projects/${pid}/security-labels`, {
+				classification: 'SECRET',
+				compartments: [],
+			}),
+		);
+
+		const entitled: Authenticator = {
+			authenticate: async () => ({
+				id: OWNER,
+				email: `${OWNER}@example.com`,
+				entitlements: ['default-role:editor'],
+				entitlementsExpiresAt: entitlementExpiry,
+				credential: { kind: 'sso' },
+			}),
+		};
+		const api = createTestApi({
+			bucket,
+			userId: OWNER,
+			compute: makeFakeCompute(),
+			deps: { authenticator: entitled, resourceSecurity: security },
+		});
+		const session = await expectOk<{ session_id: string }>(
+			await api.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {}),
+		);
+		const record = await api.deps.services.sessions.getSession(
+			pid as never,
+			session.session_id as never,
+		);
+		// The store may normalize the format; the INSTANT must be the entitlement
+		// deadline — string-min would have kept the later '…00.900Z' context expiry.
+		expect(Date.parse(record.authorization_expires_at ?? '')).toBe(baseMs);
+	});
+});
