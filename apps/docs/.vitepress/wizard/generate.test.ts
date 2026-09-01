@@ -98,6 +98,16 @@ const CASES: Record<string, WizardSelection> = {
 		ai: 'openai-compatible',
 		values: { MARIMOHUB_AI_MODEL: 'gpt-4o-mini' },
 	},
+	's3 + modal + oidc, bedrock ai': {
+		storage: 's3',
+		compute: 'modal',
+		auth: 'oidc',
+		ai: 'bedrock',
+		values: {
+			MARIMOHUB_AI_MODEL: 'eu.anthropic.claude-opus-4-7',
+			MARIMOHUB_AI_AWS_REGION: 'eu-west-1',
+		},
+	},
 	's3 + modal + oidc, value overrides': {
 		storage: 's3',
 		compute: 'modal',

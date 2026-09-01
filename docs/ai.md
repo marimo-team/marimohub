@@ -31,7 +31,7 @@ The full set of variables:
 | -------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
 | `MARIMOHUB_AI_BACKEND`           | —        | `none` (default), `bedrock`, or `openai-compatible`.                                                                 |
 | `MARIMOHUB_AI_AWS_REGION`        | Bedrock  | AWS region for Bedrock. Falls back to `AWS_REGION` or `AWS_DEFAULT_REGION`.                                          |
-| `MARIMOHUB_AI_UPSTREAM_BASE_URL` | yes      | Upstream OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`. The proxy POSTs to `<base>/chat/completions`. |
+| `MARIMOHUB_AI_UPSTREAM_BASE_URL` | API key  | Upstream OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`. The proxy POSTs to `<base>/chat/completions`. |
 | `MARIMOHUB_AI_UPSTREAM_API_KEY`  | API key  | The real upstream key. Held server-side; never injected into a sandbox.                                              |
 | `MARIMOHUB_AI_MODEL`             | yes      | Default model id surfaced to marimo, e.g. `gpt-4o-mini`.                                                             |
 | `MARIMOHUB_AI_ALLOWED_MODELS`    | no       | Comma-separated allowlist; off-list requests fall back to the default model.                                         |

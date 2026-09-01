@@ -28,7 +28,11 @@ export function sqlGenerationInstructions(
 }
 
 function bedrockRegion(env: Env): string {
-	const region = env.MARIMOHUB_AI_AWS_REGION ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION;
+	// First non-empty candidate: an explicitly empty MARIMOHUB_AI_AWS_REGION must
+	// not mask a valid AWS_REGION / AWS_DEFAULT_REGION fallback.
+	const region = [env.MARIMOHUB_AI_AWS_REGION, env.AWS_REGION, env.AWS_DEFAULT_REGION]
+		.map((v) => v?.trim())
+		.find((v) => v);
 	if (region) return region;
 	throw new ConfigError(
 		'Missing required env var: MARIMOHUB_AI_AWS_REGION (AWS_REGION and AWS_DEFAULT_REGION are also accepted)',
@@ -78,7 +82,7 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 	const awsRegion = backend === 'bedrock' ? bedrockRegion(env) : undefined;
 	const upstreamBaseUrl =
 		awsRegion !== undefined
-			? `https://bedrock-runtime.${awsRegion}.amazonaws.com/v1`
+			? `https://bedrock-runtime.${awsRegion}.amazonaws.com/openai/v1`
 			: requiredVar(env, 'MARIMOHUB_AI_UPSTREAM_BASE_URL', {
 					remediation:
 						'Set the upstream OpenAI-compatible base URL, e.g. https://api.openai.com/v1',

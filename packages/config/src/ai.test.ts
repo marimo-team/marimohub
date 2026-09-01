@@ -38,7 +38,7 @@ describe('makeAi', () => {
 		});
 
 		expect(ai).toMatchObject({
-			upstreamBaseUrl: 'https://bedrock-runtime.eu-west-1.amazonaws.com/v1',
+			upstreamBaseUrl: 'https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1',
 			upstreamApiKey: undefined,
 			allowedModels: ['eu.anthropic.claude-opus-4-7'],
 		});
