@@ -8,6 +8,8 @@ import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { IdentityService } from '../identity/IdentityService';
 import type { NotebookService } from './NotebookService';
+import { EventService } from '../catalog/EventService';
+import { LocalResourceConstraintPolicy } from '../authorization/LocalResourceConstraintPolicy';
 import { claimInviteRows, ProjectService } from './ProjectService';
 import { listAllKeys } from '../catalog/storage';
 
@@ -1002,5 +1004,153 @@ describe('ProjectService', () => {
 			expect((await projects.listProjects()).map((p) => p.id)).toContain(survivor.id);
 			expect(await notebooks.getNotebookContent(survivor.id, survivorNb.id)).toBe('s1');
 		});
+	});
+});
+
+describe('ProjectService security labels', () => {
+	let bucket: MemoryBucket;
+	let projects: ProjectService;
+	let catalog: CatalogService;
+
+	beforeEach(async () => {
+		const env = await setupTestEnv();
+		bucket = env.bucket;
+		projects = env.projects;
+		catalog = env.catalog;
+	});
+
+	const LABELS = { classification: 'SECRET', compartments: ['element-b', 'element-a'] };
+	const CONTEXT = {
+		schemaVersion: 1 as const,
+		classification: 'SECRET',
+		compartments: ['element-a', 'element-b'],
+		policyVersion: 'policy-1',
+		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+	};
+	const SUBJECT = {
+		id: ACTOR,
+		email: `${ACTOR}@example.com`,
+		credential: { kind: 'sso' as const },
+	};
+	const securityPolicy = (context = CONTEXT) => ({
+		resourceSecurity: {
+			constraints: new LocalResourceConstraintPolicy({
+				classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
+			}),
+			subjectContext: { resolve: async () => context },
+		},
+	});
+
+	async function recentEvents() {
+		const events = new EventService(bucket);
+		return (await events.getEvents(new Date().toISOString().slice(0, 10))) as Record<
+			string,
+			unknown
+		>[];
+	}
+
+	const entryFor = async (id: string) =>
+		(await catalog.getCurrentSnapshot()).projects.find((e) => e.id === id);
+
+	it('sets normalized labels on the record and projects them into the snapshot', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		const updated = await projects.setSecurityLabels(p.id, LABELS, ACTOR);
+		expect(updated.security_labels).toEqual({
+			classification: 'SECRET',
+			compartments: ['element-a', 'element-b'],
+		});
+		expect((await entryFor(p.id))?.security_labels).toEqual(updated.security_labels);
+	});
+
+	it('clears labels back to a known-unlabeled projection', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		await projects.setSecurityLabels(p.id, LABELS, ACTOR);
+		const cleared = await projects.setSecurityLabels(p.id, undefined, ACTOR);
+		expect(cleared.security_labels).toBeUndefined();
+		expect((await entryFor(p.id))?.security_labels).toBeNull();
+	});
+
+	it('records a durable audit trail with the old and new labels', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		await projects.setSecurityLabels(p.id, LABELS, ACTOR);
+		const events = await recentEvents();
+		expect(events.find((e) => e.event === 'project.security_labels')).toMatchObject({
+			actor: ACTOR,
+			previous_labels: null,
+			next_labels: { classification: 'SECRET', compartments: ['element-a', 'element-b'] },
+		});
+		expect(events.some((e) => e.event === 'project.security_labels.pending')).toBe(true);
+	});
+
+	it('leaves the projection indeterminate — never wrong — when the authoritative write fails', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		const key = paths.project(p.id).meta;
+		const realPut = bucket.put.bind(bucket);
+		const failing = vi.spyOn(bucket, 'put').mockImplementation(async (k, ...rest) => {
+			if (k === key) throw new Error('injected crash between projection and authoritative write');
+			return realPut(k, ...rest);
+		});
+		try {
+			await expect(projects.setSecurityLabels(p.id, LABELS, ACTOR)).rejects.toThrow(/injected/);
+		} finally {
+			failing.mockRestore();
+		}
+		// Step 1 parked the projection at indeterminate; the authoritative record
+		// still has no labels, so the list resolves it from project.json.
+		expect((await entryFor(p.id))?.security_labels).toBeUndefined();
+		const list = await projects.listProjects({ subject: SUBJECT });
+		expect(list.map((e) => e.id)).toEqual([p.id]);
+	});
+
+	it('self-heals an indeterminate projection on the next routine write', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		await catalog.updateProjectEntry('test.strip', ACTOR, p.id, () => ({
+			security_labels: undefined,
+		}));
+		await projects.updateProject(p.id, { description: 'healed' }, ACTOR);
+		expect((await entryFor(p.id))?.security_labels).toBeNull();
+	});
+
+	it('filters labeled projects from lists unless the subject satisfies them', async () => {
+		const open = await projects.createProject({ name: 'open', description: '' }, ACTOR);
+		const secret = await projects.createProject({ name: 'secret', description: '' }, ACTOR);
+		await projects.setSecurityLabels(secret.id, LABELS, ACTOR);
+
+		// No resource-security wiring: the labeled project fails closed.
+		const unwired = await projects.listProjects({ subject: SUBJECT });
+		expect(unwired.map((e) => e.id)).toEqual([open.id]);
+
+		// A dominating context admits it; an insufficient one does not.
+		const admitted = await projects.listProjects({ subject: SUBJECT, policy: securityPolicy() });
+		expect(admitted.map((e) => e.id).sort()).toEqual([open.id, secret.id].sort());
+		const denied = await projects.listProjects({
+			subject: SUBJECT,
+			policy: securityPolicy({ ...CONTEXT, classification: 'CUI' }),
+		});
+		expect(denied.map((e) => e.id)).toEqual([open.id]);
+	});
+
+	it('resolves an indeterminate label projection from the authoritative record', async () => {
+		const secret = await projects.createProject({ name: 'secret', description: '' }, ACTOR);
+		await projects.setSecurityLabels(secret.id, LABELS, ACTOR);
+		await catalog.updateProjectEntry('test.strip', ACTOR, secret.id, () => ({
+			security_labels: undefined,
+		}));
+
+		const denied = await projects.listProjects({
+			subject: SUBJECT,
+			policy: securityPolicy({ ...CONTEXT, classification: 'CUI' }),
+		});
+		expect(denied).toEqual([]);
+		const admitted = await projects.listProjects({ subject: SUBJECT, policy: securityPolicy() });
+		expect(admitted.map((e) => e.id)).toEqual([secret.id]);
+	});
+
+	it('gives super admins no automatic label bypass in listings', async () => {
+		const secret = await projects.createProject({ name: 'secret', description: '' }, ACTOR);
+		await projects.setSecurityLabels(secret.id, LABELS, ACTOR);
+		const god = { superAdmins: [ACTOR], ...securityPolicy({ ...CONTEXT, classification: 'CUI' }) };
+		const denied = await projects.listProjects({ subject: SUBJECT, policy: god });
+		expect(denied).toEqual([]);
 	});
 });

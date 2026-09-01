@@ -428,3 +428,52 @@ describe('OIDC login-policy library loading', () => {
 		);
 	});
 });
+
+describe('subject-security-context library loading', () => {
+	const contextFixtures = fileURLToPath(new URL('./testdata/subject-contexts/', import.meta.url));
+	const contextFixture = (name: string) => path.join(contextFixtures, name);
+	const contextEnv = (specifier: string) => ({
+		MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER: 'UNCLASSIFIED,SECRET',
+		MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND: 'library',
+		MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY: specifier,
+	});
+
+	it('is a no-op unless the library backend is selected', async () => {
+		await expect(
+			loadAdapterLibraries({ MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER: 'UNCLASSIFIED,SECRET' }),
+		).resolves.toEqual({});
+	});
+
+	it('loads a provider and resolves through it', async () => {
+		const loaded = await loadAdapterLibraries(contextEnv(contextFixture('valid.mjs')));
+		const provider = loaded.subjectContext;
+		expect(provider).toBeDefined();
+		const context = await provider?.resolve(
+			{
+				id: 'user-1' as never,
+				email: 'user@example.com',
+				credential: { kind: 'sso' },
+			},
+			new AbortController().signal,
+		);
+		expect(context).toMatchObject({ classification: 'SECRET' });
+		await expect(
+			provider?.resolve(
+				{
+					id: 'user-1' as never,
+					email: 'user@example.com',
+					credential: { kind: 'development' },
+				},
+				new AbortController().signal,
+			),
+		).resolves.toBeNull();
+	});
+
+	it('maps provider shape failures to ConfigErrors', async () => {
+		await expectConfigError(
+			loadAdapterLibraries(contextEnv(contextFixture('missing-resolve.mjs'))),
+			'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY',
+			/missing a callable resolve method/,
+		);
+	});
+});

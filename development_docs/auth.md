@@ -138,23 +138,46 @@ never to personal access tokens.
 **Boundary — this is not resource FGAC.** The login policy maps identity to
 login eligibility and coarse deployment-wide roles; it makes no project or
 notebook decision, and a version-1 result carrying runtime subject state (e.g.
-`subjectSecurityContext`) is rejected. Resource-level security keeps
-separate seams:
+`subjectSecurityContext`) is rejected. Resource-level security uses separate
+seams:
 
-- Runtime subject attributes (clearance-style context) come from the
+- Runtime subject attributes (clearance and compartments) come from the
   `SubjectSecurityContextProvider` port (`core/src/ports/subjectContext.ts`),
-  resolved per credential — never from the raw JWT or this login-time result.
-  The bounded context is resolved at request time and cached at most until its
-  expiry; it never rides in the session cookie, which is signed but not
-  encrypted.
-- Resource security labels only **add restrictions** on top of the existing
-  role checks (`roleAllowed AND constraintsSatisfied`); a constraint adapter can
-  never grant access that baseline RBAC denies, and a labeled resource fails
-  closed when the subject context is missing or stale.
-- Project labels must also be projected into catalog snapshot entries so list
-  filtering stays ahead of pagination; the authoritative label write and the
-  snapshot projection are not atomic, so readers must treat a missing or
-  indeterminate projection as fail-closed, never as unlabeled.
+  resolved per principal — never from the raw JWT or this login-time result.
+  The deployment loads a trusted provider module via
+  `MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND=library`; the bounded context is
+  resolved at request time (once per decision batch), validated fail-closed
+  (strict schema, calendar-correct expiry), and never rides in the session
+  cookie, which is signed but not encrypted.
+- Resource security labels (`project.security_labels`, plus notebook overrides
+  evaluated IN ADDITION so they can only add restrictions) compose as
+  `roleAllowed AND constraintsSatisfied` in `AuthorizationService`. The
+  `ResourceConstraintPolicy` port is deny-only — an adapter can never grant
+  access baseline RBAC denies — and the built-in
+  `LocalResourceConstraintPolicy` evaluates the configured
+  `MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER` lattice plus required compartments. A
+  labeled resource fails closed on a missing/expired context, an unwired
+  adapter, an unknown classification, adapter errors, and timeouts, and masks
+  as 404. Super admins get no automatic bypass. Sessions started on labeled
+  resources tighten `authorization_expires_at` to the earliest of the
+  entitlement and subject-context expiry, which the lifecycle sweep and proxy
+  deadlines already enforce.
+- Project labels are projected into catalog snapshot entries (tri-state:
+  labeled, `null` = known unlabeled, absent = indeterminate) so list filtering
+  stays ahead of pagination with one batch constraint decision per page. The
+  authoritative write and the projection are not atomic: label mutations park
+  the projection at indeterminate FIRST, then write `project.json`, then the
+  final projection — a crash between writes can only fail closed, readers
+  resolve indeterminate entries from the authoritative record, and every
+  routine projection self-heals the state. Label changes require super-admin
+  standing (`security-labels.raise` / `security-labels.lower` — an owner or
+  manager holds no label authority), and emit durable audit events with the old
+  and new labels.
+- Known gaps, by design: git-sync endpoints authenticate by notebook-scoped
+  tokens with no principal (labeled notebooks should not enable git sync), and
+  sandboxes holding deployment-wide storage credentials can read past label
+  boundaries below the API — use scoped credentials (WIF) for labeled
+  deployments.
 
 ### Example: Google
 

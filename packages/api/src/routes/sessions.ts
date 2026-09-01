@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import type {
+	ResourceSecurityLabels,
 	Role,
 	AuthUser,
 	EditorClaim,
@@ -72,6 +73,7 @@ import {
 	errorResponses,
 	IdempotencyKeyHeader,
 	jsonContent,
+	loadAuthorizedNotebook,
 	loadVisibleProject,
 	NotebookIdParam,
 	ProjectIdParam,
@@ -505,21 +507,29 @@ async function authorizeSessionStart(
 	user: AuthUser,
 	mode: SessionMode,
 	policy: PolicyConfig,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<{
 	role: Role | null;
 	ephemeral: boolean;
 	profileOverrideEligible: boolean;
 	restrictedViewerCredentials: boolean;
+	subjectContextExpiresAt?: string;
 }> {
 	const decision = await authorizationService(policy).authorize(user, 'session.start', {
 		kind: 'session-start',
 		project,
 		mode,
+		notebookLabels,
 	});
 	const role = decision.role;
 	if (!decision.allowed) {
-		// The canonical editor-gate 403 (session.start admits every editor+); the
-		// caller has already 404'd a deleted project.
+		// A security-label denial masks the project as nonexistent, matching the
+		// read routes; role denials keep the canonical editor-gate 403
+		// (session.start admits every editor+; the caller already 404'd a deleted
+		// project).
+		if (decision.category === 'constraint') {
+			throw new NotFoundError(`Project ${project.id} not found`);
+		}
 		throw new ForbiddenError(`Requires 'editor' role on project ${project.id}`);
 	}
 	const ephemeral = role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral';
@@ -532,7 +542,20 @@ async function authorizeSessionStart(
 		// ephemeral throwaway is forced onto the deployment default.
 		profileOverrideEligible: !ephemeral,
 		restrictedViewerCredentials: ephemeral,
+		...(decision.subjectContextExpiresAt !== undefined
+			? { subjectContextExpiresAt: decision.subjectContextExpiresAt }
+			: {}),
 	};
+}
+
+/** The earlier of two ISO deadlines; undefined entries do not bound. */
+function earliestDeadline(...deadlines: (string | undefined)[]): string | undefined {
+	let earliest: string | undefined;
+	for (const deadline of deadlines) {
+		if (deadline === undefined) continue;
+		if (earliest === undefined || deadline < earliest) earliest = deadline;
+	}
+	return earliest;
 }
 
 function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
@@ -736,9 +759,14 @@ app.openapi(getEditorSession, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps.policy);
-	const notebook = await deps.services.notebooks.getNotebook(pid, nid);
-	if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'notebook.write',
+		deps.policy,
+	);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
 	const sharing = effectiveEditorSharing(claim, deps.policy.editorSandboxSharing);
 	const claimedSession = claim?.session_id
@@ -814,8 +842,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 			'notebook.write',
 			deps.policy,
 		);
-		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
-		if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+		const notebook = await loadAuthorizedNotebook(deps, project, nid, user);
 		return { project, notebook };
 	};
 	try {
@@ -993,8 +1020,32 @@ app.openapi(createSession, async (c) => {
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	const authorization = await authorizeSessionStart(project, user, mode, deps.policy);
-	const authorizationExpiresAt = entitlementAuthorizationDeadline(user);
+	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
+	// otherwise. Loaded before the start gate so a notebook security-label
+	// override joins the authorization decision. Prevents provisioning a
+	// billable sandbox for a bogus notebook id. A soft-deleted notebook is
+	// treated as missing: getNotebook still serves it (the delete/GC paths need
+	// that), but starting a session on it would serve deleted content — and,
+	// for `app`, recreate the singleton claim that deleteNotebook just cleaned
+	// up, permanently (its cleanup never runs again).
+	const notebook = await notebooks.getNotebook(pid, nid);
+	if (notebook.meta.status === 'deleted') {
+		throw new NotFoundError(`Notebook ${nid} not found`);
+	}
+	const authorization = await authorizeSessionStart(
+		project,
+		user,
+		mode,
+		deps.policy,
+		notebook.meta.security_labels ?? null,
+	);
+	// The session deadline is the earliest of the entitlement credential expiry
+	// and the subject security context expiry that satisfied any labels — an
+	// active session must not outlive either.
+	const authorizationExpiresAt = earliestDeadline(
+		entitlementAuthorizationDeadline(user),
+		authorization.subjectContextExpiresAt,
+	);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
 	const replacingAfterTakeover =
@@ -1044,16 +1095,6 @@ app.openapi(createSession, async (c) => {
 			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
 			: Promise.resolve(session);
 
-	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
-	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook id.
-	// A soft-deleted notebook is treated as missing: getNotebook still serves it
-	// (the delete/GC paths need that), but starting a session on it would serve
-	// deleted content — and, for `app`, recreate the singleton claim that
-	// deleteNotebook just cleaned up, permanently (its cleanup never runs again).
-	const notebook = await notebooks.getNotebook(pid, nid);
-	if (notebook.meta.status === 'deleted') {
-		throw new NotFoundError(`Notebook ${nid} not found`);
-	}
 	const workspacePolicy = workspaceSourcePolicy(notebook.source);
 	// Synced sources are read-only mirrors served from the immutable workspace of the
 	// version the source currently points at; a session can't start before a push.

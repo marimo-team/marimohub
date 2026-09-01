@@ -50,5 +50,9 @@ export function projectCatalogPatch(
 		member_emails: project.members.flatMap((member) =>
 			member.email !== undefined ? [member.email] : [],
 		),
+		// Tri-state projection: null marks KNOWN-unlabeled so lists can skip the
+		// authoritative read. Every routine projection also self-heals a stale or
+		// pending label state left by a crashed label mutation.
+		security_labels: project.security_labels ?? null,
 	};
 }

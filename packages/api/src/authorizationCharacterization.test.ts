@@ -6,9 +6,9 @@
  * silently.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { UserId } from '@marimo-hub/core';
+import { LocalResourceConstraintPolicy, UserId } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
-import { MemoryBucket } from '@marimo-hub/core/testing';
+import { makeFakeCompute, MemoryBucket } from '@marimo-hub/core/testing';
 import { createTestApi, expectError, expectOk } from './testing';
 
 const OWNER = UserId.parse('char-owner');
@@ -309,5 +309,136 @@ describe('authorization characterization: unhappy paths', () => {
 			await owner.request('GET', `/projects/${pid}`),
 		);
 		expect(asOwner.members.some((m) => m.email === 'pending@example.com')).toBe(true);
+	});
+});
+
+describe('authorization characterization: resource security labels', () => {
+	const LABELS = { classification: 'SECRET', compartments: ['element-a'] };
+	const context = (overrides: Record<string, unknown> = {}) => ({
+		schemaVersion: 1,
+		classification: 'SECRET',
+		compartments: ['element-a', 'element-b'],
+		policyVersion: 'policy-1',
+		expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+		...overrides,
+	});
+	const security = (resolved: Record<string, unknown> | null) => ({
+		constraints: new LocalResourceConstraintPolicy({
+			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
+		}),
+		subjectContext: { resolve: async () => resolved as never },
+	});
+
+	async function seedLabeled(bucket: MemoryBucket, resolved: Record<string, unknown> | null) {
+		const pid = await seedProject(bucket);
+		const god = apiFor(bucket, OWNER, {
+			policy: { superAdmins: [OWNER], resourceSecurity: security(context()) },
+		});
+		await expectOk(await god.request('PUT', `/projects/${pid}/security-labels`, LABELS));
+		const member = apiFor(bucket, VIEWER, {
+			policy: { resourceSecurity: security(resolved) },
+		});
+		return { pid, god, member };
+	}
+
+	it('gates label mutations on super-admin standing — the owner is refused', async () => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const owner = apiFor(bucket, OWNER, {
+			policy: { resourceSecurity: security(context()) },
+		});
+		await expectError(
+			await owner.request('PUT', `/projects/${pid}/security-labels`, LABELS),
+			403,
+			'FORBIDDEN',
+		);
+	});
+
+	it('refuses labels when resource security is not configured', async () => {
+		const bucket = new MemoryBucket();
+		const pid = await seedProject(bucket);
+		const god = apiFor(bucket, OWNER, { policy: { superAdmins: [OWNER] } });
+		await expectError(
+			await god.request('PUT', `/projects/${pid}/security-labels`, LABELS),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
+	it('masks a labeled project as 404 without a satisfying context, 200 with one', async () => {
+		const bucket = new MemoryBucket();
+		const { pid, member } = await seedLabeled(bucket, null);
+		await expectError(await member.request('GET', `/projects/${pid}`), 404, 'NOT_FOUND');
+
+		const admitted = apiFor(bucket, VIEWER, {
+			policy: { resourceSecurity: security(context()) },
+		});
+		const project = await expectOk<{ security_labels?: unknown }>(
+			await admitted.request('GET', `/projects/${pid}`),
+		);
+		expect(project.security_labels).toEqual(LABELS);
+	});
+
+	it('hides labeled projects from lists, super admins included', async () => {
+		const bucket = new MemoryBucket();
+		const { pid } = await seedLabeled(bucket, null);
+		const god = apiFor(bucket, OWNER, {
+			policy: {
+				superAdmins: [OWNER],
+				resourceSecurity: security(context({ classification: 'CUI' })),
+			},
+		});
+		const list = await expectOk<{ items: { id: string }[] }>(await god.request('GET', '/projects'));
+		expect(list.items.map((p) => p.id)).not.toContain(pid);
+	});
+
+	it('bounds a session on a labeled project to the subject-context expiry', async () => {
+		const bucket = new MemoryBucket();
+		const ctx = context();
+		const { pid } = await seedLabeled(bucket, ctx);
+		const editor = createTestApi({
+			bucket,
+			userId: EDITOR,
+			compute: makeFakeCompute(),
+			deps: { policy: { resourceSecurity: security(ctx) } },
+		});
+		const nid = await createNotebook(editor, pid);
+		const session = await expectOk<{ session_id: string }>(
+			await editor.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {}),
+		);
+		const record = await editor.deps.services.sessions.getSession(
+			pid as never,
+			session.session_id as never,
+		);
+		expect(record.authorization_expires_at).toBe(ctx.expiresAt);
+	});
+
+	it('enforces a notebook label override in addition to the project labels', async () => {
+		const bucket = new MemoryBucket();
+		const projectOnly = context({ compartments: ['element-a'] });
+		const { pid } = await seedLabeled(bucket, projectOnly);
+		const god = apiFor(bucket, OWNER, {
+			policy: { superAdmins: [OWNER], resourceSecurity: security(context()) },
+		});
+		const nid = await createNotebook(god, pid);
+		await expectOk(
+			await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, {
+				classification: 'SECRET',
+				compartments: ['element-b'],
+			}),
+		);
+
+		// The member's context satisfies the project labels but not the override.
+		const member = apiFor(bucket, VIEWER, {
+			policy: { resourceSecurity: security(projectOnly) },
+		});
+		await expectOk(await member.request('GET', `/projects/${pid}`));
+		await expectError(
+			await member.request('GET', `/projects/${pid}/notebooks/${nid}`),
+			404,
+			'NOT_FOUND',
+		);
+		const full = apiFor(bucket, VIEWER, { policy: { resourceSecurity: security(context()) } });
+		await expectOk(await full.request('GET', `/projects/${pid}/notebooks/${nid}`));
 	});
 });

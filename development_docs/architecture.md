@@ -288,11 +288,14 @@ role calculation for display (`your_role`); it is not the complete
 authorization result. This keeps the "no database" property intact all the way
 through access control.
 
-Future resource security composes here as restrictions only: a constraint
-adapter evaluated by the service can deny an access the role permits, never
-grant one the role denies. Its subject inputs come from the
-`SubjectSecurityContextProvider` port (bounded clearance/compartment context
-resolved per credential — see `ports.md`), never from raw provider claims.
+Resource security composes here as restrictions only
+(`roleAllowed AND constraintsSatisfied`): optional project security labels —
+with stricter notebook overrides — are evaluated by the deny-only
+`ResourceConstraintPolicy` port against a per-subject security context from the
+`SubjectSecurityContextProvider` port (bounded clearance/compartment data
+resolved per principal — see `ports.md`), never from raw provider claims. A
+labeled resource fails closed and masks as nonexistent; labels never grant
+access the role denies.
 
 > **Scaling note.** The global catalog snapshot lists projects by `owner` only;
 > per-project `members` live in `project.json`. Authorized listing for a

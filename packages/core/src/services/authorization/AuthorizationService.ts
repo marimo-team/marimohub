@@ -29,6 +29,15 @@ import {
 	subjectDefaultRole,
 } from '../../authz';
 import type { AuthSubject, AuthzPolicy } from '../../authz';
+import { withDeadline } from '../../async';
+import type { AuthenticatedPrincipal } from '../../ports/auth';
+import type { ConstraintDecision, ResourceConstraintPolicy } from '../../ports/resourceConstraints';
+import { validateSubjectSecurityContext } from '../../ports/subjectContext';
+import type {
+	SubjectSecurityContext,
+	SubjectSecurityContextProvider,
+} from '../../ports/subjectContext';
+import type { ResourceSecurityLabels } from '../../securityLabels';
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
 import type { UserId } from '../../ids';
 import type { Project, Session } from '../../schema';
@@ -42,10 +51,24 @@ import type {
 	SessionScopedAction,
 } from './actions';
 
+/**
+ * Resource-security wiring: the deny-only constraint adapter, the subject
+ * context provider, and the shared deadline for both. A labeled resource
+ * WITHOUT this wiring fails closed — labels must never open up because the
+ * deployment forgot an adapter.
+ */
+export interface ResourceSecurityPolicy {
+	constraints: ResourceConstraintPolicy;
+	subjectContext?: SubjectSecurityContextProvider;
+	/** Per context-resolution / constraint-evaluation deadline (default 5s). */
+	timeoutMs?: number;
+}
+
 /** The deployment policy slice every authorization decision reads. */
 export type AuthorizationPolicy = AuthzPolicy & {
 	viewerMode?: ViewerMode;
 	editorSandboxSharing?: EditorSandboxSharing;
+	resourceSecurity?: ResourceSecurityPolicy;
 };
 
 /** The session fields admission decisions read. */
@@ -54,11 +77,20 @@ export type SessionAdmissionRecord = Pick<
 	'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'
 >;
 
+/**
+ * Optional notebook security-label override carried alongside a project-scoped
+ * resource. Both label sets must be satisfied, so an override can only add
+ * restrictions. `null`/absent = no override.
+ */
+export interface NotebookLabelOverride {
+	notebookLabels?: ResourceSecurityLabels | null;
+}
+
 export type AuthorizationResource =
 	| { kind: 'deployment' }
-	| { kind: 'project'; project: Project }
-	| { kind: 'session'; project: Project; session: SessionAdmissionRecord }
-	| { kind: 'session-start'; project: Project; mode: SessionMode };
+	| ({ kind: 'project'; project: Project } & NotebookLabelOverride)
+	| ({ kind: 'session'; project: Project; session: SessionAdmissionRecord } & NotebookLabelOverride)
+	| ({ kind: 'session-start'; project: Project; mode: SessionMode } & NotebookLabelOverride);
 
 /**
  * Bounded denial categories. `lifecycle` and `visibility` present the resource
@@ -70,10 +102,19 @@ export type AuthorizationDenialCategory =
 	| 'visibility'
 	| 'role'
 	| 'session'
-	| 'standing';
+	| 'standing'
+	| 'constraint';
 
 export type AuthorizationDecision =
-	| { allowed: true; role: Role | null }
+	| {
+			allowed: true;
+			role: Role | null;
+			/**
+			 * Expiry of the subject security context that satisfied a labeled
+			 * resource. Sessions and proxies must not outlive it.
+			 */
+			subjectContextExpiresAt?: string;
+	  }
 	| { allowed: false; category: AuthorizationDenialCategory; role: Role | null };
 
 const SESSION_ACTION_FOR: Record<SessionScopedAction, SessionAction> = {
@@ -82,6 +123,8 @@ const SESSION_ACTION_FOR: Record<SessionScopedAction, SessionAction> = {
 	'session.surface': 'surface',
 	'session.proxy': 'attach',
 };
+
+const DEFAULT_RESOURCE_SECURITY_TIMEOUT_MS = 5_000;
 
 /** A catalog snapshot entry as list visibility reads it (denormalized members). */
 export interface ProjectEntryVisibilityInput {
@@ -98,6 +141,31 @@ export class AuthorizationService {
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
 	): Promise<AuthorizationDecision> {
+		return this.decide(subject, action, resource, this.contextResolver(subject));
+	}
+
+	/**
+	 * Batch form of {@link authorize} for list and sweep paths. The subject
+	 * context is resolved at most once for the whole batch — a decision per
+	 * resource must never cost one provider call per resource.
+	 */
+	async authorizeMany(
+		subject: AuthSubject,
+		action: AuthorizationAction,
+		resources: readonly AuthorizationResource[],
+	): Promise<AuthorizationDecision[]> {
+		const getContext = this.contextResolver(subject);
+		return Promise.all(
+			resources.map((resource) => this.decide(subject, action, resource, getContext)),
+		);
+	}
+
+	private async decide(
+		subject: AuthSubject,
+		action: AuthorizationAction,
+		resource: AuthorizationResource,
+		getContext: () => Promise<SubjectSecurityContext | null>,
+	): Promise<AuthorizationDecision> {
 		const rule = ACTION_RULES[action];
 		if (resource.kind !== rule.scope) {
 			throw new Error(`Action ${action} requires a ${rule.scope} resource, got ${resource.kind}`);
@@ -111,36 +179,52 @@ export class AuthorizationService {
 			return { allowed: false, category: 'lifecycle', role: null };
 		}
 		const role = effectiveRole(resource.project, subject, this.policy);
-		switch (resource.kind) {
-			case 'project': {
-				const projectRule = ACTION_RULES[action as ProjectAction];
-				if (roleAtLeast(role, projectRule.min)) return { allowed: true, role };
-				return {
-					allowed: false,
-					category: projectRule.deniedAs === 'not-found' ? 'visibility' : 'role',
-					role,
-				};
+		const baseline = ((): AuthorizationDecision => {
+			switch (resource.kind) {
+				case 'project': {
+					const projectRule = ACTION_RULES[action as ProjectAction];
+					if (projectRule.requiresSuperAdmin && !isSuperAdmin(subject, this.policy?.superAdmins)) {
+						return { allowed: false, category: 'standing', role };
+					}
+					if (roleAtLeast(role, projectRule.min)) return { allowed: true, role };
+					return {
+						allowed: false,
+						category: projectRule.deniedAs === 'not-found' ? 'visibility' : 'role',
+						role,
+					};
+				}
+				case 'session': {
+					const sessionAction = SESSION_ACTION_FOR[action as SessionScopedAction];
+					return sessionCan(sessionAction, this.sessionActor(subject, role), resource.session)
+						? { allowed: true, role }
+						: { allowed: false, category: 'session', role };
+				}
+				case 'session-start':
+					return canStartSessionMode({ role, viewerMode: this.policy?.viewerMode }, resource.mode)
+						? { allowed: true, role }
+						: { allowed: false, category: 'session', role };
 			}
-			case 'session': {
-				const sessionAction = SESSION_ACTION_FOR[action as SessionScopedAction];
-				return sessionCan(sessionAction, this.sessionActor(subject, role), resource.session)
-					? { allowed: true, role }
-					: { allowed: false, category: 'session', role };
+		})();
+		if (!baseline.allowed) return baseline;
+		// `roleAllowed AND constraintsSatisfied`: labels only ever restrict. A
+		// role denial above never consults constraints, a satisfied constraint
+		// never upgrades the baseline, and a notebook override is evaluated IN
+		// ADDITION to the project labels so it can never lower them.
+		const labelSets = [
+			resource.project.security_labels ?? null,
+			resource.notebookLabels ?? null,
+		].filter((labels): labels is ResourceSecurityLabels => labels !== null);
+		let decision: AuthorizationDecision = baseline;
+		for (const labels of labelSets) {
+			const constraint = await this.evaluateConstraint(action, labels, getContext);
+			if (!constraint.satisfied) {
+				return { allowed: false, category: 'constraint', role };
 			}
-			case 'session-start':
-				return canStartSessionMode({ role, viewerMode: this.policy?.viewerMode }, resource.mode)
-					? { allowed: true, role }
-					: { allowed: false, category: 'session', role };
+			if (constraint.contextExpiresAt !== undefined) {
+				decision = { ...decision, subjectContextExpiresAt: constraint.contextExpiresAt };
+			}
 		}
-	}
-
-	/** Batch form of {@link authorize} for list and sweep paths. */
-	async authorizeMany(
-		subject: AuthSubject,
-		action: AuthorizationAction,
-		resources: readonly AuthorizationResource[],
-	): Promise<AuthorizationDecision[]> {
-		return Promise.all(resources.map((resource) => this.authorize(subject, action, resource)));
+		return decision;
 	}
 
 	/** The baseline role for display (`your_role`) and derived projections. */
@@ -181,6 +265,127 @@ export class AuthorizationService {
 		return allowed
 			? { allowed: true, role: null }
 			: { allowed: false, category: 'standing', role: null };
+	}
+
+	/**
+	 * Whether the subject satisfies a resource's labels — the single-decision
+	 * form used by list fallbacks (`null` = known unlabeled → satisfied).
+	 */
+	async constraintsSatisfied(
+		subject: AuthSubject,
+		labels: ResourceSecurityLabels | null,
+	): Promise<boolean> {
+		if (labels === null) return true;
+		const decision = await this.evaluateConstraint(
+			'project.read',
+			labels,
+			this.contextResolver(subject),
+		);
+		return decision.satisfied;
+	}
+
+	/**
+	 * Batch constraint decisions over resolved label states for the list path:
+	 * one subject-context resolution and one adapter batch for the whole page's
+	 * worth of entries. Callers resolve indeterminate (legacy/pending) snapshot
+	 * label states from the authoritative record BEFORE calling.
+	 */
+	async projectLabelConstraints(
+		subject: AuthSubject,
+		labelStates: readonly (ResourceSecurityLabels | null)[],
+	): Promise<boolean[]> {
+		if (labelStates.every((labels) => labels === null)) {
+			return labelStates.map(() => true);
+		}
+		const security = this.policy?.resourceSecurity;
+		if (!security) return labelStates.map((labels) => labels === null);
+		const context = await this.contextResolver(subject)();
+		try {
+			const decisions = await this.withSecurityDeadline(security, (signal) =>
+				Promise.resolve(
+					security.constraints.evaluateMany(
+						context,
+						'project.read',
+						labelStates.map((labels) => ({ labels })),
+						signal,
+					),
+				),
+			);
+			if (decisions.length !== labelStates.length) {
+				// A miscounting adapter cannot be trusted for any entry.
+				return labelStates.map((labels) => labels === null);
+			}
+			return decisions.map((decision, index) =>
+				labelStates[index] === null ? true : decision.satisfied,
+			);
+		} catch {
+			return labelStates.map((labels) => labels === null);
+		}
+	}
+
+	/**
+	 * Lazy, per-call-memoized subject-context resolution: resolved at most once
+	 * per authorize/authorizeMany invocation and only when a labeled resource
+	 * actually needs it. Operational failures and timeouts yield null — a
+	 * labeled resource then fails closed, never open.
+	 */
+	private contextResolver(subject: AuthSubject): () => Promise<SubjectSecurityContext | null> {
+		let resolved: Promise<SubjectSecurityContext | null> | undefined;
+		return () => (resolved ??= this.resolveSubjectContext(subject));
+	}
+
+	private async resolveSubjectContext(
+		subject: AuthSubject,
+	): Promise<SubjectSecurityContext | null> {
+		const security = this.policy?.resourceSecurity;
+		const provider = security?.subjectContext;
+		if (!security || !provider) return null;
+		const credential = (subject as Partial<AuthenticatedPrincipal>).credential;
+		// Only a principal with credential provenance can resolve a context;
+		// bare subjects (and unsupported credential kinds, per the provider's
+		// contract) have none and fail closed on labeled resources.
+		if (credential === undefined) return null;
+		try {
+			const context = await this.withSecurityDeadline(security, (signal) =>
+				Promise.resolve(provider.resolve(subject as AuthenticatedPrincipal, signal)),
+			);
+			return context === null ? null : validateSubjectSecurityContext(context);
+		} catch {
+			return null;
+		}
+	}
+
+	private async evaluateConstraint(
+		action: AuthorizationAction,
+		labels: ResourceSecurityLabels,
+		getContext: () => Promise<SubjectSecurityContext | null>,
+	): Promise<ConstraintDecision & { contextExpiresAt?: string }> {
+		const security = this.policy?.resourceSecurity;
+		// Labeled resources without wiring fail closed: labels must never open
+		// up because the deployment forgot an adapter.
+		if (!security) return { satisfied: false, reason: 'unavailable' };
+		const context = await getContext();
+		try {
+			const decision = await this.withSecurityDeadline(security, (signal) =>
+				Promise.resolve(security.constraints.evaluate(context, action, { labels }, signal)),
+			);
+			if (!decision.satisfied) return decision;
+			return context !== null
+				? { satisfied: true, contextExpiresAt: context.expiresAt }
+				: { satisfied: true };
+		} catch {
+			return { satisfied: false, reason: 'unavailable' };
+		}
+	}
+
+	private withSecurityDeadline<T>(
+		security: ResourceSecurityPolicy,
+		work: (signal: AbortSignal) => Promise<T>,
+	): Promise<T> {
+		return withDeadline(work, {
+			timeoutMs: security.timeoutMs ?? DEFAULT_RESOURCE_SECURITY_TIMEOUT_MS,
+			timeoutError: () => new Error('resource security evaluation timed out'),
+		});
 	}
 
 	private sessionActor(subject: AuthSubject, role: Role | null) {

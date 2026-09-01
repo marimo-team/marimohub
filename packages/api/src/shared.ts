@@ -5,6 +5,8 @@ import {
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
 	DOMAIN_ERROR_CODES,
+	MAX_SECURITY_COMPARTMENTS,
+	SECURITY_LABEL_TOKEN,
 	effectiveRole,
 	ForbiddenError,
 	NotebookId,
@@ -32,6 +34,7 @@ import type {
 	AuthorizationPolicy,
 	AuthSubject,
 	AuthzPolicy,
+	NotebookDetail,
 	ComputeResources,
 	EditorSandboxSharing,
 	Project,
@@ -121,6 +124,9 @@ export async function assertProjectActionOn(
 			`Requires '${projectActionMinRole(action)}' role on project ${project.id}`,
 		);
 	}
+	if (decision.category === 'standing') {
+		throw new ForbiddenError('Requires super admin');
+	}
 	throw new NotFoundError(`Project ${project.id} not found`);
 }
 
@@ -139,6 +145,37 @@ export async function assertProjectRole(
 	const project = await projects.getProject(pid);
 	await assertProjectActionOn(project, subject, action, policy);
 	return project;
+}
+
+/**
+ * Load a notebook the caller may see: 404 for a deleted notebook, and a
+ * `project.read` decision including the notebook's security-label override — a
+ * constraint denial masks the notebook as nonexistent, matching the
+ * project-level rule. The project itself must already have passed its own
+ * guard; only the override needs evaluating here (the service checks the
+ * project labels again regardless — labels only ever remove access).
+ */
+export async function loadAuthorizedNotebook(
+	deps: Pick<ApiDeps, 'services' | 'policy'>,
+	project: Project,
+	nid: NotebookId,
+	subject: AuthSubject,
+): Promise<NotebookDetail> {
+	const detail = await deps.services.notebooks.getNotebook(project.id, nid);
+	if (detail.meta.status === 'deleted') {
+		throw new NotFoundError(`Notebook ${nid} not found`);
+	}
+	if (detail.meta.security_labels !== undefined) {
+		const decision = await authorizationService(deps.policy).authorize(subject, 'project.read', {
+			kind: 'project',
+			project,
+			notebookLabels: detail.meta.security_labels,
+		});
+		if (!decision.allowed) {
+			throw new NotFoundError(`Notebook ${nid} not found`);
+		}
+	}
+	return detail;
 }
 
 /**
@@ -717,6 +754,25 @@ export const ProjectFederationResponseSchema = z
 	})
 	.openapi('ProjectFederation');
 
+/**
+ * Resource security labels on a project or notebook. Only visible to callers
+ * who already satisfied them (or hold the label-management standing), so the
+ * label values themselves are not a disclosure channel.
+ */
+export const SecurityLabelsResponseSchema = z
+	.object({
+		classification: z.string(),
+		compartments: z.array(z.string()),
+	})
+	.openapi('SecurityLabels');
+
+export const SecurityLabelsBodySchema = z
+	.object({
+		classification: z.string().regex(SECURITY_LABEL_TOKEN),
+		compartments: z.array(z.string().regex(SECURITY_LABEL_TOKEN)).max(MAX_SECURITY_COMPARTMENTS),
+	})
+	.openapi('SecurityLabelsInput');
+
 export const ProjectResponseSchema = z
 	.object({
 		id: z.string(),
@@ -729,6 +785,7 @@ export const ProjectResponseSchema = z
 		updated_at: dt(),
 		tags: z.array(z.string()),
 		federation: ProjectFederationResponseSchema.optional(),
+		security_labels: SecurityLabelsResponseSchema.optional(),
 		/** The requesting user's effective role on this project, or null if none. */
 		your_role: z.enum(ROLES).nullable(),
 	})
@@ -789,6 +846,8 @@ export const NotebookMetaResponseSchema = z
 		base_image: z.string().optional(),
 		/** The notebook's non-default compute profile; absent = deployment default. */
 		compute_profile: z.string().optional(),
+		/** Security-label override enforced in addition to the project labels. */
+		security_labels: SecurityLabelsResponseSchema.optional(),
 	})
 	.openapi('NotebookMeta');
 

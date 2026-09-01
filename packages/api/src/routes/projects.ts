@@ -4,11 +4,14 @@ import {
 	canCreateProject,
 	effectiveRole,
 	ForbiddenError,
+	isMonotonicRestrictionIncrease,
 	notificationRouter,
+	ProjectId,
 	resolveMemberRecipient,
 	roleAtLeast,
 	toPublicProject,
 	UserId,
+	ValidationError,
 } from '@marimo-hub/core';
 import type {
 	AuthSubject,
@@ -19,7 +22,9 @@ import type {
 	Role,
 } from '@marimo-hub/core';
 import {
+	assertProjectActionOn,
 	assertProjectRole,
+	assertSessionAuthenticated,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -35,6 +40,8 @@ import {
 	ProjectMemberResponseSchema,
 	ProjectResponseSchema,
 	retireLiveApps,
+	SecurityLabelsBodySchema,
+	SESSION_ONLY_SECURITY,
 	SnapshotProjectEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
@@ -222,6 +229,48 @@ const deleteProject = createRoute({
 	},
 });
 
+const setSecurityLabels = createRoute({
+	method: 'put',
+	path: '/projects/{pid}/security-labels',
+	operationId: 'projects.securityLabels.set',
+	tags: ['Projects'],
+	summary: 'Set project security labels',
+	description:
+		'Sets the project classification and required compartments. Requires super-admin standing ' +
+		'— no project role grants label authority — and the deployment must have resource security ' +
+		'configured. Labels only add restrictions on top of role checks.',
+	security: SESSION_ONLY_SECURITY,
+	request: { params: ProjectIdParam, body: jsonBody(SecurityLabelsBodySchema) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: ProjectResponseSchema }),
+			'Security labels updated',
+			EtagResponseHeader,
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const clearSecurityLabels = createRoute({
+	method: 'delete',
+	path: '/projects/{pid}/security-labels',
+	operationId: 'projects.securityLabels.clear',
+	tags: ['Projects'],
+	summary: 'Remove project security labels',
+	security: SESSION_ONLY_SECURITY,
+	request: { params: ProjectIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: ProjectResponseSchema }),
+			'Security labels removed',
+			EtagResponseHeader,
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
 const listMembers = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/members',
@@ -351,6 +400,46 @@ app.openapi(updateProject, async (c) => {
 	c.header('ETag', etagFor(project.updated_at));
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
 });
+
+/**
+ * Shared handler body for the two label mutations. The action is chosen from
+ * the actual transition: adding labels or a provable compartment-superset
+ * increase is a raise; anything else — removal, a classification change, a
+ * dropped compartment — needs the stricter lowering permission (core cannot
+ * order classifications; the constraint adapter owns the lattice).
+ */
+async function mutateSecurityLabels(
+	c: Parameters<Parameters<typeof app.openapi>[1]>[0],
+	labels: { classification: string; compartments: string[] } | undefined,
+) {
+	const deps = c.get('deps');
+	const { projects } = deps.services;
+	const user = c.get('user');
+	const pid = ProjectId.parse(c.req.param('pid') ?? '');
+	assertSessionAuthenticated(c, 'change security labels');
+	if (labels !== undefined && deps.policy.resourceSecurity === undefined) {
+		throw new ValidationError(
+			'Security labels require resource security to be configured (MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER); ' +
+				'labels without an evaluator would lock the project for everyone.',
+		);
+	}
+	const project = await projects.getProject(pid);
+	const previous = project.security_labels;
+	const action =
+		previous === undefined
+			? 'security-labels.raise'
+			: labels !== undefined && isMonotonicRestrictionIncrease(previous, labels)
+				? 'security-labels.raise'
+				: 'security-labels.lower';
+	await assertProjectActionOn(project, user, action, deps.policy);
+	const updated = await projects.setSecurityLabels(pid, labels, user.id);
+	c.header('ETag', etagFor(updated.updated_at));
+	return c.json({ success: true, data: projectResponse(updated, user, deps.policy) }, 200);
+}
+
+app.openapi(setSecurityLabels, async (c) => mutateSecurityLabels(c, c.req.valid('json')));
+
+app.openapi(clearSecurityLabels, async (c) => mutateSecurityLabels(c, undefined));
 
 app.openapi(deleteProject, async (c) => {
 	const deps = c.get('deps');

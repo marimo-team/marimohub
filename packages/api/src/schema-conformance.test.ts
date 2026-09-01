@@ -101,11 +101,15 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	// must equal the core set MINUS exactly the declared internal fields — this
 	// catches both a new core field missing from the response AND an internal
 	// field accidentally leaking into the response.
-	it('SnapshotNotebookEntry omits exactly `key_prefix` from the core entry', () => {
+	// `security_labels` stays internal on list entries: label VALUES are only
+	// shown to callers who already satisfied them, which the list projection
+	// cannot know per entry — the detail routes expose them after the guard.
+	it('SnapshotNotebookEntry omits exactly the internal fields from the core entry', () => {
 		const coreKeys = shapeKeys(CoreSnapshotNotebookEntrySchema);
 		const apiKeys = shapeKeys(SnapshotNotebookEntrySchema);
-		expect(coreKeys.filter((k) => k !== 'key_prefix')).toEqual(apiKeys);
-		expect(coreKeys).toContain('key_prefix');
+		const internal = ['key_prefix', 'security_labels'];
+		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
+		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});
 
 	// The project-list response drops the nested `notebooks` roster (unbounded,
@@ -115,7 +119,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	it('SnapshotProjectEntry omits internal list-filter fields from the core entry', () => {
 		const coreKeys = shapeKeys(CoreSnapshotProjectEntrySchema);
 		const apiKeys = shapeKeys(SnapshotProjectEntrySchema);
-		const internal = ['notebooks', 'tags', 'member_ids', 'member_emails'];
+		const internal = ['notebooks', 'tags', 'member_ids', 'member_emails', 'security_labels'];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});

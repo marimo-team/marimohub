@@ -1,7 +1,8 @@
 import type { Bucket } from '../../ports/bucket';
 import { roleAtLeast } from '../../authz';
-import type { AuthSubject, AuthzPolicy } from '../../authz';
+import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
+import type { AuthorizationPolicy } from '../authorization/AuthorizationService';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -15,6 +16,8 @@ import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
 import { metricsObserver, saga } from '../../saga';
 import { parseStored, ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
+import { normalizeSecurityLabels } from '../../securityLabels';
+import type { ResourceSecurityLabels } from '../../securityLabels';
 import type {
 	Project,
 	ProjectFederation,
@@ -210,7 +213,7 @@ export class ProjectService {
 	async listProjects(
 		filter?: ListFilters<Project['status']> & {
 			subject: AuthSubject;
-			policy?: AuthzPolicy;
+			policy?: AuthorizationPolicy;
 		},
 	): Promise<PublicProjectEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
@@ -233,24 +236,55 @@ export class ProjectService {
 		}
 		if (!filter) return matching.map(toPublicProjectEntry);
 		// Visibility routes through the authorization service so listings and
-		// direct reads cannot drift. The filter runs BEFORE pagination (the caller
-		// pages the returned entries), so a hidden project never leaks through
-		// page counts or cursors.
+		// direct reads cannot drift. Both filters run BEFORE pagination (the
+		// caller pages the returned entries), so a hidden project never leaks
+		// through page counts or cursors.
 		const authz = new AuthorizationService(filter.policy);
-		if (authz.listsAllProjects(filter.subject)) {
-			return matching.map(toPublicProjectEntry);
+		let visible = matching;
+		if (!authz.listsAllProjects(filter.subject)) {
+			const visibility = await mapWithConcurrency(
+				matching,
+				BUCKET_SCAN_CONCURRENCY,
+				async (entry) => {
+					const seen = authz.projectEntryVisibility(filter.subject, entry);
+					// `null` = the entry predates `member_ids`, so visibility can't be decided
+					// from the snapshot alone; fall back to the authoritative project.json.
+					return seen ?? (await this.canSeeProject(authz, entry.id, filter.subject));
+				},
+			);
+			visible = matching.filter((_, i) => visibility[i]);
 		}
-		const visibility = await mapWithConcurrency(
-			matching,
-			BUCKET_SCAN_CONCURRENCY,
-			async (entry) => {
-				const seen = authz.projectEntryVisibility(filter.subject, entry);
-				// `null` = the entry predates `member_ids`, so visibility can't be decided
-				// from the snapshot alone; fall back to the authoritative project.json.
-				return seen ?? (await this.canSeeProject(authz, entry.id, filter.subject));
-			},
+		return (await this.filterBySecurityLabels(authz, filter.subject, visible)).map(
+			toPublicProjectEntry,
 		);
-		return matching.filter((_, i) => visibility[i]).map(toPublicProjectEntry);
+	}
+
+	/**
+	 * Security-label filter over membership-visible entries. Labels only remove
+	 * entries — super admins get no automatic bypass. Indeterminate label
+	 * states (a legacy entry, or a label mutation in flight) are resolved from
+	 * the authoritative record BEFORE one batch constraint decision, so a page
+	 * never costs one adapter call per entry; an unreadable authoritative
+	 * record fails closed.
+	 */
+	private async filterBySecurityLabels(
+		authz: AuthorizationService,
+		subject: AuthSubject,
+		entries: SnapshotProjectEntry[],
+	): Promise<SnapshotProjectEntry[]> {
+		if (entries.every((entry) => entry.security_labels === null)) return entries;
+		const states = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+			if (entry.security_labels !== undefined) return { labels: entry.security_labels };
+			try {
+				return { labels: (await this.getProject(entry.id)).security_labels ?? null };
+			} catch {
+				return null;
+			}
+		});
+		const readable = entries.filter((_, i) => states[i] !== null);
+		const labelStates = states.flatMap((state) => (state === null ? [] : [state.labels]));
+		const satisfied = await authz.projectLabelConstraints(subject, labelStates);
+		return readable.filter((_, i) => satisfied[i]);
 	}
 
 	// Only reached when the fast path above didn't return, i.e. the caller is
@@ -325,6 +359,7 @@ export class ProjectService {
 									m.user_id !== undefined ? [m.user_id] : [],
 								),
 								member_emails: [],
+								security_labels: null,
 							},
 						],
 					}),
@@ -368,6 +403,70 @@ export class ProjectService {
 
 		await this.catalog.updateProjectEntry('project.update', actor, id, (entry) =>
 			loadProjectCatalogPatch(this.bucket, id, entry),
+		);
+
+		return updated;
+	}
+
+	/**
+	 * Set or clear the project's security labels (`labels: undefined` clears).
+	 *
+	 * The authoritative record and the snapshot projection cannot be written
+	 * atomically, so the flow fails closed by ordering: (1) park the projection
+	 * at INDETERMINATE (list decisions then defer to the authoritative record),
+	 * (2) write the authoritative `project.json`, (3) write the final
+	 * projection. A crash between any two steps leaves the projection
+	 * indeterminate, never wrong — and every routine projection write
+	 * (`projectCatalogPatch`) self-heals it afterwards. The two snapshot commits
+	 * produce the durable audit trail: `project.security_labels.pending` and
+	 * `project.security_labels` (with the old and new labels in its context).
+	 */
+	async setSecurityLabels(
+		id: ProjectId,
+		labels: ResourceSecurityLabels | undefined,
+		actor: UserId,
+	): Promise<Project> {
+		const key = paths.project(id).meta;
+		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
+
+		await this.catalog.updateProjectEntry(
+			'project.security_labels.pending',
+			actor,
+			id,
+			() => ({ security_labels: undefined }),
+			{ project_id: id },
+		);
+
+		let previous: ResourceSecurityLabels | null = null;
+		const updated = await mutateObject(
+			this.bucket,
+			key,
+			(raw) => parseStored(ProjectSchema, raw, key),
+			(current) => {
+				if (current.status === 'deleted') {
+					throw new NotFoundError(`Project ${id} not found`);
+				}
+				previous = current.security_labels ?? null;
+				const { security_labels: _cleared, ...rest } = current;
+				return {
+					...rest,
+					...(normalized !== undefined ? { security_labels: normalized } : {}),
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
+		);
+
+		await this.catalog.updateProjectEntry(
+			'project.security_labels',
+			actor,
+			id,
+			(entry) => loadProjectCatalogPatch(this.bucket, id, entry),
+			{
+				project_id: id,
+				previous_labels: previous,
+				next_labels: normalized ?? null,
+			},
 		);
 
 		return updated;

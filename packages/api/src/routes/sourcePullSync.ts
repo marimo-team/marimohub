@@ -6,18 +6,20 @@ import {
 	SyncNotConfiguredError,
 } from '@marimo-hub/core';
 import type {
+	AuthSubject,
 	GitSource,
 	GitSourceConfig,
 	NotebookId,
-	ProjectId,
+	Project,
 	Source,
 	SourceBranchHead,
 	SourceControlReader,
 	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { loadAuthorizedNotebook } from '../shared';
 
-type PullSyncDeps = Pick<ApiDeps, 'services' | 'sourceControl'>;
+type PullSyncDeps = Pick<ApiDeps, 'services' | 'sourceControl' | 'policy'>;
 
 export interface SyncTarget {
 	git: GitSource;
@@ -75,12 +77,13 @@ export interface PullSyncOutcome {
  */
 export async function pullSourceToHead(
 	deps: PullSyncDeps,
-	projectId: ProjectId,
+	project: Project,
 	notebookId: NotebookId,
 	actor: UserId,
+	subject: AuthSubject,
 ): Promise<PullSyncOutcome> {
 	const { notebooks } = deps.services;
-	const { source } = await notebooks.getNotebook(projectId, notebookId);
+	const { source } = await loadAuthorizedNotebook(deps, project, notebookId, subject);
 	const { git, reader, config, head } = await resolveSyncTarget(deps, source);
 	if (isAtBranchHead(git, head.commit)) {
 		return { synced: false, commit: head.commit, version_id: null };
@@ -92,7 +95,7 @@ export async function pullSourceToHead(
 			: undefined,
 	]);
 	const { versionId } = await notebooks.synced.sync(
-		projectId,
+		project.id,
 		notebookId,
 		{
 			repo: config.repo,

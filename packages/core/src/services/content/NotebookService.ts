@@ -24,6 +24,11 @@ import {
 	toPublicNotebookEntry,
 	VersionSchema,
 } from '../../schema';
+import type { AuthSubject } from '../../authz';
+import { AuthorizationService } from '../authorization/AuthorizationService';
+import type { AuthorizationPolicy } from '../authorization/AuthorizationService';
+import { normalizeSecurityLabels } from '../../securityLabels';
+import type { ResourceSecurityLabels } from '../../securityLabels';
 import type {
 	FsSnapshot,
 	NotebookMeta,
@@ -183,21 +188,46 @@ export class NotebookService {
 
 	async listNotebooks(
 		projectId: ProjectId,
-		filter?: ListFilters<NotebookMeta['status']>,
+		filter?: ListFilters<NotebookMeta['status']> & {
+			subject?: AuthSubject;
+			policy?: AuthorizationPolicy;
+		},
 	): Promise<PublicNotebookEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const project = snapshot.projects.find((p) => p.id === projectId);
 		if (!project) {
 			throw new NotFoundError(`Project ${projectId} not found`);
 		}
-		return project.notebooks
-			.filter(
-				createListFilter<SnapshotNotebookEntry>(filter, (notebook) => [
-					notebook.title,
-					notebook.description,
-				]),
-			)
-			.map(toPublicNotebookEntry);
+		const matching = project.notebooks.filter(
+			createListFilter<SnapshotNotebookEntry>(filter, (notebook) => [
+				notebook.title,
+				notebook.description,
+			]),
+		);
+		if (filter?.subject === undefined) return matching.map(toPublicNotebookEntry);
+		// Security-label override filter, mirroring the project list: the caller
+		// already satisfied the PROJECT labels to see this list at all, so only
+		// notebook overrides are decided here — one batch decision per page, with
+		// indeterminate (legacy or mutation-in-flight) projections resolved from
+		// the authoritative notebook record, failing closed when unreadable.
+		const authz = new AuthorizationService(filter.policy);
+		const subject = filter.subject;
+		if (matching.every((entry) => entry.security_labels === null)) {
+			return matching.map(toPublicNotebookEntry);
+		}
+		const states = await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+			if (entry.security_labels !== undefined) return { labels: entry.security_labels };
+			try {
+				const detail = await this.getNotebook(projectId, entry.id);
+				return { labels: detail.meta.security_labels ?? null };
+			} catch {
+				return null;
+			}
+		});
+		const readable = matching.filter((_, i) => states[i] !== null);
+		const labelStates = states.flatMap((state) => (state === null ? [] : [state.labels]));
+		const satisfied = await authz.projectLabelConstraints(subject, labelStates);
+		return readable.filter((_, i) => satisfied[i]).map(toPublicNotebookEntry);
 	}
 
 	async getNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookDetail> {
@@ -420,6 +450,69 @@ export class NotebookService {
 			},
 			actor,
 		);
+	}
+
+	/**
+	 * Set or clear the notebook's security-label override (`labels: undefined`
+	 * clears). Same fail-closed ordering as the project flow: park the snapshot
+	 * projection at INDETERMINATE, write the authoritative `notebook.json`,
+	 * then write the final projection — a crash between writes leaves the
+	 * projection indeterminate, never wrong, and routine projections self-heal
+	 * it. The override is enforced IN ADDITION to the project labels, so it can
+	 * only add restrictions.
+	 */
+	async setSecurityLabels(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		labels: ResourceSecurityLabels | undefined,
+		actor: UserId,
+	): Promise<NotebookMeta> {
+		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
+		await this.catalog.updateNotebookEntry(
+			'notebook.security_labels.pending',
+			actor,
+			projectId,
+			notebookId,
+			() => ({ security_labels: undefined }),
+		);
+
+		const nb = paths.project(projectId).notebook(notebookId);
+		let previous: ResourceSecurityLabels | null = null;
+		const updated = await mutateObject(
+			this.bucket,
+			nb.meta,
+			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+			(current) => {
+				if (current.status === 'deleted') {
+					throw new NotFoundError(`Notebook ${notebookId} not found`);
+				}
+				previous = current.security_labels ?? null;
+				const { security_labels: _cleared, ...rest } = current;
+				return {
+					...rest,
+					...(normalized !== undefined ? { security_labels: normalized } : {}),
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
+		);
+
+		await this.catalog.updateNotebookEntry(
+			'notebook.security_labels',
+			actor,
+			projectId,
+			notebookId,
+			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
+			undefined,
+			{
+				project_id: projectId,
+				notebook_id: notebookId,
+				previous_labels: previous,
+				next_labels: normalized ?? null,
+			},
+		);
+
+		return updated;
 	}
 
 	async updateNotebook(

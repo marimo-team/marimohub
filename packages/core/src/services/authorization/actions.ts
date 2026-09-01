@@ -49,6 +49,10 @@ export const PROJECT_ACTIONS = [
 	'integration.manage',
 	/** Publish a change request (PR/MR) from a notebook session. */
 	'change-request.publish',
+	/** Add security labels or provably increase them (compartment superset). */
+	'security-labels.raise',
+	/** Lower, remove, or otherwise change security labels non-monotonically. */
+	'security-labels.lower',
 ] as const;
 
 export const SESSION_ACTIONS = [
@@ -88,6 +92,11 @@ export interface ProjectActionRule {
 	min: Role;
 	/** How a role denial presents: masked as nonexistent, or plain forbidden. */
 	deniedAs: 'not-found' | 'forbidden';
+	/**
+	 * Security-sensitive mutations gated on deployment standing, NOT project
+	 * role: an owner or manager does not hold label authority by default.
+	 */
+	requiresSuperAdmin?: true;
 }
 
 export interface NonProjectActionRule {
@@ -122,6 +131,18 @@ export const ACTION_RULES: {
 	'integration.use': project('editor', 'forbidden'),
 	'integration.manage': project('manager', 'forbidden'),
 	'change-request.publish': project('manager', 'forbidden'),
+	'security-labels.raise': {
+		scope: 'project',
+		min: 'viewer',
+		deniedAs: 'forbidden',
+		requiresSuperAdmin: true,
+	},
+	'security-labels.lower': {
+		scope: 'project',
+		min: 'viewer',
+		deniedAs: 'forbidden',
+		requiresSuperAdmin: true,
+	},
 
 	'session.attach': { scope: 'session' },
 	'session.stop': { scope: 'session' },

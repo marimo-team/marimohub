@@ -20,7 +20,12 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
-import { assertSessionProxyAccess, assertSessionSurfaceAccess, fail } from './shared';
+import {
+	assertSessionProxyAccess,
+	assertSessionSurfaceAccess,
+	authorizationService,
+	fail,
+} from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -169,9 +174,19 @@ export async function authorizeProxyRequest(
 		// A session whose project is gone is unreachable, like a missing session.
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
-	// A soft-deleted project's kernels go dark immediately: this gate is the only
-	// thing in the browser→kernel path, and the sandbox may still be alive.
-	if (project.status === 'deleted') {
+	// A soft-deleted or security-label-denied project's kernels go dark
+	// immediately: this gate is the only thing in the browser→kernel path, and
+	// the sandbox may still be alive. Both mask as a missing session; a plain
+	// membership (visibility) denial falls through to the session gate's
+	// historical 403 instead.
+	const projectDecision = await authorizationService(deps.policy).authorize(user, 'project.read', {
+		kind: 'project',
+		project,
+	});
+	if (
+		!projectDecision.allowed &&
+		(projectDecision.category === 'lifecycle' || projectDecision.category === 'constraint')
+	) {
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
 	try {

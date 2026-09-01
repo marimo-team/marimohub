@@ -1,5 +1,6 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
+	ResourceSecurityPolicy,
 	Authenticator,
 	AssignableRole,
 	AuthUser,
@@ -253,6 +254,11 @@ export interface PolicyConfig {
 	superAdmins?: string[];
 	/** Require super-admin or OIDC project-creator entitlement for project creation. */
 	projectCreationRestricted?: boolean;
+	/**
+	 * Resource-security wiring (constraint adapter + subject-context provider).
+	 * Labeled projects and notebooks fail closed without it.
+	 */
+	resourceSecurity?: ResourceSecurityPolicy;
 }
 
 export interface ConfigSettingSummary {

@@ -284,6 +284,7 @@ export class CatalogService {
 		projectPatch?: (
 			project: SnapshotProjectEntry,
 		) => Awaitable<Partial<SnapshotProjectEntry> | undefined>,
+		context: Record<string, unknown> = { project_id: projectId, notebook_id: notebookId },
 	): Promise<Snapshot> {
 		return this.updateProjectEntry(
 			operation,
@@ -308,7 +309,7 @@ export class CatalogService {
 								),
 				};
 			},
-			{ project_id: projectId, notebook_id: notebookId },
+			context,
 		);
 	}
 }

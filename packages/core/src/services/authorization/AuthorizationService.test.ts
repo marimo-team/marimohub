@@ -53,6 +53,15 @@ describe('AuthorizationService: project actions', () => {
 			if (rule.scope !== 'project') continue;
 			for (const [who, role] of bySubject) {
 				const decision = await service().authorize(who, action, onProject());
+				if (rule.requiresSuperAdmin) {
+					// Standing-gated: no project role — the owner included — suffices.
+					expect(decision, `${action} for ${role}`).toEqual({
+						allowed: false,
+						category: 'standing',
+						role,
+					});
+					continue;
+				}
 				const rank = { viewer: 1, editor: 2, manager: 3, admin: 4 } as const;
 				const expected = rank[role as keyof typeof rank] >= rank[rule.min];
 				expect(decision.allowed, `${action} for ${role}`).toBe(expected);

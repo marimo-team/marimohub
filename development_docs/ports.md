@@ -5,9 +5,10 @@ and verification status of each adapter.
 
 ## External adapter libraries
 
-The Node server can load external storage and compute adapters, and an external
-OIDC login-policy module, at startup. Set the port selector to `library`. Set
-its library variable to an npm package, an ESM file path, or a `file://` URL:
+The Node server can load external storage and compute adapters, an external
+OIDC login-policy module, and an external subject-security-context provider at
+startup. Set the port selector to `library`. Set its library variable to an npm
+package, an ESM file path, or a `file://` URL:
 
 ```sh
 MARIMOHUB_STORAGE_BACKEND=library
@@ -16,6 +17,8 @@ MARIMOHUB_COMPUTE_BACKEND=library
 MARIMOHUB_COMPUTE_LIBRARY=@myorg/marimohub-compute
 MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library      # requires MARIMOHUB_AUTH_BACKEND=oidc
 MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=/etc/marimohub/oidc-login-policy.mjs
+MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND=library       # requires MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER
+MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY=/etc/marimohub/subject-context.mjs
 ```
 
 A module must default-export a manifest. A CommonJS module can use
@@ -24,7 +27,7 @@ A module must default-export a manifest. A CommonJS module can use
 ```js
 export default {
 	apiVersion: 1,
-	kind: 'storage', // 'storage', 'compute', or 'oidc-login-policy'
+	kind: 'storage', // 'storage', 'compute', 'oidc-login-policy', or 'subject-security-context'
 	async create(context) {
 		return makeAdapter(context);
 	},
@@ -36,6 +39,8 @@ factory returns a `SandboxProvider`. An `oidc-login-policy` factory returns an
 object with `evaluate(input)`; its contract lives in `@marimo-hub/auth-oidc`
 (`loginPolicy.ts`), not in `core` — the module maps validated OIDC claims to a
 bounded login decision and entitlements, and is not a runtime authorization
+port. A `subject-security-context` factory returns an object with
+`resolve(principal, signal)` implementing the `SubjectSecurityContextProvider`
 port. Each factory receives the full `MARIMOHUB_*` environment. A compute
 factory also receives `sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in
 `context.compute`.

@@ -1,24 +1,27 @@
 import { ConflictError, NotFoundError, UnavailableError } from '@marimo-hub/core';
 import type {
+	AuthSubject,
 	GitSourceRevision,
 	NotebookId,
 	NotebookProposal,
 	NotebookProposalRecord,
-	ProjectId,
+	Project,
 	ProposalId,
 	SessionId,
 	SourceControlPublisher,
 	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { loadAuthorizedNotebook } from '../shared';
 
 interface PrepareProposalInput {
-	deps: Pick<ApiDeps, 'compute' | 'sandbox' | 'services' | 'sourceControl'>;
-	projectId: ProjectId;
+	deps: Pick<ApiDeps, 'compute' | 'sandbox' | 'services' | 'sourceControl' | 'policy'>;
+	project: Project;
 	notebookId: NotebookId;
 	sessionId: SessionId;
 	proposalId: ProposalId;
 	author: UserId;
+	subject: AuthSubject;
 	targetProposalId?: ProposalId;
 }
 
@@ -54,7 +57,7 @@ async function reusableProposal(
 ): Promise<NotebookProposalRecord | undefined> {
 	try {
 		return await input.deps.services.proposals.getReusableProposal(
-			input.projectId,
+			input.project.id,
 			input.notebookId,
 			input.proposalId,
 		);
@@ -71,9 +74,11 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		if (reusable.publication.state === 'published') {
 			return { proposal: reusable.proposal, state: 'published' };
 		}
-		const notebook = await input.deps.services.notebooks.getNotebook(
-			input.projectId,
+		const notebook = await loadAuthorizedNotebook(
+			input.deps,
+			input.project,
 			input.notebookId,
+			input.subject,
 		);
 		return {
 			proposal: reusable.proposal,
@@ -83,11 +88,13 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		};
 	}
 
-	const notebook = await input.deps.services.notebooks.getNotebook(
-		input.projectId,
+	const notebook = await loadAuthorizedNotebook(
+		input.deps,
+		input.project,
 		input.notebookId,
+		input.subject,
 	);
-	const session = await input.deps.services.sessions.getSession(input.projectId, input.sessionId);
+	const session = await input.deps.services.sessions.getSession(input.project.id, input.sessionId);
 	if (notebook.source.type !== 'git') {
 		throw new ConflictError('Only git-synced notebooks can open change requests');
 	}
@@ -110,7 +117,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 				}
 			: undefined;
 	const sourceRevision = await input.deps.services.proposals.resolveSourceRevision(
-		input.projectId,
+		input.project.id,
 		input.notebookId,
 		session.source_version_id,
 		legacySourceRevision,
@@ -118,7 +125,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 	const publisher = publisherFor(input.deps, sourceRevision.provider);
 	const { proposal, created, publicationState } =
 		await input.deps.services.proposals.captureProposalWithOutcome({
-			projectId: input.projectId,
+			projectId: input.project.id,
 			notebookId: input.notebookId,
 			proposalId: input.proposalId,
 			session,

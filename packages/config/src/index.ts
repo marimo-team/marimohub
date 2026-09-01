@@ -63,6 +63,7 @@ import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { createGuardedHostResolver } from './integrationProbe';
 import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
+import { makeResourceSecurity } from './resourceSecurity';
 import { makeSourceControl } from './sourceControl';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { loadAdapterLibraries } from './library';
@@ -616,6 +617,10 @@ export function createFromEnv(
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
 			superAdmins: parseList(env.MARIMOHUB_SUPER_ADMINS),
 			...(projectCreationRestricted(env) ? { projectCreationRestricted: true } : {}),
+			...(() => {
+				const resourceSecurity = makeResourceSecurity(env, options?.libraries);
+				return resourceSecurity ? { resourceSecurity } : {};
+			})(),
 			maxConcurrentSessionsPerUser: parseCap(
 				env,
 				'MARIMOHUB_MAX_SESSIONS_PER_USER',

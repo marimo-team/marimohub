@@ -95,6 +95,7 @@ export function buildNotebookEntry(
 		tags: meta.tags,
 		last_run_at: null,
 		compute_profile: meta.compute_profile,
+		security_labels: meta.security_labels ?? null,
 		key_prefix: keyPrefix,
 	};
 }
@@ -103,7 +104,14 @@ export function notebookCatalogPatch(
 	meta: NotebookMeta,
 ): Pick<
 	SnapshotNotebookEntry,
-	'title' | 'description' | 'status' | 'updated_at' | 'tags' | 'last_run_at' | 'compute_profile'
+	| 'title'
+	| 'description'
+	| 'status'
+	| 'updated_at'
+	| 'tags'
+	| 'last_run_at'
+	| 'compute_profile'
+	| 'security_labels'
 > {
 	return {
 		title: meta.title,
@@ -113,5 +121,6 @@ export function notebookCatalogPatch(
 		tags: meta.tags,
 		last_run_at: meta.last_run_at,
 		compute_profile: meta.compute_profile,
+		security_labels: meta.security_labels ?? null,
 	};
 }
