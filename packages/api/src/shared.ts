@@ -875,13 +875,13 @@ export const SessionResponseSchema = z
 		 * The caller's grants on this session, evaluated server-side (the same
 		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,
 		 * heartbeat; `sandbox_url` is present iff true), `stop` — may stop or
-		 * restart it, `surfaces.vscode` — may use the secondary editor. Clients
+		 * restart it, `surfaces` — may use each secondary editor. Clients
 		 * render from these instead of re-deriving policy.
 		 */
 		can: z.object({
 			attach: z.boolean(),
 			stop: z.boolean(),
-			surfaces: z.object({ vscode: z.boolean() }).optional(),
+			surfaces: z.object({ vscode: z.boolean(), opencode: z.boolean() }).optional(),
 		}),
 		surfaces: z.record(z.string(), SurfaceResponseSchema).optional(),
 		/**
@@ -1122,12 +1122,20 @@ export const CapabilitiesResponseSchema = z
 		),
 		compute_profile_override: z.enum(['none', 'editors']),
 		surfaces: z.array(
-			z.object({
-				id: z.literal('vscode'),
-				flavor: z.enum(['code-server', 'openvscode']),
-				start: z.enum(['on-demand', 'eager']),
-				embed: z.enum(['tab', 'iframe']),
-			}),
+			z.discriminatedUnion('id', [
+				z.object({
+					id: z.literal('vscode'),
+					flavor: z.enum(['code-server', 'openvscode']),
+					start: z.enum(['on-demand', 'eager']),
+					embed: z.enum(['tab', 'iframe']),
+				}),
+				z.object({
+					id: z.literal('opencode'),
+					start: z.enum(['on-demand', 'eager']),
+					embed: z.enum(['tab', 'iframe']),
+					managed_ai: z.boolean(),
+				}),
+			]),
 		),
 	})
 	.openapi('Capabilities');

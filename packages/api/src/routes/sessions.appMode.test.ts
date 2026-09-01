@@ -381,7 +381,11 @@ describe('Session routes (app mode)', () => {
 
 		it('a viewer attaches to the app an editor started, with viewer-shaped grants', async () => {
 			const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
-			expect(app.can).toEqual({ attach: true, stop: true, surfaces: { vscode: false } });
+			expect(app.can).toEqual({
+				attach: true,
+				stop: true,
+				surfaces: { vscode: false, opencode: false },
+			});
 
 			const attached = await expectOk<any>(
 				await viewerApi('applications')('POST', sessionsPath(), { mode: 'app' }),
@@ -389,7 +393,11 @@ describe('Session routes (app mode)', () => {
 			expect(attached.session_id).toBe(app.session_id);
 			expect(attached.reused).toBe(true);
 			// The response carries the CALLER's evaluated grants, not the starter's.
-			expect(attached.can).toEqual({ attach: true, stop: false, surfaces: { vscode: false } });
+			expect(attached.can).toEqual({
+				attach: true,
+				stop: false,
+				surfaces: { vscode: false, opencode: false },
+			});
 		});
 
 		it('a viewer may heartbeat the shared app under `applications`, not under `static`', async () => {

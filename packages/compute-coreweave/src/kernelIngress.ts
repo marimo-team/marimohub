@@ -126,7 +126,8 @@ export function createKernelIngressPublisher(
 	const ns = options.namespace;
 	const retries = options.retries ?? 10;
 	const retryDelayMs = options.retryDelayMs ?? 1000;
-	const ingressName = (sandboxId: string) => `kernel-${sandboxId}`;
+	// Cleanup by label also removes the port-less names created by older deployments.
+	const ingressName = (sandboxId: string, port: number) => `kernel-${sandboxId}-${port}`;
 
 	async function findService(sandboxId: string): Promise<{ name: string; uid: string }> {
 		const selector = encodeURIComponent(`${SANDBOX_ID_LABEL}=${sandboxId}`);
@@ -166,7 +167,7 @@ export function createKernelIngressPublisher(
 					apiVersion: 'networking.k8s.io/v1',
 					kind: 'Ingress',
 					metadata: {
-						name: ingressName(sandboxId),
+						name: ingressName(sandboxId, port),
 						namespace: ns,
 						labels: { 'app.kubernetes.io/managed-by': 'marimohub', [SANDBOX_ID_LABEL]: sandboxId },
 						ownerReferences: [{ apiVersion: 'v1', kind: 'Service', name: svc.name, uid: svc.uid }],
@@ -200,9 +201,10 @@ export function createKernelIngressPublisher(
 		},
 		async remove(sandboxId) {
 			assertSandboxId(sandboxId);
+			const selector = encodeURIComponent(`${SANDBOX_ID_LABEL}=${sandboxId}`);
 			const res = await api.request(
 				'DELETE',
-				`/apis/networking.k8s.io/v1/namespaces/${ns}/ingresses/${ingressName(sandboxId)}`,
+				`/apis/networking.k8s.io/v1/namespaces/${ns}/ingresses?labelSelector=${selector}`,
 			);
 			if (res.status === 404) return;
 			if (res.status < 200 || res.status >= 300) {

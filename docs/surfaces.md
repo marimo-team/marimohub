@@ -1,62 +1,104 @@
 ---
-description: Open a notebook workspace in browser-based VS Code on its existing edit sandbox.
+description: Run VS Code or OpenCode beside marimo in an existing edit sandbox.
 ---
 
-# VS Code surface
+# Session surfaces
 
-marimohub can run code-server or OpenVSCode Server beside marimo in the same
-notebook edit sandbox. Both editors use the same workspace, credentials, Python
-environment, and lifecycle. Stopping the session saves the workspace through
-the normal version-capture path.
+marimohub can run VS Code, OpenCode, or both in an edit sandbox. Each surface
+shares marimo's workspace, Python environment, credentials, authorization, and
+session lifetime. A surface does not create another sandbox.
 
-VS Code is disabled by default. Enable it with a sandbox image built from the
-`vscode` target in `images/marimo-sandbox/Dockerfile`:
+Secondary surfaces are disabled by default. Select an image and enable the
+matching surface:
 
 ```bash
+# VS Code only
 MARIMOHUB_SURFACES=marimo,vscode
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest-vscode
+
+# OpenCode only
+MARIMOHUB_SURFACES=marimo,opencode
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest-opencode
+
+# Both
+MARIMOHUB_SURFACES=marimo,vscode,opencode
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest-tools
 ```
 
-The notebook toolbar then shows **Open in VS Code** for editors who can attach
-to the edit session. The server starts VS Code on demand and opens it in a new
-tab. Set `MARIMOHUB_SURFACE_VSCODE_START=eager` to start it with each new edit
-session. Set `MARIMOHUB_SURFACE_VSCODE_EMBED=iframe` to show marimo and VS Code
-side by side instead.
+The toolbar has a **Surfaces** menu, even when only one surface is enabled. The
+menu has a start action for each surface. It has a stop action when that surface
+is running.
+
+By default, a surface opens in the notebook's application tabs. Set its `EMBED`
+variable to `iframe` to open it beside marimo in a split view. The most recently
+opened split replaces the previous split, while the previous surface remains
+available as a background tab. Use a surface tab's pop-out control to open its
+iframe in a separate browser tab.
+
+Set a surface's `START` variable to `eager` to start it with each authorized edit
+session. The default is `on-demand`. A surface failure does not stop marimo or
+another surface.
 
 ## Availability
 
-The compute adapter must expose more than one port from one sandbox. The current
-implementation enables this for `local`, `e2b`, and `cloudflare`. Configuration
-fails at startup on an adapter that cannot provide the second port. Docker,
-Podman, Kubernetes, Modal, and CoreWeave require their create-time port manifests
-to reserve the configured VS Code port before they can enable this feature.
+The compute adapter must expose multiple ports from one sandbox. The `local`,
+`e2b`, and `cloudflare` adapters support this feature. Configuration fails for
+other adapters. Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B need
+create-time port reservation support.
 
-If the selected image does not contain the configured server binary, the
-surface is marked unavailable and the marimo session continues to run.
+Port 2718 belongs to marimo. Each secondary surface must use a unique port. If
+an image lacks a required binary, only that surface becomes unavailable.
 
-## Editing behavior
+## Editing and state
 
-- marimo starts with file watching when VS Code is enabled. A saved VS Code edit
-  reloads in marimo. Set `MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH=false` to opt out.
-- VS Code autosaves after one second by default. Concurrent writes remain
-  last-writer-wins; v1 does not merge editor buffers.
-- Temporary edit sessions may use VS Code, but their changes are discarded with
+- marimo watches files when either surface requests this behavior. A saved file
+  then reloads in marimo.
+- VS Code opens the notebook entry path. OpenCode starts in the workspace without
+  a notebook path.
+- VS Code autosaves after one second. Concurrent writes use last-writer-wins.
+- Surfaces start and stop independently. Session teardown stops all surfaces,
+  captures eligible workspace changes, and destroys the sandbox.
+- Surface configuration, caches, credentials, databases, and UI state stay
+  under `/tmp/.marimohub/surfaces/<session-id>/<surface-id>`. They survive a
+  stop and restart in the same sandbox. They are not versioned and do not
+  survive session teardown.
+- Temporary edit sessions can use surfaces. Their changes are discarded with
   the sandbox.
-- App sessions and viewer-owned ephemeral sessions cannot start VS Code. Its
-  terminal has the same credential access as the notebook kernel and remains
-  inside the editor trust boundary.
-- VS Code user data stays under `/tmp/.marimohub`, outside the versioned
-  workspace. Unsaved hot-exit buffers do not survive a sandbox restart.
-- The extension gallery defaults to Open VSX. Set
-  `MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY=none` for an air-gapped deployment,
-  or provide the HTTP(S) service URL of a mirror.
 
-## Exposure
+## OpenCode AI providers
 
-In `proxy` mode, HTTP and WebSocket traffic uses a signed
-`/surface-proxy/<token>/vscode/` prefix. The hub authenticates and authorizes
-each new request or upgrade. In `subdomain` mode, the compute adapter returns the
-second port's direct URL. The same origin-isolation requirements as the marimo
-kernel apply.
+When [managed AI](./ai.md) is enabled, marimohub adds a temporary `marimohub`
+provider when OpenCode starts. This OpenAI-compatible provider uses the configured
+model and a session token. The upstream API key stays on the server.
 
-See [Configuration](./configuration.md#compute) for all VS Code settings.
+Project `opencode.json` files can override the provider or initial model. Users
+can also add bring-your-own-key providers through `/connect`. These credentials
+stay in the temporary surface directory.
+
+The published OpenCode images include the `marimo-pair` skill and its shell
+dependencies. OpenCode can use it to work directly with the running marimo kernel.
+
+The managed token expires after `MARIMOHUB_AI_TOKEN_TTL_SECONDS`, even while
+OpenCode is open. Restart OpenCode to get a new token. A bring-your-own-key
+provider uses its own credential.
+
+## Security and exposure
+
+Only users who can attach to an edit session can use its surfaces. App sessions
+and viewer-owned ephemeral sessions cannot use them. VS Code terminals and
+OpenCode agents can run shell commands and read the notebook credentials.
+
+VS Code supports both exposure modes. In `proxy` mode, traffic uses a signed
+`/surface-proxy/<token>/vscode/` path. The hub authorizes each HTTP request and
+WebSocket upgrade.
+
+OpenCode supports only `subdomain` mode because its client uses root-relative
+paths. Configuration fails when OpenCode and
+`MARIMOHUB_SANDBOX_EXPOSURE=proxy` are both enabled.
+
+In `subdomain` mode, each surface has a direct, high-entropy URL. The URL is an
+access capability, so the hub returns it only to authorized editors. Keep the
+sandbox domain isolated. Do not publish these URLs.
+
+See [Configuration](./configuration.md#compute) for all surface configuration and
+[Security](./security.md#secondary-editor-surfaces) for the trust boundary.

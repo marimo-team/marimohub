@@ -224,6 +224,8 @@ export interface CoreWeaveConfig {
 	kernelVisibility?: 'public' | 'custom';
 	/** Publishes each kernel's hostname (an Ingress in the sandbox namespace). */
 	kernelIngress?: KernelIngressPublisher;
+	/** Secondary-surface ports reserved when the sandbox is created. */
+	extraPorts?: readonly number[];
 	/**
 	 * Org-scoped sandbox template every sandbox is created from (custom specs:
 	 * GPU placement, egress rules, pod shape). Omit to use the runner's
@@ -457,13 +459,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 * there is no per-create egress knob.
 	 */
 	private kernelServices(): readonly Service[] {
+		const visibility = this.config.kernelVisibility ?? 'public';
 		return [
-			{
-				name: 'kernel',
-				port: this.kernelPort,
-				protocol: 'tcp',
-				visibility: this.config.kernelVisibility ?? 'public',
-			},
+			{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility },
+			...(this.config.extraPorts ?? []).map((port) => ({
+				// Names reach pod container-port names; keep them unique + DNS-safe.
+				name: `port-${port}`,
+				port,
+				protocol: 'tcp' as const,
+				visibility,
+			})),
 		];
 	}
 
@@ -934,7 +939,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 }
 
 export class CoreWeaveCompute implements SandboxProvider {
-	readonly capabilities = { multiPort: false } as const;
+	/**
+	 * v1 sandbox ports are create-time only, so a second port (the VS Code
+	 * surface) works exactly when it was pre-declared via `extraPorts`.
+	 */
+	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
 
 	constructor(
@@ -942,6 +951,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 		client?: CoreWeaveClient,
 	) {
 		this.client = client;
+		this.capabilities = { multiPort: (config.extraPorts?.length ?? 0) > 0 };
 	}
 
 	private getClient(): CoreWeaveClient {

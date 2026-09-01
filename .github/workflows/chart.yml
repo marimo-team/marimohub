@@ -33,6 +33,23 @@ jobs:
       - name: helm lint
         run: helm lint --strict charts/marimohub
 
+      - name: Verify surface image upgrade compatibility
+        run: |
+          legacy_image=ghcr.io/example/sandbox:legacy-vscode
+          current_image=ghcr.io/example/sandbox:tools
+          legacy_render=$(helm template test charts/marimohub \
+            --set surfaces.vscode.enabled=true \
+            --set surfaces.vscode.sandboxImage=$legacy_image)
+          grep -Fq "MARIMOHUB_COMPUTE_IMAGE: \"$legacy_image\"" <<< "$legacy_render"
+          current_render=$(helm template test charts/marimohub \
+            --set surfaces.vscode.enabled=true \
+            --set surfaces.vscode.sandboxImage=$legacy_image \
+            --set surfaces.sandboxImage=$current_image)
+          grep -Fq "MARIMOHUB_COMPUTE_IMAGE: \"$current_image\"" <<< "$current_render"
+          if grep -Fq "MARIMOHUB_COMPUTE_IMAGE: \"$legacy_image\"" <<< "$current_render"; then
+            exit 1
+          fi
+
       - name: Install kubeconform
         run: |
           curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \

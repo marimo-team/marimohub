@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { sessionKeys } from '@/api/queryKeys';
@@ -11,6 +11,14 @@ import {
 	sessionPosts,
 } from './NotebookPage.testWorld';
 
+async function chooseSurfaceAction(
+	user: ReturnType<typeof userEvent.setup>,
+	name: string,
+): Promise<void> {
+	await user.click(await screen.findByRole('button', { name: 'Surfaces' }));
+	await user.click(await screen.findByRole('menuitem', { name }));
+}
+
 describe('NotebookPage viewer modes', () => {
 	it('opens and stops the configured VS Code iframe for an authorized editor', async () => {
 		const user = userEvent.setup();
@@ -18,19 +26,157 @@ describe('NotebookPage viewer modes', () => {
 			role: 'editor',
 			vscode: { embed: 'iframe' },
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
 		renderPage();
 
-		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
+		await user.click(await screen.findByRole('button', { name: 'Surfaces' }));
+		expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).toBeInTheDocument();
+		expect(screen.queryByRole('menuitem', { name: 'Stop VS Code' })).toBeNull();
+		await user.click(screen.getByRole('menuitem', { name: 'Start VS Code' }));
 		expect(await screen.findByTitle('Forecast in VS Code')).toHaveAttribute(
 			'src',
 			'https://vscode.example/?folder=/workspace',
 		);
+		expect(screen.getByRole('tablist', { name: 'Notebook applications' })).toBeVisible();
 
-		await user.click(screen.getByRole('button', { name: 'Stop VS Code' }));
+		await chooseSurfaceAction(user, 'Stop VS Code');
 		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
+		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
+	});
+
+	it('keeps surface iframes mounted while the most recent split replaces the previous one', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			vscode: { embed: 'iframe' },
+			opencode: { embed: 'iframe' },
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: true } },
+			}),
+		});
+		renderPage();
+
+		const notebookFrame = await screen.findByTitle('Forecast');
+		const notebookPanel = notebookFrame.closest('[role="tabpanel"]');
+		await chooseSurfaceAction(user, 'Start VS Code');
+		const vscodeFrame = await screen.findByTitle('Forecast in VS Code');
+		const vscodePanel = vscodeFrame.closest('[role="tabpanel"]');
+		await chooseSurfaceAction(user, 'Start OpenCode');
+		const opencodeFrame = await screen.findByTitle('Forecast in OpenCode');
+		expect(opencodeFrame).toHaveAttribute('src', 'https://opencode.example/');
+		expect(screen.getByTitle('Forecast in VS Code')).toBe(vscodeFrame);
+		expect(vscodeFrame.parentElement).toBe(vscodePanel);
+		expect(screen.getByTitle('Forecast')).toBe(notebookFrame);
+		expect(notebookFrame.parentElement).toBe(notebookPanel);
+		expect(vscodePanel).toHaveAttribute('inert');
+		expect(opencodeFrame.closest('[role="tabpanel"]')).not.toHaveAttribute('inert');
+		expect(screen.getByRole('separator', { name: 'Resize split view' })).toBeInTheDocument();
+
+		const openCodeCall = fetch.mock.calls.find(
+			([url, init]) => String(url).endsWith('/surfaces/opencode') && init?.method === 'POST',
+		);
+		expect(JSON.parse(String(openCodeCall?.[1]?.body))).toEqual({});
+
+		await chooseSurfaceAction(user, 'Stop VS Code');
+		expect(screen.getByTitle('Forecast in OpenCode')).toBeInTheDocument();
+		expect(
+			fetch.mock.calls.some(
+				([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'DELETE',
+			),
+		).toBe(true);
+	});
+
+	it('opens and closes each surface when concurrent actions settle out of order', async () => {
+		let resolveVscodeStart!: () => void;
+		let resolveOpenCodeStart!: () => void;
+		let resolveVscodeStop!: () => void;
+		let resolveOpenCodeStop!: () => void;
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			vscode: { embed: 'iframe' },
+			opencode: { embed: 'iframe' },
+			vscodeStartPromise: new Promise((resolve) => (resolveVscodeStart = resolve)),
+			opencodeStartPromise: new Promise((resolve) => (resolveOpenCodeStart = resolve)),
+			vscodeStopPromise: new Promise((resolve) => (resolveVscodeStop = resolve)),
+			opencodeStopPromise: new Promise((resolve) => (resolveOpenCodeStop = resolve)),
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: true } },
+			}),
+		});
+		renderPage();
+
+		await chooseSurfaceAction(user, 'Start VS Code');
+		await chooseSurfaceAction(user, 'Start OpenCode');
+		resolveOpenCodeStart();
+		expect(await screen.findByTitle('Forecast in OpenCode')).toBeInTheDocument();
+		resolveVscodeStart();
+		expect(await screen.findByTitle('Forecast in VS Code')).toBeInTheDocument();
+
+		await chooseSurfaceAction(user, 'Stop VS Code');
+		await chooseSurfaceAction(user, 'Stop OpenCode');
+		resolveOpenCodeStop();
+		await waitFor(() => expect(screen.queryByTitle('Forecast in OpenCode')).toBeNull());
+		expect(screen.getByTitle('Forecast in VS Code')).toBeInTheDocument();
+		resolveVscodeStop();
+		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
+	});
+
+	it('opens a tab surface locally and only pops it out on request', async () => {
+		const user = userEvent.setup();
+		const open = vi.spyOn(window, 'open').mockReturnValue(null);
+		makeFetch({
+			role: 'editor',
+			opencode: { embed: 'tab' },
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: false, opencode: true } },
+			}),
+		});
+		renderPage();
+
+		await chooseSurfaceAction(user, 'Start OpenCode');
+		expect(await screen.findByTitle('Forecast in OpenCode')).toHaveAttribute(
+			'src',
+			'https://opencode.example/',
+		);
+		expect(screen.getByRole('tab', { name: /OpenCode/ })).toHaveAttribute('aria-selected', 'true');
+		expect(open).not.toHaveBeenCalled();
+
+		await user.click(screen.getByRole('button', { name: 'Open OpenCode in a new browser tab' }));
+		expect(open).toHaveBeenCalledWith('https://opencode.example/', '_blank', 'noopener,noreferrer');
+	});
+
+	it('confirms before stopping a surface from its application tab', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			opencode: { embed: 'tab' },
+			session: runningSession({
+				can: { attach: true, stop: true, surfaces: { vscode: false, opencode: true } },
+			}),
+		});
+		renderPage();
+
+		await chooseSurfaceAction(user, 'Start OpenCode');
+		await screen.findByTitle('Forecast in OpenCode');
+		await user.click(screen.getByRole('button', { name: 'Close OpenCode' }));
+		expect(screen.getByRole('dialog')).toHaveTextContent('Unsaved editor state may be lost.');
+		expect(
+			fetch.mock.calls.some(
+				([url, init]) => String(url).endsWith('/surfaces/opencode') && init?.method === 'DELETE',
+			),
+		).toBe(false);
+
+		await user.click(screen.getByRole('button', { name: 'Stop OpenCode' }));
+		await waitFor(() => expect(screen.queryByTitle('Forecast in OpenCode')).toBeNull());
+		expect(
+			fetch.mock.calls.some(
+				([url, init]) => String(url).endsWith('/surfaces/opencode') && init?.method === 'DELETE',
+			),
+		).toBe(true);
 	});
 
 	it('opens the configured entry notebook for a synced source', async () => {
@@ -41,12 +187,12 @@ describe('NotebookPage viewer modes', () => {
 			entryNotebook: 'apps/main.py',
 			vscode: { embed: 'iframe' },
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
 		renderPage();
 
-		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		await chooseSurfaceAction(user, 'Start VS Code');
 		await waitFor(() => {
 			const call = fetch.mock.calls.find(
 				([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'POST',
@@ -55,7 +201,7 @@ describe('NotebookPage viewer modes', () => {
 		});
 	});
 
-	it('waits for synced notebook metadata before offering VS Code', async () => {
+	it('disables VS Code start until synced notebook metadata is available', async () => {
 		let releaseNotebook!: () => void;
 		const notebookPromise = new Promise<void>((resolve) => {
 			releaseNotebook = resolve;
@@ -68,15 +214,21 @@ describe('NotebookPage viewer modes', () => {
 			notebookPromise,
 			vscode: { embed: 'iframe' },
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
 		renderPage();
 
 		await screen.findByRole('button', { name: 'Stop' });
-		expect(screen.queryByRole('button', { name: 'Open in VS Code' })).toBeNull();
+		await user.click(screen.getByRole('button', { name: 'Surfaces' }));
+		expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).toHaveAttribute(
+			'aria-disabled',
+			'true',
+		);
 		releaseNotebook();
-		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		const startVscode = screen.getByRole('menuitem', { name: 'Start VS Code' });
+		await waitFor(() => expect(startVscode).not.toHaveAttribute('aria-disabled'));
+		await user.click(startVscode);
 		await waitFor(() => {
 			const call = fetch.mock.calls.find(
 				([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'POST',
@@ -98,15 +250,20 @@ describe('NotebookPage viewer modes', () => {
 				status: 409,
 			},
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
 		renderPage();
 
-		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		await chooseSurfaceAction(user, 'Start VS Code');
 		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
-		expect(screen.getByRole('button', { name: 'Open in VS Code' })).toBeEnabled();
 		expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+		await user.click(screen.getByRole('button', { name: 'Surfaces' }));
+		await waitFor(() =>
+			expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).not.toHaveAttribute(
+				'aria-disabled',
+			),
+		);
 	});
 
 	it('keeps the VS Code frame open when stopping the surface fails', async () => {
@@ -120,16 +277,21 @@ describe('NotebookPage viewer modes', () => {
 				status: 503,
 			},
 			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true } },
+				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
 		renderPage();
 
-		await user.click(await screen.findByRole('button', { name: 'Open in VS Code' }));
+		await chooseSurfaceAction(user, 'Start VS Code');
 		const frame = await screen.findByTitle('Forecast in VS Code');
-		await user.click(screen.getByRole('button', { name: 'Stop VS Code' }));
+		await chooseSurfaceAction(user, 'Stop VS Code');
 		await waitFor(() => expect(screen.getByTitle('Forecast in VS Code')).toBe(frame));
-		expect(screen.getByRole('button', { name: 'Stop VS Code' })).toBeEnabled();
+		await user.click(screen.getByRole('button', { name: 'Surfaces' }));
+		await waitFor(() =>
+			expect(screen.getByRole('menuitem', { name: 'Stop VS Code' })).not.toHaveAttribute(
+				'aria-disabled',
+			),
+		);
 	});
 
 	it('starts shared editing without requesting exclusive ownership state', async () => {

@@ -18,6 +18,13 @@ GET /api/v1/version removed the required property `data/started_at` from the res
 GET /api/v1/projects/{pid}/notebooks/{nid} the response property `data/source/oneOf[subschema #2]/provider` became nullable for the status `200`
 PATCH /api/v1/projects/{pid}/notebooks/{nid}/source the response property `data/source/provider` became nullable for the status `200`
 
+Capabilities now return independent schemas for each supported secondary
+surface. Existing VS Code responses are unchanged.
+
+```text
+GET /api/v1/capabilities added `subschema #1, subschema #2` to the `data/surfaces/items/` response property `oneOf` list for the response status `200`
+```
+
 GET /api/v1/projects/{pid}/alert-destinations the `data` response's property `type` changed from `array<any>` to `object` for status `200`
 POST /api/v1/projects/{pid}/alert-destinations removed `subschema #1, subschema #2` from the request body `oneOf` list
 POST /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `201`

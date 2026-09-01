@@ -19,6 +19,18 @@ Every container-based backend reads this same variable. (`local` runs `uv` on th
 host and needs no image; `e2b` uses an E2B template instead — see
 [Compute](./compute.md).)
 
+The repository image also publishes optional [session surface](./surfaces.md)
+targets:
+
+| Target     | Published tag suffix | Included tools                         |
+| ---------- | -------------------- | -------------------------------------- |
+| `vscode`   | `-vscode`            | code-server and pinned extensions      |
+| `opencode` | `-opencode`          | OpenCode, ripgrep, jq, and marimo-pair |
+| `tools`    | `-tools`             | VS Code plus the OpenCode tools        |
+
+OpenCode is pinned to 1.18.17 with separate SHA-256 checksums for Linux x64 and
+arm64 builds.
+
 ## Multiple images
 
 To offer more than one image — say a lean default plus a GPU or heavy-ML

@@ -45,7 +45,7 @@ describe('createKernelIngressPublisher', () => {
 		expect(post?.path).toBe('/apis/networking.k8s.io/v1/namespaces/org-ns/ingresses');
 		expect(post?.body).toMatchObject({
 			metadata: {
-				name: 'kernel-abc-123',
+				name: 'kernel-abc-123-2718',
 				ownerReferences: [{ kind: 'Service', name: 'sabc-123-service', uid: 'uid-1' }],
 			},
 			spec: {
@@ -127,6 +127,31 @@ describe('createKernelIngressPublisher', () => {
 			api,
 		});
 		await expect(publisher.publish(target)).rejects.toThrow(/expected one Service/);
+	});
+
+	it('publishes one Ingress per port and removes them by label', async () => {
+		const { api, calls } = fakeApi({
+			services: () => ({ items: [{ metadata: { name: 'svc', uid: 'u' } }] }),
+		});
+		const publisher = createKernelIngressPublisher({
+			namespace: 'org-ns',
+			ingressClassName: 'traefik',
+			api,
+		});
+		await publisher.publish({ ...target, port: 2718, host: 'abc-123-2718.sandbox.example.com' });
+		await publisher.publish({ ...target, port: 8443, host: 'abc-123-8443.sandbox.example.com' });
+		const posts = calls.filter((c) => c.method === 'POST');
+		expect(posts.map((c) => (c.body as { metadata: { name: string } }).metadata.name)).toEqual([
+			'kernel-abc-123-2718',
+			'kernel-abc-123-8443',
+		]);
+		await publisher.remove('abc-123');
+		const del = calls.find((c) => c.method === 'DELETE');
+		expect(del?.path).toBe(
+			`/apis/networking.k8s.io/v1/namespaces/org-ns/ingresses?labelSelector=${encodeURIComponent(
+				'sandbox.coreweave.com/sandbox-id=abc-123',
+			)}`,
+		);
 	});
 
 	it('treats an existing Ingress as published and a missing one as removed', async () => {

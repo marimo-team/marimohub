@@ -135,6 +135,24 @@ describe('SessionRetirer', () => {
 		});
 	});
 
+	it('stops VS Code and OpenCode before destroying their shared sandbox', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			surfaces: {
+				vscode: { status: 'ready', port: 8443, url: 'https://vscode.example/' },
+				opencode: { status: 'ready', port: 4096, url: 'https://opencode.example/' },
+			},
+		});
+		await sessions.beginTerminating(projectId, session.session_id);
+
+		await retirer(fakeComputeFrom(instance)).retire(session);
+
+		const stopCommands = calls.exec.filter((command) => command.includes('/surface.pid'));
+		expect(stopCommands.some((command) => command.includes('/vscode/surface.pid'))).toBe(true);
+		expect(stopCommands.some((command) => command.includes('/opencode/surface.pid'))).toBe(true);
+		expect(calls.destroy).toBe(1);
+	});
+
 	it('does not snapshot or advance the restore pointer when the capture fails', async () => {
 		const { instance } = makeFakeSandbox();
 		const compute = snapshotProvider(instance);

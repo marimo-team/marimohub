@@ -18,6 +18,7 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import type { LoadedAdapterLibraries } from './library';
 import { CONFIG_SPEC } from './spec';
+import { surfacesFromEnv } from './surfaces';
 
 const COMPUTE_BACKEND_VALUES = [
 	...(CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [])
@@ -204,6 +205,19 @@ export function usesSandboxNativeObjectStorage(env: Env): boolean {
 }
 
 /**
+ * Surface ports the CoreWeave create must reserve up front (v1 ports are
+ * create-time only). Deriving them here keeps `multiPort` honest: it is
+ * advertised exactly when the configured surfaces' ports are on every sandbox.
+ */
+function coreWeaveExtraPorts(env: Env): readonly number[] | undefined {
+	const surfaces = surfacesFromEnv(env);
+	const ports = [surfaces?.vscode?.port, surfaces?.opencode?.port].filter(
+		(port): port is number => port !== undefined,
+	);
+	return ports.length > 0 ? ports : undefined;
+}
+
+/**
  * Sandbox v1 has no per-create profile selection or network modes; the SDK
  * rejects those options client-side. Fail at boot with the replacement rather
  * than at the first provision with a cryptic validation error. (The user-home
@@ -311,6 +325,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			}
 			return new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
+				extraPorts: coreWeaveExtraPorts(env),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,

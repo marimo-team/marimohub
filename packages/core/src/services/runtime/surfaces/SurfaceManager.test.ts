@@ -4,6 +4,7 @@ import { createNotebookId, createProjectId, createSandboxId } from '../../../ids
 import { MemoryBucket, ACTOR, fakeComputeFrom, makeFakeSandbox } from '../../../testing';
 import { SessionService } from '../SessionService';
 import { marimoSurface } from './marimo';
+import { opencodeSurface } from './opencode';
 import { SurfaceManager } from './SurfaceManager';
 import { SurfaceRegistry } from './registry';
 import { vscodeSurface } from './vscode';
@@ -44,6 +45,23 @@ function options() {
 }
 
 describe('SurfaceManager', () => {
+	it('rejects unsupported exposure and open-path combinations before sandbox work', async () => {
+		const { calls, instance, session, sessions } = await setup();
+		const manager = new SurfaceManager(
+			fakeComputeFrom(instance),
+			sessions,
+			new SurfaceRegistry([marimoSurface, opencodeSurface()]),
+		);
+
+		await expect(
+			manager.begin(session, 'opencode', { ...options(), exposure: 'proxy', open: undefined }),
+		).rejects.toThrow('does not support proxy exposure');
+		await expect(manager.begin(session, 'opencode', options())).rejects.toThrow(
+			'does not support an open path',
+		);
+		expect(calls.exec).toHaveLength(0);
+	});
+
 	it('prepares, starts, exposes, and persists a secondary surface once', async () => {
 		const { calls, manager, session, sessions } = await setup();
 
@@ -78,6 +96,31 @@ describe('SurfaceManager', () => {
 		expect(JSON.parse(opened.searchParams.get('payload')!)).toEqual([
 			['openFile', 'vscode-remote://sandbox.example/workspace/notebook.py'],
 		]);
+	});
+
+	it('lets a ready surface resolve its application URL from sandbox state', async () => {
+		const resolveOpenUrl = vi.fn(async (_instance: unknown, base: URL) => {
+			const url = new URL(base);
+			url.pathname = '/workspace/session/ses_test';
+			return url;
+		});
+		const { manager, session, sessions } = await setup(undefined, {
+			...vscodeSurface(),
+			resolveOpenUrl,
+		});
+
+		const result = await manager.ensure(session, 'vscode', { ...options(), open: undefined });
+
+		expect(result.state.url).toBe('https://sandbox.example/workspace/session/ses_test');
+		expect(resolveOpenUrl).toHaveBeenCalledWith(
+			expect.anything(),
+			new URL('https://sandbox.example/kernel'),
+			expect.objectContaining({ processWorkspaceDir: '/workspace' }),
+			{ open: undefined, port: 8443 },
+		);
+		expect(
+			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode?.url,
+		).toBe('https://sandbox.example/workspace/session/ses_test');
 	});
 
 	it.each([

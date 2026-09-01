@@ -61,7 +61,7 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- define "marimohub.podTemplate" -}}
 {{- $root := .root -}}
 {{- $v := $root.Values -}}
-{{- $hasConfigMap := or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") $v.surfaces.vscode.enabled -}}
+{{- $hasConfigMap := or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") $v.surfaces.vscode.enabled $v.surfaces.opencode.enabled -}}
 {{- $res := $v.resources -}}
 {{- if .maintenance -}}{{- $res = $v.maintenance.resources -}}{{- end }}
 metadata:

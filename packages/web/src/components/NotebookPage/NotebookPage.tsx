@@ -4,8 +4,10 @@ import {
 	AlertTriangle,
 	AppWindow,
 	ArrowLeft,
+	Bot,
 	Code2,
 	Eye,
+	FileCode2,
 	GitBranch,
 	Pencil,
 	RefreshCw,
@@ -15,12 +17,14 @@ import {
 	Button,
 	Chip,
 	ConfirmDialog,
+	ApplicationTabs,
 	IconButton,
 	IconLink,
 	StatusDot,
 	SessionStatusDot,
 	UserLabel,
 } from '@/components/ui';
+import type { ApplicationTabItem } from '@/components/ui';
 import {
 	useCapabilitiesQuery,
 	useNotebookQuery,
@@ -28,11 +32,10 @@ import {
 	useProjectSessionsQuery,
 	useEditorSessionQuery,
 	useTakeoverEditorSession,
-	useEnsureVscodeSurface,
-	useStopVscodeSurface,
 	useUserQuery,
 	useUsersQuery,
 } from '@/api/hooks';
+import { useSurfaceActions } from '@/api/surfaces';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
 import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
@@ -47,6 +50,13 @@ import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib
 import { useTheme } from '@/context/ThemeContext';
 import type { Theme } from '@/context/ThemeContext';
 import { canManageProject } from '@/lib/roles';
+import { SurfaceMenu } from './SurfaceMenu';
+import type { SecondarySurfaceFrame } from './SurfaceMenu';
+
+const SURFACE_TAB_ICONS = {
+	vscode: Code2,
+	opencode: Bot,
+};
 
 /** Copy for the app page's terminal panel, keyed by how the session ended. */
 function endedPanel(ended: SessionEnded): { title: string; message: string; canRestart: boolean } {
@@ -120,8 +130,9 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const confirmEditStop = useDisclosure();
 	const confirmTakeover = useDisclosure();
 	const [editIntent, setEditIntent] = useState<'temporary' | undefined>();
-	const [stoppedVscodeSessionId, setStoppedVscodeSessionId] = useState<string>();
-	const [vscodeFrame, setVscodeFrame] = useState<{ sessionId: string; url: string }>();
+	const [secondaryFrames, setSecondaryFrames] = useState<readonly SecondarySurfaceFrame[]>([]);
+	const [selectedApplicationKey, setSelectedApplicationKey] = useState('notebook');
+	const [splitApplicationKey, setSplitApplicationKey] = useState<string | null>(null);
 
 	// The viewer branch (server-enforced regardless): editors get a session as
 	// always; a viewer gets an edit kernel only when the deployment's evaluated
@@ -169,8 +180,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const identityStateFailed =
 		needsEditorState && editorStateQuery.isSuccess && !!editorState?.holder && userQuery.isError;
 	const takeover = useTakeoverEditorSession(pid!, nid!);
-	const ensureVscode = useEnsureVscodeSurface(pid!, nid!);
-	const stopVscode = useStopVscodeSurface(pid!, nid!);
+	const surfaceActions = useSurfaceActions(pid!, nid!);
 
 	const {
 		session,
@@ -293,21 +303,54 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		computeProfiles.length > 0 &&
 		error?.kind === 'startup' &&
 		error.generic === true;
-	const vscodeCapability = capabilities?.surfaces?.find((surface) => surface.id === 'vscode');
-	const ensuredVscodeState =
-		ensureVscode.variables?.sessionId === session?.session_id ? ensureVscode.data : undefined;
-	const vscodeState =
-		stoppedVscodeSessionId === session?.session_id
-			? { status: 'stopped' as const }
-			: (ensuredVscodeState ?? session?.surfaces?.vscode);
-	const vscodeFrameUrl =
-		vscodeFrame && vscodeFrame.sessionId === session?.session_id ? vscodeFrame.url : undefined;
-	const canUseVscode =
-		!isApp &&
-		!!notebook &&
-		!!session?.can.surfaces?.vscode &&
-		!!vscodeCapability &&
-		session.status === 'running';
+	const activeSecondaryFrames = useMemo(
+		() => secondaryFrames.filter((frame) => frame.sessionId === session?.session_id),
+		[secondaryFrames, session?.session_id],
+	);
+	const applicationTabs = useMemo<ApplicationTabItem[]>(
+		() => [
+			{
+				id: 'notebook',
+				label: 'Notebook',
+				icon: <FileCode2 />,
+				panel: (
+					<iframe
+						className="size-full border-0"
+						src={iframeSrc}
+						sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+						allow="clipboard-read; clipboard-write"
+						title={title}
+					/>
+				),
+				...(iframeSrc ? { browserUrl: iframeSrc } : {}),
+			},
+			...activeSecondaryFrames.map((frame) => {
+				const SurfaceIcon = SURFACE_TAB_ICONS[frame.surfaceId];
+				return {
+					id: frame.surfaceId,
+					label: frame.label,
+					icon: <SurfaceIcon />,
+					panel: (
+						<iframe
+							className="size-full border-0"
+							src={frame.url}
+							sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+							allow="clipboard-read; clipboard-write"
+							title={`${title} in ${frame.label}`}
+						/>
+					),
+					browserUrl: frame.url,
+					close: {
+						title: `Stop ${frame.label}?`,
+						description: `Stop ${frame.label} and close its tab? Unsaved editor state may be lost.`,
+						confirmLabel: `Stop ${frame.label}`,
+						pendingLabel: `Stopping ${frame.label}...`,
+					},
+				};
+			}),
+		],
+		[activeSecondaryFrames, iframeSrc, title],
+	);
 
 	const backToProject = () => {
 		void navigate(`/projects/${pid}`);
@@ -323,36 +366,45 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		stop();
 		backToProject();
 	};
-	const openVscode = () => {
-		if (!session || !notebook) return;
-		const entryNotebook =
-			notebook.source.type === 'git' ? notebook.source.entry_notebook : 'notebook.py';
-		setStoppedVscodeSessionId(undefined);
-		const embed = vscodeCapability?.embed === 'iframe';
-		const tab = embed ? null : window.open('about:blank', '_blank');
-		if (tab) tab.opener = null;
-		ensureVscode.mutate(
-			{ sessionId: session.session_id, open: entryNotebook },
-			{
-				onSuccess: (surface) => {
-					if (embed) setVscodeFrame({ sessionId: session.session_id, url: surface.url! });
-					else if (tab) tab.location.href = surface.url!;
-					else window.open(surface.url, '_blank', 'noopener,noreferrer');
-				},
-				onError: () => tab?.close(),
-			},
-		);
-	};
-	const closeVscode = () => {
-		if (!session) return;
-		const sessionId = session.session_id;
-		stopVscode.mutate(sessionId, {
-			onSuccess: () => {
-				setStoppedVscodeSessionId(sessionId);
-				setVscodeFrame(undefined);
-				ensureVscode.reset();
-			},
+	const openSecondaryFrame = (frame: SecondarySurfaceFrame) => {
+		setSecondaryFrames((current) => {
+			const index = current.findIndex(
+				(candidate) =>
+					candidate.sessionId === frame.sessionId && candidate.surfaceId === frame.surfaceId,
+			);
+			if (index === -1) return [...current, frame];
+			if (current[index]?.url === frame.url && current[index]?.embed === frame.embed)
+				return current;
+			return current.map((candidate, candidateIndex) =>
+				candidateIndex === index ? frame : candidate,
+			);
 		});
+		if (frame.embed === 'iframe') {
+			setSelectedApplicationKey('notebook');
+			setSplitApplicationKey(frame.surfaceId);
+		} else {
+			setSelectedApplicationKey(frame.surfaceId);
+			setSplitApplicationKey(null);
+		}
+	};
+	const closeSecondaryFrame = (
+		surfaceId: SecondarySurfaceFrame['surfaceId'],
+		sessionId: string,
+	) => {
+		setSecondaryFrames((current) =>
+			current.filter((frame) => frame.sessionId !== sessionId || frame.surfaceId !== surfaceId),
+		);
+		setSelectedApplicationKey((current) => (current === surfaceId ? 'notebook' : current));
+		setSplitApplicationKey((current) => (current === surfaceId ? null : current));
+	};
+	const stopApplicationTab = async (tab: ApplicationTabItem) => {
+		const frame = activeSecondaryFrames.find((candidate) => candidate.surfaceId === tab.id);
+		if (!frame) return;
+		await surfaceActions.stop.mutateAsync({
+			surfaceId: frame.surfaceId,
+			sessionId: frame.sessionId,
+		});
+		closeSecondaryFrame(frame.surfaceId, frame.sessionId);
 	};
 	const takeOver = () => {
 		const holder = editorState?.holder;
@@ -510,27 +562,15 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 							Stop
 						</Button>
 					)}
-					{canUseVscode && (
-						<Button
-							variant="unstyled"
-							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
-							isDisabled={ensureVscode.isPending}
-							onPress={openVscode}
-						>
-							<Code2 className="size-3" />
-							{ensureVscode.isPending ? 'Starting VS Code...' : 'Open in VS Code'}
-						</Button>
-					)}
-					{canUseVscode && vscodeState?.status === 'ready' && (
-						<Button
-							variant="unstyled"
-							className="flex h-[26px] items-center rounded-md px-2 text-xs text-muted-foreground hover:text-destructive max-md:min-h-11"
-							isDisabled={stopVscode.isPending}
-							onPress={closeVscode}
-						>
-							Stop VS Code
-						</Button>
-					)}
+					<SurfaceMenu
+						actions={surfaceActions}
+						session={session}
+						capabilities={capabilities}
+						notebook={notebook}
+						isApp={isApp}
+						onOpenFrame={openSecondaryFrame}
+						onCloseFrame={closeSecondaryFrame}
+					/>
 				</div>
 			</header>
 
@@ -696,27 +736,28 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						</div>
 					)}
 					<div
-						className={cn(
-							'flex-1 overflow-hidden',
-							vscodeFrameUrl && 'grid grid-cols-2',
-							takeover.isPending && 'pointer-events-none',
-						)}
+						className={cn('flex-1 overflow-hidden', takeover.isPending && 'pointer-events-none')}
 						aria-hidden={takeover.isPending || undefined}
 					>
-						<iframe
-							className="size-full border-0"
-							src={iframeSrc}
-							sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-							allow="clipboard-read; clipboard-write"
-							title={title}
-						/>
-						{vscodeFrameUrl && (
+						{isApp ? (
 							<iframe
-								className="size-full border-0 border-l"
-								src={vscodeFrameUrl}
-								sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+								className="size-full border-0"
+								src={iframeSrc}
+								sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
 								allow="clipboard-read; clipboard-write"
-								title={`${title} in VS Code`}
+								title={title}
+							/>
+						) : (
+							<ApplicationTabs
+								ariaLabel="Notebook applications"
+								tabs={applicationTabs}
+								selectedKey={selectedApplicationKey}
+								onSelectionChange={setSelectedApplicationKey}
+								splitKey={splitApplicationKey}
+								onSplitKeyChange={setSplitApplicationKey}
+								onClose={stopApplicationTab}
+								hideTabListWhenSingle
+								className="size-full"
 							/>
 						)}
 					</div>

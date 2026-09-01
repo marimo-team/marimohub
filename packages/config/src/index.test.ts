@@ -737,7 +737,6 @@ describe('createFromEnv sandbox exposure mode', () => {
 		expect((deps.sandbox.exposure as ProxyExposure).signingSecret).toBe('x'.repeat(48));
 		expect(deps.sandbox.appBaseUrl).toBe('https://hub.example.com');
 	});
-
 	it('passes proxy exposure to the kubernetes compute adapter', () => {
 		const deps = createFromEnv({
 			...baseEnv,
@@ -751,6 +750,27 @@ describe('createFromEnv sandbox exposure mode', () => {
 		const config = (deps.compute as unknown as { config: { exposureMode?: string } }).config;
 
 		expect(config.exposureMode).toBe('proxy');
+	});
+
+	it('rejects OpenCode in proxy exposure mode', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_SURFACES: 'marimo,opencode',
+				MARIMOHUB_SANDBOX_EXPOSURE: 'proxy',
+				MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: 'true',
+				MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
+			}),
+		).toThrow(/OpenCode does not support proxy/);
+	});
+
+	it('rejects OpenCode when the compute backend cannot expose another port', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_SURFACES: 'marimo,opencode',
+			}),
+		).toThrow(/none compute backend cannot expose secondary sandbox surfaces/);
 	});
 });
 

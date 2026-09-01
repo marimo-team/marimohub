@@ -11,6 +11,7 @@ function setup(onAction = vi.fn()) {
 			icon={<MoreHorizontal />}
 			options={[
 				{ id: 'download-file', label: 'Download notebook file' },
+				{ id: 'disabled', label: 'Unavailable action', isDisabled: true },
 				{ id: 'delete', label: 'Delete', danger: true, separatorBefore: true },
 			]}
 			onAction={onAction}
@@ -46,5 +47,17 @@ describe('DropdownMenu', () => {
 		const separator = screen.getByRole('separator');
 		const deleteItem = screen.getByRole('menuitem', { name: 'Delete' });
 		expect(separator.nextElementSibling).toBe(deleteItem);
+	});
+
+	it('does not fire actions for disabled items', async () => {
+		const user = userEvent.setup();
+		const { onAction } = setup();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		const item = screen.getByRole('menuitem', { name: 'Unavailable action' });
+		expect(item).toHaveAttribute('aria-disabled', 'true');
+		await user.click(item);
+
+		expect(onAction).not.toHaveBeenCalled();
 	});
 });

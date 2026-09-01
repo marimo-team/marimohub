@@ -103,3 +103,8 @@ The injected config sits at the user-config tier, so a user who explicitly sets
 `[tool.marimo.ai]` in their own `pyproject.toml` still overrides it — a deliberate
 bring-your-own-key escape hatch. With managed AI **off** (`MARIMOHUB_AI_BACKEND=none`),
 the assistant only works for users who supply their own key in marimo's settings.
+
+[OpenCode](./surfaces.md#opencode-ai-providers) uses the same proxy through a
+temporary `marimohub` provider. Project `opencode.json` files and `/connect`
+providers can override it. The token expires at the configured TTL. Restart
+OpenCode to get a new token.

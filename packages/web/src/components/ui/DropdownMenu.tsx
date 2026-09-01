@@ -8,12 +8,13 @@ export interface DropdownMenuOption {
 	label: ReactNode;
 	icon?: ReactNode;
 	separatorBefore?: boolean;
+	isDisabled?: boolean;
 	/** Render the item in the destructive style (e.g. Delete). */
 	danger?: boolean;
 }
 
 export interface DropdownMenuProps {
-	/** Accessible label for the trigger button (it is icon-only). */
+	/** Accessible label for the trigger button. */
 	label: string;
 	/** Trigger icon, e.g. `<MoreHorizontal className="size-4" />`. */
 	icon: ReactNode;
@@ -25,9 +26,9 @@ export interface DropdownMenuProps {
 }
 
 /**
- * A small overflow ("…") menu built on react-aria-components, mirroring the
- * popover/menu styling used by the header user menu. The trigger is icon-only;
- * the popover is portaled, so item clicks never bubble to an enclosing row.
+ * A small menu built on react-aria-components, mirroring the popover/menu
+ * styling used by the header user menu. The popover is portaled, so item clicks
+ * never bubble to an enclosing row.
  */
 export function DropdownMenu({
 	label,
@@ -61,8 +62,9 @@ export function DropdownMenu({
 						<MenuItem
 							key={opt.id}
 							id={opt.id}
+							isDisabled={opt.isDisabled}
 							className={cn(
-								'flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors max-md:min-h-11',
+								'flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors data-[disabled]:cursor-default data-[disabled]:opacity-50 max-md:min-h-11',
 								opt.danger
 									? 'text-destructive focus:bg-destructive/10'
 									: 'text-popover-foreground focus:bg-muted',

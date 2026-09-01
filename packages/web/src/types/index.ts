@@ -81,6 +81,10 @@ export type GitNotebookCreateResult = ClientGitNotebookCreateResult;
 /** A sync URL + write-once token, returned on synced-notebook creation and token rotation. */
 export type SyncToken = ClientSyncToken;
 export type Session = ClientSession;
+export type SecondarySurfaceId = NonNullable<
+	components['schemas']['SessionCreateBody']['surfaces']
+>[number];
+export type Surface = components['schemas']['Surface'];
 export type EditorSessionState = components['schemas']['EditorSessionState'];
 /** An integration kind's catalog card + JSON Schema for its config form. */
 export type IntegrationKind = ClientIntegrationKind;

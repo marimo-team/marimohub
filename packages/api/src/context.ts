@@ -153,6 +153,12 @@ export interface SandboxConfig {
 			embed: 'tab' | 'iframe';
 			marimoWatch: boolean;
 		};
+		opencode?: {
+			start: 'on-demand' | 'eager';
+			port: number;
+			embed: 'tab' | 'iframe';
+			marimoWatch: boolean;
+		};
 	};
 }
 

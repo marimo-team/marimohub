@@ -4,6 +4,7 @@ export const marimoSurface: SurfaceSpec = {
 	id: 'marimo',
 	primary: true,
 	defaultPort: 2718,
+	supportedExposures: ['proxy', 'subdomain'],
 	proxyPath: 'preserve-prefix',
 	async probe() {
 		return { available: true };

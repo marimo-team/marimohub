@@ -40,15 +40,23 @@ compute:
   profileOverride: none
 
 surfaces:
+  # Use a published `-vscode`, `-opencode`, or `-tools` sandbox image tag.
+  sandboxImage: ''
   vscode:
     enabled: false
-    # Use a published `-vscode` sandbox image tag when enabled.
+    # Deprecated: use surfaces.sandboxImage. This remains an upgrade fallback.
     sandboxImage: ''
     flavor: code-server
     start: on-demand
     port: 8443
     extensionGallery: openvsx
     settingsJson: '{}'
+    embed: tab
+    marimoWatch: true
+  opencode:
+    enabled: false
+    start: on-demand
+    port: 4096
     embed: tab
     marimoWatch: true
 
