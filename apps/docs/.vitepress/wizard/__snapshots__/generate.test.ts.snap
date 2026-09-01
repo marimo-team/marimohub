@@ -1683,6 +1683,202 @@ const app = createApi({
 });"
 `;
 
+exports[`config -> code generators > s3 + modal + oidc, bedrock ai > .env 1`] = `
+"# --- Storage ---
+MARIMOHUB_STORAGE_BACKEND=s3
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
+MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
+MARIMOHUB_STORAGE_S3_REGION=us-east-1
+MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
+MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
+
+# --- Compute ---
+MARIMOHUB_COMPUTE_BACKEND=modal
+MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
+MARIMOHUB_COMPUTE_WORKDIR=/workspace
+MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
+MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT=notebooks
+MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
+
+# --- Auth ---
+MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
+
+# --- Managed AI ---
+MARIMOHUB_AI_BACKEND=bedrock
+MARIMOHUB_AI_AWS_REGION=eu-west-1
+MARIMOHUB_AI_MODEL=eu.anthropic.claude-opus-4-7
+MARIMOHUB_AI_ALLOWED_MODELS=gpt-4o-mini,gpt-4o
+MARIMOHUB_AI_MAX_TOKENS=4096
+MARIMOHUB_AI_RULES=Prefer polars over pandas.
+MARIMOHUB_AI_TOKEN_TTL_SECONDS=3600
+
+# --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
+MARIMOHUB_PERSIST_WORKSPACE=source"
+`;
+
+exports[`config -> code generators > s3 + modal + oidc, bedrock ai > compose 1`] = `
+"services:
+  marimohub:
+    image: ghcr.io/marimo-team/marimohub:latest
+    ports:
+      - '3000:3000'
+    environment:
+      MARIMOHUB_STORAGE_BACKEND: s3
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
+      MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
+      MARIMOHUB_STORAGE_S3_REGION: us-east-1
+      MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
+      MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
+      MARIMOHUB_COMPUTE_BACKEND: modal
+      MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+      MARIMOHUB_COMPUTE_WORKDIR: /workspace
+      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
+      MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
+      MARIMOHUB_AUTH_BACKEND: oidc
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+      MARIMOHUB_AI_BACKEND: bedrock
+      MARIMOHUB_AI_AWS_REGION: eu-west-1
+      MARIMOHUB_AI_MODEL: eu.anthropic.claude-opus-4-7
+      MARIMOHUB_AI_ALLOWED_MODELS: "gpt-4o-mini,gpt-4o"
+      MARIMOHUB_AI_MAX_TOKENS: 4096
+      MARIMOHUB_AI_RULES: "Prefer polars over pandas."
+      MARIMOHUB_AI_TOKEN_TTL_SECONDS: 3600
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
+      MARIMOHUB_PERSIST_WORKSPACE: source"
+`;
+
+exports[`config -> code generators > s3 + modal + oidc, bedrock ai > helm 1`] = `
+"# Non-secret MARIMOHUB_* config -> ConfigMap.
+config:
+  MARIMOHUB_STORAGE_BACKEND: s3
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
+  MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
+  MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
+  MARIMOHUB_COMPUTE_BACKEND: modal
+  MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+  MARIMOHUB_COMPUTE_WORKDIR: /workspace
+  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+  MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
+  MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
+  MARIMOHUB_AUTH_BACKEND: oidc
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+  MARIMOHUB_AI_BACKEND: bedrock
+  MARIMOHUB_AI_AWS_REGION: eu-west-1
+  MARIMOHUB_AI_MODEL: eu.anthropic.claude-opus-4-7
+  MARIMOHUB_AI_ALLOWED_MODELS: "gpt-4o-mini,gpt-4o"
+  MARIMOHUB_AI_MAX_TOKENS: 4096
+  MARIMOHUB_AI_RULES: "Prefer polars over pandas."
+  MARIMOHUB_AI_TOKEN_TTL_SECONDS: 3600
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
+  MARIMOHUB_PERSIST_WORKSPACE: source
+
+# Secret values -> Secret (prefer secrets.existingSecret in production).
+secrets:
+  data:
+    MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
+    MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
+`;
+
+exports[`config -> code generators > s3 + modal + oidc, bedrock ai > library 1`] = `
+"import { createApi } from '@marimo-hub/api';
+import { createServices } from '@marimo-hub/core';
+import { createAwsSigV4Fetch } from '@marimo-hub/credentials-aws';
+import { S3Storage } from '@marimo-hub/storage-s3';
+import { ModalCompute } from '@marimo-hub/compute-modal';
+import { createOidcAuth } from '@marimo-hub/auth-oidc';
+
+const bucket = new S3Storage({
+	bucket: process.env.MARIMOHUB_STORAGE_S3_BUCKET!,
+	endpoint: "https://s3.us-east-1.amazonaws.com",
+	region: "us-east-1",
+	forcePathStyle: true,
+});
+
+const compute = new ModalCompute({
+	tokenId: process.env.MARIMOHUB_COMPUTE_MODAL_TOKEN_ID!,
+	tokenSecret: process.env.MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET!,
+	image: process.env.MARIMOHUB_COMPUTE_IMAGE!,
+	idleTimeout: process.env.MARIMOHUB_COMPUTE_IDLE_TIMEOUT,
+});
+
+const { authenticator, routes: authRoutes } = createOidcAuth({
+	issuer: process.env.MARIMOHUB_AUTH_OIDC_ISSUER!,
+	clientId: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_ID!,
+	clientSecret: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_SECRET!,
+	redirectUri: process.env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI!,
+	sessionSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,
+	allowedEmailDomains: (process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS ?? '').split(','),
+});
+
+const ai = {
+	upstreamBaseUrl: \`https://bedrock-runtime.\${process.env.MARIMOHUB_AI_AWS_REGION!}.amazonaws.com/openai/v1\`,
+	upstreamFetch: createAwsSigV4Fetch({
+		region: process.env.MARIMOHUB_AI_AWS_REGION!,
+		service: 'bedrock',
+	}),
+	model: process.env.MARIMOHUB_AI_MODEL!,
+	signingSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,
+};
+
+const app = createApi({
+	services: createServices(bucket),
+	bucket,
+	compute,
+	authenticator,
+	authRoutes,
+	ai,
+	sandbox: {
+		bucket: {
+			name: process.env.MARIMOHUB_STORAGE_S3_BUCKET ?? '',
+			endpoint: process.env.MARIMOHUB_STORAGE_S3_ENDPOINT ?? '',
+		},
+		hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
+		workdir: process.env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
+		persistWorkspace: "source",
+	},
+	policy: {},
+});"
+`;
+
 exports[`config -> code generators > s3 + modal + oidc, managed ai > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3

@@ -440,9 +440,9 @@ Optional: let a notebook reach cloud resources (object storage, and for AWS any 
 
 ## Managed AI
 
-Selected by `MARIMOHUB_AI_BACKEND` (default `none`); one of `none`, `openai-compatible`.
+Selected by `MARIMOHUB_AI_BACKEND` (default `none`); one of `none`, `bedrock`, `openai-compatible`.
 
-Optional: auto-configure the marimo AI assistant to use a managed provider, so it works with no user-supplied key. The hub injects a `marimo.toml` pointing at its own OpenAI-compatible proxy (`/api/ai/v1`) with a short-lived, session-scoped token; the proxy holds the real upstream key server-side and forwards requests. The real key is NEVER injected into a sandbox. Deployment-wide and default-on when configured. See docs/ai.md.
+Optional: auto-configure the marimo AI assistant to use a managed provider, so it works with no user-supplied credentials. The hub injects a `marimo.toml` pointing at its own OpenAI-compatible proxy (`/api/ai/v1`) with a short-lived, session-scoped token; the proxy authenticates upstream requests server-side. Provider credentials are NEVER injected into a sandbox. Deployment-wide and default-on when configured. See docs/ai.md.
 
 ### Off
 
@@ -451,6 +451,21 @@ Optional: auto-configure the marimo AI assistant to use a managed provider, so i
 No managed AI. The marimo assistant still works if a user supplies their own key in marimo settings.
 
 _No environment variables to set here._
+
+### Amazon Bedrock
+
+`MARIMOHUB_AI_BACKEND=bedrock`
+
+Uses the Amazon Bedrock OpenAI-compatible endpoint and signs requests with the runtime AWS identity. No Bedrock API key or AWS credential is injected into a sandbox.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_AI_AWS_REGION` | AWS region for Bedrock. Falls back to AWS_REGION or AWS_DEFAULT_REGION. | Yes | — | `eu-west-1` |
+| `MARIMOHUB_AI_MODEL` | Default model id surfaced to marimo. | Yes | — | `gpt-4o-mini` |
+| `MARIMOHUB_AI_ALLOWED_MODELS` | Comma-separated allowlist of model ids; off-list requests fall back to the default model. Unset allows any model on OpenAI-compatible upstreams, or restricts Bedrock to MARIMOHUB_AI_MODEL. | — | — | `gpt-4o-mini,gpt-4o` |
+| `MARIMOHUB_AI_MAX_TOKENS` | Optional `[ai] max_tokens` written into the injected notebook config. | — | — | `4096` |
+| `MARIMOHUB_AI_RULES` | Optional `[ai] rules` (custom assistant instructions). | — | — | `Prefer polars over pandas.` |
+| `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | Per-session token lifetime in seconds. | — | `3600` | — |
 
 ### OpenAI-compatible upstream
 
@@ -463,8 +478,8 @@ Fronts any OpenAI-compatible upstream (OpenAI, OpenRouter, LiteLLM, or Anthropic
 | `MARIMOHUB_AI_UPSTREAM_BASE_URL` | OpenAI-compatible upstream base URL; the proxy POSTs to `<base>/chat/completions`. | Yes | — | `https://api.openai.com/v1` |
 | `MARIMOHUB_AI_UPSTREAM_API_KEY` 🔒 | The real upstream provider key. Held server-side; never injected. | Yes | — | `sk-...` |
 | `MARIMOHUB_AI_UPSTREAM_PROJECT` | Optional `OpenAI-Project` header forwarded upstream — e.g. W&B Inference uses `entity/project` for usage attribution. Omit for providers that ignore it. | — | — | `my-team/my-project` |
-| `MARIMOHUB_AI_MODEL` | Default upstream model id surfaced to marimo. | Yes | — | `gpt-4o-mini` |
-| `MARIMOHUB_AI_ALLOWED_MODELS` | Comma-separated allowlist of upstream model ids; off-list requests fall back to the default model. Unset allows any model. | — | — | `gpt-4o-mini,gpt-4o` |
+| `MARIMOHUB_AI_MODEL` | Default model id surfaced to marimo. | Yes | — | `gpt-4o-mini` |
+| `MARIMOHUB_AI_ALLOWED_MODELS` | Comma-separated allowlist of model ids; off-list requests fall back to the default model. Unset allows any model on OpenAI-compatible upstreams, or restricts Bedrock to MARIMOHUB_AI_MODEL. | — | — | `gpt-4o-mini,gpt-4o` |
 | `MARIMOHUB_AI_MAX_TOKENS` | Optional `[ai] max_tokens` written into the injected notebook config. | — | — | `4096` |
 | `MARIMOHUB_AI_RULES` | Optional `[ai] rules` (custom assistant instructions). | — | — | `Prefer polars over pandas.` |
 | `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | Per-session token lifetime in seconds. | — | `3600` | — |

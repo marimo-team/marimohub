@@ -44,7 +44,8 @@ const DOC_HREFS: Record<string, string> = {
 	'compute/local': '/compute#local-dev',
 	'compute/none': '/compute#none',
 	'compute/library': '/compute#external-library',
-	'ai/openai-compatible': '/ai#configuration',
+	'ai/bedrock': '/ai#amazon-bedrock',
+	'ai/openai-compatible': '/ai#openai-compatible-provider',
 	'ai/none': '/ai#what-the-user-can-override',
 };
 

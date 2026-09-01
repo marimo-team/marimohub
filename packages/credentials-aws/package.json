@@ -18,7 +18,11 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@aws-crypto/sha256-js": "catalog:",
+		"@aws-sdk/credential-provider-node": "catalog:",
 		"@marimo-hub/core": "workspace:*",
+		"@smithy/signature-v4": "catalog:",
+		"@smithy/types": "catalog:",
 		"ofetch": "catalog:",
 		"zod": "catalog:"
 	},

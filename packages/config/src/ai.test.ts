@@ -29,6 +29,42 @@ describe('makeAi', () => {
 		expect(ai?.tokenTtlSeconds).toBe(900);
 	});
 
+	it('wires Bedrock through its regional OpenAI-compatible endpoint without an API key', () => {
+		const { ai } = makeAi({
+			MARIMOHUB_AI_BACKEND: 'bedrock',
+			MARIMOHUB_AUTH_SESSION_SECRET: 'secret',
+			MARIMOHUB_AI_AWS_REGION: 'eu-west-1',
+			MARIMOHUB_AI_MODEL: 'eu.anthropic.claude-opus-4-7',
+		});
+
+		expect(ai).toMatchObject({
+			upstreamBaseUrl: 'https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1',
+			upstreamApiKey: undefined,
+			allowedModels: ['eu.anthropic.claude-opus-4-7'],
+		});
+		expect(ai?.upstreamFetch).toBeTypeOf('function');
+	});
+
+	it('accepts AWS_REGION for the Bedrock region', () => {
+		const { ai } = makeAi({
+			MARIMOHUB_AI_BACKEND: 'bedrock',
+			MARIMOHUB_AUTH_SESSION_SECRET: 'secret',
+			AWS_REGION: 'us-east-1',
+			MARIMOHUB_AI_MODEL: 'model',
+		});
+		expect(ai?.upstreamBaseUrl).toContain('bedrock-runtime.us-east-1.amazonaws.com');
+	});
+
+	it('requires a region for Bedrock', () => {
+		expect(() =>
+			makeAi({
+				MARIMOHUB_AI_BACKEND: 'bedrock',
+				MARIMOHUB_AUTH_SESSION_SECRET: 'secret',
+				MARIMOHUB_AI_MODEL: 'model',
+			}),
+		).toThrow(/MARIMOHUB_AI_AWS_REGION/);
+	});
+
 	it('leaves the token TTL undefined when unset (mint falls back to its default)', () => {
 		expect(makeAi(aiEnv).ai?.tokenTtlSeconds).toBeUndefined();
 	});

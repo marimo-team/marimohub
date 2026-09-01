@@ -166,13 +166,15 @@ export interface SandboxConfig {
  * Managed-AI capability: the upstream provider the proxy fronts plus the secret it
  * signs/verifies session tokens with. Present enables auto-injection of marimo AI
  * config into every session and the `/api/ai/v1` proxy; absent disables both. The
- * upstream key lives here (server-side) and is NEVER injected into a sandbox.
+ * upstream credentials live server-side and are NEVER injected into a sandbox.
  */
 export interface AiProxyConfig {
 	/** Upstream OpenAI-compatible base URL; the proxy POSTs to `<base>/chat/completions`. */
 	upstreamBaseUrl: string;
-	/** The real upstream provider key — server-side only. */
-	upstreamApiKey: string;
+	/** The real upstream provider key — server-side only. Omitted for request-signed backends. */
+	upstreamApiKey?: string;
+	/** Optional fetch adapter that authenticates the upstream request (for example, AWS SigV4). */
+	upstreamFetch?: (request: Request) => Promise<Response>;
 	/**
 	 * Optional `OpenAI-Project` header value sent upstream (e.g. W&B Inference uses
 	 * it as `entity/project` for usage attribution). Omit for providers that ignore it.

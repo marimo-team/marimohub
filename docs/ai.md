@@ -9,13 +9,19 @@ API key. When managed AI is on, marimohub points marimo's assistant at a provide
 **you** configure and pays for. Chat, autocomplete, and "generate with AI" work
 when someone opens a notebook.
 
-It's optional and off by default. Turn it on by setting one upstream provider; the
-real provider key stays on the server and is never exposed to notebook code.
+It's optional and off by default. Turn it on by setting one upstream provider;
+provider credentials stay on the server and are never exposed to notebook code.
 
 ## Configuration
 
-Set `MARIMOHUB_AI_BACKEND=openai-compatible` plus the upstream details. When
-configured, managed AI is injected into **every** session deployment-wide.
+Select Bedrock or an API-key-backed OpenAI-compatible upstream. When configured,
+managed AI is injected into **every** session deployment-wide.
+
+### Amazon Bedrock
+
+<!--@include: ./setup/ai/bedrock.md-->
+
+### OpenAI-compatible provider
 
 <!--@include: ./setup/ai/openai-compatible.md-->
 
@@ -23,9 +29,10 @@ The full set of variables:
 
 | Variable                         | Required | Description                                                                                                          |
 | -------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| `MARIMOHUB_AI_BACKEND`           | —        | `none` (default) or `openai-compatible`.                                                                             |
-| `MARIMOHUB_AI_UPSTREAM_BASE_URL` | yes      | Upstream OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`. The proxy POSTs to `<base>/chat/completions`. |
-| `MARIMOHUB_AI_UPSTREAM_API_KEY`  | yes      | The real upstream key. Held server-side; never injected into a sandbox.                                              |
+| `MARIMOHUB_AI_BACKEND`           | —        | `none` (default), `bedrock`, or `openai-compatible`.                                                                 |
+| `MARIMOHUB_AI_AWS_REGION`        | Bedrock  | AWS region for Bedrock. Falls back to `AWS_REGION` or `AWS_DEFAULT_REGION`.                                          |
+| `MARIMOHUB_AI_UPSTREAM_BASE_URL` | API key  | Upstream OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`. The proxy POSTs to `<base>/chat/completions`. |
+| `MARIMOHUB_AI_UPSTREAM_API_KEY`  | API key  | The real upstream key. Held server-side; never injected into a sandbox.                                              |
 | `MARIMOHUB_AI_MODEL`             | yes      | Default model id surfaced to marimo, e.g. `gpt-4o-mini`.                                                             |
 | `MARIMOHUB_AI_ALLOWED_MODELS`    | no       | Comma-separated allowlist; off-list requests fall back to the default model.                                         |
 | `MARIMOHUB_AI_UPSTREAM_PROJECT`  | no       | Optional `OpenAI-Project` header forwarded upstream (e.g. W&B Inference `entity/project` attribution).               |
@@ -38,8 +45,9 @@ are signed with it (the same secret that signs login cookies).
 
 ## Providers
 
-Any OpenAI-compatible endpoint works. Set `MARIMOHUB_AI_UPSTREAM_BASE_URL` to the
-provider's base and `MARIMOHUB_AI_MODEL` to one of its model ids:
+For API-key-backed providers, any OpenAI-compatible endpoint works. Set
+`MARIMOHUB_AI_UPSTREAM_BASE_URL` to the provider's base and
+`MARIMOHUB_AI_MODEL` to one of its model ids:
 
 | Provider              | Base URL                            | Notes                                               |
 | --------------------- | ----------------------------------- | --------------------------------------------------- |
@@ -56,10 +64,10 @@ provider's base and `MARIMOHUB_AI_MODEL` to one of its model ids:
    files. The config registers a custom AI provider pointed at marimohub's own
    proxy using a short-lived, session-scoped token as the `api_key`.
 2. **Proxy.** marimohub hosts an OpenAI-compatible endpoint at `/api/ai/v1`. It
-   verifies the session token, then forwards the request to your upstream with the
-   **real** key (held server-side), streaming the response back.
+   verifies the session token, authenticates the upstream request server-side, and
+   streams the response back.
 
-Notebook kernels run untrusted code, so the real provider key is never written into
+Notebook kernels run untrusted code, so provider credentials are never written into
 a sandbox — only a minted, expiring, session-scoped token. This mirrors how
 [Workload Identity Federation](/workload-identity-federation) avoids long-lived storage
 keys.
@@ -80,8 +88,8 @@ if the notebook session remains active.
 ## Proxy contract
 
 The proxy implements the subset of the OpenAI API that marimo calls server-side.
-All endpoints require a valid bearer session token; the upstream key is added
-server-side.
+All endpoints require a valid bearer session token; upstream authentication is
+applied server-side.
 
 - `POST /api/ai/v1/chat/completions` — forwards to the upstream, streaming SSE when
   `stream: true`. The request `model` is normalized to a managed model.

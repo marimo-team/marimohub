@@ -7,8 +7,10 @@ blockExoticSubdeps: true
 
 catalog:
   '@ai-sdk/openai-compatible': ^3.0.17
+  '@aws-crypto/sha256-js': ^5.2.0
   '@aws-sdk/client-s3': ^3.1066.0
   '@aws-sdk/client-secrets-manager': ^3.1066.0
+  '@aws-sdk/credential-provider-node': ^3.972.59
   '@azure/core-auth': ^1.11.0
   '@azure/identity': ^4.13.1
   '@azure/storage-blob': ^12.33.0
@@ -43,6 +45,8 @@ catalog:
   '@opentelemetry/sdk-trace-node': ^2.9.0
   '@oxlint/plugins': 1.67.0
   '@smithy/node-http-handler': ^4.9.1
+  '@smithy/signature-v4': ^5.6.0
+  '@smithy/types': ^4.15.0
   '@tailwindcss/vite': ^4.3.0
   '@tanstack/react-form': ^1.33.0
   '@tanstack/react-store': ^0.11.0

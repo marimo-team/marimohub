@@ -61,6 +61,45 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 	required: true,
 };
 
+// Shared by every managed-AI backend (Bedrock, OpenAI-compatible); the config
+// registry requires one definition per variable id.
+const AI_MODEL: ConfigVar = {
+	id: 'MARIMOHUB_AI_MODEL',
+	name: 'Default model',
+	description: 'Default model id surfaced to marimo.',
+	example: 'gpt-4o-mini',
+	required: true,
+};
+
+const AI_ALLOWED_MODELS: ConfigVar = {
+	id: 'MARIMOHUB_AI_ALLOWED_MODELS',
+	name: 'Allowed models',
+	description:
+		'Comma-separated allowlist of model ids; off-list requests fall back to the default model. Unset allows any model on OpenAI-compatible upstreams, or restricts Bedrock to MARIMOHUB_AI_MODEL.',
+	example: 'gpt-4o-mini,gpt-4o',
+};
+
+const AI_MAX_TOKENS: ConfigVar = {
+	id: 'MARIMOHUB_AI_MAX_TOKENS',
+	name: 'Max tokens',
+	description: 'Optional `[ai] max_tokens` written into the injected notebook config.',
+	example: '4096',
+};
+
+const AI_RULES: ConfigVar = {
+	id: 'MARIMOHUB_AI_RULES',
+	name: 'Assistant rules',
+	description: 'Optional `[ai] rules` (custom assistant instructions).',
+	example: 'Prefer polars over pandas.',
+};
+
+const AI_TOKEN_TTL_SECONDS: ConfigVar = {
+	id: 'MARIMOHUB_AI_TOKEN_TTL_SECONDS',
+	name: 'Session token TTL (seconds)',
+	description: 'Per-session token lifetime in seconds.',
+	default: '3600',
+};
+
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Storage',
@@ -1428,7 +1467,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_AI_BACKEND',
 		selectorDefault: 'none',
 		description:
-			'Optional: auto-configure the marimo AI assistant to use a managed provider, so it works with no user-supplied key. The hub injects a `marimo.toml` pointing at its own OpenAI-compatible proxy (`/api/ai/v1`) with a short-lived, session-scoped token; the proxy holds the real upstream key server-side and forwards requests. The real key is NEVER injected into a sandbox. Deployment-wide and default-on when configured. See docs/ai.md.',
+			'Optional: auto-configure the marimo AI assistant to use a managed provider, so it works with no user-supplied credentials. The hub injects a `marimo.toml` pointing at its own OpenAI-compatible proxy (`/api/ai/v1`) with a short-lived, session-scoped token; the proxy authenticates upstream requests server-side. Provider credentials are NEVER injected into a sandbox. Deployment-wide and default-on when configured. See docs/ai.md.',
 		backends: [
 			{
 				name: 'Off',
@@ -1436,6 +1475,26 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				description:
 					'No managed AI. The marimo assistant still works if a user supplies their own key in marimo settings.',
 				vars: [],
+			},
+			{
+				name: 'Amazon Bedrock',
+				selectorValue: 'bedrock',
+				description:
+					'Uses the Amazon Bedrock OpenAI-compatible endpoint and signs requests with the runtime AWS identity. No Bedrock API key or AWS credential is injected into a sandbox.',
+				vars: [
+					{
+						id: 'MARIMOHUB_AI_AWS_REGION',
+						name: 'AWS region',
+						description: 'AWS region for Bedrock. Falls back to AWS_REGION or AWS_DEFAULT_REGION.',
+						example: 'eu-west-1',
+						required: true,
+					},
+					AI_MODEL,
+					AI_ALLOWED_MODELS,
+					AI_MAX_TOKENS,
+					AI_RULES,
+					AI_TOKEN_TTL_SECONDS,
+				],
 			},
 			{
 				name: 'OpenAI-compatible upstream',
@@ -1466,38 +1525,11 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Optional `OpenAI-Project` header forwarded upstream — e.g. W&B Inference uses `entity/project` for usage attribution. Omit for providers that ignore it.',
 						example: 'my-team/my-project',
 					},
-					{
-						id: 'MARIMOHUB_AI_MODEL',
-						name: 'Default model',
-						description: 'Default upstream model id surfaced to marimo.',
-						example: 'gpt-4o-mini',
-						required: true,
-					},
-					{
-						id: 'MARIMOHUB_AI_ALLOWED_MODELS',
-						name: 'Allowed models',
-						description:
-							'Comma-separated allowlist of upstream model ids; off-list requests fall back to the default model. Unset allows any model.',
-						example: 'gpt-4o-mini,gpt-4o',
-					},
-					{
-						id: 'MARIMOHUB_AI_MAX_TOKENS',
-						name: 'Max tokens',
-						description: 'Optional `[ai] max_tokens` written into the injected notebook config.',
-						example: '4096',
-					},
-					{
-						id: 'MARIMOHUB_AI_RULES',
-						name: 'Assistant rules',
-						description: 'Optional `[ai] rules` (custom assistant instructions).',
-						example: 'Prefer polars over pandas.',
-					},
-					{
-						id: 'MARIMOHUB_AI_TOKEN_TTL_SECONDS',
-						name: 'Session token TTL (seconds)',
-						description: 'Per-session token lifetime in seconds.',
-						default: '3600',
-					},
+					AI_MODEL,
+					AI_ALLOWED_MODELS,
+					AI_MAX_TOKENS,
+					AI_RULES,
+					AI_TOKEN_TTL_SECONDS,
 				],
 			},
 		],

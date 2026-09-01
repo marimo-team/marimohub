@@ -18,7 +18,7 @@ export interface WizardSelection {
 	storage: string;
 	compute: string;
 	auth: string;
-	/** Managed-AI backend: `none` (default) or `openai-compatible`. */
+	/** Managed-AI backend: `none` (default), `bedrock`, or `openai-compatible`. */
 	ai: string;
 	/** Extra option id -> value (e.g. persist workspace, sandbox image). */
 	options?: Record<string, string>;
@@ -364,6 +364,9 @@ export function generateLibrary(sel: WizardSelection): string {
 		`import { createApi } from '@marimo-hub/api';`,
 		...(usesExternalLibrary ? [`import { loadAdapterLibraries } from '@marimo-hub/config';`] : []),
 		`import { createServices } from '@marimo-hub/core';`,
+		...(sel.ai === 'bedrock'
+			? [`import { createAwsSigV4Fetch } from '@marimo-hub/credentials-aws';`]
+			: []),
 		...storage.imports,
 		...compute.imports,
 		...auth.imports,
@@ -374,19 +377,34 @@ export function generateLibrary(sel: WizardSelection): string {
 	const bind = AUTH_BIND[sel.auth] ?? ((rhs: string) => `const authResult = ${rhs};`);
 
 	// Managed AI is an optional `ai` dep (a plain config object, not an adapter),
-	// only emitted when an upstream is selected.
-	const aiOn = sel.ai === 'openai-compatible';
-	const aiDecl = aiOn
-		? [
-				`const ai = {`,
-				`\tupstreamBaseUrl: process.env.MARIMOHUB_AI_UPSTREAM_BASE_URL!,`,
-				`\tupstreamApiKey: process.env.MARIMOHUB_AI_UPSTREAM_API_KEY!,`,
-				`\tmodel: process.env.MARIMOHUB_AI_MODEL!,`,
-				`\tsigningSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,`,
-				`};`,
-				``,
-			]
-		: [];
+	// only emitted when a backend is selected. Bedrock signs upstream requests with
+	// SigV4 (no API key) instead of a bearer key.
+	const aiOn = sel.ai === 'openai-compatible' || sel.ai === 'bedrock';
+	const aiDecl =
+		sel.ai === 'bedrock'
+			? [
+					`const ai = {`,
+					`\tupstreamBaseUrl: \`https://bedrock-runtime.\${process.env.MARIMOHUB_AI_AWS_REGION!}.amazonaws.com/openai/v1\`,`,
+					`\tupstreamFetch: createAwsSigV4Fetch({`,
+					`\t\tregion: process.env.MARIMOHUB_AI_AWS_REGION!,`,
+					`\t\tservice: 'bedrock',`,
+					`\t}),`,
+					`\tmodel: process.env.MARIMOHUB_AI_MODEL!,`,
+					`\tsigningSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,`,
+					`};`,
+					``,
+				]
+			: aiOn
+				? [
+						`const ai = {`,
+						`\tupstreamBaseUrl: process.env.MARIMOHUB_AI_UPSTREAM_BASE_URL!,`,
+						`\tupstreamApiKey: process.env.MARIMOHUB_AI_UPSTREAM_API_KEY!,`,
+						`\tmodel: process.env.MARIMOHUB_AI_MODEL!,`,
+						`\tsigningSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,`,
+						`};`,
+						``,
+					]
+				: [];
 
 	const body = [
 		...(usesExternalLibrary

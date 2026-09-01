@@ -21,6 +21,9 @@ import { FetchError, ofetch } from 'ofetch';
 import { z } from 'zod';
 import type { CredentialBroker, TempS3Creds } from '@marimo-hub/core';
 
+export { createAwsSigV4Fetch } from './sigv4';
+export type { AwsSigV4FetchOptions } from './sigv4';
+
 /** Default request timeout for the exchange (ms). */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
