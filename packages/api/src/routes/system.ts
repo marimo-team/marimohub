@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	canCreateProject,
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	isSuperAdmin,
 	MAX_REQUEST_BYTES,
@@ -54,6 +55,7 @@ app.openapi(meRoute, (c) => {
 		picture_url: user.pictureUrl ?? null,
 		logout_url: logoutUrl,
 		is_super_admin: isSuperAdmin(user, deps.policy.superAdmins),
+		can_create_projects: canCreateProject(user, deps.policy),
 	});
 });
 

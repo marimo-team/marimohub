@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeAuth } from './auth';
+import { makeAuth, projectCreationRestricted } from './auth';
 import { ConfigError } from './errors';
 
 /**
@@ -194,6 +194,56 @@ describe('makeAuth oidc required vars', () => {
 		).toThrow(/RFC 6901 JSON Pointer/);
 	});
 
+	it.each(['', '   ', ',,,'])('accepts an empty project-creation group policy (%j)', (value) => {
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: value }),
+		).not.toThrow();
+	});
+
+	it.each(['', '   ', ',,,'])(
+		'rejects an unused groups claim with an empty project-creation policy (%j)',
+		(value) => {
+			expect(() =>
+				makeAuth({
+					...oidcEnv,
+					MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+					MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: value,
+				}),
+			).toThrow(/requires at least one group policy/);
+		},
+	);
+
+	it('requires a claim pointer for non-empty project-creation groups', () => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: 'project-creators',
+			}),
+		).toThrow(/GROUPS_CLAIM/);
+	});
+
+	it('restricts project creation only when the OIDC variable is present', () => {
+		expect(projectCreationRestricted(oidcEnv)).toBe(false);
+		expect(
+			projectCreationRestricted({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: '',
+			}),
+		).toBe(true);
+		expect(
+			projectCreationRestricted({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: 'project-creators',
+			}),
+		).toBe(true);
+		expect(
+			projectCreationRestricted({
+				...proxyHeaderEnv,
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: 'project-creators',
+			}),
+		).toBe(false);
+	});
+
 	it.each([
 		['missing leading slash', 'groups'],
 		['invalid tilde escape', '/realm~2access/roles'],
@@ -211,6 +261,7 @@ describe('makeAuth oidc required vars', () => {
 	it.each([
 		'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
@@ -239,6 +290,23 @@ describe('makeAuth oidc required vars', () => {
 
 		expect(error.message).toContain('expected at most 200 group ids');
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
+	});
+
+	it.each([
+		['too many groups', Array.from({ length: 201 }, (_, i) => `group-${i}`).join(',')],
+		['oversized group id', 'g'.repeat(257)],
+		['control character', 'project-creators,bad\u007fgroup'],
+	])('rejects invalid project-creation group lists: %s', (_name, groups) => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: groups,
+			}),
+		);
+
+		expect(error.message).toContain('expected at most 200 group ids');
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS');
 	});
 
 	it('requires HTTPS issuer and redirect URLs', () => {

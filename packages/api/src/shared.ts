@@ -937,6 +937,8 @@ export const MeResponseSchema = z
 		logout_url: z.string().nullable(),
 		/** Static or OIDC group-derived super admin: implicit admin everywhere. */
 		is_super_admin: z.boolean(),
+		/** Whether the current credential can create projects. */
+		can_create_projects: z.boolean(),
 	})
 	.openapi('Me');
 

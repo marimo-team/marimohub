@@ -989,6 +989,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS',
+						name: 'Project creation groups',
+						description:
+							'Exact comma-separated group IDs permitted to create projects. Unset allows all authenticated users. An empty value allows only super admins.',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
 						name: 'Default viewer groups',
 						description: 'Groups granted a deployment-wide default viewer role.',

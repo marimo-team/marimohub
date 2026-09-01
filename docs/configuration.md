@@ -325,6 +325,7 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM` | RFC 6901 JSON Pointer to an array of exact provider group IDs. Required for group policy. | — | — | `/groups` |
 | `MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS` | Exact comma-separated group IDs. A user must belong to at least one. Missing or malformed group data fails closed. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS` | Exact comma-separated group IDs mapped to marimohub super-admin. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` | Exact comma-separated group IDs permitted to create projects. Unset allows all authenticated users. An empty value allows only super admins. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS` | Groups granted a deployment-wide default viewer role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` | Groups granted a deployment-wide default editor role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS` | Groups granted a deployment-wide default project-manager role. | — | — | — |

@@ -1566,6 +1566,7 @@ export interface components {
 			picture_url?: string | null;
 			logout_url: string | null;
 			is_super_admin: boolean;
+			can_create_projects: boolean;
 		};
 		DeploymentInfo: {
 			version: string;

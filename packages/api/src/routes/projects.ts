@@ -1,7 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ASSIGNABLE_ROLES,
+	canCreateProject,
 	effectiveRole,
+	ForbiddenError,
 	notificationRouter,
 	resolveMemberRecipient,
 	roleAtLeast,
@@ -316,6 +318,9 @@ app.openapi(listProjects, async (c) => {
 app.openapi(createProject, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
+	if (!canCreateProject(user, deps.policy)) {
+		throw new ForbiddenError('Project creation is restricted to authorized users');
+	}
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(c, 'POST /projects', async () => {
 		const project = await deps.services.projects.createProject(body, user.id);

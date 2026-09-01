@@ -630,6 +630,40 @@ describe('createFromEnv oidc email-domain allowlist', () => {
 		const deps = createFromEnv({ ...oidcEnv, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*' });
 		expect(deps.authenticator).toBeDefined();
 	});
+
+	it('wires project-creation restriction for empty and non-empty OIDC policies', () => {
+		const unrestricted = createFromEnv({
+			...oidcEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+		});
+		expect(unrestricted.policy.projectCreationRestricted).toBeUndefined();
+
+		const superAdminsOnly = createFromEnv({
+			...oidcEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+			MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: '',
+		});
+		expect(superAdminsOnly.policy.projectCreationRestricted).toBe(true);
+
+		const groupRestricted = createFromEnv({
+			...oidcEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+			MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+			MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: 'project-creators',
+		});
+		expect(groupRestricted.policy.projectCreationRestricted).toBe(true);
+	});
+
+	it('ignores OIDC project-creation groups for other auth backends', () => {
+		const deps = createFromEnv({
+			MARIMOHUB_STORAGE_BACKEND: 'memory',
+			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+			MARIMOHUB_COMPUTE_BACKEND: 'none',
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: 'project-creators',
+		});
+		expect(deps.policy.projectCreationRestricted).toBeUndefined();
+	});
 });
 
 describe('createFromEnv sandbox-host isolation guard', () => {

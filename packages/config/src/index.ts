@@ -47,7 +47,7 @@ import type {
 } from '@marimo-hub/core';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import { makeAi } from './ai';
-import { authBackend, makeAuth } from './auth';
+import { authBackend, makeAuth, projectCreationRestricted } from './auth';
 import { buildConfigSummary } from './configSummary';
 import { computeBackend, makeCompute, resolveSandboxImages } from './compute';
 import {
@@ -615,6 +615,7 @@ export function createFromEnv(
 			editorSandboxSharing,
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
 			superAdmins: parseList(env.MARIMOHUB_SUPER_ADMINS),
+			...(projectCreationRestricted(env) ? { projectCreationRestricted: true } : {}),
 			maxConcurrentSessionsPerUser: parseCap(
 				env,
 				'MARIMOHUB_MAX_SESSIONS_PER_USER',

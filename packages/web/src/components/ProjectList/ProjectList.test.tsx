@@ -7,6 +7,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ProjectSummary } from '@/types';
 import { ProjectList } from './ProjectList';
 
+const authState = vi.hoisted(() => ({ canCreateProjects: true as boolean | undefined }));
+
+vi.mock('@/context/AuthContext', () => ({
+	useAuth: () => ({ user: { can_create_projects: authState.canCreateProjects } }),
+}));
+
 type TestProject = ProjectSummary & { tags: string[] };
 
 function project(
@@ -27,7 +33,12 @@ function project(
 	} as TestProject;
 }
 
-function renderList(projects: TestProject[], route = '/') {
+function renderList(
+	projects: TestProject[],
+	route = '/',
+	canCreateProjects: boolean | undefined = true,
+) {
+	authState.canCreateProjects = canCreateProjects;
 	const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
 		const url = new URL(String(input), 'http://localhost');
 		const q = url.searchParams.get('q')?.toLocaleLowerCase();
@@ -86,6 +97,25 @@ describe('ProjectList', () => {
 		await waitForLoaded();
 
 		expect(screen.getByText('No projects yet')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create your first project' })).toBeInTheDocument();
+	});
+
+	it('hides project-creation actions when the server denies access', async () => {
+		renderList([], '/', false);
+		await waitForLoaded();
+
+		expect(screen.queryByRole('button', { name: 'New Project' })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', { name: 'Create your first project' }),
+		).not.toBeInTheDocument();
+		expect(screen.queryByRole('heading', { name: 'Create New Project' })).not.toBeInTheDocument();
+	});
+
+	it('keeps project creation available with an older user response', async () => {
+		renderList([], '/', undefined);
+		await waitForLoaded();
+
+		expect(screen.getByRole('button', { name: 'New Project' })).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Create your first project' })).toBeInTheDocument();
 	});
 
