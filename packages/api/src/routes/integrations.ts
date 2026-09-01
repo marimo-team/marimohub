@@ -2,7 +2,6 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
 	INTEGRATION_CATEGORIES,
 	IntegrationId,
-	ForbiddenError,
 	NotFoundError,
 	ProjectId,
 	ResourceExhaustedError,
@@ -19,9 +18,9 @@ import type {
 	TestIntegrationRequest,
 } from '@marimo-hub/core';
 import {
+	assertProjectActionOn,
 	assertProjectRole,
 	assertSuperAdmin,
-	authorizationService,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -764,14 +763,7 @@ app.openapi(copyIntegration, async (c) => {
 		user,
 		deps.policy,
 	);
-	const sourceDecision = await authorizationService(deps.policy).authorize(
-		user,
-		'integration.manage',
-		{ kind: 'project', project: source },
-	);
-	if (!sourceDecision.allowed) {
-		throw new ForbiddenError(`Requires 'manager' role on project ${source.id}`);
-	}
+	await assertProjectActionOn(source, user, 'integration.manage', deps.policy);
 	const detail = await integrations.copy(
 		body.source_project_id,
 		body.source_integration_id,

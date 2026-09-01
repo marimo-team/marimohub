@@ -9,7 +9,7 @@ import type { AuthSubject } from '../../authz';
 import { UserId } from '../../ids';
 import { makeProject } from '../../testing';
 import { AuthorizationService } from './AuthorizationService';
-import type { AuthorizationResource } from './AuthorizationService';
+import type { AuthorizationResource, SessionAdmissionRecord } from './AuthorizationService';
 import { ACTION_RULES, AUTHORIZATION_ACTIONS, PROJECT_ACTIONS } from './actions';
 
 function subject(id: string, email = `${id}@example.com`): AuthSubject {
@@ -34,6 +34,11 @@ const deletedProject = makeProject({ owner: OWNER.id, members: [], status: 'dele
 
 const service = (policy = {}) => new AuthorizationService(policy);
 const onProject = (p = project): AuthorizationResource => ({ kind: 'project', project: p });
+const onSession = (session: SessionAdmissionRecord, p = project): AuthorizationResource => ({
+	kind: 'session',
+	project: p,
+	session,
+});
 
 describe('AuthorizationService: project actions', () => {
 	it('grants each project action at exactly its rule tier', async () => {
@@ -144,15 +149,13 @@ describe('AuthorizationService: session actions', () => {
 
 	it('admits editors to shared editors and apps, and blocks role-less callers', async () => {
 		await expect(
-			service().authorize(EDITOR, 'session.attach', {
-				kind: 'session',
-				project,
-				session: edit(MANAGER),
-			}),
+			service().authorize(EDITOR, 'session.attach', onSession(edit(MANAGER))),
 		).resolves.toMatchObject({ allowed: true });
-		await expect(
-			service().authorize(STRANGER, 'session.attach', { kind: 'session', project, session: app }),
-		).resolves.toEqual({ allowed: false, category: 'session', role: null });
+		await expect(service().authorize(STRANGER, 'session.attach', onSession(app))).resolves.toEqual({
+			allowed: false,
+			category: 'session',
+			role: null,
+		});
 	});
 
 	it('keeps exclusive editors owner-only, with manager force-stop but no attach', async () => {
@@ -169,7 +172,7 @@ describe('AuthorizationService: session actions', () => {
 	});
 
 	it('admits viewers to shared apps exactly per viewer mode', async () => {
-		const resource: AuthorizationResource = { kind: 'session', project, session: app };
+		const resource: AuthorizationResource = onSession(app);
 		await expect(service().authorize(VIEWER, 'session.attach', resource)).resolves.toMatchObject({
 			allowed: false,
 			category: 'session',
@@ -180,7 +183,7 @@ describe('AuthorizationService: session actions', () => {
 	});
 
 	it('routes proxy admission through the attach rule', async () => {
-		const resource: AuthorizationResource = { kind: 'session', project, session: app };
+		const resource: AuthorizationResource = onSession(app);
 		const direct = await service({ viewerMode: 'applications' }).authorize(
 			VIEWER,
 			'session.attach',
@@ -196,18 +199,14 @@ describe('AuthorizationService: session actions', () => {
 
 	it('restricts surfaces to editors on edit sessions', async () => {
 		await expect(
-			service({ viewerMode: 'ephemeral-sandbox' }).authorize(VIEWER, 'session.surface', {
-				kind: 'session',
-				project,
-				session: app,
-			}),
+			service({ viewerMode: 'ephemeral-sandbox' }).authorize(
+				VIEWER,
+				'session.surface',
+				onSession(app),
+			),
 		).resolves.toMatchObject({ allowed: false, category: 'session' });
 		await expect(
-			service().authorize(EDITOR, 'session.surface', {
-				kind: 'session',
-				project,
-				session: edit(EDITOR),
-			}),
+			service().authorize(EDITOR, 'session.surface', onSession(edit(EDITOR))),
 		).resolves.toMatchObject({ allowed: true });
 	});
 
@@ -237,11 +236,7 @@ describe('AuthorizationService: session actions', () => {
 
 	it('denies session actions on a deleted project before any session rule', async () => {
 		await expect(
-			service().authorize(OWNER, 'session.attach', {
-				kind: 'session',
-				project: deletedProject,
-				session: app,
-			}),
+			service().authorize(OWNER, 'session.attach', onSession(app, deletedProject)),
 		).resolves.toEqual({ allowed: false, category: 'lifecycle', role: null });
 	});
 });
@@ -400,18 +395,10 @@ describe('AuthorizationService: session edge cases', () => {
 		const throwaway = { mode: 'edit' as const, ephemeral: true, user_id: VIEWER.id };
 		const downgraded = service({ viewerMode: 'static' });
 		await expect(
-			downgraded.authorize(VIEWER, 'session.attach', {
-				kind: 'session',
-				project,
-				session: throwaway,
-			}),
+			downgraded.authorize(VIEWER, 'session.attach', onSession(throwaway)),
 		).resolves.toMatchObject({ allowed: false, category: 'session' });
 		await expect(
-			downgraded.authorize(VIEWER, 'session.stop', {
-				kind: 'session',
-				project,
-				session: throwaway,
-			}),
+			downgraded.authorize(VIEWER, 'session.stop', onSession(throwaway)),
 		).resolves.toMatchObject({ allowed: true });
 		// Another viewer never reaches someone else's throwaway.
 		const otherViewer = subject('user_viewer_2');
@@ -423,22 +410,18 @@ describe('AuthorizationService: session edge cases', () => {
 			],
 		});
 		await expect(
-			service({ viewerMode: 'ephemeral-sandbox' }).authorize(otherViewer, 'session.attach', {
-				kind: 'session',
-				project: withOther,
-				session: throwaway,
-			}),
+			service({ viewerMode: 'ephemeral-sandbox' }).authorize(
+				otherViewer,
+				'session.attach',
+				onSession(throwaway, withOther),
+			),
 		).resolves.toMatchObject({ allowed: false, category: 'session' });
 	});
 
 	it('never grants a viewer stop on a shared app', async () => {
 		const app = { mode: 'app' as const, user_id: OWNER.id };
 		await expect(
-			service({ viewerMode: 'applications' }).authorize(VIEWER, 'session.stop', {
-				kind: 'session',
-				project,
-				session: app,
-			}),
+			service({ viewerMode: 'applications' }).authorize(VIEWER, 'session.stop', onSession(app)),
 		).resolves.toMatchObject({ allowed: false, category: 'session' });
 	});
 

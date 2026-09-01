@@ -20,27 +20,38 @@ function apiFor(bucket: MemoryBucket, userId: UserId, deps = {}) {
 	return createTestApi({ bucket, userId, deps });
 }
 
-async function seedProject(bucket: MemoryBucket) {
-	const owner = apiFor(bucket, OWNER);
+type TestApi = ReturnType<typeof createTestApi>;
+
+async function createProject(api: TestApi, name = 'char'): Promise<string> {
 	const project = await expectOk<{ id: string }>(
-		await owner.request('POST', '/projects', { name: 'char', description: '' }),
-		201,
-	);
-	await expectOk(
-		await owner.request('POST', `/projects/${project.id}/members`, {
-			user_id: VIEWER,
-			role: 'viewer',
-		}),
-		201,
-	);
-	await expectOk(
-		await owner.request('POST', `/projects/${project.id}/members`, {
-			user_id: EDITOR,
-			role: 'editor',
-		}),
+		await api.request('POST', '/projects', { name, description: '' }),
 		201,
 	);
 	return project.id;
+}
+
+async function addMember(api: TestApi, pid: string, member: Record<string, string>) {
+	await expectOk(await api.request('POST', `/projects/${pid}/members`, member), 201);
+}
+
+async function createNotebook(api: TestApi, pid: string): Promise<string> {
+	const notebook = await expectOk<{ id: string }>(
+		await api.request('POST', `/projects/${pid}/notebooks`, {
+			title: 'nb',
+			description: '',
+			code: 'import marimo as mo',
+		}),
+		201,
+	);
+	return notebook.id;
+}
+
+async function seedProject(bucket: MemoryBucket) {
+	const owner = apiFor(bucket, OWNER);
+	const pid = await createProject(owner);
+	await addMember(owner, pid, { user_id: VIEWER, role: 'viewer' });
+	await addMember(owner, pid, { user_id: EDITOR, role: 'editor' });
+	return pid;
 }
 
 describe('authorization characterization: project reads and writes', () => {
@@ -78,10 +89,7 @@ describe('authorization characterization: project reads and writes', () => {
 			403,
 			'FORBIDDEN',
 		);
-		await expectOk(
-			await apiFor(bucket, EDITOR).request('POST', `/projects/${pid}/notebooks`, create),
-			201,
-		);
+		await createNotebook(apiFor(bucket, EDITOR), pid);
 	});
 
 	it('answers 404 for everyone on a soft-deleted project, super admins included', async () => {
@@ -145,14 +153,7 @@ describe('authorization characterization: entitlement expiry', () => {
 		const bucket = new MemoryBucket();
 		const pid = await seedProject(bucket);
 		const owner = apiFor(bucket, OWNER);
-		const notebook = await expectOk<{ id: string }>(
-			await owner.request('POST', `/projects/${pid}/notebooks`, {
-				title: 'nb',
-				description: '',
-				code: 'import marimo as mo',
-			}),
-			201,
-		);
+		const nid = await createNotebook(owner, pid);
 
 		const expired: Authenticator = {
 			authenticate: async () => ({
@@ -164,11 +165,7 @@ describe('authorization characterization: entitlement expiry', () => {
 			}),
 		};
 		const stale = createTestApi({ bucket, userId: OWNER, deps: { authenticator: expired } });
-		const res = await stale.request(
-			'POST',
-			`/projects/${pid}/notebooks/${notebook.id}/sessions`,
-			{},
-		);
+		const res = await stale.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {});
 		const error = await expectError(res, 403, 'FORBIDDEN');
 		expect(error.message).toContain('Group authorization has expired');
 	});
@@ -180,19 +177,10 @@ describe('authorization characterization: list filtering and pagination', () => 
 		const owner = apiFor(bucket, OWNER);
 		const visible: string[] = [];
 		for (let i = 0; i < 5; i += 1) {
-			const project = await expectOk<{ id: string }>(
-				await owner.request('POST', '/projects', { name: `p${i}`, description: '' }),
-				201,
-			);
+			const id = await createProject(owner, `p${i}`);
 			if (i % 2 === 0) {
-				await expectOk(
-					await owner.request('POST', `/projects/${project.id}/members`, {
-						user_id: VIEWER,
-						role: 'viewer',
-					}),
-					201,
-				);
-				visible.push(project.id);
+				await addMember(owner, id, { user_id: VIEWER, role: 'viewer' });
+				visible.push(id);
 			}
 		}
 
@@ -233,25 +221,18 @@ describe('authorization characterization: unhappy paths', () => {
 		const bucket = new MemoryBucket();
 		const pid = await seedProject(bucket);
 		const owner = apiFor(bucket, OWNER);
-		const notebook = await expectOk<{ id: string }>(
-			await owner.request('POST', `/projects/${pid}/notebooks`, {
-				title: 'nb',
-				description: '',
-				code: 'import marimo as mo',
-			}),
-			201,
-		);
+		const nid = await createNotebook(owner, pid);
 		await expectOk(await owner.request('DELETE', `/projects/${pid}`));
 
 		await expectError(
-			await owner.request('POST', `/projects/${pid}/notebooks/${notebook.id}/sessions`, {}),
+			await owner.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {}),
 			404,
 			'NOT_FOUND',
 		);
 		await expectError(
 			await owner.request(
 				'DELETE',
-				`/projects/${pid}/notebooks/${notebook.id}/sessions/sess-9qm4xz7rp3w8h2k9`,
+				`/projects/${pid}/notebooks/${nid}/sessions/sess-9qm4xz7rp3w8h2k9`,
 			),
 			404,
 			'NOT_FOUND',
@@ -288,17 +269,8 @@ describe('authorization characterization: unhappy paths', () => {
 	it('admits a pending email invite by login email, never by an id collision', async () => {
 		const bucket = new MemoryBucket();
 		const owner = apiFor(bucket, OWNER);
-		const project = await expectOk<{ id: string }>(
-			await owner.request('POST', '/projects', { name: 'invites', description: '' }),
-			201,
-		);
-		await expectOk(
-			await owner.request('POST', `/projects/${project.id}/members`, {
-				email: 'invitee@example.com',
-				role: 'viewer',
-			}),
-			201,
-		);
+		const pid = await createProject(owner, 'invites');
+		await addMember(owner, pid, { email: 'invitee@example.com', role: 'viewer' });
 
 		const invitee: Authenticator = {
 			authenticate: async () => ({
@@ -308,7 +280,7 @@ describe('authorization characterization: unhappy paths', () => {
 			}),
 		};
 		const inviteeApi = createTestApi({ bucket, deps: { authenticator: invitee } });
-		await expectOk(await inviteeApi.request('GET', `/projects/${project.id}`));
+		await expectOk(await inviteeApi.request('GET', `/projects/${pid}`));
 
 		// An id equal to the invite email must not be admitted: invite rows bind to
 		// the IdP-asserted login email, not the opaque subject id.
@@ -320,24 +292,14 @@ describe('authorization characterization: unhappy paths', () => {
 			}),
 		};
 		const collisionApi = createTestApi({ bucket, deps: { authenticator: collision } });
-		await expectError(
-			await collisionApi.request('GET', `/projects/${project.id}`),
-			404,
-			'NOT_FOUND',
-		);
+		await expectError(await collisionApi.request('GET', `/projects/${pid}`), 404, 'NOT_FOUND');
 	});
 
 	it('hides pending-invite emails from members below manager', async () => {
 		const bucket = new MemoryBucket();
 		const pid = await seedProject(bucket);
 		const owner = apiFor(bucket, OWNER);
-		await expectOk(
-			await owner.request('POST', `/projects/${pid}/members`, {
-				email: 'pending@example.com',
-				role: 'viewer',
-			}),
-			201,
-		);
+		await addMember(owner, pid, { email: 'pending@example.com', role: 'viewer' });
 
 		const asViewer = await expectOk<{ members: { email?: string }[] }>(
 			await apiFor(bucket, VIEWER).request('GET', `/projects/${pid}`),

@@ -37,6 +37,7 @@ import type {
 	Project,
 	ProjectAction,
 	ProjectService,
+	SessionAdmissionRecord,
 	SessionScopedAction,
 	Session,
 	SessionActor,
@@ -97,13 +98,36 @@ export function authorizationService(
 }
 
 /**
- * Enforce a project-scoped action. Loads `project.json` (404 if the project
- * does not exist) and maps the service's decision to the transport: a
- * `lifecycle` or `visibility` denial is **404** (a soft-deleted or hidden
- * project is indistinguishable from a nonexistent one — super admins
- * included), a `role` denial is **403**. Returns the loaded project so callers
- * can reuse it without a second fetch. The subject is the request's principal —
+ * Authorize a project-scoped action against an already-loaded project, mapping
+ * the service's decision to the canonical transport errors: a `lifecycle` or
+ * `visibility` denial is **404** (a soft-deleted or hidden project is
+ * indistinguishable from a nonexistent one — super admins included), a `role`
+ * denial is a tier-named **403**. The subject is the request's principal —
  * membership matches by user id or (invite) email.
+ */
+export async function assertProjectActionOn(
+	project: Project,
+	subject: AuthSubject,
+	action: ProjectAction,
+	policy?: AuthzPolicy,
+): Promise<void> {
+	const decision = await authorizationService(policy).authorize(subject, action, {
+		kind: 'project',
+		project,
+	});
+	if (decision.allowed) return;
+	if (decision.category === 'role') {
+		throw new ForbiddenError(
+			`Requires '${projectActionMinRole(action)}' role on project ${project.id}`,
+		);
+	}
+	throw new NotFoundError(`Project ${project.id} not found`);
+}
+
+/**
+ * Enforce a project-scoped action: loads `project.json` (404 if the project
+ * does not exist), then {@link assertProjectActionOn}. Returns the loaded
+ * project so callers can reuse it without a second fetch.
  */
 export async function assertProjectRole(
 	projects: ProjectService,
@@ -113,18 +137,7 @@ export async function assertProjectRole(
 	policy?: AuthzPolicy,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	const decision = await authorizationService(policy).authorize(subject, action, {
-		kind: 'project',
-		project,
-	});
-	if (!decision.allowed) {
-		if (decision.category === 'role') {
-			throw new ForbiddenError(
-				`Requires '${projectActionMinRole(action)}' role on project ${project.id}`,
-			);
-		}
-		throw new NotFoundError(`Project ${pid} not found`);
-	}
+	await assertProjectActionOn(project, subject, action, policy);
 	return project;
 }
 
@@ -191,7 +204,7 @@ export function sessionActorFor(
 export function sessionGrantsFor(
 	project: Project,
 	subject: AuthSubject,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAdmissionRecord,
 	policy: SessionPolicy,
 ): { attach: boolean; stop: boolean; surface: boolean } {
 	return sessionGrants(sessionActorFor(project, subject, policy), session);
@@ -199,9 +212,9 @@ export function sessionGrantsFor(
 
 async function assertSession(
 	action: SessionScopedAction,
-	message: 'attach' | 'stop',
+	error: () => Error,
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): Promise<void> {
@@ -210,8 +223,7 @@ async function assertSession(
 		project,
 		session,
 	});
-	if (decision.allowed) return;
-	throw new ForbiddenError(`Not authorized to ${message} this session`);
+	if (!decision.allowed) throw error();
 }
 
 /**
@@ -221,11 +233,18 @@ async function assertSession(
  */
 export async function assertSessionControl(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): Promise<void> {
-	await assertSession('session.stop', 'stop', project, session, subject, policy);
+	await assertSession(
+		'session.stop',
+		() => new ForbiddenError('Not authorized to stop this session'),
+		project,
+		session,
+		subject,
+		policy,
+	);
 }
 
 /**
@@ -236,26 +255,34 @@ export async function assertSessionControl(
  */
 export async function assertSessionAccess(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): Promise<void> {
-	await assertSession('session.attach', 'attach', project, session, subject, policy);
+	await assertSession(
+		'session.attach',
+		() => new ForbiddenError('Not authorized to attach this session'),
+		project,
+		session,
+		subject,
+		policy,
+	);
 }
 
 export async function assertSessionSurfaceAccess(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: SessionAdmissionRecord,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): Promise<void> {
-	const decision = await authorizationService(policy).authorize(subject, 'session.surface', {
-		kind: 'session',
+	await assertSession(
+		'session.surface',
+		() => new SurfaceForbiddenError(),
 		project,
 		session,
-	});
-	if (decision.allowed) return;
-	throw new SurfaceForbiddenError();
+		subject,
+		policy,
+	);
 }
 
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
@@ -334,17 +361,9 @@ export async function loadVisibleProject(
 	subject: AuthSubject,
 	policy?: AuthzPolicy,
 ): Promise<Project> {
-	const project = await projects.getProject(pid);
-	// `project.read` denials are all masked: lifecycle (deleted precedes role,
-	// super admins included) and visibility both present as nonexistent.
-	const decision = await authorizationService(policy).authorize(subject, 'project.read', {
-		kind: 'project',
-		project,
-	});
-	if (!decision.allowed) {
-		throw new NotFoundError(`Project ${pid} not found`);
-	}
-	return project;
+	// `project.read` denials are all masked (`deniedAs: 'not-found'`), so this is
+	// assertProjectRole with a guaranteed-404 denial shape.
+	return assertProjectRole(projects, pid, subject, 'project.read', policy);
 }
 
 /**

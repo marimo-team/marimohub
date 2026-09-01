@@ -102,20 +102,35 @@ export class AuthorizationService {
 		if (resource.kind !== rule.scope) {
 			throw new Error(`Action ${action} requires a ${rule.scope} resource, got ${resource.kind}`);
 		}
+		if (resource.kind === 'deployment') {
+			return this.decideDeployment(subject, action as DeploymentAction);
+		}
+		// Lifecycle precedes every project-scoped rule on purpose: a soft-deleted
+		// project is unreachable for everyone, super admins included.
+		if (resource.project.status === 'deleted') {
+			return { allowed: false, category: 'lifecycle', role: null };
+		}
+		const role = effectiveRole(resource.project, subject, this.policy);
 		switch (resource.kind) {
-			case 'deployment':
-				return this.decideDeployment(subject, action as DeploymentAction);
-			case 'project':
-				return this.decideProject(subject, action as ProjectAction, resource.project);
-			case 'session':
-				return this.decideSession(
-					subject,
-					SESSION_ACTION_FOR[action as SessionScopedAction],
-					resource.project,
-					resource.session,
-				);
+			case 'project': {
+				const projectRule = ACTION_RULES[action as ProjectAction];
+				if (roleAtLeast(role, projectRule.min)) return { allowed: true, role };
+				return {
+					allowed: false,
+					category: projectRule.deniedAs === 'not-found' ? 'visibility' : 'role',
+					role,
+				};
+			}
+			case 'session': {
+				const sessionAction = SESSION_ACTION_FOR[action as SessionScopedAction];
+				return sessionCan(sessionAction, this.sessionActor(subject, role), resource.session)
+					? { allowed: true, role }
+					: { allowed: false, category: 'session', role };
+			}
 			case 'session-start':
-				return this.decideSessionStart(subject, resource.project, resource.mode);
+				return canStartSessionMode({ role, viewerMode: this.policy?.viewerMode }, resource.mode)
+					? { allowed: true, role }
+					: { allowed: false, category: 'session', role };
 		}
 	}
 
@@ -166,53 +181,6 @@ export class AuthorizationService {
 		return allowed
 			? { allowed: true, role: null }
 			: { allowed: false, category: 'standing', role: null };
-	}
-
-	private decideProject(
-		subject: AuthSubject,
-		action: ProjectAction,
-		project: Project,
-	): AuthorizationDecision {
-		// Lifecycle precedes role on purpose: a soft-deleted project is
-		// unreachable for everyone, super admins included.
-		if (project.status === 'deleted') {
-			return { allowed: false, category: 'lifecycle', role: null };
-		}
-		const rule = ACTION_RULES[action];
-		const role = effectiveRole(project, subject, this.policy);
-		if (roleAtLeast(role, rule.min)) return { allowed: true, role };
-		return {
-			allowed: false,
-			category: rule.deniedAs === 'not-found' ? 'visibility' : 'role',
-			role,
-		};
-	}
-
-	private decideSession(
-		subject: AuthSubject,
-		action: SessionAction,
-		project: Project,
-		session: SessionAdmissionRecord,
-	): AuthorizationDecision {
-		if (project.status === 'deleted') {
-			return { allowed: false, category: 'lifecycle', role: null };
-		}
-		const role = effectiveRole(project, subject, this.policy);
-		const allowed = sessionCan(action, this.sessionActor(subject, role), session);
-		return allowed ? { allowed: true, role } : { allowed: false, category: 'session', role };
-	}
-
-	private decideSessionStart(
-		subject: AuthSubject,
-		project: Project,
-		mode: SessionMode,
-	): AuthorizationDecision {
-		if (project.status === 'deleted') {
-			return { allowed: false, category: 'lifecycle', role: null };
-		}
-		const role = effectiveRole(project, subject, this.policy);
-		const allowed = canStartSessionMode({ role, viewerMode: this.policy?.viewerMode }, mode);
-		return allowed ? { allowed: true, role } : { allowed: false, category: 'session', role };
 	}
 
 	private sessionActor(subject: AuthSubject, role: Role | null) {
