@@ -13,6 +13,7 @@ const hookMocks = vi.hoisted(() => ({
 	useGenerateDataQuerySql: vi.fn(),
 	executeQuery: vi.fn(),
 	generateSql: vi.fn(),
+	loadEditorRuntime: vi.fn(),
 }));
 
 vi.mock('@/api/hooks', () => ({
@@ -21,6 +22,11 @@ vi.mock('@/api/hooks', () => ({
 	useRunDataQuery: hookMocks.useRunDataQuery,
 	useGenerateDataQuerySql: hookMocks.useGenerateDataQuerySql,
 }));
+
+vi.mock('codemirror', async (importOriginal) => {
+	await hookMocks.loadEditorRuntime();
+	return importOriginal();
+});
 
 const STORAGE_KEY = 'marimohub:sql:user-1:project-1:integration-1';
 const RESULT = {
@@ -53,7 +59,7 @@ function useRunDataQueryMock() {
 	};
 }
 
-function workspaceElement() {
+function workspaceElement(aiAvailable = false) {
 	return (
 		<ThemeProvider>
 			<SqlWorkspace
@@ -61,7 +67,7 @@ function workspaceElement() {
 				integrationId="integration-1"
 				integrationName="lake"
 				selection={null}
-				aiAvailable={false}
+				aiAvailable={aiAvailable}
 			/>
 		</ThemeProvider>
 	);
@@ -69,6 +75,12 @@ function workspaceElement() {
 
 function renderWorkspace() {
 	return renderWithClient(workspaceElement(), { toaster: false });
+}
+
+async function readyEditorAction(name: string) {
+	const button = screen.getByRole('button', { name });
+	await waitFor(() => expect(button).toBeEnabled());
+	return button;
 }
 
 function storeDraft(draft: string) {
@@ -96,6 +108,7 @@ beforeEach(() => {
 		isPending: false,
 		mutateAsync: hookMocks.generateSql,
 	});
+	hookMocks.loadEditorRuntime.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -106,13 +119,34 @@ afterEach(() => {
 });
 
 describe('SqlWorkspace', () => {
+	it('surfaces editor load failures, keeps actions disabled, and retries the runtime load', async () => {
+		hookMocks.loadEditorRuntime
+			.mockRejectedValueOnce(new Error('chunk unavailable'))
+			.mockResolvedValue(undefined);
+		const user = userEvent.setup();
+		const { container } = renderWithClient(workspaceElement(true), { toaster: false });
+
+		expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t load the SQL editor:');
+		for (const name of ['Run', 'Run all', 'Format', 'Copy SQL', 'Clear']) {
+			expect(screen.getByRole('button', { name })).toBeDisabled();
+		}
+		await user.type(screen.getByLabelText('AI SQL instruction'), 'show recent rows');
+		expect(screen.getByRole('button', { name: 'Apply SQL' })).toBeDisabled();
+
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() => expect(container.querySelector('.cm-content')).toBeInTheDocument());
+		expect(hookMocks.loadEditorRuntime).toHaveBeenCalledTimes(2);
+		expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
+		expect(screen.getByRole('button', { name: 'Apply SQL' })).toBeEnabled();
+	});
+
 	it('runs the current statement and renders its result', async () => {
 		storeDraft('SELECT 1 AS value;');
 		hookMocks.executeQuery.mockResolvedValue(RESULT);
 		const user = userEvent.setup();
 		renderWorkspace();
 
-		await user.click(screen.getByRole('button', { name: 'Run' }));
+		await user.click(await readyEditorAction('Run'));
 
 		await screen.findByRole('columnheader', { name: 'value' });
 		expect(screen.getByRole('button', { name: '1' })).toHaveAttribute('title', 'Copy cell');
@@ -131,7 +165,7 @@ describe('SqlWorkspace', () => {
 		const user = userEvent.setup();
 		renderWorkspace();
 
-		await user.click(screen.getByRole('button', { name: 'Run all' }));
+		await user.click(await readyEditorAction('Run all'));
 
 		await screen.findByText('The second statement failed');
 		expect(screen.getByRole('columnheader', { name: 'value' })).toBeInTheDocument();
@@ -149,7 +183,7 @@ describe('SqlWorkspace', () => {
 		const user = userEvent.setup();
 		renderWorkspace();
 
-		await user.click(screen.getByRole('button', { name: 'Run' }));
+		await user.click(await readyEditorAction('Run'));
 		const cancel = await screen.findByRole('button', { name: 'Cancel' });
 		const signal = hookMocks.executeQuery.mock.calls[0]?.[0].signal as AbortSignal;
 		await user.click(cancel);
@@ -322,7 +356,7 @@ describe('SqlWorkspace', () => {
 		await waitFor(() =>
 			expect(container.querySelector('.cm-content')).toHaveTextContent('SELECT 1 AS ready;'),
 		);
-		await user.click(screen.getByRole('button', { name: 'Run' }));
+		await user.click(await readyEditorAction('Run'));
 		await screen.findByRole('columnheader', { name: 'value' });
 		expect(hookMocks.executeQuery.mock.calls[0]?.[0].sql).toContain('SELECT 1 AS ready');
 	});

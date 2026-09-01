@@ -119,13 +119,7 @@ function MetadataValue({ value, depth = 0 }: { value: unknown; depth?: number })
 }
 
 function keyedMetadataItems(values: unknown[]): { key: string; value: unknown; index: number }[] {
-	const counts = new Map<string, number>();
-	return values.map((value, index) => {
-		const serialized = JSON.stringify(value) ?? String(value);
-		const occurrence = counts.get(serialized) ?? 0;
-		counts.set(serialized, occurrence + 1);
-		return { key: `${serialized}:${occurrence}`, value, index };
-	});
+	return values.map((value, index) => ({ key: `metadata-item-${index}`, value, index }));
 }
 
 function ActorLabel({

@@ -75,6 +75,19 @@ describe('SQL statement selection', () => {
 		]);
 	});
 
+	it('does not split PostgreSQL escape strings at escaped quotes or semicolons', () => {
+		const sql = String.raw`SELECT E'it\'s;a';
+SELECT 2;`;
+		expect(allSqlStatements(sql)).toEqual([String.raw`SELECT E'it\'s;a';`, 'SELECT 2;']);
+	});
+
+	it('does not treat dollar-tag-shaped identifier suffixes as quoted strings', () => {
+		expect(allSqlStatements('SELECT column$tag$; SELECT 2;')).toEqual([
+			'SELECT column$tag$;',
+			'SELECT 2;',
+		]);
+	});
+
 	it('replaces only the selected SQL and rejects a stale AI target', () => {
 		const document = 'SELECT 1;\nSELECT old_value;\nSELECT 3;';
 		const from = document.indexOf('old_value');

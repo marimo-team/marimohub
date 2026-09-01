@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { notebookKeys } from '@/api/queryKeys';
 import { Button } from '@/components/ui';
 import { triggerDownload } from '@/lib/download';
+import { errorMessage } from '@/lib/errors';
 import type { WorkspaceAccess } from './workspacePolicy';
 import {
 	decodeWorkspaceText,
@@ -30,6 +31,7 @@ function CodeEditor({
 	const initialValue = useRef(value).current;
 	const saveRef = useRef(onSave);
 	const changeRef = useRef(onChange);
+	const [loadError, setLoadError] = useState<string | null>(null);
 	useEffect(() => {
 		saveRef.current = onSave;
 		changeRef.current = onChange;
@@ -43,42 +45,54 @@ function CodeEditor({
 			import('codemirror'),
 			import('@codemirror/state'),
 			import('@codemirror/view'),
-		]).then(([{ basicSetup }, { EditorState }, { EditorView, keymap }]) => {
-			if (cancelled || !host.current) return;
-			view = new EditorView({
-				parent: host.current,
-				state: EditorState.create({
-					doc: initialValue,
-					extensions: [
-						basicSetup,
-						EditorState.readOnly.of(readOnly),
-						EditorView.lineWrapping,
-						EditorView.updateListener.of((update) => {
-							if (update.docChanged) changeRef.current(update.state.doc.toString());
-						}),
-						keymap.of([
-							{
-								key: 'Mod-s',
-								preventDefault: true,
-								run: () => {
-									saveRef.current();
-									return true;
+		])
+			.then(([{ basicSetup }, { EditorState }, { EditorView, keymap }]) => {
+				if (cancelled || !host.current) return;
+				view = new EditorView({
+					parent: host.current,
+					state: EditorState.create({
+						doc: initialValue,
+						extensions: [
+							basicSetup,
+							EditorState.readOnly.of(readOnly),
+							EditorView.lineWrapping,
+							EditorView.updateListener.of((update) => {
+								if (update.docChanged) changeRef.current(update.state.doc.toString());
+							}),
+							keymap.of([
+								{
+									key: 'Mod-s',
+									preventDefault: true,
+									run: () => {
+										saveRef.current();
+										return true;
+									},
 								},
-							},
-						]),
-						EditorView.theme({
-							'&': { height: '100%', fontSize: '13px' },
-							'.cm-scroller': { overflow: 'auto' },
-						}),
-					],
-				}),
+							]),
+							EditorView.theme({
+								'&': { height: '100%', fontSize: '13px' },
+								'.cm-scroller': { overflow: 'auto' },
+							}),
+						],
+					}),
+				});
+			})
+			.catch((cause: unknown) => {
+				if (!cancelled) setLoadError(errorMessage(cause));
 			});
-		});
 		return () => {
 			cancelled = true;
 			view?.destroy();
 		};
 	}, [initialValue, readOnly]);
+
+	if (loadError) {
+		return (
+			<div role="alert" className="border-t p-4 text-sm text-destructive">
+				Couldn’t load the text editor: {loadError}
+			</div>
+		);
+	}
 
 	return <div ref={host} className="min-h-0 flex-1 overflow-hidden border-t" />;
 }

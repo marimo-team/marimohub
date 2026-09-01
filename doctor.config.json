@@ -10,7 +10,7 @@
 	"respectInlineDisables": false,
 	"adoptExistingLintConfig": false,
 	"supplyChain": {
-		"enabled": false
+		"enabled": true
 	},
 	"categories": {
 		"Security": "error",

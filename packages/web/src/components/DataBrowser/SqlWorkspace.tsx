@@ -7,6 +7,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from 'react';
 import type { Ref } from 'react';
 import type { EditorView } from '@codemirror/view';
@@ -84,6 +85,29 @@ interface SqlEditorHandle {
 	focus(): void;
 }
 
+interface EditorReadinessStore {
+	getSnapshot(): boolean;
+	setReady(ready: boolean): void;
+	subscribe(listener: () => void): () => void;
+}
+
+function createEditorReadinessStore(): EditorReadinessStore {
+	let ready = false;
+	const listeners = new Set<() => void>();
+	return {
+		getSnapshot: () => ready,
+		setReady: (nextReady) => {
+			if (ready === nextReady) return;
+			ready = nextReady;
+			for (const listener of listeners) listener();
+		},
+		subscribe: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+	};
+}
+
 const MAX_HISTORY = 20;
 
 async function importSqlEditorRuntime() {
@@ -113,7 +137,13 @@ type SqlEditorRuntime = Awaited<ReturnType<typeof importSqlEditorRuntime>>;
 let sqlEditorRuntimePromise: Promise<SqlEditorRuntime> | undefined;
 
 function loadSqlEditorRuntime(): Promise<SqlEditorRuntime> {
-	sqlEditorRuntimePromise ??= importSqlEditorRuntime();
+	if (!sqlEditorRuntimePromise) {
+		const pending = importSqlEditorRuntime();
+		sqlEditorRuntimePromise = pending;
+		void pending.catch(() => {
+			if (sqlEditorRuntimePromise === pending) sqlEditorRuntimePromise = undefined;
+		});
+	}
 	return sqlEditorRuntimePromise;
 }
 
@@ -153,6 +183,12 @@ function SqlWorkspaceSession({
 	const [instruction, setInstruction] = useState('');
 	const [showHistory, setShowHistory] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const editorReadiness = useMemo(createEditorReadinessStore, []);
+	const editorReady = useSyncExternalStore(
+		editorReadiness.subscribe,
+		editorReadiness.getSnapshot,
+		editorReadiness.getSnapshot,
+	);
 	const [lastLoadedSchema, setLastLoadedSchema] = useState<typeof schemaQuery.data>(undefined);
 	const [fullscreen, setFullscreen] = useState(false);
 	const { copy, copied } = useCopyToClipboard();
@@ -223,7 +259,7 @@ function SqlWorkspaceSession({
 	);
 
 	const generateSql = async () => {
-		if (!instruction.trim()) return;
+		if (!editorReady || !instruction.trim()) return;
 		setError(null);
 		try {
 			const target = editorRef.current?.getRunTarget();
@@ -274,11 +310,15 @@ function SqlWorkspaceSession({
 					size="sm"
 					variant="primary"
 					onPress={() => void run(false)}
-					isDisabled={query.isPending}
+					isDisabled={!editorReady || query.isPending}
 				>
 					<Play className="size-3.5" /> Run
 				</Button>
-				<Button size="sm" onPress={() => void run(true)} isDisabled={query.isPending}>
+				<Button
+					size="sm"
+					onPress={() => void run(true)}
+					isDisabled={!editorReady || query.isPending}
+				>
 					Run all
 				</Button>
 				{query.isPending ? (
@@ -286,20 +326,31 @@ function SqlWorkspaceSession({
 						<Square className="size-3.5" /> Cancel
 					</Button>
 				) : null}
-				<Button size="sm" variant="ghost" onPress={() => editorRef.current?.format()}>
+				<Button
+					size="sm"
+					variant="ghost"
+					onPress={() => editorRef.current?.format()}
+					isDisabled={!editorReady}
+				>
 					<WandSparkles className="size-3.5" /> Format
 				</Button>
 				<Button
 					size="sm"
 					variant="ghost"
 					onPress={() => void copy(editorRef.current?.getSql() ?? '')}
+					isDisabled={!editorReady}
 				>
 					<Clipboard className="size-3.5" /> {copied ? 'Copied' : 'Copy SQL'}
 				</Button>
 				<Button size="sm" variant="ghost" onPress={() => setShowHistory((value) => !value)}>
 					<HistoryIcon className="size-3.5" /> History
 				</Button>
-				<Button size="sm" variant="ghost" onPress={() => editorRef.current?.replaceSql('')}>
+				<Button
+					size="sm"
+					variant="ghost"
+					onPress={() => editorRef.current?.replaceSql('')}
+					isDisabled={!editorReady}
+				>
 					<Eraser className="size-3.5" /> Clear
 				</Button>
 				<span className="ml-auto text-xs text-muted-foreground">
@@ -333,7 +384,7 @@ function SqlWorkspaceSession({
 					<Button
 						size="sm"
 						onPress={() => void generateSql()}
-						isDisabled={generate.isPending || !instruction.trim()}
+						isDisabled={!editorReady || generate.isPending || !instruction.trim()}
 					>
 						<Sparkles className="size-3.5" /> {generate.isPending ? 'Generating…' : 'Apply SQL'}
 					</Button>
@@ -346,6 +397,7 @@ function SqlWorkspaceSession({
 							type="button"
 							key={item}
 							onClick={() => editorRef.current?.replaceSql(item)}
+							disabled={!editorReady}
 							className="block w-full truncate rounded px-2 py-1 text-left font-mono text-xs hover:bg-muted"
 						>
 							{item.replaceAll(/\s+/g, ' ')}
@@ -361,6 +413,7 @@ function SqlWorkspaceSession({
 				dialect={dialect}
 				onRun={() => void run(false)}
 				onChange={persistDraft}
+				readiness={editorReadiness}
 			/>
 			{schemaQuery.isFetching ? (
 				<output className="block border-t px-3 py-2 text-xs text-muted-foreground">
@@ -413,6 +466,7 @@ const SqlEditor = forwardRef(function SqlEditor(
 		dialect,
 		onRun,
 		onChange,
+		readiness,
 	}: {
 		initialSql: string;
 		tables: QueryTable[];
@@ -420,6 +474,7 @@ const SqlEditor = forwardRef(function SqlEditor(
 		dialect: QueryDialect;
 		onRun: () => void;
 		onChange: (sql: string) => void;
+		readiness: EditorReadinessStore;
 	},
 	ref: Ref<SqlEditorHandle>,
 ) {
@@ -433,6 +488,8 @@ const SqlEditor = forwardRef(function SqlEditor(
 	);
 	const onRunRef = useRef(onRun);
 	const onChangeRef = useRef(onChange);
+	const [loadError, setLoadError] = useState<string | null>(null);
+	const [loadAttempt, setLoadAttempt] = useState(0);
 	const { theme } = useTheme();
 	const schema = useMemo(
 		() => completionSchema(tables, integrationName),
@@ -502,54 +559,61 @@ const SqlEditor = forwardRef(function SqlEditor(
 		if (!parentRef.current) return;
 		let cancelled = false;
 		let loadedView: EditorView | undefined;
-		void loadSqlEditorRuntime().then((runtime) => {
-			if (cancelled || !parentRef.current) return;
-			const parser = new runtime.NodeSqlParser({
-				getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
-			});
-			const contextAnalyzer = new runtime.QueryContextAnalyzer(parser);
-			const schemaCompartment = new runtime.Compartment();
-			const themeCompartment = new runtime.Compartment();
-			runtimeRef.current = runtime;
-			schemaCompartmentRef.current = schemaCompartment;
-			themeCompartmentRef.current = themeCompartment;
-			analyzersRef.current = { parser, contextAnalyzer };
-			loadedView = new runtime.EditorView({
-				parent: parentRef.current,
-				doc: initialSql,
-				extensions: [
-					runtime.basicSetup,
-					runtime.lintGutter(),
-					// basicSetup binds Mod-Enter to insertBlankLine; this keeps Run first.
-					runtime.Prec.high(
-						runtime.keymap.of([
-							{
-								key: 'Mod-Enter',
-								run: () => {
-									onRunRef.current();
-									return true;
+		setLoadError(null);
+		readiness.setReady(false);
+		void loadSqlEditorRuntime()
+			.then((runtime) => {
+				if (cancelled || !parentRef.current) return;
+				const parser = new runtime.NodeSqlParser({
+					getParserOptions: () => ({ database: sqlDialectSettings(dialect).parserDatabase }),
+				});
+				const contextAnalyzer = new runtime.QueryContextAnalyzer(parser);
+				const schemaCompartment = new runtime.Compartment();
+				const themeCompartment = new runtime.Compartment();
+				runtimeRef.current = runtime;
+				schemaCompartmentRef.current = schemaCompartment;
+				themeCompartmentRef.current = themeCompartment;
+				analyzersRef.current = { parser, contextAnalyzer };
+				loadedView = new runtime.EditorView({
+					parent: parentRef.current,
+					doc: initialSql,
+					extensions: [
+						runtime.basicSetup,
+						runtime.lintGutter(),
+						// basicSetup binds Mod-Enter to insertBlankLine; this keeps Run first.
+						runtime.Prec.high(
+							runtime.keymap.of([
+								{
+									key: 'Mod-Enter',
+									run: () => {
+										onRunRef.current();
+										return true;
+									},
 								},
-							},
-							runtime.indentWithTab,
-						]),
-					),
-					runtime.EditorView.updateListener.of((update) => {
-						if (update.docChanged) onChangeRef.current(update.state.doc.toString());
-					}),
-					schemaCompartment.of(
-						schemaExtensions(runtime, latestSchemaRef.current, dialect, parser, contextAnalyzer),
-					),
-					themeCompartment.of(editorTheme(runtime, latestThemeRef.current)),
-				],
+								runtime.indentWithTab,
+							]),
+						),
+						runtime.EditorView.updateListener.of((update) => {
+							if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+						}),
+						schemaCompartment.of(
+							schemaExtensions(runtime, latestSchemaRef.current, dialect, parser, contextAnalyzer),
+						),
+						themeCompartment.of(editorTheme(runtime, latestThemeRef.current)),
+					],
+				});
+				viewRef.current = loadedView;
+				readiness.setReady(true);
+			})
+			.catch((cause: unknown) => {
+				if (!cancelled) setLoadError(errorMessage(cause));
 			});
-			viewRef.current = loadedView;
-		});
 		return () => {
 			cancelled = true;
 			loadedView?.destroy();
 			if (viewRef.current === loadedView) viewRef.current = null;
 		};
-	}, [dialect, initialSql]);
+	}, [dialect, initialSql, loadAttempt, readiness]);
 
 	useEffect(() => {
 		const runtime = runtimeRef.current;
@@ -577,7 +641,19 @@ const SqlEditor = forwardRef(function SqlEditor(
 		view.dispatch({ effects: compartment.reconfigure(editorTheme(runtime, theme)) });
 	}, [theme]);
 
-	return <div ref={parentRef} className="min-h-56 overflow-auto font-mono text-sm" />;
+	return (
+		<div className="min-h-56 overflow-auto font-mono text-sm">
+			{loadError ? (
+				<div role="alert" className="flex min-h-56 flex-col items-center justify-center gap-3 p-4">
+					<p className="text-destructive">Couldn’t load the SQL editor: {loadError}</p>
+					<Button size="sm" onPress={() => setLoadAttempt((attempt) => attempt + 1)}>
+						Retry
+					</Button>
+				</div>
+			) : null}
+			<div ref={parentRef} className={loadError ? 'hidden' : undefined} />
+		</div>
+	);
 });
 
 function schemaExtensions(

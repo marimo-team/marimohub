@@ -185,7 +185,11 @@ function useObjectBrowserState({
 					return { location, keys: new Set([entry.key]) };
 				}
 				const next = new Set(
-					current.location === selectionLocation ? current.keys : key ? [key] : [],
+					current.location === selectionLocation && navigationType !== 'POP'
+						? current.keys
+						: key
+							? [key]
+							: [],
 				);
 				if (next.has(entry.key)) next.delete(entry.key);
 				else next.add(entry.key);

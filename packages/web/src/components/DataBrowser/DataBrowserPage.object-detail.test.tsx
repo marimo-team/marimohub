@@ -36,6 +36,7 @@ describe('DataBrowserPage object detail', () => {
 			objectEntries: [
 				{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
 				{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
+				{ kind: 'object', name: 'third.csv', key: 'third.csv', size: 36 },
 			],
 		});
 
@@ -65,8 +66,23 @@ describe('DataBrowserPage object detail', () => {
 			'aria-pressed',
 			'true',
 		);
-		await user.click(screen.getByRole('button', { name: 'Copy 1 selected URI' }));
-		expect(await navigator.clipboard.readText()).toBe('s3://lake/second.csv');
+		await user.keyboard('{Control>}');
+		await user.click(screen.getByRole('button', { name: /^third\.csv/ }));
+		await user.keyboard('{/Control}');
+		expect(screen.getByRole('button', { name: /^first\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'false',
+		);
+		expect(screen.getByRole('button', { name: /^second\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
+		expect(screen.getByRole('button', { name: /^third\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
+		await user.click(screen.getByRole('button', { name: 'Copy 2 selected URIs' }));
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/second.csv\ns3://lake/third.csv');
 	});
 
 	it('does not carry a loaded preview into another object detail', async () => {

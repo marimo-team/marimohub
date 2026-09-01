@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { NotebookChangeRequest } from '../types';
 import { apiClient, apiData } from './client';
 import { useInvalidate } from './mutation';
@@ -63,7 +63,7 @@ function prunePublishAttempts(attempts: Map<string, PublishAttempt>, now: number
 export function useNotebookChangeRequestPublisher(projectId: string, notebookId: string) {
 	const scope = notebookChangeRequestScope(projectId, notebookId);
 	const currentScope = useRef(scope);
-	useEffect(() => {
+	useLayoutEffect(() => {
 		currentScope.current = scope;
 	}, [scope]);
 	const [published, setPublished] = useState<ScopedChangeRequest>();

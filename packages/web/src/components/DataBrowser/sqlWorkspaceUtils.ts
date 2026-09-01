@@ -82,12 +82,27 @@ function sqlStatementRangeAtCursor(sql: string, cursor: number): { from: number;
 	return ranges.at(-1) ?? { from: 0, to: sql.length };
 }
 
+function isIdentifierContinuation(character: string | undefined): boolean {
+	return character !== undefined && /[A-Za-z0-9_$]/.test(character);
+}
+
+function isEscapeStringPrefix(sql: string, quoteIndex: number): boolean {
+	const prefix = sql[quoteIndex - 1];
+	return (prefix === 'E' || prefix === 'e') && !isIdentifierContinuation(sql[quoteIndex - 2]);
+}
+
 function sqlStatementRanges(sql: string): { from: number; to: number }[] {
 	let start = 0;
 	const ranges: { from: number; to: number }[] = [];
 	let hasToken = false;
-	let mode: 'normal' | 'single' | 'double' | 'backtick' | 'line-comment' | 'block-comment' =
-		'normal';
+	let mode:
+		| 'normal'
+		| 'single'
+		| 'escape-single'
+		| 'double'
+		| 'backtick'
+		| 'line-comment'
+		| 'block-comment' = 'normal';
 	let blockDepth = 0;
 	let dollarDelimiter: string | undefined;
 	for (let index = 0; index < sql.length; index++) {
@@ -116,7 +131,12 @@ function sqlStatementRanges(sql: string): { from: number; to: number }[] {
 			continue;
 		}
 		if (mode !== 'normal') {
-			const quote = mode === 'single' ? "'" : mode === 'double' ? '"' : '`';
+			if (mode === 'escape-single' && character === '\\') {
+				index++;
+				continue;
+			}
+			const quote =
+				mode === 'single' || mode === 'escape-single' ? "'" : mode === 'double' ? '"' : '`';
 			if (character === quote) {
 				if (next === quote) index++;
 				else mode = 'normal';
@@ -136,10 +156,17 @@ function sqlStatementRanges(sql: string): { from: number; to: number }[] {
 		}
 		if (character === "'" || character === '"' || character === '`') {
 			hasToken = true;
-			mode = character === "'" ? 'single' : character === '"' ? 'double' : 'backtick';
+			mode =
+				character === "'"
+					? isEscapeStringPrefix(sql, index)
+						? 'escape-single'
+						: 'single'
+					: character === '"'
+						? 'double'
+						: 'backtick';
 			continue;
 		}
-		if (character === '$') {
+		if (character === '$' && !isIdentifierContinuation(sql[index - 1])) {
 			const delimiter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index))?.[0];
 			if (delimiter !== undefined) {
 				hasToken = true;
