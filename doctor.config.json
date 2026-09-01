@@ -1,0 +1,32 @@
+{
+	"$schema": "https://react.doctor/schema/config.json",
+	"projects": ["packages/web"],
+	"scope": "full",
+	"blocking": "warning",
+	"warnings": true,
+	"verbose": true,
+	"share": false,
+	"noScore": true,
+	"respectInlineDisables": false,
+	"adoptExistingLintConfig": false,
+	"supplyChain": {
+		"enabled": false
+	},
+	"categories": {
+		"Security": "error",
+		"Bugs": "error",
+		"Performance": "error",
+		"Accessibility": "error",
+		"Maintainability": "error"
+	},
+	"rules": {
+		"react-doctor/iframe-missing-sandbox": "off",
+		"react-doctor/no-multi-component-file": "off",
+		"react-doctor/unused-file": "error",
+		"react-doctor/unused-export": "error",
+		"react-doctor/unused-type": "error",
+		"react-doctor/unused-dependency": "error",
+		"react-doctor/unused-dev-dependency": "error",
+		"react-doctor/circular-dependency": "error"
+	}
+}

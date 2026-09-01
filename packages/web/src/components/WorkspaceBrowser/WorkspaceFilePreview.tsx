@@ -1,9 +1,7 @@
-import { EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
 import { Finder, formatFileSize, useFinderStore } from '@marimo-team/react-finder';
 import type { FileItem, PreviewContent } from '@marimo-team/react-finder';
+import type { EditorView } from '@codemirror/view';
 import { useQueryClient } from '@tanstack/react-query';
-import { basicSetup } from 'codemirror';
 import { Download, File, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -32,40 +30,54 @@ function CodeEditor({
 	const initialValue = useRef(value).current;
 	const saveRef = useRef(onSave);
 	const changeRef = useRef(onChange);
-	saveRef.current = onSave;
-	changeRef.current = onChange;
+	useEffect(() => {
+		saveRef.current = onSave;
+		changeRef.current = onChange;
+	}, [onChange, onSave]);
 
 	useEffect(() => {
 		if (!host.current) return;
-		const view = new EditorView({
-			parent: host.current,
-			state: EditorState.create({
-				doc: initialValue,
-				extensions: [
-					basicSetup,
-					EditorState.readOnly.of(readOnly),
-					EditorView.lineWrapping,
-					EditorView.updateListener.of((update) => {
-						if (update.docChanged) changeRef.current(update.state.doc.toString());
-					}),
-					keymap.of([
-						{
-							key: 'Mod-s',
-							preventDefault: true,
-							run: () => {
-								saveRef.current();
-								return true;
+		let cancelled = false;
+		let view: EditorView | undefined;
+		void Promise.all([
+			import('codemirror'),
+			import('@codemirror/state'),
+			import('@codemirror/view'),
+		]).then(([{ basicSetup }, { EditorState }, { EditorView, keymap }]) => {
+			if (cancelled || !host.current) return;
+			view = new EditorView({
+				parent: host.current,
+				state: EditorState.create({
+					doc: initialValue,
+					extensions: [
+						basicSetup,
+						EditorState.readOnly.of(readOnly),
+						EditorView.lineWrapping,
+						EditorView.updateListener.of((update) => {
+							if (update.docChanged) changeRef.current(update.state.doc.toString());
+						}),
+						keymap.of([
+							{
+								key: 'Mod-s',
+								preventDefault: true,
+								run: () => {
+									saveRef.current();
+									return true;
+								},
 							},
-						},
-					]),
-					EditorView.theme({
-						'&': { height: '100%', fontSize: '13px' },
-						'.cm-scroller': { overflow: 'auto' },
-					}),
-				],
-			}),
+						]),
+						EditorView.theme({
+							'&': { height: '100%', fontSize: '13px' },
+							'.cm-scroller': { overflow: 'auto' },
+						}),
+					],
+				}),
+			});
 		});
-		return () => view.destroy();
+		return () => {
+			cancelled = true;
+			view?.destroy();
+		};
 	}, [initialValue, readOnly]);
 
 	return <div ref={host} className="min-h-0 flex-1 overflow-hidden border-t" />;

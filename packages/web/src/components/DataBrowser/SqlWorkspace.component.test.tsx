@@ -115,7 +115,7 @@ describe('SqlWorkspace', () => {
 		await user.click(screen.getByRole('button', { name: 'Run' }));
 
 		await screen.findByRole('columnheader', { name: 'value' });
-		expect(screen.getByTitle('Click to copy')).toHaveTextContent('1');
+		expect(screen.getByRole('button', { name: '1' })).toHaveAttribute('title', 'Copy cell');
 		expect(hookMocks.executeQuery).toHaveBeenCalledOnce();
 		expect(hookMocks.executeQuery).toHaveBeenCalledWith({
 			sql: 'SELECT 1 AS value',

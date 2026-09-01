@@ -196,14 +196,18 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 		);
 	};
 
-	const results: PickerOption[] = (search.data ?? [])
-		.filter((u) => !isMember({ user_id: u.id }))
-		.map((u) => ({
-			id: `user:${u.id}`,
-			textValue: u.name || u.email,
-			choice: { user_id: u.id },
-			user: u,
-		}));
+	const results: PickerOption[] = (search.data ?? []).flatMap((user) =>
+		isMember({ user_id: user.id })
+			? []
+			: [
+					{
+						id: `user:${user.id}`,
+						textValue: user.name || user.email,
+						choice: { user_id: user.id },
+						user,
+					},
+				],
+	);
 
 	// Synthetic fallbacks only once the search for the CURRENT text has settled:
 	// while the debounce or request is still pending, the directory might match,

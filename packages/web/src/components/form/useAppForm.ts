@@ -4,7 +4,7 @@ import { TextField } from './fields/TextField';
 import { SwitchField } from './fields/SwitchField';
 import { RadioGroupField } from './fields/RadioGroupField';
 
-export const { useAppForm, withForm } = createFormHook({
+export const { useAppForm } = createFormHook({
 	fieldContext,
 	formContext,
 	fieldComponents: { TextField, SwitchField, RadioGroupField },

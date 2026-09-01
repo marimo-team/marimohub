@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigationType, useSearchParams } from 'react-router-dom';
 import { Button as AriaButton, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import { toast } from 'sonner';
 import {
@@ -71,7 +71,7 @@ const rowGridClass =
 const crumbTextClass = 'flex h-7 min-w-0 items-center px-1.5';
 const crumbButtonClass = 'h-7 px-1.5 max-md:min-h-7';
 
-export function ObjectBrowser({
+function useObjectBrowserState({
 	projectId,
 	integration,
 	previewAvailable,
@@ -83,6 +83,7 @@ export function ObjectBrowser({
 }: ObjectBrowserProps) {
 	const rootLabel = objectRootLabel(rootKind);
 	const [params, setParams] = useSearchParams();
+	const navigationType = useNavigationType();
 	const bucketParam = params.get('bucket') ?? '';
 	const prefix = params.get('prefix') ?? '';
 	const key = params.get('key') ?? '';
@@ -106,14 +107,9 @@ export function ObjectBrowser({
 		bucketParam || (bucketItems.length === 1 && !buckets.hasNextPage ? bucketItems[0].name : '');
 	const selectionLocation = objectSelectionLocation(bucket, prefix, key);
 	const selectedKeys =
-		selection.location === selectionLocation ? selection.keys : new Set(key ? [key] : []);
-	useEffect(() => {
-		setSelection((current) =>
-			current.location === selectionLocation
-				? current
-				: { location: selectionLocation, keys: new Set(key ? [key] : []) },
-		);
-	}, [key, selectionLocation]);
+		selection.location === selectionLocation && navigationType !== 'POP'
+			? selection.keys
+			: new Set(key ? [key] : []);
 	const listing = useObjectsQuery(
 		projectId,
 		integration.id,
@@ -236,6 +232,107 @@ export function ObjectBrowser({
 	};
 
 	const crumbs = prefixParts(prefix);
+	return {
+		activeSearchQuery,
+		bucket,
+		bucketItems,
+		buckets,
+		copySelectedUris,
+		crumbs,
+		downloadAvailable,
+		entries,
+		filter,
+		formatFilter,
+		handleListKeyDown,
+		initialListError,
+		integration,
+		key,
+		listError,
+		listing,
+		loaded,
+		modifiedAfter,
+		parentPrefix,
+		prefix,
+		previewAvailable,
+		projectId,
+		results,
+		rootLabel,
+		search,
+		searchAvailable,
+		searchDraft,
+		searchQuery,
+		searchSummary,
+		selectedKeys,
+		selectBucket,
+		selectEntry,
+		selectPrefix,
+		setFilter,
+		setFormatFilter,
+		setModifiedAfter,
+		setSearchDraft,
+		setSizeFilter,
+		setSort,
+		sizeFilter,
+		sort,
+		update,
+		uriScheme,
+		versionId,
+		versionsAvailable,
+	};
+}
+
+export function ObjectBrowser(props: ObjectBrowserProps) {
+	return renderObjectBrowser(useObjectBrowserState(props));
+}
+
+function renderObjectBrowser(state: ReturnType<typeof useObjectBrowserState>) {
+	const {
+		activeSearchQuery,
+		bucket,
+		bucketItems,
+		buckets,
+		copySelectedUris,
+		crumbs,
+		downloadAvailable,
+		entries,
+		filter,
+		formatFilter,
+		handleListKeyDown,
+		initialListError,
+		integration,
+		key,
+		listError,
+		listing,
+		loaded,
+		modifiedAfter,
+		parentPrefix,
+		prefix,
+		previewAvailable,
+		projectId,
+		results,
+		rootLabel,
+		search,
+		searchAvailable,
+		searchDraft,
+		searchQuery,
+		searchSummary,
+		selectedKeys,
+		selectBucket,
+		selectEntry,
+		selectPrefix,
+		setFilter,
+		setFormatFilter,
+		setModifiedAfter,
+		setSearchDraft,
+		setSizeFilter,
+		setSort,
+		sizeFilter,
+		sort,
+		update,
+		uriScheme,
+		versionId,
+		versionsAvailable,
+	} = state;
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
@@ -682,7 +779,7 @@ function ObjectDetailSheet({
 	return (
 		<aside
 			aria-label="Object details"
-			className="fixed inset-y-3 right-3 z-40 flex w-[min(30rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border bg-card shadow-2xl animate-in duration-200 fade-in-0 slide-in-from-right-6"
+			className="fixed inset-y-3 right-3 z-40 flex w-[min(30rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border bg-card shadow-2xl transition-[opacity,transform] animate-in duration-200 fade-in-0 slide-in-from-right-6"
 		>
 			<div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
 				<h2 className="min-w-0 truncate text-sm font-semibold" translate="no">
@@ -864,9 +961,8 @@ function ObjectDetail({
 						>
 							Current object
 						</Button>
-						{versions.data?.pages
-							.flatMap((page) => page.items)
-							.map((item) => (
+						{(versions.data?.pages ?? []).flatMap((page) =>
+							page.items.map((item) => (
 								<button
 									key={`${item.kind}:${item.version_id ?? item.last_modified}`}
 									type="button"
@@ -882,7 +978,8 @@ function ObjectDetail({
 										{item.is_latest ? 'latest' : formatDateTime(item.last_modified)}
 									</span>
 								</button>
-							))}
+							)),
+						)}
 						{versions.error && (
 							<p className="text-sm text-destructive">{errorMessage(versions.error)}</p>
 						)}
@@ -1052,13 +1149,13 @@ function objectUri(uriScheme: ObjectUriScheme, bucket: string, key: string): str
 
 function prefixParts(prefix: string): { label: string; value: string }[] {
 	let value = '';
-	return prefix
-		.split('/')
-		.filter(Boolean)
-		.map((label) => {
-			value += `${label}/`;
-			return { label, value };
-		});
+	const parts: { label: string; value: string }[] = [];
+	for (const label of prefix.split('/')) {
+		if (!label) continue;
+		value += `${label}/`;
+		parts.push({ label, value });
+	}
+	return parts;
 }
 
 function formatBytes(bytes: number): string {
@@ -1073,14 +1170,16 @@ function formatBytes(bytes: number): string {
 	return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
 }
 
+const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+	dateStyle: 'medium',
+	timeStyle: 'short',
+});
+
 function formatDateTime(value: string | undefined): string | undefined {
 	if (!value) return undefined;
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;
-	return new Intl.DateTimeFormat(undefined, {
-		dateStyle: 'medium',
-		timeStyle: 'short',
-	}).format(date);
+	return dateTimeFormatter.format(date);
 }
 
 function objectFormat(name: string): 'data' | 'text' | 'image' | 'other' {

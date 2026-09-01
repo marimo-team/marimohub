@@ -533,7 +533,7 @@ function Explorer({
 	);
 	const [view, setView] = useState<ViewMode>('list');
 	const [openPath, setOpenPath] = useState<string | null>(null);
-	const [dirty, setDirty] = useState(false);
+	const dirty = useRef(false);
 	const [error, setError] = useState<FinderError | null>(null);
 	const activeCollection = useRef<'tree' | 'content'>('content');
 	const [store] = useState(() =>
@@ -546,7 +546,7 @@ function Explorer({
 	useEffect(() => () => store.destroy(), [store]);
 	const setDirtyState = useCallback(
 		(next: boolean) => {
-			setDirty(next);
+			dirty.current = next;
 			onDirtyChange(next);
 		},
 		[onDirtyChange],
@@ -554,11 +554,12 @@ function Explorer({
 	const open = useCallback(
 		(item: FileItem) => {
 			if (item.kind !== 'file') return;
-			if (dirty && !window.confirm('Discard unsaved changes and open another file?')) return;
+			if (dirty.current && !window.confirm('Discard unsaved changes and open another file?'))
+				return;
 			setDirtyState(false);
 			setOpenPath(item.path);
 		},
-		[dirty, setDirtyState],
+		[setDirtyState],
 	);
 	const navigateFromTreeSelection = useCallback(
 		(items: FileItem[]) => {
@@ -698,7 +699,10 @@ export default function WorkspaceBrowserDialog({
 	isOpen,
 	onClose,
 }: WorkspaceBrowserDialogProps): ReactElement {
-	const [dirty, setDirty] = useState(false);
+	const dirty = useRef(false);
+	const setDirty = useCallback((next: boolean) => {
+		dirty.current = next;
+	}, []);
 	const access = useQuery({
 		queryKey: ['workspace-access', projectId, notebookId],
 		queryFn: ({ signal }) => fetchWorkspaceAccess(projectId, notebookId, signal),
@@ -706,8 +710,8 @@ export default function WorkspaceBrowserDialog({
 		staleTime: 0,
 	});
 	const close = () => {
-		if (dirty && !window.confirm('Discard unsaved workspace changes?')) return;
-		setDirty(false);
+		if (dirty.current && !window.confirm('Discard unsaved workspace changes?')) return;
+		dirty.current = false;
 		onClose();
 	};
 

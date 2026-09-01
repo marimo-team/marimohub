@@ -69,10 +69,7 @@ export function SqlReadinessChecklist({
 						<li key={check.id}>
 							<a
 								href={`#${schemaFieldId(check.field)}`}
-								onClick={(event) => {
-									event.preventDefault();
-									revealField(check.field);
-								}}
+								onClick={() => revealField(check.field)}
 								className="flex items-start gap-1.5 rounded px-1.5 py-1 text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
 								{check.ready ? (

@@ -1,9 +1,10 @@
 import { afterEach, vi } from 'vitest';
-import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import DataBrowserPage from './DataBrowserPage';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, renderWithClient } from '@/test/render';
+import { TestWorldControls } from './DataBrowserPage.testWorldControls';
 
 export const PID = 'p_1';
 export const IID = 'intg_lake';
@@ -343,35 +344,6 @@ function makeFetch({
 	return impl;
 }
 
-function LocationProbe() {
-	const location = useLocation();
-	return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
-}
-
-/** Simulates an in-app deep link arriving while the page is already mounted. */
-function DeepLink({ to }: { to: string }) {
-	const navigate = useNavigate();
-	return (
-		<button type="button" data-testid="deeplink" onClick={() => void navigate(to)}>
-			deeplink
-		</button>
-	);
-}
-
-function HistoryControls() {
-	const navigate = useNavigate();
-	return (
-		<>
-			<button type="button" data-testid="history-back" onClick={() => void navigate(-1)}>
-				back
-			</button>
-			<button type="button" data-testid="history-forward" onClick={() => void navigate(1)}>
-				forward
-			</button>
-		</>
-	);
-}
-
 export function setup(route: string | string[], fetchOpts?: Parameters<typeof makeFetch>[0]) {
 	installMatchMedia();
 	const fetchImpl = makeFetch(fetchOpts);
@@ -381,9 +353,7 @@ export function setup(route: string | string[], fetchOpts?: Parameters<typeof ma
 				<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
 				<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
 			</Routes>
-			<LocationProbe />
-			<DeepLink to={`/projects/${PID}/data/${IID}?ns=sales&table=orders`} />
-			<HistoryControls />
+			<TestWorldControls deepLink={`/projects/${PID}/data/${IID}?ns=sales&table=orders`} />
 		</ThemeProvider>,
 		{ route },
 	);

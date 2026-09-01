@@ -3,7 +3,8 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
-import { CliLoginPage, parseCliLoginRequest } from './CliLoginPage';
+import { CliLoginPage } from './CliLoginPage';
+import { parseCliLoginRequest } from './cliLoginRequest';
 
 const CALLBACK = 'http://127.0.0.1:49152/callback';
 const STATE = 's'.repeat(32);

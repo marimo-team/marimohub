@@ -120,11 +120,13 @@ interface ApplicationTabProps {
 	order: readonly string[];
 	tabDomId: string;
 	panelDomId: string;
-	isReorderable: boolean;
-	isPrimary: boolean;
-	isSplit: boolean;
-	canSplit: boolean;
-	canClose: boolean;
+	state: {
+		reorderable: boolean;
+		primary: boolean;
+		split: boolean;
+		canSplit: boolean;
+		canClose: boolean;
+	};
 	onMove: (sourceKey: string, targetKey: string, position: DropPosition) => void;
 	onRequestSplit: (key: string | null) => void;
 	onRequestClose: (tab: ApplicationTabItem) => void;
@@ -135,11 +137,7 @@ function ApplicationTab({
 	order,
 	tabDomId,
 	panelDomId,
-	isReorderable,
-	isPrimary,
-	isSplit,
-	canSplit,
-	canClose,
+	state,
 	onMove,
 	onRequestSplit,
 	onRequestClose,
@@ -148,7 +146,7 @@ function ApplicationTab({
 	const [dropPosition, setDropPosition] = useState<DropPosition>();
 	const { dragProps, dragButtonProps, isDragging } = useDrag({
 		hasDragButton: true,
-		isDisabled: !isReorderable || tab.isDisabled,
+		isDisabled: !state.reorderable || tab.isDisabled,
 		getItems: () => [
 			{
 				[APPLICATION_TAB_DRAG_TYPE]: tab.id,
@@ -165,7 +163,7 @@ function ApplicationTab({
 
 	const { dropProps, isDropTarget } = useDrop({
 		ref,
-		isDisabled: !isReorderable || tab.isDisabled,
+		isDisabled: !state.reorderable || tab.isDisabled,
 		getDropOperation: (types) => (types.has(APPLICATION_TAB_DRAG_TYPE) ? 'move' : 'cancel'),
 		onDropEnter: (event) => setDropPosition(positionForPoint(event.x)),
 		onDropMove: (event) => setDropPosition(positionForPoint(event.x)),
@@ -205,11 +203,11 @@ function ApplicationTab({
 						isSelected
 							? 'bg-background text-foreground before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-primary'
 							: 'bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-						isSplit && !isSelected && 'bg-primary/5 text-foreground',
+						state.split && !isSelected && 'bg-primary/5 text-foreground',
 						isDragging && 'opacity-50',
 					)}
 				>
-					{isReorderable ? (
+					{state.reorderable ? (
 						<Button
 							{...dragButtonProps}
 							aria-label={`Reorder ${tab.label}`}
@@ -234,7 +232,7 @@ function ApplicationTab({
 							isFocusVisible && 'inset-ring-2 inset-ring-ring',
 						)}
 					/>
-					{isSplit ? (
+					{state.split ? (
 						<Button
 							aria-label={`Close ${tab.label} split view`}
 							className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
@@ -242,7 +240,7 @@ function ApplicationTab({
 						>
 							<PanelRightClose className="size-3.5" />
 						</Button>
-					) : canSplit && !isPrimary ? (
+					) : state.canSplit && !state.primary ? (
 						<Button
 							aria-label={`Open ${tab.label} to the side`}
 							className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
@@ -263,7 +261,7 @@ function ApplicationTab({
 							<ExternalLink className="size-3" />
 						</Button>
 					) : null}
-					{tab.close && canClose ? (
+					{tab.close && state.canClose ? (
 						<Button
 							aria-label={`Close ${tab.label}`}
 							className={cn(
@@ -476,16 +474,17 @@ export function ApplicationTabs({
 										order={visibleOrder}
 										tabDomId={`${instanceId}-tab-${tab.id}`}
 										panelDomId={`${instanceId}-panel-${tab.id}`}
-										isReorderable={isReorderable}
-										isPrimary={tab.id === primaryKey}
-										isSplit={tab.id === activeSplitKey}
-										canSplit={
-											allowsSplitView &&
-											tab.isSplittable !== false &&
-											!tab.isDisabled &&
-											tabs.length > 1
-										}
-										canClose={!!onClose}
+										state={{
+											reorderable: isReorderable,
+											primary: tab.id === primaryKey,
+											split: tab.id === activeSplitKey,
+											canSplit:
+												allowsSplitView &&
+												tab.isSplittable !== false &&
+												!tab.isDisabled &&
+												tabs.length > 1,
+											canClose: !!onClose,
+										}}
 										onMove={changeOrder}
 										onRequestSplit={changeSplitKey}
 										onRequestClose={(item) => setCloseKey(item.id)}

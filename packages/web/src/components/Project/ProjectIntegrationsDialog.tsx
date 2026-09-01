@@ -629,10 +629,12 @@ function CopyView({
 	const copyIntegration = useCopyIntegration(pid);
 	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
 
-	const projectOptions = (projectsQuery.data ?? [])
-		.filter((p) => p.id !== pid)
-		.filter((p) => p.name.toLowerCase().includes(projectInput.trim().toLowerCase()))
-		.map((p) => ({ id: p.id, textValue: p.name }));
+	const normalizedProjectInput = projectInput.trim().toLowerCase();
+	const projectOptions = (projectsQuery.data ?? []).flatMap((project) =>
+		project.id !== pid && project.name.toLowerCase().includes(normalizedProjectInput)
+			? [{ id: project.id, textValue: project.name }]
+			: [],
+	);
 
 	// Only the source project's own instances: inherited org entries already
 	// reach the destination through inheritance.

@@ -115,7 +115,7 @@ function withThemeParam(url: string, theme: Theme): string {
 	}
 }
 
-export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' }) {
+function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }) {
 	const { pid, nid } = useParams<{ pid: string; nid: string }>();
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -210,11 +210,11 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	// marimo reads `?theme=` only on load, so re-deriving it live would reload
 	// (and reset) the running app. Restart mints a fresh URL and re-reads it.
 	const { theme } = useTheme();
-	const iframeSrc = useMemo(
-		() => (sandboxUrl ? withThemeParam(sandboxUrl, theme) : undefined),
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[sandboxUrl],
-	);
+	const [iframeLocation, setIframeLocation] = useState(() => ({ sandboxUrl, theme }));
+	if (iframeLocation.sandboxUrl !== sandboxUrl) setIframeLocation({ sandboxUrl, theme });
+	const iframeSrc = iframeLocation.sandboxUrl
+		? withThemeParam(iframeLocation.sandboxUrl, iframeLocation.theme)
+		: undefined;
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
@@ -443,6 +443,137 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		!!sourceProvider &&
 		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
 		canManageProject(project.your_role);
+	return {
+		appStale,
+		applicationTabs,
+		author,
+		backToProject,
+		canOpenChangeRequest,
+		canRetryWithDefault,
+		capabilities,
+		closeSecondaryFrame,
+		computeOverrideApplies,
+		computeProfiles,
+		confirmAppAction,
+		confirmEditRestart,
+		confirmEditStop,
+		confirmTakeover,
+		editStale,
+		editorDecisionReady,
+		editorState,
+		editorStateQuery,
+		ended,
+		error,
+		handleStop,
+		holderName,
+		iframeSrc,
+		isApp,
+		isProvisioning,
+		isRunning,
+		isViewer,
+		nid,
+		notebook,
+		openSecondaryFrame,
+		pid,
+		renameModal,
+		resolvingMode,
+		restart,
+		selectedApplicationKey,
+		selectedComputeProfile,
+		session,
+		setEditIntent,
+		setSelectedApplicationKey,
+		setSplitApplicationKey,
+		sharedPersistentEditor,
+		sharedStarterName,
+		showEditorChoice,
+		showEditorStateFailure,
+		showIdentityStateFailure,
+		showProfileSizeHint,
+		showRetry,
+		sourceProvider,
+		splitApplicationKey,
+		start,
+		startWithDefault,
+		staticView,
+		stopApplicationTab,
+		surfaceActions,
+		takeOver,
+		takeover,
+		terminal,
+		title,
+		userQuery,
+		users,
+	};
+}
+
+export function NotebookPage(props: { variant?: 'edit' | 'app' }) {
+	return renderNotebookPage(useNotebookPageModel(props));
+}
+
+function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
+	const {
+		appStale,
+		applicationTabs,
+		author,
+		backToProject,
+		canOpenChangeRequest,
+		canRetryWithDefault,
+		capabilities,
+		closeSecondaryFrame,
+		computeOverrideApplies,
+		computeProfiles,
+		confirmAppAction,
+		confirmEditRestart,
+		confirmEditStop,
+		confirmTakeover,
+		editStale,
+		editorDecisionReady,
+		editorState,
+		editorStateQuery,
+		ended,
+		error,
+		handleStop,
+		holderName,
+		iframeSrc,
+		isApp,
+		isProvisioning,
+		isRunning,
+		isViewer,
+		nid,
+		notebook,
+		openSecondaryFrame,
+		pid,
+		renameModal,
+		resolvingMode,
+		restart,
+		selectedApplicationKey,
+		selectedComputeProfile,
+		session,
+		setEditIntent,
+		setSelectedApplicationKey,
+		setSplitApplicationKey,
+		sharedPersistentEditor,
+		sharedStarterName,
+		showEditorChoice,
+		showEditorStateFailure,
+		showIdentityStateFailure,
+		showProfileSizeHint,
+		showRetry,
+		sourceProvider,
+		splitApplicationKey,
+		start,
+		startWithDefault,
+		staticView,
+		stopApplicationTab,
+		surfaceActions,
+		takeOver,
+		takeover,
+		terminal,
+		title,
+		userQuery,
+		users,
+	} = model;
 	return (
 		<div className="flex h-dvh flex-col">
 			<title>{`${title} · marimohub`}</title>
@@ -797,7 +928,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					<p className="max-w-md text-sm text-destructive">{error.message}</p>
 					{showProfileSizeHint && (
 						<p className="max-w-md text-xs text-muted-foreground">
-							This notebook uses profile {selectedComputeProfile.name} — a larger profile may be
+							This notebook uses profile {selectedComputeProfile?.name} — a larger profile may be
 							needed.
 						</p>
 					)}
@@ -835,7 +966,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					title={sharedPersistentEditor ? 'Restart Shared Sandbox' : 'Restart Session'}
 					description={`Restart the session for "${title}" to load the latest synced version? Changes made in this sandbox aren't synced back and will be lost.${
 						sharedPersistentEditor
-							? ` All connected editors will be disconnected.${sessionConnectionHint(session)}`
+							? ` All connected editors will be disconnected.${sessionConnectionHint(session ?? undefined)}`
 							: ''
 					}`}
 					confirmLabel="Restart"

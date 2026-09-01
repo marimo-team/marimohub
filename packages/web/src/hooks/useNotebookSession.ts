@@ -276,8 +276,7 @@ export function useNotebookSession(
 		if (!enabled || startedRef.current) return;
 		startedRef.current = true;
 		start();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [enabled]);
+	}, [enabled, start]);
 
 	const startFailedMessage =
 		mode === 'app' ? 'The app failed to start.' : 'The kernel failed to start.';

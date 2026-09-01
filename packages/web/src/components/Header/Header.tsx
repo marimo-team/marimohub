@@ -41,7 +41,7 @@ export function Header() {
 					<MenuTrigger>
 						<Button
 							aria-label="User menu"
-							className="flex items-center gap-1.5 rounded-full border border-input bg-card p-1 pr-2.5 shadow-xs transition-all hover:border-ring hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-md:min-h-11"
+							className="flex items-center gap-1.5 rounded-full border border-input bg-card p-1 pr-2.5 shadow-xs transition-[border-color,box-shadow] hover:border-ring hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-md:min-h-11"
 						>
 							<UserAvatar
 								pictureUrl={user.picture_url}

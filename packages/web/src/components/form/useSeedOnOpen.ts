@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { AnyFormApi } from '@tanstack/react-form';
 
 /**
@@ -12,13 +12,14 @@ import type { AnyFormApi } from '@tanstack/react-form';
  * touched form, the reopen case this hook exists for, is unaffected.
  */
 export function useSeedOnOpen(form: AnyFormApi, isOpen: boolean, values: Record<string, unknown>) {
+	const wasOpen = useRef(false);
 	useEffect(() => {
-		if (!isOpen) return;
+		const opening = isOpen && !wasOpen.current;
+		wasOpen.current = isOpen;
+		if (!opening) return;
 		form.reset(values);
 		// reset() clears validation state, so re-run the form schema to refresh
 		// canSubmit for the seeded values (errors stay hidden until a field is touched).
 		void form.validate('mount');
-		// Re-seed only on the open transition; `values`/`form` are stable per open.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [isOpen]);
+	}, [form, isOpen, values]);
 }

@@ -72,12 +72,14 @@ function VersionSelect({ label, versions, value, onChange }: VersionSelectProps)
 
 interface VersionListItemProps {
 	version: NotebookVersion;
-	isCurrent: boolean;
-	isBase: boolean;
-	isCompare: boolean;
+	state: {
+		current: boolean;
+		base: boolean;
+		compare: boolean;
+		canRestore: boolean;
+	};
 	users: UserDirectory | undefined;
 	usersLoading: boolean;
-	showRestore: boolean;
 	/** Host link for the synced commit this version mirrors, when known. */
 	commitLink?: { href: string; label: string };
 	/** SnapshotPage link for this version's captured outputs, when it has any. */
@@ -88,12 +90,9 @@ interface VersionListItemProps {
 
 function VersionListItem({
 	version,
-	isCurrent,
-	isBase,
-	isCompare,
+	state,
 	users,
 	usersLoading,
-	showRestore,
 	commitLink,
 	outputsLink,
 	onSelect,
@@ -107,12 +106,12 @@ function VersionListItem({
 				className={cn(
 					'min-w-0 flex-1 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60',
 					'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-					(isBase || isCompare) && 'bg-muted',
+					(state.base || state.compare) && 'bg-muted',
 				)}
 			>
 				<span className="flex items-center gap-1.5 text-xs">
 					<span className="font-medium">{formatRelative(version.saved_at)}</span>
-					{isCurrent && (
+					{state.current && (
 						<span className="rounded bg-primary/10 px-1 py-px text-[10px] font-semibold text-primary">
 							Current
 						</span>
@@ -151,7 +150,7 @@ function VersionListItem({
 					<Camera className="size-3.5" />
 				</IconLink>
 			)}
-			{showRestore && (
+			{state.canRestore && (
 				<Button variant="ghost" size="sm" onPress={onRestore} className="shrink-0">
 					Restore
 				</Button>
@@ -298,12 +297,14 @@ export function VersionHistoryDialog({
 									<VersionListItem
 										key={v.version_id}
 										version={v}
-										isCurrent={i === 0}
-										isBase={v.version_id === effectiveBase}
-										isCompare={v.version_id === effectiveCompare}
+										state={{
+											current: i === 0,
+											base: v.version_id === effectiveBase,
+											compare: v.version_id === effectiveCompare,
+											canRestore: restorable && i !== 0,
+										}}
 										users={users}
 										usersLoading={usersLoading}
-										showRestore={restorable && i !== 0}
 										commitLink={commitLinkFor(v)}
 										outputsLink={outputsLinkFor(v)}
 										onSelect={() => {

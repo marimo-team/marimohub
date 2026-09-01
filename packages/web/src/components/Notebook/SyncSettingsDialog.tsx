@@ -130,7 +130,7 @@ export function SyncSettingsDialog({
 							rel="noreferrer"
 							className="text-primary underline-offset-2 hover:underline"
 						>
-							Learn more
+							Read the syncing documentation
 						</a>
 						.
 					</p>

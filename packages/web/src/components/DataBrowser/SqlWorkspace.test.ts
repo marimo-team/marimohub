@@ -9,7 +9,7 @@ import {
 	selectedOrCurrentStatement,
 	sqlDialectSettings,
 	sqlTargetAtState,
-} from './SqlWorkspace';
+} from './sqlWorkspaceUtils';
 
 describe('SQL dialect selection', () => {
 	it('selects PostgreSQL parsing, formatting, and starter text', () => {

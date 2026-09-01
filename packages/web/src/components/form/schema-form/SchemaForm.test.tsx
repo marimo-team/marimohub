@@ -156,10 +156,9 @@ describe('SchemaForm', () => {
 			'Secret ID or ARN, optionally followed by #json-key',
 		);
 		expect(screen.getByText('Use secret-id-or-arn[#json-key].')).toBeInTheDocument();
-		expect(screen.getByRole('link', { name: 'Learn more' })).toHaveAttribute(
-			'href',
-			'https://example.com/secret-locators',
-		);
+		expect(
+			screen.getByRole('link', { name: 'Read the secret manager documentation' }),
+		).toHaveAttribute('href', 'https://example.com/secret-locators');
 		await user.click(screen.getByRole('button', { name: 'Encrypted value' }));
 		expect(screen.getByLabelText('Api key')).toHaveAttribute('type', 'password');
 	});
