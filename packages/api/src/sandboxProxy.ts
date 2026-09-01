@@ -20,7 +20,7 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
-import { assertSessionAccess, assertSessionSurfaceAccess, fail } from './shared';
+import { assertSessionProxyAccess, assertSessionSurfaceAccess, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -161,7 +161,7 @@ export async function authorizeProxyRequest(
 	}
 
 	// Per-session authorization — role re-checked per request, so a revoked
-	// membership cuts kernel access (assertSessionAccess says who is admitted).
+	// membership cuts kernel access (assertSessionProxyAccess says who is admitted).
 	let project;
 	try {
 		project = await deps.services.projects.getProject(projectId);
@@ -176,7 +176,7 @@ export async function authorizeProxyRequest(
 	}
 	try {
 		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps.policy);
-		else await assertSessionAccess(project, session, user, deps.policy);
+		else await assertSessionProxyAccess(project, session, user, deps.policy);
 	} catch (err) {
 		if (err instanceof ForbiddenError || err instanceof SurfaceForbiddenError) {
 			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };

@@ -26,6 +26,7 @@
  * never as unlabeled access.
  */
 import { z } from 'zod';
+import { parseIsoTimestamp } from '../utcDate';
 import type { AuthenticatedPrincipal } from './auth';
 
 export const SUBJECT_SECURITY_CONTEXT_SCHEMA_VERSION = 1;
@@ -65,7 +66,13 @@ export function validateSubjectSecurityContext(
 ): SubjectSecurityContext | null {
 	const parsed = SubjectSecurityContextSchema.safeParse(value);
 	if (!parsed.success) return null;
-	if (Date.parse(parsed.data.expiresAt) <= now.getTime()) return null;
+	// parseIsoTimestamp, not Date.parse: engines normalize a nonexistent
+	// calendar date (2025-02-30 → March 2), which would silently EXTEND an
+	// expiry. An invalid `now` fails closed too — NaN comparisons would
+	// otherwise report every context as unexpired.
+	const expiresAtMs = parseIsoTimestamp(parsed.data.expiresAt);
+	const nowMs = now.getTime();
+	if (expiresAtMs === null || !Number.isFinite(nowMs) || expiresAtMs <= nowMs) return null;
 	return {
 		...parsed.data,
 		compartments: [...new Set(parsed.data.compartments)].sort(),

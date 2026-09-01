@@ -269,6 +269,28 @@ export async function assertSessionAccess(
 	);
 }
 
+/**
+ * Proxy-path variant of {@link assertSessionAccess}: the same admission rule
+ * (`session.proxy` maps onto attach), named separately so forwarded kernel
+ * traffic stays distinguishable from direct attach in decisions and future
+ * constraint evaluation.
+ */
+export async function assertSessionProxyAccess(
+	project: Project,
+	session: SessionAdmissionRecord,
+	subject: AuthSubject,
+	policy: SessionPolicy,
+): Promise<void> {
+	await assertSession(
+		'session.proxy',
+		() => new ForbiddenError('Not authorized to attach this session'),
+		project,
+		session,
+		subject,
+		policy,
+	);
+}
+
 export async function assertSessionSurfaceAccess(
 	project: Project,
 	session: SessionAdmissionRecord,

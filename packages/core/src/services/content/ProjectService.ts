@@ -254,18 +254,17 @@ export class ProjectService {
 	}
 
 	// Only reached when the fast path above didn't return, i.e. the caller is
-	// neither a super admin nor covered by a defaultRole. The service applies
-	// the same policy either way; membership alone decides here.
+	// neither a super admin nor covered by a defaultRole. Membership alone
+	// decides — NOT a `project.read` decision, whose lifecycle rule would hide a
+	// legacy (indeterminate) entry from an explicit `status: 'deleted'` listing
+	// while current snapshot entries still appear. Lifecycle filtering already
+	// happened in the status filter above, identically for both paths.
 	private async canSeeProject(
 		authz: AuthorizationService,
 		id: ProjectId,
 		subject: AuthSubject,
 	): Promise<boolean> {
-		const decision = await authz.authorize(subject, 'project.read', {
-			kind: 'project',
-			project: await this.getProject(id),
-		});
-		return decision.allowed;
+		return authz.role(subject, await this.getProject(id)) !== null;
 	}
 
 	async getProject(id: ProjectId): Promise<Project> {
