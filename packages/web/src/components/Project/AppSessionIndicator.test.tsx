@@ -15,7 +15,7 @@ function makeAppSession(overrides: Partial<Session> = {}): Session {
 		user_id: 'user_1',
 		status: 'running',
 		mode: 'app',
-		source_version_id: 'ver-head',
+		source_version_id: 'ver-2',
 		started_at: '2026-06-24T12:00:00Z',
 		last_heartbeat: '2026-06-24T12:00:00Z',
 		...overrides,
@@ -28,7 +28,7 @@ function renderIndicator(
 		canControl = true,
 		canOpen = false,
 		editActive = false,
-		headVersion = 'ver-head',
+		headVersion = 'ver-2',
 		sourceType = 'local',
 		profiles = [],
 		computeProfile,
@@ -157,8 +157,8 @@ describe('AppSessionIndicator', () => {
 	});
 
 	it('suppresses the stale hint while the notebook is being edited', async () => {
-		renderIndicator(makeAppSession({ source_version_id: 'ver-old' }), {
-			headVersion: 'ver-head',
+		renderIndicator(makeAppSession({ source_version_id: 'ver-1' }), {
+			headVersion: 'ver-2',
 			editActive: true,
 		});
 		await userEvent.click(screen.getByRole('button'));
@@ -168,8 +168,8 @@ describe('AppSessionIndicator', () => {
 	});
 
 	it('shows the stale hint when the app trails the notebook head', async () => {
-		renderIndicator(makeAppSession({ source_version_id: 'ver-old' }), {
-			headVersion: 'ver-head',
+		renderIndicator(makeAppSession({ source_version_id: 'ver-1' }), {
+			headVersion: 'ver-2',
 		});
 		await userEvent.click(screen.getByRole('button'));
 
@@ -177,8 +177,8 @@ describe('AppSessionIndicator', () => {
 	});
 
 	it('does not suppress the stale hint during editing on a git-synced notebook', async () => {
-		renderIndicator(makeAppSession({ source_version_id: 'ver-old' }), {
-			headVersion: 'ver-head',
+		renderIndicator(makeAppSession({ source_version_id: 'ver-1' }), {
+			headVersion: 'ver-2',
 			sourceType: 'git',
 			editActive: true,
 		});
@@ -234,8 +234,8 @@ describe('AppSessionIndicator', () => {
 	// A version committed server-side (an edit session ending) invalidates
 	// nothing on the client, so a cached head would hide the hint for 5 minutes.
 	it('re-reads the notebook head each time the popover opens', async () => {
-		let head = 'ver-head';
-		renderIndicator(makeAppSession({ source_version_id: 'ver-head' }), {
+		let head = 'ver-2';
+		renderIndicator(makeAppSession({ source_version_id: 'ver-2' }), {
 			headVersion: () => head,
 		});
 		const trigger = screen.getByRole('button');
@@ -249,7 +249,7 @@ describe('AppSessionIndicator', () => {
 			expect(screen.queryByRole('button', { name: 'Restart' })).not.toBeInTheDocument(),
 		);
 
-		head = 'ver-next';
+		head = 'ver-3';
 		await userEvent.click(trigger);
 
 		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();

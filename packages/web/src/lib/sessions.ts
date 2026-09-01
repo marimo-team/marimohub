@@ -29,6 +29,8 @@ export interface NotebookSessions {
  * must also suppress the hint while an edit session is live on the notebook
  * (`editActive`) — otherwise it flaps for the whole editing session. Git-synced
  * heads move only when a push lands, so no such suppression applies there.
+ * Version IDs sort in creation order; comparing directionally avoids a false
+ * warning when cached notebook detail trails the version used to start a session.
  */
 export function isSessionStale(
 	session: Pick<Session, 'source_version_id'>,
@@ -37,7 +39,7 @@ export function isSessionStale(
 	return (
 		!!session.source_version_id &&
 		!!currentVersionId &&
-		currentVersionId !== session.source_version_id
+		currentVersionId > session.source_version_id
 	);
 }
 

@@ -532,11 +532,11 @@ describe('NotebookPage viewer modes', () => {
 			role: 'viewer',
 			viewerMode: 'ephemeral-sandbox',
 			sourceType: 'git',
-			headVersion: 'ver-head',
+			headVersion: 'ver-2',
 			session: runningSession({
 				ephemeral: true,
 				editor_sandbox_sharing: 'shared',
-				source_version_id: 'ver-old',
+				source_version_id: 'ver-1',
 			}),
 		});
 		renderPage();

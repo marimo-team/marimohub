@@ -248,9 +248,9 @@ export function makeFetch(opts: FetchOptions) {
 								entry_notebook: opts.entryNotebook ?? 'app.py',
 								commit: 'deadbeefcafe0123',
 								last_synced_at: '2026-07-01T10:00:00Z',
-								current_version_id: opts.headVersion ?? 'ver-head',
+								current_version_id: opts.headVersion ?? 'ver-2',
 							}
-						: { type: 'local', current_version_id: opts.headVersion ?? 'ver-head' },
+						: { type: 'local', current_version_id: opts.headVersion ?? 'ver-2' },
 			});
 		}
 		if (url.includes('/capabilities')) {
