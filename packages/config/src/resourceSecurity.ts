@@ -67,7 +67,7 @@ export function makeResourceSecurity(
 			{
 				variable: 'MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER',
 				remediation:
-					'List distinct bounded classification tokens from lowest to highest, e.g. "UNCLASSIFIED,CUI,SECRET,TOP_SECRET".',
+					'List distinct bounded classification tokens from lowest to highest, for example "PUBLIC,INTERNAL,CONFIDENTIAL,RESTRICTED".',
 			},
 		);
 	}

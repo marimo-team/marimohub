@@ -617,10 +617,6 @@ export function createFromEnv(
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
 			superAdmins: parseList(env.MARIMOHUB_SUPER_ADMINS),
 			...(projectCreationRestricted(env) ? { projectCreationRestricted: true } : {}),
-			...(() => {
-				const resourceSecurity = makeResourceSecurity(env, options?.libraries);
-				return resourceSecurity ? { resourceSecurity } : {};
-			})(),
 			maxConcurrentSessionsPerUser: parseCap(
 				env,
 				'MARIMOHUB_MAX_SESSIONS_PER_USER',
@@ -632,6 +628,12 @@ export function createFromEnv(
 				DEFAULT_MAX_APPS_PER_PROJECT,
 			),
 		},
+		// Resource-security collaborators, injected beside the data-only policy
+		// (no-op unless MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER is configured).
+		...(() => {
+			const resourceSecurity = makeResourceSecurity(env, options?.libraries);
+			return resourceSecurity ? { resourceSecurity } : {};
+		})(),
 		// Read-only configuration for the super-admin settings page (secrets
 		// redacted at assembly).
 		configSummary: buildConfigSummary(env),

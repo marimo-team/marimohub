@@ -353,6 +353,7 @@ app.openapi(listProjects, async (c) => {
 	const all = await deps.services.projects.listProjects({
 		subject: user,
 		policy: deps.policy,
+		resourceSecurity: deps.resourceSecurity,
 		status: query.status,
 		tag: query.tag,
 		q: query.q,
@@ -384,7 +385,7 @@ app.openapi(getProject, async (c) => {
 	const { pid } = c.req.valid('param');
 	// 404s a project the caller can't see (MARIMOHUB_DEFAULT_ROLE=none, non-member)
 	// or one that is soft-deleted.
-	const project = await loadVisibleProject(deps.services.projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
 	c.header('ETag', etagFor(project.updated_at));
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
 });
@@ -394,7 +395,7 @@ app.openapi(updateProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'project.update', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.update', deps);
 	const body = c.req.valid('json');
 	const project = await projects.updateProject(pid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(project.updated_at));
@@ -417,7 +418,7 @@ async function mutateSecurityLabels(
 	const user = c.get('user');
 	const pid = ProjectId.parse(c.req.param('pid') ?? '');
 	assertSessionAuthenticated(c, 'change security labels');
-	if (labels !== undefined && deps.policy.resourceSecurity === undefined) {
+	if (labels !== undefined && deps.resourceSecurity === undefined) {
 		throw new ValidationError(
 			'Security labels require resource security to be configured (MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER); ' +
 				'labels without an evaluator would lock the project for everyone.',
@@ -431,7 +432,7 @@ async function mutateSecurityLabels(
 			: labels !== undefined && isMonotonicRestrictionIncrease(previous, labels)
 				? 'security-labels.raise'
 				: 'security-labels.lower';
-	await assertProjectActionOn(project, user, action, deps.policy);
+	await assertProjectActionOn(project, user, action, deps);
 	const updated = await projects.setSecurityLabels(pid, labels, user.id);
 	c.header('ETag', etagFor(updated.updated_at));
 	return c.json({ success: true, data: projectResponse(updated, user, deps.policy) }, 200);
@@ -446,7 +447,7 @@ app.openapi(deleteProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'project.delete', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.delete', deps);
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const deleted = await projects.deleteProjectWithMutation(pid, user.id, ifMatchToken(c));
 	if (deleted) {
@@ -467,7 +468,7 @@ app.openapi(listMembers, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	const project = await loadVisibleProject(deps.services.projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
 	const role = effectiveRole(project, user, deps.policy);
 	return c.json({ success: true, data: visibleMembers(project.members, role, user) }, 200);
 });
@@ -477,7 +478,7 @@ app.openapi(addMember, async (c) => {
 	const { projects, identities } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'project.members.manage', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.members.manage', deps);
 	const body = c.req.valid('json');
 	// Both identifiers are passed to the service whenever both are known, so the
 	// duplicate check spans a person's id row AND any pending invite row — one
@@ -548,7 +549,7 @@ app.openapi(updateMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'project.members.manage', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.members.manage', deps);
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const body = c.req.valid('json');
 	const result = await projects.updateMemberRoleWithMutation(pid, uid, body.role, user.id);
@@ -575,7 +576,7 @@ app.openapi(removeMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'project.members.manage', deps.policy);
+	await assertProjectRole(projects, pid, user, 'project.members.manage', deps);
 	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const result = await projects.removeMemberWithMutation(pid, uid, user.id);
 	scheduleProjectAlert(deps, pid, 'member.removed', { project_id: pid, user: user.id }, () =>

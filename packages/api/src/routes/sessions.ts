@@ -62,7 +62,7 @@ import {
 	scheduleNotification,
 	scheduleProjectAlert,
 } from '../notifications';
-import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
+import type { ApiDeps, SandboxConfig } from '../context';
 import {
 	assertProjectRole,
 	assertSessionAccess,
@@ -86,6 +86,7 @@ import {
 	SuccessResponseSchema,
 	toComputeResourcesResponse,
 } from '../shared';
+import type { AuthzDeps } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 import {
 	beginSessionSurface,
@@ -506,7 +507,7 @@ async function authorizeSessionStart(
 	project: Project,
 	user: AuthUser,
 	mode: SessionMode,
-	policy: PolicyConfig,
+	deps: AuthzDeps,
 	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<{
 	role: Role | null;
@@ -515,7 +516,7 @@ async function authorizeSessionStart(
 	restrictedViewerCredentials: boolean;
 	subjectContextExpiresAt?: string;
 }> {
-	const decision = await authorizationService(policy).authorize(user, 'session.start', {
+	const decision = await authorizationService(deps).authorize(user, 'session.start', {
 		kind: 'session-start',
 		project,
 		mode,
@@ -696,7 +697,7 @@ app.openapi(listSessions, async (c) => {
 	// open when a default role is set, members-only under MARIMOHUB_DEFAULT_ROLE=none.
 	// The project is loaded (not just visibility-checked) to gate each item's
 	// kernel URL and `can` grants by the caller's role (see sessionGrantsFor).
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 	const active = await sessions.listActiveByProject(pid);
 	const data = paginate(
 		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
@@ -717,7 +718,7 @@ app.openapi(getSession, async (c) => {
 	// Read-only, project-scoped (matches listSessions). The project-scoped key 404s
 	// a cross-project id; the notebook check keeps a same-project/other-notebook id
 	// out of scope.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 	const session = await sessions.getSession(pid, sid);
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
@@ -764,7 +765,7 @@ app.openapi(getEditorSession, async (c) => {
 		pid,
 		user,
 		'notebook.write',
-		deps.policy,
+		deps,
 	);
 	await loadAuthorizedNotebook(deps, project, nid, user);
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
@@ -840,7 +841,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 			pid,
 			user,
 			'notebook.write',
-			deps.policy,
+			deps,
 		);
 		const notebook = await loadAuthorizedNotebook(deps, project, nid, user);
 		return { project, notebook };
@@ -1036,7 +1037,7 @@ app.openapi(createSession, async (c) => {
 		project,
 		user,
 		mode,
-		deps.policy,
+		deps,
 		notebook.meta.security_labels ?? null,
 	);
 	// The session deadline is the earliest of the entitlement credential expiry
@@ -1786,7 +1787,7 @@ app.openapi(deleteSession, async (c) => {
 	// Project visibility FIRST (404 when hidden, matching getSession) — resolving
 	// the session before it would let 403-vs-404 leak whether a session id exists
 	// in a project the caller cannot see.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
@@ -1797,7 +1798,7 @@ app.openapi(deleteSession, async (c) => {
 
 	// Terminating a session tears down a running kernel — editor+, or the owner of
 	// their own ephemeral session (role re-checked; see assertSessionControl).
-	await assertSessionControl(project, existing, user, deps.policy);
+	await assertSessionControl(project, existing, user, deps);
 
 	// Mark `terminating` first (atomic): pollers immediately see `Stopping…` while
 	// the retire below runs, instead of a stale `running`. The CAS in the service
@@ -1818,7 +1819,7 @@ app.openapi(heartbeatSession, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 
 	// Project visibility FIRST (404 when hidden) — see the delete route.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
@@ -1829,7 +1830,7 @@ app.openapi(heartbeatSession, async (c) => {
 
 	// Access-level gate, not control: an admitted viewer watching the shared app
 	// must keep it alive too (see assertSessionAccess).
-	await assertSessionAccess(project, existing, user, deps.policy);
+	await assertSessionAccess(project, existing, user, deps);
 
 	const updated = await sessions.heartbeat(pid, sid);
 

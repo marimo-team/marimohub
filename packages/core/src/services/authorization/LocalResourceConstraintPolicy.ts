@@ -1,11 +1,9 @@
 /**
- * In-process resource constraint policy over a configured classification
- * order. The deployment names its lattice lowest→highest (e.g.
- * `UNCLASSIFIED,CUI,SECRET,TOP_SECRET`); a labeled resource is satisfied when
- * the subject context's classification ranks at least as high AND the context
- * holds every required compartment. Everything unknown fails closed: a
- * classification absent from the configured order — on either side — can not
- * be dominated.
+ * In-process resource constraint policy with a configured classification order.
+ * The deployment lists classifications from lowest to highest. For example:
+ * `PUBLIC,INTERNAL,CONFIDENTIAL,RESTRICTED`. A resource passes when the subject
+ * has the required classification rank and every required compartment. An
+ * unknown subject or resource classification fails closed.
  */
 import type {
 	ConstraintDecision,
@@ -14,6 +12,7 @@ import type {
 } from '../../ports/resourceConstraints';
 import type { SubjectSecurityContext } from '../../ports/subjectContext';
 import { SECURITY_LABEL_TOKEN } from '../../securityLabels';
+import type { AuthorizationAction } from './actions';
 
 export class LocalResourceConstraintPolicy implements ResourceConstraintPolicy {
 	private readonly rank: ReadonlyMap<string, number>;
@@ -31,7 +30,7 @@ export class LocalResourceConstraintPolicy implements ResourceConstraintPolicy {
 
 	async evaluate(
 		context: SubjectSecurityContext | null,
-		_action: string,
+		_action: AuthorizationAction,
 		resource: ConstraintResource,
 		_signal?: AbortSignal,
 	): Promise<ConstraintDecision> {
@@ -50,7 +49,7 @@ export class LocalResourceConstraintPolicy implements ResourceConstraintPolicy {
 
 	async evaluateMany(
 		context: SubjectSecurityContext | null,
-		action: string,
+		action: AuthorizationAction,
 		resources: readonly ConstraintResource[],
 		signal: AbortSignal,
 	): Promise<readonly ConstraintDecision[]> {

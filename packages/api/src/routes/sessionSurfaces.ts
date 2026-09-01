@@ -213,12 +213,12 @@ export async function loadSurfaceSession(
 	params: { pid: ProjectId; nid: string; sid: SessionId },
 	permission: 'attach' | 'control' = 'attach',
 ) {
-	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps.policy);
+	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps);
 	const session = await deps.services.sessions.getSession(params.pid, params.sid);
 	if (session.notebook_id !== params.nid) {
 		throw new NotFoundError(`Session ${params.sid} not found`);
 	}
-	if (permission === 'control') await assertSessionControl(project, session, user, deps.policy);
-	else await assertSessionSurfaceAccess(project, session, user, deps.policy);
+	if (permission === 'control') await assertSessionControl(project, session, user, deps);
+	else await assertSessionSurfaceAccess(project, session, user, deps);
 	return session;
 }

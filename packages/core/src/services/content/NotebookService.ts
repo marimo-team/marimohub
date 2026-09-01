@@ -26,7 +26,10 @@ import {
 } from '../../schema';
 import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
-import type { AuthorizationPolicy } from '../authorization/AuthorizationService';
+import type {
+	AuthorizationPolicy,
+	ResourceSecurityPolicy,
+} from '../authorization/AuthorizationService';
 import { normalizeSecurityLabels } from '../../securityLabels';
 import type { ResourceSecurityLabels } from '../../securityLabels';
 import type {
@@ -191,6 +194,7 @@ export class NotebookService {
 		filter?: ListFilters<NotebookMeta['status']> & {
 			subject?: AuthSubject;
 			policy?: AuthorizationPolicy;
+			resourceSecurity?: ResourceSecurityPolicy;
 		},
 	): Promise<PublicNotebookEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
@@ -210,7 +214,7 @@ export class NotebookService {
 		// notebook overrides are decided here — one batch decision per page, with
 		// indeterminate (legacy or mutation-in-flight) projections resolved from
 		// the authoritative notebook record, failing closed when unreadable.
-		const authz = new AuthorizationService(filter.policy);
+		const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
 		const subject = filter.subject;
 		if (matching.every((entry) => entry.security_labels === null)) {
 			return matching.map(toPublicNotebookEntry);

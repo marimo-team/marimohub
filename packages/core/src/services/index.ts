@@ -263,6 +263,7 @@ export type {
 	AuthorizationDenialCategory,
 	AuthorizationPolicy,
 	AuthorizationResource,
+	AuthorizationSubject,
 	NotebookLabelOverride,
 	ProjectEntryVisibilityInput,
 	ResourceSecurityPolicy,

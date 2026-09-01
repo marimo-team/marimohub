@@ -2,7 +2,10 @@ import type { Bucket } from '../../ports/bucket';
 import { roleAtLeast } from '../../authz';
 import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
-import type { AuthorizationPolicy } from '../authorization/AuthorizationService';
+import type {
+	AuthorizationPolicy,
+	ResourceSecurityPolicy,
+} from '../authorization/AuthorizationService';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -214,6 +217,7 @@ export class ProjectService {
 		filter?: ListFilters<Project['status']> & {
 			subject: AuthSubject;
 			policy?: AuthorizationPolicy;
+			resourceSecurity?: ResourceSecurityPolicy;
 		},
 	): Promise<PublicProjectEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
@@ -239,7 +243,7 @@ export class ProjectService {
 		// direct reads cannot drift. Both filters run BEFORE pagination (the
 		// caller pages the returned entries), so a hidden project never leaks
 		// through page counts or cursors.
-		const authz = new AuthorizationService(filter.policy);
+		const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
 		let visible = matching;
 		if (!authz.listsAllProjects(filter.subject)) {
 			const visibility = await mapWithConcurrency(

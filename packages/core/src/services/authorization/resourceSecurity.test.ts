@@ -54,9 +54,7 @@ const unlabeled = makeProject({ owner: OWNER, members: [] });
 function service(
 	security?: Partial<ResourceSecurityPolicy> & { constraints?: ResourceConstraintPolicy },
 ) {
-	return new AuthorizationService({
-		...(security ? { resourceSecurity: { constraints: local(), ...security } } : {}),
-	});
+	return new AuthorizationService({}, security ? { constraints: local(), ...security } : undefined);
 }
 
 describe('LocalResourceConstraintPolicy', () => {
@@ -125,18 +123,21 @@ describe('AuthorizationService: label constraints', () => {
 	it('fails closed on a labeled project when no resource security is wired', async () => {
 		await expect(
 			new AuthorizationService({}).authorize(principal(), 'project.read', read),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'unavailable',
+		});
 	});
 
 	it('denies labels for super admins too — no automatic bypass', async () => {
-		const god = new AuthorizationService({
-			superAdmins: [OWNER],
-			resourceSecurity: { constraints: local() },
-		});
+		const god = new AuthorizationService({ superAdmins: [OWNER] }, { constraints: local() });
 		await expect(god.authorize(principal(), 'project.read', read)).resolves.toEqual({
 			allowed: false,
 			category: 'constraint',
 			role: 'admin',
+			constraintReason: 'missing-context',
 		});
 	});
 
@@ -182,7 +183,12 @@ describe('AuthorizationService: label constraints', () => {
 	] as const)('fails closed when the %s', async (_name, subjectContext) => {
 		await expect(
 			service({ subjectContext }).authorize(principal(), 'project.read', read),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'missing-context',
+		});
 	});
 
 	it('fails closed on adapter errors and timeouts', async () => {
@@ -200,7 +206,12 @@ describe('AuthorizationService: label constraints', () => {
 				'project.read',
 				read,
 			),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'unavailable',
+		});
 
 		const hanging: ResourceConstraintPolicy = {
 			evaluate: () => new Promise(() => {}),
@@ -212,7 +223,12 @@ describe('AuthorizationService: label constraints', () => {
 				subjectContext: providerOf(context()),
 				timeoutMs: 20,
 			}).authorize(principal(), 'project.read', read),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'unavailable',
+		});
 	});
 
 	it('denies a bare subject without credential provenance on labeled resources', async () => {
@@ -222,7 +238,12 @@ describe('AuthorizationService: label constraints', () => {
 				'project.read',
 				read,
 			),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'missing-context',
+		});
 	});
 
 	it('resolves the subject context once per batch', async () => {
@@ -268,7 +289,12 @@ describe('AuthorizationService: label constraints', () => {
 				...read,
 				notebookLabels: { classification: 'SECRET', compartments: ['element-b'] },
 			}),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'constraint',
+		});
 		// An override on an UNLABELED project still constrains on its own.
 		await expect(
 			authz.authorize(principal(), 'project.read', {
@@ -276,7 +302,12 @@ describe('AuthorizationService: label constraints', () => {
 				project: unlabeled,
 				notebookLabels: { classification: 'TOP_SECRET', compartments: [] },
 			}),
-		).resolves.toEqual({ allowed: false, category: 'constraint', role: 'admin' });
+		).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'constraint',
+		});
 	});
 
 	it('batch label decisions fail closed per entry on adapter miscounts', async () => {
@@ -291,6 +322,44 @@ describe('AuthorizationService: label constraints', () => {
 				{ classification: 'SECRET', compartments: [] },
 			]),
 		).resolves.toEqual([true, false]);
+	});
+
+	it('emits bounded, content-free operational events on the fail-closed paths', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			await new AuthorizationService({}).authorize(principal(), 'project.read', read);
+			await service({
+				subjectContext: providerOf(async () => {
+					throw new Error('idp down');
+				}),
+			}).authorize(principal(), 'project.read', read);
+			await service({
+				subjectContext: providerOf({ classification: 'SECRET' } as never),
+			}).authorize(principal(), 'project.read', read);
+			const hanging: ResourceConstraintPolicy = {
+				evaluate: () => new Promise(() => {}),
+				evaluateMany: () => new Promise(() => {}),
+			};
+			await service({
+				constraints: hanging,
+				subjectContext: providerOf(context()),
+				timeoutMs: 20,
+			}).authorize(principal(), 'project.read', read);
+
+			const events = warn.mock.calls.map(
+				(call) => (JSON.parse(String(call[0])) as { event?: string }).event,
+			);
+			expect(events).toContain('authz_constraint_unwired');
+			expect(events).toContain('authz_subject_context_failed');
+			expect(events).toContain('authz_subject_context_invalid');
+			expect(events).toContain('authz_constraint_timeout');
+			// Content-free: no label, claim, or error text ever reaches a line.
+			for (const call of warn.mock.calls) {
+				expect(String(call[0])).not.toMatch(/SECRET|element-|idp down/);
+			}
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('constraintsSatisfied mirrors single decisions for the list fallback', async () => {

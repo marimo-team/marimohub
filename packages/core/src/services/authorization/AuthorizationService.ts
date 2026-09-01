@@ -30,8 +30,12 @@ import {
 } from '../../authz';
 import type { AuthSubject, AuthzPolicy } from '../../authz';
 import { withDeadline } from '../../async';
+import { logEvent } from '../../logs';
 import type { AuthenticatedPrincipal } from '../../ports/auth';
-import type { ConstraintDecision, ResourceConstraintPolicy } from '../../ports/resourceConstraints';
+import type {
+	ConstraintDenialReason,
+	ResourceConstraintPolicy,
+} from '../../ports/resourceConstraints';
 import { validateSubjectSecurityContext } from '../../ports/subjectContext';
 import type {
 	SubjectSecurityContext,
@@ -53,9 +57,10 @@ import type {
 
 /**
  * Resource-security wiring: the deny-only constraint adapter, the subject
- * context provider, and the shared deadline for both. A labeled resource
- * WITHOUT this wiring fails closed — labels must never open up because the
- * deployment forgot an adapter.
+ * context provider, and the shared deadline for both. Injected into the
+ * service's constructor as collaborators — the policy object stays pure
+ * env-derived data. A labeled resource WITHOUT this wiring fails closed —
+ * labels must never open up because the deployment forgot an adapter.
  */
 export interface ResourceSecurityPolicy {
 	constraints: ResourceConstraintPolicy;
@@ -68,8 +73,14 @@ export interface ResourceSecurityPolicy {
 export type AuthorizationPolicy = AuthzPolicy & {
 	viewerMode?: ViewerMode;
 	editorSandboxSharing?: EditorSandboxSharing;
-	resourceSecurity?: ResourceSecurityPolicy;
 };
+
+/**
+ * A subject with credential provenance can carry a resolvable security
+ * context; a bare subject never does and fails closed on labeled resources.
+ * The union keeps that distinction in the signature instead of a cast.
+ */
+export type AuthorizationSubject = AuthSubject | AuthenticatedPrincipal;
 
 /** The session fields admission decisions read. */
 export type SessionAdmissionRecord = Pick<
@@ -115,7 +126,17 @@ export type AuthorizationDecision =
 			 */
 			subjectContextExpiresAt?: string;
 	  }
-	| { allowed: false; category: AuthorizationDenialCategory; role: Role | null };
+	| {
+			allowed: false;
+			category: AuthorizationDenialCategory;
+			role: Role | null;
+			/**
+			 * For `constraint` denials only: why, in the port's bounded terms — an
+			 * internal operational/audit signal ("no clearance" vs "adapter down").
+			 * Transport mapping ignores it; every constraint denial masks the same.
+			 */
+			constraintReason?: ConstraintDenialReason;
+	  };
 
 const SESSION_ACTION_FOR: Record<SessionScopedAction, SessionAction> = {
 	'session.attach': 'attach',
@@ -126,6 +147,30 @@ const SESSION_ACTION_FOR: Record<SessionScopedAction, SessionAction> = {
 
 const DEFAULT_RESOURCE_SECURITY_TIMEOUT_MS = 5_000;
 
+/** Discriminates a deadline expiry from an adapter failure at the swallow sites. */
+class ResourceSecurityTimeoutError extends Error {
+	constructor() {
+		super('resource security evaluation timed out');
+		this.name = 'ResourceSecurityTimeoutError';
+	}
+}
+
+/**
+ * Stable, content-free operational events for the fail-closed paths, following
+ * the login-policy precedent: without them an adapter outage is
+ * indistinguishable from "no clearance" — every labeled resource just 404s.
+ * Fields never include labels, claims, or error text.
+ */
+const SECURITY_EVENTS = {
+	contextTimeout: 'authz_subject_context_timeout',
+	contextFailed: 'authz_subject_context_failed',
+	contextInvalid: 'authz_subject_context_invalid',
+	constraintUnwired: 'authz_constraint_unwired',
+	constraintTimeout: 'authz_constraint_timeout',
+	constraintFailed: 'authz_constraint_failed',
+	constraintMiscount: 'authz_constraint_miscount',
+} as const;
+
 /** A catalog snapshot entry as list visibility reads it (denormalized members). */
 export interface ProjectEntryVisibilityInput {
 	owner: UserId;
@@ -134,10 +179,13 @@ export interface ProjectEntryVisibilityInput {
 }
 
 export class AuthorizationService {
-	constructor(private readonly policy: AuthorizationPolicy | undefined) {}
+	constructor(
+		private readonly policy: AuthorizationPolicy | undefined,
+		private readonly security?: ResourceSecurityPolicy,
+	) {}
 
 	async authorize(
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
 	): Promise<AuthorizationDecision> {
@@ -150,7 +198,7 @@ export class AuthorizationService {
 	 * resource must never cost one provider call per resource.
 	 */
 	async authorizeMany(
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resources: readonly AuthorizationResource[],
 	): Promise<AuthorizationDecision[]> {
@@ -161,7 +209,7 @@ export class AuthorizationService {
 	}
 
 	private async decide(
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
 		getContext: () => Promise<SubjectSecurityContext | null>,
@@ -214,17 +262,14 @@ export class AuthorizationService {
 			resource.project.security_labels ?? null,
 			resource.notebookLabels ?? null,
 		].filter((labels): labels is ResourceSecurityLabels => labels !== null);
-		let decision: AuthorizationDecision = baseline;
-		for (const labels of labelSets) {
-			const constraint = await this.evaluateConstraint(action, labels, getContext);
-			if (!constraint.satisfied) {
-				return { allowed: false, category: 'constraint', role };
-			}
-			if (constraint.contextExpiresAt !== undefined) {
-				decision = { ...decision, subjectContextExpiresAt: constraint.contextExpiresAt };
-			}
+		if (labelSets.length === 0) return baseline;
+		const constraint = await this.evaluateLabelSets(action, labelSets, getContext);
+		if (!constraint.satisfied) {
+			return { allowed: false, category: 'constraint', role, constraintReason: constraint.reason };
 		}
-		return decision;
+		return constraint.contextExpiresAt !== undefined
+			? { ...baseline, subjectContextExpiresAt: constraint.contextExpiresAt }
+			: baseline;
 	}
 
 	/** The baseline role for display (`your_role`) and derived projections. */
@@ -272,13 +317,13 @@ export class AuthorizationService {
 	 * form used by list fallbacks (`null` = known unlabeled → satisfied).
 	 */
 	async constraintsSatisfied(
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 		labels: ResourceSecurityLabels | null,
 	): Promise<boolean> {
 		if (labels === null) return true;
-		const decision = await this.evaluateConstraint(
+		const decision = await this.evaluateLabelSets(
 			'project.read',
-			labels,
+			[labels],
 			this.contextResolver(subject),
 		);
 		return decision.satisfied;
@@ -291,14 +336,17 @@ export class AuthorizationService {
 	 * label states from the authoritative record BEFORE calling.
 	 */
 	async projectLabelConstraints(
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 		labelStates: readonly (ResourceSecurityLabels | null)[],
 	): Promise<boolean[]> {
 		if (labelStates.every((labels) => labels === null)) {
 			return labelStates.map(() => true);
 		}
-		const security = this.policy?.resourceSecurity;
-		if (!security) return labelStates.map((labels) => labels === null);
+		const security = this.security;
+		if (!security) {
+			this.emitSecurityEvent(SECURITY_EVENTS.constraintUnwired, 'project.read');
+			return labelStates.map((labels) => labels === null);
+		}
 		const context = await this.contextResolver(subject)();
 		try {
 			const decisions = await this.withSecurityDeadline(security, (signal) =>
@@ -313,12 +361,14 @@ export class AuthorizationService {
 			);
 			if (decisions.length !== labelStates.length) {
 				// A miscounting adapter cannot be trusted for any entry.
+				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, 'project.read');
 				return labelStates.map((labels) => labels === null);
 			}
 			return decisions.map((decision, index) =>
 				labelStates[index] === null ? true : decision.satisfied,
 			);
-		} catch {
+		} catch (error) {
+			this.emitConstraintFailure(error, 'project.read');
 			return labelStates.map((labels) => labels === null);
 		}
 	}
@@ -329,51 +379,90 @@ export class AuthorizationService {
 	 * actually needs it. Operational failures and timeouts yield null — a
 	 * labeled resource then fails closed, never open.
 	 */
-	private contextResolver(subject: AuthSubject): () => Promise<SubjectSecurityContext | null> {
+	private contextResolver(
+		subject: AuthorizationSubject,
+	): () => Promise<SubjectSecurityContext | null> {
 		let resolved: Promise<SubjectSecurityContext | null> | undefined;
 		return () => (resolved ??= this.resolveSubjectContext(subject));
 	}
 
 	private async resolveSubjectContext(
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 	): Promise<SubjectSecurityContext | null> {
-		const security = this.policy?.resourceSecurity;
+		const security = this.security;
 		const provider = security?.subjectContext;
 		if (!security || !provider) return null;
-		const credential = (subject as Partial<AuthenticatedPrincipal>).credential;
 		// Only a principal with credential provenance can resolve a context;
 		// bare subjects (and unsupported credential kinds, per the provider's
 		// contract) have none and fail closed on labeled resources.
-		if (credential === undefined) return null;
+		if (!('credential' in subject)) return null;
 		try {
 			const context = await this.withSecurityDeadline(security, (signal) =>
-				Promise.resolve(provider.resolve(subject as AuthenticatedPrincipal, signal)),
+				Promise.resolve(provider.resolve(subject, signal)),
 			);
-			return context === null ? null : validateSubjectSecurityContext(context);
-		} catch {
+			if (context === null) return null;
+			const validated = validateSubjectSecurityContext(context);
+			if (validated === null) this.emitSecurityEvent(SECURITY_EVENTS.contextInvalid);
+			return validated;
+		} catch (error) {
+			this.emitSecurityEvent(
+				error instanceof ResourceSecurityTimeoutError
+					? SECURITY_EVENTS.contextTimeout
+					: SECURITY_EVENTS.contextFailed,
+			);
 			return null;
 		}
 	}
 
-	private async evaluateConstraint(
+	/**
+	 * One adapter round-trip for a decision's full label set (project labels
+	 * plus any notebook override) — a network PDP must not pay double latency
+	 * per decision. Every set must be satisfied.
+	 */
+	private async evaluateLabelSets(
 		action: AuthorizationAction,
-		labels: ResourceSecurityLabels,
+		labelSets: readonly ResourceSecurityLabels[],
 		getContext: () => Promise<SubjectSecurityContext | null>,
-	): Promise<ConstraintDecision & { contextExpiresAt?: string }> {
-		const security = this.policy?.resourceSecurity;
+	): Promise<
+		| { satisfied: true; contextExpiresAt?: string }
+		| { satisfied: false; reason: ConstraintDenialReason }
+	> {
+		const security = this.security;
 		// Labeled resources without wiring fail closed: labels must never open
 		// up because the deployment forgot an adapter.
-		if (!security) return { satisfied: false, reason: 'unavailable' };
+		if (!security) {
+			this.emitSecurityEvent(SECURITY_EVENTS.constraintUnwired, action);
+			return { satisfied: false, reason: 'unavailable' };
+		}
 		const context = await getContext();
+		const resources = labelSets.map((labels) => ({ labels }));
 		try {
-			const decision = await this.withSecurityDeadline(security, (signal) =>
-				Promise.resolve(security.constraints.evaluate(context, action, { labels }, signal)),
-			);
-			if (!decision.satisfied) return decision;
+			const decisions =
+				resources.length === 1
+					? [
+							await this.withSecurityDeadline(security, (signal) =>
+								Promise.resolve(
+									security.constraints.evaluate(context, action, resources[0], signal),
+								),
+							),
+						]
+					: await this.withSecurityDeadline(security, (signal) =>
+							Promise.resolve(
+								security.constraints.evaluateMany(context, action, resources, signal),
+							),
+						);
+			if (decisions.length !== resources.length) {
+				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, action);
+				return { satisfied: false, reason: 'unavailable' };
+			}
+			for (const decision of decisions) {
+				if (!decision.satisfied) return decision;
+			}
 			return context !== null
 				? { satisfied: true, contextExpiresAt: context.expiresAt }
 				: { satisfied: true };
-		} catch {
+		} catch (error) {
+			this.emitConstraintFailure(error, action);
 			return { satisfied: false, reason: 'unavailable' };
 		}
 	}
@@ -384,8 +473,21 @@ export class AuthorizationService {
 	): Promise<T> {
 		return withDeadline(work, {
 			timeoutMs: security.timeoutMs ?? DEFAULT_RESOURCE_SECURITY_TIMEOUT_MS,
-			timeoutError: () => new Error('resource security evaluation timed out'),
+			timeoutError: () => new ResourceSecurityTimeoutError(),
 		});
+	}
+
+	private emitConstraintFailure(error: unknown, action: AuthorizationAction): void {
+		this.emitSecurityEvent(
+			error instanceof ResourceSecurityTimeoutError
+				? SECURITY_EVENTS.constraintTimeout
+				: SECURITY_EVENTS.constraintFailed,
+			action,
+		);
+	}
+
+	private emitSecurityEvent(event: string, action?: AuthorizationAction): void {
+		logEvent({ level: 'warn', event, ...(action ? { action } : {}) }, { channel: 'warn' });
 	}
 
 	private sessionActor(subject: AuthSubject, role: Role | null) {

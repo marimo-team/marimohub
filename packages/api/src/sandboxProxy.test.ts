@@ -161,10 +161,10 @@ describe('authorizeProxyRequest', () => {
 			}),
 		};
 		// Wired but contextless, and unwired entirely: both fail closed and mask.
-		for (const policy of [{ resourceSecurity: security }, {}]) {
+		for (const override of [{ resourceSecurity: security }, {}]) {
 			const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
 				...deps(ACTOR),
-				policy,
+				...override,
 			});
 			expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
 		}

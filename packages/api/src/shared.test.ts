@@ -220,7 +220,7 @@ describe('assertProjectRole', () => {
 				{ id: uid('god'), email: 'god@example.com' },
 				'project.update',
 				{
-					superAdmins: ['god@example.com'],
+					policy: { superAdmins: ['god@example.com'] },
 				},
 			),
 		).resolves.toMatchObject({ id });

@@ -10,6 +10,9 @@
  * decision per entry must not cost one network call per resource.
  */
 import type { ResourceSecurityLabels } from '../securityLabels';
+// Type-only: the port shares the service's bounded action vocabulary without a
+// runtime dependency on the rules table.
+import type { AuthorizationAction } from '../services/authorization/actions';
 import type { SubjectSecurityContext } from './subjectContext';
 
 /** The bounded resource slice a constraint decision reads. `null` labels = known unlabeled. */
@@ -18,26 +21,29 @@ export interface ConstraintResource {
 }
 
 /**
- * Whether the resource's extra restrictions are satisfied. Bounded reasons
- * only: `missing-context` (the subject has no valid security context),
- * `constraint` (the context does not dominate the labels), `unavailable`
- * (the adapter could not decide — always treated as denial).
+ * Bounded reasons a constraint is not satisfied: `missing-context` (the
+ * subject has no valid security context), `constraint` (the context does not
+ * dominate the labels), `unavailable` (the adapter could not decide — always
+ * treated as denial).
  */
+export type ConstraintDenialReason = 'missing-context' | 'constraint' | 'unavailable';
+
+/** Whether the resource's extra restrictions are satisfied. */
 export type ConstraintDecision =
 	| { satisfied: true }
-	| { satisfied: false; reason: 'missing-context' | 'constraint' | 'unavailable' };
+	| { satisfied: false; reason: ConstraintDenialReason };
 
 export interface ResourceConstraintPolicy {
 	evaluate(
 		context: SubjectSecurityContext | null,
-		action: string,
+		action: AuthorizationAction,
 		resource: ConstraintResource,
 		signal: AbortSignal,
 	): Promise<ConstraintDecision>;
 
 	evaluateMany(
 		context: SubjectSecurityContext | null,
-		action: string,
+		action: AuthorizationAction,
 		resources: readonly ConstraintResource[],
 		signal: AbortSignal,
 	): Promise<readonly ConstraintDecision[]>;

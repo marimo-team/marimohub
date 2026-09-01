@@ -2269,13 +2269,11 @@ describe('NotebookService security labels', () => {
 		email: `${ACTOR}@example.com`,
 		credential: { kind: 'sso' as const },
 	};
-	const securityPolicy = (context = CONTEXT) => ({
-		resourceSecurity: {
-			constraints: new LocalResourceConstraintPolicy({
-				classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-			}),
-			subjectContext: { resolve: async () => context },
-		},
+	const security = (context = CONTEXT) => ({
+		constraints: new LocalResourceConstraintPolicy({
+			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
+		}),
+		subjectContext: { resolve: async () => context },
 	});
 
 	async function createLabeled() {
@@ -2374,12 +2372,12 @@ describe('NotebookService security labels', () => {
 
 		const admitted = await notebooks.listNotebooks(pid, {
 			subject: SUBJECT,
-			policy: securityPolicy(),
+			resourceSecurity: security(),
 		});
 		expect(admitted.map((n) => n.id).sort()).toEqual([open.id, labeled].sort());
 		const denied = await notebooks.listNotebooks(pid, {
 			subject: SUBJECT,
-			policy: securityPolicy({ ...CONTEXT, compartments: ['element-a'] }),
+			resourceSecurity: security({ ...CONTEXT, compartments: ['element-a'] }),
 		});
 		expect(denied.map((n) => n.id)).toEqual([open.id]);
 	});
@@ -2391,12 +2389,12 @@ describe('NotebookService security labels', () => {
 		}));
 		const denied = await notebooks.listNotebooks(pid, {
 			subject: SUBJECT,
-			policy: securityPolicy({ ...CONTEXT, compartments: [] }),
+			resourceSecurity: security({ ...CONTEXT, compartments: [] }),
 		});
 		expect(denied).toEqual([]);
 		const admitted = await notebooks.listNotebooks(pid, {
 			subject: SUBJECT,
-			policy: securityPolicy(),
+			resourceSecurity: security(),
 		});
 		expect(admitted.map((n) => n.id)).toEqual([labeled]);
 	});
@@ -2409,7 +2407,7 @@ describe('NotebookService security labels', () => {
 		await bucket.delete(paths.project(pid).notebook(labeled).meta);
 		const list = await notebooks.listNotebooks(pid, {
 			subject: SUBJECT,
-			policy: securityPolicy(),
+			resourceSecurity: security(),
 		});
 		expect(list).toEqual([]);
 	});

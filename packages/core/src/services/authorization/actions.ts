@@ -95,6 +95,8 @@ export interface ProjectActionRule {
 	/**
 	 * Security-sensitive mutations gated on deployment standing, NOT project
 	 * role: an owner or manager does not hold label authority by default.
+	 * This flag is the intended seam for a future security-officer standing
+	 * distinct from platform admin — do not fold it into the role matrix.
 	 */
 	requiresSuperAdmin?: true;
 }

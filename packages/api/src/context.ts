@@ -254,11 +254,6 @@ export interface PolicyConfig {
 	superAdmins?: string[];
 	/** Require super-admin or OIDC project-creator entitlement for project creation. */
 	projectCreationRestricted?: boolean;
-	/**
-	 * Resource-security wiring (constraint adapter + subject-context provider).
-	 * Labeled projects and notebooks fail closed without it.
-	 */
-	resourceSecurity?: ResourceSecurityPolicy;
 }
 
 export interface ConfigSettingSummary {
@@ -340,8 +335,14 @@ export interface ApiDeps {
 	tracingMiddleware?: MiddlewareHandler;
 	/** How the notebook sandbox is mounted, exposed, and persisted. */
 	sandbox: SandboxConfig;
-	/** Deployment-wide authorization / abuse-guard knobs. */
+	/** Deployment-wide authorization / abuse-guard knobs (pure env-derived data). */
 	policy: PolicyConfig;
+	/**
+	 * Resource-security collaborators (constraint adapter + subject-context
+	 * provider) — live ports, kept out of the data-only `policy`. Labeled
+	 * projects and notebooks fail closed without them.
+	 */
+	resourceSecurity?: ResourceSecurityPolicy;
 	/**
 	 * Probe downstream deps (storage/auth/compute/WIF). Built by `@marimo-hub/config`;
 	 * logged once (non-fatal) at boot and served by `GET /api/health?deep=true`.

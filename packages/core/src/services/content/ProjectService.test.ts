@@ -1032,13 +1032,11 @@ describe('ProjectService security labels', () => {
 		email: `${ACTOR}@example.com`,
 		credential: { kind: 'sso' as const },
 	};
-	const securityPolicy = (context = CONTEXT) => ({
-		resourceSecurity: {
-			constraints: new LocalResourceConstraintPolicy({
-				classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-			}),
-			subjectContext: { resolve: async () => context },
-		},
+	const security = (context = CONTEXT) => ({
+		constraints: new LocalResourceConstraintPolicy({
+			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
+		}),
+		subjectContext: { resolve: async () => context },
 	});
 
 	async function recentEvents() {
@@ -1121,11 +1119,14 @@ describe('ProjectService security labels', () => {
 		expect(unwired.map((e) => e.id)).toEqual([open.id]);
 
 		// A dominating context admits it; an insufficient one does not.
-		const admitted = await projects.listProjects({ subject: SUBJECT, policy: securityPolicy() });
+		const admitted = await projects.listProjects({
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
 		expect(admitted.map((e) => e.id).sort()).toEqual([open.id, secret.id].sort());
 		const denied = await projects.listProjects({
 			subject: SUBJECT,
-			policy: securityPolicy({ ...CONTEXT, classification: 'CUI' }),
+			resourceSecurity: security({ ...CONTEXT, classification: 'CUI' }),
 		});
 		expect(denied.map((e) => e.id)).toEqual([open.id]);
 	});
@@ -1139,18 +1140,24 @@ describe('ProjectService security labels', () => {
 
 		const denied = await projects.listProjects({
 			subject: SUBJECT,
-			policy: securityPolicy({ ...CONTEXT, classification: 'CUI' }),
+			resourceSecurity: security({ ...CONTEXT, classification: 'CUI' }),
 		});
 		expect(denied).toEqual([]);
-		const admitted = await projects.listProjects({ subject: SUBJECT, policy: securityPolicy() });
+		const admitted = await projects.listProjects({
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
 		expect(admitted.map((e) => e.id)).toEqual([secret.id]);
 	});
 
 	it('gives super admins no automatic label bypass in listings', async () => {
 		const secret = await projects.createProject({ name: 'secret', description: '' }, ACTOR);
 		await projects.setSecurityLabels(secret.id, LABELS, ACTOR);
-		const god = { superAdmins: [ACTOR], ...securityPolicy({ ...CONTEXT, classification: 'CUI' }) };
-		const denied = await projects.listProjects({ subject: SUBJECT, policy: god });
+		const denied = await projects.listProjects({
+			subject: SUBJECT,
+			policy: { superAdmins: [ACTOR] },
+			resourceSecurity: security({ ...CONTEXT, classification: 'CUI' }),
+		});
 		expect(denied).toEqual([]);
 	});
 });

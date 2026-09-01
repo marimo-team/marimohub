@@ -332,11 +332,12 @@ describe('authorization characterization: resource security labels', () => {
 	async function seedLabeled(bucket: MemoryBucket, resolved: Record<string, unknown> | null) {
 		const pid = await seedProject(bucket);
 		const god = apiFor(bucket, OWNER, {
-			policy: { superAdmins: [OWNER], resourceSecurity: security(context()) },
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: security(context()),
 		});
 		await expectOk(await god.request('PUT', `/projects/${pid}/security-labels`, LABELS));
 		const member = apiFor(bucket, VIEWER, {
-			policy: { resourceSecurity: security(resolved) },
+			resourceSecurity: security(resolved),
 		});
 		return { pid, god, member };
 	}
@@ -345,7 +346,7 @@ describe('authorization characterization: resource security labels', () => {
 		const bucket = new MemoryBucket();
 		const pid = await seedProject(bucket);
 		const owner = apiFor(bucket, OWNER, {
-			policy: { resourceSecurity: security(context()) },
+			resourceSecurity: security(context()),
 		});
 		await expectError(
 			await owner.request('PUT', `/projects/${pid}/security-labels`, LABELS),
@@ -371,7 +372,7 @@ describe('authorization characterization: resource security labels', () => {
 		await expectError(await member.request('GET', `/projects/${pid}`), 404, 'NOT_FOUND');
 
 		const admitted = apiFor(bucket, VIEWER, {
-			policy: { resourceSecurity: security(context()) },
+			resourceSecurity: security(context()),
 		});
 		const project = await expectOk<{ security_labels?: unknown }>(
 			await admitted.request('GET', `/projects/${pid}`),
@@ -383,10 +384,8 @@ describe('authorization characterization: resource security labels', () => {
 		const bucket = new MemoryBucket();
 		const { pid } = await seedLabeled(bucket, null);
 		const god = apiFor(bucket, OWNER, {
-			policy: {
-				superAdmins: [OWNER],
-				resourceSecurity: security(context({ classification: 'CUI' })),
-			},
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: security(context({ classification: 'CUI' })),
 		});
 		const list = await expectOk<{ items: { id: string }[] }>(await god.request('GET', '/projects'));
 		expect(list.items.map((p) => p.id)).not.toContain(pid);
@@ -400,7 +399,7 @@ describe('authorization characterization: resource security labels', () => {
 			bucket,
 			userId: EDITOR,
 			compute: makeFakeCompute(),
-			deps: { policy: { resourceSecurity: security(ctx) } },
+			deps: { resourceSecurity: security(ctx) },
 		});
 		const nid = await createNotebook(editor, pid);
 		const session = await expectOk<{ session_id: string }>(
@@ -418,7 +417,8 @@ describe('authorization characterization: resource security labels', () => {
 		const projectOnly = context({ compartments: ['element-a'] });
 		const { pid } = await seedLabeled(bucket, projectOnly);
 		const god = apiFor(bucket, OWNER, {
-			policy: { superAdmins: [OWNER], resourceSecurity: security(context()) },
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: security(context()),
 		});
 		const nid = await createNotebook(god, pid);
 		await expectOk(
@@ -430,7 +430,7 @@ describe('authorization characterization: resource security labels', () => {
 
 		// The member's context satisfies the project labels but not the override.
 		const member = apiFor(bucket, VIEWER, {
-			policy: { resourceSecurity: security(projectOnly) },
+			resourceSecurity: security(projectOnly),
 		});
 		await expectOk(await member.request('GET', `/projects/${pid}`));
 		await expectError(
@@ -438,7 +438,7 @@ describe('authorization characterization: resource security labels', () => {
 			404,
 			'NOT_FOUND',
 		);
-		const full = apiFor(bucket, VIEWER, { policy: { resourceSecurity: security(context()) } });
+		const full = apiFor(bucket, VIEWER, { resourceSecurity: security(context()) });
 		await expectOk(await full.request('GET', `/projects/${pid}/notebooks/${nid}`));
 	});
 });
@@ -446,15 +446,13 @@ describe('authorization characterization: resource security labels', () => {
 describe('authorization characterization: label mutation unhappy paths', () => {
 	const LABELS = { classification: 'SECRET', compartments: ['element-a'] };
 	const wired = (extra: Record<string, unknown> = {}) => ({
-		policy: {
-			superAdmins: [OWNER],
-			resourceSecurity: {
-				constraints: new LocalResourceConstraintPolicy({
-					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-				}),
-			},
-			...extra,
+		policy: { superAdmins: [OWNER] },
+		resourceSecurity: {
+			constraints: new LocalResourceConstraintPolicy({
+				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+			}),
 		},
+		...extra,
 	});
 
 	it('answers 404 for labels on a nonexistent or deleted project', async () => {
@@ -582,14 +580,12 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 		};
 		const god = apiFor(bucket, OWNER, {
-			policy: {
-				superAdmins: [OWNER],
-				resourceSecurity: {
-					constraints: new LocalResourceConstraintPolicy({
-						classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-					}),
-					subjectContext: { resolve: async () => ctx as never },
-				},
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: {
+				constraints: new LocalResourceConstraintPolicy({
+					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+				}),
+				subjectContext: { resolve: async () => ctx as never },
 			},
 		});
 		const pid = await createProject(god);
@@ -630,7 +626,8 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 			subjectContext: { resolve: async () => ctx as never },
 		};
 		const god = apiFor(bucket, OWNER, {
-			policy: { superAdmins: [OWNER], resourceSecurity: security },
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: security,
 		});
 		const pid = await createProject(god);
 		const nid = await createNotebook(god, pid);
@@ -654,7 +651,7 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 			bucket,
 			userId: OWNER,
 			compute: makeFakeCompute(),
-			deps: { authenticator: entitled, policy: { resourceSecurity: security } },
+			deps: { authenticator: entitled, resourceSecurity: security },
 		});
 		const session = await expectOk<{ session_id: string }>(
 			await api.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {}),

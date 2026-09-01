@@ -34,6 +34,7 @@ import type {
 	AuthorizationPolicy,
 	AuthSubject,
 	AuthzPolicy,
+	ResourceSecurityPolicy,
 	NotebookDetail,
 	ComputeResources,
 	EditorSandboxSharing,
@@ -82,20 +83,27 @@ export function extensibleResponseEnum<const Values extends readonly [string, ..
 }
 
 /**
- * The one `AuthorizationService` per deployment policy object. `deps.policy`
- * is stable for a server's lifetime, so every guard shares one instance; the
- * WeakMap only matters for tests that build many dep bundles.
+ * The authorization wiring every guard reads: the pure-data policy slice plus
+ * the resource-security collaborators. `ApiDeps` satisfies it structurally, so
+ * route handlers pass `deps` straight through.
  */
-const AUTHZ_SERVICES = new WeakMap<object, AuthorizationService>();
+export interface AuthzDeps {
+	policy?: AuthorizationPolicy;
+	resourceSecurity?: ResourceSecurityPolicy;
+}
 
-export function authorizationService(
-	policy: AuthorizationPolicy | undefined,
-): AuthorizationService {
-	if (!policy) return new AuthorizationService(undefined);
-	let service = AUTHZ_SERVICES.get(policy);
+/**
+ * The one `AuthorizationService` per dep bundle. `deps` is stable for a
+ * server's lifetime, so every guard shares one instance; the WeakMap only
+ * matters for tests that build many bundles.
+ */
+const AUTHZ_SERVICES = new WeakMap<AuthzDeps, AuthorizationService>();
+
+export function authorizationService(deps: AuthzDeps): AuthorizationService {
+	let service = AUTHZ_SERVICES.get(deps);
 	if (!service) {
-		service = new AuthorizationService(policy);
-		AUTHZ_SERVICES.set(policy, service);
+		service = new AuthorizationService(deps.policy, deps.resourceSecurity);
+		AUTHZ_SERVICES.set(deps, service);
 	}
 	return service;
 }
@@ -112,9 +120,9 @@ export async function assertProjectActionOn(
 	project: Project,
 	subject: AuthSubject,
 	action: ProjectAction,
-	policy?: AuthzPolicy,
+	deps: AuthzDeps = {},
 ): Promise<void> {
-	const decision = await authorizationService(policy).authorize(subject, action, {
+	const decision = await authorizationService(deps).authorize(subject, action, {
 		kind: 'project',
 		project,
 	});
@@ -140,10 +148,10 @@ export async function assertProjectRole(
 	pid: ProjectId,
 	subject: AuthSubject,
 	action: ProjectAction,
-	policy?: AuthzPolicy,
+	deps: AuthzDeps = {},
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	await assertProjectActionOn(project, subject, action, policy);
+	await assertProjectActionOn(project, subject, action, deps);
 	return project;
 }
 
@@ -156,7 +164,7 @@ export async function assertProjectRole(
  * project labels again regardless — labels only ever remove access).
  */
 export async function loadAuthorizedNotebook(
-	deps: Pick<ApiDeps, 'services' | 'policy'>,
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
 	project: Project,
 	nid: NotebookId,
 	subject: AuthSubject,
@@ -166,7 +174,7 @@ export async function loadAuthorizedNotebook(
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
 	if (detail.meta.security_labels !== undefined) {
-		const decision = await authorizationService(deps.policy).authorize(subject, 'project.read', {
+		const decision = await authorizationService(deps).authorize(subject, 'project.read', {
 			kind: 'project',
 			project,
 			notebookLabels: detail.meta.security_labels,
@@ -182,8 +190,8 @@ export async function loadAuthorizedNotebook(
  * Enforce that the caller is a deployment super admin (`MARIMOHUB_SUPER_ADMINS`).
  * Gates org-scoped resources, which no project role can reach.
  */
-export async function assertSuperAdmin(subject: AuthSubject, policy?: AuthzPolicy): Promise<void> {
-	const decision = await authorizationService(policy).authorize(subject, 'admin.access', {
+export async function assertSuperAdmin(subject: AuthSubject, deps: AuthzDeps = {}): Promise<void> {
+	const decision = await authorizationService(deps).authorize(subject, 'admin.access', {
 		kind: 'deployment',
 	});
 	if (!decision.allowed) {
@@ -253,9 +261,9 @@ async function assertSession(
 	project: Project,
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
-	policy: SessionPolicy,
+	deps: AuthzDeps,
 ): Promise<void> {
-	const decision = await authorizationService(policy).authorize(subject, action, {
+	const decision = await authorizationService(deps).authorize(subject, action, {
 		kind: 'session',
 		project,
 		session,
@@ -272,7 +280,7 @@ export async function assertSessionControl(
 	project: Project,
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
-	policy: SessionPolicy,
+	deps: AuthzDeps,
 ): Promise<void> {
 	await assertSession(
 		'session.stop',
@@ -280,7 +288,7 @@ export async function assertSessionControl(
 		project,
 		session,
 		subject,
-		policy,
+		deps,
 	);
 }
 
@@ -294,7 +302,7 @@ export async function assertSessionAccess(
 	project: Project,
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
-	policy: SessionPolicy,
+	deps: AuthzDeps,
 ): Promise<void> {
 	await assertSession(
 		'session.attach',
@@ -302,7 +310,7 @@ export async function assertSessionAccess(
 		project,
 		session,
 		subject,
-		policy,
+		deps,
 	);
 }
 
@@ -316,7 +324,7 @@ export async function assertSessionProxyAccess(
 	project: Project,
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
-	policy: SessionPolicy,
+	deps: AuthzDeps,
 ): Promise<void> {
 	await assertSession(
 		'session.proxy',
@@ -324,7 +332,7 @@ export async function assertSessionProxyAccess(
 		project,
 		session,
 		subject,
-		policy,
+		deps,
 	);
 }
 
@@ -332,7 +340,7 @@ export async function assertSessionSurfaceAccess(
 	project: Project,
 	session: SessionAdmissionRecord,
 	subject: AuthSubject,
-	policy: SessionPolicy,
+	deps: AuthzDeps,
 ): Promise<void> {
 	await assertSession(
 		'session.surface',
@@ -340,7 +348,7 @@ export async function assertSessionSurfaceAccess(
 		project,
 		session,
 		subject,
-		policy,
+		deps,
 	);
 }
 
@@ -418,11 +426,11 @@ export async function loadVisibleProject(
 	projects: ProjectService,
 	pid: ProjectId,
 	subject: AuthSubject,
-	policy?: AuthzPolicy,
+	deps: AuthzDeps = {},
 ): Promise<Project> {
 	// `project.read` denials are all masked (`deniedAs: 'not-found'`), so this is
 	// assertProjectRole with a guaranteed-404 denial shape.
-	return assertProjectRole(projects, pid, subject, 'project.read', policy);
+	return assertProjectRole(projects, pid, subject, 'project.read', deps);
 }
 
 /**
@@ -436,9 +444,9 @@ export async function assertProjectVisible(
 	projects: ProjectService,
 	pid: ProjectId,
 	subject: AuthSubject,
-	policy?: AuthzPolicy,
+	deps: AuthzDeps = {},
 ): Promise<void> {
-	await loadVisibleProject(projects, pid, subject, policy);
+	await loadVisibleProject(projects, pid, subject, deps);
 }
 
 export function createApp() {

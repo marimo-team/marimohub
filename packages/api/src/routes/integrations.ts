@@ -607,7 +607,7 @@ app.openapi(listIntegrations, async (c) => {
 	const { pid } = c.req.valid('param');
 	const query = c.req.valid('query');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.read', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.read', deps);
 	const data = paginate((await integrations.list(pid)).map(entryResponse), query, {
 		key: (entry) => entry.updated_at,
 		tiebreak: (entry) => entry.id,
@@ -620,7 +620,7 @@ app.openapi(createIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
 	const body = c.req.valid('json');
 	const detail = await integrations.create(pid, body, user.id);
 	// Audit trail (kind/name only — never config). Best-effort; never fail the write.
@@ -646,7 +646,7 @@ app.openapi(getIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.read', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.read', deps);
 	const detail = await integrations.get(pid, iid);
 	c.header('ETag', etagFor(detail.updated_at));
 	return c.json({ success: true, data: detailResponse(detail) }, 200);
@@ -657,7 +657,7 @@ app.openapi(updateIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
 	const body = c.req.valid('json');
 	const detail = await integrations.update(pid, iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
@@ -685,7 +685,7 @@ app.openapi(deleteIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
 	// A no-op delete (already gone, or an id from the org tier) still succeeds
 	// but must not fabricate an audit-trail deletion.
 	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
@@ -712,7 +712,7 @@ app.openapi(listIntegrationVersions, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const query = c.req.valid('query');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.read', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.read', deps);
 	// Paged in the store rather than by `paginate`: it reads only this page's
 	// records, never the whole (unbounded) history.
 	const page = await integrations.listVersions(pid, iid, {
@@ -753,7 +753,7 @@ app.openapi(copyIntegration, async (c) => {
 	// The copy moves decrypted secret material across the project boundary, so
 	// the caller must hold manager on BOTH sides (a super admin is admin
 	// everywhere). Destination first: its 404/403 must not confirm the source.
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
 	// Visibility before role for the SOURCE: any destination manager can probe an
 	// arbitrary id here, so a project the caller cannot see answers the same 404
 	// as one that does not exist; 403 is reserved for projects they can see.
@@ -761,9 +761,9 @@ app.openapi(copyIntegration, async (c) => {
 		deps.services.projects,
 		body.source_project_id,
 		user,
-		deps.policy,
+		deps,
 	);
-	await assertProjectActionOn(source, user, 'integration.manage', deps.policy);
+	await assertProjectActionOn(source, user, 'integration.manage', deps);
 	const detail = await integrations.copy(
 		body.source_project_id,
 		body.source_integration_id,
@@ -800,7 +800,7 @@ app.openapi(testIntegration, async (c) => {
 		pid,
 		user,
 		'integration.manage',
-		deps.policy,
+		deps,
 	);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
@@ -818,7 +818,7 @@ app.openapi(queryReadiness, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
 	const body = c.req.valid('json') as QueryReadinessRequest;
 	return c.json({ success: true, data: integrations.queryReadiness(body) }, 200);
 });
@@ -828,7 +828,7 @@ app.route('/', integrationBrowseApp);
 app.openapi(listOrgIntegrations, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps.policy);
+	await assertSuperAdmin(c.get('user'), deps);
 	const query = c.req.valid('query');
 	const data = paginate((await integrations.list()).map(entryResponse), query, {
 		key: (entry) => entry.updated_at,
@@ -841,7 +841,7 @@ app.openapi(createOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps);
 	const body = c.req.valid('json');
 	const detail = await integrations.create(body, user.id);
 	await appendAudit(
@@ -864,7 +864,7 @@ app.openapi(getOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps.policy);
+	await assertSuperAdmin(c.get('user'), deps);
 	const detail = await integrations.get(iid);
 	c.header('ETag', etagFor(detail.updated_at));
 	return c.json({ success: true, data: detailResponse(detail) }, 200);
@@ -875,7 +875,7 @@ app.openapi(updateOrgIntegration, async (c) => {
 	const user = c.get('user');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps);
 	const body = c.req.valid('json');
 	const detail = await integrations.update(iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
@@ -902,7 +902,7 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	const user = c.get('user');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps);
 	const deleted = await integrations.delete(iid, ifMatchToken(c));
 	if (deleted) {
 		await appendAudit(
@@ -925,7 +925,7 @@ app.openapi(listOrgIntegrationVersions, async (c) => {
 	const { iid } = c.req.valid('param');
 	const query = c.req.valid('query');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps.policy);
+	await assertSuperAdmin(c.get('user'), deps);
 	const page = await integrations.listVersions(iid, {
 		limit: Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
 		cursor: query.cursor,
@@ -937,7 +937,7 @@ app.openapi(testOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
 	const objectContext = await objectTestContext(
@@ -962,7 +962,7 @@ app.openapi(testOrgIntegration, async (c) => {
 app.openapi(queryOrgReadiness, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps.policy);
+	await assertSuperAdmin(c.get('user'), deps);
 	const body = c.req.valid('json') as QueryReadinessRequest;
 	return c.json({ success: true, data: integrations.queryReadiness(body) }, 200);
 });

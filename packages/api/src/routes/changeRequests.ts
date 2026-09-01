@@ -106,7 +106,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 		pid,
 		user,
 		'change-request.publish',
-		deps.policy,
+		deps,
 	);
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {

@@ -179,7 +179,7 @@ export async function authorizeProxyRequest(
 	// the sandbox may still be alive. Both mask as a missing session; a plain
 	// membership (visibility) denial falls through to the session gate's
 	// historical 403 instead.
-	const projectDecision = await authorizationService(deps.policy).authorize(user, 'project.read', {
+	const projectDecision = await authorizationService(deps).authorize(user, 'project.read', {
 		kind: 'project',
 		project,
 	});
@@ -190,8 +190,8 @@ export async function authorizeProxyRequest(
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
 	try {
-		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps.policy);
-		else await assertSessionProxyAccess(project, session, user, deps.policy);
+		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps);
+		else await assertSessionProxyAccess(project, session, user, deps);
 	} catch (err) {
 		if (err instanceof ForbiddenError || err instanceof SurfaceForbiddenError) {
 			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };
