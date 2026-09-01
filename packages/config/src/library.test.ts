@@ -281,3 +281,150 @@ describe('resolveAdapterSpecifier', () => {
 		expect(resolveAdapterSpecifier('@myorg/custom-storage')).toBe('@myorg/custom-storage');
 	});
 });
+
+describe('OIDC login-policy library loading', () => {
+	const policyFixtures = fileURLToPath(new URL('./testdata/oidc-login-policies/', import.meta.url));
+	const policyFixture = (name: string) => path.join(policyFixtures, name);
+	const policyEnv = (specifier: string) => ({
+		MARIMOHUB_AUTH_BACKEND: 'oidc',
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: specifier,
+	});
+	const policyInput = (claims: Record<string, unknown>) => ({
+		identity: { id: 'user-1' as never, email: 'user@example.com' },
+		idTokenClaims: claims,
+		signal: new AbortController().signal,
+	});
+
+	it('is a no-op unless the library backend and the oidc auth backend are selected', async () => {
+		await expect(
+			loadAdapterLibraries({
+				MARIMOHUB_AUTH_BACKEND: 'oidc',
+			}),
+		).resolves.toEqual({});
+		// A stale selector under another auth backend must not run module code;
+		// makeAuth rejects the combination separately.
+		await expect(
+			loadAdapterLibraries({
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: policyFixture('throwing-factory.mjs'),
+			}),
+		).resolves.toEqual({});
+	});
+
+	it('requires the library specifier', async () => {
+		await expectConfigError(
+			loadAdapterLibraries({
+				MARIMOHUB_AUTH_BACKEND: 'oidc',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+			}),
+			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+			/Missing required env var/,
+		);
+	});
+
+	it('loads a policy from a path and passes the full env to the factory', async () => {
+		const env = {
+			...policyEnv(policyFixture('valid.mjs')),
+			MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TENANT: 'fixture-tenant',
+		};
+		const loaded = await loadAdapterLibraries(env);
+		const policy = loaded.oidcLoginPolicy;
+		expect(policy).toBeDefined();
+		expect((policy as unknown as { factoryContext: { env: typeof env } }).factoryContext.env).toBe(
+			env,
+		);
+		expect(policy?.evaluate(policyInput({ groups: ['hub-users'] }))).toEqual({
+			decision: 'allow',
+			entitlements: ['default-role:editor'],
+		});
+		expect(policy?.evaluate(policyInput({}))).toEqual({
+			decision: 'deny',
+			reason: 'fixture_policy',
+		});
+	});
+
+	it('loads file URLs and asynchronous factories', async () => {
+		await expect(
+			loadAdapterLibraries(policyEnv(pathToFileURL(policyFixture('valid.mjs')).href)),
+		).resolves.toHaveProperty('oidcLoginPolicy');
+		const loaded = await loadAdapterLibraries(policyEnv(policyFixture('async-factory.mjs')));
+		await expect(loaded.oidcLoginPolicy?.evaluate(policyInput({}))).resolves.toEqual({
+			decision: 'allow',
+		});
+	});
+
+	it('loads the example module and evaluates its compound AND rule', async () => {
+		const examplePolicy = fileURLToPath(
+			new URL('../../../examples/external-adapter/oidc-login-policy.mjs', import.meta.url),
+		);
+		const loaded = await loadAdapterLibraries(policyEnv(examplePolicy));
+		const satisfied = {
+			department: 'orgcode1',
+			access_level: 'elevated',
+			elements: ['element-a', 'element-b'],
+		};
+		expect(loaded.oidcLoginPolicy?.evaluate(policyInput({ user_attributes: satisfied }))).toEqual({
+			decision: 'allow',
+			entitlements: ['default-role:editor'],
+		});
+		for (const missing of [
+			{ ...satisfied, department: 'other' },
+			{ ...satisfied, access_level: 'baseline' },
+			{ ...satisfied, elements: ['element-a'] },
+			{},
+		]) {
+			expect(loaded.oidcLoginPolicy?.evaluate(policyInput({ user_attributes: missing }))).toEqual({
+				decision: 'deny',
+				reason: 'example_access_policy',
+			});
+		}
+	});
+
+	it('loads a login policy alongside library storage and compute', async () => {
+		const loaded = await loadAdapterLibraries({
+			...policyEnv(policyFixture('valid.mjs')),
+			MARIMOHUB_STORAGE_BACKEND: 'library',
+			MARIMOHUB_STORAGE_LIBRARY: fixture('valid-storage.mjs'),
+			MARIMOHUB_COMPUTE_BACKEND: 'library',
+			MARIMOHUB_COMPUTE_LIBRARY: fixture('valid-compute.mjs'),
+		});
+		expect(loaded.bucket).toBeDefined();
+		expect(loaded.compute).toBeDefined();
+		expect(loaded.oidcLoginPolicy).toBeDefined();
+	});
+
+	it('reports missing packages clearly', async () => {
+		await expectConfigError(
+			loadAdapterLibraries(policyEnv('@missing/marimohub-login-policy-fixture')),
+			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+			/Could not load oidc-login-policy adapter library/,
+		);
+	});
+
+	it.each([
+		['no-manifest.mjs', /does not default-export.*manifest/],
+		['wrong-kind.mjs', /declares kind "storage".*oidc-login-policy adapter/],
+		['bad-api-version.mjs', /apiVersion 2; this server supports 1/],
+		['missing-evaluate.mjs', /missing a callable evaluate method/],
+		['non-callable-evaluate.mjs', /missing a callable evaluate method/],
+		['throwing-factory.mjs', /failed to initialize: fixture initialization failed/],
+		['rejected-factory.mjs', /failed to initialize: login-policy initialization rejected/],
+		['throwing-shape.mjs', /could not be validated: shape getter failed/],
+	] as const)('maps %s failures to ConfigErrors', async (name, message) => {
+		await expectConfigError(
+			loadAdapterLibraries(policyEnv(policyFixture(name))),
+			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+			message,
+		);
+	});
+
+	it('rejects a storage manifest configured as a login policy', async () => {
+		await expectConfigError(
+			loadAdapterLibraries(policyEnv(fixture('valid-storage.mjs'))),
+			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+			/declares kind "storage".*oidc-login-policy adapter/,
+		);
+	});
+});

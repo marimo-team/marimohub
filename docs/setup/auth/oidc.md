@@ -89,6 +89,57 @@ is an identity migration. Reconcile stored owners and members before the change.
 
 Generate a session secret with `openssl rand -base64 32`.
 
+### Login-policy module
+
+When a group mapping cannot express your access rule — for example, an approved
+department AND a minimum level AND a set of required attribute values — load a
+trusted login-policy module instead:
+
+```bash
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=/etc/marimohub/oidc-login-policy.mjs
+# MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS=5        # 1–30; a timeout denies login
+# MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS=3600 # 300–3600
+```
+
+The built-in adapter still completes all OIDC protocol work: discovery, PKCE,
+state and nonce, ID-token verification, UserInfo subject binding, email
+verification, and the email-domain allowlist. The module runs after that
+validation and before session signing. It receives the validated ID-token and
+UserInfo claims as separate read-only objects and returns one bounded result: an
+allow or deny decision, plus the built-in entitlements (`super-admin`,
+`project-creator`, `default-role:viewer`, `default-role:editor`,
+`default-role:manager`).
+
+Login-policy configuration is mutually exclusive with the group variables
+above. A module can reproduce any group rule in code. The module applies to
+browser sessions only; personal access tokens never receive login-policy
+entitlements.
+
+The module is trusted code and runs in-process with server privileges. Bundle
+it (with its dependencies) into one `.mjs` file, pin its version, and mount the
+same artifact on every replica. A module that fails to load stops the server at
+startup. During login, a policy denial shows the user a generic access-policy
+message; a policy error, timeout, or malformed result fails closed with the
+generic sign-in error and a bounded operator log event — the host never
+persists, logs, or writes raw claims into the session cookie. That guarantee
+covers the host only: the module sees every claim and runs with server
+privileges, so your policy code must not log or store claim values, and
+reviews should verify that it doesn't.
+
+Policy sessions last at most one hour, like group sessions, which bounds the
+delay after an attribute or policy change. A module change requires a server
+restart and takes effect on the next login.
+
+This feature maps identity to login eligibility and coarse roles. It is not
+resource-level access control: it cannot see projects or notebooks, and an
+entitlement never bypasses project-role checks. See
+[Security](/security) for the boundary.
+
+See
+[`examples/external-adapter/oidc-login-policy.mjs`](https://github.com/marimo-team/marimohub/blob/main/examples/external-adapter/oidc-login-policy.mjs)
+for a complete example.
+
 ### Google
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),

@@ -1021,6 +1021,38 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: '3600',
 						optIn: true,
 					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
+						name: 'Login-policy backend',
+						description:
+							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables.',
+						example: 'library',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+						name: 'Login-policy module',
+						description:
+							'The login-policy module: an npm package installed in the image, an ESM path, or a file URL. Required with the `library` login-policy backend. The module runs in-process with server privileges — load only trusted, pinned code.',
+						example: '/etc/marimohub/oidc-login-policy.mjs',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS',
+						name: 'Login-policy timeout',
+						description:
+							'Login-policy evaluation timeout, from 1 to 30 seconds. A timeout denies the login.',
+						default: '5',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS',
+						name: 'Login-policy session lifetime',
+						description:
+							'Maximum age of a session created through the login policy, from 300 to 3600 seconds. This value limits the deprovisioning delay after a policy or attribute change.',
+						default: '3600',
+						optIn: true,
+					},
 				],
 			},
 			{

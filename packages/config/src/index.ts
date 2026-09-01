@@ -516,7 +516,7 @@ export function createFromEnv(
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
 	// its own explicit acknowledgement above.
 	if (exposure.mode === 'subdomain') assertSandboxHostIsolated(env);
-	const { authenticator, authRoutes } = makeAuth(env);
+	const { authenticator, authRoutes } = makeAuth(env, options?.libraries);
 	const sessionLifetime = parseSessionLifetime(env);
 	const sandboxImages = resolveSandboxImages(env);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);

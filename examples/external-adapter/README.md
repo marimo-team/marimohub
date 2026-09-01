@@ -37,3 +37,50 @@ A production adapter must implement the complete `Bucket` contract in
 
 `compute.mjs` includes all required methods, but it rejects sandbox operations.
 Replace its methods with calls to the provider SDK.
+
+## OIDC login-policy module
+
+The Node server can also load one trusted OIDC login-policy module. The module
+runs after the built-in OIDC adapter validates the identity, and before the
+adapter signs a session. It maps validated claims to a login decision and coarse
+entitlements. It is not a runtime (per-request) authorization hook.
+
+```sh
+MARIMOHUB_AUTH_BACKEND=oidc \
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library \
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=examples/external-adapter/oidc-login-policy.mjs \
+node apps/server/dist/index.mjs
+```
+
+`oidc-login-policy.mjs` shows a compound AND rule across multiple claim paths.
+Its attribute names and values are placeholders, not an authoritative access
+policy.
+
+`oidc-login-policy.test.mjs` shows how to test a policy module with nothing but
+Node's built-in test runner — no framework install:
+
+```sh
+node --test examples/external-adapter/oidc-login-policy.test.mjs
+```
+
+Test your own module the same way before deploying it: import the bundled
+`.mjs`, call `create()` once, and drive `evaluate()` with claim fixtures for
+each allow and deny case.
+
+Key facts:
+
+- The built-in adapter completes all OIDC protocol validation. The module
+  receives validated claims, but each claim _value_ remains untrusted
+  provider data.
+- The module is trusted in-process code with server privileges. Load only
+  pinned, reviewed modules, and use the same artifact on every replica.
+- The result affects browser login sessions only. Personal access tokens do not
+  receive login-policy entitlements.
+- The host never persists, logs, or writes raw claims into the session cookie.
+  This guarantee covers the host only: the module itself sees every claim and
+  runs with server privileges, so your policy code must not log or store claim
+  values either.
+- Login-policy configuration is mutually exclusive with the
+  `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables.
+- A login decision expires with the session, after at most one hour. A module
+  change requires a server restart and a new login.

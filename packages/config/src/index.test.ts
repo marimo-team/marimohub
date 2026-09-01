@@ -593,6 +593,39 @@ describe('createFromEnv external adapter libraries', () => {
 	});
 });
 
+describe('createFromEnv oidc login-policy library', () => {
+	const loginPolicyEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'oidc',
+		MARIMOHUB_AUTH_OIDC_ISSUER: 'https://accounts.example.com',
+		MARIMOHUB_AUTH_OIDC_CLIENT_ID: 'client',
+		MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: 'secret',
+		MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
+		MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
+		MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: fileURLToPath(
+			new URL('./testdata/oidc-login-policies/valid.mjs', import.meta.url),
+		),
+	};
+
+	it('requires a preloaded login policy in the synchronous API', () => {
+		expect(() => createFromEnv(loginPolicyEnv)).toThrow(/createFromEnvAsync/);
+	});
+
+	it('wires a preloaded login policy', () => {
+		const oidcLoginPolicy = { evaluate: () => ({ decision: 'deny' as const }) };
+		const deps = createFromEnv(loginPolicyEnv, undefined, { libraries: { oidcLoginPolicy } });
+		expect(deps.authenticator).toBeDefined();
+		expect(deps.authRoutes).toBeDefined();
+	});
+
+	// The full loaded-module → callback-decision wiring is proven end to end in
+	// loginPolicyComposition.test.ts (it needs the oauth4webapi mock).
+});
+
 describe('createFromEnv oidc email-domain allowlist', () => {
 	// A full oidc env, minus the allowlist (added per-test). The session secret is
 	// ≥32 bytes so createOidcAuth's HS256 check passes; discovery stays lazy.

@@ -15,6 +15,8 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
 		'Your email address isn’t verified with your identity provider. Verify it there, then try again.',
 	group_not_allowed:
 		'That account is not in a group allowed to access this marimohub. Contact your administrator.',
+	policy_denied:
+		'Your identity does not meet this marimohub access policy. Contact your administrator.',
 	session_expired: 'Your sign-in session expired before it completed. Please try again.',
 	auth_failed: 'Sign-in failed. Please try again.',
 };

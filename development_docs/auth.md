@@ -54,6 +54,7 @@ The adapter then mints the `mh_session` cookie. Protocol code uses
 | `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION`      |     | `required` (default) or explicit `trusted-issuer`.                        |
 | `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`            |     | JSON Pointer for opt-in group policy and entitlement mapping.             |
 | `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` |     | Exact groups permitted to create projects. Empty means super admins only. |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND`    |     | `library` loads a trusted external login-policy module.                   |
 
 **Routes** are public and mount before the authentication guard.
 `GET /api/auth/login` starts the flow. `/api/auth/callback` exchanges the code
@@ -70,7 +71,7 @@ domain allowlist is active. If the claim is present, its value must be boolean
 
 **Cookies**: `mh_session` is an issuer-, audience-, and type-bound HS256 JWT.
 It is HttpOnly, Secure, and SameSite=Lax. Its default lifetime is 8 hours, or
-at most 1 hour with group policy. The short-lived `mh_oidc_txn` stores the PKCE
+at most 1 hour with a group policy or login-policy module. The short-lived `mh_oidc_txn` stores the PKCE
 verifier, state, and nonce. Rotating `MARIMOHUB_AUTH_SESSION_SECRET` invalidates
 all sessions.
 
@@ -92,6 +93,56 @@ Periodic snapshots limit potential data loss.
 
 > The session cookie is `Secure` (HTTPS only). For local `http://localhost`
 > work, use the [`dev`](#dev-marimohub_auth_backenddev) backend, not `oidc`.
+
+### Login-policy module (`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library`)
+
+For compound identity rules that exact group matching cannot express, the OIDC
+backend can load one trusted login-policy module
+(`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY`; see
+[Ports → External adapter libraries](./ports.md#external-adapter-libraries)).
+The versioned contract lives in `@marimo-hub/auth-oidc` (`loginPolicy.ts`), and
+deliberately **not** in `core`: OIDC claims stay an adapter concern. The
+composition root (`packages/config`) loads the module once during
+`createFromEnvAsync()` and rejects any combination with the group variables, so
+exactly one identity-mapping mechanism is ever in force.
+
+The adapter calls the module after every protocol/email validation above and
+before session signing, with the host-owned identity (`sub` + verified email),
+deep-frozen clones of the ID-token and UserInfo claims as **separate** objects,
+and an abort signal. The host accepts only a bounded result — `allow` with
+recognized entitlements, or `deny` with an optional `^[a-z][a-z0-9_]{0,63}$`
+reason — and fails closed on everything else. A denial redirects with
+`policy_denied`; a timeout (timer race, since a module can ignore the signal),
+exception, or malformed result redirects with the generic `auth_failed`. A
+synchronous block cannot be preempted in-process, so a decision returned after
+the deadline is also discarded as a timeout. The
+stable operator events are `oidc_login_policy_denied`,
+`oidc_login_policy_timeout`, `oidc_login_policy_failed`, and
+`oidc_login_policy_result_invalid`; they carry a duration and a bounded
+reason/problem code, never claim values or module exception messages.
+
+An allowed login always signs an `entitlements` claim (possibly empty), so the
+session carries the short authorization lifetime; policy sessions are capped at
+one hour like group sessions. Entitlements apply to browser sessions only —
+never to personal access tokens.
+
+**Boundary — this is not resource FGAC.** The login policy maps identity to
+login eligibility and coarse deployment-wide roles; it makes no project or
+notebook decision, and a version-1 result carrying runtime subject state (e.g.
+`subjectSecurityContext`) is rejected. Planned resource-level security keeps
+separate seams:
+
+- Runtime subject attributes (clearance-style context) come from a separate
+  `SubjectSecurityContextProvider`, resolved per credential — never from the raw
+  JWT or this login-time result.
+- Resource security labels only **add restrictions** on top of the existing
+  role checks (`roleAllowed AND constraintsSatisfied`); a constraint adapter can
+  never grant access that baseline RBAC denies, and a labeled resource fails
+  closed when the subject context is missing or stale.
+- Project labels must also be projected into catalog snapshot entries so list
+  filtering stays ahead of pagination; the authoritative label write and the
+  snapshot projection are not atomic, so readers must treat a missing or
+  indeterminate projection as fail-closed, never as unlabeled.
 
 ### Example: Google
 

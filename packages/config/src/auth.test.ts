@@ -582,3 +582,119 @@ describe('makeAuth proxy-header', () => {
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_PROXY_JWKS_URL');
 	});
 });
+
+describe('makeAuth oidc login policy', () => {
+	const policy = { evaluate: () => ({ decision: 'deny' as const }) };
+	const loginPolicyEnv = {
+		...oidcEnv,
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: '/etc/marimohub/agency-login-policy.mjs',
+	};
+	const libraries = { oidcLoginPolicy: policy };
+
+	it('accepts a preloaded login policy', () => {
+		const { authenticator, authRoutes } = makeAuth(loginPolicyEnv, libraries);
+		expect(authenticator).toBeDefined();
+		expect(authRoutes).toBeDefined();
+	});
+
+	it('rejects an unknown login-policy backend', () => {
+		const error = getConfigError(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'external' }, libraries),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
+		expect(error.message).toMatch(/expected library/);
+	});
+
+	it.each([
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY', '/etc/marimohub/agency-login-policy.mjs'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS', '5'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS', '900'],
+	])('rejects %s without the library selector', (key, value) => {
+		const error = getConfigError(() => makeAuth({ ...oidcEnv, [key]: value }, libraries));
+		expect(error.opts.variable).toBe(key);
+		expect(error.message).toMatch(/LOGIN_POLICY_BACKEND=library/);
+	});
+
+	it('requires the module path even when an instance is preloaded', () => {
+		const error = getConfigError(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library' }, libraries),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY');
+		expect(error.message).toMatch(/Missing required env var/);
+	});
+
+	it('requires the module to be preloaded (createFromEnvAsync)', () => {
+		const error = getConfigError(() => makeAuth(loginPolicyEnv));
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
+		expect(error.message).toMatch(/createFromEnvAsync/);
+	});
+
+	it.each([
+		'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
+		'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
+	])('rejects a login policy combined with %s', (groupVar) => {
+		const error = getConfigError(() =>
+			makeAuth(
+				{ ...loginPolicyEnv, [groupVar]: groupVar.endsWith('SECONDS') ? '900' : '/g' },
+				libraries,
+			),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
+		expect(error.message).toMatch(new RegExp(groupVar));
+	});
+
+	it.each(['0', '31', 'abc', '2.5'])('rejects login-policy timeout %s', (value) => {
+		expect(() =>
+			makeAuth(
+				{ ...loginPolicyEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS: value },
+				libraries,
+			),
+		).toThrow(/LOGIN_POLICY_TIMEOUT_SECONDS/);
+	});
+
+	it('accepts login-policy timeouts at the bounds', () => {
+		for (const value of ['1', '30']) {
+			expect(() =>
+				makeAuth(
+					{ ...loginPolicyEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS: value },
+					libraries,
+				),
+			).not.toThrow();
+		}
+	});
+
+	it.each(['299', '3601'])('rejects login-policy session lifetime %s', (value) => {
+		expect(() =>
+			makeAuth(
+				{ ...loginPolicyEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS: value },
+				libraries,
+			),
+		).toThrow(/LOGIN_POLICY_SESSION_TTL_SECONDS/);
+	});
+
+	it('bounds a login-policy session even when the general lifetime is longer', () => {
+		// The general 8h default would exceed the adapter's 1h cap for
+		// policy-derived sessions; composition must clamp instead of throwing.
+		expect(() =>
+			makeAuth({ ...loginPolicyEnv, MARIMOHUB_AUTH_SESSION_TTL_SECONDS: '86400' }, libraries),
+		).not.toThrow();
+	});
+
+	it.each([
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND', 'library'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY', '/etc/marimohub/policy.mjs'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS', '5'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS', '900'],
+	])('rejects %s under a non-oidc auth backend', (key, value) => {
+		const error = getConfigError(() => makeAuth({ ...proxyHeaderEnv, [key]: value }, libraries));
+		expect(error.opts.variable).toBe(key);
+		expect(error.message).toMatch(/only valid with MARIMOHUB_AUTH_BACKEND=oidc/);
+	});
+});

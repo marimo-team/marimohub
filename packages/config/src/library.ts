@@ -10,14 +10,14 @@ import {
 } from '@marimo-hub/core';
 import type {
 	AdapterFactoryContext,
-	AdapterModule,
 	Bucket,
-	ComputeAdapterModule,
 	ExternalStorageAdapter,
 	SandboxInstance,
 	SandboxProvider,
-	StorageAdapterModule,
 } from '@marimo-hub/core';
+import { isOidcLoginPolicy, OIDC_LOGIN_POLICY_API_VERSION } from '@marimo-hub/auth-oidc';
+import type { OidcLoginPolicy } from '@marimo-hub/auth-oidc';
+import { authBackend, oidcLoginPolicySelected } from './auth';
 import { computeBackend } from './compute';
 import { parseSecondsEnv, requiredVar } from './env';
 import type { Env } from './env';
@@ -29,6 +29,7 @@ import { storageBackend } from './storage';
 export interface LoadedAdapterLibraries {
 	bucket?: Bucket;
 	compute?: SandboxProvider;
+	oidcLoginPolicy?: OidcLoginPolicy;
 }
 
 const ADAPTER_DOCS = 'development_docs/ports.md#external-adapter-libraries';
@@ -37,11 +38,19 @@ const LIBRARY_CONFIG = {
 		variable: 'MARIMOHUB_STORAGE_LIBRARY',
 		label: 'Storage',
 		example: '/etc/marimohub/storage.mjs',
+		apiVersion: ADAPTER_API_VERSION,
 	},
 	compute: {
 		variable: 'MARIMOHUB_COMPUTE_LIBRARY',
 		label: 'Compute',
 		example: '/etc/marimohub/compute.mjs',
+		apiVersion: ADAPTER_API_VERSION,
+	},
+	'oidc-login-policy': {
+		variable: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+		label: 'OIDC login-policy',
+		example: '/etc/marimohub/oidc-login-policy.mjs',
+		apiVersion: OIDC_LOGIN_POLICY_API_VERSION,
 	},
 } as const;
 type AdapterKind = keyof typeof LIBRARY_CONFIG;
@@ -86,7 +95,12 @@ function unwrapManifest(namespace: unknown): unknown {
 	return manifest;
 }
 
-function validateManifest(value: unknown, kind: AdapterKind, specifier: string): AdapterModule {
+/** A validated manifest with `create` pre-bound; the factory context is per-kind. */
+interface LibraryManifest {
+	create(context: unknown): unknown;
+}
+
+function validateManifest(value: unknown, kind: AdapterKind, specifier: string): LibraryManifest {
 	if (
 		!isObject(value) ||
 		typeof value.apiVersion !== 'number' ||
@@ -104,24 +118,45 @@ function validateManifest(value: unknown, kind: AdapterKind, specifier: string):
 			`"${specifier}" declares kind "${value.kind}" but was configured as the ${kind} adapter`,
 		);
 	}
-	if (value.apiVersion !== ADAPTER_API_VERSION) {
+	const supportedApiVersion = LIBRARY_CONFIG[kind].apiVersion;
+	if (value.apiVersion !== supportedApiVersion) {
 		throw adapterConfigError(
 			kind,
-			`"${specifier}" declares adapter apiVersion ${value.apiVersion}; this server supports ${ADAPTER_API_VERSION}`,
+			`"${specifier}" declares adapter apiVersion ${value.apiVersion}; this server supports ${supportedApiVersion}`,
 		);
 	}
-	const create = value.create;
-	return kind === 'storage'
-		? {
-				apiVersion: value.apiVersion,
-				kind,
-				create: create.bind(value) as StorageAdapterModule['create'],
-			}
-		: {
-				apiVersion: value.apiVersion,
-				kind,
-				create: create.bind(value) as ComputeAdapterModule['create'],
-			};
+	return { create: value.create.bind(value) as LibraryManifest['create'] };
+}
+
+async function importLibraryManifest(
+	kind: AdapterKind,
+	specifier: string,
+): Promise<LibraryManifest> {
+	let namespace: unknown;
+	try {
+		namespace = await import(/* @vite-ignore */ resolveAdapterSpecifier(specifier));
+	} catch (error) {
+		throw adapterConfigError(
+			kind,
+			`Could not load ${kind} adapter library "${specifier}": ${errorMessage(error)}`,
+			{
+				remediation:
+					'Install the npm package in the server image, or mount the configured ESM module path.',
+			},
+		);
+	}
+	try {
+		return validateManifest(unwrapManifest(namespace), kind, specifier);
+	} catch (error) {
+		if (isConfigError(error)) throw error;
+		throw adapterConfigError(
+			kind,
+			`${LIBRARY_CONFIG[kind].label} adapter manifest from "${specifier}" could not be validated: ${errorMessage(error)}`,
+			{
+				remediation: 'Export a plain adapter manifest whose properties can be read safely.',
+			},
+		);
+	}
 }
 
 interface RequiredShape {
@@ -257,36 +292,11 @@ function validateSandboxInstance(
 }
 
 async function loadLibrary(
-	kind: AdapterKind,
+	kind: 'storage' | 'compute',
 	specifier: string,
 	context: AdapterFactoryContext,
 ): Promise<Bucket | SandboxProvider> {
-	let namespace: unknown;
-	try {
-		namespace = await import(/* @vite-ignore */ resolveAdapterSpecifier(specifier));
-	} catch (error) {
-		throw adapterConfigError(
-			kind,
-			`Could not load ${kind} adapter library "${specifier}": ${errorMessage(error)}`,
-			{
-				remediation:
-					'Install the npm package in the server image, or mount the configured ESM module path.',
-			},
-		);
-	}
-	let manifest: AdapterModule;
-	try {
-		manifest = validateManifest(unwrapManifest(namespace), kind, specifier);
-	} catch (error) {
-		if (isConfigError(error)) throw error;
-		throw adapterConfigError(
-			kind,
-			`${LIBRARY_CONFIG[kind].label} adapter manifest from "${specifier}" could not be validated: ${errorMessage(error)}`,
-			{
-				remediation: 'Export a plain adapter manifest whose properties can be read safely.',
-			},
-		);
-	}
+	const manifest = await importLibraryManifest(kind, specifier);
 	let adapter: unknown;
 	try {
 		adapter = await manifest.create(context);
@@ -326,6 +336,44 @@ function adapterContext(env: Env, kind: AdapterKind): AdapterFactoryContext {
 	};
 }
 
+/**
+ * Load and validate a trusted OIDC login-policy module. Unlike storage/compute
+ * factories, its context is only the environment record: the module maps
+ * validated claims to a bounded decision and needs no wired services.
+ */
+async function loadOidcLoginPolicyLibrary(env: Env, specifier: string): Promise<OidcLoginPolicy> {
+	const kind = 'oidc-login-policy';
+	const manifest = await importLibraryManifest(kind, specifier);
+	let policy: unknown;
+	try {
+		policy = await manifest.create({ env });
+	} catch (error) {
+		throw adapterConfigError(
+			kind,
+			`${LIBRARY_CONFIG[kind].label} adapter library "${specifier}" failed to initialize: ${errorMessage(error)}`,
+		);
+	}
+	try {
+		if (isOidcLoginPolicy(policy)) return policy;
+	} catch (error) {
+		throw adapterConfigError(
+			kind,
+			`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" could not be validated: ${errorMessage(error)}`,
+			{
+				remediation: 'Return a plain policy object whose properties can be read safely.',
+			},
+		);
+	}
+	throw adapterConfigError(
+		kind,
+		`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable evaluate method`,
+		{
+			remediation:
+				'Return an object with evaluate(input) from create(); see the OIDC login-policy contract in @marimo-hub/auth-oidc.',
+		},
+	);
+}
+
 function requiredLibrarySpecifier(env: Env, kind: AdapterKind): string {
 	const config = LIBRARY_CONFIG[kind];
 	return requiredVar(env, config.variable, {
@@ -345,7 +393,7 @@ function loadSelectedLibrary(
 	env: Env,
 ): Promise<SandboxProvider | undefined>;
 async function loadSelectedLibrary(
-	kind: AdapterKind,
+	kind: 'storage' | 'compute',
 	selected: boolean,
 	env: Env,
 ): Promise<Bucket | SandboxProvider | undefined> {
@@ -356,14 +404,21 @@ async function loadSelectedLibrary(
 export async function loadAdapterLibraries(env: Env): Promise<LoadedAdapterLibraries> {
 	const storageSelected = storageBackend(env) === 'library';
 	const computeSelected = computeBackend(env) === 'library';
-	if (!storageSelected && !computeSelected) return {};
+	// Gated on the oidc backend so a stale login-policy selector on another auth
+	// backend never runs module code; makeAuth still rejects that configuration.
+	const loginPolicySelected = oidcLoginPolicySelected(env) && authBackend(env) === 'oidc';
+	if (!storageSelected && !computeSelected && !loginPolicySelected) return {};
 
-	const [bucket, compute] = await Promise.all([
+	const [bucket, compute, oidcLoginPolicy] = await Promise.all([
 		loadSelectedLibrary('storage', storageSelected, env),
 		loadSelectedLibrary('compute', computeSelected, env),
+		loginPolicySelected
+			? loadOidcLoginPolicyLibrary(env, requiredLibrarySpecifier(env, 'oidc-login-policy'))
+			: undefined,
 	]);
 	return {
 		...(bucket ? { bucket } : {}),
 		...(compute ? { compute } : {}),
+		...(oidcLoginPolicy ? { oidcLoginPolicy } : {}),
 	};
 }

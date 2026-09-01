@@ -623,6 +623,9 @@ importers:
       oauth4webapi:
         specifier: 'catalog:'
         version: 3.8.6
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
     devDependencies:
       '@marimo-hub/tsconfig':
         specifier: workspace:*
