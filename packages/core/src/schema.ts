@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ResourceSecurityLabelsSchema } from './securityLabels';
 import { DomainError } from './errors';
 import {
 	NOTEBOOK_STATUSES,
@@ -170,6 +171,19 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	tags: z.array(z.string()),
 	last_run_at: z.iso.datetime().nullable(),
 	compute_profile: z.string().optional(),
+	/**
+	 * Notebook security-label OVERRIDE projection, mirroring the tri-state on
+	 * `SnapshotProjectEntrySchema.security_labels`: object = overridden, `null`
+	 * = known no-override, absent = indeterminate. Enforcement evaluates the
+	 * project labels AND the override, so an override can only add restrictions.
+	 */
+	security_labels: ResourceSecurityLabelsSchema.nullable().optional(),
+	/**
+	 * Set while a label mutation is in flight. Routine projections preserve it
+	 * and keep `security_labels` indeterminate; only the mutation's own
+	 * finalization clears it (see `catalogProjection.ts`).
+	 */
+	security_labels_pending: z.literal(true).optional(),
 	key_prefix: z.string(),
 });
 
@@ -209,6 +223,23 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Lowercased on parse so authz matching against a lowercased subject email holds
 	// regardless of the case an invite was stored in.
 	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
+	/**
+	 * Denormalized security-label projection for list filtering ahead of
+	 * pagination. Tri-state: an object = labeled, `null` = KNOWN unlabeled,
+	 * absent = indeterminate (a legacy entry, or a label mutation in flight) —
+	 * an indeterminate entry must be decided from the authoritative
+	 * `project.json`, never treated as unlabeled. The authoritative write and
+	 * this projection are not atomic; the label mutation flow parks the
+	 * projection at indeterminate first so a crash between the writes can only
+	 * fail closed.
+	 */
+	security_labels: ResourceSecurityLabelsSchema.nullable().optional(),
+	/**
+	 * Set while a label mutation is in flight. Routine projections preserve it
+	 * and keep `security_labels` indeterminate; only the mutation's own
+	 * finalization clears it (see `catalogProjection.ts`).
+	 */
+	security_labels_pending: z.literal(true).optional(),
 });
 
 export type SnapshotProjectEntry = z.infer<typeof SnapshotProjectEntrySchema>;
@@ -371,6 +402,13 @@ export const ProjectSchema = z.object({
 	created_at: z.iso.datetime(),
 	updated_at: z.iso.datetime(),
 	tags: z.array(z.string()),
+	/**
+	 * Optional resource security labels — the AUTHORITATIVE copy (the snapshot
+	 * entry carries a projection). Absent = unlabeled: current role behavior.
+	 * Labels only add restrictions; they never grant access. Mutated only
+	 * through the dedicated security-label flow, never by project updates.
+	 */
+	security_labels: ResourceSecurityLabelsSchema.optional(),
 });
 
 export type Project = z.infer<typeof ProjectSchema>;
@@ -412,6 +450,13 @@ export const NotebookMetaSchema = z.object({
 	// Absent = the deployment's default compute profile. Only a non-default
 	// choice is persisted.
 	compute_profile: z.string().optional(),
+	/**
+	 * Optional security-label override — authoritative copy. Enforced IN
+	 * ADDITION to the project's labels (both must be satisfied), so an override
+	 * can keep or increase restrictions but never lower them. Absent = the
+	 * notebook inherits the project labels unchanged.
+	 */
+	security_labels: ResourceSecurityLabelsSchema.optional(),
 });
 
 export type NotebookMeta = z.infer<typeof NotebookMetaSchema>;

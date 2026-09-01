@@ -63,6 +63,7 @@ import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { createGuardedHostResolver } from './integrationProbe';
 import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
+import { makeResourceSecurity } from './resourceSecurity';
 import { makeSourceControl } from './sourceControl';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { loadAdapterLibraries } from './library';
@@ -627,6 +628,12 @@ export function createFromEnv(
 				DEFAULT_MAX_APPS_PER_PROJECT,
 			),
 		},
+		// Resource-security collaborators, injected beside the data-only policy
+		// (no-op unless MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER is configured).
+		...(() => {
+			const resourceSecurity = makeResourceSecurity(env, options?.libraries);
+			return resourceSecurity ? { resourceSecurity } : {};
+		})(),
 		// Read-only configuration for the super-admin settings page (secrets
 		// redacted at assembly).
 		configSummary: buildConfigSummary(env),

@@ -53,7 +53,11 @@ export type {
 	PruneExpiredProposalPayloadsOptions,
 	PublishProposalChangeRequestInput,
 } from './content/NotebookProposalService';
-export type { CreateNotebookInput, NotebookVersionProtector } from './content/NotebookService';
+export type {
+	CreateNotebookInput,
+	NotebookDetail,
+	NotebookVersionProtector,
+} from './content/NotebookService';
 export {
 	applyGitSourceUpdate,
 	assertSyncedSource,
@@ -253,12 +257,16 @@ export {
 	sessionGrants,
 } from './runtime/sessionAuthz';
 export { AuthorizationService } from './authorization/AuthorizationService';
+export { LocalResourceConstraintPolicy } from './authorization/LocalResourceConstraintPolicy';
 export type {
 	AuthorizationDecision,
 	AuthorizationDenialCategory,
 	AuthorizationPolicy,
 	AuthorizationResource,
+	AuthorizationSubject,
+	NotebookLabelOverride,
 	ProjectEntryVisibilityInput,
+	ResourceSecurityPolicy,
 	SessionAdmissionRecord,
 } from './authorization/AuthorizationService';
 export {

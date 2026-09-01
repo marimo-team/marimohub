@@ -23,7 +23,12 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { errorMetadata, logEvent } from '../log';
-import { assertSessionControl, assertSessionSurfaceAccess, loadVisibleProject } from '../shared';
+import {
+	assertSessionControl,
+	assertSessionNotebookVisible,
+	assertSessionSurfaceAccess,
+	loadVisibleProject,
+} from '../shared';
 
 export function surfaceConfig(deps: ApiDeps, id: SecondarySurfaceId) {
 	const config = deps.sandbox.surfaces?.[id];
@@ -213,12 +218,13 @@ export async function loadSurfaceSession(
 	params: { pid: ProjectId; nid: string; sid: SessionId },
 	permission: 'attach' | 'control' = 'attach',
 ) {
-	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps.policy);
+	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps);
 	const session = await deps.services.sessions.getSession(params.pid, params.sid);
 	if (session.notebook_id !== params.nid) {
 		throw new NotFoundError(`Session ${params.sid} not found`);
 	}
-	if (permission === 'control') await assertSessionControl(project, session, user, deps.policy);
-	else await assertSessionSurfaceAccess(project, session, user, deps.policy);
+	const labels = await assertSessionNotebookVisible(deps, project, session, user);
+	if (permission === 'control') await assertSessionControl(project, session, user, deps, labels);
+	else await assertSessionSurfaceAccess(project, session, user, deps, labels);
 	return session;
 }

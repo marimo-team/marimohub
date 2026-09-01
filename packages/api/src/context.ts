@@ -1,5 +1,6 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
+	ResourceSecurityPolicy,
 	Authenticator,
 	AssignableRole,
 	AuthUser,
@@ -334,8 +335,14 @@ export interface ApiDeps {
 	tracingMiddleware?: MiddlewareHandler;
 	/** How the notebook sandbox is mounted, exposed, and persisted. */
 	sandbox: SandboxConfig;
-	/** Deployment-wide authorization / abuse-guard knobs. */
+	/** Deployment-wide authorization / abuse-guard knobs (pure env-derived data). */
 	policy: PolicyConfig;
+	/**
+	 * Resource-security collaborators (constraint adapter + subject-context
+	 * provider) — live ports, kept out of the data-only `policy`. Labeled
+	 * projects and notebooks fail closed without them.
+	 */
+	resourceSecurity?: ResourceSecurityPolicy;
 	/**
 	 * Probe downstream deps (storage/auth/compute/WIF). Built by `@marimo-hub/config`;
 	 * logged once (non-fatal) at boot and served by `GET /api/health?deep=true`.

@@ -11,16 +11,11 @@
  * the Node relay uses to close an established socket.
  */
 import type { MiddlewareHandler } from 'hono';
-import {
-	ForbiddenError,
-	ProxyExposure,
-	SurfaceForbiddenError,
-	UnavailableError,
-	verifyProxyToken,
-} from '@marimo-hub/core';
+import { NotFoundError, ProxyExposure, UnavailableError, verifyProxyToken } from '@marimo-hub/core';
+import type { ResourceSecurityLabels } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
-import { assertSessionProxyAccess, assertSessionSurfaceAccess, fail } from './shared';
+import { authorizationService, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -160,8 +155,7 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	// Per-session authorization — role re-checked per request, so a revoked
-	// membership cuts kernel access (assertSessionProxyAccess says who is admitted).
+	// Per-session authorization follows below once the project is loaded.
 	let project;
 	try {
 		project = await deps.services.projects.getProject(projectId);
@@ -169,20 +163,63 @@ export async function authorizeProxyRequest(
 		// A session whose project is gone is unreachable, like a missing session.
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
-	// A soft-deleted project's kernels go dark immediately: this gate is the only
-	// thing in the browser→kernel path, and the sandbox may still be alive.
-	if (project.status === 'deleted') {
-		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
-	}
+	// The notebook's label override rides on every proxy decision: a caller who
+	// satisfies the project labels but not the override must not reach the
+	// kernel. A missing notebook masks; a transient meta failure fails closed as
+	// unavailable rather than pretending the session is gone.
+	let notebookLabels: ResourceSecurityLabels | null;
 	try {
-		if (surfaceId) await assertSessionSurfaceAccess(project, session, user, deps.policy);
-		else await assertSessionProxyAccess(project, session, user, deps.policy);
+		notebookLabels = await deps.services.notebooks.getSecurityLabels(
+			projectId,
+			session.notebook_id,
+		);
 	} catch (err) {
-		if (err instanceof ForbiddenError || err instanceof SurfaceForbiddenError) {
-			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };
+		if (err instanceof NotFoundError) {
+			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 		}
-		throw err;
+		return {
+			kind: 'reject',
+			status: 503,
+			code: 'SERVICE_UNAVAILABLE',
+			message: 'Session authorization could not be verified',
+		};
 	}
+	// ONE decision covers the whole gate: lifecycle (a soft-deleted project's
+	// kernels go dark immediately — this is the only thing in the
+	// browser→kernel path, and the sandbox may still be alive), session
+	// admission (role re-checked per request, so a revoked membership cuts
+	// kernel access), and the label constraints (project labels + notebook
+	// override — one subject-context resolve and one adapter round-trip, not
+	// one per gate). Lifecycle and constraint denials mask as a missing
+	// session; membership and session denials keep the historical 403.
+	const decision = await authorizationService(deps).authorize(
+		user,
+		surfaceId ? 'session.surface' : 'session.proxy',
+		{ kind: 'session', project, session, notebookLabels },
+	);
+	if (!decision.allowed) {
+		if (decision.category === 'lifecycle' || decision.category === 'constraint') {
+			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+		}
+		return {
+			kind: 'reject',
+			status: 403,
+			code: 'FORBIDDEN',
+			message: surfaceId
+				? 'Not authorized to use this session surface'
+				: 'Not authorized to attach this session',
+		};
+	}
+	// The CURRENT context expiry can be earlier than the deadline stamped at
+	// session start — an established socket must not outlive either.
+	const contextDeadline =
+		decision.subjectContextExpiresAt !== undefined
+			? Date.parse(decision.subjectContextExpiresAt)
+			: undefined;
+	const effectiveDeadline =
+		authorizationDeadline !== undefined && contextDeadline !== undefined
+			? Math.min(authorizationDeadline, contextDeadline)
+			: (authorizationDeadline ?? contextDeadline);
 
 	const upstreamPath =
 		surfaceId === 'vscode' &&
@@ -197,7 +234,7 @@ export async function authorizeProxyRequest(
 		kind: 'forward',
 		targetUrl,
 		sessionId,
-		...(authorizationDeadline !== undefined ? { authorizationDeadline } : {}),
+		...(effectiveDeadline !== undefined ? { authorizationDeadline: effectiveDeadline } : {}),
 	};
 }
 

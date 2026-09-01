@@ -178,7 +178,7 @@ export class SyncedNotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
+			(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
 		);
 		return source;
 	}
@@ -381,7 +381,7 @@ export class SyncedNotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
+			(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
 		);
 
 		await this.hooks.pruneVersions(projectId, notebookId, versionToKeep);

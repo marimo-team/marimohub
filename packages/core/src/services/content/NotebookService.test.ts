@@ -11,6 +11,7 @@ import {
 import { createNotebookId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
+import { LocalResourceConstraintPolicy } from '../authorization/LocalResourceConstraintPolicy';
 import { ACTOR, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
@@ -2236,5 +2237,220 @@ describe('NotebookService', () => {
 				{ snapshot_id: 'orphan_1', captured_at: '2020-01-01T00:00:00.000Z' },
 			]);
 		});
+	});
+});
+
+describe('NotebookService security labels', () => {
+	let bucket: MemoryBucket;
+	let projects: ProjectService;
+	let notebooks: NotebookService;
+	let catalog: CatalogService;
+	let pid: ProjectId;
+
+	beforeEach(async () => {
+		const env = await setupTestEnv();
+		bucket = env.bucket;
+		projects = env.projects;
+		notebooks = env.notebooks;
+		catalog = env.catalog;
+		pid = (await projects.createProject({ name: 'L', description: '' }, ACTOR)).id;
+	});
+
+	const LABELS = { classification: 'SECRET', compartments: ['element-b', 'element-a'] };
+	const CONTEXT = {
+		schemaVersion: 1 as const,
+		classification: 'SECRET',
+		compartments: ['element-a', 'element-b'],
+		policyVersion: 'policy-1',
+		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+	};
+	const SUBJECT = {
+		id: ACTOR,
+		email: `${ACTOR}@example.com`,
+		credential: { kind: 'sso' as const },
+	};
+	const security = (context = CONTEXT) => ({
+		constraints: new LocalResourceConstraintPolicy({
+			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
+		}),
+		subjectContext: { resolve: async () => context },
+	});
+
+	async function createLabeled() {
+		const meta = await notebooks.createNotebook(
+			pid,
+			{ title: 'labeled', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		await notebooks.setSecurityLabels(pid, meta.id, LABELS, ACTOR);
+		return meta.id;
+	}
+
+	const entryFor = async (nid: string) =>
+		(await catalog.getCurrentSnapshot()).projects
+			.find((p) => p.id === pid)
+			?.notebooks.find((n) => n.id === nid);
+
+	it('routine projections never resurrect an override while a mutation is pending', async () => {
+		const nid = await createLabeled();
+		// Freeze the crashed/in-flight window: pending marker set, authoritative
+		// record still carrying the OLD override.
+		await catalog.updateNotebookEntry('test.pending', ACTOR, pid, nid, () => ({
+			security_labels: undefined,
+			security_labels_pending: true,
+		}));
+
+		await notebooks.updateNotebook(pid, nid, { title: 'renamed' }, ACTOR);
+		const during = await entryFor(nid);
+		expect(during?.title).toBe('renamed');
+		expect(during?.security_labels).toBeUndefined();
+		expect(during?.security_labels_pending).toBe(true);
+
+		await notebooks.setSecurityLabels(
+			pid,
+			nid,
+			{ classification: 'SECRET', compartments: ['element-a'] },
+			ACTOR,
+		);
+		const after = await entryFor(nid);
+		expect(after?.security_labels).toEqual({
+			classification: 'SECRET',
+			compartments: ['element-a'],
+		});
+		expect(after?.security_labels_pending).toBeUndefined();
+	});
+
+	it('resolves an indeterminate override from meta even when the source blob is unreadable', async () => {
+		const nid = await createLabeled();
+		await catalog.updateNotebookEntry('test.strip', ACTOR, pid, nid, () => ({
+			security_labels: undefined,
+		}));
+		await bucket.delete(paths.project(pid).notebook(nid).source);
+		const list = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
+		expect(list.map((n) => n.id)).toEqual([nid]);
+	});
+
+	it('sets a normalized override on the record and projects it into the snapshot', async () => {
+		const nid = await createLabeled();
+		const detail = await notebooks.getNotebook(pid, nid);
+		expect(detail.meta.security_labels).toEqual({
+			classification: 'SECRET',
+			compartments: ['element-a', 'element-b'],
+		});
+		expect((await entryFor(nid))?.security_labels).toEqual(detail.meta.security_labels);
+	});
+
+	it('clears the override back to a known no-override projection', async () => {
+		const nid = await createLabeled();
+		const cleared = await notebooks.setSecurityLabels(pid, nid, undefined, ACTOR);
+		expect(cleared.security_labels).toBeUndefined();
+		expect((await entryFor(nid))?.security_labels).toBeNull();
+	});
+
+	it('refuses to label a deleted notebook', async () => {
+		const meta = await notebooks.createNotebook(
+			pid,
+			{ title: 'gone', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		await notebooks.deleteNotebook(pid, meta.id, ACTOR);
+		await expect(notebooks.setSecurityLabels(pid, meta.id, LABELS, ACTOR)).rejects.toThrow(
+			NotFoundError,
+		);
+	});
+
+	it('leaves the projection indeterminate — never wrong — when the authoritative write fails', async () => {
+		const meta = await notebooks.createNotebook(
+			pid,
+			{ title: 'crash', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const key = paths.project(pid).notebook(meta.id).meta;
+		const realPut = bucket.put.bind(bucket);
+		const failing = vi.spyOn(bucket, 'put').mockImplementation(async (k, ...rest) => {
+			if (k === key) throw new Error('injected crash before the authoritative write');
+			return realPut(k, ...rest);
+		});
+		try {
+			await expect(notebooks.setSecurityLabels(pid, meta.id, LABELS, ACTOR)).rejects.toThrow(
+				/injected/,
+			);
+		} finally {
+			failing.mockRestore();
+		}
+		expect((await entryFor(meta.id))?.security_labels).toBeUndefined();
+		// The list resolves the indeterminate entry from the authoritative record,
+		// which still carries no override.
+		const list = await notebooks.listNotebooks(pid, { subject: SUBJECT, policy: {} });
+		expect(list.map((n) => n.id)).toContain(meta.id);
+	});
+
+	it('self-heals an indeterminate projection on the next routine write', async () => {
+		const nid = await createLabeled();
+		await catalog.updateNotebookEntry('test.strip', ACTOR, pid, nid, () => ({
+			security_labels: undefined,
+		}));
+		await notebooks.updateNotebook(pid, nid, { description: 'healed' }, ACTOR);
+		expect((await entryFor(nid))?.security_labels).toEqual({
+			classification: 'SECRET',
+			compartments: ['element-a', 'element-b'],
+		});
+	});
+
+	it('filters override-labeled notebooks from lists unless the subject satisfies them', async () => {
+		const open = await notebooks.createNotebook(
+			pid,
+			{ title: 'open', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const labeled = await createLabeled();
+
+		// No wiring: the override fails closed while the plain notebook lists.
+		const unwired = await notebooks.listNotebooks(pid, { subject: SUBJECT, policy: {} });
+		expect(unwired.map((n) => n.id)).toEqual([open.id]);
+
+		const admitted = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
+		expect(admitted.map((n) => n.id).sort()).toEqual([open.id, labeled].sort());
+		const denied = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security({ ...CONTEXT, compartments: ['element-a'] }),
+		});
+		expect(denied.map((n) => n.id)).toEqual([open.id]);
+	});
+
+	it('resolves an indeterminate override projection from the authoritative record', async () => {
+		const labeled = await createLabeled();
+		await catalog.updateNotebookEntry('test.strip', ACTOR, pid, labeled, () => ({
+			security_labels: undefined,
+		}));
+		const denied = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security({ ...CONTEXT, compartments: [] }),
+		});
+		expect(denied).toEqual([]);
+		const admitted = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
+		expect(admitted.map((n) => n.id)).toEqual([labeled]);
+	});
+
+	it('fails closed when an indeterminate entry has an unreadable record', async () => {
+		const labeled = await createLabeled();
+		await catalog.updateNotebookEntry('test.strip', ACTOR, pid, labeled, () => ({
+			security_labels: undefined,
+		}));
+		await bucket.delete(paths.project(pid).notebook(labeled).meta);
+		const list = await notebooks.listNotebooks(pid, {
+			subject: SUBJECT,
+			resourceSecurity: security(),
+		});
+		expect(list).toEqual([]);
 	});
 });

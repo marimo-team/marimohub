@@ -15,6 +15,7 @@ import {
 	errorResponses,
 	jsonBody,
 	jsonContent,
+	loadAuthorizedNotebook,
 	RequiredIdempotencyKeyHeader,
 	SessionIdParam,
 } from '../shared';
@@ -101,17 +102,25 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 	const idempotencyKey = c.req.valid('header')['idempotency-key'];
 	const request = c.req.valid('json');
-	await assertProjectRole(deps.services.projects, pid, user, 'change-request.publish', deps.policy);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'change-request.publish',
+		deps,
+	);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);
 		const { proposal, publisher, notebookTitle, state } = await prepareProposal({
 			deps,
-			projectId: pid,
+			project,
 			notebookId: nid,
 			sessionId: sid,
 			proposalId,
 			author: user.id,
+			subject: user,
 			targetProposalId: request.target_proposal_id,
 		});
 		const eventContext = {

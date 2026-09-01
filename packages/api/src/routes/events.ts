@@ -124,7 +124,7 @@ const app = createApp();
 app.openapi(listGlobalEvents, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	await assertSuperAdmin(user, deps.policy);
+	await assertSuperAdmin(user, deps);
 	const query = c.req.valid('query');
 	const range = eventRange(query.from, query.to);
 	const page = await deps.services.events.listEvents({
@@ -152,7 +152,7 @@ app.openapi(listEvents, async (c) => {
 
 	// Unlike other reads (open by v1 policy), the audit trail is manager-only.
 	// assertProjectRole also 404s a soft-deleted project (its own lifecycle guard).
-	await assertProjectRole(deps.services.projects, pid, user, 'project.events.read', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'project.events.read', deps);
 
 	const day = date ?? new Date().toISOString().slice(0, 10);
 	const events = await deps.services.events.getEvents(day);

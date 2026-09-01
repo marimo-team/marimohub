@@ -142,6 +142,26 @@ WebSocket path, which force-closes at the authorization deadline), the managed
 AI proxy and git sync accept only their own short-lived minted tokens, and the
 CLI token exchange is bound by PKCE and rate budgets.
 
+Deployments can add **security labels** to projects and notebooks. A label has a
+classification and required compartments. Notebook labels add restrictions to
+the project label.
+
+Access requires both the project role and a matching subject context. A trusted
+provider resolves this context at request time, never from raw login claims.
+A request with a missing, expired, or invalid context fails closed. The API
+returns 404. Super admins do not bypass labels.
+
+Lists filter labels before pagination. Sessions and kernel proxies use the
+earlier of the credential and subject-context expiry. Label changes require
+super-admin standing and record the old and new labels in the audit log.
+
+Known limits:
+
+- Git-sync tokens have no user principal. Do not enable git sync for labeled
+  notebooks.
+- Deployment-wide sandbox storage credentials can cross project boundaries.
+  Use scoped credentials (WIF) or non-persistent workspaces.
+
 Project reads require an effective `viewer` role, obtained through ownership,
 membership, or `MARIMOHUB_DEFAULT_ROLE`. Non-members cannot see a project when
 the default role is `none`. Notebook writes require `editor` or higher against

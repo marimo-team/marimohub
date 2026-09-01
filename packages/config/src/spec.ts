@@ -1292,6 +1292,36 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'admin@example.com,user_01HXY00000000000000000000',
 					},
 					{
+						id: 'MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER',
+						name: 'Classification order',
+						description:
+							'Comma-separated classification order, lowest to highest. A subject context must ' +
+							'include the required classification or a higher one, plus every required compartment. Labels ' +
+							'only restrict access. If unset, new labels are rejected and existing labels fail closed.',
+						example: 'PUBLIC,INTERNAL,CONFIDENTIAL,RESTRICTED',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND',
+						name: 'Subject-context backend',
+						description:
+							'Set `library` to load a trusted subject-context provider. The provider resolves ' +
+							'clearance and compartments for each principal. A classification order is required. ' +
+							'Without a provider, all labeled resources are denied.',
+						example: 'library',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY',
+						name: 'Subject-context module',
+						description:
+							'The provider module as an npm package, ESM path, or file URL. This value is ' +
+							'required for the `library` backend. The module runs with server privileges. ' +
+							'Use only trusted, pinned code.',
+						example: '/etc/marimohub/subject-context.mjs',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_VIEWER_MODE',
 						name: 'Viewer mode',
 						description:

@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
+	LocalResourceConstraintPolicy,
 	ProxyExposure,
 	signProxyToken,
 	SubdomainExposure,
@@ -145,6 +146,93 @@ describe('authorizeProxyRequest', () => {
 			policy: { superAdmins: [STRANGER] },
 		});
 		expect(d.kind).toBe('forward');
+	});
+
+	it('masks a labeled project as 404 when the caller has no satisfying context — owner included', async () => {
+		const services = createServices(bucket);
+		await services.projects.setSecurityLabels(
+			pid,
+			{ classification: 'SECRET', compartments: ['element-a'] },
+			ACTOR,
+		);
+		const security = {
+			constraints: new LocalResourceConstraintPolicy({
+				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+			}),
+		};
+		// Wired but contextless, and unwired entirely: both fail closed and mask.
+		for (const override of [{ resourceSecurity: security }, {}]) {
+			const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+				...deps(ACTOR),
+				...override,
+			});
+			expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
+		}
+	});
+
+	it('masks the kernel behind a notebook override the caller does not satisfy', async () => {
+		const services = createServices(bucket);
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		// Project stays unlabeled; only the notebook carries an override.
+		await services.notebooks.setSecurityLabels(
+			pid,
+			notebooks[0].id,
+			{ classification: 'SECRET', compartments: ['element-x'] },
+			ACTOR,
+		);
+		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+			...deps(ACTOR),
+			resourceSecurity: {
+				constraints: new LocalResourceConstraintPolicy({
+					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+				}),
+			},
+		});
+		expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
+	});
+
+	it('tightens the forward deadline to a context expiry earlier than the stored one', async () => {
+		const services = createServices(bucket);
+		await services.projects.setSecurityLabels(
+			pid,
+			{ classification: 'SECRET', compartments: [] },
+			ACTOR,
+		);
+		// A session stamped with a FAR deadline at start...
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		const far = await services.sessions.createSession({
+			notebook_id: notebooks[0].id,
+			project_id: pid,
+			user_id: ACTOR,
+			authorization_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+		});
+		await services.sessions.setRunning(pid, far.session_id, '/proxy/x/', false, ORIGIN);
+		const farToken = await signProxyToken(pid, far.session_id, SECRET);
+		// ...whose subject context now expires much sooner.
+		const contextExpiry = new Date(Date.now() + 60_000).toISOString();
+		const d = await authorizeProxyRequest(req(`/proxy/${farToken}/`), {
+			...deps(ACTOR),
+			resourceSecurity: {
+				constraints: new LocalResourceConstraintPolicy({
+					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
+				}),
+				subjectContext: {
+					resolve: async () =>
+						({
+							schemaVersion: 1,
+							classification: 'SECRET',
+							compartments: [],
+							policyVersion: 'p1',
+							expiresAt: contextExpiry,
+						}) as never,
+				},
+			},
+		});
+		expect(d).toMatchObject({ kind: 'forward' });
+		// The CURRENT context expiry wins over the deadline stamped at start.
+		expect((d as { authorizationDeadline?: number }).authorizationDeadline).toBe(
+			Date.parse(contextExpiry),
+		);
 	});
 
 	it('rejects a non-owner editor from an exclusive editor kernel', async () => {

@@ -2,11 +2,13 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
 	ADAPTER_API_VERSION,
+	isSubjectSecurityContextProvider,
 	missingBucketMethods,
 	missingSandboxInstanceMethods,
 	missingSandboxProviderMethods,
 	PreconditionFailedError,
 	SANDBOX_INSTANCE_OPTIONAL_METHODS,
+	SUBJECT_CONTEXT_ADAPTER_API_VERSION,
 } from '@marimo-hub/core';
 import type {
 	AdapterFactoryContext,
@@ -14,10 +16,12 @@ import type {
 	ExternalStorageAdapter,
 	SandboxInstance,
 	SandboxProvider,
+	SubjectSecurityContextProvider,
 } from '@marimo-hub/core';
 import { isOidcLoginPolicy, OIDC_LOGIN_POLICY_API_VERSION } from '@marimo-hub/auth-oidc';
 import type { OidcLoginPolicy } from '@marimo-hub/auth-oidc';
 import { authBackend, oidcLoginPolicySelected } from './auth';
+import { validateResourceSecurityEnv } from './resourceSecurity';
 import { computeBackend } from './compute';
 import { parseSecondsEnv, requiredVar } from './env';
 import type { Env } from './env';
@@ -30,6 +34,7 @@ export interface LoadedAdapterLibraries {
 	bucket?: Bucket;
 	compute?: SandboxProvider;
 	oidcLoginPolicy?: OidcLoginPolicy;
+	subjectContext?: SubjectSecurityContextProvider;
 }
 
 const ADAPTER_DOCS = 'development_docs/ports.md#external-adapter-libraries';
@@ -51,6 +56,12 @@ const LIBRARY_CONFIG = {
 		label: 'OIDC login-policy',
 		example: '/etc/marimohub/oidc-login-policy.mjs',
 		apiVersion: OIDC_LOGIN_POLICY_API_VERSION,
+	},
+	'subject-security-context': {
+		variable: 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY',
+		label: 'Subject security context',
+		example: '/etc/marimohub/subject-context.mjs',
+		apiVersion: SUBJECT_CONTEXT_ADAPTER_API_VERSION,
 	},
 } as const;
 type AdapterKind = keyof typeof LIBRARY_CONFIG;
@@ -374,6 +385,44 @@ async function loadOidcLoginPolicyLibrary(env: Env, specifier: string): Promise<
 	);
 }
 
+/**
+ * Load and validate a trusted subject-security-context provider. Like the
+ * login-policy kind, its factory context is only the environment record.
+ */
+async function loadSubjectContextLibrary(
+	env: Env,
+	specifier: string,
+): Promise<SubjectSecurityContextProvider> {
+	const kind = 'subject-security-context';
+	const manifest = await importLibraryManifest(kind, specifier);
+	let provider: unknown;
+	try {
+		provider = await manifest.create({ env });
+	} catch (error) {
+		throw adapterConfigError(
+			kind,
+			`${LIBRARY_CONFIG[kind].label} adapter library "${specifier}" failed to initialize: ${errorMessage(error)}`,
+		);
+	}
+	try {
+		if (isSubjectSecurityContextProvider(provider)) return provider;
+	} catch (error) {
+		throw adapterConfigError(
+			kind,
+			`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" could not be validated: ${errorMessage(error)}`,
+			{ remediation: 'Return a plain provider object whose properties can be read safely.' },
+		);
+	}
+	throw adapterConfigError(
+		kind,
+		`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable resolve method`,
+		{
+			remediation:
+				'Return an object with resolve(principal, signal) from create(); see the SubjectSecurityContextProvider port.',
+		},
+	);
+}
+
 function requiredLibrarySpecifier(env: Env, kind: AdapterKind): string {
 	const config = LIBRARY_CONFIG[kind];
 	return requiredVar(env, config.variable, {
@@ -407,18 +456,28 @@ export async function loadAdapterLibraries(env: Env): Promise<LoadedAdapterLibra
 	// Gated on the oidc backend so a stale login-policy selector on another auth
 	// backend never runs module code; makeAuth still rejects that configuration.
 	const loginPolicySelected = oidcLoginPolicySelected(env) && authBackend(env) === 'oidc';
-	if (!storageSelected && !computeSelected && !loginPolicySelected) return {};
+	// Full validation BEFORE the selector: an orphaned or invalid
+	// resource-security configuration must never import (and initialize) the
+	// provider module — makeResourceSecurity would only reject it afterwards.
+	const { subjectContextSelected } = validateResourceSecurityEnv(env);
+	if (!storageSelected && !computeSelected && !loginPolicySelected && !subjectContextSelected) {
+		return {};
+	}
 
-	const [bucket, compute, oidcLoginPolicy] = await Promise.all([
+	const [bucket, compute, oidcLoginPolicy, subjectContext] = await Promise.all([
 		loadSelectedLibrary('storage', storageSelected, env),
 		loadSelectedLibrary('compute', computeSelected, env),
 		loginPolicySelected
 			? loadOidcLoginPolicyLibrary(env, requiredLibrarySpecifier(env, 'oidc-login-policy'))
+			: undefined,
+		subjectContextSelected
+			? loadSubjectContextLibrary(env, requiredLibrarySpecifier(env, 'subject-security-context'))
 			: undefined,
 	]);
 	return {
 		...(bucket ? { bucket } : {}),
 		...(compute ? { compute } : {}),
 		...(oidcLoginPolicy ? { oidcLoginPolicy } : {}),
+		...(subjectContext ? { subjectContext } : {}),
 	};
 }

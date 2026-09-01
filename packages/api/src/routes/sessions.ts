@@ -1,9 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import type {
+	ResourceSecurityLabels,
 	Role,
 	AuthUser,
 	EditorClaim,
 	EditorSandboxSharing,
+	NotebookId,
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
@@ -61,17 +63,19 @@ import {
 	scheduleNotification,
 	scheduleProjectAlert,
 } from '../notifications';
-import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
+import type { ApiDeps, SandboxConfig } from '../context';
 import {
 	assertProjectRole,
 	assertSessionAccess,
 	assertSessionControl,
+	assertSessionNotebookVisible,
 	authorizationService,
 	commonErrors,
 	createApp,
 	errorResponses,
 	IdempotencyKeyHeader,
 	jsonContent,
+	loadAuthorizedNotebook,
 	loadVisibleProject,
 	NotebookIdParam,
 	ProjectIdParam,
@@ -84,6 +88,7 @@ import {
 	SuccessResponseSchema,
 	toComputeResourcesResponse,
 } from '../shared';
+import type { AuthzDeps } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 import {
 	beginSessionSurface,
@@ -504,22 +509,30 @@ async function authorizeSessionStart(
 	project: Project,
 	user: AuthUser,
 	mode: SessionMode,
-	policy: PolicyConfig,
+	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<{
 	role: Role | null;
 	ephemeral: boolean;
 	profileOverrideEligible: boolean;
 	restrictedViewerCredentials: boolean;
+	subjectContextExpiresAt?: string;
 }> {
-	const decision = await authorizationService(policy).authorize(user, 'session.start', {
+	const decision = await authorizationService(deps).authorize(user, 'session.start', {
 		kind: 'session-start',
 		project,
 		mode,
+		notebookLabels,
 	});
 	const role = decision.role;
 	if (!decision.allowed) {
-		// The canonical editor-gate 403 (session.start admits every editor+); the
-		// caller has already 404'd a deleted project.
+		// A security-label denial masks the project as nonexistent, matching the
+		// read routes; role denials keep the canonical editor-gate 403
+		// (session.start admits every editor+; the caller already 404'd a deleted
+		// project).
+		if (decision.category === 'constraint') {
+			throw new NotFoundError(`Project ${project.id} not found`);
+		}
 		throw new ForbiddenError(`Requires 'editor' role on project ${project.id}`);
 	}
 	const ephemeral = role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral';
@@ -532,7 +545,24 @@ async function authorizeSessionStart(
 		// ephemeral throwaway is forced onto the deployment default.
 		profileOverrideEligible: !ephemeral,
 		restrictedViewerCredentials: ephemeral,
+		...(decision.subjectContextExpiresAt !== undefined
+			? { subjectContextExpiresAt: decision.subjectContextExpiresAt }
+			: {}),
 	};
+}
+
+/** The earlier of two ISO deadlines; undefined entries do not bound. */
+function earliestDeadline(...deadlines: (string | undefined)[]): string | undefined {
+	// Compare as instants, not strings: ISO timestamps with mixed fractional
+	// seconds do not sort lexicographically ('…00.900Z' < '…00Z' as text).
+	let earliest: string | undefined;
+	for (const deadline of deadlines) {
+		if (deadline === undefined) continue;
+		if (earliest === undefined || Date.parse(deadline) < Date.parse(earliest)) {
+			earliest = deadline;
+		}
+	}
+	return earliest;
 }
 
 function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
@@ -664,6 +694,47 @@ async function assertCapAfterCreate(
 
 const app = createApp();
 
+/**
+ * Notebook-override enforcement for session read paths: sessions of a notebook
+ * whose security-label override the caller does not satisfy are
+ * indistinguishable from nonexistent — they must not leak existence or a
+ * kernel URL through listings. One meta read and one batched decision per
+ * distinct notebook; an unreadable meta fails closed (hidden, not leaked).
+ */
+async function admittedSessionNotebooks(
+	deps: ApiDeps,
+	user: AuthUser,
+	project: Project,
+	notebookIds: readonly NotebookId[],
+): Promise<Set<NotebookId>> {
+	const distinct = [...new Set(notebookIds)];
+	const states = await Promise.all(
+		distinct.map(async (nid) => {
+			try {
+				return { nid, labels: await deps.services.notebooks.getSecurityLabels(project.id, nid) };
+			} catch {
+				return null;
+			}
+		}),
+	);
+	const admitted = new Set(states.flatMap((s) => (s?.labels === null ? [s.nid] : [])));
+	const labeled = states.filter(
+		(s): s is { nid: NotebookId; labels: ResourceSecurityLabels } =>
+			s !== null && s.labels !== null,
+	);
+	if (labeled.length > 0) {
+		const decisions = await authorizationService(deps).authorizeMany(
+			user,
+			'project.read',
+			labeled.map((s) => ({ kind: 'project' as const, project, notebookLabels: s.labels })),
+		);
+		decisions.forEach((decision, index) => {
+			if (decision.allowed) admitted.add(labeled[index].nid);
+		});
+	}
+	return admitted;
+}
+
 app.openapi(listSessions, async (c) => {
 	const deps = c.get('deps');
 	const { sessions, projects } = deps.services;
@@ -673,10 +744,17 @@ app.openapi(listSessions, async (c) => {
 	// open when a default role is set, members-only under MARIMOHUB_DEFAULT_ROLE=none.
 	// The project is loaded (not just visibility-checked) to gate each item's
 	// kernel URL and `can` grants by the caller's role (see sessionGrantsFor).
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 	const active = await sessions.listActiveByProject(pid);
+	const admitted = await admittedSessionNotebooks(
+		deps,
+		user,
+		project,
+		active.map((s) => s.notebook_id),
+	);
+	const visible = active.filter((s) => admitted.has(s.notebook_id));
 	const data = paginate(
-		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
+		visible.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
 		c.req.valid('query'),
 		{
 			key: (s) => s.started_at,
@@ -694,11 +772,12 @@ app.openapi(getSession, async (c) => {
 	// Read-only, project-scoped (matches listSessions). The project-scoped key 404s
 	// a cross-project id; the notebook check keeps a same-project/other-notebook id
 	// out of scope.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 	const session = await sessions.getSession(pid, sid);
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
+	await assertSessionNotebookVisible(deps, project, session, user);
 	return c.json(
 		{
 			success: true,
@@ -736,9 +815,14 @@ app.openapi(getEditorSession, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps.policy);
-	const notebook = await deps.services.notebooks.getNotebook(pid, nid);
-	if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'notebook.write',
+		deps,
+	);
+	await loadAuthorizedNotebook(deps, project, nid, user);
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
 	const sharing = effectiveEditorSharing(claim, deps.policy.editorSandboxSharing);
 	const claimedSession = claim?.session_id
@@ -812,10 +896,9 @@ app.openapi(takeoverEditorSession, async (c) => {
 			pid,
 			user,
 			'notebook.write',
-			deps.policy,
+			deps,
 		);
-		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
-		if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+		const notebook = await loadAuthorizedNotebook(deps, project, nid, user);
 		return { project, notebook };
 	};
 	try {
@@ -993,8 +1076,40 @@ app.openapi(createSession, async (c) => {
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	const authorization = await authorizeSessionStart(project, user, mode, deps.policy);
-	const authorizationExpiresAt = entitlementAuthorizationDeadline(user);
+	// The start gate runs BEFORE the notebook load so a role denial keeps its
+	// canonical 403 even for a bogus or deleted notebook id — only admitted
+	// callers learn whether the notebook exists.
+	let authorization = await authorizeSessionStart(project, user, mode, deps);
+	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
+	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook
+	// id. A soft-deleted notebook is treated as missing: getNotebook still
+	// serves it (the delete/GC paths need that), but starting a session on it
+	// would serve deleted content — and, for `app`, recreate the singleton
+	// claim that deleteNotebook just cleaned up, permanently (its cleanup never
+	// runs again).
+	const notebook = await notebooks.getNotebook(pid, nid);
+	if (notebook.meta.status === 'deleted') {
+		throw new NotFoundError(`Notebook ${nid} not found`);
+	}
+	// A notebook security-label override joins the decision only once one
+	// exists — re-run the gate with it (the label-free pass above already
+	// settled role and project labels).
+	if (notebook.meta.security_labels !== undefined) {
+		authorization = await authorizeSessionStart(
+			project,
+			user,
+			mode,
+			deps,
+			notebook.meta.security_labels,
+		);
+	}
+	// The session deadline is the earliest of the entitlement credential expiry
+	// and the subject security context expiry that satisfied any labels — an
+	// active session must not outlive either.
+	const authorizationExpiresAt = earliestDeadline(
+		entitlementAuthorizationDeadline(user),
+		authorization.subjectContextExpiresAt,
+	);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
 	const replacingAfterTakeover =
@@ -1044,16 +1159,6 @@ app.openapi(createSession, async (c) => {
 			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
 			: Promise.resolve(session);
 
-	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
-	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook id.
-	// A soft-deleted notebook is treated as missing: getNotebook still serves it
-	// (the delete/GC paths need that), but starting a session on it would serve
-	// deleted content — and, for `app`, recreate the singleton claim that
-	// deleteNotebook just cleaned up, permanently (its cleanup never runs again).
-	const notebook = await notebooks.getNotebook(pid, nid);
-	if (notebook.meta.status === 'deleted') {
-		throw new NotFoundError(`Notebook ${nid} not found`);
-	}
 	const workspacePolicy = workspaceSourcePolicy(notebook.source);
 	// Synced sources are read-only mirrors served from the immutable workspace of the
 	// version the source currently points at; a session can't start before a push.
@@ -1745,7 +1850,7 @@ app.openapi(deleteSession, async (c) => {
 	// Project visibility FIRST (404 when hidden, matching getSession) — resolving
 	// the session before it would let 403-vs-404 leak whether a session id exists
 	// in a project the caller cannot see.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
@@ -1754,9 +1859,11 @@ app.openapi(deleteSession, async (c) => {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
+	const labels = await assertSessionNotebookVisible(deps, project, existing, user);
+
 	// Terminating a session tears down a running kernel — editor+, or the owner of
 	// their own ephemeral session (role re-checked; see assertSessionControl).
-	await assertSessionControl(project, existing, user, deps.policy);
+	await assertSessionControl(project, existing, user, deps, labels);
 
 	// Mark `terminating` first (atomic): pollers immediately see `Stopping…` while
 	// the retire below runs, instead of a stale `running`. The CAS in the service
@@ -1777,7 +1884,7 @@ app.openapi(heartbeatSession, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 
 	// Project visibility FIRST (404 when hidden) — see the delete route.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy);
+	const project = await loadVisibleProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
@@ -1786,9 +1893,11 @@ app.openapi(heartbeatSession, async (c) => {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
+	const labels = await assertSessionNotebookVisible(deps, project, existing, user);
+
 	// Access-level gate, not control: an admitted viewer watching the shared app
 	// must keep it alive too (see assertSessionAccess).
-	await assertSessionAccess(project, existing, user, deps.policy);
+	await assertSessionAccess(project, existing, user, deps, labels);
 
 	const updated = await sessions.heartbeat(pid, sid);
 

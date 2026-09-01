@@ -26,15 +26,14 @@
  * never as unlabeled access.
  */
 import { z } from 'zod';
+import { MAX_SECURITY_COMPARTMENTS, SECURITY_LABEL_TOKEN } from '../securityLabels';
 import { parseIsoTimestamp } from '../utcDate';
 import type { AuthenticatedPrincipal } from './auth';
 
 export const SUBJECT_SECURITY_CONTEXT_SCHEMA_VERSION = 1;
 
-/** Bounded label token: printable, no whitespace/control characters. */
-const LABEL_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$/;
-
-export const MAX_SUBJECT_COMPARTMENTS = 64;
+/** Subject compartments share the resource-label bounds so comparisons are total. */
+export const MAX_SUBJECT_COMPARTMENTS = MAX_SECURITY_COMPARTMENTS;
 
 /**
  * The bounded runtime security context. Strict: unknown fields are rejected so
@@ -44,10 +43,10 @@ export const MAX_SUBJECT_COMPARTMENTS = 64;
  */
 export const SubjectSecurityContextSchema = z.strictObject({
 	schemaVersion: z.literal(SUBJECT_SECURITY_CONTEXT_SCHEMA_VERSION),
-	classification: z.string().regex(LABEL_TOKEN),
-	compartments: z.array(z.string().regex(LABEL_TOKEN)).max(MAX_SUBJECT_COMPARTMENTS),
+	classification: z.string().regex(SECURITY_LABEL_TOKEN),
+	compartments: z.array(z.string().regex(SECURITY_LABEL_TOKEN)).max(MAX_SUBJECT_COMPARTMENTS),
 	/** Identifies the policy revision that produced this context. */
-	policyVersion: z.string().regex(LABEL_TOKEN),
+	policyVersion: z.string().regex(SECURITY_LABEL_TOKEN),
 	/** Hard expiry; a stale context must be re-resolved, never trusted. */
 	expiresAt: z.iso.datetime(),
 });
@@ -77,6 +76,18 @@ export function validateSubjectSecurityContext(
 		...parsed.data,
 		compartments: [...new Set(parsed.data.compartments)].sort(),
 	};
+}
+
+/** Manifest version for external subject-context adapter libraries. */
+export const SUBJECT_CONTEXT_ADAPTER_API_VERSION = 1;
+
+export function isSubjectSecurityContextProvider(
+	value: unknown,
+): value is SubjectSecurityContextProvider {
+	return (
+		((typeof value === 'object' && value !== null) || typeof value === 'function') &&
+		typeof (value as { resolve?: unknown }).resolve === 'function'
+	);
 }
 
 export interface SubjectSecurityContextProvider {

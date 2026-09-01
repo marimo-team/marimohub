@@ -1126,6 +1126,27 @@ components:
                         - type: 'null'
                     compute_profile:
                       type: string
+                    security_labels:
+                      anyOf:
+                        - type: object
+                          properties:
+                            classification:
+                              type: string
+                              pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                            compartments:
+                              maxItems: 64
+                              type: array
+                              items:
+                                type: string
+                                pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                          required:
+                            - classification
+                            - compartments
+                          additionalProperties: false
+                        - type: 'null'
+                    security_labels_pending:
+                      type: boolean
+                      const: true
                     key_prefix:
                       type: string
                   required:
@@ -1153,6 +1174,27 @@ components:
                 type: array
                 items:
                   type: string
+              security_labels:
+                anyOf:
+                  - type: object
+                    properties:
+                      classification:
+                        type: string
+                        pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                      compartments:
+                        maxItems: 64
+                        type: array
+                        items:
+                          type: string
+                          pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                    required:
+                      - classification
+                      - compartments
+                    additionalProperties: false
+                  - type: 'null'
+              security_labels_pending:
+                type: boolean
+                const: true
             required:
               - id
               - name
@@ -1231,6 +1273,22 @@ components:
           type: array
           items:
             type: string
+        security_labels:
+          type: object
+          properties:
+            classification:
+              type: string
+              pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+            compartments:
+              maxItems: 64
+              type: array
+              items:
+                type: string
+                pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+          required:
+            - classification
+            - compartments
+          additionalProperties: false
       required:
         - schema_version
         - id
@@ -1488,6 +1546,22 @@ components:
           type: string
         compute_profile:
           type: string
+        security_labels:
+          type: object
+          properties:
+            classification:
+              type: string
+              pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+            compartments:
+              maxItems: 64
+              type: array
+              items:
+                type: string
+                pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+          required:
+            - classification
+            - compartments
+          additionalProperties: false
       required:
         - schema_version
         - id
