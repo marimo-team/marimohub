@@ -6,7 +6,7 @@ import { createTokenId, TokenId } from '../../ids';
 import type { UserId } from '../../ids';
 import { timingSafeEqual } from '../../internal/hmac';
 import { toHex } from '../../internal/hex';
-import type { AuthUser } from '../../ports/auth';
+import type { AuthenticatedPrincipal, AuthUser } from '../../ports/auth';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { readStored, TokenSchema, toPublicToken } from '../../schema';
@@ -206,7 +206,7 @@ export class TokenService {
 	 * issuer with no identity record). Never throws — the auth middleware maps
 	 * null to 401.
 	 */
-	async verify(bearer: string): Promise<AuthUser | null> {
+	async verify(bearer: string): Promise<AuthenticatedPrincipal | null> {
 		const match = PAT_RE.exec(bearer);
 		if (!match) return null;
 		const tokenId = TokenId.parse(match[1]);
@@ -231,7 +231,14 @@ export class TokenService {
 		if (await this.identities.isSuspended(user.id)) return null;
 
 		await this.touch(entry);
-		return user;
+		return {
+			...user,
+			credential: {
+				kind: 'personal-access-token',
+				id: tokenId,
+				...(record.expires_at !== undefined ? { expiresAt: record.expires_at } : {}),
+			},
+		};
 	}
 
 	/** Cached entry for a token id, refreshing from the bucket past the TTL. */

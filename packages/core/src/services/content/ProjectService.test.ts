@@ -178,6 +178,23 @@ describe('ProjectService', () => {
 			expect(list.map((e) => e.id)).toEqual([p.id]);
 		});
 
+		it('lists an explicitly-requested deleted project through the legacy fallback too', async () => {
+			const current = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			const legacy = await projects.createProject({ name: 'B', description: 'b' }, ACTOR);
+			await projects.addMember(current.id, { user_id: STRANGER.id }, 'viewer', ACTOR);
+			await projects.addMember(legacy.id, { user_id: STRANGER.id }, 'viewer', ACTOR);
+			await projects.deleteProject(current.id, ACTOR);
+			await projects.deleteProject(legacy.id, ACTOR);
+			await catalog.updateProjectEntry('test.strip', ACTOR, legacy.id, () => ({
+				member_ids: undefined,
+			}));
+
+			// The fallback decides membership only — lifecycle was already applied by
+			// the status filter, so a legacy entry must list exactly like a current one.
+			const list = await projects.listProjects({ subject: STRANGER, status: 'deleted' });
+			expect(list.map((e) => e.id).sort()).toEqual([current.id, legacy.id].sort());
+		});
+
 		it('hides the project from a stranger via the project.json deny fallback', async () => {
 			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			// Simulate an old snapshot entry (no denormalized roster) so visibility is

@@ -268,16 +268,31 @@ Establishes _what_ an authenticated user may do. **Authorization data lives in
 the notebook storage**, not in a separate service: each `project.json` carries a
 `members` list mapping `user_id` → `role`.
 
-|                     |                                                                                                                                                            |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Port**            | `Authorizer` — `can(user, action, resource) → boolean`, resolved by reading project membership from the Storage port                                       |
-| **Roles**           | `admin` (reserved owner/deployment authority) · `manager` (project settings, delete, membership) · `editor` (create/edit notebooks) · `viewer` (read-only) |
-| **Source of truth** | `projects/{pid}/project.json` → `members[]`, read through the same `Bucket` adapter as everything else                                                     |
+|                     |                                                                                                                                                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Service**         | `AuthorizationService` (core) — `authorize(subject, action, resource)` / `authorizeMany(...)`, async, over a bounded action vocabulary (`packages/core/src/services/authorization/actions.ts`) |
+| **Roles**           | `admin` (reserved owner/deployment authority) · `manager` (project settings, delete, membership) · `editor` (create/edit notebooks) · `viewer` (read-only)                                     |
+| **Source of truth** | `projects/{pid}/project.json` → `members[]`, read through the same `Bucket` adapter as everything else                                                                                         |
 
 Because membership is just more metadata in the store, authorization needs no
-extra infrastructure: the authorizer loads the relevant `project.json`, finds
-the caller's role, and allows or denies. This keeps the "no database" property
-intact all the way through access control.
+extra infrastructure: the caller loads the relevant `project.json` and hands it
+to the service as a bounded resource descriptor; the service applies the role
+matrix, lifecycle rules (a soft-deleted project is nonexistent for everyone),
+visibility masking (a hidden project answers 404, never 403), viewer-mode
+session admission, and deployment standing (super-admin, project creation), and
+returns a decision with a bounded denial category. The API's guards
+(`assertProjectRole`, `loadVisibleProject`, the session gates, the sandbox
+proxies, and project listings) all route through this one service, so the
+answers cannot drift between surfaces. `effectiveRole` remains the baseline
+role calculation for display (`your_role`); it is not the complete
+authorization result. This keeps the "no database" property intact all the way
+through access control.
+
+Future resource security composes here as restrictions only: a constraint
+adapter evaluated by the service can deny an access the role permits, never
+grant one the role denies. Its subject inputs come from the
+`SubjectSecurityContextProvider` port (bounded clearance/compartment context
+resolved per credential — see `ports.md`), never from raw provider claims.
 
 > **Scaling note.** The global catalog snapshot lists projects by `owner` only;
 > per-project `members` live in `project.json`. Authorized listing for a

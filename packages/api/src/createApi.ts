@@ -8,7 +8,6 @@ import {
 	DomainError,
 	ensureInitialized,
 	IntegrationId,
-	isPatRequest,
 	MAX_REQUEST_BYTES,
 	MAX_WORKSPACE_FILE_BYTES,
 	NotebookId,
@@ -437,11 +436,10 @@ export function createApi(rawDeps: ApiDeps) {
 			return fail(c, 'USER_SUSPENDED', 'User account is suspended', 403);
 		}
 		c.set('user', user);
-		// A PAT-shaped bearer is resolved ONLY by the token path (see
-		// composeAuthenticators), so its presence is an exact signal for "this
-		// request authenticated with a PAT". Decided here, once, and read by the
-		// token-management guard — never re-parsed downstream.
-		c.set('authMethod', isPatRequest(c.req.raw) ? 'pat' : 'session');
+		// Credential provenance is owned by the authenticator result — never
+		// re-derived from request headers, which can disagree with the adapter over
+		// parsing. Decided here, once, and read by the token-management guard.
+		c.set('authMethod', user.credential.kind === 'personal-access-token' ? 'pat' : 'session');
 
 		// Refresh this user's identity-directory record so opaque ids (author /
 		// session user_id) resolve to a name+email at read time. Best-effort and

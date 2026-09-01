@@ -26,7 +26,14 @@ function fakeIncomingMessage(url: string): http.IncomingMessage {
 
 function authAs(userId: UserId | null): Authenticator {
 	return {
-		authenticate: async () => (userId ? { id: userId, email: `${userId}@example.com` } : null),
+		authenticate: async () =>
+			userId
+				? {
+						id: userId,
+						email: `${userId}@example.com`,
+						credential: { kind: 'development' as const },
+					}
+				: null,
 	};
 }
 

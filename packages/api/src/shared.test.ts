@@ -13,6 +13,7 @@ import {
 	assertSessionAccess,
 	assertSessionControl,
 	createApp,
+	loadVisibleProject,
 	ErrorResponseSchema,
 	extensibleResponseEnum,
 	jsonBody,
@@ -90,7 +91,7 @@ async function seedProject(
 }
 
 describe('assertProjectRole', () => {
-	it('passes when the owner (implicit admin) meets the requirement', async () => {
+	it('passes when the owner (implicit admin) meets a manager-tier action', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, { owner: uid('owner-1'), members: [] });
 		const { projects } = createServices(bucket);
@@ -101,14 +102,14 @@ describe('assertProjectRole', () => {
 				projects,
 				id,
 				{ id: uid('owner-1'), email: 'owner-1@example.com' },
-				'admin',
+				'project.update',
 			),
 		).resolves.toMatchObject({
 			id,
 		});
 	});
 
-	it('passes when a member exceeds the minimum role (editor satisfies viewer)', async () => {
+	it('passes when a member exceeds the action tier (editor satisfies a viewer-tier action)', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, {
 			owner: uid('someone-else'),
@@ -121,12 +122,12 @@ describe('assertProjectRole', () => {
 				projects,
 				id,
 				{ id: uid('editor-1'), email: 'editor-1@example.com' },
-				'viewer',
+				'integration.read',
 			),
 		).resolves.toMatchObject({ id });
 	});
 
-	it('passes when a manager meets the project-management requirement', async () => {
+	it('passes when a manager meets a manager-tier action', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, {
 			owner: uid('someone-else'),
@@ -139,12 +140,12 @@ describe('assertProjectRole', () => {
 				projects,
 				id,
 				{ id: uid('manager-1'), email: 'manager-1@example.com' },
-				'manager',
+				'project.update',
 			),
 		).resolves.toMatchObject({ id });
 	});
 
-	it('throws ForbiddenError when the member role is insufficient (viewer < editor)', async () => {
+	it('throws ForbiddenError when the member role is below the action tier (viewer < editor)', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, {
 			owner: uid('someone-else'),
@@ -157,9 +158,25 @@ describe('assertProjectRole', () => {
 				projects,
 				id,
 				{ id: uid('viewer-1'), email: 'viewer-1@example.com' },
-				'editor',
+				'notebook.write',
 			),
-		).rejects.toBeInstanceOf(ForbiddenError);
+		).rejects.toThrow(new ForbiddenError(`Requires 'editor' role on project ${id}`));
+	});
+
+	it('names the action tier and masks hidden projects with the canonical messages', async () => {
+		const bucket = new MemoryBucket();
+		const { id } = await seedProject(bucket, { owner: uid('someone-else'), members: [] });
+		const { projects } = createServices(bucket);
+		const stranger = { id: uid('stranger'), email: 'stranger@example.com' };
+
+		// 403 messages carry the rule tier, not the action name.
+		await expect(assertProjectRole(projects, id, stranger, 'project.update')).rejects.toThrow(
+			`Requires 'manager' role on project ${id}`,
+		);
+		// 404 masking uses the same message as a truly nonexistent project.
+		await expect(loadVisibleProject(projects, id, stranger)).rejects.toThrow(
+			`Project ${id} not found`,
+		);
 	});
 
 	it('throws ForbiddenError for a non-member', async () => {
@@ -172,7 +189,7 @@ describe('assertProjectRole', () => {
 				projects,
 				id,
 				{ id: uid('stranger'), email: 'stranger@example.com' },
-				'viewer',
+				'integration.read',
 			),
 		).rejects.toBeInstanceOf(ForbiddenError);
 	});
@@ -186,20 +203,26 @@ describe('assertProjectRole', () => {
 				projects,
 				createProjectId(),
 				{ id: uid('anyone'), email: 'anyone@example.com' },
-				'viewer',
+				'integration.read',
 			),
 		).rejects.toBeInstanceOf(NotFoundError);
 	});
 
-	it('admits a non-member super admin at admin level', async () => {
+	it('admits a non-member super admin to manager-tier actions', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, { owner: uid('someone-else'), members: [] });
 		const { projects } = createServices(bucket);
 
 		await expect(
-			assertProjectRole(projects, id, { id: uid('god'), email: 'god@example.com' }, 'admin', {
-				superAdmins: ['god@example.com'],
-			}),
+			assertProjectRole(
+				projects,
+				id,
+				{ id: uid('god'), email: 'god@example.com' },
+				'project.update',
+				{
+					superAdmins: ['god@example.com'],
+				},
+			),
 		).resolves.toMatchObject({ id });
 	});
 });
@@ -224,22 +247,30 @@ describe('session authorization assertions', () => {
 		editor_sandbox_sharing: 'exclusive' as const,
 	};
 
-	it('denies a non-owner editor instead of falling back to project role', () => {
+	it('denies a non-owner editor instead of falling back to project role', async () => {
 		const subject = { id: editor, email: 'editor@example.com' };
-		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
-		expect(() => assertSessionControl(project, session, subject, {})).toThrow(ForbiddenError);
+		await expect(assertSessionAccess(project, session, subject, {})).rejects.toThrow(
+			ForbiddenError,
+		);
+		await expect(assertSessionControl(project, session, subject, {})).rejects.toThrow(
+			ForbiddenError,
+		);
 	});
 
-	it('denies admin attach while preserving force-stop authority', () => {
+	it('denies admin attach while preserving force-stop authority', async () => {
 		const subject = { id: admin, email: 'admin@example.com' };
-		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
-		expect(() => assertSessionControl(project, session, subject, {})).not.toThrow();
+		await expect(assertSessionAccess(project, session, subject, {})).rejects.toThrow(
+			ForbiddenError,
+		);
+		await expect(assertSessionControl(project, session, subject, {})).resolves.toBeUndefined();
 	});
 
-	it('denies manager attach while preserving force-stop authority', () => {
+	it('denies manager attach while preserving force-stop authority', async () => {
 		const subject = { id: manager, email: 'manager@example.com' };
-		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
-		expect(() => assertSessionControl(project, session, subject, {})).not.toThrow();
+		await expect(assertSessionAccess(project, session, subject, {})).rejects.toThrow(
+			ForbiddenError,
+		);
+		await expect(assertSessionControl(project, session, subject, {})).resolves.toBeUndefined();
 	});
 });
 

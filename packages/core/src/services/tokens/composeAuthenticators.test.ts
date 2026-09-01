@@ -2,20 +2,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryBucket, uid } from '../../testing';
 import { TokenId } from '../../ids';
 import { paths } from '../../paths';
-import type { Authenticator, AuthUser } from '../../ports/auth';
+import type { AuthenticatedPrincipal, Authenticator } from '../../ports/auth';
 import { IdentityService } from '../identity/IdentityService';
 import { composeAuthenticators } from './composeAuthenticators';
 import { PAT_PREFIX, TokenService } from './TokenService';
 
 const OWNER = uid('sub-owner');
-const SSO_USER: AuthUser = { id: uid('sub-sso'), email: 'sso@x.io' };
+const SSO_USER: AuthenticatedPrincipal = {
+	id: uid('sub-sso'),
+	email: 'sso@x.io',
+	credential: { kind: 'sso' },
+};
 
 function req(headers: Record<string, string> = {}): Request {
 	return new Request('https://hub.example/api/v1/me', { headers });
 }
 
 const makeSsoMock = () =>
-	vi.fn((_request: Request): Promise<AuthUser | null> => Promise.resolve(SSO_USER));
+	vi.fn((_request: Request): Promise<AuthenticatedPrincipal | null> => Promise.resolve(SSO_USER));
 
 describe('composeAuthenticators', () => {
 	let bucket: MemoryBucket;
@@ -33,11 +37,13 @@ describe('composeAuthenticators', () => {
 	});
 
 	it('resolves a valid PAT without consulting SSO', async () => {
-		const { token } = await tokens.create({ name: 'ci' }, OWNER);
+		const { token, record } = await tokens.create({ name: 'ci' }, OWNER);
 		const auth = composeAuthenticators(tokens, sso);
 
 		const user = await auth.authenticate(req({ authorization: `Bearer ${token}` }));
 		expect(user?.id).toBe(OWNER);
+		// PAT provenance survives composition — consumers key off it, never headers.
+		expect(user?.credential).toEqual({ kind: 'personal-access-token', id: record.id });
 		expect(ssoAuthenticate).not.toHaveBeenCalled();
 	});
 

@@ -4,7 +4,12 @@ import { DevAuthenticator } from './index';
 describe('DevAuthenticator', () => {
 	it('returns the configured fixed user for every request', async () => {
 		const auth = new DevAuthenticator({ userId: 'u', email: 'e@x', name: 'Dev U' });
-		expect(await auth.authenticate()).toEqual({ id: 'u', email: 'e@x', name: 'Dev U' });
+		expect(await auth.authenticate()).toEqual({
+			id: 'u',
+			email: 'e@x',
+			name: 'Dev U',
+			credential: { kind: 'development' },
+		});
 	});
 
 	it('falls back to the default user (incl. a display name) when no config is given', async () => {
@@ -13,6 +18,7 @@ describe('DevAuthenticator', () => {
 			id: 'user',
 			email: 'user@localhost',
 			name: 'Local Dev',
+			credential: { kind: 'development' },
 		});
 	});
 
@@ -33,6 +39,7 @@ describe('DevAuthenticator', () => {
 				id: 'user',
 				email: 'user@localhost',
 				name: 'Local Dev',
+				credential: { kind: 'development' },
 			});
 		} finally {
 			process.env.NODE_ENV = prev;

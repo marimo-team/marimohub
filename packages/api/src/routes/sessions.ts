@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import type {
+	Role,
 	AuthUser,
 	EditorClaim,
 	EditorSandboxSharing,
@@ -17,7 +18,6 @@ import {
 	ConflictError,
 	createSandboxId,
 	DomainError,
-	effectiveRole,
 	exchangeFederatedStorageEnv,
 	marimoAiContributor,
 	marimoConfigToSessionEnv,
@@ -27,7 +27,6 @@ import {
 	NotFoundError,
 	notificationRouter,
 	paths,
-	requireRole,
 	roleAtLeast,
 	resolveBaseImage,
 	resolveLaunchStrategyForSession,
@@ -42,7 +41,6 @@ import {
 	sessionMode,
 	sessionModePolicy,
 	SubdomainExposure,
-	canStartSessionMode,
 	UnavailableError,
 	EditSessionOwnedError,
 	EditSessionChangedError,
@@ -65,8 +63,10 @@ import {
 } from '../notifications';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
+	assertProjectRole,
 	assertSessionAccess,
 	assertSessionControl,
+	authorizationService,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -494,27 +494,33 @@ class EditorClaimLostError extends Error {
 }
 
 /**
- * The start gate — `canStartSessionMode` as a thrower, plus the session
+ * The start gate — the `session.start` decision as a thrower, plus the session
  * classification: a viewer's admitted session is what
  * `MODE_POLICY[mode].viewerSession` says — their own ephemeral throwaway for
  * `edit`, the shared singleton for `app` (identical to an editor-started one,
  * with WIF credentials and integration secrets).
  */
-function authorizeSessionStart(
+async function authorizeSessionStart(
 	project: Project,
 	user: AuthUser,
 	mode: SessionMode,
 	policy: PolicyConfig,
-): {
-	role: ReturnType<typeof effectiveRole>;
+): Promise<{
+	role: Role | null;
 	ephemeral: boolean;
 	profileOverrideEligible: boolean;
 	restrictedViewerCredentials: boolean;
-} {
-	const role = effectiveRole(project, user, policy);
-	if (!canStartSessionMode({ role, viewerMode: policy.viewerMode }, mode)) {
-		// Throws the canonical editor-gate 403 (canStart admits every editor+).
-		requireRole(project, user, 'editor', policy);
+}> {
+	const decision = await authorizationService(policy).authorize(user, 'session.start', {
+		kind: 'session-start',
+		project,
+		mode,
+	});
+	const role = decision.role;
+	if (!decision.allowed) {
+		// The canonical editor-gate 403 (session.start admits every editor+); the
+		// caller has already 404'd a deleted project.
+		throw new ForbiddenError(`Requires 'editor' role on project ${project.id}`);
 	}
 	const ephemeral = role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral';
 	return {
@@ -730,9 +736,7 @@ app.openapi(getEditorSession, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	const project = await deps.services.projects.getProject(pid);
-	if (project.status === 'deleted') throw new NotFoundError(`Project ${pid} not found`);
-	requireRole(project, user, 'editor', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps.policy);
 	const notebook = await deps.services.notebooks.getNotebook(pid, nid);
 	if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
@@ -803,9 +807,13 @@ app.openapi(takeoverEditorSession, async (c) => {
 				}),
 		);
 	const assertAccess = async () => {
-		const project = await deps.services.projects.getProject(pid);
-		if (project.status === 'deleted') throw new NotFoundError(`Project ${pid} not found`);
-		requireRole(project, user, 'editor', deps.policy);
+		const project = await assertProjectRole(
+			deps.services.projects,
+			pid,
+			user,
+			'notebook.write',
+			deps.policy,
+		);
 		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
 		if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
 		return { project, notebook };
@@ -985,7 +993,7 @@ app.openapi(createSession, async (c) => {
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	const authorization = authorizeSessionStart(project, user, mode, deps.policy);
+	const authorization = await authorizeSessionStart(project, user, mode, deps.policy);
 	const authorizationExpiresAt = entitlementAuthorizationDeadline(user);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
@@ -1748,7 +1756,7 @@ app.openapi(deleteSession, async (c) => {
 
 	// Terminating a session tears down a running kernel — editor+, or the owner of
 	// their own ephemeral session (role re-checked; see assertSessionControl).
-	assertSessionControl(project, existing, user, deps.policy);
+	await assertSessionControl(project, existing, user, deps.policy);
 
 	// Mark `terminating` first (atomic): pollers immediately see `Stopping…` while
 	// the retire below runs, instead of a stale `running`. The CAS in the service
@@ -1780,7 +1788,7 @@ app.openapi(heartbeatSession, async (c) => {
 
 	// Access-level gate, not control: an admitted viewer watching the shared app
 	// must keep it alive too (see assertSessionAccess).
-	assertSessionAccess(project, existing, user, deps.policy);
+	await assertSessionAccess(project, existing, user, deps.policy);
 
 	const updated = await sessions.heartbeat(pid, sid);
 

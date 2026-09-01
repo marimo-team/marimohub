@@ -8,7 +8,7 @@
  */
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { UserId } from '@marimo-hub/core';
-import type { Authenticator, AuthUser } from '@marimo-hub/core';
+import type { Authenticator, AuthenticatedPrincipal } from '@marimo-hub/core';
 
 export interface CloudflareAccessConfig {
 	/** Cloudflare Access team name (e.g. `myteam` for myteam.cloudflareaccess.com). */
@@ -26,7 +26,7 @@ export class CloudflareAccessAuthenticator implements Authenticator {
 		);
 	}
 
-	async authenticate(request: Request): Promise<AuthUser | null> {
+	async authenticate(request: Request): Promise<AuthenticatedPrincipal | null> {
 		const jwt = request.headers.get('CF-Access-JWT-Assertion');
 		if (!jwt) return null;
 
@@ -38,7 +38,17 @@ export class CloudflareAccessAuthenticator implements Authenticator {
 			}
 			// Access includes `name` only when the IdP supplies one.
 			const name = typeof payload.name === 'string' ? payload.name : undefined;
-			return { id: UserId.parse(payload.sub), email: payload.email, name };
+			return {
+				id: UserId.parse(payload.sub),
+				email: payload.email,
+				name,
+				credential: {
+					kind: 'sso',
+					...(typeof payload.exp === 'number'
+						? { expiresAt: new Date(payload.exp * 1000).toISOString() }
+						: {}),
+				},
+			};
 		} catch (error) {
 			console.error(
 				'Access JWT verification failed',

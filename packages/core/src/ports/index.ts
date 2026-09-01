@@ -2,6 +2,7 @@ export * from './bucket';
 export * from './sandbox';
 export * from './sandboxExposure';
 export * from './auth';
+export * from './subjectContext';
 export * from './metrics';
 export * from './credentialBroker';
 export * from './databaseBrowser';

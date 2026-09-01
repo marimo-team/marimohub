@@ -147,13 +147,27 @@ describe('TokenService', () => {
 	});
 
 	describe('verify', () => {
-		it('resolves a valid token to the issuing user', async () => {
-			const { token } = await tokens.create({ name: 'ci' }, OWNER);
+		it('resolves a valid token to the issuing principal with PAT provenance', async () => {
+			const { token, record } = await tokens.create({ name: 'ci' }, OWNER);
 			expect(await tokens.verify(token)).toEqual({
 				id: OWNER,
 				email: 'owner@x.io',
 				name: 'Owner',
+				credential: { kind: 'personal-access-token', id: record.id },
 			});
+		});
+
+		it('carries the token expiry as bounded credential provenance', async () => {
+			const { token, record } = await tokens.create({ name: 'short', expiresInDays: 7 }, OWNER);
+			const principal = await tokens.verify(token);
+			expect(principal?.credential).toEqual({
+				kind: 'personal-access-token',
+				id: record.id,
+				expiresAt: record.expires_at,
+			});
+			// A PAT principal never carries session-only entitlements or their expiry.
+			expect(principal).not.toHaveProperty('entitlements');
+			expect(principal).not.toHaveProperty('entitlementsExpiresAt');
 		});
 
 		it('rejects a wrong secret for a real token id', async () => {

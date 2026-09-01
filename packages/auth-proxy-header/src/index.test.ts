@@ -29,7 +29,11 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': 'provider-user-1',
 				}),
 			),
-		).resolves.toEqual({ id: 'provider-user-1', email: 'user@example.com' });
+		).resolves.toEqual({
+			id: 'provider-user-1',
+			email: 'user@example.com',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('supports a custom pair of identity headers', async () => {
@@ -41,7 +45,7 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 			auth.authenticate(
 				request({ 'X-Auth-Email': 'user@example.com', 'X-Auth-Subject': 'subject-1' }),
 			),
-		).resolves.toEqual({ id: 'subject-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'subject-1', email: 'user@example.com', credential: { kind: 'sso' } });
 	});
 
 	it('uses a single header as both the email and user id', async () => {
@@ -51,7 +55,11 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 		});
 		await expect(
 			auth.authenticate(request({ 'Tailscale-User-Login': 'user@example.com' })),
-		).resolves.toEqual({ id: 'user@example.com', email: 'user@example.com' });
+		).resolves.toEqual({
+			id: 'user@example.com',
+			email: 'user@example.com',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('trims identity values and preserves the user-id case', async () => {
@@ -63,7 +71,11 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': '  Provider-User-ABC  ',
 				}),
 			),
-		).resolves.toEqual({ id: 'Provider-User-ABC', email: 'user@example.com' });
+		).resolves.toEqual({
+			id: 'Provider-User-ABC',
+			email: 'user@example.com',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('returns null when either configured identity header is missing', async () => {
@@ -127,7 +139,7 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': 'user-1',
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 		await expect(
 			auth.authenticate(
 				request({
@@ -165,7 +177,7 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': 'user-1',
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 	});
 
 	it('allows all valid emails when the allowlist is omitted', async () => {
@@ -177,7 +189,11 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': 'user-1',
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@outside.example' });
+		).resolves.toEqual({
+			id: 'user-1',
+			email: 'user@outside.example',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('allows all valid emails for the wildcard policy', async () => {
@@ -192,7 +208,11 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': 'user-1',
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@outside.example' });
+		).resolves.toEqual({
+			id: 'user-1',
+			email: 'user@outside.example',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('treats a wildcard as allow-all only when it is the sole entry', async () => {
@@ -207,7 +227,7 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 					'X-Forwarded-User': 'user-1',
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 		await expect(
 			auth.authenticate(
 				request({
@@ -233,7 +253,11 @@ describe('ProxyHeaderAuthenticator JWT mode', () => {
 
 		await expect(
 			auth.authenticate(request({ 'X-Goog-IAP-JWT-Assertion': 'signed.jwt.value' })),
-		).resolves.toEqual({ id: 'iap-user-1', email: 'user@example.com' });
+		).resolves.toEqual({
+			id: 'iap-user-1',
+			email: 'user@example.com',
+			credential: { kind: 'sso', expiresAt: expect.any(String) },
+		});
 		expect(createRemoteJWKSet).toHaveBeenCalledWith(
 			new URL('https://www.gstatic.com/iap/verify/public_key-jwk'),
 		);

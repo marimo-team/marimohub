@@ -44,7 +44,12 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_AUTH_DEV_NAME: 'Alice Example',
 		});
 		const user = await deps.authenticator.authenticate(new Request('http://x'));
-		expect(user).toEqual({ id: 'alice', email: 'alice@example.com', name: 'Alice Example' });
+		expect(user).toEqual({
+			id: 'alice',
+			email: 'alice@example.com',
+			name: 'Alice Example',
+			credential: { kind: 'development' },
+		});
 	});
 
 	it('parses compute profiles during boot and rejects typos', () => {

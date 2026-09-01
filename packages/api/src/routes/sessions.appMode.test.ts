@@ -145,6 +145,7 @@ describe('Session routes (app mode)', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: starter,
 						email: `${starter}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -163,6 +164,7 @@ describe('Session routes (app mode)', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: OTHER_EDITOR,
 						email: `${OTHER_EDITOR}@example.com`,
 						entitlements: ['default-role:editor'],
@@ -232,6 +234,7 @@ describe('Session routes (app mode)', () => {
 			deps: {
 				authenticator: {
 					authenticate: async () => ({
+						credential: { kind: 'development' },
 						id: OTHER_EDITOR,
 						email: `${OTHER_EDITOR}@example.com`,
 						entitlements: ['default-role:editor'],

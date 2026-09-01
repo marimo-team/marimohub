@@ -101,7 +101,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 	const idempotencyKey = c.req.valid('header')['idempotency-key'];
 	const request = c.req.valid('json');
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'change-request.publish', deps.policy);
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);

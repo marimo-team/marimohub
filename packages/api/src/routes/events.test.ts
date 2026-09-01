@@ -142,6 +142,7 @@ describe('Event routes', () => {
 		const deps = makeTestDeps(bucket, {
 			authenticator: {
 				authenticate: async () => ({
+					credential: { kind: 'development' },
 					id: ACTOR,
 					email: `${ACTOR}@example.com`,
 					entitlements: ['super-admin'],

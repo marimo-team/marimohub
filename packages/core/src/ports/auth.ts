@@ -37,9 +37,46 @@ export interface AuthUser {
 	entitlementsExpiresAt?: string;
 }
 
+export const CREDENTIAL_KINDS = [
+	'sso',
+	'personal-access-token',
+	'service-account',
+	'development',
+] as const;
+
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+
+/**
+ * Bounded provenance of the credential that authenticated a request. Owned by
+ * the authenticator result — consumers must never re-derive it from request
+ * headers, which can disagree with the adapter over parsing.
+ */
+export interface AuthCredential {
+	readonly kind: CredentialKind;
+	/** Stable credential identifier (e.g. the personal-access-token id). */
+	readonly id?: string;
+	/** ISO expiry of the credential itself, when it is bounded. */
+	readonly expiresAt?: string;
+	/**
+	 * Opaque reference a `SubjectSecurityContextProvider` can resolve into a
+	 * bounded runtime security context. Never raw claims or attributes.
+	 */
+	readonly subjectContextRef?: string;
+}
+
+/**
+ * An authenticated caller with credential provenance. Every adapter returns
+ * this shape; runtime authorization keys subject-context resolution and
+ * credential-scoped policy off `credential.kind` instead of inferring the
+ * credential from the request.
+ */
+export interface AuthenticatedPrincipal extends AuthUser {
+	credential: AuthCredential;
+}
+
 export interface Authenticator {
-	/** Resolve identity from the incoming request, or null if unauthenticated. */
-	authenticate(request: Request): Promise<AuthUser | null>;
+	/** Resolve the principal from the incoming request, or null if unauthenticated. */
+	authenticate(request: Request): Promise<AuthenticatedPrincipal | null>;
 	/** Optional provider end-session URL, surfaced by `GET /api/v1/me`. */
 	logoutUrl?(): string | null;
 }

@@ -84,7 +84,11 @@ export function createTestApi(options: TestApiOptions = {}) {
 	const bucket = options.bucket ?? new MemoryBucket();
 	const userId = options.userId ?? ACTOR;
 	const authenticator: Authenticator = {
-		authenticate: async () => ({ id: userId, email: `${userId}@example.com` }),
+		authenticate: async () => ({
+			id: userId,
+			email: `${userId}@example.com`,
+			credential: { kind: 'development' },
+		}),
 	};
 	const deps = makeTestDeps(bucket, {
 		authenticator,

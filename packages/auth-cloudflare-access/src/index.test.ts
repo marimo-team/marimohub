@@ -56,7 +56,11 @@ describe('CloudflareAccessAuthenticator', () => {
 		const auth = makeAuth();
 		jwtVerify.mockResolvedValue({ payload: { sub: 'user-1', email: 'user@example.com' } });
 		const user = await auth.authenticate(requestWithJwt('a.b.c'));
-		expect(user).toEqual({ id: 'user-1', email: 'user@example.com' });
+		expect(user).toEqual({
+			id: 'user-1',
+			email: 'user@example.com',
+			credential: { kind: 'sso' },
+		});
 		// Verification is performed with the configured audience.
 		expect(jwtVerify).toHaveBeenCalledWith('a.b.c', { __mockJwks: true }, { audience: 'my-aud' });
 	});

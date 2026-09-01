@@ -250,7 +250,13 @@ describe('Token routes', () => {
 				authenticator: composeAuthenticators(
 					createTestApi({ bucket }).deps.services.tokens,
 					// An SSO adapter that would happily authenticate — must not be reached.
-					{ authenticate: async () => ({ id: ACTOR, email: 'sso@example.com' }) },
+					{
+						authenticate: async () => ({
+							id: ACTOR,
+							email: 'sso@example.com',
+							credential: { kind: 'sso' },
+						}),
+					},
 				),
 			});
 			const res = await composed.request('/api/v1/me', {

@@ -71,6 +71,7 @@ describe('makeAuth selector errors', () => {
 			id: 'local-user',
 			email: 'local@example.com',
 			name: 'Local User',
+			credential: { kind: 'development' },
 		});
 	});
 });
@@ -410,7 +411,7 @@ describe('makeAuth proxy-header', () => {
 					},
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 	});
 
 	it('supports one custom header for both identity fields', async () => {
@@ -424,7 +425,11 @@ describe('makeAuth proxy-header', () => {
 					headers: { 'Tailscale-User-Login': 'user@example.com' },
 				}),
 			),
-		).resolves.toEqual({ id: 'user@example.com', email: 'user@example.com' });
+		).resolves.toEqual({
+			id: 'user@example.com',
+			email: 'user@example.com',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('requires a deliberate email-domain allowlist', () => {
@@ -456,7 +461,11 @@ describe('makeAuth proxy-header', () => {
 					},
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@outside.example' });
+		).resolves.toEqual({
+			id: 'user-1',
+			email: 'user@outside.example',
+			credential: { kind: 'sso' },
+		});
 	});
 
 	it('does not treat a wildcard mixed with a domain as allow-all', async () => {
@@ -473,7 +482,7 @@ describe('makeAuth proxy-header', () => {
 					},
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 		await expect(
 			authenticator.authenticate(
 				new Request('https://hub.example.com', {
@@ -530,7 +539,7 @@ describe('makeAuth proxy-header', () => {
 					},
 				}),
 			),
-		).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 	});
 
 	it('accepts an audience-only IAP configuration without auth routes', async () => {

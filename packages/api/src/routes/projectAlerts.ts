@@ -248,7 +248,7 @@ app.openapi(listDestinations, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const alerts = requireProjectAlerts(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'project.alerts.manage', deps.policy);
 	return c.json(
 		{ success: true, data: { items: await alerts.store.list(pid), next_cursor: null } },
 		200,
@@ -260,7 +260,7 @@ app.openapi(createDestination, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const alerts = requireProjectAlerts(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'project.alerts.manage', deps.policy);
 	const destination = await alerts.store.create(pid, c.req.valid('json'), user.id);
 	c.header('ETag', etagFor(destination.updated_at));
 	await audit(
@@ -282,7 +282,7 @@ app.openapi(updateDestination, async (c) => {
 	const user = c.get('user');
 	const { pid, aid } = c.req.valid('param');
 	const alerts = requireProjectAlerts(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'project.alerts.manage', deps.policy);
 	const body = c.req.valid('json');
 	const destination = await alerts.store.update(pid, aid, body, ifMatchToken(c));
 	c.header('ETag', etagFor(destination.updated_at));
@@ -308,7 +308,7 @@ app.openapi(deleteDestination, async (c) => {
 	const user = c.get('user');
 	const { pid, aid } = c.req.valid('param');
 	const alerts = requireProjectAlerts(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'project.alerts.manage', deps.policy);
 	await alerts.store.remove(pid, aid, ifMatchToken(c));
 	await audit(
 		deps,
@@ -329,7 +329,7 @@ app.openapi(testDestination, async (c) => {
 		deps.services.projects,
 		pid,
 		user,
-		'manager',
+		'project.alerts.manage',
 		deps.policy,
 	);
 	const routeId = `POST /projects/${pid}/alert-destinations/${aid}/test`;

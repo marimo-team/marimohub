@@ -7,7 +7,7 @@
  * users. Extracted from the original `worker/auth.ts` (`AUTH_MODE === 'none'`).
  */
 import { UserId } from '@marimo-hub/core';
-import type { Authenticator, AuthUser } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core';
 
 export interface DevAuthConfig {
 	userId?: string;
@@ -16,20 +16,21 @@ export interface DevAuthConfig {
 }
 
 export class DevAuthenticator implements Authenticator {
-	private user: AuthUser;
+	private user: AuthenticatedPrincipal;
 
 	constructor(config: DevAuthConfig = {}) {
 		this.user = {
 			id: UserId.parse(config.userId || 'user'),
 			email: config.email || 'user@localhost',
 			name: config.name || 'Local Dev',
+			credential: { kind: 'development' },
 		};
 		console.warn(
 			'[marimohub] DEV AUTH ENABLED — every request is authenticated as a fixed local user. Do NOT use in production.',
 		);
 	}
 
-	async authenticate(): Promise<AuthUser> {
+	async authenticate(): Promise<AuthenticatedPrincipal> {
 		return this.user;
 	}
 

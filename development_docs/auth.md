@@ -33,6 +33,15 @@ dance itself (no reverse proxy) and issues a signed, httpOnly session cookie, so
 the API tier stays stateless — no session store, preserving the "no database"
 property.
 
+Every adapter returns an `AuthenticatedPrincipal` — the user plus a required
+`credential` naming the provenance (`sso`, `personal-access-token` with the
+token id, `service-account`, or `development`) and, when bounded, its expiry.
+The authenticator result owns this: consumers such as the API's PAT-only route
+guard read `credential.kind` and never re-derive the credential from request
+headers, which can disagree with the adapter over parsing. A PAT-shaped bearer
+still resolves exclusively through the token path (`composeAuthenticators`),
+so a revoked token can never fall through to SSO.
+
 ## OIDC (`MARIMOHUB_AUTH_BACKEND=oidc`)
 
 The adapter discovers the provider at `<issuer>/.well-known/openid-configuration`.
@@ -129,12 +138,15 @@ never to personal access tokens.
 **Boundary — this is not resource FGAC.** The login policy maps identity to
 login eligibility and coarse deployment-wide roles; it makes no project or
 notebook decision, and a version-1 result carrying runtime subject state (e.g.
-`subjectSecurityContext`) is rejected. Planned resource-level security keeps
+`subjectSecurityContext`) is rejected. Resource-level security keeps
 separate seams:
 
-- Runtime subject attributes (clearance-style context) come from a separate
-  `SubjectSecurityContextProvider`, resolved per credential — never from the raw
-  JWT or this login-time result.
+- Runtime subject attributes (clearance-style context) come from the
+  `SubjectSecurityContextProvider` port (`core/src/ports/subjectContext.ts`),
+  resolved per credential — never from the raw JWT or this login-time result.
+  The bounded context is resolved at request time and cached at most until its
+  expiry; it never rides in the session cookie, which is signed but not
+  encrypted.
 - Resource security labels only **add restrictions** on top of the existing
   role checks (`roleAllowed AND constraintsSatisfied`); a constraint adapter can
   never grant access that baseline RBAC denies, and a labeled resource fails
