@@ -144,7 +144,7 @@ function ApplicationTab({
 	onRequestSplit,
 	onRequestClose,
 }: ApplicationTabProps) {
-	const ref = useRef<HTMLFieldSetElement>(null);
+	const ref = useRef<HTMLDivElement>(null);
 	const [dropPosition, setDropPosition] = useState<DropPosition>();
 	const { dragProps, dragButtonProps, isDragging } = useDrag({
 		hasDragButton: true,
@@ -194,99 +194,101 @@ function ApplicationTab({
 		<Tab
 			id={tab.id}
 			isDisabled={tab.isDisabled}
-			render={(domProps) => (
+			aria-label={tab.label}
+			render={(domProps, { isSelected, isFocusVisible }) => (
 				<div
-					{...(domProps as HTMLAttributes<HTMLDivElement>)}
-					id={tabDomId}
-					aria-controls={panelDomId}
-				/>
-			)}
-			className={({ isSelected, isFocusVisible }) =>
-				cn(
-					'group relative flex h-9 min-w-28 max-w-56 shrink-0 cursor-default items-center gap-1.5 border-r border-border/70 px-2 text-xs outline-none transition-colors',
-					isSelected
-						? 'bg-background text-foreground before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-primary'
-						: 'bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-					isSplit && !isSelected && 'bg-primary/5 text-foreground',
-					isFocusVisible && 'inset-ring-2 inset-ring-ring',
-					isDragging && 'opacity-50',
-				)
-			}
-		>
-			<fieldset
-				{...dragProps}
-				{...dropProps}
-				ref={ref}
-				tabIndex={isReorderable && !tab.isDisabled ? -1 : undefined}
-				aria-label={`Drop ${tab.label} tab here`}
-				className="flex min-w-0 flex-1 items-center gap-1.5 border-0 p-0"
-			>
-				{isReorderable ? (
-					<Button
-						{...dragButtonProps}
-						aria-label={`Reorder ${tab.label}`}
-						onKeyDown={(event) => {
-							if (!event.altKey || !event.shiftKey) return;
-							if (event.key === 'ArrowLeft') moveWithKeyboard(-1);
-							else if (event.key === 'ArrowRight') moveWithKeyboard(1);
-							else return;
-							event.preventDefault();
-						}}
-						className="-ml-1 flex size-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100 pressed:cursor-grabbing"
-					>
-						<GripVertical className="size-3" />
-					</Button>
-				) : null}
-				<span className="shrink-0 text-muted-foreground [&>svg]:size-3.5">{tab.icon}</span>
-				<span className="min-w-0 flex-1 truncate">{tab.label}</span>
-				{isSplit ? (
-					<Button
-						aria-label={`Close ${tab.label} split view`}
-						className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
-						onPress={() => onRequestSplit(null)}
-					>
-						<PanelRightClose className="size-3.5" />
-					</Button>
-				) : canSplit && !isPrimary ? (
-					<Button
-						aria-label={`Open ${tab.label} to the side`}
-						className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
-						onPress={() => onRequestSplit(tab.id)}
-					>
-						<PanelRightOpen className="size-3.5" />
-					</Button>
-				) : null}
-				{tab.browserUrl ? (
-					<Button
-						aria-label={`Open ${tab.label} in a new browser tab`}
-						className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
-						onPress={() => {
-							const opened = window.open(tab.browserUrl, '_blank', 'noopener,noreferrer');
-							if (opened) opened.opener = null;
-						}}
-					>
-						<ExternalLink className="size-3" />
-					</Button>
-				) : null}
-				{tab.close && canClose ? (
-					<Button
-						aria-label={`Close ${tab.label}`}
-						className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100 group-data-[selected]:opacity-100"
-						onPress={() => onRequestClose(tab)}
-					>
-						<X className="size-3.5" />
-					</Button>
-				) : null}
-				{isDropTarget && dropPosition ? (
-					<span
-						aria-hidden="true"
+					{...dragProps}
+					{...dropProps}
+					ref={ref}
+					className={cn(
+						'group relative flex h-9 min-w-28 max-w-56 shrink-0 items-center gap-1.5 border-r border-border/70 px-2 text-xs transition-colors',
+						isSelected
+							? 'bg-background text-foreground before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-primary'
+							: 'bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+						isSplit && !isSelected && 'bg-primary/5 text-foreground',
+						isDragging && 'opacity-50',
+					)}
+				>
+					{isReorderable ? (
+						<Button
+							{...dragButtonProps}
+							aria-label={`Reorder ${tab.label}`}
+							onKeyDown={(event) => {
+								if (!event.altKey || !event.shiftKey) return;
+								if (event.key === 'ArrowLeft') moveWithKeyboard(-1);
+								else if (event.key === 'ArrowRight') moveWithKeyboard(1);
+								else return;
+								event.preventDefault();
+							}}
+							className="-ml-1 flex size-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100 pressed:cursor-grabbing"
+						>
+							<GripVertical className="size-3" />
+						</Button>
+					) : null}
+					<div
+						{...(domProps as HTMLAttributes<HTMLDivElement>)}
+						id={tabDomId}
+						aria-controls={panelDomId}
 						className={cn(
-							'pointer-events-none absolute inset-y-1 z-10 w-0.5 rounded-full bg-primary',
-							dropPosition === 'before' ? '-left-px' : '-right-px',
+							'flex min-w-0 flex-1 cursor-default items-center gap-1.5 self-stretch px-2 outline-none',
+							isFocusVisible && 'inset-ring-2 inset-ring-ring',
 						)}
 					/>
-				) : null}
-			</fieldset>
+					{isSplit ? (
+						<Button
+							aria-label={`Close ${tab.label} split view`}
+							className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+							onPress={() => onRequestSplit(null)}
+						>
+							<PanelRightClose className="size-3.5" />
+						</Button>
+					) : canSplit && !isPrimary ? (
+						<Button
+							aria-label={`Open ${tab.label} to the side`}
+							className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+							onPress={() => onRequestSplit(tab.id)}
+						>
+							<PanelRightOpen className="size-3.5" />
+						</Button>
+					) : null}
+					{tab.browserUrl ? (
+						<Button
+							aria-label={`Open ${tab.label} in a new browser tab`}
+							className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+							onPress={() => {
+								const opened = window.open(tab.browserUrl, '_blank', 'noopener,noreferrer');
+								if (opened) opened.opener = null;
+							}}
+						>
+							<ExternalLink className="size-3" />
+						</Button>
+					) : null}
+					{tab.close && canClose ? (
+						<Button
+							aria-label={`Close ${tab.label}`}
+							className={cn(
+								'flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100',
+								isSelected && 'opacity-100',
+							)}
+							onPress={() => onRequestClose(tab)}
+						>
+							<X className="size-3.5" />
+						</Button>
+					) : null}
+					{isDropTarget && dropPosition ? (
+						<span
+							aria-hidden="true"
+							className={cn(
+								'pointer-events-none absolute inset-y-1 z-10 w-0.5 rounded-full bg-primary',
+								dropPosition === 'before' ? '-left-px' : '-right-px',
+							)}
+						/>
+					) : null}
+				</div>
+			)}
+		>
+			<span className="shrink-0 text-muted-foreground [&>svg]:size-3.5">{tab.icon}</span>
+			<span className="min-w-0 flex-1 truncate">{tab.label}</span>
 		</Tab>
 	);
 }
