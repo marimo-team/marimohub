@@ -622,11 +622,8 @@ describe('createFromEnv oidc login-policy library', () => {
 		expect(deps.authRoutes).toBeDefined();
 	});
 
-	it('loads and wires the module end to end through the async API', async () => {
-		const deps = await createFromEnvAsync(loginPolicyEnv);
-		expect(deps.authenticator).toBeDefined();
-		expect(deps.version?.backends?.auth).toBe('oidc');
-	});
+	// The full loaded-module → callback-decision wiring is proven end to end in
+	// loginPolicyComposition.test.ts (it needs the oauth4webapi mock).
 });
 
 describe('createFromEnv oidc email-domain allowlist', () => {

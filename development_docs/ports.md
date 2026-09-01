@@ -24,7 +24,7 @@ A module must default-export a manifest. A CommonJS module can use
 ```js
 export default {
 	apiVersion: 1,
-	kind: 'storage', // or 'compute'
+	kind: 'storage', // 'storage', 'compute', or 'oidc-login-policy'
 	async create(context) {
 		return makeAdapter(context);
 	},

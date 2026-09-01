@@ -141,8 +141,19 @@ function problemFromIssues(
  * failing closed with a bounded problem category. Entitlements are
  * deduplicated into canonical `AUTH_ENTITLEMENTS` order so downstream
  * consumers see one normalized shape.
+ *
+ * Total: a hostile result (throwing getter, misbehaving Proxy) parses as a
+ * problem instead of throwing, so callers never leak a module exception.
  */
 export function parseLoginPolicyDecision(value: unknown): LoginPolicyParseResult {
+	try {
+		return parseDecision(value);
+	} catch {
+		return { ok: false, problem: 'result_not_an_object' };
+	}
+}
+
+function parseDecision(value: unknown): LoginPolicyParseResult {
 	if (!isRecord(value)) return { ok: false, problem: 'result_not_an_object' };
 	if (value.decision !== 'allow' && value.decision !== 'deny') {
 		return { ok: false, problem: 'invalid_decision' };
@@ -266,7 +277,7 @@ export async function evaluateLoginPolicy(
 	// A synchronous busy-loop blocks the event loop, so the deadline timer can
 	// never fire while it runs; enforce the budget after the fact instead of
 	// honoring an over-deadline decision. Preemption would need a worker.
-	if (durationMs > timeoutMs) return { outcome: 'timeout', durationMs };
+	if (durationMs >= timeoutMs) return { outcome: 'timeout', durationMs };
 	const parsed = parseLoginPolicyDecision(value);
 	if (!parsed.ok) return { outcome: 'invalid', problem: parsed.problem, durationMs };
 	return parsed.value.decision === 'allow'

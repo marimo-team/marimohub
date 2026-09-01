@@ -19,6 +19,10 @@ const policy = manifest.create({ env: {} });
 // The host's version-1 result bounds: allow with recognized entitlements, or
 // deny with an optional bounded reason. Anything else fails closed server-side,
 // so a policy emitting it would silently lock everyone out with `auth_failed`.
+// Deliberately re-hardcoded so this file stays framework-free; the source of
+// truth is AUTH_ENTITLEMENTS in packages/core/src/ports/auth.ts and
+// OidcLoginPolicyDecisionSchema in packages/auth-oidc/src/loginPolicy.ts —
+// sync these when the host contract changes.
 const KNOWN_ENTITLEMENTS = new Set([
 	'super-admin',
 	'project-creator',

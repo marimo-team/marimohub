@@ -48,7 +48,7 @@ entitlements. It is not a runtime (per-request) authorization hook.
 ```sh
 MARIMOHUB_AUTH_BACKEND=oidc \
 MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library \
-MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=../../examples/external-adapter/oidc-login-policy.mjs \
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=examples/external-adapter/oidc-login-policy.mjs \
 node apps/server/dist/index.mjs
 ```
 

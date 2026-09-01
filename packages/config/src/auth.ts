@@ -260,20 +260,30 @@ function parseLoginPolicy(
 	libraries: LoadedAdapterLibraries | undefined,
 ): OidcLoginPolicySettings | undefined {
 	if (!oidcLoginPolicySelected(env)) {
-		if (env.MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY?.trim()) {
+		const orphaned = LOGIN_POLICY_VARS.find(
+			(key) => key !== 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND' && env[key]?.trim(),
+		);
+		if (orphaned) {
 			throw new ConfigError(
-				'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY is set without ' +
-					'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library; refusing to silently ignore a ' +
-					'configured login policy.',
+				`${orphaned} is set without MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library; ` +
+					'refusing to silently ignore login-policy configuration.',
 				{
-					variable: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
-					remediation: 'Set MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library, or unset the path.',
+					variable: orphaned,
+					remediation:
+						'Set MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library, or unset the variable.',
 					docs: 'docs/configuration.md#auth',
 				},
 			);
 		}
 		return undefined;
 	}
+	// Required even when an instance is preloaded, so the sync and async paths
+	// accept the same configuration and preflight can name the module.
+	requiredVar(env, 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY', {
+		remediation:
+			'Set it to an npm package installed in the image, or a path to a mounted ESM module.',
+		docs: 'docs/configuration.md#auth',
+	});
 	const conflicting = GROUP_POLICY_VARS.find((key) => env[key]?.trim());
 	if (conflicting) {
 		throw new ConfigError(

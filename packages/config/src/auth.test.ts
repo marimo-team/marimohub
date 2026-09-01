@@ -606,18 +606,22 @@ describe('makeAuth oidc login policy', () => {
 		expect(error.message).toMatch(/expected library/);
 	});
 
-	it('rejects a module path without the library selector', () => {
+	it.each([
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY', '/etc/marimohub/agency-login-policy.mjs'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS', '5'],
+		['MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS', '900'],
+	])('rejects %s without the library selector', (key, value) => {
+		const error = getConfigError(() => makeAuth({ ...oidcEnv, [key]: value }, libraries));
+		expect(error.opts.variable).toBe(key);
+		expect(error.message).toMatch(/LOGIN_POLICY_BACKEND=library/);
+	});
+
+	it('requires the module path even when an instance is preloaded', () => {
 		const error = getConfigError(() =>
-			makeAuth(
-				{
-					...oidcEnv,
-					MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: '/etc/marimohub/agency-login-policy.mjs',
-				},
-				libraries,
-			),
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library' }, libraries),
 		);
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY');
-		expect(error.message).toMatch(/LOGIN_POLICY_BACKEND=library/);
+		expect(error.message).toMatch(/Missing required env var/);
 	});
 
 	it('requires the module to be preloaded (createFromEnvAsync)', () => {

@@ -353,17 +353,25 @@ async function loadOidcLoginPolicyLibrary(env: Env, specifier: string): Promise<
 			`${LIBRARY_CONFIG[kind].label} adapter library "${specifier}" failed to initialize: ${errorMessage(error)}`,
 		);
 	}
-	if (!isOidcLoginPolicy(policy)) {
+	try {
+		if (isOidcLoginPolicy(policy)) return policy;
+	} catch (error) {
 		throw adapterConfigError(
 			kind,
-			`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable evaluate method`,
+			`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" could not be validated: ${errorMessage(error)}`,
 			{
-				remediation:
-					'Return an object with evaluate(input) from create(); see the OIDC login-policy contract in @marimo-hub/auth-oidc.',
+				remediation: 'Return a plain policy object whose properties can be read safely.',
 			},
 		);
 	}
-	return policy;
+	throw adapterConfigError(
+		kind,
+		`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable evaluate method`,
+		{
+			remediation:
+				'Return an object with evaluate(input) from create(); see the OIDC login-policy contract in @marimo-hub/auth-oidc.',
+		},
+	);
 }
 
 function requiredLibrarySpecifier(env: Env, kind: AdapterKind): string {

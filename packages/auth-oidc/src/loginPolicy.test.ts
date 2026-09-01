@@ -83,6 +83,32 @@ describe('parseLoginPolicyDecision', () => {
 		expect(parseLoginPolicyDecision(result)).toEqual({ ok: false, problem });
 	});
 
+	it('never throws on hostile result objects', () => {
+		const throwingGetter = {};
+		Object.defineProperty(throwingGetter, 'decision', {
+			enumerable: true,
+			get() {
+				throw new Error('claims: SECRET');
+			},
+		});
+		expect(parseLoginPolicyDecision(throwingGetter)).toEqual({
+			ok: false,
+			problem: 'result_not_an_object',
+		});
+		const hostileProxy = new Proxy(
+			{ decision: 'allow' },
+			{
+				ownKeys() {
+					throw new Error('trap');
+				},
+			},
+		);
+		expect(parseLoginPolicyDecision(hostileProxy)).toEqual({
+			ok: false,
+			problem: 'result_not_an_object',
+		});
+	});
+
 	it('accepts a deny with a bounded reason and without one', () => {
 		expect(parseLoginPolicyDecision({ decision: 'deny', reason: 'agency_access_policy' })).toEqual({
 			ok: true,
@@ -176,6 +202,20 @@ describe('evaluateLoginPolicy', () => {
 				policyReturning({ decision: 'allow', subjectSecurityContext: { clearance: 'SECRET' } }),
 			),
 		).resolves.toMatchObject({ outcome: 'invalid', problem: 'unknown_result_field' });
+	});
+
+	it('maps a result with a throwing getter to a bounded invalid outcome', async () => {
+		const hostile = {};
+		Object.defineProperty(hostile, 'decision', {
+			enumerable: true,
+			get() {
+				throw new Error('claims: SECRET//element-a');
+			},
+		});
+		await expect(evaluate(policyReturning(hostile))).resolves.toMatchObject({
+			outcome: 'invalid',
+			problem: 'result_not_an_object',
+		});
 	});
 
 	it('maps synchronous exceptions to a bounded error outcome', async () => {

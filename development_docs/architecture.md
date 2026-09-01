@@ -437,15 +437,18 @@ saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 ### Authentication — `MARIMOHUB_AUTH_*`
 
-| Variable                                   | Purpose                                                  |
-| ------------------------------------------ | -------------------------------------------------------- |
-| `MARIMOHUB_AUTH_BACKEND`                   | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev` |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`               | OIDC issuer URL                                          |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`            | OAuth client ID                                          |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`        | OAuth client secret (secret)                             |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`             | Deprecated and ignored; `aud` must contain client ID     |
-| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND` | `library` loads a trusted external login-policy module   |
-| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL`    | Fixed identity for the `dev` bypass (local only)         |
+| Variable                                               | Purpose                                                                     |
+| ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `MARIMOHUB_AUTH_BACKEND`                               | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev`                    |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`                           | OIDC issuer URL                                                             |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`                        | OAuth client ID                                                             |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`                    | OAuth client secret (secret)                                                |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`                         | Deprecated and ignored; `aud` must contain client ID                        |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND`             | `library` loads a trusted external login-policy module                      |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY`             | External npm package or ESM file when the login-policy backend is `library` |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS`     | Login-policy evaluation timeout (1–30s, default 5)                          |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS` | Policy-session lifetime (300–3600s, default 3600)                           |
+| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL`                | Fixed identity for the `dev` bypass (local only)                            |
 
 > Authorization needs no env vars: roles are data in the notebook storage
 > ([§3.4](#34-authorization-authz)).

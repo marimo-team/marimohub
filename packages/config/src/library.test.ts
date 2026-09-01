@@ -411,6 +411,7 @@ describe('OIDC login-policy library loading', () => {
 		['non-callable-evaluate.mjs', /missing a callable evaluate method/],
 		['throwing-factory.mjs', /failed to initialize: fixture initialization failed/],
 		['rejected-factory.mjs', /failed to initialize: login-policy initialization rejected/],
+		['throwing-shape.mjs', /could not be validated: shape getter failed/],
 	] as const)('maps %s failures to ConfigErrors', async (name, message) => {
 		await expectConfigError(
 			loadAdapterLibraries(policyEnv(policyFixture(name))),
