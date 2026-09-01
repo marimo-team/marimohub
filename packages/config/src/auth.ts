@@ -1,13 +1,18 @@
 import type { Authenticator } from '@marimo-hub/core';
 import { basePathFromUrl } from '@marimo-hub/core/url';
 import { createOidcAuth } from '@marimo-hub/auth-oidc';
-import type { EmailVerificationPolicy, OidcGroupPolicy } from '@marimo-hub/auth-oidc';
+import type {
+	EmailVerificationPolicy,
+	OidcGroupPolicy,
+	OidcLoginPolicySettings,
+} from '@marimo-hub/auth-oidc';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';
 import type { Hono } from 'hono';
 import { parseEnum, parseEnumOr, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import type { LoadedAdapterLibraries } from './library';
 import { CONFIG_SPEC } from './spec';
 
 const AUTH_BACKEND_VALUES = (
@@ -124,7 +129,44 @@ function proxyJwksUrl(raw: string | undefined): string | undefined {
 }
 
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;
-const DEFAULT_GROUP_SESSION_TTL_SECONDS = 60 * 60;
+/** Default lifetime for sessions carrying group- or policy-derived authorization. */
+const DEFAULT_DERIVED_SESSION_TTL_SECONDS = 60 * 60;
+const DEFAULT_LOGIN_POLICY_TIMEOUT_SECONDS = 5;
+
+const LOGIN_POLICY_VARS = [
+	'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
+	'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+	'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS',
+	'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS',
+] as const;
+
+/** True when the OIDC login-policy library backend is explicitly selected. */
+export function oidcLoginPolicySelected(env: Env): boolean {
+	return (
+		parseEnum(env, 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND', {
+			allowed: ['library'],
+			remediation: 'Set it to library, or unset it to disable the external login policy.',
+			docs: 'docs/configuration.md#auth',
+		}) === 'library'
+	);
+}
+
+/**
+ * Login-policy variables outside an OIDC deployment are copied or stale
+ * configuration; fail closed instead of silently ignoring an access policy.
+ */
+function assertNoLoginPolicyVars(env: Env, backend: string): void {
+	const configured = LOGIN_POLICY_VARS.find((key) => env[key]?.trim());
+	if (!configured) return;
+	throw new ConfigError(
+		`${configured} is only valid with MARIMOHUB_AUTH_BACKEND=oidc (got ${backend}).`,
+		{
+			variable: configured,
+			remediation: 'Remove the login-policy variables or use the oidc backend.',
+			docs: 'docs/configuration.md#auth',
+		},
+	);
+}
 
 function hasAsciiAtOrBelow(value: string, limit: number): boolean {
 	for (let index = 0; index < value.length; index += 1) {
@@ -196,6 +238,76 @@ function checkedGroups(env: Env, key: string): string[] | undefined {
 	return groups;
 }
 
+const GROUP_POLICY_VARS = [
+	'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
+	'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
+] as const;
+
+/**
+ * Resolve the login-policy settings, enforcing mutual exclusion with the group
+ * variables: two identity-mapping rules would make the login decision an
+ * unclear AND/OR composite, so exactly one mechanism may be configured. A
+ * policy module can reproduce any group rule in code.
+ */
+function parseLoginPolicy(
+	env: Env,
+	libraries: LoadedAdapterLibraries | undefined,
+): OidcLoginPolicySettings | undefined {
+	if (!oidcLoginPolicySelected(env)) {
+		if (env.MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY?.trim()) {
+			throw new ConfigError(
+				'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY is set without ' +
+					'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library; refusing to silently ignore a ' +
+					'configured login policy.',
+				{
+					variable: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY',
+					remediation: 'Set MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library, or unset the path.',
+					docs: 'docs/configuration.md#auth',
+				},
+			);
+		}
+		return undefined;
+	}
+	const conflicting = GROUP_POLICY_VARS.find((key) => env[key]?.trim());
+	if (conflicting) {
+		throw new ConfigError(
+			`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library cannot be combined with ${conflicting}; ` +
+				'a login policy replaces the group mapping (and can reproduce it in code).',
+			{
+				variable: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
+				remediation: 'Remove the group variables or the login policy.',
+				docs: 'docs/configuration.md#auth',
+			},
+		);
+	}
+	const policy = libraries?.oidcLoginPolicy;
+	if (!policy) {
+		throw new ConfigError(
+			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library requires the preloaded login-policy ' +
+				'module; compose with createFromEnvAsync() (or pass a loaded instance).',
+			{
+				variable: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
+				docs: 'docs/configuration.md#auth',
+			},
+		);
+	}
+	return {
+		policy,
+		timeoutSeconds: parseSeconds(
+			env,
+			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS',
+			DEFAULT_LOGIN_POLICY_TIMEOUT_SECONDS,
+			1,
+			30,
+		),
+	};
+}
+
 function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 	const claim = env.MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM?.trim();
 	const allowed = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
@@ -242,7 +354,10 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 	};
 }
 
-export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?: Hono } {
+export function makeAuth(
+	env: Env,
+	libraries?: LoadedAdapterLibraries,
+): { authenticator: Authenticator; authRoutes?: Hono } {
 	const backend = authBackend(env);
 	if (!backend) {
 		throw new ConfigError(
@@ -261,9 +376,11 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 			remediation: 'Required for the oidc backend.',
 			docs: 'docs/configuration.md#auth',
 		});
+	if (backend !== 'oidc') assertNoLoginPolicyVars(env, backend);
 	switch (backend) {
 		case 'oidc': {
-			const groups = parseGroupPolicy(env);
+			const loginPolicy = parseLoginPolicy(env, libraries);
+			const groups = loginPolicy ? undefined : parseGroupPolicy(env);
 			const sessionTtlSeconds = parseSeconds(
 				env,
 				'MARIMOHUB_AUTH_SESSION_TTL_SECONDS',
@@ -271,14 +388,15 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 				300,
 				86_400,
 			);
-			const groupSessionTtlSeconds = groups
-				? parseSeconds(
-						env,
-						'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
-						DEFAULT_GROUP_SESSION_TTL_SECONDS,
-						300,
-						3600,
-					)
+			// Group- and policy-derived sessions share the 1h deprovisioning bound;
+			// the mechanisms are mutually exclusive, so at most one TTL var applies.
+			const derivedTtlVar = groups
+				? 'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS'
+				: loginPolicy
+					? 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS'
+					: undefined;
+			const derivedSessionTtlSeconds = derivedTtlVar
+				? parseSeconds(env, derivedTtlVar, DEFAULT_DERIVED_SESSION_TTL_SECONDS, 300, 3600)
 				: sessionTtlSeconds;
 			const { authenticator, routes } = createOidcAuth({
 				issuer: oidc('MARIMOHUB_AUTH_OIDC_ISSUER'),
@@ -294,11 +412,12 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 					'required',
 				),
 				sessionSecret: oidc('MARIMOHUB_AUTH_SESSION_SECRET'),
-				sessionTtlSeconds: Math.min(sessionTtlSeconds, groupSessionTtlSeconds),
+				sessionTtlSeconds: Math.min(sessionTtlSeconds, derivedSessionTtlSeconds),
 				allowedEmailDomains: parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS),
 				prompt: env.MARIMOHUB_AUTH_OIDC_PROMPT?.trim() || undefined,
 				postLoginRedirect: appRedirectPath(env.MARIMOHUB_APP_BASE_URL),
 				...(groups ? { groups } : {}),
+				...(loginPolicy ? { loginPolicy } : {}),
 			});
 			return { authenticator, authRoutes: routes };
 		}

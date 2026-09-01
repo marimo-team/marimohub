@@ -5,15 +5,17 @@ and verification status of each adapter.
 
 ## External adapter libraries
 
-The Node server can load external storage and compute adapters at startup. Set
-the port selector to `library`. Set its library variable to an npm package, an
-ESM file path, or a `file://` URL:
+The Node server can load external storage and compute adapters, and an external
+OIDC login-policy module, at startup. Set the port selector to `library`. Set
+its library variable to an npm package, an ESM file path, or a `file://` URL:
 
 ```sh
 MARIMOHUB_STORAGE_BACKEND=library
 MARIMOHUB_STORAGE_LIBRARY=/etc/marimohub/storage.mjs
 MARIMOHUB_COMPUTE_BACKEND=library
 MARIMOHUB_COMPUTE_LIBRARY=@myorg/marimohub-compute
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library      # requires MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=/etc/marimohub/oidc-login-policy.mjs
 ```
 
 A module must default-export a manifest. A CommonJS module can use
@@ -30,9 +32,13 @@ export default {
 ```
 
 `apiVersion` must equal `1`. A storage factory returns a `Bucket`. A compute
-factory returns a `SandboxProvider`. Each factory receives the full
-`MARIMOHUB_*` environment. A compute factory also receives
-`sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in `context.compute`.
+factory returns a `SandboxProvider`. An `oidc-login-policy` factory returns an
+object with `evaluate(input)`; its contract lives in `@marimo-hub/auth-oidc`
+(`loginPolicy.ts`), not in `core` — the module maps validated OIDC claims to a
+bounded login decision and entitlements, and is not a runtime authorization
+port. Each factory receives the full `MARIMOHUB_*` environment. A compute
+factory also receives `sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in
+`context.compute`.
 
 At startup, the loader validates the five required `Bucket` methods and its CAS
 safety contract. For compute, it validates `create` and `proxy`, plus optional
@@ -110,6 +116,7 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | ✅     | Personal access tokens                           | built into `core`        | `mhub_pat_…` bearer → user, for CLI/programmatic access |
 | ⬜     | GitHub OAuth (native)                            | —                        | Partly covered by `auth-oidc` today                     |
 | ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC          |
+| ✅     | OIDC login policy (external module)              | `auth-oidc`              | `oidc-login-policy` library: login-time claim mapping   |
 
 ## Object browsing (`ObjectBrowser`)
 

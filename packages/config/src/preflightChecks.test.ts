@@ -117,6 +117,38 @@ describe('auth.oidc-discovery check', () => {
 	});
 });
 
+describe('auth.oidc-login-policy check', () => {
+	it('skipped when no login-policy library is selected', async () => {
+		const { by } = await run({ MARIMOHUB_AUTH_BACKEND: 'oidc' }, makeDeps());
+		expect(by('auth.oidc-login-policy')?.status).toBe('skipped');
+	});
+
+	it('skipped for non-oidc backends even with a stale selector', async () => {
+		const { by } = await run(
+			{
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+			},
+			makeDeps(),
+		);
+		expect(by('auth.oidc-login-policy')?.status).toBe('skipped');
+	});
+
+	it('reports the loaded module when selected', async () => {
+		const { by } = await run(
+			{
+				MARIMOHUB_AUTH_BACKEND: 'oidc',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: '/etc/marimohub/agency-login-policy.mjs',
+			},
+			makeDeps(),
+		);
+		const check = by('auth.oidc-login-policy');
+		expect(check?.status).toBe('ok');
+		expect(check?.message).toContain('/etc/marimohub/agency-login-policy.mjs');
+	});
+});
+
 describe('sandbox.isolation check', () => {
 	const env = {
 		MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',

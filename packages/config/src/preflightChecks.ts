@@ -16,7 +16,7 @@
  */
 import type { ApiDeps } from '@marimo-hub/api';
 import type { CheckOutcome, PreflightCheck } from '@marimo-hub/core';
-import { authBackend } from './auth';
+import { authBackend, oidcLoginPolicySelected } from './auth';
 import { computeBackend } from './compute';
 import type { Env } from './env';
 import { checkSandboxHostIsolation } from './hostIsolation';
@@ -112,6 +112,22 @@ async function checkAuth(env: Env): Promise<CheckOutcome> {
 			remediation: 'Verify MARIMOHUB_AUTH_OIDC_ISSUER and network egress to the IdP.',
 		};
 	}
+}
+
+/**
+ * Reports whether an external login-policy module is in force. Never calls
+ * `evaluate()`: the contract has no probe input, and a synthetic identity must
+ * not reach a real access policy. A module that failed to load prevents boot
+ * (ConfigError), so a serving replica with the selector on implies loaded.
+ */
+function checkLoginPolicy(env: Env): CheckOutcome {
+	if (authBackend(env) !== 'oidc' || !oidcLoginPolicySelected(env)) {
+		return { status: 'skipped', message: 'no OIDC login-policy library selected' };
+	}
+	return {
+		status: 'ok',
+		message: `login-policy module loaded (${env.MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY})`,
+	};
 }
 
 function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
@@ -351,6 +367,7 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 	const checks: PreflightCheck[] = [
 		{ name: 'storage', run: () => checkStorage(env, deps) },
 		{ name: 'auth.oidc-discovery', run: () => checkAuth(env) },
+		{ name: 'auth.oidc-login-policy', run: async () => checkLoginPolicy(env) },
 		{ name: 'sandbox.isolation', run: async () => checkIsolation(env, deps) },
 		{ name: 'sandbox.config', run: async () => checkSandboxConfig(env, deps) },
 		{ name: 'compute', run: () => checkCompute(env, deps) },

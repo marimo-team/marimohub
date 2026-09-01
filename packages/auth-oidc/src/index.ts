@@ -20,8 +20,18 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { ASSIGNABLE_ROLES, AUTH_ENTITLEMENTS, logOperationalError, UserId } from '@marimo-hub/core';
+import {
+	ASSIGNABLE_ROLES,
+	AUTH_ENTITLEMENTS,
+	logEvent,
+	logOperationalError,
+	UserId,
+} from '@marimo-hub/core';
 import type { AssignableRole, AuthEntitlement, Authenticator, AuthUser } from '@marimo-hub/core';
+import { evaluateLoginPolicy } from './loginPolicy';
+import type { OidcLoginPolicy } from './loginPolicy';
+
+export * from './loginPolicy';
 
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
 
@@ -36,6 +46,13 @@ export interface OidcGroupPolicy {
 	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
 	/** Maximum accepted group count (default 200, maximum 200). */
 	maxGroups?: number;
+}
+
+export interface OidcLoginPolicySettings {
+	/** Preloaded, trusted login-policy instance (see `loginPolicy.ts`). */
+	policy: OidcLoginPolicy;
+	/** Evaluation timeout from 1 to 30 seconds (default 5). */
+	timeoutSeconds?: number;
 }
 
 export interface OidcConfig {
@@ -57,6 +74,12 @@ export interface OidcConfig {
 	emailVerification?: EmailVerificationPolicy;
 	/** Optional provider-group extraction and entitlement mapping. */
 	groups?: OidcGroupPolicy;
+	/**
+	 * Optional trusted login-policy module, mutually exclusive with `groups`.
+	 * Called after all OIDC/email validation and before session signing; maps
+	 * validated claims to a bounded allow/deny plus recognized entitlements.
+	 */
+	loginPolicy?: OidcLoginPolicySettings;
 	/** OAuth `prompt` parameter (default `select_account`). */
 	prompt?: string;
 	/** Secret used to sign the session + transaction cookies (HS256). */
@@ -93,6 +116,13 @@ const MAX_SESSION_JWT_BYTES = 3800;
 const MAX_GROUPS = 200;
 const MAX_GROUP_LENGTH = 256;
 const AUTH_ENTITLEMENT_SET: ReadonlySet<string> = new Set(AUTH_ENTITLEMENTS);
+/** Stable operational event per non-allow login-policy outcome. */
+const LOGIN_POLICY_EVENTS = {
+	deny: 'oidc_login_policy_denied',
+	timeout: 'oidc_login_policy_timeout',
+	error: 'oidc_login_policy_failed',
+	invalid: 'oidc_login_policy_result_invalid',
+} as const;
 
 function utf8ByteLength(value: string): number {
 	return new TextEncoder().encode(value).byteLength;
@@ -316,15 +346,31 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		throw new Error('OIDC post-login redirect must be a same-origin application path');
 	}
 	const postLoginRedirect = sanitizedPostLoginRedirect;
-	const sessionTtl = config.sessionTtlSeconds ?? (config.groups ? 60 * 60 : 8 * 60 * 60);
+	// Sessions carrying provider-derived authorization (group- or policy-mapped
+	// entitlements) default to the short lifetime that bounds deprovisioning delay.
+	const derivedAuthorization = Boolean(config.groups || config.loginPolicy);
+	const sessionTtl = config.sessionTtlSeconds ?? (derivedAuthorization ? 60 * 60 : 8 * 60 * 60);
 	const emailVerification = config.emailVerification ?? 'required';
 	const maxGroups = config.groups?.maxGroups ?? MAX_GROUPS;
 	const scopeValues = new Set(scopes.split(/\s+/).filter(Boolean));
 	if (!Number.isInteger(sessionTtl) || sessionTtl < 300 || sessionTtl > 86_400) {
 		throw new Error('OIDC session TTL must be an integer between 300 and 86400 seconds');
 	}
-	if (config.groups && sessionTtl > 3600) {
-		throw new Error('OIDC sessions containing group-derived access must not exceed 3600 seconds');
+	if (derivedAuthorization && sessionTtl > 3600) {
+		throw new Error(
+			'OIDC sessions containing group- or policy-derived access must not exceed 3600 seconds',
+		);
+	}
+	if (config.groups && config.loginPolicy) {
+		throw new Error('OIDC groups and a login policy are mutually exclusive');
+	}
+	const loginPolicyTimeoutSeconds = config.loginPolicy?.timeoutSeconds ?? 5;
+	if (
+		!Number.isInteger(loginPolicyTimeoutSeconds) ||
+		loginPolicyTimeoutSeconds < 1 ||
+		loginPolicyTimeoutSeconds > 30
+	) {
+		throw new Error('OIDC login-policy timeout must be an integer between 1 and 30 seconds');
 	}
 	if (emailVerification !== 'required' && emailVerification !== 'trusted-issuer') {
 		throw new Error('Invalid OIDC email verification policy');
@@ -684,7 +730,35 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		}
 
 		let entitlements: AuthEntitlement[] | undefined;
-		if (config.groups) {
+		if (config.loginPolicy) {
+			const evaluation = await evaluateLoginPolicy(
+				config.loginPolicy.policy,
+				{
+					// validSubject above guarantees a non-empty sub, so parse cannot throw.
+					identity: { id: UserId.parse(claims.sub), email },
+					idTokenClaims: claims as Record<string, unknown>,
+					...(userInfo ? { userInfoClaims: userInfo as Record<string, unknown> } : {}),
+				},
+				{ timeoutMs: loginPolicyTimeoutSeconds * 1000 },
+			);
+			if (evaluation.outcome !== 'allow') {
+				const denied = evaluation.outcome === 'deny';
+				// Only bounded, host-generated fields are logged: never claims, the raw
+				// result, or a module exception (any of which can carry agency attributes).
+				logEvent(
+					{
+						level: denied ? 'warn' : 'error',
+						event: LOGIN_POLICY_EVENTS[evaluation.outcome],
+						duration_ms: evaluation.durationMs,
+						...(denied && evaluation.reason !== undefined ? { reason: evaluation.reason } : {}),
+						...(evaluation.outcome === 'invalid' ? { problem: evaluation.problem } : {}),
+					},
+					{ channel: 'warn' },
+				);
+				return callbackError(c, denied ? 'policy_denied' : 'auth_failed', returnTo);
+			}
+			entitlements = [...evaluation.entitlements];
+		} else if (config.groups) {
 			let rawGroups = userInfo ? claimAtPointer(userInfo, config.groups.claim) : undefined;
 			if (rawGroups === undefined) rawGroups = claimAtPointer(claims, config.groups.claim);
 			let groups: string[];
@@ -712,7 +786,9 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				email,
 				...(name ? { name } : {}),
 				...(pictureUrl ? { pictureUrl } : {}),
-				...(config.groups ? { entitlements: entitlements ?? [] } : {}),
+				// Always present (possibly empty) under derived authorization: the claim
+				// marks the session so `authenticate` exposes `entitlementsExpiresAt`.
+				...(derivedAuthorization ? { entitlements: entitlements ?? [] } : {}),
 			});
 		} catch (err) {
 			logOperationalError('oidc_session_signing_failed', {}, err);

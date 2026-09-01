@@ -21,7 +21,8 @@
 		"@marimo-hub/core": "workspace:*",
 		"hono": "catalog:",
 		"jose": "catalog:",
-		"oauth4webapi": "catalog:"
+		"oauth4webapi": "catalog:",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

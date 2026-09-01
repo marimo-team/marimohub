@@ -112,6 +112,17 @@ API key. Project configuration and bring-your-own-key providers can override it.
 - Group policy accepts at most 200 group IDs and stores only mapped entitlements.
   Group sessions and kernels expire with the entitlement credential. Active
   connections cannot extend this deadline.
+- An external OIDC login-policy module is **trusted in-process code** with
+  server privileges — load only pinned, reviewed modules, identical on every
+  replica. The host fails closed on module load errors, timeouts, exceptions,
+  and out-of-contract results, and accepts only an allow/deny decision plus the
+  built-in entitlements. The host keeps raw provider claims out of cookies,
+  storage, logs, and client errors — but the module sees every claim and could
+  log or persist them itself, so require and review that policy code does
+  neither. Policy sessions expire within one hour. The module
+  maps identity to login eligibility and coarse roles only — it is not
+  resource-level access control, and an entitlement never bypasses the
+  project-role checks below.
 - The OIDC issuer, callback, authorization endpoint, and logout endpoint must
   use HTTPS and cannot contain credentials. Stored user IDs are issuer-local
   `sub` values, so an issuer change requires an identity migration.

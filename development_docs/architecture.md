@@ -437,14 +437,15 @@ saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 ### Authentication — `MARIMOHUB_AUTH_*`
 
-| Variable                                | Purpose                                                  |
-| --------------------------------------- | -------------------------------------------------------- |
-| `MARIMOHUB_AUTH_BACKEND`                | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev` |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`            | OIDC issuer URL                                          |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`         | OAuth client ID                                          |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`     | OAuth client secret (secret)                             |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`          | Deprecated and ignored; `aud` must contain client ID     |
-| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL` | Fixed identity for the `dev` bypass (local only)         |
+| Variable                                   | Purpose                                                  |
+| ------------------------------------------ | -------------------------------------------------------- |
+| `MARIMOHUB_AUTH_BACKEND`                   | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev` |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`               | OIDC issuer URL                                          |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`            | OAuth client ID                                          |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`        | OAuth client secret (secret)                             |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`             | Deprecated and ignored; `aud` must contain client ID     |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND` | `library` loads a trusted external login-policy module   |
+| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL`    | Fixed identity for the `dev` bypass (local only)         |
 
 > Authorization needs no env vars: roles are data in the notebook storage
 > ([§3.4](#34-authorization-authz)).
@@ -467,7 +468,7 @@ prebuilt artifact (the Worker, or the Docker image). A small `@marimo-hub/config
 package reads the env, selects each adapter from its `*_BACKEND` selector, and
 wires the system together. No code required.
 
-### External adapter library (custom storage or compute)
+### External adapter library (custom storage, compute, or OIDC login policy)
 
 The Node server can load an external adapter without a custom entrypoint. Select
 `library` and provide an npm package or ESM file:
@@ -477,6 +478,8 @@ MARIMOHUB_STORAGE_BACKEND=library
 MARIMOHUB_STORAGE_LIBRARY=/etc/marimohub/storage.mjs
 MARIMOHUB_COMPUTE_BACKEND=library
 MARIMOHUB_COMPUTE_LIBRARY=@myorg/marimohub-compute
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library   # oidc backend only
+MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=/etc/marimohub/oidc-login-policy.mjs
 ```
 
 At startup, the server loads each module once and validates its version and port

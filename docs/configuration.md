@@ -329,6 +329,10 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` | Groups granted a deployment-wide default editor role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS` | Groups granted a deployment-wide default project-manager role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS` | Maximum group-session age, from 300 to 3600 seconds. This value limits the deprovisioning delay. | — | `3600` | — |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND` | Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. | — | — | `library` |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY` | The login-policy module: an npm package installed in the image, an ESM path, or a file URL. Required with the `library` login-policy backend. The module runs in-process with server privileges — load only trusted, pinned code. | — | — | `/etc/marimohub/oidc-login-policy.mjs` |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS` | Login-policy evaluation timeout, from 1 to 30 seconds. A timeout denies the login. | — | `5` | — |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS` | Maximum age of a session created through the login policy, from 300 to 3600 seconds. This value limits the deprovisioning delay after a policy or attribute change. | — | `3600` | — |
 
 ### Trusted proxy headers
 

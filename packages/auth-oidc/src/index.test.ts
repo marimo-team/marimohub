@@ -8,6 +8,7 @@ import {
 	pictureUrlClaim,
 	sanitizeReturnTo,
 } from './index';
+import type { OidcLoginPolicy } from './index';
 
 const oauthMock = vi.hoisted(() => ({
 	ClientSecretPost: vi.fn(),
@@ -252,7 +253,7 @@ describe('createOidcAuth configuration validation', () => {
 				sessionTtlSeconds: 3601,
 				groups: { claim: '/groups', superAdmin: ['admins'] },
 			}),
-		).toThrow(/group-derived access/);
+		).toThrow(/group- or policy-derived access/);
 		expect(() =>
 			makeOidc({ groups: { claim: '/groups', maxGroups: 1.5, allowed: ['hub-users'] } }),
 		).toThrow(/maxGroups/);
@@ -2112,5 +2113,307 @@ describe('operational logging for swallowed verification failures', () => {
 		expect(loggedEvents().some((line) => line.includes('oidc_callback_exchange_failed'))).toBe(
 			true,
 		);
+	});
+});
+
+describe('OIDC login policy', () => {
+	const makeWarnSpy = () => vi.spyOn(console, 'warn').mockImplementation(() => {});
+	let warnSpy: ReturnType<typeof makeWarnSpy>;
+	beforeEach(() => {
+		warnSpy = makeWarnSpy();
+	});
+	afterEach(() => {
+		warnSpy.mockRestore();
+		vi.useRealTimers();
+	});
+	const warnedLines = () => warnSpy.mock.calls.map(([line]) => String(line));
+
+	const allowEditor = () => ({
+		policy: {
+			evaluate: () => ({ decision: 'allow', entitlements: ['default-role:editor'] }) as const,
+		},
+	});
+
+	async function callback(routes: ReturnType<typeof createOidcAuth>['routes']) {
+		const txn = await beginOidcTransaction(routes);
+		return routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+	}
+
+	function sessionPayload(res: Response): Record<string, unknown> {
+		const token = cookiePair(res, SESSION_COOKIE).split('=')[1];
+		return JSON.parse(
+			Buffer.from(decodeURIComponent(token).split('.')[1], 'base64url').toString(),
+		) as Record<string, unknown>;
+	}
+
+	it('rejects a login policy combined with a group policy', () => {
+		expect(() =>
+			makeOidc({
+				groups: { claim: '/groups', allowed: ['hub-users'] },
+				loginPolicy: allowEditor(),
+			}),
+		).toThrow(/mutually exclusive/);
+	});
+
+	it.each([0, 31, 2.5])('rejects login-policy timeout %s', (timeoutSeconds) => {
+		expect(() => makeOidc({ loginPolicy: { ...allowEditor(), timeoutSeconds } })).toThrow(
+			/login-policy timeout/,
+		);
+	});
+
+	it('caps login-policy sessions at one hour', () => {
+		expect(() => makeOidc({ loginPolicy: allowEditor(), sessionTtlSeconds: 3601 })).toThrow(
+			/group- or policy-derived access/,
+		);
+	});
+
+	it('passes the host identity and separate frozen claim objects to the policy', async () => {
+		oauthMock.processDiscoveryResponse.mockReturnValue({
+			issuer: 'https://issuer.example.com',
+			authorization_endpoint: 'https://issuer.example.com/authorize',
+			token_endpoint: 'https://issuer.example.com/token',
+			jwks_uri: 'https://issuer.example.com/jwks',
+			userinfo_endpoint: 'https://issuer.example.com/userinfo',
+		});
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			user_attributes: { department: 'orgcode1' },
+		});
+		oauthMock.processUserInfoResponse.mockResolvedValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			groups: ['hub-users'],
+		});
+		let seen: Parameters<OidcLoginPolicy['evaluate']>[0] | undefined;
+		const { routes } = makeOidc({
+			loginPolicy: {
+				policy: {
+					evaluate(input) {
+						seen = input;
+						return { decision: 'allow' };
+					},
+				},
+			},
+		});
+
+		const res = await callback(routes);
+
+		expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
+		expect(seen?.identity).toEqual({ id: 'user-1', email: 'user@example.com' });
+		expect(seen?.idTokenClaims).toMatchObject({
+			user_attributes: { department: 'orgcode1' },
+		});
+		expect(seen?.userInfoClaims).toMatchObject({ groups: ['hub-users'] });
+		// Separate objects: userinfo values are not merged into the ID-token claims.
+		expect(seen?.idTokenClaims).not.toHaveProperty('groups');
+		expect(Object.isFrozen(seen?.idTokenClaims)).toBe(true);
+		expect(Object.isFrozen(seen?.userInfoClaims)).toBe(true);
+	});
+
+	it('omits userInfoClaims when the provider has no userinfo endpoint', async () => {
+		let seen: Parameters<OidcLoginPolicy['evaluate']>[0] | undefined;
+		const { routes } = makeOidc({
+			loginPolicy: {
+				policy: {
+					evaluate(input) {
+						seen = input;
+						return { decision: 'allow' };
+					},
+				},
+			},
+		});
+
+		await callback(routes);
+
+		expect(seen && 'userInfoClaims' in seen).toBe(false);
+	});
+
+	it('signs recognized entitlements into a session bounded to one hour', async () => {
+		const { authenticator, routes } = makeOidc({ loginPolicy: allowEditor() });
+
+		const res = await callback(routes);
+		const sessionCookie = cookiePair(res, SESSION_COOKIE);
+		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
+
+		expect(user?.entitlements).toEqual(['default-role:editor']);
+		expect(Date.parse(user!.entitlementsExpiresAt!)).toBeLessThanOrEqual(Date.now() + 3_600_000);
+	});
+
+	it('marks an allowed empty grant so the authorization expiry still applies', async () => {
+		const { authenticator, routes } = makeOidc({
+			loginPolicy: { policy: { evaluate: () => ({ decision: 'allow' }) } },
+		});
+
+		const res = await callback(routes);
+		expect(sessionPayload(res).entitlements).toEqual([]);
+		const sessionCookie = cookiePair(res, SESSION_COOKIE);
+		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
+
+		expect(user).not.toHaveProperty('entitlements');
+		expect(user?.entitlementsExpiresAt).toBeDefined();
+	});
+
+	it('redirects an explicit denial with policy_denied and logs the bounded reason', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			user_attributes: { clearance: 'CUI' },
+		});
+		const { routes } = makeOidc({
+			loginPolicy: {
+				policy: { evaluate: () => ({ decision: 'deny', reason: 'agency_access_policy' }) },
+			},
+		});
+
+		const res = await callback(routes);
+
+		expect(res.headers.get('location')).toBe('/?auth_error=policy_denied');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+		const lines = warnedLines();
+		expect(lines.some((line) => line.includes('oidc_login_policy_denied'))).toBe(true);
+		expect(lines.some((line) => line.includes('agency_access_policy'))).toBe(true);
+		expect(lines.some((line) => line.includes('CUI'))).toBe(false);
+	});
+
+	it('fails closed on a timeout when the policy ignores its abort signal', async () => {
+		// Real timers: the callback pipeline crosses the crypto thread pool, which
+		// fake timers cannot flush. The 1s minimum timeout keeps this test short.
+		const { routes } = makeOidc({
+			loginPolicy: {
+				policy: { evaluate: () => new Promise(() => {}) },
+				timeoutSeconds: 1,
+			},
+		});
+
+		const res = await callback(routes);
+
+		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+		expect(warnedLines().some((line) => line.includes('oidc_login_policy_timeout'))).toBe(true);
+	});
+
+	it('fails closed when the policy throws, without logging the exception', async () => {
+		const { routes } = makeOidc({
+			loginPolicy: {
+				policy: {
+					evaluate: () => {
+						throw new Error('leaked claim value SECRET//element-a');
+					},
+				},
+			},
+		});
+
+		const res = await callback(routes);
+
+		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+		const lines = warnedLines();
+		expect(lines.some((line) => line.includes('oidc_login_policy_failed'))).toBe(true);
+		expect(lines.some((line) => line.includes('SECRET//element-a'))).toBe(false);
+	});
+
+	it.each([
+		[{ decision: 'allow', entitlements: ['owner'] }, 'unknown_entitlement'],
+		[{ decision: 'allow', subjectSecurityContext: {} }, 'unknown_result_field'],
+		[{ decision: 'yes' }, 'invalid_decision'],
+	] as const)('fails closed on invalid result %j', async (result, problem) => {
+		const { routes } = makeOidc({
+			loginPolicy: { policy: { evaluate: () => result as never } },
+		});
+
+		const res = await callback(routes);
+
+		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+		const lines = warnedLines();
+		expect(lines.some((line) => line.includes('oidc_login_policy_result_invalid'))).toBe(true);
+		expect(lines.some((line) => line.includes(problem))).toBe(true);
+	});
+
+	it('keeps raw attributes out of the signed session and under the cookie limit', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			user_attributes: {
+				department: 'orgcode1',
+				classification: 'SECRET',
+				compartments: Array.from({ length: 200 }, (_, i) => `element-${i}`),
+			},
+		});
+		const { routes } = makeOidc({ loginPolicy: allowEditor() });
+
+		const res = await callback(routes);
+		const payload = sessionPayload(res);
+
+		expect(payload).not.toHaveProperty('user_attributes');
+		expect(JSON.stringify(payload)).not.toContain('orgcode1');
+		expect(JSON.stringify(payload)).not.toContain('SECRET');
+		expect(payload.entitlements).toEqual(['default-role:editor']);
+		const token = cookiePair(res, SESSION_COOKIE).split('=')[1];
+		expect(utf8ByteLength(decodeURIComponent(token))).toBeLessThanOrEqual(3800);
+	});
+
+	it('evaluates a compound department, clearance, and compartment rule end to end', async () => {
+		const CLASSIFICATION_RANK: Record<string, number> = {
+			UNCLASSIFIED: 0,
+			CUI: 1,
+			SECRET: 2,
+			TOP_SECRET: 3,
+		};
+		const compound: OidcLoginPolicy = {
+			evaluate(input) {
+				const attributes = (input.idTokenClaims.user_attributes ?? {}) as Record<string, unknown>;
+				const departmentAllowed = ['orgcode1', 'orgcode2'].includes(
+					attributes.department as string,
+				);
+				const clearance =
+					typeof attributes.classification === 'string'
+						? (CLASSIFICATION_RANK[attributes.classification] ?? -1)
+						: -1;
+				const compartments = Array.isArray(attributes.compartments) ? attributes.compartments : [];
+				const satisfied =
+					departmentAllowed &&
+					clearance >= CLASSIFICATION_RANK.SECRET &&
+					['element-a', 'element-b'].every((element) => compartments.includes(element));
+				return satisfied
+					? { decision: 'allow', entitlements: ['default-role:editor'] }
+					: { decision: 'deny', reason: 'agency_access_policy' };
+			},
+		};
+		const satisfied = {
+			department: 'orgcode1',
+			classification: 'SECRET',
+			compartments: ['element-a', 'element-b'],
+		};
+		const cases: [Record<string, unknown>, string][] = [
+			[satisfied, 'allowed'],
+			[{ ...satisfied, department: 'orgcode9' }, 'denied'],
+			[{ ...satisfied, classification: 'CUI' }, 'denied'],
+			[{ ...satisfied, compartments: ['element-a'] }, 'denied'],
+			[{}, 'denied'],
+		];
+		for (const [attributes, expected] of cases) {
+			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+				sub: 'user-1',
+				email: 'user@example.com',
+				email_verified: true,
+				user_attributes: attributes,
+			});
+			const { routes } = makeOidc({ loginPolicy: { policy: compound } });
+
+			const res = await callback(routes);
+
+			if (expected === 'allowed') {
+				expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
+			} else {
+				expect(res.headers.get('location')).toBe('/?auth_error=policy_denied');
+				expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+			}
+		}
 	});
 });
