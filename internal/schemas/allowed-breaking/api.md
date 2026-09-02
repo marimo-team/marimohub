@@ -25,6 +25,13 @@ surface. Existing VS Code responses are unchanged.
 GET /api/v1/capabilities added `subschema #1, subschema #2` to the `data/surfaces/items/` response property `oneOf` list for the response status `200`
 ```
 
+`directory.search` expands the shared action enum in both `PolicyCaseV1`
+request branches. oasdiff reports the resulting compatible branches as removed.
+
+```text
+POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2` from the `cases/items/` request property `anyOf` list
+```
+
 GET /api/v1/projects/{pid}/alert-destinations the `data` response's property `type` changed from `array<any>` to `object` for status `200`
 POST /api/v1/projects/{pid}/alert-destinations removed `subschema #1, subschema #2` from the request body `oneOf` list
 POST /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `201`
