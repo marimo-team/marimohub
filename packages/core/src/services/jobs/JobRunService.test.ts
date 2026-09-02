@@ -177,22 +177,18 @@ describe('JobRunService', () => {
 
 	it('never overwrites captured outputs on a repeated capture', async () => {
 		const run = await enqueue();
-		await runs.putOutputs(run, { html: 'first', session: '{"first":true}', logs: 'original' });
+		await runs.putOutputs(run, { html: 'first', logs: 'original' });
 		expect(
 			await runs.putOutputs(run, {
 				html: 'replacement',
-				session: '{"replacement":true}',
 				logs: 'new',
 			}),
 		).toEqual({
 			html_bytes: 5,
-			session_bytes: 14,
 			logs_bytes: 8,
 		});
 		expect(await runs.readHtml(run)).toBe('first');
 		expect(await runs.readLogs(run)).toBe('original');
-		const sessionPath = paths.project(pid).notebook(nid).job(job.id).run(run.run_id).session;
-		expect(await (await env.bucket.get(sessionPath))!.text()).toBe('{"first":true}');
 	});
 
 	it('writes a terminal skipped record with a finalization marker', async () => {

@@ -192,7 +192,10 @@ describe('JobsService', () => {
 		const job = await env.jobs.createJob(pid, nid, { name: 'nightly' }, ACTOR);
 		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
 		await env.bucket.put(jobPaths.occurrence('20260902T0600Z'), '{}');
-		await env.jobs.deleteJob(pid, nid, job.id, ACTOR);
+		await env.jobs.beginDelete(pid, nid, job.id, ACTOR, job.updated_at);
+		expect(indexedJobs(await env.catalog.getCurrentSnapshot())).toEqual([]);
+		expect(await env.jobs.isDeleting(job)).toBe(true);
+		await env.jobs.finishDelete(pid, nid, job.id);
 		expect(await env.bucket.head(jobPaths.head)).toBeNull();
 		expect(await env.bucket.head(jobPaths.occurrence('20260902T0600Z'))).toBeNull();
 		expect(indexedJobs(await env.catalog.getCurrentSnapshot())).toEqual([]);
@@ -231,7 +234,7 @@ describe('JobsService', () => {
 			await expect(
 				env.jobs.updateJob(pid, nid, missing, { name: 'x' }, ACTOR),
 			).rejects.toBeInstanceOf(NotFoundError);
-			await expect(env.jobs.deleteJob(pid, nid, missing, ACTOR)).rejects.toBeInstanceOf(
+			await expect(env.jobs.beginDelete(pid, nid, missing, ACTOR)).rejects.toBeInstanceOf(
 				NotFoundError,
 			);
 		});

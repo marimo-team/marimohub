@@ -73,7 +73,6 @@ describe('Job routes', () => {
 			notifications: { on: ['failure'] },
 			created_by: ACTOR,
 		});
-		expect(created.next_run_at).toMatch(/T0[45]:00:00\.000Z$/);
 
 		expect((await expectPage(await request('GET', base()))).map((j) => j.id)).toEqual([created.id]);
 		const read = await request('GET', `${base()}/${created.id}`);
@@ -87,7 +86,7 @@ describe('Job routes', () => {
 				{ 'if-match': created.updated_at },
 			),
 		);
-		expect(updated).toMatchObject({ enabled: false, next_run_at: null });
+		expect(updated).toMatchObject({ enabled: false });
 		expect(updated.schedule).toBeUndefined();
 		expect(updated.parameters).toBeUndefined();
 
@@ -101,8 +100,19 @@ describe('Job routes', () => {
 			412,
 			'PRECONDITION_FAILED',
 		);
+		await expectError(
+			await request('DELETE', `${base()}/${created.id}`, undefined, {
+				'if-match': created.updated_at,
+			}),
+			412,
+			'PRECONDITION_FAILED',
+		);
 
-		await expectOk(await request('DELETE', `${base()}/${created.id}`));
+		await expectOk(
+			await request('DELETE', `${base()}/${created.id}`, undefined, {
+				'if-match': updated.updated_at,
+			}),
+		);
 		await expectError(await request('GET', `${base()}/${created.id}`), 404, 'NOT_FOUND');
 	});
 
@@ -183,7 +193,11 @@ describe('Job routes', () => {
 			'FORBIDDEN',
 		);
 		await expectError(await viewer('POST', `${base()}/${job.id}/runs`), 403, 'FORBIDDEN');
-		await expectError(await viewer('DELETE', `${base()}/${job.id}`), 403, 'FORBIDDEN');
+		await expectError(
+			await viewer('DELETE', `${base()}/${job.id}`, undefined, { 'if-match': job.updated_at }),
+			403,
+			'FORBIDDEN',
+		);
 
 		const run = await expectOk<any>(await editor('POST', `${base()}/${job.id}/runs`), 201);
 		expect(run).toMatchObject({ status: 'queued', trigger: 'manual', triggered_by: EDITOR });
@@ -289,7 +303,11 @@ describe('Job routes', () => {
 	it('deleting a job cancels its active runs first', async () => {
 		const job = await createJob();
 		const queued = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
-		await expectOk(await request('DELETE', `${base()}/${job.id}`));
+		await expectOk(
+			await request('DELETE', `${base()}/${job.id}`, undefined, {
+				'if-match': job.updated_at,
+			}),
+		);
 		expect(await bucket.head(paths.jobRunMarker(pid, queued.run_id))).toBeNull();
 		expect(await services.jobRuns.listActive()).toEqual([]);
 	});
@@ -318,7 +336,9 @@ describe('Job routes', () => {
 				},
 			}) as never;
 
-		const deleting = request('DELETE', `${base()}/${job.id}`);
+		const deleting = request('DELETE', `${base()}/${job.id}`, undefined, {
+			'if-match': job.updated_at,
+		});
 		await destroying;
 		await expectError(await request('POST', `${base()}/${job.id}/runs`), 404, 'NOT_FOUND');
 		releaseDestroy();
@@ -395,6 +415,7 @@ describe('Job routes', () => {
 		expect(capabilities.jobs).toEqual({
 			available: true,
 			max_per_notebook: 5,
+			max_queued_runs_per_job: 20,
 			default_timeout_seconds: 1800,
 			max_timeout_seconds: 14_400,
 			run_retention_days: 30,
@@ -460,7 +481,9 @@ describe('Job routes', () => {
 				'VALIDATION_ERROR',
 			);
 			await expectError(
-				await request('DELETE', `${base()}/job-0000000000000000`),
+				await request('DELETE', `${base()}/job-0000000000000000`, undefined, {
+					'if-match': '2000-01-01T00:00:00.000Z',
+				}),
 				404,
 				'NOT_FOUND',
 			);
@@ -588,7 +611,11 @@ describe('Job routes', () => {
 		it('keeps the notebook’s other jobs when one is deleted', async () => {
 			const a = await createJob({ name: 'a' });
 			const b = await createJob({ name: 'b' });
-			await expectOk(await request('DELETE', `${base()}/${a.id}`));
+			await expectOk(
+				await request('DELETE', `${base()}/${a.id}`, undefined, {
+					'if-match': a.updated_at,
+				}),
+			);
 			expect((await expectPage<any>(await request('GET', base()))).map((j) => j.id)).toEqual([
 				b.id,
 			]);
@@ -631,6 +658,7 @@ describe('Job routes', () => {
 			expect(capabilities.jobs).toEqual({
 				available: false,
 				max_per_notebook: null,
+				max_queued_runs_per_job: null,
 				default_timeout_seconds: null,
 				max_timeout_seconds: null,
 				run_retention_days: null,

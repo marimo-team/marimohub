@@ -4,7 +4,6 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
-	appendJobRunFinishEvent,
 	BUCKET_SCAN_CONCURRENCY,
 	DOMAIN_ERROR_CODES,
 	MAX_SECURITY_COMPARTMENTS,
@@ -32,6 +31,7 @@ import {
 	VIEWER_MODES,
 	SurfaceForbiddenError,
 } from '@marimo-hub/core';
+import { appendJobRunFinishEvent } from '@marimo-hub/core/jobs';
 import type {
 	AuthorizationPolicy,
 	AuthorizationSubject,
@@ -1386,11 +1386,11 @@ export const CapabilitiesResponseSchema = z
 			),
 			max_destinations: z.number().int().positive(),
 		}),
-		/** Notebook jobs: the limits a client validates definitions against. */
 		/** Notebook jobs (`MARIMOHUB_JOBS`); the limits are null while off. */
 		jobs: z.object({
 			available: z.boolean(),
 			max_per_notebook: z.number().int().nullable(),
+			max_queued_runs_per_job: z.number().int().positive().nullable(),
 			default_timeout_seconds: z.number().int().nullable(),
 			max_timeout_seconds: z.number().int().nullable(),
 			run_retention_days: z.number().nullable(),

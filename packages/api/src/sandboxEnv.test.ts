@@ -3,11 +3,11 @@ import { createRunId, UnavailableError, ValidationError } from '@marimo-hub/core
 import type {
 	JobDefinition,
 	JobRun,
-	JobRunContext,
 	Project,
 	ProjectIntegrationsService,
 	SessionRender,
 } from '@marimo-hub/core';
+import type { JobRunContext } from '@marimo-hub/core/jobs';
 import { ACTOR, makeProject, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { resolveFederatedVars, resolveIntegrationRender, resolveJobSandboxEnv } from './sandboxEnv';
@@ -76,19 +76,31 @@ describe('resolveFederatedVars', () => {
 		expect(
 			await resolveFederatedVars(
 				{},
-				{ project: federated, subjectId: createRunId(), restricted: false },
+				{
+					project: federated,
+					workload: { kind: 'job-run', id: createRunId() },
+					restricted: false,
+				},
 			),
 		).toBeUndefined();
 		expect(
 			await resolveFederatedVars(
 				{ wif: config },
-				{ project: makeProject(), subjectId: createRunId(), restricted: false },
+				{
+					project: makeProject(),
+					workload: { kind: 'job-run', id: createRunId() },
+					restricted: false,
+				},
 			),
 		).toBeUndefined();
 		expect(
 			await resolveFederatedVars(
 				{ wif: config },
-				{ project: federated, subjectId: createRunId(), restricted: true },
+				{
+					project: federated,
+					workload: { kind: 'job-run', id: createRunId() },
+					restricted: true,
+				},
 			),
 		).toBeUndefined();
 	});
@@ -100,7 +112,7 @@ describe('resolveFederatedVars', () => {
 				{ wif: config },
 				{
 					project: makeProject({ federation: { enabled: true } }),
-					subjectId: createRunId(),
+					workload: { kind: 'job-run', id: createRunId() },
 					restricted: false,
 				},
 			),
@@ -125,7 +137,7 @@ describe('resolveFederatedVars', () => {
 				{ wif: config },
 				{
 					project: makeProject({ federation: { enabled: true } }),
-					subjectId: createRunId(),
+					workload: { kind: 'job-run', id: createRunId() },
 					restricted: false,
 					onError,
 				},
@@ -150,7 +162,7 @@ describe('resolveIntegrationRender', () => {
 				{},
 				{
 					projectId: makeProject().id,
-					sessionId: createRunId(),
+					workload: { kind: 'job-run', id: createRunId() },
 					principal: { userId: ACTOR, email: 'a@x' },
 					restricted: false,
 				},
@@ -161,7 +173,7 @@ describe('resolveIntegrationRender', () => {
 				{ integrations: service },
 				{
 					projectId: makeProject().id,
-					sessionId: createRunId(),
+					workload: { kind: 'job-run', id: createRunId() },
 					principal: { userId: ACTOR, email: 'a@x' },
 					restricted: true,
 				},
@@ -179,7 +191,7 @@ describe('resolveIntegrationRender', () => {
 				{ integrations: validation.service },
 				{
 					projectId: makeProject().id,
-					sessionId: createRunId(),
+					workload: { kind: 'job-run', id: createRunId() },
 					principal: { userId: ACTOR, email: 'a@x' },
 					restricted: false,
 					onError,
@@ -196,7 +208,7 @@ describe('resolveIntegrationRender', () => {
 				{ integrations: vendor.service },
 				{
 					projectId: makeProject().id,
-					sessionId: createRunId(),
+					workload: { kind: 'job-run', id: createRunId() },
 					principal: { userId: ACTOR, email: 'a@x' },
 					restricted: false,
 				},
@@ -263,14 +275,14 @@ describe('resolveJobSandboxEnv', () => {
 		const scheduled = context();
 		await resolveJobSandboxEnv(withIntegrations, scheduled);
 		expect(resolveForSession).toHaveBeenLastCalledWith(scheduled.project.id, {
-			sessionId: scheduled.run.run_id,
+			workload: { kind: 'job-run', id: scheduled.run.run_id },
 			principal: { userId: AUTHOR, email: 'author@example.com' },
 		});
 
 		const manual = context({ run: { trigger: 'manual', triggered_by: TRIGGERER } });
 		await resolveJobSandboxEnv(withIntegrations, manual);
 		expect(resolveForSession).toHaveBeenLastCalledWith(manual.project.id, {
-			sessionId: manual.run.run_id,
+			workload: { kind: 'job-run', id: manual.run.run_id },
 			principal: { userId: TRIGGERER, email: '' },
 		});
 	});

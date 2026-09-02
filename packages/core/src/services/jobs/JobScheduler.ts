@@ -260,7 +260,7 @@ export class JobScheduler {
 	): Promise<'fired' | 'repaired' | 'skipped' | 'none'> {
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
-			if (await this.deps.runs.isJobDeleting(jobRef)) return 'none';
+			if (await this.deps.jobs.isDeleting(jobRef)) return 'none';
 			const job = await this.loadJob(projectId, notebookId, jobId);
 			if (!job?.enabled || !job.schedule) return 'none';
 			let cron;
@@ -473,7 +473,7 @@ export class JobScheduler {
 		const retry = job.retry;
 		if (failed && retry && finished.attempt <= retry.max_retries) {
 			await this.deps.runs.withJobMutation(job, async () => {
-				if (await this.deps.runs.isJobDeleting(job)) return;
+				if (await this.deps.jobs.isDeleting(job)) return;
 				const current = await this.loadJob(job.project_id, job.notebook_id, job.id);
 				if (!current) return;
 				await this.deps.runs.enqueue({

@@ -4,20 +4,18 @@ import {
 	JOB_CONCURRENCY_POLICIES,
 	JOB_NOTIFICATION_EVENTS,
 	JOB_PARAMETER_KEY_PATTERN,
-	appendJobRunFinishEvent,
-	isTerminalRunStatus,
+	JOB_PARAMETERS_JSON_SCHEMA,
 	JobId,
 	MAX_JOB_NAME_LENGTH,
 	MAX_JOB_PARAMETER_VALUE_LENGTH,
 	MAX_JOB_PARAMETERS,
 	MAX_JOB_RETRIES,
 	MAX_JOB_RETRY_BACKOFF_SECONDS,
+	MAX_QUEUED_RUNS_PER_JOB,
 	MIN_JOB_TIMEOUT_SECONDS,
 	Millis,
-	nextOccurrence,
 	BadRequestError,
 	NotFoundError,
-	parseCron,
 	ResourceExhaustedError,
 	RUN_STATUSES,
 	RUN_TRIGGERS,
@@ -25,7 +23,8 @@ import {
 	toPublicJobDefinition,
 	toPublicJobRun,
 } from '@marimo-hub/core';
-import type { JobDefinition, JobRun, PublicJobDefinition } from '@marimo-hub/core';
+import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
+import type { JobDefinition, JobRun } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv, JobsConfig } from '../context';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
@@ -58,9 +57,6 @@ import {
 	NotebookIdParam,
 	SuccessResponseSchema,
 } from '../shared';
-
-/** Manual triggers only enqueue; this bounds how far a client can stack them. */
-const MAX_QUEUED_RUNS_PER_JOB = 20;
 
 // --- Params ---
 
@@ -107,10 +103,11 @@ const JobParametersShape = z
 	)
 	.refine((parameters) => Object.keys(parameters).length <= MAX_JOB_PARAMETERS, {
 		message: `At most ${MAX_JOB_PARAMETERS} parameters are allowed`,
-	});
+	})
+	.meta(JOB_PARAMETERS_JSON_SCHEMA);
 const JobParametersSchema = JobParametersShape.openapi('JobParameters', {
 	description:
-		'String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.',
+		'String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`. Parameters are visible to every project member who can read the job or its run history; do not store secrets here.',
 	example: { region: 'eu-west-1' },
 });
 
@@ -135,13 +132,13 @@ const TimeoutSchema = z.number().int().min(MIN_JOB_TIMEOUT_SECONDS).openapi({
 const CreateJobBody = z
 	.strictObject({
 		name: z.string().min(1).max(MAX_JOB_NAME_LENGTH).openapi({ example: 'Nightly refresh' }),
-		enabled: z.boolean().optional(),
+		enabled: z.boolean().default(true),
 		/** Absent = manual-trigger only. */
 		schedule: JobScheduleSchema.optional(),
 		parameters: JobParametersSchema.optional(),
 		retry: JobRetryPolicySchema.optional(),
 		timeout_seconds: TimeoutSchema.optional(),
-		concurrency_policy: z.enum(JOB_CONCURRENCY_POLICIES).optional(),
+		concurrency_policy: z.enum(JOB_CONCURRENCY_POLICIES).default('forbid'),
 		notifications: JobNotificationsSchema.optional(),
 	})
 	.openapi('JobCreateBody');
@@ -187,8 +184,6 @@ const JobResponseSchema = z
 		created_by: z.string(),
 		created_at: z.iso.datetime(),
 		updated_at: z.iso.datetime(),
-		/** The next scheduled fire, or null when disabled or manual-only. */
-		next_run_at: z.iso.datetime().nullable(),
 	})
 	.openapi('Job');
 
@@ -200,13 +195,19 @@ const JobRunResponseSchema = z
 		job_id: z.string(),
 		notebook_id: z.string(),
 		project_id: z.string(),
-		status: extensibleResponseEnum(RUN_STATUSES, 'queued'),
+		status: extensibleResponseEnum(RUN_STATUSES, 'queued').openapi({
+			description:
+				'queued/provisioning/running are active. succeeded/failed/timed_out/cancelled/skipped are terminal; terminal records are never rewritten.',
+		}),
 		trigger: extensibleResponseEnum(RUN_TRIGGERS, 'manual'),
 		triggered_by: z.string().optional(),
 		scheduled_for: z.iso.datetime().optional(),
 		source_version_id: z.string().optional(),
 		parameters: JobParametersSchema.optional(),
-		attempt: z.number().int(),
+		attempt: z.number().int().positive().openapi({
+			description:
+				'One-based attempt number. A failed or timed-out attempt can create a new run with attempt + 1 and retry_of set, subject to the job retry policy.',
+		}),
 		retry_of: z.string().optional(),
 		/** Provenance of the sandbox the run provisioned with, as on session records. */
 		image: z.string().optional(),
@@ -215,18 +216,28 @@ const JobRunResponseSchema = z
 		timeout_seconds: z.number().int(),
 		queued_at: z.iso.datetime(),
 		eligible_at: z.iso.datetime().optional(),
-		started_at: z.iso.datetime().optional(),
-		finished_at: z.iso.datetime().optional(),
-		deadline_at: z.iso.datetime().optional(),
-		exit_code: z.number().int().optional(),
-		error: RunErrorSchema.optional(),
+		started_at: z.iso.datetime().optional().openapi({
+			description: 'Present after the run enters running.',
+		}),
+		finished_at: z.iso.datetime().optional().openapi({
+			description: 'Present on terminal runs.',
+		}),
+		deadline_at: z.iso.datetime().optional().openapi({
+			description: 'Present after provisioning establishes the watchdog deadline.',
+		}),
+		exit_code: z.number().int().optional().openapi({
+			description: 'Process exit code when the export command reported one.',
+		}),
+		error: RunErrorSchema.optional().openapi({
+			description: 'Sanitized failure detail, present on failed, timed-out, or skipped runs.',
+		}),
 		output: z
 			.object({
-				html_bytes: z.number().int(),
-				session_bytes: z.number().int().optional(),
-				logs_bytes: z.number().int().optional(),
+				html_bytes: z.number().int().nonnegative(),
+				logs_bytes: z.number().int().nonnegative().optional(),
 			})
-			.optional(),
+			.optional()
+			.openapi({ description: 'Captured write-once artifacts, present after execution.' }),
 		cancelled_by: z.string().optional(),
 	})
 	.openapi('JobRun');
@@ -320,11 +331,11 @@ const deleteJob = createRoute({
 	tags: ['Jobs'],
 	summary: 'Delete a job and its run history',
 	description: 'Active runs are cancelled and their sandboxes destroyed first.',
-	request: { params: JobIdParam },
+	request: { params: JobIdParam, headers: IfMatchHeader },
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Job deleted'),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 412),
 	},
 });
 
@@ -452,20 +463,6 @@ function jobLimits(deps: ApiDeps) {
 	};
 }
 
-function nextRunAt(job: JobDefinition, now = Date.now()): string | null {
-	if (!job.enabled || !job.schedule) return null;
-	try {
-		const next = nextOccurrence(parseCron(job.schedule.cron), job.schedule.timezone, now);
-		return next === null ? null : new Date(next).toISOString();
-	} catch {
-		return null;
-	}
-}
-
-function toJobResponse(job: JobDefinition): PublicJobDefinition & { next_run_at: string | null } {
-	return { ...toPublicJobDefinition(job), next_run_at: nextRunAt(job) };
-}
-
 /** Viewer read gate: visible project + authorized notebook, then the job. */
 async function loadReadableJob(
 	c: Context<HonoEnv>,
@@ -553,7 +550,7 @@ app.openapi(listJobs, async (c) => {
 		{
 			success: true,
 			data: {
-				items: page.items.map(toJobResponse),
+				items: page.items.map(toPublicJobDefinition),
 				next_cursor: page.next ? encodeCursor(page.next.createdAt, page.next.jobId) : null,
 			},
 		},
@@ -576,7 +573,7 @@ app.openapi(createJob, async (c) => {
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(c, 'POST /projects/{pid}/notebooks/{nid}/jobs', async () => {
 		const job = await deps.services.jobs.createJob(pid, nid, body, user.id, jobLimits(deps));
-		return toJobResponse(job);
+		return toPublicJobDefinition(job);
 	});
 	c.header('ETag', etagFor(data.updated_at));
 	return c.json({ success: true, data }, 201);
@@ -586,7 +583,7 @@ app.openapi(getJob, async (c) => {
 	const { pid, nid, jid } = c.req.valid('param');
 	const { job } = await loadReadableJob(c, pid, nid, jid);
 	c.header('ETag', etagFor(job.updated_at));
-	return c.json({ success: true, data: toJobResponse(job) }, 200);
+	return c.json({ success: true, data: toPublicJobDefinition(job) }, 200);
 });
 
 app.openapi(updateJob, async (c) => {
@@ -598,9 +595,7 @@ app.openapi(updateJob, async (c) => {
 	const job = await deps.services.jobRuns.withJobMutation(
 		{ project_id: pid, notebook_id: nid, id: jid },
 		async () => {
-			if (
-				await deps.services.jobRuns.isJobDeleting({ project_id: pid, notebook_id: nid, id: jid })
-			) {
+			if (await deps.services.jobs.isDeleting({ project_id: pid, notebook_id: nid, id: jid })) {
 				throw new NotFoundError(`Job ${jid} not found`);
 			}
 			return deps.services.jobs.updateJob(
@@ -615,16 +610,16 @@ app.openapi(updateJob, async (c) => {
 		},
 	);
 	c.header('ETag', etagFor(job.updated_at));
-	return c.json({ success: true, data: toJobResponse(job) }, 200);
+	return c.json({ success: true, data: toPublicJobDefinition(job) }, 200);
 });
 
 app.openapi(deleteJob, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid, jid } = c.req.valid('param');
-	const { job } = await loadWritableJob(c, pid, nid, jid);
-	const cancelled = await deps.services.jobRuns.withJobMutation(job, async () => {
-		await deps.services.jobRuns.markJobDeleting(job);
+	const { job: loaded } = await loadWritableJob(c, pid, nid, jid);
+	const cancelled = await deps.services.jobRuns.withJobMutation(loaded, async () => {
+		const job = await deps.services.jobs.beginDelete(pid, nid, jid, user.id, ifMatchToken(c));
 		const result = await deps.services.jobRuns.cancelRunsOfJob(job, user.id);
 		const cancelledIds = new Set(result.runs.map((run) => run.run_id));
 		const terminal = (await deps.services.jobRuns.listActive()).flatMap(({ marker, run }) =>
@@ -647,7 +642,7 @@ app.openapi(deleteJob, async (c) => {
 		notebook_id: nid,
 		job_id: jid,
 	});
-	await deps.services.jobs.deleteJob(pid, nid, jid, user.id);
+	await deps.services.jobs.finishDelete(pid, nid, jid);
 	return c.json({ success: true }, 200);
 });
 
@@ -662,7 +657,7 @@ app.openapi(triggerRun, async (c) => {
 		'POST /projects/{pid}/notebooks/{nid}/jobs/{jid}/runs',
 		async () => {
 			const run = await deps.services.jobRuns.withJobMutation(job, async () => {
-				if (await deps.services.jobRuns.isJobDeleting(job)) {
+				if (await deps.services.jobs.isDeleting(job)) {
 					throw new NotFoundError(`Job ${jid} not found`);
 				}
 				const current = await deps.services.jobs.getJob(pid, nid, jid);

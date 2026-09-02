@@ -9,6 +9,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./jobs": "./src/services/jobs/public.ts",
 		"./data-query-sql": "./src/services/integrations/data-query/sql.ts",
 		"./data-query-contracts": "./src/services/integrations/data-query/contracts.ts",
 		"./ports": "./src/ports/index.ts",

@@ -19,17 +19,19 @@ import {
 	UserIdSchema,
 } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
-import { PROJECT_ALERT_KINDS, ProjectAlertKindSchema } from '../../notifications';
+import { PROJECT_ALERT_KINDS } from '../../notifications';
 import type { ProjectAlertKind } from '../../notifications';
 import { nextIsoTimestamp } from '../../utcDate';
 import { parseHttpUrl } from '../../url';
 
 export const MAX_PROJECT_ALERT_DESTINATIONS = 10;
 
+export const StoredProjectAlertKindSchema = z.string().min(1);
+
 const StoredDestinationCommonSchema = z.object({
 	id: AlertDestinationIdSchema,
 	name: z.string().min(1).max(100),
-	kinds: z.array(ProjectAlertKindSchema).min(1),
+	kinds: z.array(StoredProjectAlertKindSchema).min(1),
 	enabled: z.boolean(),
 	verified_at: z.iso.datetime().nullable(),
 	endpoint_host: z.string().min(1),
@@ -64,10 +66,12 @@ export const ProjectAlertConfigSchema = z.object({
 export type ProjectAlertConfig = z.infer<typeof ProjectAlertConfigSchema>;
 
 export type ProjectAlertDestination =
-	| (Omit<z.infer<typeof StoredSlackDestinationSchema>, 'webhook_url'> & {
+	| (Omit<z.infer<typeof StoredSlackDestinationSchema>, 'webhook_url' | 'kinds'> & {
+			kinds: (ProjectAlertKind | 'unknown')[];
 			webhook_url_set: true;
 	  })
-	| (Omit<z.infer<typeof StoredWebhookDestinationSchema>, 'url' | 'signing_secret'> & {
+	| (Omit<z.infer<typeof StoredWebhookDestinationSchema>, 'url' | 'signing_secret' | 'kinds'> & {
+			kinds: (ProjectAlertKind | 'unknown')[];
 			url_set: true;
 			signing_secret_set: true;
 	  });
@@ -368,12 +372,17 @@ export class ProjectAlertStore {
 	}
 
 	private redact(destination: StoredProjectAlertDestination): ProjectAlertDestination {
+		const kinds = destination.kinds.map((kind) =>
+			PROJECT_ALERT_KINDS.includes(kind as ProjectAlertKind)
+				? (kind as ProjectAlertKind)
+				: 'unknown',
+		);
 		if (destination.type === 'slack') {
 			const { webhook_url: _secret, ...rest } = destination;
-			return { ...rest, webhook_url_set: true };
+			return { ...rest, kinds, webhook_url_set: true };
 		}
 		const { url: _url, signing_secret: _secret, ...rest } = destination;
-		return { ...rest, url_set: true, signing_secret_set: true };
+		return { ...rest, kinds, url_set: true, signing_secret_set: true };
 	}
 
 	private async decrypt(

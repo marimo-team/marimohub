@@ -7,8 +7,8 @@ description: Run notebooks headlessly on a cron schedule or on demand, with a du
 A **job** runs a notebook to completion without a browser — on a cron schedule,
 or on demand from the UI, API, or CLI — and keeps a durable **run history** with
 the rendered outputs. marimo's deterministic DAG execution makes a notebook a
-good batch unit: a run executes `marimo export html` against a frozen copy of
-the notebook and stores the result beside the run record. Editing, apps, and
+good batch unit: a run executes `marimo export html` against saved notebook
+source and stores the result beside the run record. Editing, apps, and
 version history are untouched: a run never writes anything back to the
 notebook.
 
@@ -28,18 +28,20 @@ so the feature can be turned back on without loss.
   name, an optional cron schedule with an IANA time zone, parameters, a
   timeout, a retry policy, and what to do when the previous run is still active.
   A job without a schedule is manual-only.
-- **Runs are pinned to a frozen copy.** Each run copies the notebook's saved
-  files into a fresh sandbox (the same copy-only load [apps](./apps.md) use;
-  never a bucket mount) and records the notebook version it started from.
-  Git-synced notebooks run the workspace of the version their source currently
-  points at. Outputs — the rendered HTML, marimo's session snapshot when
-  produced, and the captured stdout/stderr — live under the run only. They are
-  **not** notebook versions and never advance the notebook's head.
+- **Runs pin notebook source, not every local workspace file.** Each run uses a
+  fresh copy-only sandbox (never a bucket mount) and records the notebook version
+  it started from. Git-synced notebooks copy the complete immutable workspace of
+  that version. Local notebooks copy the current workspace, then overlay the
+  pinned version's `notebook.py` and `pyproject.toml`; other local workspace files
+  therefore reflect their values when execution starts. The rendered HTML and
+  captured stdout/stderr live under the run only. They are **not** notebook
+  versions and never advance the notebook's head.
 - **Parameters reach the notebook as `mo.cli_args()`.** Each `key=value`
   becomes `--key value` after `--` on the export command, so
   `mo.cli_args().get("region")` reads it. Values are strings and are never
   shell-interpolated. A manual run can override the job's stored parameters
-  for that run only.
+  for that run only. Parameters are visible to project members who can read the
+  job and run history, so they must not contain secrets.
 - **The scheduler lives on the maintenance replica.** The replica running
   `MARIMOHUB_RUN_MAINTENANCE=true` evaluates schedules every
   `MARIMOHUB_JOBS_TICK_SECONDS`, dispatches queued runs under the concurrency
@@ -134,11 +136,11 @@ standard envelope; `POST` routes accept an `Idempotency-Key`.
 
 | Method   | Path                       | Notes                                                    |
 | -------- | -------------------------- | -------------------------------------------------------- |
-| `GET`    | `/`                        | List jobs (with `next_run_at`).                          |
+| `GET`    | `/`                        | List jobs, oldest first, with cursor pagination.         |
 | `POST`   | `/`                        | Create; validates cron/time zone/timeout.                |
 | `GET`    | `/{jid}`                   | Read (ETag = `updated_at`).                              |
 | `PATCH`  | `/{jid}`                   | Partial update; `null` clears an optional field.         |
-| `DELETE` | `/{jid}`                   | Cancels active runs, then deletes the job and history.   |
+| `DELETE` | `/{jid}`                   | Requires `If-Match`; cancels active runs, then deletes.  |
 | `POST`   | `/{jid}/runs`              | Run now; body `{ "parameters": {…} }` overrides per run. |
 | `GET`    | `/{jid}/runs`              | Run history, newest first, paginated.                    |
 | `GET`    | `/{jid}/runs/{rid}`        | One run.                                                 |

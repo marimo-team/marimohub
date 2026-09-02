@@ -81,6 +81,7 @@ interface BucketArtifact {
 	key: string;
 	summary: string;
 	mutability: Mutability;
+	owner?: string;
 	tag: string;
 }
 
@@ -345,6 +346,24 @@ const OBJECTS: BucketObject[] = [
 
 const ARTIFACTS: BucketArtifact[] = [
 	{
+		name: 'JobDefinitionIndex',
+		key: notebook.jobIndex('{created_at}', JOB_ID),
+		summary:
+			'Empty create-if-absent job index entry. Lexicographic key order is oldest-first by created_at, then job_id.',
+		mutability: 'immutable',
+		owner: 'JobsService',
+		tag: 'job',
+	},
+	{
+		name: 'JobRunIndex',
+		key: `${job.runIndexPrefix}{reverse_ulid}.json`,
+		summary:
+			'Empty create-if-absent run index entry. The complemented ULID makes lexicographic key order newest-first.',
+		mutability: 'immutable',
+		owner: 'JobRunService',
+		tag: 'job',
+	},
+	{
 		name: 'JobRunOutputHtml',
 		key: jobRun.html,
 		summary: 'Write-once rendered notebook output captured by a job run.',
@@ -355,13 +374,6 @@ const ARTIFACTS: BucketArtifact[] = [
 		name: 'JobRunLogs',
 		key: jobRun.logs,
 		summary: 'Write-once stdout+stderr tail of a job run (editor-only via the API).',
-		mutability: 'immutable',
-		tag: 'job',
-	},
-	{
-		name: 'JobRunSession',
-		key: jobRun.session,
-		summary: 'Write-once marimo session state captured by a job run.',
 		mutability: 'immutable',
 		tag: 'job',
 	},
@@ -453,6 +465,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 			summary: artifact.summary,
 			parameters: pathParams(artifact.key),
 			'x-mutability': artifact.mutability,
+			...(artifact.owner ? { 'x-owner': artifact.owner } : {}),
 			get: {
 				operationId: `read_${opSuffix}`,
 				summary: `Read ${artifact.name}`,

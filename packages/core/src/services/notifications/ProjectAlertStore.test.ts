@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
 	ConflictError,
 	NotFoundError,
@@ -11,7 +12,11 @@ import { createAlertDestinationId, createProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { StoredObjectError } from '../../schema';
 import { ACTOR, MemoryBucket } from '../../testing';
-import { MAX_PROJECT_ALERT_DESTINATIONS, ProjectAlertStore } from './ProjectAlertStore';
+import {
+	MAX_PROJECT_ALERT_DESTINATIONS,
+	ProjectAlertStore,
+	StoredProjectAlertKindSchema,
+} from './ProjectAlertStore';
 
 const KEK = '00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100';
 
@@ -25,6 +30,22 @@ function setup() {
 }
 
 describe('ProjectAlertStore', () => {
+	it('keeps the v1 persisted kind field readable when newer replicas add alert kinds', () => {
+		const priorConfigSchema = z.looseObject({
+			schema_version: z.literal(1),
+			destinations: z.array(z.looseObject({ kinds: z.array(StoredProjectAlertKindSchema).min(1) })),
+		});
+		const parsed = priorConfigSchema.parse({
+			schema_version: 1,
+			destinations: [{ kinds: ['project.deleted', 'job.run.failed', 'future.kind'] }],
+		});
+		expect(parsed.destinations[0].kinds).toEqual([
+			'project.deleted',
+			'job.run.failed',
+			'future.kind',
+		]);
+	});
+
 	it('encrypts endpoint material and returns only redacted configuration', async () => {
 		const { bucket, projectId, store } = setup();
 		const destination = await store.create(

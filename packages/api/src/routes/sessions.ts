@@ -1440,7 +1440,7 @@ app.openapi(createSession, async (c) => {
 					const resolveWifVars = () =>
 						resolveFederatedVars(deps, {
 							project,
-							subjectId: session!.session_id,
+							workload: { kind: 'session', id: session!.session_id },
 							restricted: restrictedViewerCredentials,
 							onError: (err) => {
 								observer.tag('wif_exchange_failed', true);
@@ -1495,7 +1495,7 @@ app.openapi(createSession, async (c) => {
 					const resolveIntegrationEnv = () =>
 						resolveIntegrationRender(deps, {
 							projectId: pid,
-							sessionId: session!.session_id,
+							workload: { kind: 'session', id: session!.session_id },
 							principal: { userId: user.id, email: user.email },
 							restricted: restrictedViewerCredentials,
 							onRendered: (render) => {

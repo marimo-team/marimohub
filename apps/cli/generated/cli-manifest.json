@@ -1945,7 +1945,7 @@
 						"name": "parameters",
 						"cli_name": "parameters",
 						"required": false,
-						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.",
+						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`. Parameters are visible to every project member who can read the job or its run history; do not store secrets here.",
 						"value_type": "object",
 						"repeatable": false
 					},
@@ -1988,6 +1988,14 @@
 			"description": "Active runs are cancelled and their sandboxes destroyed first.",
 			"parameters": [
 				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
 					"name": "jid",
 					"cli_name": "jid",
 					"in": "path",
@@ -2015,8 +2023,9 @@
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "jobs.get"
 		},
 		{
 			"id": "jobs.get",
@@ -2392,7 +2401,7 @@
 						"name": "parameters",
 						"cli_name": "parameters",
 						"required": false,
-						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.",
+						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`. Parameters are visible to every project member who can read the job or its run history; do not store secrets here.",
 						"value_type": "object",
 						"repeatable": false
 					}

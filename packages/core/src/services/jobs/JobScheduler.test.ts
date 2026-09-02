@@ -148,6 +148,54 @@ describe('JobScheduler', () => {
 		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
 	});
 
+	it('does not recreate job state when deletion starts after an occurrence claim', async () => {
+		const job = await createJob();
+		let occurrenceClaimed!: () => void;
+		const claimed = new Promise<void>((resolve) => {
+			occurrenceClaimed = resolve;
+		});
+		let resumeClaim!: () => void;
+		const claimPaused = new Promise<void>((resolve) => {
+			resumeClaim = resolve;
+		});
+		const claimOccurrence = env.jobRuns.claimOccurrence.bind(env.jobRuns);
+		vi.spyOn(env.jobRuns, 'claimOccurrence').mockImplementation(async (...args) => {
+			const result = await claimOccurrence(...args);
+			occurrenceClaimed();
+			await claimPaused;
+			return result;
+		});
+
+		const s = scheduler(fakeRunner(env), {
+			config: { ...CONFIG, maxConcurrentRuns: 0 },
+		});
+		const ticking = s.tick();
+		await claimed;
+		let deletionEntered = false;
+		const deleting = env.jobRuns
+			.withJobMutation(job, async () => {
+				deletionEntered = true;
+				const fenced = await env.jobs.beginDelete(pid, nid, job.id, ACTOR, job.updated_at);
+				const cancelled = await env.jobRuns.cancelRunsOfJob(fenced, ACTOR);
+				for (const run of cancelled.runs) await env.jobRuns.deleteMarker(run);
+			})
+			.then(() => env.jobs.finishDelete(pid, nid, job.id));
+		await Promise.resolve();
+		expect(deletionEntered).toBe(false);
+
+		resumeClaim();
+		await Promise.all([ticking, deleting]);
+		expect(await env.jobRuns.listActive()).toEqual([]);
+		expect(
+			(
+				await env.bucket.list({
+					prefix: paths.project(pid).notebook(nid).job(job.id).base,
+				})
+			).objects,
+		).toEqual([]);
+		expect(await env.jobs.isDeleting(job)).toBe(true);
+	});
+
 	it('fires at most the latest missed occurrence after a gap', async () => {
 		const job = await createJob();
 		const s = scheduler(fakeRunner(env));

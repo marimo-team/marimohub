@@ -18,7 +18,7 @@ import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { toastError } from '@/lib/errors';
 import { describeSchedule } from '@/lib/jobs';
-import { formatAbsolute, formatElapsed } from '@/lib/time';
+import { formatElapsed } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { Job, JobRun } from '@/types';
 import { JobFormDialog } from './JobFormDialog';
@@ -259,8 +259,6 @@ export function JobsPage() {
 										<h1 className="truncate text-base font-semibold">{selectedJob.name}</h1>
 										<p className="text-xs text-muted-foreground">
 											{describeSchedule(selectedJob)}
-											{selectedJob.next_run_at &&
-												` · next run ${formatAbsolute(selectedJob.next_run_at)}`}
 											{selectedJob.timeout_seconds !== undefined &&
 												` · timeout ${formatElapsed(selectedJob.timeout_seconds * 1000)}`}
 											{selectedJob.retry &&

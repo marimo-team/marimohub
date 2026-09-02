@@ -15,14 +15,13 @@ import {
 	defaultRegistry,
 	EDITOR_SANDBOX_SHARING_VALUES,
 	foldCase,
-	JobRunner,
-	JobScheduler,
 	MaintenanceLock,
 	OrgIntegrationsStore,
 	paths,
 	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
+import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import type { AssignableRole, EditorSandboxSharing } from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';

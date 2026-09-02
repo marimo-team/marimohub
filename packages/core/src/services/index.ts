@@ -202,46 +202,6 @@ export {
 } from './integrations/kinds';
 export { ReconciliationService } from './runtime/ReconciliationService';
 export type { ActiveSandboxSource, ReconcileResult } from './runtime/ReconciliationService';
-export { indexedJobs, JobsService, validateJobSchedule } from './jobs/JobsService';
-export type { CreateJobInput, IndexedJob, JobLimits, UpdateJobInput } from './jobs/JobsService';
-export { DANGLING_MARKER_GRACE_MS, JobRunService } from './jobs/JobRunService';
-export type {
-	ActiveRun,
-	CancelledRuns,
-	EnqueueRunInput,
-	RunOutputs,
-	RunPage,
-} from './jobs/JobRunService';
-export {
-	JOB_OUTPUT_FILE,
-	JOB_PROVISION_ALLOWANCE_MS,
-	JobRunner,
-	jobShellCommand,
-	MAX_RUN_LOG_BYTES,
-	parseExitCode,
-	toRunError,
-} from './jobs/JobRunner';
-export type { JobRunContext, JobRunnerDeps, JobRunnerSandboxConfig } from './jobs/JobRunner';
-export { JobScheduler, appendJobRunFinishEvent, jobRunFinishEvent } from './jobs/JobScheduler';
-export type { JobSchedulerConfig, JobSchedulerDeps, TickResult } from './jobs/JobScheduler';
-export {
-	isValidCron,
-	isValidTimeZone,
-	nextOccurrence,
-	occurrenceKey,
-	occurrenceKeyToInstant,
-	parseCron,
-	previousOccurrence,
-} from './jobs/cron';
-export type { CronSchedule } from './jobs/cron';
-export {
-	ACTIVE_RUN_STATUSES,
-	isActiveRunStatus,
-	isTerminalRunStatus,
-	nextRunStatus,
-	TERMINAL_RUN_STATUSES,
-} from './jobs/runState';
-export type { RunEvent } from './jobs/runState';
 export { SandboxDiagnosticLease } from './runtime/SandboxDiagnosticLease';
 export { kernelActiveConnections, SessionLifecycleService } from './runtime/sessionLifecycle';
 export type {
@@ -541,7 +501,8 @@ export function createServices(
 		createJob: notebook,
 		getJob: job,
 		updateJob: job,
-		deleteJob: job,
+		beginDelete: job,
+		finishDelete: job,
 	});
 	const jobRuns = wrap('JobRunService', new JobRunService(bucket, metrics), {
 		getRun: run,

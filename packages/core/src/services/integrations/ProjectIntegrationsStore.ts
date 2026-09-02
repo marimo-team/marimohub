@@ -10,7 +10,7 @@ import {
 	UnavailableError,
 	ValidationError,
 } from '../../errors';
-import type { IntegrationId, ProjectId, UserId } from '../../ids';
+import type { IntegrationId, ProjectId, SessionId, UserId } from '../../ids';
 import { createIntegrationId } from '../../ids';
 import { paths } from '../../paths';
 import type { IntegrationPaths } from '../../paths';
@@ -1103,7 +1103,7 @@ class ScopedIntegrationsStore {
 		id: IntegrationId,
 		projectId: ProjectId,
 		principal: { userId: UserId; email: string },
-		sessionId: SessionRenderContext['sessionId'],
+		sessionId: SessionId,
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
@@ -1156,7 +1156,7 @@ class ScopedIntegrationsStore {
 		id: IntegrationId,
 		projectId: ProjectId,
 		principal: { userId: UserId; email: string },
-		sessionId: SessionRenderContext['sessionId'],
+		sessionId: SessionId,
 		sql: string,
 		signal?: AbortSignal,
 	): Promise<DataQueryResult> {
@@ -1181,8 +1181,9 @@ class ScopedIntegrationsStore {
 			const gate = this.queryGateBlocker(head.kind, parsed);
 			if (gate) throw new ValidationError(gate.reason);
 		}
-		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });
-		const bundled = bundleIntegrations([rendered], sessionId);
+		const workload = { kind: 'session', id: sessionId } as const;
+		const rendered = await this.renderOne(scope, head, projectId, { workload, principal });
+		const bundled = bundleIntegrations([rendered], workload);
 		const opened = await this.openResolvedBrowse(scope, id);
 		const query = opened.def.query;
 		if (!query) {
@@ -1480,7 +1481,7 @@ class ScopedIntegrationsStore {
 				instanceName: head.name,
 				projectId: renderProjectId,
 				principal: context.principal,
-				session: { sessionId: context.sessionId },
+				workload: context.workload,
 			});
 		} catch {
 			throw new ValidationError(`Integration "${head.name}" could not be rendered.`);
@@ -2017,7 +2018,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		projectId: ProjectId,
 		id: IntegrationId,
 		principal: { userId: UserId; email: string },
-		sessionId: SessionRenderContext['sessionId'],
+		sessionId: SessionId,
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
@@ -2042,7 +2043,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		projectId: ProjectId,
 		id: IntegrationId,
 		principal: { userId: UserId; email: string },
-		sessionId: SessionRenderContext['sessionId'],
+		sessionId: SessionId,
 		sql: string,
 		signal?: AbortSignal,
 	): Promise<DataQueryResult> {
@@ -2172,7 +2173,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		const rendered = await mapWithConcurrency(active, BUCKET_SCAN_CONCURRENCY, (item) =>
 			this.store.renderOne(item.scope, item.head, projectId, context),
 		);
-		return bundleIntegrations(rendered, context.sessionId);
+		return bundleIntegrations(rendered, context.workload);
 	}
 }
 

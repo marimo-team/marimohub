@@ -5,7 +5,6 @@ import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
 	createSandboxId,
-	JobScheduler,
 	MaintenanceLock,
 	Millis,
 	paths,
@@ -13,6 +12,7 @@ import {
 	ReconciliationService,
 	SessionLifecycleService,
 } from '@marimo-hub/core';
+import { JobScheduler } from '@marimo-hub/core/jobs';
 import type { SweepResult } from '@marimo-hub/core';
 import { ACTOR, makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
 import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';

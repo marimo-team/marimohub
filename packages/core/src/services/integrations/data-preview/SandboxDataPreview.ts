@@ -78,7 +78,7 @@ export class SandboxDataPreview extends DrainableService {
 						output: program.render,
 					},
 				],
-				program.sessionId,
+				{ kind: 'session', id: program.sessionId },
 			);
 			await sandboxDeadline(
 				Promise.all([

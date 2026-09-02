@@ -72,28 +72,22 @@ describe('buildMarimoLaunch', () => {
 
 		expect(setup.at(-1)).toEqual({
 			name: 'job_output_dir',
-			command: "mkdir -p '__marimo__/session'",
+			command: "mkdir -p '__marimo__'",
 		});
 		expect(start).toContain('marimo export html');
 	});
 
-	it('job normalizes a custom entry session path for capture', () => {
+	it('job does not establish a session-artifact contract for custom entries', () => {
 		const { setup, start } = buildMarimoLaunch({
 			...BASE,
 			mode: 'job',
 			notebookFile: 'apps/main.py',
 		});
 
-		expect(start).toContain('apps/__marimo__/session/main.py.json');
-		expect(start).toContain('__marimo__/session/notebook.py.json');
-		expect(start).toContain('"$@"');
-		expect(setup.at(-1)?.command).toContain('apps/__marimo__/session');
-	});
-
-	it('job does not copy the default entry session onto itself', () => {
-		const { start } = buildMarimoLaunch({ ...BASE, mode: 'job' });
-
+		expect(start).toContain("'apps/main.py'");
+		expect(start).not.toContain('__marimo__/session');
 		expect(start).not.toContain('cp ');
+		expect(setup.at(-1)?.command).toBe("mkdir -p '__marimo__'");
 	});
 
 	// Every strategy must honor the mode — a new strategy hardcoding `marimo

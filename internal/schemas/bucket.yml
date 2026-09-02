@@ -1191,6 +1191,114 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/job-index/{created_at}_{job_id}.json:
+    summary: Empty create-if-absent job index entry. Lexicographic key order is
+      oldest-first by created_at, then job_id.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: created_at
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobsService
+    get:
+      operationId: read_projects_notebooks_job_index_json
+      summary: Read JobDefinitionIndex
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_job_index_json
+      summary: Write JobDefinitionIndex
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/run-index/{reverse_ulid}.json:
+    summary: Empty create-if-absent run index entry. The complemented ULID makes
+      lexicographic key order newest-first.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: reverse_ulid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobRunService
+    get:
+      operationId: read_projects_notebooks_jobs_run_index_json
+      summary: Read JobRunIndex
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_jobs_run_index_json
+      summary: Write JobRunIndex
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/output.html:
     summary: Write-once rendered notebook output captured by a job run.
     parameters:
@@ -1283,58 +1391,6 @@ paths:
     put:
       operationId: write_projects_notebooks_jobs_runs_logs_txt
       summary: Write JobRunLogs
-      tags:
-        - job
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              format: binary
-      responses:
-        '204':
-          description: Stored.
-  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/session.json:
-    summary: Write-once marimo session state captured by a job run.
-    parameters:
-      - name: pid
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: nid
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: job_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: run_id
-        in: path
-        required: true
-        schema:
-          type: string
-    x-mutability: immutable
-    get:
-      operationId: read_projects_notebooks_jobs_runs_session_json
-      summary: Read JobRunSession
-      tags:
-        - job
-      responses:
-        '200':
-          description: The stored artifact.
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-    put:
-      operationId: write_projects_notebooks_jobs_runs_session_json
-      summary: Write JobRunSession
       tags:
         - job
       requestBody:
@@ -1749,19 +1805,7 @@ components:
                     type: array
                     items:
                       type: string
-                      enum:
-                        - member.invited
-                        - member.added
-                        - member.role_changed
-                        - member.removed
-                        - session.takeover
-                        - notebook.deleted
-                        - project.deleted
-                        - app.start_failed
-                        - app.unavailable
-                        - sync.failed
-                        - job.run.failed
-                        - job.run.succeeded
+                      minLength: 1
                   enabled:
                     type: boolean
                   verified_at:
@@ -1828,19 +1872,7 @@ components:
                     type: array
                     items:
                       type: string
-                      enum:
-                        - member.invited
-                        - member.added
-                        - member.role_changed
-                        - member.removed
-                        - session.takeover
-                        - notebook.deleted
-                        - project.deleted
-                        - app.start_failed
-                        - app.unavailable
-                        - sync.failed
-                        - job.run.failed
-                        - job.run.succeeded
+                      minLength: 1
                   enabled:
                     type: boolean
                   verified_at:
@@ -2412,9 +2444,8 @@ components:
       type: object
       properties:
         schema_version:
-          type: integer
-          exclusiveMinimum: 0
-          maximum: 9007199254740991
+          type: number
+          const: 1
         id:
           type: string
         notebook_id:
@@ -2533,9 +2564,8 @@ components:
       type: object
       properties:
         schema_version:
-          type: integer
-          exclusiveMinimum: 0
-          maximum: 9007199254740991
+          type: number
+          const: 1
         run_id:
           type: string
         job_id:
@@ -2643,10 +2673,6 @@ components:
           type: object
           properties:
             html_bytes:
-              type: integer
-              minimum: 0
-              maximum: 9007199254740991
-            session_bytes:
               type: integer
               minimum: 0
               maximum: 9007199254740991

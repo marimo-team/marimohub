@@ -165,7 +165,6 @@ s3-bucket/
                 │           └── {run-id}/
                 │               ├── run.json     ← run record (CAS, JobRunService)
                 │               ├── output.html  ← write-once rendered output
-                │               ├── session.json ← write-once, optional
                 │               └── logs.txt     ← write-once stdout+stderr (capped)
                 └── versions/
                     └── {version-id}/
@@ -777,7 +776,8 @@ only within one tier, so both tiers can contain an integration named
 ### 4.13 `projects/{pid}/notebooks/{nid}/jobs/{jid}/…` and `_system/job-runs/`
 
 A **job** is a per-notebook headless-run definition (schedule + policy); a
-**run** is the immutable record of one execution beside it. See
+**run** is the CAS-managed record of one execution until it reaches a terminal
+status. See
 [docs/jobs.md](../docs/jobs.md) for the user-facing behavior.
 
 ```json
@@ -867,9 +867,19 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
 - `_system/job-operations/{pid}/{nid}/{jid}.json` — an expiring singleton claim
   that serializes scheduling, manual triggers, updates, and
   deletion for one job. `_system/job-deletions/{pid}/{nid}/{jid}.json` is the
-  durable deletion fence checked before enqueueing or updating.
+  durable deletion fence owned by `JobsService` and checked before enqueueing or
+  updating. Deletion writes the fence and removes both discovery indexes before
+  cancelling runs; it deletes `job.json` last so interrupted cleanup can retry.
 - Outputs — write-once under a fresh run prefix; no CAS needed. They are **not
   notebook versions** and never advance `source.json`.
+
+Job definitions and job runs have independent `schema_version` constants and
+read-upgrade functions. Deploy readers for a new version before enabling its
+writers. Older replicas reject unknown job or run versions instead of rewriting
+them. Additive fields within a version are preserved by the loose stored
+schemas; enum changes require a version bump. Project alert destination kinds
+are open strings in storage, so an older replica preserves a kind introduced by
+a newer one, while API inputs accept only the kinds that replica knows.
 
 Deleting a job deletes its whole prefix (after cancelling active runs);
 deleting a notebook or project reclaims the subtree with everything else.

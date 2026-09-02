@@ -33,7 +33,6 @@ import type { JobRunService } from './JobRunService';
 
 /** Where the export lands inside the sandbox working dir; never persisted to the workspace. */
 export const JOB_OUTPUT_FILE = '__marimo__/job_output.html';
-const JOB_SESSION_FILE = '__marimo__/session/notebook.py.json';
 /** Wall-clock allowance for sandbox creation + workspace copy + env setup, on top of `timeout_seconds`. */
 export const JOB_PROVISION_ALLOWANCE_MS = Millis.minutes(10);
 /** Tail of stdout+stderr kept on the run record's `logs.txt`. */
@@ -203,7 +202,6 @@ interface ExportCapture {
 	outcome: ExportOutcome;
 	exitCode: number | undefined;
 	html: string | undefined;
-	session: string | undefined;
 	logs: string;
 }
 
@@ -290,14 +288,13 @@ export class JobRunner {
 			if (!started.transitioned) throw new RunCancelledError();
 			context.run = started.run;
 
-			const { outcome, exitCode, html, session, logs } = await stopwatch.time('exec', () =>
+			const { outcome, exitCode, html, logs } = await stopwatch.time('exec', () =>
 				beforeDeadline(this.runExport(prepared, context.run)),
 			);
 			const output = await stopwatch.time('capture', () =>
 				beforeDeadline(
 					runs.putOutputs(context.run, {
 						...(html !== undefined ? { html } : {}),
-						...(session !== undefined ? { session } : {}),
 						logs,
 					}),
 				),
@@ -364,10 +361,8 @@ export class JobRunner {
 	}
 
 	/**
-	 * Run the export and gather everything the run record needs from the
-	 * sandbox: exit status, the rendered HTML and session (capped), and a log
-	 * tail. The in-process deadline is the last line of defense after `timeout`
-	 * in the sandbox and the exec RPC's own bound.
+	 * The caller's persisted deadline also bounds artifact reads after the shell
+	 * and exec RPC timeouts have stopped covering the operation.
 	 */
 	private async runExport(prepared: PreparedSandbox, run: JobRun): Promise<ExportCapture> {
 		const { sandbox, workdir } = prepared;
@@ -388,17 +383,14 @@ export class JobRunner {
 			MAX_RUN_LOG_BYTES,
 		);
 		const sizes = await listFileSizes(sandbox, `${workdir}/__marimo__`);
-		const [html, session] = await Promise.all([
-			readCappedFile(sandbox, `${workdir}/${JOB_OUTPUT_FILE}`, sizes),
-			readCappedFile(sandbox, `${workdir}/${JOB_SESSION_FILE}`, sizes),
-		]);
+		const html = await readCappedFile(sandbox, `${workdir}/${JOB_OUTPUT_FILE}`, sizes);
 		const outcome = classifyExport({
 			result,
 			exitCode,
 			hasHtml: html !== undefined,
 			timeoutSeconds: run.timeout_seconds,
 		});
-		return { outcome, exitCode, html, session, logs };
+		return { outcome, exitCode, html, logs };
 	}
 
 	private async loadContext(run: JobRun): Promise<JobRunContext> {

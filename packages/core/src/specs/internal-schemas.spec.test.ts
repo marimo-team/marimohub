@@ -105,12 +105,19 @@ describe('bucket job contracts', () => {
 		).toBe(true);
 	});
 
-	it('documents every write-once job run output', () => {
+	it('documents load-bearing job indexes without exposing an unused session artifact', () => {
 		expect(
-			doc.paths['/projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/session.json'],
+			doc.paths['/projects/{pid}/notebooks/{nid}/job-index/{created_at}_{job_id}.json'],
 		).toMatchObject({
 			'x-mutability': 'immutable',
+			'x-owner': 'JobsService',
 		});
+		expect(
+			doc.paths['/projects/{pid}/notebooks/{nid}/jobs/{job_id}/run-index/{reverse_ulid}.json'],
+		).toMatchObject({ 'x-mutability': 'immutable', 'x-owner': 'JobRunService' });
+		expect(
+			doc.paths['/projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/session.json'],
+		).toBeUndefined();
 	});
 });
 

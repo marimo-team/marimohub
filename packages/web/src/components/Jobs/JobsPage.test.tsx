@@ -21,7 +21,6 @@ function job(overrides: Partial<Job> = {}): Job {
 		created_by: 'u-1',
 		created_at: '2026-09-01T10:00:00Z',
 		updated_at: '2026-09-01T10:00:00Z',
-		next_run_at: '2026-09-03T04:00:00Z',
 		...overrides,
 	};
 }
@@ -154,7 +153,7 @@ function makeFetch(world: World = {}) {
 		}
 		if (method === 'POST' && url.endsWith('/jobs')) {
 			const body = init?.body ? (JSON.parse(String(init.body)) as Partial<Job>) : {};
-			const created = job({ id: 'job-2', ...body, next_run_at: null });
+			const created = job({ id: 'job-2', ...body });
 			jobs.push(created);
 			return jsonOk(created, { status: 201 });
 		}
@@ -504,7 +503,7 @@ describe('JobsPage', () => {
 	});
 
 	it('marks a disabled job in the list and offers to enable it', async () => {
-		const world = makeFetch({ jobs: [job({ enabled: false, next_run_at: null })] });
+		const world = makeFetch({ jobs: [job({ enabled: false })] });
 		const user = userEvent.setup();
 		renderPage();
 		expect(await screen.findByText('Disabled')).toBeInTheDocument();

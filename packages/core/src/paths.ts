@@ -73,8 +73,6 @@ export interface JobRunPaths {
 	record: string;
 	/** Write-once captured HTML output of a finished run. */
 	html: string;
-	/** Write-once marimo session snapshot, when the export produced one. */
-	session: string;
 	/** Write-once stdout+stderr of the export command (capped). */
 	logs: string;
 }
@@ -178,7 +176,6 @@ function jobPaths(notebookBase: string, jobId: JobId): JobPaths {
 				base: `${runBase}/`,
 				record: `${runBase}/run.json`,
 				html: `${runBase}/output.html`,
-				session: `${runBase}/session.json`,
 				logs: `${runBase}/logs.txt`,
 			};
 		},

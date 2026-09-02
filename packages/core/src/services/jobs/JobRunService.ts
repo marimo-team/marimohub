@@ -10,12 +10,13 @@ import type { JobId, NotebookId, ProjectId, UserId, VersionId } from '../../ids'
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import {
-	CURRENT_JOB_VERSION,
+	CURRENT_JOB_RUN_VERSION,
 	JobOccurrenceSchema,
 	JobRunMarkerSchema,
 	JobRunSchema,
-	parseStored,
+	parseStoredJobRun,
 	readStored,
+	readStoredJobRun,
 } from '../../schema';
 import type {
 	JobDefinition,
@@ -60,7 +61,6 @@ export interface ActiveRun {
 
 export interface RunOutputs {
 	html?: string;
-	session?: string;
 	logs?: string;
 }
 
@@ -138,20 +138,6 @@ export class JobRunService {
 		throw new UnavailableError('Job is busy; retry the operation');
 	}
 
-	async markJobDeleting(
-		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
-	): Promise<void> {
-		const key = paths.jobDeletionClaim(job.project_id, job.notebook_id, job.id);
-		await putIfAbsent(this.bucket, key, new Date().toISOString());
-	}
-
-	async isJobDeleting(
-		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
-	): Promise<boolean> {
-		const key = paths.jobDeletionClaim(job.project_id, job.notebook_id, job.id);
-		return (await this.bucket.head(key)) !== null;
-	}
-
 	/**
 	 * Write a `queued` run. The marker lands first, then the record — both
 	 * create-if-absent, so a repeated enqueue for the same id (an occurrence repair
@@ -162,7 +148,7 @@ export class JobRunService {
 		const now = new Date().toISOString();
 		const { job } = input;
 		const run = JobRunSchema.parse({
-			schema_version: CURRENT_JOB_VERSION,
+			schema_version: CURRENT_JOB_RUN_VERSION,
 			run_id: runId,
 			job_id: job.id,
 			notebook_id: job.notebook_id,
@@ -213,7 +199,7 @@ export class JobRunService {
 		const now = new Date().toISOString();
 		const { job } = input;
 		const run = JobRunSchema.parse({
-			schema_version: CURRENT_JOB_VERSION,
+			schema_version: CURRENT_JOB_RUN_VERSION,
 			run_id: runId,
 			job_id: job.id,
 			notebook_id: job.notebook_id,
@@ -258,7 +244,7 @@ export class JobRunService {
 		const key = paths.project(projectId).notebook(notebookId).job(jobId).run(runId).record;
 		const obj = await this.bucket.get(key);
 		if (!obj) throw new NotFoundError(`Run ${runId} not found`);
-		return readStored(JobRunSchema, obj, key);
+		return readStoredJobRun(obj, key);
 	}
 
 	async runExists(
@@ -313,7 +299,7 @@ export class JobRunService {
 					const record = await this.bucket.get(recordKey);
 					if (!record) return;
 					try {
-						return await readStored(JobRunSchema, record, recordKey);
+						return await readStoredJobRun(record, recordKey);
 					} catch (err) {
 						logOperationalError(
 							'stored_object_skipped',
@@ -361,7 +347,7 @@ export class JobRunService {
 		const outcome = await mutateObjectWithOutcome(
 			this.bucket,
 			key,
-			(raw) => parseStored(JobRunSchema, raw, key),
+			(raw) => parseStoredJobRun(raw, key),
 			(current) => {
 				const status = nextRunStatus(current.status, event);
 				if (status === null) return null;
@@ -444,7 +430,7 @@ export class JobRunService {
 			const recordObj = await this.bucket.get(recordKey);
 			if (!recordObj) return { marker, run: null };
 			try {
-				return { marker, run: await readStored(JobRunSchema, recordObj, recordKey) };
+				return { marker, run: await readStoredJobRun(recordObj, recordKey) };
 			} catch (err) {
 				logOperationalError(
 					'stored_object_skipped',
@@ -492,10 +478,6 @@ export class JobRunService {
 		if (outputs.html !== undefined) {
 			const bytes = encoder.encode(outputs.html);
 			output.html_bytes = await this.putOutput(p.html, bytes, 'text/html');
-		}
-		if (outputs.session !== undefined) {
-			const bytes = encoder.encode(outputs.session);
-			output.session_bytes = await this.putOutput(p.session, bytes, 'application/json');
 		}
 		if (outputs.logs !== undefined) {
 			const bytes = encoder.encode(outputs.logs);

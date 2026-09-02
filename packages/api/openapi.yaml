@@ -250,6 +250,11 @@ components:
               type:
                 - integer
                 - 'null'
+            max_queued_runs_per_job:
+              type:
+                - integer
+                - 'null'
+              exclusiveMinimum: 0
             default_timeout_seconds:
               type:
                 - integer
@@ -265,6 +270,7 @@ components:
           required:
             - available
             - max_per_notebook
+            - max_queued_runs_per_job
             - default_timeout_seconds
             - max_timeout_seconds
             - run_retention_days
@@ -2817,11 +2823,6 @@ components:
         updated_at:
           type: string
           format: date-time
-        next_run_at:
-          type:
-            - string
-            - 'null'
-          format: date-time
       required:
         - id
         - notebook_id
@@ -2832,7 +2833,6 @@ components:
         - created_by
         - created_at
         - updated_at
-        - next_run_at
     JobSchedule:
       type: object
       properties:
@@ -2857,8 +2857,14 @@ components:
       additionalProperties:
         type: string
         maxLength: 4096
+      maxProperties: 32
+      propertyNames: &a2
+        type: string
+        pattern: ^[A-Za-z][A-Za-z0-9_-]{0,63}$
       description: String parameters passed to the notebook as `--key value` after
-        `--`, readable via `mo.cli_args()`.
+        `--`, readable via `mo.cli_args()`. Parameters are visible to every
+        project member who can read the job or its run history; do not store
+        secrets here.
       example:
         region: eu-west-1
     JobRetryPolicy:
@@ -2900,6 +2906,7 @@ components:
           example: Nightly refresh
         enabled:
           type: boolean
+          default: true
         schedule:
           $ref: '#/components/schemas/JobSchedule'
         parameters:
@@ -2917,6 +2924,7 @@ components:
           enum:
             - forbid
             - allow
+          default: forbid
         notifications:
           $ref: '#/components/schemas/JobNotifications'
       required:
@@ -2959,6 +2967,8 @@ components:
           additionalProperties:
             type: string
             maxLength: 4096
+          maxProperties: 32
+          propertyNames: *a2
         retry:
           type:
             - object
@@ -3028,9 +3038,9 @@ components:
             - cancelled
             - skipped
             - unknown
-          description: 'Known values: queued, provisioning, running, succeeded, failed,
-            timed_out, cancelled, skipped. Unrecognized values normalize to
-            unknown.'
+          description: queued/provisioning/running are active.
+            succeeded/failed/timed_out/cancelled/skipped are terminal; terminal
+            records are never rewritten.
           example: queued
         trigger:
           type: string
@@ -3052,6 +3062,10 @@ components:
           $ref: '#/components/schemas/JobParameters'
         attempt:
           type: integer
+          exclusiveMinimum: 0
+          description: One-based attempt number. A failed or timed-out attempt can create
+            a new run with attempt + 1 and retry_of set, subject to the job
+            retry policy.
         retry_of:
           type: string
         image:
@@ -3071,14 +3085,18 @@ components:
         started_at:
           type: string
           format: date-time
+          description: Present after the run enters running.
         finished_at:
           type: string
           format: date-time
+          description: Present on terminal runs.
         deadline_at:
           type: string
           format: date-time
+          description: Present after provisioning establishes the watchdog deadline.
         exit_code:
           type: integer
+          description: Process exit code when the export command reported one.
         error:
           type: object
           properties:
@@ -3089,17 +3107,20 @@ components:
           required:
             - code
             - message
+          description: Sanitized failure detail, present on failed, timed-out, or skipped
+            runs.
         output:
           type: object
           properties:
             html_bytes:
               type: integer
-            session_bytes:
-              type: integer
+              minimum: 0
             logs_bytes:
               type: integer
+              minimum: 0
           required:
             - html_bytes
+          description: Captured write-once artifacts, present after execution.
         cancelled_by:
           type: string
       required:
@@ -5276,7 +5297,7 @@ paths:
         super-admin standing — no project role grants label authority — and the
         deployment must have resource security configured. Labels only add
         restrictions on top of role checks.
-      security: &a2
+      security: &a3
         - cookieAuth: []
       parameters:
         - schema:
@@ -5386,7 +5407,7 @@ paths:
       tags:
         - Projects
       summary: Remove project security labels
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -6859,7 +6880,7 @@ paths:
       description: 'Every user who has signed in at least once, name-sorted. Currently
         a single page (`next_cursor` is always null). Super-admin only, and
         session-only: a PAT — even a super admin’s — is rejected with 403.'
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: The user directory, name-sorted
@@ -6932,7 +6953,7 @@ paths:
       description: Blocks the user at authentication time, including personal access
         tokens. Super-admin only and session-only. A super admin cannot suspend
         their own account.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -7017,7 +7038,7 @@ paths:
       summary: Reactivate a suspended user
       description: Restores authentication for a known user. Super-admin only and
         session-only.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -7107,7 +7128,7 @@ paths:
         CPU limits, files.pythonhosted.org throughput, uv phase timings, and CPU
         throttling counters. The sandbox is always destroyed. Runtime failures
         are returned as a partial report. Super-admin only and session-only.
-      security: *a2
+      security: *a3
       requestBody:
         required: false
         description: Optional; omit to use the deployment defaults.
@@ -7206,7 +7227,7 @@ paths:
         auth, …) as resolved from the serving replica's environment at boot;
         secret values are never included, only whether they are set. Super-admin
         only, session-only.
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: The deployment configuration, secrets redacted
@@ -7274,7 +7295,7 @@ paths:
       tags:
         - Admin
       summary: Describe policy analyzer inputs
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: Policy analyzer metadata
@@ -7343,7 +7364,7 @@ paths:
       tags:
         - Admin
       summary: Evaluate a policy test suite
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -9788,7 +9809,7 @@ paths:
       description: Sets an override enforced IN ADDITION to the project labels, so it
         can only add restrictions. Requires super-admin standing — no project
         role grants label authority.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -9904,7 +9925,7 @@ paths:
       tags:
         - Notebooks
       summary: Remove a notebook security-label override
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -12306,6 +12327,12 @@ paths:
           required: true
           name: jid
           in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
       responses:
         '200':
           description: Job deleted
@@ -12327,6 +12354,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
           content:
             application/json:
               schema:
@@ -16903,7 +16936,7 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -17006,7 +17039,7 @@ paths:
         - Auth
       summary: List the caller's personal access tokens
       description: Metadata only — the secret is never retrievable after creation.
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: Tokens, newest first
@@ -17245,7 +17278,7 @@ paths:
       description: Deletes the token; API requests using it fail within the
         verification-cache TTL (~30 seconds) on other replicas, immediately on
         this one.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -17320,7 +17353,7 @@ paths:
       summary: Approve a CLI login
       description: Creates a one-time code that is bound to the CLI PKCE challenge.
         Requires a browser session. Exchange creates the personal access token.
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -17712,7 +17745,7 @@ paths:
       summary: Approve a CLI device login
       description: Approves a short-lived device code for the signed-in user. Requires
         a browser session. Personal access tokens cannot approve device logins.
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:

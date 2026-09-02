@@ -980,10 +980,18 @@ export const MAX_JOB_PARAMETERS = 32;
 export const MAX_JOB_PARAMETER_VALUE_LENGTH = 4096;
 export const MAX_JOB_RETRIES = 5;
 export const MAX_JOB_RETRY_BACKOFF_SECONDS = 3600;
+export const MAX_QUEUED_RUNS_PER_JOB = 20;
 export const MIN_JOB_TIMEOUT_SECONDS = 60;
+
+export const CURRENT_JOB_DEFINITION_VERSION = 1;
+export const CURRENT_JOB_RUN_VERSION = 1;
 
 /** Keys become `--key value` argv for `mo.cli_args()`, so they must be flag-safe. */
 export const JOB_PARAMETER_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+export const JOB_PARAMETERS_JSON_SCHEMA = {
+	maxProperties: MAX_JOB_PARAMETERS,
+	propertyNames: { type: 'string', pattern: JOB_PARAMETER_KEY_PATTERN.source },
+} as const;
 
 export const JobParametersSchema = z
 	.record(
@@ -993,7 +1001,7 @@ export const JobParametersSchema = z
 	.refine((parameters) => Object.keys(parameters).length <= MAX_JOB_PARAMETERS, {
 		message: `At most ${MAX_JOB_PARAMETERS} parameters are allowed`,
 	})
-	.meta({ maxProperties: MAX_JOB_PARAMETERS });
+	.meta(JOB_PARAMETERS_JSON_SCHEMA);
 
 export type JobParameters = z.infer<typeof JobParametersSchema>;
 
@@ -1017,7 +1025,7 @@ export const JobNotificationsSchema = z.looseObject({
 export type JobNotifications = z.infer<typeof JobNotificationsSchema>;
 
 export const JobDefinitionSchema = z.looseObject({
-	schema_version: SchemaVersionSchema,
+	schema_version: z.literal(CURRENT_JOB_DEFINITION_VERSION),
 	id: JobIdSchema,
 	notebook_id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
@@ -1040,15 +1048,12 @@ export const JobDefinitionSchema = z.looseObject({
 
 export type JobDefinition = z.infer<typeof JobDefinitionSchema>;
 
-/** Current version stamped onto newly-written job definitions and runs. */
-export const CURRENT_JOB_VERSION = 1;
-
 export const RunErrorSchema = z.looseObject({ code: z.string(), message: z.string() });
 
 export type RunError = z.infer<typeof RunErrorSchema>;
 
 export const JobRunSchema = z.looseObject({
-	schema_version: SchemaVersionSchema,
+	schema_version: z.literal(CURRENT_JOB_RUN_VERSION),
 	run_id: RunIdSchema,
 	job_id: JobIdSchema,
 	notebook_id: NotebookIdSchema,
@@ -1085,7 +1090,6 @@ export const JobRunSchema = z.looseObject({
 	output: z
 		.looseObject({
 			html_bytes: z.number().int().nonnegative(),
-			session_bytes: z.number().int().nonnegative().optional(),
 			logs_bytes: z.number().int().nonnegative().optional(),
 		})
 		.optional(),
@@ -1093,6 +1097,46 @@ export const JobRunSchema = z.looseObject({
 });
 
 export type JobRun = z.infer<typeof JobRunSchema>;
+
+const StoredJobVersionSchema = z.looseObject({ schema_version: SchemaVersionSchema });
+
+export function parseStoredJobDefinition(value: unknown, what: string): JobDefinition {
+	const { schema_version } = parseStored(StoredJobVersionSchema, value, what);
+	switch (schema_version) {
+		case 1:
+			return parseStored(JobDefinitionSchema, value, what);
+		default:
+			throw new StoredObjectError(what, 'schema_mismatch', {
+				issues: [{ path: 'schema_version', code: 'unsupported_version' }],
+			});
+	}
+}
+
+export async function readStoredJobDefinition(
+	body: { json(): Promise<unknown> },
+	what: string,
+): Promise<JobDefinition> {
+	return parseStoredJobDefinition(await readStoredJson(body, what), what);
+}
+
+export function parseStoredJobRun(value: unknown, what: string): JobRun {
+	const { schema_version } = parseStored(StoredJobVersionSchema, value, what);
+	switch (schema_version) {
+		case 1:
+			return parseStored(JobRunSchema, value, what);
+		default:
+			throw new StoredObjectError(what, 'schema_mismatch', {
+				issues: [{ path: 'schema_version', code: 'unsupported_version' }],
+			});
+	}
+}
+
+export async function readStoredJobRun(
+	body: { json(): Promise<unknown> },
+	what: string,
+): Promise<JobRun> {
+	return parseStoredJobRun(await readStoredJson(body, what), what);
+}
 
 /** Scheduled-fire claim: create-if-absent, immutable (see `paths.job().occurrence`). */
 export const JobOccurrenceSchema = z.object({
@@ -1233,9 +1277,6 @@ export function toPublicJobRun(run: JobRun): PublicJobRun {
 			? {
 					output: {
 						html_bytes: run.output.html_bytes,
-						...(run.output.session_bytes !== undefined
-							? { session_bytes: run.output.session_bytes }
-							: {}),
 						...(run.output.logs_bytes !== undefined ? { logs_bytes: run.output.logs_bytes } : {}),
 					},
 				}

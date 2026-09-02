@@ -305,9 +305,10 @@ export interface CopyIntegrationOptions {
 	name?: string;
 }
 
+export type WorkloadRef = { kind: 'session'; id: SessionId } | { kind: 'job-run'; id: RunId };
+
 export interface SessionRenderContext {
-	/** The session — or headless job run — the render is attributed to. */
-	sessionId: SessionId | RunId;
+	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 }
 

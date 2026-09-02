@@ -1,4 +1,4 @@
-import type { ProjectId, RunId, SessionId, UserId } from '../../../ids';
+import type { ProjectId, SessionId, UserId } from '../../../ids';
 import type { IntegrationVersionPin, TablePreview } from '../../../ports/integrations';
 import type { RenderOutput } from '../sdk';
 
@@ -103,7 +103,7 @@ export interface PythonPreviewProgram {
 	maxRows: number;
 	render: RenderOutput;
 	integration: IntegrationVersionPin;
-	sessionId: SessionId | RunId;
+	sessionId: SessionId;
 	credentialVars?: PreviewCredentialVars;
 }
 
@@ -122,7 +122,7 @@ export interface PreviewProgramInput<C> {
 	integration: PythonPreviewProgram['integration'];
 	projectId: ProjectId;
 	principal: { userId: UserId; email: string };
-	sessionId: SessionId | RunId;
+	sessionId: SessionId;
 	namespace: string[];
 	table: string;
 	limit: number;

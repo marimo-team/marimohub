@@ -11,7 +11,12 @@ import { createJobId, JobId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
-import { CURRENT_JOB_VERSION, JobDefinitionSchema, parseStored, readStored } from '../../schema';
+import {
+	CURRENT_JOB_DEFINITION_VERSION,
+	JobDefinitionSchema,
+	parseStoredJobDefinition,
+	readStoredJobDefinition,
+} from '../../schema';
 import type {
 	JobDefinition,
 	JobNotifications,
@@ -23,8 +28,8 @@ import type {
 	SnapshotJobEntry,
 } from '../../schema';
 import { nextIsoTimestamp } from '../../utcDate';
-import { mutateObject } from '../catalog/cas';
-import { deleteByPrefix } from '../catalog/storage';
+import { mutateObject, putIfAbsent } from '../catalog/cas';
+import { listAllKeys } from '../catalog/storage';
 import type { CatalogService } from '../catalog/CatalogService';
 import { isValidTimeZone, parseCron } from './cron';
 
@@ -196,7 +201,7 @@ export class JobsService {
 		const key = paths.project(projectId).notebook(notebookId).job(jobId).head;
 		const obj = await this.bucket.get(key);
 		if (!obj) throw new NotFoundError(`Job ${jobId} not found`);
-		return readStored(JobDefinitionSchema, obj, key);
+		return readStoredJobDefinition(obj, key);
 	}
 
 	async createJob(
@@ -210,7 +215,7 @@ export class JobsService {
 		validateTimeout(input.timeout_seconds, limits);
 		const now = new Date().toISOString();
 		const job = JobDefinitionSchema.parse({
-			schema_version: CURRENT_JOB_VERSION,
+			schema_version: CURRENT_JOB_DEFINITION_VERSION,
 			id: createJobId(),
 			notebook_id: notebookId,
 			project_id: projectId,
@@ -255,7 +260,7 @@ export class JobsService {
 		const updated = await mutateObject(
 			this.bucket,
 			key,
-			(raw) => parseStored(JobDefinitionSchema, raw, key),
+			(raw) => parseStoredJobDefinition(raw, key),
 			(current) => {
 				assertVersionMatch(current.updated_at, expectedVersion);
 				const next: JobDefinition = { ...current };
@@ -277,25 +282,43 @@ export class JobsService {
 		return updated;
 	}
 
-	/**
-	 * Delete the definition and everything beneath it (occurrences, runs,
-	 * outputs). Callers cancel active runs first so no sandbox outlives its record.
-	 */
-	async deleteJob(
+	async beginDelete(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		jobId: JobId,
 		actor: UserId,
-	): Promise<void> {
+		expectedVersion?: string,
+	): Promise<JobDefinition> {
 		const job = await this.getJob(projectId, notebookId, jobId);
-		await deleteByPrefix(
+		assertVersionMatch(job.updated_at, expectedVersion);
+		await putIfAbsent(
 			this.bucket,
-			paths.project(projectId).notebook(notebookId).job(jobId).base,
+			paths.jobDeletionClaim(projectId, notebookId, jobId),
+			new Date().toISOString(),
 		);
 		await this.bucket.delete(
 			paths.project(projectId).notebook(notebookId).jobIndex(job.created_at, job.id),
 		);
 		await this.syncIndex('job.delete', actor, job, null);
+		return job;
+	}
+
+	async isDeleting(
+		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
+	): Promise<boolean> {
+		return (
+			(await this.bucket.head(paths.jobDeletionClaim(job.project_id, job.notebook_id, job.id))) !==
+			null
+		);
+	}
+
+	async finishDelete(projectId: ProjectId, notebookId: NotebookId, jobId: JobId): Promise<void> {
+		const job = paths.project(projectId).notebook(notebookId).job(jobId);
+		const subordinate = (await listAllKeys(this.bucket, job.base)).filter(
+			(key) => key !== job.head,
+		);
+		if (subordinate.length > 0) await this.bucket.delete(subordinate);
+		await this.bucket.delete(job.head);
 	}
 
 	private async syncIndex(

@@ -1,14 +1,13 @@
 import { exchangeFederatedStorageEnv, UnavailableError, ValidationError } from '@marimo-hub/core';
 import type {
-	JobRunContext,
 	Project,
 	ProjectId,
-	RunId,
 	SessionEnv,
-	SessionId,
 	SessionRender,
 	UserId,
+	WorkloadRef,
 } from '@marimo-hub/core';
+import type { JobRunContext } from '@marimo-hub/core/jobs';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
 
@@ -29,8 +28,7 @@ export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): 
 
 export interface FederatedVarsOptions {
 	project: Project;
-	/** The session or run the minted token names in its `session_id` claim. */
-	subjectId: SessionId | RunId;
+	workload: WorkloadRef;
 	/** True for a viewer's throwaway sandbox: never federated credentials. */
 	restricted: boolean;
 	onError?: (err: unknown) => void;
@@ -51,7 +49,7 @@ export async function resolveFederatedVars(
 			deps.wif.issuerUrl,
 			deps.wif.target,
 			options.project.id,
-			options.subjectId,
+			options.workload,
 		);
 	} catch (err) {
 		options.onError?.(err);
@@ -61,7 +59,7 @@ export async function resolveFederatedVars(
 
 export interface IntegrationRenderOptions {
 	projectId: ProjectId;
-	sessionId: SessionId | RunId;
+	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 	restricted: boolean;
 	onRendered?: (render: SessionRender) => void;
@@ -80,7 +78,7 @@ export async function resolveIntegrationRender(
 	if (!(deps.integrations && !options.restricted)) return;
 	try {
 		const render = await deps.integrations.resolveForSession(options.projectId, {
-			sessionId: options.sessionId,
+			workload: options.workload,
 			principal: options.principal,
 		});
 		if (render) options.onRendered?.(render);
@@ -110,7 +108,7 @@ export async function resolveJobSandboxEnv(
 	const [wifVars, render] = await Promise.all([
 		resolveFederatedVars(deps, {
 			project,
-			subjectId: run.run_id,
+			workload: { kind: 'job-run', id: run.run_id },
 			restricted: false,
 			onError: (err) =>
 				logEvent({
@@ -122,7 +120,7 @@ export async function resolveJobSandboxEnv(
 		}),
 		resolveIntegrationRender(deps, {
 			projectId: project.id,
-			sessionId: run.run_id,
+			workload: { kind: 'job-run', id: run.run_id },
 			principal: { userId, email: identity?.email ?? '' },
 			restricted: false,
 			onRendered: (rendered) => {

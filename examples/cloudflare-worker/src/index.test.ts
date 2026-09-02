@@ -17,7 +17,8 @@ vi.mock('@marimo-hub/storage-r2', () => ({
 	},
 }));
 
-import { JobScheduler, MaintenanceLock } from '@marimo-hub/core';
+import { MaintenanceLock } from '@marimo-hub/core';
+import { JobScheduler } from '@marimo-hub/core/jobs';
 import { MemoryBucket } from '@marimo-hub/core/testing';
 import worker, { buildDeps } from './index';
 

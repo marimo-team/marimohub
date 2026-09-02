@@ -2,8 +2,6 @@ import os from 'node:os';
 import { resolveJobSandboxEnv, scheduleProjectAlert } from '@marimo-hub/api';
 import type { ApiDeps, JobsConfig } from '@marimo-hub/api';
 import {
-	JobRunner,
-	JobScheduler,
 	MaintenanceLock,
 	Millis,
 	mapWithConcurrency,
@@ -14,6 +12,7 @@ import {
 	sessionModePolicy,
 	SessionLifecycleService,
 } from '@marimo-hub/core';
+import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import { logEvent } from './log';
 import type { WideEventMetrics } from './metrics';
 

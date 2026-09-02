@@ -1933,6 +1933,7 @@ export interface components {
 			jobs: {
 				available: boolean;
 				max_per_notebook: number | null;
+				max_queued_runs_per_job: number | null;
 				default_timeout_seconds: number | null;
 				max_timeout_seconds: number | null;
 				run_retention_days: number | null;
@@ -3057,8 +3058,6 @@ export interface components {
 			created_at: string;
 			/** Format: date-time */
 			updated_at: string;
-			/** Format: date-time */
-			next_run_at: string | null;
 		};
 		JobSchedule: {
 			/**
@@ -3073,7 +3072,7 @@ export interface components {
 			timezone: string;
 		};
 		/**
-		 * @description String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.
+		 * @description String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`. Parameters are visible to every project member who can read the job or its run history; do not store secrets here.
 		 * @example {
 		 *       "region": "eu-west-1"
 		 *     }
@@ -3093,7 +3092,8 @@ export interface components {
 		JobCreateBody: {
 			/** @example Nightly refresh */
 			name: string;
-			enabled?: boolean;
+			/** @default true */
+			enabled: boolean;
 			schedule?: components['schemas']['JobSchedule'];
 			parameters?: components['schemas']['JobParameters'];
 			retry?: components['schemas']['JobRetryPolicy'];
@@ -3102,8 +3102,11 @@ export interface components {
 			 * @example 1800
 			 */
 			timeout_seconds?: number;
-			/** @enum {string} */
-			concurrency_policy?: 'forbid' | 'allow';
+			/**
+			 * @default forbid
+			 * @enum {string}
+			 */
+			concurrency_policy: 'forbid' | 'allow';
 			notifications?: components['schemas']['JobNotifications'];
 		};
 		JobUpdateBody: {
@@ -3146,7 +3149,7 @@ export interface components {
 			notebook_id: string;
 			project_id: string;
 			/**
-			 * @description Known values: queued, provisioning, running, succeeded, failed, timed_out, cancelled, skipped. Unrecognized values normalize to unknown.
+			 * @description queued/provisioning/running are active. succeeded/failed/timed_out/cancelled/skipped are terminal; terminal records are never rewritten.
 			 * @example queued
 			 * @enum {string}
 			 */
@@ -3171,6 +3174,7 @@ export interface components {
 			scheduled_for?: string;
 			source_version_id?: string;
 			parameters?: components['schemas']['JobParameters'];
+			/** @description One-based attempt number. A failed or timed-out attempt can create a new run with attempt + 1 and retry_of set, subject to the job retry policy. */
 			attempt: number;
 			retry_of?: string;
 			image?: string;
@@ -3181,20 +3185,31 @@ export interface components {
 			queued_at: string;
 			/** Format: date-time */
 			eligible_at?: string;
-			/** Format: date-time */
+			/**
+			 * Format: date-time
+			 * @description Present after the run enters running.
+			 */
 			started_at?: string;
-			/** Format: date-time */
+			/**
+			 * Format: date-time
+			 * @description Present on terminal runs.
+			 */
 			finished_at?: string;
-			/** Format: date-time */
+			/**
+			 * Format: date-time
+			 * @description Present after provisioning establishes the watchdog deadline.
+			 */
 			deadline_at?: string;
+			/** @description Process exit code when the export command reported one. */
 			exit_code?: number;
+			/** @description Sanitized failure detail, present on failed, timed-out, or skipped runs. */
 			error?: {
 				code: string;
 				message: string;
 			};
+			/** @description Captured write-once artifacts, present after execution. */
 			output?: {
 				html_bytes: number;
-				session_bytes?: number;
 				logs_bytes?: number;
 			};
 			cancelled_by?: string;
@@ -11314,7 +11329,9 @@ export interface operations {
 	'jobs.delete': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				'if-match'?: string;
+			};
 			path: {
 				pid: string;
 				nid: string;
@@ -11353,6 +11370,15 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
 				headers: {
 					[name: string]: unknown;
 				};

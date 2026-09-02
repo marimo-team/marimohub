@@ -11,6 +11,8 @@ import {
 import { z } from 'zod';
 import {
 	CatalogSchema,
+	CURRENT_JOB_DEFINITION_VERSION,
+	CURRENT_JOB_RUN_VERSION,
 	EmailAddressSchema,
 	EventSchema,
 	IdentitySchema,
@@ -18,6 +20,8 @@ import {
 	JobRunSchema,
 	NotebookIdSchema,
 	parseStored,
+	parseStoredJobDefinition,
+	parseStoredJobRun,
 	readStored,
 	ProjectIdSchema,
 	ProjectMemberSchema,
@@ -247,7 +251,14 @@ describe('SnapshotSchema (looseObject rolling-deploy invariant)', () => {
 	});
 });
 
-describe('job schemas (looseObject rolling-deploy invariant)', () => {
+describe('job schema evolution', () => {
+	it('versions definitions and runs independently and rejects unknown versions at the upgrade seam', () => {
+		expect(CURRENT_JOB_DEFINITION_VERSION).toBe(1);
+		expect(CURRENT_JOB_RUN_VERSION).toBe(1);
+		expect(() => parseStoredJobDefinition({ schema_version: 2 }, 'job.json')).toThrow();
+		expect(() => parseStoredJobRun({ schema_version: 2 }, 'run.json')).toThrow();
+	});
+
 	it('preserves unknown fields in nested job-definition structures', () => {
 		const parsed = JobDefinitionSchema.parse({
 			schema_version: 1,

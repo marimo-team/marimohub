@@ -447,7 +447,7 @@ describe('JobRunner unhappy paths', () => {
 		expect(run.output?.logs_bytes).toBeLessThanOrEqual(MAX_RUN_LOG_BYTES + 64);
 	});
 
-	it('captures the session snapshot when the export produced one', async () => {
+	it('does not persist marimo session state without a restore API', async () => {
 		const sandbox = makeJobSandbox({ html: '<html/>' });
 		const { instance } = makeFakeSandbox({
 			files: {
@@ -457,7 +457,13 @@ describe('JobRunner unhappy paths', () => {
 		});
 		sandbox.instance.readFile = instance.readFile;
 		const run = await runner(sandbox).execute(await enqueue());
-		expect(run.output).toMatchObject({ html_bytes: 7, session_bytes: 12 });
+		expect(run.output).toMatchObject({ html_bytes: 7 });
+		expect(run.output).not.toHaveProperty('session_bytes');
+		expect(
+			await env.bucket.head(
+				`${paths.project(pid).notebook(nid).job(job.id).run(run.run_id).base}session.json`,
+			),
+		).toBeNull();
 	});
 
 	it('omits an export past the artifact cap instead of buffering it', async () => {
@@ -543,7 +549,7 @@ describe('JobRunner unhappy paths', () => {
 	it('fails when the job definition was deleted before dispatch', async () => {
 		const sandbox = makeJobSandbox({ html: '<html/>' });
 		const queued = await enqueue();
-		await env.jobs.deleteJob(pid, nid, job.id, ACTOR);
+		await env.jobs.finishDelete(pid, nid, job.id);
 		// The delete wiped the run record too; the runner reports the missing run.
 		await expect(runner(sandbox).execute(queued)).rejects.toThrow('not found');
 		expect(sandbox.calls.exec).toHaveLength(0);

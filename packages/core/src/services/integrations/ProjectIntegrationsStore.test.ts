@@ -104,7 +104,7 @@ function ticking(): () => string {
 }
 
 const renderContext = (sessionId: SessionId) => ({
-	sessionId,
+	workload: { kind: 'session' as const, id: sessionId },
 	principal: { userId: ACTOR, email: 'user@example.com' },
 });
 
@@ -591,7 +591,8 @@ describe('ProjectIntegrationsStore', () => {
 		const manifest = render?.files.find((f) => f.path === `${INTEGRATIONS_DIR}/manifest.json`);
 		expect(manifest).toBeDefined();
 		expect(JSON.parse(manifest?.content ?? '')).toEqual({
-			session_id: sessionId,
+			workload_kind: 'session',
+			workload_id: sessionId,
 			integrations: [{ name: 'bbb', kind: 'echo', version: 1, extra: { greeting: 'hi' } }],
 		});
 		expect(render?.files.some((f) => f.path === `${INTEGRATIONS_DIR}/echo/bbb.txt`)).toBe(true);
