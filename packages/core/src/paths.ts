@@ -89,8 +89,20 @@ export interface JobPaths {
 	 */
 	occurrencesPrefix: string;
 	occurrence: (occurrenceKey: string) => string;
+	/** Immutable newest-first index entries for paginating run history. */
+	runIndexPrefix: string;
+	runIndex: (runId: RunId) => string;
 	runsPrefix: string;
 	run: (runId: RunId) => JobRunPaths;
+}
+
+const CROCKFORD_BASE32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function reverseRunId(runId: RunId): string {
+	return Array.from(
+		runId.slice(4),
+		(char) => CROCKFORD_BASE32[31 - CROCKFORD_BASE32.indexOf(char)],
+	).join('');
 }
 
 export interface ProposalPaths {
@@ -155,6 +167,8 @@ function jobPaths(notebookBase: string, jobId: JobId): JobPaths {
 		head: `${base}/job.json`,
 		occurrencesPrefix: `${base}/occurrences/`,
 		occurrence: (occurrenceKey: string) => `${base}/occurrences/${occurrenceKey}.json`,
+		runIndexPrefix: `${base}/run-index/`,
+		runIndex: (runId: RunId) => `${base}/run-index/${reverseRunId(runId)}.json`,
 		runsPrefix: `${base}/runs/`,
 		run: (runId: RunId) => {
 			const runBase = `${base}/runs/${runId}`;

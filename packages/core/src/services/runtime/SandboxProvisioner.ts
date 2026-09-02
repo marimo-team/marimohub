@@ -5,7 +5,7 @@ import { withDeadline } from '../../async';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
-import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import { NotFoundError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
@@ -250,6 +250,8 @@ export interface ProvisionOptions {
 	 * `versions/{vid}/workspace/` prefix instead.
 	 */
 	workspacePrefix?: string;
+	/** Trusted workspace-relative files copied from immutable bucket objects after workspace restore. */
+	workspaceOverlay?: { path: string; key: string }[];
 	/** Pull-source Git metadata restored into `<workdir>/.git`. */
 	gitPrefix?: string;
 	/** Optional packed copy of a synced workspace and its Git metadata. */
@@ -675,6 +677,7 @@ export class SandboxProvisioner {
 						options.workspacePrefix ?? nb.workspacePrefix,
 					),
 				);
+				await time(() => this.applyWorkspaceOverlay(sandbox, options, mountPath));
 				span.setAttributes({
 					objects: loaded.stats?.objectCount ?? 0,
 					bytes: loaded.stats?.bytes ?? 0,
@@ -706,6 +709,25 @@ export class SandboxProvisioner {
 			},
 		});
 		return { load, startup: setup, sw, mountPath };
+	}
+
+	private async applyWorkspaceOverlay(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		mountPath: string,
+	): Promise<void> {
+		const overlay = options.workspaceOverlay;
+		if (!overlay || overlay.length === 0) return;
+		const bucket = options.bucketHandle;
+		if (!bucket) throw new UnavailableError('Bucket access is required for workspace overlay');
+		const files = await Promise.all(
+			overlay.map(async ({ path, key }) => {
+				const object = await bucket.get(key);
+				if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
+				return { path: `${mountPath}/${path}`, content: await object.bytes() };
+			}),
+		);
+		await sandbox.writeFiles(files);
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {

@@ -117,6 +117,8 @@ export const jobKeys = {
 		[...jobKeys.all, 'list', { projectId, notebookId }] as const,
 	runs: (projectId: string, notebookId: string, jobId: string) =>
 		[...jobKeys.all, 'runs', { projectId, notebookId, jobId }] as const,
+	run: (projectId: string, notebookId: string, jobId: string, runId: string) =>
+		[...jobKeys.all, 'run', { projectId, notebookId, jobId, runId }] as const,
 	runHtml: (projectId: string, notebookId: string, jobId: string, runId: string) =>
 		[...jobKeys.all, 'run-html', { projectId, notebookId, jobId, runId }] as const,
 	runLogs: (projectId: string, notebookId: string, jobId: string, runId: string) =>

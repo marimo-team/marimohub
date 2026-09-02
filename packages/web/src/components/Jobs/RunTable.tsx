@@ -34,13 +34,19 @@ export function RunTable({ runs, selectedRunId, onSelect }: RunTableProps) {
 						<tr
 							key={run.run_id}
 							data-testid="run-row"
-							onClick={() => onSelect(run)}
 							className={cn(
-								'cursor-pointer border-b transition-colors hover:bg-muted/50',
+								'relative cursor-pointer border-b transition-colors hover:bg-muted/50 focus-within:ring-2 focus-within:ring-ring',
 								run.run_id === selectedRunId && 'bg-muted',
 							)}
 						>
 							<td className="py-1.5 pr-3">
+								<button
+									type="button"
+									aria-label={`Open run ${run.run_id}`}
+									aria-pressed={run.run_id === selectedRunId}
+									onClick={() => onSelect(run)}
+									className="absolute inset-0 z-10 focus-visible:outline-none"
+								/>
 								<RunStatusChip run={run} />
 							</td>
 							<td className="py-1.5 pr-3 capitalize">{run.trigger}</td>

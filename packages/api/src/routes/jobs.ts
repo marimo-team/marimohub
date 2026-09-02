@@ -4,6 +4,7 @@ import {
 	JOB_CONCURRENCY_POLICIES,
 	JOB_NOTIFICATION_EVENTS,
 	JOB_PARAMETER_KEY_PATTERN,
+	jobRunFinishEvent,
 	JobId,
 	MAX_JOB_NAME_LENGTH,
 	MAX_JOB_PARAMETER_VALUE_LENGTH,
@@ -13,6 +14,7 @@ import {
 	MIN_JOB_TIMEOUT_SECONDS,
 	Millis,
 	nextOccurrence,
+	BadRequestError,
 	NotFoundError,
 	parseCron,
 	ResourceExhaustedError,
@@ -26,7 +28,14 @@ import type { JobDefinition, JobRun, PublicJobDefinition } from '@marimo-hub/cor
 import type { ApiDeps, HonoEnv, JobsConfig } from '../context';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
-import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import {
+	decodeCursor,
+	DEFAULT_PAGE_SIZE,
+	encodeCursor,
+	MAX_PAGE_SIZE,
+	pageSchema,
+	PaginationQuery,
+} from '../pagination';
 import {
 	assertProjectRole,
 	commonErrors,
@@ -588,8 +597,19 @@ app.openapi(deleteJob, async (c) => {
 	const { pid, nid, jid } = c.req.valid('param');
 	const { job } = await loadWritableJob(c, pid, nid, jid);
 	// Cancel first so no sandbox outlives its record; the delete then wipes the subtree.
-	const sandboxIds = await deps.services.jobRuns.cancelRunsOfJob(job, user.id);
-	await destroySandboxes(deps, sandboxIds, { project_id: pid, notebook_id: nid, job_id: jid });
+	const cancelled = await deps.services.jobRuns.cancelRunsOfJob(job, user.id);
+	for (const run of cancelled.runs) {
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'job.run.finish',
+			() => deps.services.events.append(jobRunFinishEvent(run)),
+		);
+	}
+	await destroySandboxes(deps, cancelled.sandboxIds, {
+		project_id: pid,
+		notebook_id: nid,
+		job_id: jid,
+	});
 	await deps.services.jobs.deleteJob(pid, nid, jid, user.id);
 	return c.json({ success: true }, 200);
 });
@@ -646,12 +666,25 @@ app.openapi(listRuns, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid } = c.req.valid('param');
 	const { job } = await loadReadableJob(c, pid, nid, jid);
-	const runs = await deps.services.jobRuns.listRuns(pid, nid, job.id);
-	const page = paginate(runs, c.req.valid('query'), {
-		key: (run) => run.run_id,
-		tiebreak: (run) => run.run_id,
-	});
-	return c.json({ success: true, data: { ...page, items: page.items.map(toPublicJobRun) } }, 200);
+	const query = c.req.valid('query');
+	const cursor = decodeCursor(query.cursor);
+	let afterRunId: RunId | undefined;
+	if (cursor && (cursor[0] !== cursor[1] || !RunId.is(cursor[0]))) {
+		throw new BadRequestError('Invalid pagination cursor');
+	}
+	if (cursor) afterRunId = RunId.parse(cursor[0]);
+	const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+	const page = await deps.services.jobRuns.listRunsPage(pid, nid, job.id, limit, afterRunId);
+	return c.json(
+		{
+			success: true,
+			data: {
+				items: page.items.map(toPublicJobRun),
+				next_cursor: page.nextRunId ? encodeCursor(page.nextRunId, page.nextRunId) : null,
+			},
+		},
+		200,
+	);
 });
 
 app.openapi(getRun, async (c) => {
@@ -690,6 +723,11 @@ app.openapi(cancelRun, async (c) => {
 					job_id: jid,
 					run_id: rid,
 				}),
+		);
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'job.run.finish',
+			() => deps.services.events.append(jobRunFinishEvent(run)),
 		);
 	}
 	return c.json({ success: true, data: toPublicJobRun(run) }, 200);

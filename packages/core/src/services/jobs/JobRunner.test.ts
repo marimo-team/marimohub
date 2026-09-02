@@ -136,6 +136,24 @@ describe('JobRunner', () => {
 		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
 	});
 
+	it('loads the source version pinned when the run was queued', async () => {
+		const [initial] = await env.notebooks.listVersions(pid, nid);
+		const sourceVersionId = initial.version_id;
+		const queued = await enqueue({ sourceVersionId });
+		await env.notebooks.updateNotebook(pid, nid, { code: 'print("new")' }, ACTOR);
+		const get = vi.spyOn(env.bucket, 'get');
+		const sandbox = makeJobSandbox({ html: '<html/>' });
+		const run = await runner(sandbox).execute(queued);
+		expect(run.status).toBe('succeeded');
+		const pinned = paths.project(pid).notebook(nid).version(sourceVersionId);
+		expect(get.mock.calls.some(([key]) => key === pinned.code)).toBe(true);
+		expect(get.mock.calls.some(([key]) => key === pinned.deps)).toBe(true);
+		const notebookWrites = sandbox.calls.writeFile.filter(
+			(file) => file.path === `${WORKDIR}/notebook.py`,
+		);
+		expect(notebookWrites.at(-1)?.content).toEqual(new TextEncoder().encode('import marimo'));
+	});
+
 	it('marks a cell failure as failed but still keeps the rendered output', async () => {
 		const sandbox = makeJobSandbox({ exitCode: 1, html: '<html>partial</html>', stderr: 'boom' });
 		const run = await runner(sandbox).execute(await enqueue());
@@ -636,6 +654,8 @@ describe('jobShellCommand', () => {
 		expect(command).toContain("timeout -k 30 30 uv run marimo export html -- --k 'v w'");
 		expect(command).toMatch(/printf '\\n__MARIMOHUB_JOB_EXIT__ %s\\n' "\$status"$/);
 		expect(parseExitCode('x\n__MARIMOHUB_JOB_EXIT__ 3\n')).toBe(3);
+		expect(parseExitCode('__MARIMOHUB_JOB_EXIT__ 9\nreal output')).toBeUndefined();
+		expect(parseExitCode('__MARIMOHUB_JOB_EXIT__ 9\n__MARIMOHUB_JOB_EXIT__ 3\n')).toBe(3);
 		expect(parseExitCode('no marker')).toBeUndefined();
 	});
 });

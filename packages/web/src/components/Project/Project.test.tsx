@@ -141,7 +141,14 @@ describe('deleted notebook tombstones', () => {
 		]) {
 			expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument();
 		}
-		for (const label of ['Rename', 'Duplicate', 'Run as app', 'Sync settings', 'Delete']) {
+		for (const label of [
+			'Jobs & schedules',
+			'Rename',
+			'Duplicate',
+			'Run as app',
+			'Sync settings',
+			'Delete',
+		]) {
 			expect(within(menu).queryByRole('menuitem', { name: label })).not.toBeInTheDocument();
 		}
 

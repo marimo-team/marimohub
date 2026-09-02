@@ -1792,19 +1792,51 @@ export function useTriggerJobRun(projectId: string, notebookId: string) {
  * history table follows a queued → running → terminal run without a reload.
  */
 export function useJobRunsQuery(projectId: string, notebookId: string, jobId: string | null) {
-	return useQuery({
+	return useInfiniteQuery({
 		queryKey: jobKeys.runs(projectId, notebookId, jobId ?? ''),
-		queryFn: async () =>
-			(
-				await apiData(
-					apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', {
-						params: { path: { pid: projectId, nid: notebookId, jid: jobId ?? '' } },
-					}),
-				)
-			).items,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', {
+					params: {
+						path: { pid: projectId, nid: notebookId, jid: jobId ?? '' },
+						query: { limit: 100, ...(pageParam ? { cursor: pageParam } : {}) },
+					},
+				}),
+			),
+		initialPageParam: null as string | null,
+		getNextPageParam: (lastPage) => lastPage.next_cursor,
+		select: (data) => data.pages.flatMap((page) => page.items),
 		enabled: !!jobId,
 		refetchInterval: (query) =>
-			query.state.data?.some((run) => !isTerminalRun(run)) ? RUNS_POLL_INTERVAL_MS : false,
+			query.state.data?.pages.some((page) => page.items.some((run) => !isTerminalRun(run)))
+				? RUNS_POLL_INTERVAL_MS
+				: false,
+	});
+}
+
+export function useJobRunQuery(
+	projectId: string,
+	notebookId: string,
+	jobId: string | null,
+	runId: string | null,
+	enabled: boolean,
+) {
+	return useQuery({
+		queryKey: jobKeys.run(projectId, notebookId, jobId ?? '', runId ?? ''),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}', {
+					params: {
+						path: {
+							pid: projectId,
+							nid: notebookId,
+							jid: jobId ?? '',
+							rid: runId ?? '',
+						},
+					},
+				}),
+			),
+		enabled: enabled && !!jobId && !!runId,
 	});
 }
 
@@ -1816,7 +1848,10 @@ export function useCancelJobRun(projectId: string, notebookId: string) {
 					params: { path: { pid: projectId, nid: notebookId, jid: jobId, rid: runId } },
 				}),
 			),
-		({ jobId }) => [jobKeys.runs(projectId, notebookId, jobId)],
+		({ jobId, runId }) => [
+			jobKeys.runs(projectId, notebookId, jobId),
+			jobKeys.run(projectId, notebookId, jobId, runId),
+		],
 	);
 }
 

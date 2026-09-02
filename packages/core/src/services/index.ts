@@ -205,7 +205,13 @@ export type { ActiveSandboxSource, ReconcileResult } from './runtime/Reconciliat
 export { indexedJobs, JobsService, validateJobSchedule } from './jobs/JobsService';
 export type { CreateJobInput, IndexedJob, JobLimits, UpdateJobInput } from './jobs/JobsService';
 export { DANGLING_MARKER_GRACE_MS, JobRunService } from './jobs/JobRunService';
-export type { ActiveRun, EnqueueRunInput, RunOutputs } from './jobs/JobRunService';
+export type {
+	ActiveRun,
+	CancelledRuns,
+	EnqueueRunInput,
+	RunOutputs,
+	RunPage,
+} from './jobs/JobRunService';
 export {
 	JOB_OUTPUT_FILE,
 	JOB_PROVISION_ALLOWANCE_MS,
@@ -216,7 +222,7 @@ export {
 	toRunError,
 } from './jobs/JobRunner';
 export type { JobRunContext, JobRunnerDeps, JobRunnerSandboxConfig } from './jobs/JobRunner';
-export { JobScheduler } from './jobs/JobScheduler';
+export { JobScheduler, jobRunFinishEvent } from './jobs/JobScheduler';
 export type { JobSchedulerConfig, JobSchedulerDeps, TickResult } from './jobs/JobScheduler';
 export {
 	isValidCron,

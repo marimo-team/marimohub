@@ -159,6 +159,8 @@ s3-bucket/
                 │       ├── job.json         ← definition head (CAS, JobsService)
                 │       ├── occurrences/
                 │       │   └── {YYYYMMDDTHHmmZ}.json ← scheduled-fire claim (create-if-absent, immutable)
+                │       ├── run-index/
+                │       │   └── {reverse-ulid}.json ← empty, immutable newest-first history index
                 │       └── runs/
                 │           └── {run-id}/
                 │               ├── run.json     ← run record (CAS, JobRunService)
@@ -801,6 +803,8 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
 // …/jobs/job-z/occurrences/20260902T0400Z.json   (immutable, create-if-absent)
 { "run_id": "run_01JX…", "fired_at": "2026-09-02T04:00:12Z" }
 
+// …/jobs/job-z/run-index/{reverse-ulid}.json   (empty, immutable, create-if-absent)
+
 // …/jobs/job-z/runs/run_01JX…/run.json   (CAS-managed until terminal)
 {
 	"schema_version": 1,
@@ -846,6 +850,10 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
   between the claim and the run record leaves a claim naming a run that does
   not exist; the next tick re-writes that record idempotently (the claim is the
   commit point, the record write is retryable).
+- `run-index/{reverse-ulid}.json` — empty, create-if-absent history entries.
+  Complementing each Crockford Base32 digit makes ascending object-key order
+  equal newest-first run order, so a cursor page reads only that page's run
+  records. Retention deletes the entry with its `runs/{rid}/` prefix.
 - `_system/job-runs/{pid}/{rid}.json` — the active-run index: written
   create-if-absent **before** the run record and deleted on the terminal CAS,
   so the scheduler's dispatch/watchdog and the reconciler enumerate live runs

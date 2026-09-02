@@ -39,7 +39,7 @@ export const JOB_PROVISION_ALLOWANCE_MS = Millis.minutes(10);
 /** Tail of stdout+stderr kept on the run record's `logs.txt`. */
 export const MAX_RUN_LOG_BYTES = 256 * 1024;
 const EXIT_MARKER = '__MARIMOHUB_JOB_EXIT__';
-const EXIT_MARKER_PATTERN = /^__MARIMOHUB_JOB_EXIT__ (\d{1,3})$/m;
+const EXIT_MARKER_PATTERN = /(?:^|\n)__MARIMOHUB_JOB_EXIT__ (\d{1,3})\n?$/;
 /** GNU `timeout` reports 124 when it had to stop the command. */
 const TIMEOUT_EXIT_CODE = 124;
 /**
@@ -116,9 +116,8 @@ function cliArgs(parameters: JobRun['parameters']): string {
 
 /**
  * The export command wrapped for capture: the exit status is echoed on a
- * marker line because `SandboxInstance.exec` reports only success/failure, and
- * `timeout` (when the image has coreutils) bounds execution independently of
- * the exec RPC's own deadline. The watchdog is the authoritative bound.
+ * marker line because `SandboxInstance.exec` reports only success/failure. The
+ * suffix match prevents notebook output from impersonating the wrapper's marker.
  */
 export function jobShellCommand(
 	workdir: string,
@@ -441,12 +440,16 @@ export class JobRunner {
 		const policy = workspaceSourcePolicy(notebook.source);
 		const syncedVersionId = policy.persistSessionEdits
 			? undefined
-			: notebook.source.current_version_id;
+			: (run.source_version_id ?? notebook.source.current_version_id);
 		if (!policy.persistSessionEdits && !syncedVersionId) {
 			throw new NotFoundError('Synced notebook has not been synced yet');
 		}
 		const nb = paths.project(run.project_id).notebook(run.notebook_id);
 		const syncedPaths = syncedVersionId ? nb.version(syncedVersionId) : undefined;
+		const localVersion =
+			policy.persistSessionEdits && run.source_version_id
+				? nb.version(run.source_version_id)
+				: undefined;
 		const gitPrefix =
 			notebook.source.type === 'git' && notebook.source.sync_mode === 'pull'
 				? syncedPaths?.gitPrefix
@@ -486,6 +489,12 @@ export class JobRunner {
 			// workspace mirror, and outputs belong under the run prefix only.
 			workspaceLoadMode: 'copy-only' as const,
 			workspacePrefix: syncedPaths?.workspacePrefix,
+			workspaceOverlay: localVersion
+				? [
+						{ path: 'notebook.py', key: localVersion.code },
+						{ path: 'pyproject.toml', key: localVersion.deps },
+					]
+				: undefined,
 			gitPrefix,
 			workspaceArchive: syncedPaths?.workspaceArchive,
 		};

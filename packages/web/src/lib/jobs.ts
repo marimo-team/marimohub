@@ -1,5 +1,42 @@
 import type { JobRun, JobRunStatus } from '@/types';
 
+const PARAMETER_LINE = /^([A-Za-z][A-Za-z0-9_-]{0,63})=(.*)$/;
+
+export function parseJobParameters(text: string): Record<string, string> {
+	const parameters: Record<string, string> = {};
+	for (const raw of text.split('\n')) {
+		const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+		if (!line.trim()) continue;
+		const match = PARAMETER_LINE.exec(line);
+		if (!match) throw new Error(`"${line}" is not key=value (keys: letters, digits, _ or -)`);
+		let value = match[2];
+		if (value.startsWith('"')) {
+			try {
+				const parsed: unknown = JSON.parse(value);
+				if (typeof parsed !== 'string') throw new Error('Parameter value must be a string');
+				value = parsed;
+			} catch {
+				throw new Error(`The value for "${match[1]}" is not a valid JSON string`);
+			}
+		}
+		parameters[match[1]] = value;
+	}
+	return parameters;
+}
+
+export function formatJobParameters(parameters: Record<string, string> | undefined): string {
+	return Object.entries(parameters ?? {})
+		.map(([key, value]) => {
+			const needsQuotes =
+				value.startsWith('"') ||
+				value.trim() !== value ||
+				value.includes('\n') ||
+				value.includes('\r');
+			return `${key}=${needsQuotes ? JSON.stringify(value) : value}`;
+		})
+		.join('\n');
+}
+
 export const TERMINAL_RUN_STATUSES: readonly JobRunStatus[] = [
 	'succeeded',
 	'failed',

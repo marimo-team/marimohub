@@ -50,6 +50,7 @@ interface World {
 	role?: 'viewer' | 'editor';
 	jobs?: Job[];
 	runs?: JobRun[];
+	olderRuns?: JobRun[];
 	html?: string | null;
 	logs?: string | null;
 	/** Fail the job list request. */
@@ -63,6 +64,7 @@ interface World {
 function makeFetch(world: World = {}) {
 	const jobs = world.jobs ?? [job()];
 	const runs = world.runs ?? [run()];
+	const olderRuns = world.olderRuns ?? [];
 	const calls: { url: string; method: string; body?: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
@@ -154,7 +156,17 @@ function makeFetch(world: World = {}) {
 			if (index !== -1) jobs.splice(index, 1);
 			return jsonOk(undefined);
 		}
-		if (/\/jobs\/[^/]+\/runs(\?.*)?$/.test(url)) return jsonOk({ items: runs, next_cursor: null });
+		const runDetail = /\/jobs\/[^/]+\/runs\/([^/?]+)$/.exec(url);
+		if (method === 'GET' && runDetail) {
+			const found = [...runs, ...olderRuns].find((item) => item.run_id === runDetail[1]);
+			return found ? jsonOk(found) : jsonError('NOT_FOUND', 'Run not found', 404);
+		}
+		if (/\/jobs\/[^/]+\/runs(\?.*)?$/.test(url)) {
+			const cursor = new URL(url, 'http://local').searchParams.get('cursor');
+			return cursor
+				? jsonOk({ items: olderRuns, next_cursor: null })
+				: jsonOk({ items: runs, next_cursor: olderRuns.length > 0 ? 'older' : null });
+		}
 		if (url.endsWith(`/notebooks/${NID}/jobs`)) {
 			if (world.jobsError) return jsonError('INTERNAL_ERROR', 'boom', 500);
 			return jsonOk({ items: jobs, next_cursor: null });
@@ -193,6 +205,21 @@ describe('JobsPage', () => {
 		expect(within(rows[0]).getByText('schedule')).toBeInTheDocument();
 	});
 
+	it('loads additional run-history pages', async () => {
+		makeFetch({ olderRuns: [run({ run_id: 'run_old' })] });
+		const user = userEvent.setup();
+		renderPage();
+		expect(await screen.findAllByTestId('run-row')).toHaveLength(1);
+		await user.click(screen.getByRole('button', { name: 'Load more runs' }));
+		expect(await screen.findAllByTestId('run-row')).toHaveLength(2);
+	});
+
+	it('loads a directly linked run that is not on the first history page', async () => {
+		makeFetch({ olderRuns: [run({ run_id: 'run_old' })] });
+		renderPage('?job=job-1&run=run_old');
+		expect(await screen.findByText(/Duration 2m/)).toBeInTheDocument();
+	});
+
 	it('explains an off deployment instead of loading jobs', async () => {
 		const { calls } = makeFetch({ jobsOff: true });
 		renderPage();
@@ -206,12 +233,23 @@ describe('JobsPage', () => {
 		const user = userEvent.setup();
 		const { container } = renderPage();
 
-		await user.click((await screen.findAllByTestId('run-row'))[0]);
+		const row = (await screen.findAllByTestId('run-row'))[0];
+		await user.click(within(row).getByRole('button'));
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		const iframe = container.querySelector('iframe')!;
 		expect(iframe.getAttribute('srcdoc')).toContain('rendered');
 		expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
 		expect(screen.getByText(/Duration 2m/)).toBeInTheDocument();
+	});
+
+	it('opens a run from the keyboard', async () => {
+		makeFetch();
+		const user = userEvent.setup();
+		renderPage();
+		const row = (await screen.findAllByTestId('run-row'))[0];
+		within(row).getByRole('button').focus();
+		await user.keyboard('{Enter}');
+		expect(await screen.findByText(/Duration 2m/)).toBeInTheDocument();
 	});
 
 	it('shows logs to editors on the Logs tab', async () => {

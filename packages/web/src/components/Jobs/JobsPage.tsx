@@ -5,6 +5,7 @@ import {
 	useCancelJobRun,
 	useCapabilitiesQuery,
 	useDeleteJob,
+	useJobRunQuery,
 	useJobRunsQuery,
 	useJobsQuery,
 	useNotebookQuery,
@@ -52,7 +53,15 @@ function useJobsPageModel() {
 	const selectedJobId = selectedJob?.id ?? null;
 	const runs = useJobRunsQuery(projectId, notebookId, selectedJob?.id ?? null);
 	const selectedRunId = searchParams.get('run');
-	const selectedRun = runs.data?.find((run) => run.run_id === selectedRunId) ?? null;
+	const pagedRun = runs.data?.find((run) => run.run_id === selectedRunId) ?? null;
+	const selectedRunQuery = useJobRunQuery(
+		projectId,
+		notebookId,
+		selectedJobId,
+		selectedRunId,
+		!!selectedRunId && !runs.isPending && !pagedRun,
+	);
+	const selectedRun = pagedRun ?? selectedRunQuery.data ?? null;
 
 	const select = (next: { job?: string | null; run?: string | null }) => {
 		setSearchParams(
@@ -309,6 +318,16 @@ export function JobsPage() {
 											selectedRunId={selectedRun?.run_id ?? null}
 											onSelect={(run) => m.select({ run: run.run_id })}
 										/>
+									)}
+									{m.runs.hasNextPage && (
+										<Button
+											variant="default"
+											size="sm"
+											isDisabled={m.runs.isFetchingNextPage}
+											onPress={() => void m.runs.fetchNextPage()}
+										>
+											{m.runs.isFetchingNextPage ? 'Loading…' : 'Load more runs'}
+										</Button>
 									)}
 								</section>
 

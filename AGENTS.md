@@ -141,7 +141,8 @@ These CAS-managed records also have one writer each:
 - `JobRunService` owns each run record at
   `projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/run.json`, each
   immutable occurrence claim at `…/jobs/{jid}/occurrences/{key}.json`
-  (create-if-absent), and each active-run marker at
+  (create-if-absent), each immutable newest-first history entry at
+  `…/jobs/{jid}/run-index/{reverse-ulid}.json`, and each active-run marker at
   `_system/job-runs/{pid}/{rid}.json` (create-once, deleted at a terminal
   status). Run outputs under `runs/{rid}/` are write-once.
 

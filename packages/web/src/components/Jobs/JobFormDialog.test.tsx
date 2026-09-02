@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { JobFormDialog, parseParameters } from './JobFormDialog';
+import { JobFormDialog } from './JobFormDialog';
+import { formatJobParameters, parseJobParameters } from '@/lib/jobs';
 import type { Job } from '@/types';
 import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 
@@ -58,16 +59,25 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe('parseParameters', () => {
-	it('parses key=value lines and ignores blanks', () => {
-		expect(parseParameters('a=1\n\n  b=two \nc==')).toEqual({ a: '1', b: 'two', c: '=' });
+describe('job parameters', () => {
+	it('parses raw and JSON-quoted values without losing whitespace', () => {
+		expect(parseJobParameters('a=1\n\nb=" two "\nc==\nd="line\\nnext"')).toEqual({
+			a: '1',
+			b: ' two ',
+			c: '=',
+			d: 'line\nnext',
+		});
+		expect(formatJobParameters({ a: ' plain ', b: 'line\nnext', c: 'simple' })).toBe(
+			'a=" plain "\nb="line\\nnext"\nc=simple',
+		);
 	});
 
 	it('rejects lines without a flag-safe key', () => {
-		expect(() => parseParameters('just text')).toThrow('is not key=value');
-		expect(() => parseParameters('b = two')).toThrow('is not key=value');
-		expect(() => parseParameters('1bad=1')).toThrow('is not key=value');
-		expect(() => parseParameters('=value')).toThrow('is not key=value');
+		expect(() => parseJobParameters('just text')).toThrow('is not key=value');
+		expect(() => parseJobParameters('b = two')).toThrow('is not key=value');
+		expect(() => parseJobParameters('1bad=1')).toThrow('is not key=value');
+		expect(() => parseJobParameters('=value')).toThrow('is not key=value');
+		expect(() => parseJobParameters('a="unterminated')).toThrow('not a valid JSON string');
 	});
 });
 

@@ -422,7 +422,27 @@ describe('JobScheduler', () => {
 			});
 		});
 
-		it('audits a watchdog timeout and a cancelled run too', async () => {
+		it('audits a scheduled run skipped by the concurrency policy', async () => {
+			const job = await createJob();
+			await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const runner = fakeRunner(env, 'hang');
+			const s = scheduler(runner, { events: env.events });
+			await s.tick();
+			const finish = (await env.events.getEvents(today())).find(
+				(event) => event.event === 'job.run.finish' && event.status === 'skipped',
+			);
+			expect(finish).toMatchObject({
+				actor: 'system',
+				job_id: job.id,
+				status: 'skipped',
+				error_code: 'CONCURRENCY_FORBIDDEN',
+			});
+			await vi.waitFor(() => expect(runner.release.size).toBe(1));
+			for (const release of runner.release.values()) release();
+			await settle(s);
+		});
+
+		it('audits a watchdog timeout while cancellation auditing stays with the canceller', async () => {
 			const job = await createJob({ schedule: undefined });
 			const overdue = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
 			await env.jobRuns.transition(overdue, 'provision', () => ({
@@ -442,7 +462,7 @@ describe('JobScheduler', () => {
 				.filter((e) => e.event === 'job.run.finish')
 				.map((e) => String(e.status))
 				.sort();
-			expect(statuses).toEqual(['cancelled', 'timed_out']);
+			expect(statuses).toEqual(['timed_out']);
 		});
 
 		it('never lets a failing audit sink affect the run', async () => {
@@ -563,6 +583,24 @@ describe('JobScheduler', () => {
 			expect((await s.tick()).timedOut).toBe(0);
 			now += Number(CONFIG.maxTimeoutMs) + 5 * MINUTE;
 			expect((await s.tick()).timedOut).toBe(1);
+		});
+
+		it('reclaims a locally executing run after its watchdog deadline', async () => {
+			const job = await createJob({ schedule: undefined });
+			const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			now = Date.parse(run.queued_at);
+			const runner = fakeRunner(env, 'hang');
+			const s = scheduler(runner);
+			await s.tick();
+			await vi.waitFor(() => expect(runner.release.has(run.run_id)).toBe(true));
+			now += Number(CONFIG.maxTimeoutMs) + 2 * MINUTE;
+			expect((await s.tick()).timedOut).toBe(1);
+			expect((await env.jobRuns.getRun(pid, nid, job.id, run.run_id)).status).toBe('timed_out');
+			runner.release.get(run.run_id)?.();
+			await settle(s);
+			expect((await env.jobRuns.listRuns(pid, nid, job.id)).map((item) => item.status)).toEqual([
+				'timed_out',
+			]);
 		});
 
 		it('keeps a fresh dangling marker and prunes a stale one', async () => {

@@ -77,6 +77,31 @@ const DEFAULT_WATCHDOG_GRACE_MS = Millis.minutes(2);
 /** How long a marker may outlive its record before it is considered dangling. */
 const DANGLING_GRACE_MS = Millis.minutes(10);
 
+interface LocalExecution {
+	finalizedExternally: boolean;
+}
+
+export function jobRunFinishEvent(run: JobRun) {
+	const started = run.started_at ? Date.parse(run.started_at) : Number.NaN;
+	const finished = run.finished_at ? Date.parse(run.finished_at) : Number.NaN;
+	return {
+		event: 'job.run.finish',
+		actor: run.triggered_by ?? SYSTEM_ACTOR,
+		project_id: run.project_id,
+		notebook_id: run.notebook_id,
+		job_id: run.job_id,
+		run_id: run.run_id,
+		status: run.status,
+		trigger: run.trigger,
+		attempt: run.attempt,
+		...(run.exit_code !== undefined ? { exit_code: run.exit_code } : {}),
+		...(run.error ? { error_code: run.error.code } : {}),
+		...(Number.isFinite(started) && Number.isFinite(finished)
+			? { duration_seconds: Math.max(0, Math.round((finished - started) / 1000)) }
+			: {}),
+	};
+}
+
 /**
  * Which queued runs may start now: oldest-eligible first, bounded by the global
  * and per-project caps with `running` already counted against them. Pure, so
@@ -119,8 +144,7 @@ export function admit(
  */
 export class JobScheduler {
 	private readonly inFlight = new InFlightWork();
-	/** Run ids this process is executing, so a tick never re-dispatches or reclaims them. */
-	private readonly executing = new Set<RunId>();
+	private readonly executing = new Map<RunId, LocalExecution>();
 	private readonly metrics: Metrics;
 	private readonly now: () => number;
 
@@ -191,11 +215,11 @@ export class JobScheduler {
 				result.markersPruned++;
 				continue;
 			}
-			if (this.executing.has(run.run_id)) {
-				running.push(run);
-				continue;
-			}
 			if (run.status === 'queued') {
+				if (this.executing.has(run.run_id)) {
+					running.push(run);
+					continue;
+				}
 				if (!run.eligible_at || Date.parse(run.eligible_at) <= now) queued.push(run);
 				continue;
 			}
@@ -278,7 +302,7 @@ export class JobScheduler {
 				!isTerminalRunStatus(run.status),
 		);
 		if (job.concurrency_policy === 'forbid' && hasActive) {
-			await this.deps.runs.writeSkipped({
+			const skipped = await this.deps.runs.writeSkipped({
 				job,
 				runId,
 				scheduledFor,
@@ -289,6 +313,7 @@ export class JobScheduler {
 					message: 'Skipped: the previous run of this job was still active',
 				},
 			});
+			await this.afterRun(skipped);
 			return 'skipped';
 		}
 		await this.enqueueScheduled(job, runId, scheduledFor);
@@ -375,6 +400,11 @@ export class JobScheduler {
 			}),
 		);
 		if (transitioned) {
+			const local = this.executing.get(run.run_id);
+			if (local) {
+				local.finalizedExternally = true;
+				this.executing.delete(run.run_id);
+			}
 			this.metrics.increment('jobs.runs.watchdog_timeout');
 			logEvent({
 				level: 'warn',
@@ -391,10 +421,11 @@ export class JobScheduler {
 	}
 
 	private dispatch(run: JobRun): void {
-		this.executing.add(run.run_id);
+		const local: LocalExecution = { finalizedExternally: false };
+		this.executing.set(run.run_id, local);
 		const execution = this.deps.runner
 			.execute(run)
-			.then((finished) => this.afterRun(finished))
+			.then((finished) => (local.finalizedExternally ? undefined : this.afterRun(finished)))
 			.catch((err: unknown) => {
 				logOperationalError(
 					'job_dispatch_failed',
@@ -403,7 +434,7 @@ export class JobScheduler {
 				);
 			})
 			.finally(() => {
-				this.executing.delete(run.run_id);
+				if (this.executing.get(run.run_id) === local) this.executing.delete(run.run_id);
 			});
 		void this.inFlight.track(execution);
 	}
@@ -411,8 +442,8 @@ export class JobScheduler {
 	/** Post-run policy: audit the outcome, schedule a retry, or notify on the final outcome. */
 	private async afterRun(finished: JobRun): Promise<void> {
 		if (!isTerminalRunStatus(finished.status)) return;
-		await this.audit(finished);
 		if (finished.status === 'cancelled') return;
+		await this.audit(finished);
 		const job = await this.loadJob(finished.project_id, finished.notebook_id, finished.job_id);
 		if (!job) return;
 		const failed = finished.status === 'failed' || finished.status === 'timed_out';
@@ -438,26 +469,8 @@ export class JobScheduler {
 	/** Best-effort, like every audit append: a failed write never changes the run. */
 	private async audit(run: JobRun): Promise<void> {
 		if (!this.deps.events) return;
-		const started = run.started_at ? Date.parse(run.started_at) : Number.NaN;
-		const finished = run.finished_at ? Date.parse(run.finished_at) : Number.NaN;
 		try {
-			await this.deps.events.append({
-				event: 'job.run.finish',
-				// Scheduled runs act for the job, not a person.
-				actor: run.triggered_by ?? SYSTEM_ACTOR,
-				project_id: run.project_id,
-				notebook_id: run.notebook_id,
-				job_id: run.job_id,
-				run_id: run.run_id,
-				status: run.status,
-				trigger: run.trigger,
-				attempt: run.attempt,
-				...(run.exit_code !== undefined ? { exit_code: run.exit_code } : {}),
-				...(run.error ? { error_code: run.error.code } : {}),
-				...(Number.isFinite(started) && Number.isFinite(finished)
-					? { duration_seconds: Math.max(0, Math.round((finished - started) / 1000)) }
-					: {}),
-			});
+			await this.deps.events.append(jobRunFinishEvent(run));
 		} catch (err) {
 			this.metrics.increment('events.append_failed');
 			logOperationalError(

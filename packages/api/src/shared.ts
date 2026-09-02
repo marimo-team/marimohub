@@ -8,6 +8,7 @@ import {
 	DOMAIN_ERROR_CODES,
 	MAX_SECURITY_COMPARTMENTS,
 	mapWithConcurrency,
+	jobRunFinishEvent,
 	SECURITY_LABEL_TOKEN,
 	ForbiddenError,
 	NotebookId,
@@ -519,9 +520,9 @@ export async function cancelJobRuns(
 	actor: UserId,
 	nid?: NotebookId,
 ): Promise<void> {
-	let sandboxIds: string[];
+	let cancelled;
 	try {
-		sandboxIds = nid
+		cancelled = nid
 			? await deps.services.jobRuns.cancelRunsOfNotebook(pid, nid, actor)
 			: await deps.services.jobRuns.cancelRunsOfProject(pid, actor);
 	} catch (err) {
@@ -534,7 +535,24 @@ export async function cancelJobRuns(
 		});
 		return;
 	}
-	await destroySandboxes(deps, sandboxIds, { project_id: pid, notebook_id: nid ?? null });
+	for (const run of cancelled.runs) {
+		try {
+			await deps.services.events.append(jobRunFinishEvent(run));
+		} catch (err) {
+			logEvent({
+				level: 'error',
+				event: 'job_run_finish_audit_failed',
+				project_id: run.project_id,
+				notebook_id: run.notebook_id,
+				run_id: run.run_id,
+				error: describeError(err),
+			});
+		}
+	}
+	await destroySandboxes(deps, cancelled.sandboxIds, {
+		project_id: pid,
+		notebook_id: nid ?? null,
+	});
 }
 
 /** Destroy sandboxes best-effort, one failure never stranding the rest; the reconciler backstops. */

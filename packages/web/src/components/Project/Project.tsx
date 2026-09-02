@@ -169,17 +169,10 @@ interface DeletedNotebookRowProps {
 	notebook: NotebookEntry;
 	user: ResolvedUser | undefined;
 	usersLoading: boolean;
-	jobsAvailable: boolean;
 	onAction: (key: string) => void;
 }
 
-function DeletedNotebookRow({
-	notebook,
-	user,
-	usersLoading,
-	jobsAvailable,
-	onAction,
-}: DeletedNotebookRowProps) {
+function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedNotebookRowProps) {
 	return (
 		<div
 			data-testid="notebook-row"
@@ -226,10 +219,7 @@ function DeletedNotebookRow({
 				<DropdownMenu
 					label={`Historical actions for ${notebook.title}`}
 					icon={<MoreHorizontal className="size-4" />}
-					options={groupedMenuOptions([
-						notebookHistoryActions(jobsAvailable),
-						NOTEBOOK_EXPORT_ACTIONS,
-					])}
+					options={groupedMenuOptions([notebookHistoryActions(false), NOTEBOOK_EXPORT_ACTIONS])}
 					onAction={onAction}
 				/>
 			</div>
@@ -801,7 +791,6 @@ function useProjectContent() {
 								notebook={nb}
 								user={users?.[nb.author]}
 								usersLoading={usersLoading}
-								jobsAvailable={jobsAvailable}
 								onAction={(key) => handleNotebookAction(nb, key)}
 							/>
 						);

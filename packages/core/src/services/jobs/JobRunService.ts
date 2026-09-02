@@ -4,7 +4,7 @@ import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, UnavailableError } from '../../errors';
 import { createRunId, RunId } from '../../ids';
 import type { JobId, NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
@@ -27,12 +27,7 @@ import type {
 	RunTrigger,
 } from '../../schema';
 import { mutateObjectWithOutcome, putIfAbsent } from '../catalog/cas';
-import {
-	deleteByPrefix,
-	listAllKeys,
-	listAllPrefixes,
-	readStoredObjects,
-} from '../catalog/storage';
+import { deleteByPrefix, listAllKeys } from '../catalog/storage';
 import { occurrenceKeyToInstant } from './cron';
 import { isTerminalRunStatus, nextRunStatus } from './runState';
 import type { RunEvent } from './runState';
@@ -64,6 +59,16 @@ export interface RunOutputs {
 	logs?: string;
 }
 
+export interface CancelledRuns {
+	runs: JobRun[];
+	sandboxIds: string[];
+}
+
+export interface RunPage {
+	items: JobRun[];
+	nextRunId: RunId | null;
+}
+
 /**
  * How long a marker may exist without its run record before it is treated as
  * a crashed enqueue and dropped: the marker is written first, so a fresh
@@ -72,9 +77,9 @@ export interface RunOutputs {
 export const DANGLING_MARKER_GRACE_MS = Millis.minutes(10);
 
 /**
- * Owner of every run record (`runs/{rid}/run.json`, ETag CAS), of the
- * occurrence claims beside them (create-if-absent), and of the active-run
- * markers under `_system/job-runs/`. Terminal runs are never rewritten.
+ * Owner of every run record (`runs/{rid}/run.json`, ETag CAS), occurrence
+ * claim, immutable history entry, and active marker. Terminal runs are never
+ * rewritten.
  */
 export class JobRunService {
 	constructor(
@@ -127,6 +132,8 @@ export class JobRunService {
 			paths.jobRunMarker(job.project_id, runId),
 			JSON.stringify(marker),
 		);
+		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
+		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
 		const key = this.runPaths(run).record;
 		const created = await putIfAbsent(this.bucket, key, JSON.stringify(run));
 		if (created) {
@@ -159,6 +166,8 @@ export class JobRunService {
 			finished_at: now,
 			error: input.reason,
 		});
+		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
+		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
 		const created = await putIfAbsent(this.bucket, this.runPaths(run).record, JSON.stringify(run));
 		if (!created) return this.getRun(job.project_id, job.notebook_id, job.id, runId);
 		this.metrics.increment('jobs.runs.skipped');
@@ -187,17 +196,72 @@ export class JobRunService {
 		return (await this.bucket.head(key)) !== null;
 	}
 
-	/** Every run of a job, newest first (run ids are ULIDs, so key order is chronological). */
+	/** Every run of a job, newest first. Intended for retention and internal maintenance. */
 	async listRuns(projectId: ProjectId, notebookId: NotebookId, jobId: JobId): Promise<JobRun[]> {
+		const runs: JobRun[] = [];
+		let afterRunId: RunId | undefined;
+		do {
+			const page = await this.listRunsPage(projectId, notebookId, jobId, 500, afterRunId);
+			runs.push(...page.items);
+			afterRunId = page.nextRunId ?? undefined;
+		} while (afterRunId);
+		return runs;
+	}
+
+	/** Read one newest-first history page without fetching records outside that page. */
+	async listRunsPage(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		jobId: JobId,
+		limit: number,
+		afterRunId?: RunId,
+	): Promise<RunPage> {
 		const job = paths.project(projectId).notebook(notebookId).job(jobId);
-		const prefixes = await listAllPrefixes(this.bucket, job.runsPrefix);
-		const runs = await readStoredObjects(
-			this.bucket,
-			prefixes.map((prefix) => `${prefix}run.json`),
-			JobRunSchema,
-			'job.run.list',
-		);
-		return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
+		const items: JobRun[] = [];
+		let startAfter = afterRunId ? job.runIndex(afterRunId) : undefined;
+		let hasMore = false;
+		while (items.length <= limit) {
+			const listed = await this.bucket.list({
+				prefix: job.runIndexPrefix,
+				...(startAfter ? { startAfter } : {}),
+				limit: limit + 1 - items.length,
+			});
+			if (listed.objects.length === 0) break;
+			for (const index of listed.objects) {
+				startAfter = index.key;
+				const runId = this.runIdFromIndex(job.runIndexPrefix, index.key);
+				if (!runId) continue;
+				const recordKey = job.run(runId).record;
+				const record = await this.bucket.get(recordKey);
+				if (!record) continue;
+				try {
+					items.push(await readStored(JobRunSchema, record, recordKey));
+				} catch (err) {
+					logOperationalError(
+						'stored_object_skipped',
+						{ operation: 'job.run.list', object: recordKey },
+						err,
+					);
+				}
+				if (items.length > limit) break;
+			}
+			hasMore = items.length > limit || listed.truncated;
+			if (items.length > limit || !listed.truncated) break;
+		}
+		if (items.length > limit) items.pop();
+		return {
+			items,
+			nextRunId: hasMore && items.length > 0 ? items[items.length - 1].run_id : null,
+		};
+	}
+
+	private runIdFromIndex(prefix: string, key: string): RunId | null {
+		const reversed = key.slice(prefix.length).replace(/\.json$/, '');
+		if (reversed.length !== 26) return null;
+		const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+		const body = Array.from(reversed, (char) => alphabet[31 - alphabet.indexOf(char)]).join('');
+		const candidate = `run_${body}`;
+		return RunId.is(candidate) ? candidate : null;
 	}
 
 	/**
@@ -334,27 +398,29 @@ export class JobRunService {
 	async putOutputs(run: JobRun, outputs: RunOutputs): Promise<NonNullable<JobRun['output']>> {
 		const p = this.runPaths(run);
 		const encoder = new TextEncoder();
-		const writes: Promise<unknown>[] = [];
 		const output: NonNullable<JobRun['output']> = { html_bytes: 0 };
 		if (outputs.html !== undefined) {
 			const bytes = encoder.encode(outputs.html);
-			output.html_bytes = bytes.byteLength;
-			writes.push(this.bucket.put(p.html, bytes, { httpMetadata: { contentType: 'text/html' } }));
+			output.html_bytes = await this.putOutput(p.html, bytes, 'text/html');
 		}
 		if (outputs.session !== undefined) {
 			const bytes = encoder.encode(outputs.session);
-			output.session_bytes = bytes.byteLength;
-			writes.push(
-				this.bucket.put(p.session, bytes, { httpMetadata: { contentType: 'application/json' } }),
-			);
+			output.session_bytes = await this.putOutput(p.session, bytes, 'application/json');
 		}
 		if (outputs.logs !== undefined) {
 			const bytes = encoder.encode(outputs.logs);
-			output.logs_bytes = bytes.byteLength;
-			writes.push(this.bucket.put(p.logs, bytes, { httpMetadata: { contentType: 'text/plain' } }));
+			output.logs_bytes = await this.putOutput(p.logs, bytes, 'text/plain');
 		}
-		await Promise.all(writes);
 		return output;
+	}
+
+	private async putOutput(key: string, bytes: Uint8Array, contentType: string): Promise<number> {
+		if (await putIfAbsent(this.bucket, key, bytes, { httpMetadata: { contentType } })) {
+			return bytes.byteLength;
+		}
+		const existing = await this.bucket.head(key);
+		if (existing) return existing.size;
+		throw new UnavailableError('Run output disappeared while it was being captured');
 	}
 
 	async readHtml(run: JobRun): Promise<string | null> {
@@ -374,7 +440,7 @@ export class JobRunService {
 	cancelRunsOfJob(
 		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
 		by: UserId,
-	): Promise<string[]> {
+	): Promise<CancelledRuns> {
 		return this.cancelRunsWhere(
 			(marker) => marker.project_id === job.project_id && marker.job_id === job.id,
 			by,
@@ -386,32 +452,36 @@ export class JobRunService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		by: UserId,
-	): Promise<string[]> {
+	): Promise<CancelledRuns> {
 		return this.cancelRunsWhere(
 			(marker) => marker.project_id === projectId && marker.notebook_id === notebookId,
 			by,
 		);
 	}
 
-	cancelRunsOfProject(projectId: ProjectId, by: UserId): Promise<string[]> {
+	cancelRunsOfProject(projectId: ProjectId, by: UserId): Promise<CancelledRuns> {
 		return this.cancelRunsWhere((marker) => marker.project_id === projectId, by);
 	}
 
 	private async cancelRunsWhere(
 		matches: (marker: JobRunMarker) => boolean,
 		by: UserId,
-	): Promise<string[]> {
+	): Promise<CancelledRuns> {
 		const active = (await this.listActive()).filter(({ marker }) => matches(marker));
 		const sandboxIds: string[] = [];
+		const runs: JobRun[] = [];
 		for (const { marker, run } of active) {
 			if (!run) {
 				await this.deleteMarker(marker);
 				continue;
 			}
 			const { run: cancelled, transitioned } = await this.cancel(run, by);
-			if (transitioned && cancelled.sandbox_id) sandboxIds.push(cancelled.sandbox_id);
+			if (transitioned) {
+				runs.push(cancelled);
+				if (cancelled.sandbox_id) sandboxIds.push(cancelled.sandbox_id);
+			}
 		}
-		return sandboxIds;
+		return { runs, sandboxIds };
 	}
 
 	/**
@@ -432,6 +502,7 @@ export class JobRunService {
 			const endedAt = Date.parse(run.finished_at ?? run.queued_at);
 			if (!(endedAt < cutoff)) continue;
 			await deleteByPrefix(this.bucket, jobPaths.run(run.run_id).base);
+			await this.bucket.delete(jobPaths.runIndex(run.run_id));
 			pruned++;
 		}
 		const occurrenceKeys = await listAllKeys(this.bucket, jobPaths.occurrencesPrefix);
@@ -460,6 +531,14 @@ export class JobRunService {
 			await this.bucket
 				.delete(paths.jobRunMarker(marker.project_id, marker.run_id))
 				.catch(() => {});
+			if (!run) {
+				const index = paths
+					.project(marker.project_id)
+					.notebook(marker.notebook_id)
+					.job(marker.job_id)
+					.runIndex(marker.run_id);
+				await this.bucket.delete(index).catch(() => {});
+			}
 			pruned++;
 		}
 		return pruned;

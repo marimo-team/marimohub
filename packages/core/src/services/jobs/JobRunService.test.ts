@@ -66,6 +66,18 @@ describe('JobRunService', () => {
 		]);
 	});
 
+	it('paginates run history from the immutable newest-first index', async () => {
+		const a = await enqueue();
+		const b = await enqueue();
+		const c = await enqueue();
+		const first = await runs.listRunsPage(pid, nid, job.id, 2);
+		expect(first.items.map((run) => run.run_id)).toEqual([c.run_id, b.run_id]);
+		expect(first.nextRunId).toBe(b.run_id);
+		const second = await runs.listRunsPage(pid, nid, job.id, 2, first.nextRunId!);
+		expect(second.items.map((run) => run.run_id)).toEqual([a.run_id]);
+		expect(second.nextRunId).toBeNull();
+	});
+
 	it('applies FSM transitions with CAS and drops the marker on a terminal status', async () => {
 		const run = await enqueue();
 		const provisioning = await runs.transition(run, 'provision', () => ({ sandbox_id: undefined }));
@@ -119,6 +131,17 @@ describe('JobRunService', () => {
 		expect(await runs.readLogs(run)).toBe('stdout');
 	});
 
+	it('never overwrites captured outputs on a repeated capture', async () => {
+		const run = await enqueue();
+		await runs.putOutputs(run, { html: 'first', logs: 'original' });
+		expect(await runs.putOutputs(run, { html: 'replacement', logs: 'new' })).toEqual({
+			html_bytes: 5,
+			logs_bytes: 8,
+		});
+		expect(await runs.readHtml(run)).toBe('first');
+		expect(await runs.readLogs(run)).toBe('original');
+	});
+
 	it('writes a terminal skipped record without a marker', async () => {
 		const skipped = await runs.writeSkipped({
 			job,
@@ -138,8 +161,11 @@ describe('JobRunService', () => {
 		const queued = await enqueue();
 		const active = await enqueue();
 		await runs.transition(active, 'provision', () => ({ sandbox_id: SB }));
-		const sandboxIds = await runs.cancelRunsOfJob(job, ACTOR);
-		expect(sandboxIds).toEqual([SB]);
+		const cancelled = await runs.cancelRunsOfJob(job, ACTOR);
+		expect(cancelled.sandboxIds).toEqual([SB]);
+		expect(cancelled.runs.map((run) => run.run_id)).toEqual(
+			expect.arrayContaining([queued.run_id, active.run_id]),
+		);
 		expect((await runs.getRun(pid, nid, job.id, queued.run_id)).status).toBe('cancelled');
 		expect((await runs.getRun(pid, nid, job.id, active.run_id)).status).toBe('cancelled');
 		expect(await runs.listActive()).toEqual([]);
@@ -181,6 +207,7 @@ describe('JobRunService', () => {
 			JSON.stringify({ ...terminal, status: 'succeeded' }),
 		);
 		const fresh = createRunId();
+		const freshIndex = paths.project(pid).notebook(nid).job(job.id).runIndex(fresh);
 		await bucket.put(
 			paths.jobRunMarker(pid, fresh),
 			JSON.stringify({
@@ -191,7 +218,9 @@ describe('JobRunService', () => {
 				created_at: new Date(now).toISOString(),
 			}),
 		);
+		await bucket.put(freshIndex, '');
 		const stale = createRunId();
+		const staleIndex = paths.project(pid).notebook(nid).job(job.id).runIndex(stale);
 		await bucket.put(
 			paths.jobRunMarker(pid, stale),
 			JSON.stringify({
@@ -202,9 +231,12 @@ describe('JobRunService', () => {
 				created_at: new Date(now - DANGLING_MARKER_GRACE_MS - 1000).toISOString(),
 			}),
 		);
+		await bucket.put(staleIndex, '');
 		expect(await service.pruneStaleMarkers(now)).toBe(2);
 		expect(await bucket.head(paths.jobRunMarker(pid, fresh))).not.toBeNull();
+		expect(await bucket.head(freshIndex)).not.toBeNull();
 		expect(await bucket.head(paths.jobRunMarker(pid, stale))).toBeNull();
+		expect(await bucket.head(staleIndex)).toBeNull();
 		expect(await bucket.head(paths.jobRunMarker(pid, terminal.run_id))).toBeNull();
 	});
 
@@ -238,10 +270,10 @@ describe('JobRunService', () => {
 		it('skips a corrupt run record when listing history', async () => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const good = await enqueue();
-			await env.bucket.put(
-				paths.project(pid).notebook(nid).job(job.id).run(createRunId()).record,
-				'{"status":"queued"}',
-			);
+			const corrupt = createRunId();
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			await env.bucket.put(jobPaths.runIndex(corrupt), '');
+			await env.bucket.put(jobPaths.run(corrupt).record, '{"status":"queued"}');
 			expect((await runs.listRuns(pid, nid, job.id)).map((r) => r.run_id)).toEqual([good.run_id]);
 		});
 
@@ -288,7 +320,7 @@ describe('JobRunService', () => {
 					created_at: new Date().toISOString(),
 				}),
 			);
-			expect(await runs.cancelRunsOfJob(job, ACTOR)).toEqual([]);
+			expect(await runs.cancelRunsOfJob(job, ACTOR)).toEqual({ runs: [], sandboxIds: [] });
 			expect(await env.bucket.head(paths.jobRunMarker(pid, dangling))).toBeNull();
 		});
 

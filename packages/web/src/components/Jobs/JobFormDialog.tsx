@@ -9,9 +9,9 @@ import {
 } from '@/components/form';
 import { useCapabilitiesQuery, useCreateJob, useUpdateJob } from '@/api/hooks';
 import { toastError } from '@/lib/errors';
+import { formatJobParameters, parseJobParameters } from '@/lib/jobs';
 import type { Job, JobCreateBody, JobUpdateBody } from '@/types';
 
-const PARAMETER_LINE = /^([A-Za-z][A-Za-z0-9_-]{0,63})=(.*)$/;
 const MIN_TIMEOUT_SECONDS = 60;
 
 type JobFormValues = {
@@ -28,25 +28,6 @@ type JobFormValues = {
 	notifyFailure: boolean;
 	notifySuccess: boolean;
 };
-
-/** One `key=value` per line; blank lines are ignored. */
-export function parseParameters(text: string): Record<string, string> {
-	const parameters: Record<string, string> = {};
-	for (const raw of text.split('\n')) {
-		const line = raw.trim();
-		if (!line) continue;
-		const match = PARAMETER_LINE.exec(line);
-		if (!match) throw new Error(`"${line}" is not key=value (keys: letters, digits, _ or -)`);
-		parameters[match[1]] = match[2];
-	}
-	return parameters;
-}
-
-function formatParameters(parameters: Record<string, string> | undefined): string {
-	return Object.entries(parameters ?? {})
-		.map(([key, value]) => `${key}=${value}`)
-		.join('\n');
-}
 
 const schema = z
 	.object({
@@ -87,7 +68,7 @@ const schema = z
 			ctx.addIssue({ code: 'custom', path: ['backoffSeconds'], message: 'At most 3600 seconds' });
 		}
 		try {
-			parseParameters(values.parameters);
+			parseJobParameters(values.parameters);
 		} catch (err) {
 			ctx.addIssue({
 				code: 'custom',
@@ -113,7 +94,7 @@ function seedValues(job: Job | null | undefined): JobFormValues {
 		cron: job?.schedule?.cron ?? '0 6 * * *',
 		timezone: job?.schedule?.timezone ?? localTimeZone(),
 		timeoutSeconds: job?.timeout_seconds !== undefined ? String(job.timeout_seconds) : '',
-		parameters: formatParameters(job?.parameters),
+		parameters: formatJobParameters(job?.parameters),
 		maxRetries: String(job?.retry?.max_retries ?? 0),
 		backoffSeconds: String(job?.retry?.backoff_seconds ?? 60),
 		concurrencyPolicy: job?.concurrency_policy === 'allow' ? 'allow' : 'forbid',
@@ -124,7 +105,7 @@ function seedValues(job: Job | null | undefined): JobFormValues {
 
 /** The create body, with each optional section present only when set. */
 function toCreateBody(values: JobFormValues): JobCreateBody {
-	const parameters = parseParameters(values.parameters);
+	const parameters = parseJobParameters(values.parameters);
 	const maxRetries = Number(values.maxRetries);
 	const on = [
 		...(values.notifyFailure ? (['failure'] as const) : []),
@@ -272,7 +253,7 @@ export function JobFormDialog({
 				{(field) => (
 					<label className="flex flex-col gap-1.5">
 						<span className="text-xs font-medium text-muted-foreground">
-							Parameters (one <code>key=value</code> per line, read via <code>mo.cli_args()</code>)
+							Parameters (one <code>key=value</code> per line; quote whitespace with JSON)
 						</span>
 						<textarea
 							aria-label="Parameters"

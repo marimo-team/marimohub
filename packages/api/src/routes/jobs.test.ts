@@ -236,6 +236,11 @@ describe('Job routes', () => {
 		);
 		expect(cancelled).toMatchObject({ status: 'cancelled', cancelled_by: ACTOR });
 		expect(destroyed).toEqual([sandboxId]);
+		const finishEvents = (
+			await services.events.getEvents(new Date().toISOString().slice(0, 10))
+		).filter((event) => event.event === 'job.run.finish' && event.run_id === queued.run_id);
+		expect(finishEvents).toHaveLength(1);
+		expect(finishEvents[0]).toMatchObject({ status: 'cancelled', actor: ACTOR });
 		// Cancelling again is a no-op that still reports the terminal record.
 		const again = await expectOk<any>(
 			await request('POST', `${base()}/${job.id}/runs/${queued.run_id}/cancel`),
