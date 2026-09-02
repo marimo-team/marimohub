@@ -649,8 +649,8 @@ remove actions or projects but cannot add them.
 
 The CLI receives the authorization secret. Storage contains only its SHA-256
 hash. Device polling must also supply the PKCE verifier before it reveals the
-grant status. User codes are case-insensitive. Each process limits approval
-attempts to five per user and limits polling separately.
+grant status. User codes are case-insensitive. Each process limits preview and
+approval attempts separately to five per user. Polling has a separate limit.
 
 `CliAuthorizationService` is the only writer. Legacy records use
 `device_pending`, `pending`, and `claimed`. Scoped records use

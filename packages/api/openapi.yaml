@@ -16217,7 +16217,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      summary: Preview a scoped CLI device login
+      summary: Preview a CLI device login
       security: *a2
       parameters:
         - schema:
@@ -16229,7 +16229,7 @@ paths:
           in: path
       responses:
         '200':
-          description: Scoped grant requested by the CLI
+          description: CLI device authorization type and requested grant
           content:
             application/json:
               schema:
@@ -16240,65 +16240,83 @@ paths:
                     enum:
                       - true
                   data:
-                    type: object
-                    properties:
-                      requested_grant:
-                        type: object
+                    oneOf:
+                      - type: object
                         properties:
-                          actions:
-                            anyOf:
-                              - type: string
-                                enum:
-                                  - '*'
-                              - type: array
-                                items:
-                                  type: string
-                                  enum:
-                                    - project.create
-                                    - admin.access
-                                    - org-integration.manage
-                                    - audit.global.read
-                                    - directory.search
-                                    - project.read
-                                    - project.update
-                                    - project.delete
-                                    - project.members.manage
-                                    - project.events.read
-                                    - project.alerts.manage
-                                    - notebook.write
-                                    - notebook.manage
-                                    - integration.read
-                                    - integration.use
-                                    - integration.manage
-                                    - change-request.publish
-                                    - security-labels.raise
-                                    - security-labels.lower
-                                    - session.attach
-                                    - session.stop
-                                    - session.surface
-                                    - session.proxy
-                                    - session.start
-                          projects:
-                            anyOf:
-                              - type: string
-                                enum:
-                                  - '*'
-                              - type: array
-                                items:
-                                  type: string
-                                  pattern: ^proj-[0-9a-z]{16}$
-                                minItems: 1
-                                maxItems: 100
+                          status:
+                            type: string
+                            enum:
+                              - legacy
+                          expires_at:
+                            type: string
+                            format: date-time
                         required:
-                          - actions
-                          - projects
-                        additionalProperties: false
-                      expires_at:
-                        type: string
-                        format: date-time
-                    required:
-                      - requested_grant
-                      - expires_at
+                          - status
+                          - expires_at
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum:
+                              - scoped
+                          requested_grant:
+                            type: object
+                            properties:
+                              actions:
+                                anyOf:
+                                  - type: string
+                                    enum:
+                                      - '*'
+                                  - type: array
+                                    items:
+                                      type: string
+                                      enum:
+                                        - project.create
+                                        - admin.access
+                                        - org-integration.manage
+                                        - audit.global.read
+                                        - directory.search
+                                        - project.read
+                                        - project.update
+                                        - project.delete
+                                        - project.members.manage
+                                        - project.events.read
+                                        - project.alerts.manage
+                                        - notebook.write
+                                        - notebook.manage
+                                        - integration.read
+                                        - integration.use
+                                        - integration.manage
+                                        - change-request.publish
+                                        - security-labels.raise
+                                        - security-labels.lower
+                                        - session.attach
+                                        - session.stop
+                                        - session.surface
+                                        - session.proxy
+                                        - session.start
+                              projects:
+                                anyOf:
+                                  - type: string
+                                    enum:
+                                      - '*'
+                                  - type: array
+                                    items:
+                                      type: string
+                                      pattern: ^proj-[0-9a-z]{16}$
+                                    minItems: 1
+                                    maxItems: 100
+                            required:
+                              - actions
+                              - projects
+                            additionalProperties: false
+                          expires_at:
+                            type: string
+                            format: date-time
+                        required:
+                          - status
+                          - requested_grant
+                          - expires_at
                 required:
                   - success
                   - data

@@ -211,13 +211,26 @@ describe('CLI authorization routes', () => {
 		);
 	});
 
+	it('identifies a legacy device authorization in the approval preview', async () => {
+		const device = await requestDevice();
+		const previewResponse = await request(
+			'GET',
+			`/me/cli-device-authorizations/${device.user_code}`,
+		);
+		const preview = await expectOk<{ status: string; expires_at: string }>(previewResponse);
+		expect(preview).toMatchObject({ status: 'legacy' });
+		expect(preview).not.toHaveProperty('requested_grant');
+		expect(previewResponse.headers.get('Cache-Control')).toBe('no-store');
+	});
+
 	it('previews and narrows a scoped device grant', async () => {
 		const device = await requestDevice(FULL_GRANT);
 		const previewResponse = await request(
 			'GET',
 			`/me/cli-device-authorizations/${device.user_code}`,
 		);
-		const preview = await expectOk<{ requested_grant: unknown }>(previewResponse);
+		const preview = await expectOk<{ status: string; requested_grant: unknown }>(previewResponse);
+		expect(preview.status).toBe('scoped');
 		expect(preview.requested_grant).toEqual(FULL_GRANT);
 		expect(previewResponse.headers.get('Cache-Control')).toBe('no-store');
 
@@ -405,6 +418,39 @@ describe('CLI authorization routes', () => {
 				token_name: 'remote CLI',
 				expires_in_days: 30,
 			}),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+	});
+
+	it('budgets device previews separately from approvals', async () => {
+		const approver = createTestApi({ bucket, userId: uid('device-preview-approver') });
+		await approver.request('GET', '/me');
+
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const device = await requestDevice(FULL_GRANT);
+			await expectOk(
+				await approver.request('GET', `/me/cli-device-authorizations/${device.user_code}`),
+			);
+			await expectOk(
+				await approver.request('POST', '/me/cli-device-authorizations/scoped', {
+					user_code: device.user_code,
+					token_name: `scoped CLI ${attempt}`,
+					expires_in_days: 30,
+					grant: FULL_GRANT,
+				}),
+			);
+		}
+
+		for (let attempt = 3; attempt < 5; attempt += 1) {
+			const device = await requestDevice(FULL_GRANT);
+			await expectOk(
+				await approver.request('GET', `/me/cli-device-authorizations/${device.user_code}`),
+			);
+		}
+		const limited = await requestDevice(FULL_GRANT);
+		await expectError(
+			await approver.request('GET', `/me/cli-device-authorizations/${limited.user_code}`),
 			429,
 			'RESOURCE_EXHAUSTED',
 		);

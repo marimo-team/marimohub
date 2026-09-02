@@ -1649,7 +1649,7 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Preview a scoped CLI device login */
+		/** Preview a CLI device login */
 		get: operations['auth.cli.device.preview'];
 		put?: never;
 		post?: never;
@@ -15124,7 +15124,7 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description Scoped grant requested by the CLI */
+			/** @description CLI device authorization type and requested grant */
 			200: {
 				headers: {
 					[name: string]: unknown;
@@ -15133,41 +15133,50 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: {
-							requested_grant: {
-								actions:
-									| '*'
-									| (
-											| 'project.create'
-											| 'admin.access'
-											| 'org-integration.manage'
-											| 'audit.global.read'
-											| 'directory.search'
-											| 'project.read'
-											| 'project.update'
-											| 'project.delete'
-											| 'project.members.manage'
-											| 'project.events.read'
-											| 'project.alerts.manage'
-											| 'notebook.write'
-											| 'notebook.manage'
-											| 'integration.read'
-											| 'integration.use'
-											| 'integration.manage'
-											| 'change-request.publish'
-											| 'security-labels.raise'
-											| 'security-labels.lower'
-											| 'session.attach'
-											| 'session.stop'
-											| 'session.surface'
-											| 'session.proxy'
-											| 'session.start'
-									  )[];
-								projects: '*' | string[];
-							};
-							/** Format: date-time */
-							expires_at: string;
-						};
+						data:
+							| {
+									/** @enum {string} */
+									status: 'legacy';
+									/** Format: date-time */
+									expires_at: string;
+							  }
+							| {
+									/** @enum {string} */
+									status: 'scoped';
+									requested_grant: {
+										actions:
+											| '*'
+											| (
+													| 'project.create'
+													| 'admin.access'
+													| 'org-integration.manage'
+													| 'audit.global.read'
+													| 'directory.search'
+													| 'project.read'
+													| 'project.update'
+													| 'project.delete'
+													| 'project.members.manage'
+													| 'project.events.read'
+													| 'project.alerts.manage'
+													| 'notebook.write'
+													| 'notebook.manage'
+													| 'integration.read'
+													| 'integration.use'
+													| 'integration.manage'
+													| 'change-request.publish'
+													| 'security-labels.raise'
+													| 'security-labels.lower'
+													| 'session.attach'
+													| 'session.stop'
+													| 'session.surface'
+													| 'session.proxy'
+													| 'session.start'
+											  )[];
+										projects: '*' | string[];
+									};
+									/** Format: date-time */
+									expires_at: string;
+							  };
 					};
 				};
 			};

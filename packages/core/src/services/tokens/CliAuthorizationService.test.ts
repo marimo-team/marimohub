@@ -148,6 +148,7 @@ describe('CliAuthorizationService', () => {
 	it('previews and narrows a scoped device grant', async () => {
 		const requested = await authorizations.requestDeviceScoped(await challenge(), FULL_GRANT);
 		await expect(authorizations.previewDevice(requested.userCode)).resolves.toMatchObject({
+			status: 'scoped',
 			requestedGrant: FULL_GRANT,
 		});
 		await authorizations.approveDeviceScoped(
@@ -170,9 +171,9 @@ describe('CliAuthorizationService', () => {
 
 	it('does not let legacy and scoped device approval methods cross', async () => {
 		const legacy = await authorizations.requestDevice(await challenge());
-		await expect(authorizations.previewDevice(legacy.userCode)).rejects.toThrow(
-			/invalid or expired/,
-		);
+		await expect(authorizations.previewDevice(legacy.userCode)).resolves.toMatchObject({
+			status: 'legacy',
+		});
 		await expect(
 			authorizations.approveDeviceScoped(
 				legacy.userCode,

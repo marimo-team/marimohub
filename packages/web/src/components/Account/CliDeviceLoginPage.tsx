@@ -9,6 +9,7 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
 import { withBasePath } from '@/lib/basePath';
+import { errorMessage } from '@/lib/errors';
 import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
 import type { TokenGrantDraft } from './TokenGrantEditor';
 
@@ -51,12 +52,13 @@ export function CliDeviceLoginPage({
 		code: string;
 		draft: TokenGrantDraft;
 	} | null>(null);
-	const requestedDraft: TokenGrantDraft | null = preview.data
-		? {
-				actions: preview.data.requested_grant.actions,
-				projects: preview.data.requested_grant.projects,
-			}
-		: null;
+	const requestedDraft: TokenGrantDraft | null =
+		preview.data?.status === 'scoped'
+			? {
+					actions: preview.data.requested_grant.actions,
+					projects: preview.data.requested_grant.projects,
+				}
+			: null;
 	const grantDraft =
 		normalizedCode && grantOverride?.code === normalizedCode ? grantOverride.draft : requestedDraft;
 	const grant = grantDraft ? tokenGrantFromDraft(grantDraft) : null;
@@ -77,12 +79,13 @@ export function CliDeviceLoginPage({
 			return;
 		}
 		try {
+			if (!preview.data) return;
 			const common = {
 				user_code: formatUserCode(code),
 				token_name: 'mohub CLI',
 				expires_in_days: days,
 			};
-			if (preview.data) {
+			if (preview.data.status === 'scoped') {
 				if (!grant) return;
 				await approveScoped.mutateAsync({ ...common, grant });
 			} else {
@@ -117,7 +120,18 @@ export function CliDeviceLoginPage({
 							<Terminal className="size-6" />
 						</div>
 
-						{preview.data && grantDraft ? (
+						{preview.isError ? (
+							<div
+								role="alert"
+								className="flex w-full flex-col gap-2 rounded-md border p-3 text-left"
+							>
+								<p className="text-sm font-medium">Could not load this CLI authorization</p>
+								<p className="text-xs text-destructive">{errorMessage(preview.error)}</p>
+								<Button size="sm" onPress={() => void preview.refetch()}>
+									Retry preview
+								</Button>
+							</div>
+						) : preview.data?.status === 'scoped' && grantDraft ? (
 							<TokenGrantEditor
 								value={grantDraft}
 								onChange={updateGrantDraft}
@@ -195,7 +209,11 @@ export function CliDeviceLoginPage({
 								type="submit"
 								variant="primary"
 								isDisabled={
-									isPending || preview.isFetching || (preview.data !== undefined && grant === null)
+									isPending ||
+									(normalizedCode !== null &&
+										(preview.isFetching ||
+											preview.data === undefined ||
+											(preview.data.status === 'scoped' && grant === null)))
 								}
 							>
 								{isPending ? 'Connecting…' : 'Authorize CLI'}

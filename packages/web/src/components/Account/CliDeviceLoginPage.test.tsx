@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
+import type { TokenGrant } from '@/types';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { CliDeviceLoginPage } from './CliDeviceLoginPage';
 
@@ -13,9 +14,12 @@ function setup(
 		approvalThrows?: boolean;
 		scoped?: boolean;
 		scopedApprovalFails?: boolean;
+		requestedGrant?: TokenGrant;
+		previewFailures?: number;
 	} = {},
 ) {
 	const calls: { url: string; body?: unknown }[] = [];
+	let previewAttempts = 0;
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -26,12 +30,20 @@ function setup(
 				return jsonOk({ id: 'user-one', email: 'dev@example.com', logout_url: null });
 			}
 			if (url === `/api/v1/me/cli-device-authorizations/${USER_CODE}`) {
+				previewAttempts++;
+				if (previewAttempts <= (options.previewFailures ?? 0)) {
+					return jsonError('UNAVAILABLE', 'Preview unavailable', 503);
+				}
 				return options.scoped
 					? jsonOk({
-							requested_grant: { actions: '*', projects: '*' },
+							status: 'scoped',
+							requested_grant: options.requestedGrant ?? { actions: '*', projects: '*' },
 							expires_at: '2026-08-25T12:10:00.000Z',
 						})
-					: jsonError('BAD_REQUEST', 'CLI authorization code is invalid or expired', 400);
+					: jsonOk({
+							status: 'legacy',
+							expires_at: '2026-08-25T12:10:00.000Z',
+						});
 			}
 			if (url.startsWith('/api/v1/projects')) {
 				return jsonOk({ items: [], next_cursor: null });
@@ -117,6 +129,45 @@ describe('CliDeviceLoginPage', () => {
 		expect(
 			await screen.findByRole('heading', { name: 'CLI authorization approved' }),
 		).toBeVisible();
+		expect(calls).toContainEqual({
+			url: '/api/v1/me/cli-device-authorizations/scoped',
+			body: {
+				user_code: USER_CODE,
+				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				grant: { actions: '*', projects: '*' },
+			},
+		});
+	});
+
+	it('shows every action in a custom requested grant before approval', async () => {
+		setup({
+			scoped: true,
+			requestedGrant: {
+				actions: ['project.read', 'project.delete'],
+				projects: '*',
+			},
+		});
+		await screen.findByText(/dev@example.com/);
+
+		expect(await screen.findByRole('checkbox', { name: 'project.read' })).toBeChecked();
+		expect(screen.getByRole('checkbox', { name: 'project.delete' })).toBeChecked();
+		expect(screen.getByRole('radio', { name: /^Read/ })).not.toBeChecked();
+		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeEnabled();
+	});
+
+	it('does not infer legacy approval when preview fails and allows retry', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({ scoped: true, previewFailures: 1 });
+
+		expect(await screen.findByText('Preview unavailable')).toBeVisible();
+		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeDisabled();
+		expect(calls.filter((call) => call.url.endsWith('/cli-device-authorizations'))).toEqual([]);
+
+		await user.click(screen.getByRole('button', { name: 'Retry preview' }));
+		expect(await screen.findByRole('radio', { name: /^Full/ })).toBeChecked();
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
 		expect(calls).toContainEqual({
 			url: '/api/v1/me/cli-device-authorizations/scoped',
 			body: {

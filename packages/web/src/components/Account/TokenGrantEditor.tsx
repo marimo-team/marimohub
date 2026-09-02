@@ -56,6 +56,7 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 	const selectedPreset = PRESETS.find((preset) =>
 		sameActions(value.actions, presetActions(preset.id)),
 	);
+	const showAdvanced = advanced || (value.actions !== null && selectedPreset === undefined);
 	const allowedProjects = useMemo(() => {
 		const bound = upperBound?.projects;
 		return bound === '*' || bound === undefined
@@ -90,7 +91,7 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 									aria-label={preset.label}
 									type="radio"
 									name="token-action-preset"
-									checked={selectedPreset?.id === preset.id && !advanced}
+									checked={selectedPreset?.id === preset.id && !showAdvanced}
 									disabled={disabled}
 									onChange={() => {
 										setAdvanced(false);
@@ -120,7 +121,7 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 				>
 					Advanced actions
 				</button>
-				{advanced ? (
+				{showAdvanced ? (
 					<div className="grid max-h-48 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2">
 						{AUTHORIZATION_ACTIONS.map((action) => {
 							const disabled =

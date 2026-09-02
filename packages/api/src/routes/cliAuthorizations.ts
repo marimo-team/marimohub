@@ -125,6 +125,10 @@ const userCodeAttemptBudget = createSlidingWindowBudget<string>({
 	limit: USER_CODE_ATTEMPT_LIMIT,
 	windowMs: USER_CODE_ATTEMPT_WINDOW_MS,
 });
+const userCodePreviewBudget = createSlidingWindowBudget<string>({
+	limit: USER_CODE_ATTEMPT_LIMIT,
+	windowMs: USER_CODE_ATTEMPT_WINDOW_MS,
+});
 
 function consumeBudget<Key>(budget: SlidingWindowBudget<Key>, key: Key, message: string): void {
 	if (!budget.consume(key)) throw new ResourceExhaustedError(message);
@@ -178,6 +182,14 @@ function assertUserCodeAttemptAllowed(userId: string): void {
 		userCodeAttemptBudget,
 		userId,
 		'Too many CLI device code attempts; try again later.',
+	);
+}
+
+function assertUserCodePreviewAllowed(userId: string): void {
+	consumeBudget(
+		userCodePreviewBudget,
+		userId,
+		'Too many CLI device code previews; try again later.',
 	);
 }
 
@@ -335,7 +347,7 @@ const previewDeviceAuthorization = createRoute({
 	operationId: 'auth.cli.device.preview',
 	'x-cli-hidden': true,
 	tags: ['Auth'],
-	summary: 'Preview a scoped CLI device login',
+	summary: 'Preview a CLI device login',
 	security: SESSION_ONLY_SECURITY,
 	request: {
 		params: z.object({
@@ -351,12 +363,19 @@ const previewDeviceAuthorization = createRoute({
 		200: jsonContent(
 			z.object({
 				success: z.literal(true),
-				data: z.object({
-					requested_grant: TokenGrantSchema,
-					expires_at: z.string().openapi({ format: 'date-time' }),
-				}),
+				data: z.discriminatedUnion('status', [
+					z.object({
+						status: z.literal('legacy'),
+						expires_at: z.string().openapi({ format: 'date-time' }),
+					}),
+					z.object({
+						status: z.literal('scoped'),
+						requested_grant: TokenGrantSchema,
+						expires_at: z.string().openapi({ format: 'date-time' }),
+					}),
+				]),
 			}),
-			'Scoped grant requested by the CLI',
+			'CLI device authorization type and requested grant',
 		),
 		...commonErrors(),
 		...errorResponses(400, 403, 404, 429),
@@ -528,15 +547,24 @@ app.openapi(previewDeviceAuthorization, async (c) => {
 	preventCaching(c);
 	const deps = c.get('deps');
 	const user = c.get('user');
-	assertUserCodeAttemptAllowed(user.id);
+	assertUserCodePreviewAllowed(user.id);
 	const preview = await deps.services.cliAuthorizations.previewDevice(
 		c.req.valid('param').userCode,
 	);
-	await assertTokenGrantProjectsVisible(deps, user, preview.requestedGrant);
+	if (preview.status === 'scoped') {
+		await assertTokenGrantProjectsVisible(deps, user, preview.requestedGrant);
+	}
 	return c.json(
 		{
 			success: true as const,
-			data: { requested_grant: preview.requestedGrant, expires_at: preview.expiresAt },
+			data:
+				preview.status === 'scoped'
+					? {
+							status: 'scoped' as const,
+							requested_grant: preview.requestedGrant,
+							expires_at: preview.expiresAt,
+						}
+					: { status: 'legacy' as const, expires_at: preview.expiresAt },
 		},
 		200,
 	);
@@ -549,6 +577,9 @@ app.openapi(approveScopedDeviceAuthorization, async (c) => {
 	assertUserCodeAttemptAllowed(user.id);
 	const body = c.req.valid('json');
 	const preview = await deps.services.cliAuthorizations.previewDevice(body.user_code);
+	if (preview.status !== 'scoped') {
+		throw new BadRequestError('CLI authorization code is invalid or expired');
+	}
 	await assertTokenGrantProjectsVisible(deps, user, preview.requestedGrant);
 	await assertTokenGrantProjectsVisible(deps, user, body.grant);
 	const approved = await deps.services.cliAuthorizations.approveDeviceScoped(

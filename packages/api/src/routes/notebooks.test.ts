@@ -1377,6 +1377,38 @@ describe('Notebook routes', () => {
 			}
 		});
 
+		it('reports an editor workspace as read-only when the PAT omits notebook.write', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const scopedApi = createTestApi({
+				bucket,
+				deps: {
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: {
+								kind: 'personal-access-token',
+								grant: { actions: ['project.read'], projects: [projectId] },
+							},
+						}),
+					},
+				},
+			});
+			const workspace = nb(`/${created.id}/workspace`);
+
+			expect(
+				await expectOk<any>(await scopedApi.request('GET', `${workspace}/access`)),
+			).toMatchObject({ writable: false, read_only_reason: 'viewer' });
+			await expectError(
+				await scopedApi.request('POST', `${workspace}/directories`, { path: '/blocked' }),
+				403,
+				'FORBIDDEN',
+			);
+		});
+
 		it('does not reveal workspace contents to project non-members', async () => {
 			const created = await expectOk<any>(
 				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'secret = 1' }),

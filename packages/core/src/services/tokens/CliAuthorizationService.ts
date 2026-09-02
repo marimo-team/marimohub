@@ -113,10 +113,9 @@ export interface RequestedCliDeviceAuthorization extends ApprovedCliAuthorizatio
 	userCode: string;
 }
 
-export interface CliDeviceAuthorizationPreview {
-	expiresAt: string;
-	requestedGrant: TokenGrant;
-}
+export type CliDeviceAuthorizationPreview =
+	| { status: 'legacy'; expiresAt: string }
+	| { status: 'scoped'; expiresAt: string; requestedGrant: TokenGrant };
 
 export type CliDevicePollResult =
 	| { status: 'pending' }
@@ -329,8 +328,13 @@ export class CliAuthorizationService {
 
 	async previewDevice(userCode: string): Promise<CliDeviceAuthorizationPreview> {
 		const { record } = await this.readDevicePending(userCode);
-		if (record.status !== 'device_pending_v2') throw invalidAuthorization();
-		return { expiresAt: record.expires_at, requestedGrant: record.requested_grant };
+		return record.status === 'device_pending_v2'
+			? {
+					status: 'scoped',
+					expiresAt: record.expires_at,
+					requestedGrant: record.requested_grant,
+				}
+			: { status: 'legacy', expiresAt: record.expires_at };
 	}
 
 	async approveDevice(
