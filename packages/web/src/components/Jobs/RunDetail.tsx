@@ -20,8 +20,10 @@ interface RunDetailProps {
 
 export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }: RunDetailProps) {
 	const [tab, setTab] = useState<'output' | 'logs'>('output');
-	const now = useNow(isTerminalRun(run) ? null : 1000);
 	const terminal = isTerminalRun(run);
+	const active =
+		run.status === 'queued' || run.status === 'provisioning' || run.status === 'running';
+	const now = useNow(active ? 1000 : null);
 	const html = useJobRunHtmlQuery(projectId, notebookId, job.id, run.run_id, terminal);
 	const logs = useJobRunLogsQuery(
 		projectId,
@@ -67,7 +69,7 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 						Image {run.image}
 					</span>
 				)}
-				{canEdit && !terminal && (
+				{canEdit && active && (
 					<Button variant="ghost" size="sm" onPress={() => onCancel(run)}>
 						<XCircle className="size-3.5" />
 						Cancel run
@@ -102,6 +104,8 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 					{tab === 'output' ? (
 						html.isPending ? (
 							<Skeleton className="h-40 w-full" />
+						) : html.isError ? (
+							<ArtifactError artifact="output" onRetry={() => void html.refetch()} />
 						) : html.data ? (
 							<div className="min-h-[24rem] flex-1 overflow-hidden rounded-md border">
 								<iframe
@@ -116,12 +120,18 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 						)
 					) : logs.isPending ? (
 						<Skeleton className="h-40 w-full" />
+					) : logs.isError ? (
+						<ArtifactError artifact="logs" onRetry={() => void logs.refetch()} />
 					) : (
 						<pre className="max-h-[32rem] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
 							{logs.data ?? 'No logs were captured.'}
 						</pre>
 					)}
 				</>
+			) : run.status === 'unknown' ? (
+				<p className="text-xs text-muted-foreground">
+					This run has a status this version of marimohub does not recognize.
+				</p>
 			) : (
 				<p className="text-xs text-muted-foreground">
 					{run.status === 'queued'
@@ -130,5 +140,22 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 				</p>
 			)}
 		</section>
+	);
+}
+
+function ArtifactError({
+	artifact,
+	onRetry,
+}: {
+	artifact: 'output' | 'logs';
+	onRetry: () => void;
+}) {
+	return (
+		<div className="flex items-center gap-2 text-xs text-destructive">
+			<span>Failed to load run {artifact}.</span>
+			<Button variant="default" size="sm" onPress={onRetry}>
+				Retry
+			</Button>
+		</div>
 	);
 }

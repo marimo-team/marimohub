@@ -16,7 +16,7 @@ info:
     other non-JSON artifacts): idempotency records, integration name claims,
     reconcile orphan markers, sandbox diagnostic leases, advisory locks, and
     version/workspace file
-    artifacts (notebook.py, pyproject.toml, notebook.html, session.json,
+    artifacts (notebook.py, pyproject.toml, notebook.html, version session.json,
     README.md, workspace files). Pull-source Git metadata and job run outputs
     are included because their immutable, scoped locations are part of a
     contract (the sync contract and the run-history API respectively).
@@ -1295,6 +1295,58 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/session.json:
+    summary: Write-once marimo session state captured by a job run.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_projects_notebooks_jobs_runs_session_json
+      summary: Read JobRunSession
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_jobs_runs_session_json
+      summary: Write JobRunSession
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/versions/{vid}/git/{relative_path}:
     summary: Immutable pull-source Git metadata file, addressed relative to `.git`.
     parameters:
@@ -1510,6 +1562,11 @@ components:
                             required:
                               - cron
                               - timezone
+                            additionalProperties: {}
+                          updated_at:
+                            type: string
+                            format: date-time
+                            pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
                         required:
                           - id
                           - enabled
@@ -2329,6 +2386,7 @@ components:
               type: number
             gpu:
               type: string
+          additionalProperties: {}
         owner_user_id:
           type: string
       required:
@@ -2383,6 +2441,7 @@ components:
           required:
             - cron
             - timezone
+          additionalProperties: {}
         parameters:
           type: object
           propertyNames:
@@ -2391,6 +2450,7 @@ components:
           additionalProperties:
             type: string
             maxLength: 4096
+          maxProperties: 32
         retry:
           type: object
           properties:
@@ -2405,6 +2465,7 @@ components:
               maximum: 3600
           required:
             - max_retries
+          additionalProperties: {}
         timeout_seconds:
           type: integer
           minimum: 60
@@ -2426,8 +2487,10 @@ components:
                 enum:
                   - failure
                   - success
+              uniqueItems: true
           required:
             - on
+          additionalProperties: {}
         created_by:
           type: string
         created_at:
@@ -2458,6 +2521,11 @@ components:
           type: string
           format: date-time
           pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        outcome:
+          type: string
+          enum:
+            - run
+            - skip
       required:
         - run_id
         - fired_at
@@ -2508,6 +2576,7 @@ components:
           additionalProperties:
             type: string
             maxLength: 4096
+          maxProperties: 32
         attempt:
           default: 1
           type: integer
@@ -2530,6 +2599,7 @@ components:
               type: number
             gpu:
               type: string
+          additionalProperties: {}
         timeout_seconds:
           type: integer
           minimum: 1
@@ -2568,6 +2638,7 @@ components:
           required:
             - code
             - message
+          additionalProperties: {}
         output:
           type: object
           properties:
@@ -2585,6 +2656,7 @@ components:
               maximum: 9007199254740991
           required:
             - html_bytes
+          additionalProperties: {}
         cancelled_by:
           type: string
       required:
@@ -2602,6 +2674,8 @@ components:
       type: object
       properties:
         run_id:
+          type: string
+        continuation_run_id:
           type: string
         job_id:
           type: string
@@ -2792,6 +2866,7 @@ components:
               type: number
             gpu:
               type: string
+          additionalProperties: {}
         compute_from_snapshot:
           type: boolean
         sandbox_origin_url:

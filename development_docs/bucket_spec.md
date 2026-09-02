@@ -801,7 +801,9 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
 }
 
 // …/jobs/job-z/occurrences/20260902T0400Z.json   (immutable, create-if-absent)
-{ "run_id": "run_01JX…", "fired_at": "2026-09-02T04:00:12Z" }
+{ "run_id": "run_01JX…", "fired_at": "2026-09-02T04:00:12Z", "outcome": "run" }
+
+// …/notebooks/nb-y/job-index/{created_at}_{job-id}.json   (empty, immutable)
 
 // …/jobs/job-z/run-index/{reverse-ulid}.json   (empty, immutable, create-if-absent)
 
@@ -828,8 +830,8 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
 	"output": { "html_bytes": 48211, "logs_bytes": 912 }
 }
 
-// _system/job-runs/proj-x/run_01JX….json   (create-once; deleted when the run is terminal)
-{ "run_id": "run_01JX…", "job_id": "job-…", "notebook_id": "nb-…", "project_id": "proj-…", "created_at": "…" }
+// _system/job-runs/proj-x/run_01JX….json   (create-once; deleted after finalization)
+{ "run_id": "run_01JX…", "continuation_run_id": "run_01JY…", "job_id": "job-…", "notebook_id": "nb-…", "project_id": "proj-…", "created_at": "…" }
 ```
 
 **Ownership and mutability.**
@@ -837,9 +839,12 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
 - `job.json` — mutable, ETag CAS through `mutateObject`, **written only by
   `JobsService`**, the same discipline as an integration head (§4.12).
   `JobsService` also maintains the snapshot's per-notebook `jobs` index
-  (`{ id, enabled, schedule }`) through `CatalogService.mutateSnapshot`, so the
+  (`{ id, enabled, schedule, updated_at }`) through `CatalogService.mutateSnapshot`, so the
   scheduler enumerates scheduled jobs from two GETs instead of scanning
-  `projects/**`. `job.json` stays authoritative for the full definition.
+  `projects/**`. The timestamp prevents delayed updates from replacing newer
+  index entries. `job.json` stays authoritative for the full definition.
+- `job-index/{created_at}_{job-id}.json` — empty, create-if-absent entries for
+  oldest-first API pagination without materializing every definition.
 - `run.json` — an operational record like a session (§4.8): every status
   change is a CAS transition through the run state machine, **written only by
   `JobRunService`**. Terminal runs are never rewritten; retention deletes whole
@@ -848,17 +853,21 @@ A **job** is a per-notebook headless-run definition (schedule + policy); a
   minute of the occurrence, so replicas with skewed clocks compute the same key
   and collide on the conditional PUT: the fire-exactly-once anchor. A crash
   between the claim and the run record leaves a claim naming a run that does
-  not exist; the next tick re-writes that record idempotently (the claim is the
-  commit point, the record write is retryable).
+  not exist; the next tick re-writes that record idempotently with the claimed
+  `run` or `skip` outcome (the claim is the commit point, the record write is
+  retryable).
 - `run-index/{reverse-ulid}.json` — empty, create-if-absent history entries.
   Complementing each Crockford Base32 digit makes ascending object-key order
   equal newest-first run order, so a cursor page reads only that page's run
   records. Retention deletes the entry with its `runs/{rid}/` prefix.
-- `_system/job-runs/{pid}/{rid}.json` — the active-run index: written
-  create-if-absent **before** the run record and deleted on the terminal CAS,
-  so the scheduler's dispatch/watchdog and the reconciler enumerate live runs
-  (and the sandboxes they hold) from one prefix. A marker without a record past
-  a grace window, or with a terminal record, is pruned by maintenance.
+- `_system/job-runs/{pid}/{rid}.json` — the execution/finalization index: written
+  create-if-absent **before** the run record and retained after the terminal CAS
+  until the scheduler finishes idempotent auditing and retry creation. A marker
+  without a record past the grace window is pruned by maintenance.
+- `_system/job-operations/{pid}/{nid}/{jid}.json` — an expiring singleton claim
+  that serializes scheduling, manual triggers, updates, and
+  deletion for one job. `_system/job-deletions/{pid}/{nid}/{jid}.json` is the
+  durable deletion fence checked before enqueueing or updating.
 - Outputs — write-once under a fresh run prefix; no CAS needed. They are **not
   notebook versions** and never advance `source.json`.
 
@@ -867,22 +876,24 @@ deleting a notebook or project reclaims the subtree with everything else.
 
 ## 5. ID Scheme
 
-Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Only **version** IDs (`ver_`) remain uppercase ULIDs, because their lexicographic order is load-bearing for version pruning (keep the most recent N). The examples below are illustrative; the regex in `schema.ts` is authoritative.
+Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.
 
 > **Do not infer recency from snapshot key order.** Because snapshot IDs are random, listing `_system/snapshots/` does **not** return entries in creation order. The current snapshot is always the one named by `catalog.json` — never the "last" key. Where chronological order is needed (retention, recovery), use each object's storage timestamp (`uploaded` / `LastModified`) or the snapshot's `created_at` field, not the ID.
 
 > **The current snapshot is always the one named by `catalog.json`.** An interrupted write can momentarily create a snapshot it never commits (the writer deletes it on conflict — see §7.3 / §11). `catalog.json` is the single source of truth for "current."
 
-| ID Format     | Usage                                                              |
-| ------------- | ------------------------------------------------------------------ |
-| `proj-{rand}` | Project — random 16-char body, for example `proj-7h2k9qm4xz7rp3w8` |
-| `nb-{rand}`   | Notebook — for example `nb-5g43rv2s9pfw8w4d`                       |
-| `snap-{rand}` | Snapshot — random, **not** time-sortable, for example `snap-…`     |
-| `ver_{ulid}`  | Notebook version — uppercase ULID, time-sortable on purpose        |
-| `sess-{rand}` | Session — for example `sess-…`                                     |
-| opaque string | User/actor — the authentication provider supplies this value       |
-| `intg-{rand}` | Integration — random 16-character body                             |
-| `sb-{rand}`   | Sandbox — random 16-character body                                 |
+| ID Format     | Usage                                                                  |
+| ------------- | ---------------------------------------------------------------------- |
+| `proj-{rand}` | Project — random 16-char body, for example `proj-7h2k9qm4xz7rp3w8`     |
+| `nb-{rand}`   | Notebook — for example `nb-5g43rv2s9pfw8w4d`                           |
+| `snap-{rand}` | Snapshot — random, **not** time-sortable, for example `snap-…`         |
+| `job-{rand}`  | Notebook job — random 16-char body, for example `job-7h2k9qm4xz7rp3w8` |
+| `ver_{ulid}`  | Notebook version — uppercase ULID, time-sortable on purpose            |
+| `run_{ulid}`  | Job run — uppercase ULID, time-sortable for newest-first history       |
+| `sess-{rand}` | Session — for example `sess-…`                                         |
+| opaque string | User/actor — the authentication provider supplies this value           |
+| `intg-{rand}` | Integration — random 16-character body                                 |
+| `sb-{rand}`   | Sandbox — random 16-character body                                     |
 
 ---
 

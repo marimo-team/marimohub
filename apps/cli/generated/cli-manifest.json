@@ -2078,6 +2078,22 @@
 					"required": true,
 					"value_type": "string",
 					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
 				}
 			],
 			"destructive": false,

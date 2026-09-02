@@ -4,13 +4,16 @@ import {
 	createAlertDestinationId,
 	deriveProposalId,
 	createNotebookId,
+	createRunId,
 	createProjectId,
 	createSandboxId,
 	createSessionId,
 	createVersionId,
 	NotebookId,
+	JobId,
 	ProposalId,
 	ProjectId,
+	RunId,
 	SandboxId,
 	SessionId,
 	SnapshotId,
@@ -71,6 +74,7 @@ const hyphenIds: { name: string; id: IdBrand<string>; prefix: string }[] = [
 	{ name: 'AlertDestinationId', id: AlertDestinationId, prefix: 'alert-' },
 	{ name: 'ProjectId', id: ProjectId, prefix: 'proj-' },
 	{ name: 'NotebookId', id: NotebookId, prefix: 'nb-' },
+	{ name: 'JobId', id: JobId, prefix: 'job-' },
 	{ name: 'ProposalId', id: ProposalId, prefix: 'prop-' },
 	{ name: 'SnapshotId', id: SnapshotId, prefix: 'snap-' },
 	{ name: 'SessionId', id: SessionId, prefix: 'sess-' },
@@ -131,6 +135,32 @@ describe('VersionId namespace', () => {
 		const ids = Array.from({ length: 50 }, () => createVersionId());
 		const sorted = [...ids].sort();
 		expect(ids).toEqual(sorted);
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+});
+
+describe('RunId namespace', () => {
+	it('accepts a freshly-created uppercase-ULID id', () => {
+		expect(RunId.is(createRunId())).toBe(true);
+	});
+
+	it('rejects a lowercase body and the hyphen separator', () => {
+		expect(RunId.is(`run_${'a'.repeat(26)}`)).toBe(false);
+		expect(RunId.is(`run-${'A'.repeat(26)}`)).toBe(false);
+	});
+
+	it('parse() and assert() enforce the RunId format', () => {
+		const valid = createRunId();
+		expect(RunId.parse(valid)).toBe(valid);
+		expect(() => RunId.assert(valid)).not.toThrow();
+		expect(() => RunId.parse('run_lowercase')).toThrow('RunId');
+		expect(() => RunId.assert('nope')).toThrow('RunId');
+	});
+
+	it('exposes its format regex and creates monotonic ids', () => {
+		const ids = Array.from({ length: 50 }, () => createRunId());
+		expect(ids.every((id) => RunId.regex.test(id))).toBe(true);
+		expect(ids).toEqual([...ids].sort());
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 });

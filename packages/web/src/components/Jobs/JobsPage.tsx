@@ -381,7 +381,7 @@ export function JobsPage() {
 				isOpen={m.cancelDialog.isOpen}
 				onClose={m.cancelDialog.close}
 				title="Cancel run"
-				description="Stop this run? Its sandbox is destroyed and no output is kept."
+				description="Stop this run and destroy its sandbox? Any output captured before cancellation remains available."
 				confirmLabel="Cancel run"
 				pendingLabel="Cancelling..."
 				isPending={m.cancelPending}

@@ -67,6 +67,35 @@ describe('buildMarimoLaunch', () => {
 		expect(uvPrefix(run.start)).toBe(uvPrefix(edit.start));
 	});
 
+	it('job creates its output directory before exporting', () => {
+		const { setup, start } = buildMarimoLaunch({ ...BASE, mode: 'job' });
+
+		expect(setup.at(-1)).toEqual({
+			name: 'job_output_dir',
+			command: "mkdir -p '__marimo__/session'",
+		});
+		expect(start).toContain('marimo export html');
+	});
+
+	it('job normalizes a custom entry session path for capture', () => {
+		const { setup, start } = buildMarimoLaunch({
+			...BASE,
+			mode: 'job',
+			notebookFile: 'apps/main.py',
+		});
+
+		expect(start).toContain('apps/__marimo__/session/main.py.json');
+		expect(start).toContain('__marimo__/session/notebook.py.json');
+		expect(start).toContain('"$@"');
+		expect(setup.at(-1)?.command).toContain('apps/__marimo__/session');
+	});
+
+	it('job does not copy the default entry session onto itself', () => {
+		const { start } = buildMarimoLaunch({ ...BASE, mode: 'job' });
+
+		expect(start).not.toContain('cp ');
+	});
+
 	// Every strategy must honor the mode — a new strategy hardcoding `marimo
 	// edit` would silently break app sessions.
 	for (const [name, strategy] of Object.entries(MARIMO_LAUNCH_STRATEGIES)) {

@@ -4,11 +4,11 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
+	appendJobRunFinishEvent,
 	BUCKET_SCAN_CONCURRENCY,
 	DOMAIN_ERROR_CODES,
 	MAX_SECURITY_COMPARTMENTS,
 	mapWithConcurrency,
-	jobRunFinishEvent,
 	SECURITY_LABEL_TOKEN,
 	ForbiddenError,
 	NotebookId,
@@ -537,7 +537,7 @@ export async function cancelJobRuns(
 	}
 	for (const run of cancelled.runs) {
 		try {
-			await deps.services.events.append(jobRunFinishEvent(run));
+			await appendJobRunFinishEvent(deps.services.events, run);
 		} catch (err) {
 			logEvent({
 				level: 'error',

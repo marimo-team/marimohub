@@ -403,7 +403,7 @@ Server-wide settings; no backend selector.
 
 ## Jobs
 
-Headless notebook runs on a cron schedule or on demand, with a durable run history. Off unless `MARIMOHUB_JOBS=on`. Jobs are dispatched by the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`); without one, runs stay queued. See [Notebook jobs](./jobs.md).
+Headless notebook runs on a cron schedule or on demand, with a durable run history. Off unless `MARIMOHUB_JOBS=on`. Node deployments dispatch jobs on the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`); Cloudflare Workers dispatch them from the platform `scheduled()` handler. See [Notebook jobs](./jobs.md).
 
 ### Scheduler
 

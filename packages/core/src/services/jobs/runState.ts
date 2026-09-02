@@ -27,7 +27,12 @@ export const ACTIVE_RUN_STATUSES = ['provisioning', 'running'] as const;
 
 const machine = createStateMachine<RunStatus, RunEvent>({
 	transitions: {
-		queued: { provision: 'provisioning', cancel: 'cancelled', fail: 'failed' },
+		queued: {
+			provision: 'provisioning',
+			cancel: 'cancelled',
+			fail: 'failed',
+			timeout: 'timed_out',
+		},
 		provisioning: { start: 'running', fail: 'failed', timeout: 'timed_out', cancel: 'cancelled' },
 		running: { succeed: 'succeeded', fail: 'failed', timeout: 'timed_out', cancel: 'cancelled' },
 		succeeded: {},

@@ -1,7 +1,7 @@
 import type { Bucket } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
-import type { NotebookId, ProjectId, ProposalId, SessionId, UserId } from '../ids';
+import type { JobId, NotebookId, ProjectId, ProposalId, RunId, SessionId, UserId } from '../ids';
 import { paths } from '../paths';
 import { traced } from '../tracing';
 import type { AttrExtractors } from '../tracing';
@@ -222,7 +222,7 @@ export {
 	toRunError,
 } from './jobs/JobRunner';
 export type { JobRunContext, JobRunnerDeps, JobRunnerSandboxConfig } from './jobs/JobRunner';
-export { JobScheduler, jobRunFinishEvent } from './jobs/JobScheduler';
+export { JobScheduler, appendJobRunFinishEvent, jobRunFinishEvent } from './jobs/JobScheduler';
 export type { JobSchedulerConfig, JobSchedulerDeps, TickResult } from './jobs/JobScheduler';
 export {
 	isValidCron,
@@ -398,6 +398,14 @@ const notebook = (projectId: ProjectId, notebookId: NotebookId) => ({
 	...project(projectId),
 	'marimohub.notebook_id': notebookId,
 });
+const job = (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) => ({
+	...notebook(projectId, notebookId),
+	'marimohub.job_id': jobId,
+});
+const run = (projectId: ProjectId, notebookId: NotebookId, jobId: JobId, runId: RunId) => ({
+	...job(projectId, notebookId, jobId),
+	'marimohub.run_id': runId,
+});
 const proposal = (projectId: ProjectId, notebookId: NotebookId, proposalId: ProposalId) => ({
 	...notebook(projectId, notebookId),
 	'marimohub.proposal_id': proposalId,
@@ -531,13 +539,15 @@ export function createServices(
 	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
 		listJobs: notebook,
 		createJob: notebook,
-		getJob: notebook,
-		updateJob: notebook,
-		deleteJob: notebook,
+		getJob: job,
+		updateJob: job,
+		deleteJob: job,
 	});
 	const jobRuns = wrap('JobRunService', new JobRunService(bucket, metrics), {
-		getRun: notebook,
-		listRuns: notebook,
+		getRun: run,
+		runExists: run,
+		listRuns: job,
+		listRunsPage: job,
 	});
 	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
 	const idempotency = wrap('IdempotencyService', new IdempotencyService(bucket), {

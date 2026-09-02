@@ -10,6 +10,7 @@ import { logOperationalError } from '../../operationalLog';
 import { EventSchema, readStored } from '../../schema';
 import type { Event } from '../../schema';
 import { parseUtcDate } from '../../utcDate';
+import { putIfAbsent } from './cas';
 
 export const MAX_EVENT_RANGE_DAYS = 30;
 const DAY_MS = Millis.days(1);
@@ -84,10 +85,13 @@ function matches(event: Event, options: EventListOptions): boolean {
 export class EventService {
 	constructor(private bucket: Bucket) {}
 
-	async append(event: { event: string; actor: UserId } & Record<string, unknown>): Promise<void> {
-		const now = new Date();
+	async append(
+		event: { event: string; actor: UserId } & Record<string, unknown>,
+		options: { id?: string; timestamp?: string; onlyIfAbsent?: boolean } = {},
+	): Promise<void> {
+		const now = options.timestamp ? new Date(options.timestamp) : new Date();
 		const date = now.toISOString().slice(0, 10);
-		const id = createEventId();
+		const id = options.id ?? createEventId();
 
 		const fullEvent = {
 			id,
@@ -99,7 +103,12 @@ export class EventService {
 		// One immutable object per event. Object stores have no atomic append, so a
 		// shared per-day file would lose events under concurrent writers (a
 		// read-modify-write race). Per-event objects are write-safe with no locking.
-		await this.bucket.put(paths.event(date, id), JSON.stringify(fullEvent));
+		const key = paths.event(date, id);
+		if (options.onlyIfAbsent) {
+			await putIfAbsent(this.bucket, key, JSON.stringify(fullEvent));
+		} else {
+			await this.bucket.put(key, JSON.stringify(fullEvent));
+		}
 	}
 
 	async getEvents(date: string): Promise<Event[]> {

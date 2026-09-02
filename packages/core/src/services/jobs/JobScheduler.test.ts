@@ -442,7 +442,7 @@ describe('JobScheduler', () => {
 			await settle(s);
 		});
 
-		it('audits a watchdog timeout while cancellation auditing stays with the canceller', async () => {
+		it('audits watchdog timeouts and recovers cancellation auditing', async () => {
 			const job = await createJob({ schedule: undefined });
 			const overdue = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
 			await env.jobRuns.transition(overdue, 'provision', () => ({
@@ -462,19 +462,27 @@ describe('JobScheduler', () => {
 				.filter((e) => e.event === 'job.run.finish')
 				.map((e) => String(e.status))
 				.sort();
-			expect(statuses).toEqual(['timed_out']);
+			expect(statuses).toEqual(['cancelled', 'timed_out']);
 		});
 
-		it('never lets a failing audit sink affect the run', async () => {
+		it('retries durable finalization when the audit sink recovers', async () => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const job = await createJob({ schedule: undefined });
 			const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
-			vi.spyOn(env.events, 'append').mockRejectedValue(new Error('bucket down'));
+			const append = vi.spyOn(env.events, 'append').mockRejectedValue(new Error('bucket down'));
 			const s = scheduler(fakeRunner(env), { events: env.events });
 			await s.tick();
 			await settle(s);
 			expect((await env.jobRuns.getRun(pid, nid, job.id, run.run_id)).status).toBe('succeeded');
-			vi.restoreAllMocks();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+
+			append.mockRestore();
+			await s.tick();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+			const events = (await env.events.getEvents(today())).filter(
+				(event) => event.event === 'job.run.finish' && event.run_id === run.run_id,
+			);
+			expect(events).toHaveLength(1);
 		});
 	});
 
@@ -492,12 +500,11 @@ describe('JobScheduler', () => {
 				name: 'bad',
 				schedule: { cron: '0 6 * * *', timezone: 'UTC' },
 			});
-			// Corrupt the stored schedule behind the service's validation.
-			await env.catalog.updateNotebookEntry('test', ACTOR, pid, nid, (nb) => ({
-				jobs: (nb.jobs ?? []).map((entry) =>
-					entry.id === bad.id ? { ...entry, schedule: { cron: 'nope', timezone: 'UTC' } } : entry,
-				),
-			}));
+			const key = paths.project(pid).notebook(nid).job(bad.id).head;
+			await env.bucket.put(
+				key,
+				JSON.stringify({ ...bad, schedule: { cron: 'nope', timezone: 'UTC' } }),
+			);
 			const good = await createJob({ name: 'good' });
 			const s = scheduler(fakeRunner(env));
 			const result = await s.tick();
@@ -539,6 +546,20 @@ describe('JobScheduler', () => {
 			expect(second).toMatchObject({ fired: 0, repaired: 1, dispatched: 1 });
 			await settle(s);
 			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+		});
+
+		it('repairs a claimed forbid outcome as skipped', async () => {
+			const job = await createJob();
+			const active = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			await env.jobRuns.transition(active, 'provision');
+			vi.spyOn(env.jobRuns, 'writeSkipped').mockRejectedValueOnce(new Error('bucket down'));
+			const s = scheduler(fakeRunner(env));
+			expect((await s.tick()).errors).toBe(1);
+			const repaired = await s.tick();
+			expect(repaired).toMatchObject({ repaired: 1, fired: 0, dispatched: 0 });
+			expect(
+				(await env.jobRuns.listRuns(pid, nid, job.id)).map((run) => run.status).sort(),
+			).toEqual(['provisioning', 'skipped']);
 		});
 
 		it('still lands timed_out when the watchdog cannot destroy the sandbox', async () => {

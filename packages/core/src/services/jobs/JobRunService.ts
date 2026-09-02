@@ -3,7 +3,7 @@ import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
-import { Millis } from '../../duration';
+import { Millis, sleep } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
 import { createRunId, RunId } from '../../ids';
 import type { JobId, NotebookId, ProjectId, UserId, VersionId } from '../../ids';
@@ -26,7 +26,12 @@ import type {
 	RunError,
 	RunTrigger,
 } from '../../schema';
-import { mutateObjectWithOutcome, putIfAbsent } from '../catalog/cas';
+import {
+	acquireSingletonClaim,
+	mutateObjectWithOutcome,
+	putIfAbsent,
+	releaseSingletonClaim,
+} from '../catalog/cas';
 import { deleteByPrefix, listAllKeys } from '../catalog/storage';
 import { occurrenceKeyToInstant } from './cron';
 import { isTerminalRunStatus, nextRunStatus } from './runState';
@@ -75,6 +80,9 @@ export interface RunPage {
  * marker's record may still be on its way.
  */
 export const DANGLING_MARKER_GRACE_MS = Millis.minutes(10);
+const JOB_OPERATION_TTL_MS = Millis.seconds(30);
+const JOB_OPERATION_WAIT_ATTEMPTS = 200;
+const JOB_OPERATION_WAIT_MS = 25;
 
 /**
  * Owner of every run record (`runs/{rid}/run.json`, ETag CAS), occurrence
@@ -89,6 +97,59 @@ export class JobRunService {
 
 	private runPaths(run: Pick<JobRun, 'project_id' | 'notebook_id' | 'job_id' | 'run_id'>) {
 		return paths.project(run.project_id).notebook(run.notebook_id).job(run.job_id).run(run.run_id);
+	}
+
+	async withJobMutation<T>(
+		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
+		work: () => Promise<T>,
+	): Promise<T> {
+		const key = paths.jobOperationClaim(job.project_id, job.notebook_id, job.id);
+		const holder = `${Date.now() + JOB_OPERATION_TTL_MS}:${createRunId()}`;
+		const claim = {
+			bucket: this.bucket,
+			key,
+			serialize: (value: string | null) => JSON.stringify({ holder: value }),
+			parseHolder: (raw: unknown): string | null => {
+				if (!raw || typeof raw !== 'object' || !('holder' in raw)) {
+					throw new Error('Invalid job operation claim');
+				}
+				const value = raw.holder;
+				if (value !== null && typeof value !== 'string') {
+					throw new Error('Invalid job operation claim holder');
+				}
+				return value;
+			},
+			isHolderLive: async (value: string) => {
+				const expires = Number(value.slice(0, value.indexOf(':')));
+				return Number.isFinite(expires) && expires > Date.now();
+			},
+		};
+		for (let attempt = 0; attempt < JOB_OPERATION_WAIT_ATTEMPTS; attempt++) {
+			const acquired = await acquireSingletonClaim(claim, holder);
+			if (acquired.acquired) {
+				try {
+					return await work();
+				} finally {
+					await releaseSingletonClaim(claim, holder);
+				}
+			}
+			await sleep(JOB_OPERATION_WAIT_MS);
+		}
+		throw new UnavailableError('Job is busy; retry the operation');
+	}
+
+	async markJobDeleting(
+		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
+	): Promise<void> {
+		const key = paths.jobDeletionClaim(job.project_id, job.notebook_id, job.id);
+		await putIfAbsent(this.bucket, key, new Date().toISOString());
+	}
+
+	async isJobDeleting(
+		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
+	): Promise<boolean> {
+		const key = paths.jobDeletionClaim(job.project_id, job.notebook_id, job.id);
+		return (await this.bucket.head(key)) !== null;
 	}
 
 	/**
@@ -122,6 +183,7 @@ export class JobRunService {
 		});
 		const marker: JobRunMarker = {
 			run_id: runId,
+			continuation_run_id: createRunId(),
 			job_id: job.id,
 			notebook_id: job.notebook_id,
 			project_id: job.project_id,
@@ -166,6 +228,19 @@ export class JobRunService {
 			finished_at: now,
 			error: input.reason,
 		});
+		const marker: JobRunMarker = {
+			run_id: runId,
+			continuation_run_id: createRunId(),
+			job_id: job.id,
+			notebook_id: job.notebook_id,
+			project_id: job.project_id,
+			created_at: now,
+		};
+		await putIfAbsent(
+			this.bucket,
+			paths.jobRunMarker(job.project_id, runId),
+			JSON.stringify(marker),
+		);
 		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
 		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
 		const created = await putIfAbsent(this.bucket, this.runPaths(run).record, JSON.stringify(run));
@@ -227,22 +302,29 @@ export class JobRunService {
 				limit: limit + 1 - items.length,
 			});
 			if (listed.objects.length === 0) break;
-			for (const index of listed.objects) {
-				startAfter = index.key;
-				const runId = this.runIdFromIndex(job.runIndexPrefix, index.key);
-				if (!runId) continue;
-				const recordKey = job.run(runId).record;
-				const record = await this.bucket.get(recordKey);
-				if (!record) continue;
-				try {
-					items.push(await readStored(JobRunSchema, record, recordKey));
-				} catch (err) {
-					logOperationalError(
-						'stored_object_skipped',
-						{ operation: 'job.run.list', object: recordKey },
-						err,
-					);
-				}
+			startAfter = listed.objects[listed.objects.length - 1]?.key;
+			const page = await mapWithConcurrency(
+				listed.objects,
+				BUCKET_SCAN_CONCURRENCY,
+				async (index) => {
+					const runId = this.runIdFromIndex(job.runIndexPrefix, index.key);
+					if (!runId) return;
+					const recordKey = job.run(runId).record;
+					const record = await this.bucket.get(recordKey);
+					if (!record) return;
+					try {
+						return await readStored(JobRunSchema, record, recordKey);
+					} catch (err) {
+						logOperationalError(
+							'stored_object_skipped',
+							{ operation: 'job.run.list', object: recordKey },
+							err,
+						);
+					}
+				},
+			);
+			for (const run of page) {
+				if (run) items.push(run);
 				if (items.length > limit) break;
 			}
 			hasMore = items.length > limit || listed.truncated;
@@ -267,8 +349,8 @@ export class JobRunService {
 	/**
 	 * Apply one FSM event as an ETag CAS. `transitioned: false` means the edge was
 	 * illegal against the fresh record (e.g. a cancel already landed); the caller
-	 * then acts on the returned record. A terminal transition also drops the
-	 * active-run marker.
+	 * then acts on the returned record. Terminal transitions retain the marker
+	 * until finalization finishes.
 	 */
 	async transition(
 		ref: Pick<JobRun, 'project_id' | 'notebook_id' | 'job_id' | 'run_id'>,
@@ -293,7 +375,6 @@ export class JobRunService {
 		);
 		if (outcome.written) {
 			this.metrics.increment('jobs.runs.transition', 1, { event, status: outcome.value.status });
-			if (isTerminalRunStatus(outcome.value.status)) await this.deleteMarker(outcome.value);
 		}
 		return { run: outcome.value, transitioned: outcome.written };
 	}
@@ -318,13 +399,14 @@ export class JobRunService {
 		occurrenceKey: string,
 		runId: RunId,
 		firedAt: string,
+		outcome: JobOccurrence['outcome'] = 'run',
 	): Promise<{ claimed: true } | { claimed: false; existing: JobOccurrence | null }> {
 		const key = paths
 			.project(job.project_id)
 			.notebook(job.notebook_id)
 			.job(job.id)
 			.occurrence(occurrenceKey);
-		const occurrence: JobOccurrence = { run_id: runId, fired_at: firedAt };
+		const occurrence: JobOccurrence = { run_id: runId, fired_at: firedAt, outcome };
 		if (await putIfAbsent(this.bucket, key, JSON.stringify(occurrence))) return { claimed: true };
 		const existing = await this.bucket.get(key);
 		if (!existing) return { claimed: false, existing: null };
@@ -340,7 +422,7 @@ export class JobRunService {
 		}
 	}
 
-	/** Every non-terminal run known to the markers, with its record when readable. */
+	/** Every run awaiting execution or finalization, with its record when readable. */
 	async listActive(): Promise<ActiveRun[]> {
 		const keys = await listAllKeys(this.bucket, paths.jobRunMarkersPrefix);
 		const active = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
@@ -378,7 +460,9 @@ export class JobRunService {
 	/** Sandbox ids held by active runs — the reconciler's second accounting source. */
 	async activeSandboxIds(): Promise<string[]> {
 		const active = await this.listActive();
-		return active.flatMap(({ run }) => (run?.sandbox_id ? [run.sandbox_id] : []));
+		return active.flatMap(({ run }) =>
+			run?.sandbox_id && !isTerminalRunStatus(run.status) ? [run.sandbox_id] : [],
+		);
 	}
 
 	async deleteMarker(run: Pick<JobRun, 'project_id' | 'run_id'>): Promise<void> {
@@ -392,6 +476,12 @@ export class JobRunService {
 				err,
 			);
 		});
+	}
+
+	async getMarker(run: Pick<JobRun, 'project_id' | 'run_id'>): Promise<JobRunMarker | null> {
+		const key = paths.jobRunMarker(run.project_id, run.run_id);
+		const obj = await this.bucket.get(key);
+		return obj ? readStored(JobRunMarkerSchema, obj, key) : null;
 	}
 
 	/** Write-once captured outputs; returns the byte counts to stamp on the record. */
@@ -517,16 +607,13 @@ export class JobRunService {
 	}
 
 	/**
-	 * Drop markers whose run is terminal (a crash between the terminal CAS and the
-	 * marker delete) or missing past the dangling grace (a crash between marker and
-	 * record on a manual enqueue).
+	 * Drop markers missing past the dangling grace (a crash between marker and
+	 * record on an enqueue). Terminal markers remain until finalization completes.
 	 */
 	async pruneStaleMarkers(now: number = Date.now()): Promise<number> {
 		let pruned = 0;
 		for (const { marker, run } of await this.listActive()) {
-			const stale = run
-				? isTerminalRunStatus(run.status)
-				: now - Date.parse(marker.created_at) > DANGLING_MARKER_GRACE_MS;
+			const stale = !run && now - Date.parse(marker.created_at) > DANGLING_MARKER_GRACE_MS;
 			if (!stale) continue;
 			await this.bucket
 				.delete(paths.jobRunMarker(marker.project_id, marker.run_id))

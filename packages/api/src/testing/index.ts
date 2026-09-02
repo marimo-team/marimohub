@@ -34,7 +34,7 @@ export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> =
 		},
 		policy: {},
 		// On in tests; pass `jobs: undefined` for the off-deployment paths.
-		jobs: DEFAULT_JOBS_CONFIG,
+		jobs: { ...DEFAULT_JOBS_CONFIG },
 		...overrides,
 	};
 }

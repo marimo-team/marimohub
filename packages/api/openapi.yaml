@@ -11836,6 +11836,19 @@ paths:
           required: true
           name: nid
           in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
       responses:
         '200':
           description: Job definitions, oldest first

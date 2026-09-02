@@ -9,7 +9,9 @@ import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 const PID = 'proj-x';
 const NID = 'nb-1';
 
-function makeFetch(opts: { alerts?: boolean; createResponse?: Response } = {}) {
+function makeFetch(
+	opts: { alerts?: boolean; createResponse?: Response; maxTimeout?: number } = {},
+) {
 	const calls: { url: string; method: string; body?: unknown }[] = [];
 	vi.stubGlobal(
 		'fetch',
@@ -24,7 +26,7 @@ function makeFetch(opts: { alerts?: boolean; createResponse?: Response } = {}) {
 						available: true,
 						max_per_notebook: 5,
 						default_timeout_seconds: 1800,
-						max_timeout_seconds: 14_400,
+						max_timeout_seconds: opts.maxTimeout ?? 14_400,
 						run_retention_days: 30,
 					},
 				});
@@ -53,6 +55,27 @@ function renderDialog(job?: Job) {
 		/>,
 	);
 	return { onClose, onSaved };
+}
+
+function job(overrides: Partial<Job> = {}): Job {
+	return {
+		id: 'job-1',
+		notebook_id: NID,
+		project_id: PID,
+		name: 'Existing',
+		enabled: false,
+		schedule: { cron: '15 7 * * *', timezone: 'Asia/Tokyo' },
+		parameters: { region: 'ap' },
+		retry: { max_retries: 2, backoff_seconds: 120 },
+		timeout_seconds: 900,
+		concurrency_policy: 'allow',
+		notifications: { on: ['failure'] },
+		created_by: 'u',
+		created_at: '2026-09-01T00:00:00Z',
+		updated_at: '2026-09-01T00:00:00Z',
+		next_run_at: null,
+		...overrides,
+	};
 }
 
 afterEach(() => {
@@ -123,7 +146,23 @@ describe('JobFormDialog', () => {
 		await user.click(within(dialog).getByRole('switch', { name: /Manual runs only/ }));
 		const cron = within(dialog).getByLabelText(/Cron/);
 		await user.clear(cron);
+		const timezone = within(dialog).getByLabelText(/Time zone/);
+		await user.clear(timezone);
 		expect(await within(dialog).findByText('Cron expression is required')).toBeInTheDocument();
+		expect(await within(dialog).findByText('Time zone is required')).toBeInTheDocument();
+		expect(within(dialog).getByRole('button', { name: 'Create job' })).toBeDisabled();
+	});
+
+	it('rejects a timeout above the deployment capability limit', async () => {
+		makeFetch({ maxTimeout: 120 });
+		const user = userEvent.setup();
+		renderDialog();
+		const dialog = await screen.findByRole('dialog');
+		await user.type(within(dialog).getByLabelText('Name'), 'Report');
+		const timeout = await within(dialog).findByLabelText(/Timeout \(seconds, up to 120\)/);
+		await user.type(timeout, '121');
+
+		expect(await within(dialog).findByText('At most 120 seconds')).toBeInTheDocument();
 		expect(within(dialog).getByRole('button', { name: 'Create job' })).toBeDisabled();
 	});
 
@@ -151,24 +190,7 @@ describe('JobFormDialog', () => {
 	it('seeds an edit from the job and sends notifications and retries', async () => {
 		const calls = makeFetch();
 		const user = userEvent.setup();
-		const job: Job = {
-			id: 'job-1',
-			notebook_id: NID,
-			project_id: PID,
-			name: 'Existing',
-			enabled: false,
-			schedule: { cron: '15 7 * * *', timezone: 'Asia/Tokyo' },
-			parameters: { region: 'ap' },
-			retry: { max_retries: 2, backoff_seconds: 120 },
-			timeout_seconds: 900,
-			concurrency_policy: 'allow',
-			notifications: { on: ['failure'] },
-			created_by: 'u',
-			created_at: '2026-09-01T00:00:00Z',
-			updated_at: '2026-09-01T00:00:00Z',
-			next_run_at: null,
-		};
-		const { onSaved } = renderDialog(job);
+		const { onSaved } = renderDialog(job());
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByLabelText('Name')).toHaveValue('Existing');
 		expect(within(dialog).getByLabelText(/Cron/)).toHaveValue('15 7 * * *');
@@ -193,5 +215,25 @@ describe('JobFormDialog', () => {
 			concurrency_policy: 'allow',
 			notifications: { on: ['failure', 'success'] },
 		});
+	});
+
+	it('requires an explicit supported policy before saving an unknown policy', async () => {
+		const calls = makeFetch();
+		const user = userEvent.setup();
+		renderDialog(job({ concurrency_policy: 'unknown' }));
+		const dialog = await screen.findByRole('dialog');
+
+		expect(within(dialog).getByText(/uses an unsupported concurrency policy/)).toBeInTheDocument();
+		expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+
+		await user.click(within(dialog).getByRole('radio', { name: /Run anyway/ }));
+		await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled());
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+				concurrency_policy: 'allow',
+			}),
+		);
 	});
 });

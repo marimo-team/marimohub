@@ -6,7 +6,13 @@ import {
 	SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createProposalId } from './ids';
+import {
+	createJobId,
+	createNotebookId,
+	createProjectId,
+	createProposalId,
+	createRunId,
+} from './ids';
 import type { UserId } from './ids';
 import { createServices } from './services';
 import { MemoryBucket } from './testing/MemoryBucket';
@@ -157,6 +163,30 @@ describe('createServices tracing option', () => {
 				'marimohub.proposal_id': proposalId,
 			});
 		}
+	});
+
+	it('identifies jobs and runs on service spans', async () => {
+		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
+		const projectId = createProjectId();
+		const notebookId = createNotebookId();
+		const jobId = createJobId();
+		const runId = createRunId();
+
+		await expect(services.jobs.getJob(projectId, notebookId, jobId)).rejects.toThrow();
+		await expect(services.jobRuns.getRun(projectId, notebookId, jobId, runId)).rejects.toThrow();
+
+		const spans = exporter.getFinishedSpans();
+		expect(spans.find((span) => span.name === 'JobsService.getJob')?.attributes).toMatchObject({
+			'marimohub.project_id': projectId,
+			'marimohub.notebook_id': notebookId,
+			'marimohub.job_id': jobId,
+		});
+		expect(spans.find((span) => span.name === 'JobRunService.getRun')?.attributes).toMatchObject({
+			'marimohub.project_id': projectId,
+			'marimohub.notebook_id': notebookId,
+			'marimohub.job_id': jobId,
+			'marimohub.run_id': runId,
+		});
 	});
 });
 

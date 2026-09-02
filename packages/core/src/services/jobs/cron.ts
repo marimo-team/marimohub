@@ -111,5 +111,6 @@ export function occurrenceKeyToInstant(key: string): number | null {
 	const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z$/.exec(key);
 	if (!match) return null;
 	const [, y, mo, d, h, mi] = match;
-	return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi));
+	const instant = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi));
+	return occurrenceKey(instant) === key ? instant : null;
 }

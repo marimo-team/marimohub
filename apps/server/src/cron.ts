@@ -310,7 +310,7 @@ function createJobScheduler(
 export interface JobSchedulerHandle {
 	/** Cancel future ticks. */
 	stop(): void;
-	/** Await the runs this process is still executing. */
+	/** Await the current tick, then every run this process started. */
 	drain(): Promise<void>;
 }
 
@@ -333,40 +333,47 @@ export function startJobScheduler(deps: ApiDeps, metrics: WideEventMetrics): Job
 	// In-flight guard, as for the sibling loops: a slow tick must not overlap the
 	// next one under the same lease.
 	let running = false;
-	const run = async () => {
-		if (running) return;
+	let currentTick = Promise.resolve();
+	const run = (): Promise<void> => {
+		if (running) return currentTick;
 		running = true;
-		try {
-			if (!(await lock.acquire(holder).catch(() => false))) return; // not leader
+		currentTick = (async () => {
 			try {
-				const r = await scheduler.tick();
-				if (Object.values(r).some((n) => n > 0) || scheduler.inFlightCount > 0) {
+				if (!(await lock.acquire(holder).catch(() => false))) return; // not leader
+				try {
+					const r = await scheduler.tick();
+					if (Object.values(r).some((n) => n > 0) || scheduler.inFlightCount > 0) {
+						logEvent({
+							level: 'info',
+							event: 'job_scheduler_tick',
+							holder,
+							...r,
+							in_flight: scheduler.inFlightCount,
+						});
+					}
+				} catch (err) {
 					logEvent({
-						level: 'info',
-						event: 'job_scheduler_tick',
-						holder,
-						...r,
-						in_flight: scheduler.inFlightCount,
+						level: 'error',
+						event: 'job_scheduler_failed',
+						error: err instanceof Error ? err.message : String(err),
+						name: err instanceof Error ? err.name : undefined,
 					});
+				} finally {
+					await lock.release(holder).catch(() => {});
 				}
-			} catch (err) {
-				logEvent({
-					level: 'error',
-					event: 'job_scheduler_failed',
-					error: err instanceof Error ? err.message : String(err),
-					name: err instanceof Error ? err.name : undefined,
-				});
 			} finally {
-				await lock.release(holder).catch(() => {});
+				running = false;
 			}
-		} finally {
-			running = false;
-		}
+		})();
+		return currentTick;
 	};
 	void run();
 	const handle = setInterval(() => void run(), tickMs);
 	return {
 		stop: () => clearInterval(handle),
-		drain: () => scheduler.drain(),
+		drain: async () => {
+			await currentTick;
+			await scheduler.drain();
+		},
 	};
 }

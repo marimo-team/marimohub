@@ -164,7 +164,7 @@ export type Catalog = z.infer<typeof CatalogSchema>;
 
 // --- Snapshot ---
 
-export const JobScheduleSchema = z.object({
+export const JobScheduleSchema = z.looseObject({
 	/** Five-field cron expression, validated at write time (see services/jobs/cron.ts). */
 	cron: z.string().min(1).max(100),
 	/** IANA time zone the cron fields are evaluated in. */
@@ -183,6 +183,7 @@ export const SnapshotJobEntrySchema = z.looseObject({
 	id: JobIdSchema,
 	enabled: z.boolean(),
 	schedule: JobScheduleSchema.optional(),
+	updated_at: z.iso.datetime().optional(),
 });
 
 export type SnapshotJobEntry = z.infer<typeof SnapshotJobEntrySchema>;
@@ -676,7 +677,7 @@ export type ProposalPublication = z.infer<typeof ProposalPublicationSchema>;
 // ULID). No `provider` field: the capability gate (`asFilesystemSnapshots`)
 // already ensures only a snapshot-capable backend reads or writes this pointer,
 // so a backend switch ignores it.
-export const ComputeResourceRecordSchema = z.object({
+export const ComputeResourceRecordSchema = z.looseObject({
 	cpu: z.number().optional(),
 	memory_bytes: z.number().optional(),
 	gpu: z.string().optional(),
@@ -991,24 +992,26 @@ export const JobParametersSchema = z
 	)
 	.refine((parameters) => Object.keys(parameters).length <= MAX_JOB_PARAMETERS, {
 		message: `At most ${MAX_JOB_PARAMETERS} parameters are allowed`,
-	});
+	})
+	.meta({ maxProperties: MAX_JOB_PARAMETERS });
 
 export type JobParameters = z.infer<typeof JobParametersSchema>;
 
-export const JobRetryPolicySchema = z.object({
+export const JobRetryPolicySchema = z.looseObject({
 	max_retries: z.number().int().min(0).max(MAX_JOB_RETRIES),
 	backoff_seconds: z.number().int().min(0).max(MAX_JOB_RETRY_BACKOFF_SECONDS).default(60),
 });
 
 export type JobRetryPolicy = z.infer<typeof JobRetryPolicySchema>;
 
-export const JobNotificationsSchema = z.object({
+export const JobNotificationsSchema = z.looseObject({
 	on: z
 		.array(z.enum(JOB_NOTIFICATION_EVENTS))
 		.min(1)
 		.refine((events) => new Set(events).size === events.length, {
 			message: 'Notification events must be unique',
-		}),
+		})
+		.meta({ uniqueItems: true }),
 });
 
 export type JobNotifications = z.infer<typeof JobNotificationsSchema>;
@@ -1040,7 +1043,7 @@ export type JobDefinition = z.infer<typeof JobDefinitionSchema>;
 /** Current version stamped onto newly-written job definitions and runs. */
 export const CURRENT_JOB_VERSION = 1;
 
-export const RunErrorSchema = z.object({ code: z.string(), message: z.string() });
+export const RunErrorSchema = z.looseObject({ code: z.string(), message: z.string() });
 
 export type RunError = z.infer<typeof RunErrorSchema>;
 
@@ -1080,7 +1083,7 @@ export const JobRunSchema = z.looseObject({
 	/** Sanitized like a session's `error`; never carries secret material. */
 	error: RunErrorSchema.optional(),
 	output: z
-		.object({
+		.looseObject({
 			html_bytes: z.number().int().nonnegative(),
 			session_bytes: z.number().int().nonnegative().optional(),
 			logs_bytes: z.number().int().nonnegative().optional(),
@@ -1095,13 +1098,15 @@ export type JobRun = z.infer<typeof JobRunSchema>;
 export const JobOccurrenceSchema = z.object({
 	run_id: RunIdSchema,
 	fired_at: z.iso.datetime(),
+	outcome: z.enum(['run', 'skip']).optional(),
 });
 
 export type JobOccurrence = z.infer<typeof JobOccurrenceSchema>;
 
-/** Active-run marker under `_system/job-runs/` (see `paths.jobRunMarker`). */
+/** Execution/finalization marker under `_system/job-runs/` (see `paths.jobRunMarker`). */
 export const JobRunMarkerSchema = z.object({
 	run_id: RunIdSchema,
+	continuation_run_id: RunIdSchema.optional(),
 	job_id: JobIdSchema,
 	notebook_id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
@@ -1137,12 +1142,21 @@ export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 		project_id: job.project_id,
 		name: job.name,
 		enabled: job.enabled,
-		...(job.schedule !== undefined ? { schedule: job.schedule } : {}),
+		...(job.schedule !== undefined
+			? { schedule: { cron: job.schedule.cron, timezone: job.schedule.timezone } }
+			: {}),
 		...(job.parameters !== undefined ? { parameters: job.parameters } : {}),
-		...(job.retry !== undefined ? { retry: job.retry } : {}),
+		...(job.retry !== undefined
+			? {
+					retry: {
+						max_retries: job.retry.max_retries,
+						backoff_seconds: job.retry.backoff_seconds,
+					},
+				}
+			: {}),
 		...(job.timeout_seconds !== undefined ? { timeout_seconds: job.timeout_seconds } : {}),
 		concurrency_policy: job.concurrency_policy,
-		...(job.notifications !== undefined ? { notifications: job.notifications } : {}),
+		...(job.notifications !== undefined ? { notifications: { on: job.notifications.on } } : {}),
 		created_by: job.created_by,
 		created_at: job.created_at,
 		updated_at: job.updated_at,
@@ -1194,7 +1208,17 @@ export function toPublicJobRun(run: JobRun): PublicJobRun {
 		...(run.retry_of !== undefined ? { retry_of: run.retry_of } : {}),
 		...(run.image !== undefined ? { image: run.image } : {}),
 		...(run.compute_profile !== undefined ? { compute_profile: run.compute_profile } : {}),
-		...(run.compute_resources !== undefined ? { compute_resources: run.compute_resources } : {}),
+		...(run.compute_resources !== undefined
+			? {
+					compute_resources: {
+						...(run.compute_resources.cpu !== undefined ? { cpu: run.compute_resources.cpu } : {}),
+						...(run.compute_resources.memory_bytes !== undefined
+							? { memory_bytes: run.compute_resources.memory_bytes }
+							: {}),
+						...(run.compute_resources.gpu !== undefined ? { gpu: run.compute_resources.gpu } : {}),
+					},
+				}
+			: {}),
 		timeout_seconds: run.timeout_seconds,
 		queued_at: run.queued_at,
 		...(run.eligible_at !== undefined ? { eligible_at: run.eligible_at } : {}),
@@ -1202,8 +1226,20 @@ export function toPublicJobRun(run: JobRun): PublicJobRun {
 		...(run.finished_at !== undefined ? { finished_at: run.finished_at } : {}),
 		...(run.deadline_at !== undefined ? { deadline_at: run.deadline_at } : {}),
 		...(run.exit_code !== undefined ? { exit_code: run.exit_code } : {}),
-		...(run.error !== undefined ? { error: run.error } : {}),
-		...(run.output !== undefined ? { output: run.output } : {}),
+		...(run.error !== undefined
+			? { error: { code: run.error.code, message: run.error.message } }
+			: {}),
+		...(run.output !== undefined
+			? {
+					output: {
+						html_bytes: run.output.html_bytes,
+						...(run.output.session_bytes !== undefined
+							? { session_bytes: run.output.session_bytes }
+							: {}),
+						...(run.output.logs_bytes !== undefined ? { logs_bytes: run.output.logs_bytes } : {}),
+					},
+				}
+			: {}),
 		...(run.cancelled_by !== undefined ? { cancelled_by: run.cancelled_by } : {}),
 	};
 }

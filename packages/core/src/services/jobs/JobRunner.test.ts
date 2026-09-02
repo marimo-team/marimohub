@@ -94,6 +94,7 @@ describe('JobRunner', () => {
 		});
 
 	it('runs the export headlessly, captures the output, and destroys the sandbox', async () => {
+		const log = vi.spyOn(console, 'log');
 		const sandbox = makeJobSandbox({ html: '<html>rendered</html>' });
 		const queued = await enqueue({ parameters: { name: "O'Brien" } });
 		const workspaceBefore = await listAllKeys(
@@ -133,7 +134,15 @@ describe('JobRunner', () => {
 			workspaceBefore,
 		);
 		expect(await env.notebooks.listVersions(pid, nid)).toHaveLength(1);
-		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+		const wideEvent = log.mock.calls
+			.map(([message]) => String(message))
+			.find((message) => message.includes('"event":"job_run"'));
+		expect(JSON.parse(wideEvent!)).toMatchObject({
+			run_files_objects: expect.any(Number),
+			run_files_bytes: expect.any(Number),
+		});
+		log.mockRestore();
 	});
 
 	it('loads the source version pinned when the run was queued', async () => {
@@ -195,7 +204,7 @@ describe('JobRunner', () => {
 		});
 		// prepare() self-destroyed the partial sandbox; the runner's finally destroys once more (idempotent).
 		expect(calls.destroy).toBeGreaterThanOrEqual(1);
-		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
 	});
 
 	it('stops before provisioning when the run was cancelled while queued', async () => {
@@ -309,7 +318,7 @@ describe('JobRunner unhappy paths', () => {
 		expect(run.error).toEqual({ code: 'RUN_FAILED', message: 'The run failed (Error)' });
 		expect(JSON.stringify(run)).not.toContain('secret=abc');
 		expect(sandbox.calls.destroy).toBe(1);
-		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
 	});
 
 	it('lands timed_out when the exec RPC itself times out without a marker', async () => {
@@ -343,7 +352,60 @@ describe('JobRunner unhappy paths', () => {
 			expect(run).toMatchObject({ status: 'timed_out', error: { code: 'RUN_TIMED_OUT' } });
 			expect(run.output).toBeUndefined();
 			expect(sandbox.calls.destroy).toBe(1);
-			expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('lands timed_out when context loading exceeds the persisted deadline', async () => {
+		vi.useFakeTimers();
+		try {
+			const sandbox = makeJobSandbox({ html: '<html/>' });
+			vi.spyOn(env.projects, 'getProject').mockImplementation(() => new Promise(() => {}));
+			const queued = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const pending = runner(sandbox).execute(queued);
+			await vi.advanceTimersByTimeAsync(Millis.minutes(11) + 1);
+			const run = await pending;
+			expect(run).toMatchObject({
+				status: 'timed_out',
+				deadline_at: expect.any(String),
+				error: { code: 'RUN_TIMED_OUT' },
+			});
+			expect(sandbox.calls.exec).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('lands timed_out when provisioning exceeds the persisted deadline', async () => {
+		vi.useFakeTimers();
+		try {
+			const sandbox = makeJobSandbox({ html: '<html/>' });
+			const queued = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const pending = runner(sandbox, {
+				provisioner: { prepare: () => new Promise(() => {}) } as never,
+			}).execute(queued);
+			await vi.advanceTimersByTimeAsync(Millis.minutes(11) + 1);
+			const run = await pending;
+			expect(run).toMatchObject({ status: 'timed_out', error: { code: 'RUN_TIMED_OUT' } });
+			expect(sandbox.jobCommands).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('lands timed_out when output persistence exceeds the persisted deadline', async () => {
+		vi.useFakeTimers();
+		try {
+			const sandbox = makeJobSandbox({ html: '<html/>' });
+			vi.spyOn(env.jobRuns, 'putOutputs').mockImplementation(() => new Promise(() => {}));
+			const queued = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const pending = runner(sandbox).execute(queued);
+			await vi.advanceTimersByTimeAsync(Millis.minutes(11) + 1);
+			const run = await pending;
+			expect(run).toMatchObject({ status: 'timed_out', error: { code: 'RUN_TIMED_OUT' } });
+			expect(run.output).toBeUndefined();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -364,7 +426,7 @@ describe('JobRunner unhappy paths', () => {
 		};
 		const run = await runner(sandbox).execute(await enqueue());
 		expect(run.status).toBe('succeeded');
-		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
 		expect(
 			vi
 				.mocked(console.error)

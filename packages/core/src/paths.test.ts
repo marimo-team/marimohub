@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+	JobId,
 	NotebookId,
 	ProjectId,
 	ProposalId,
@@ -34,6 +35,12 @@ describe('paths', () => {
 		expect(paths.event('2025-03-05', '01HXYZ9ABCDEFGHJKMNPQRSTVW')).toMatchInlineSnapshot(
 			`"_system/events/2025-03-05/01HXYZ9ABCDEFGHJKMNPQRSTVW.json"`,
 		);
+		expect(paths.jobOperationClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
+			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
+		);
+		expect(paths.jobDeletionClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
+			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
+		);
 	});
 
 	it('project paths', () => {
@@ -51,6 +58,8 @@ describe('paths', () => {
 			  "fsSnapshot": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/fs_snapshot.json",
 			  "integrationSyncToken": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/integration_sync_token.json",
 			  "job": [Function],
+			  "jobIndex": [Function],
+			  "jobIndexPrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/job-index/",
 			  "jobsPrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/jobs/",
 			  "meta": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/meta.json",
 			  "proposal": [Function],

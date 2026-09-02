@@ -193,16 +193,17 @@ export async function bootstrap(
 				return dataBrowserClose;
 			};
 			const disposeCompute = deps.compute[Symbol.asyncDispose];
+			const schedulerDrained = drainJobRuns();
 			const shutdowns: PromiseLike<unknown>[] = [
 				closed,
 				...(deps.dataBrowser?.close ? [closed.then(closeDataBrowser)] : []),
 				closed.then(waitForBackgroundTasks).then(closeNotifier),
 				// In-flight job runs finish (or hit the drain deadline); the watchdog
 				// reclaims whatever a forced termination leaves behind.
-				drainJobRuns(),
+				schedulerDrained,
 			];
 			if (disposeCompute) {
-				shutdowns.push(Promise.resolve().then(() => disposeCompute.call(deps.compute)));
+				shutdowns.push(schedulerDrained.then(() => disposeCompute.call(deps.compute)));
 			}
 			if (otel) shutdowns.push(Promise.resolve().then(() => otel.shutdown()));
 

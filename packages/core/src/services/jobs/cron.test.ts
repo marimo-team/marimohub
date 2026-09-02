@@ -210,4 +210,14 @@ describe('occurrenceKey', () => {
 		expect(occurrenceKeyToInstant('20260902T06Z')).toBeNull();
 		expect(occurrenceKeyToInstant('')).toBeNull();
 	});
+
+	it.each([
+		'20260230T0600Z',
+		'20261301T0600Z',
+		'20260931T0600Z',
+		'20260902T2400Z',
+		'20260902T0660Z',
+	])('rejects the impossible UTC minute %s', (key) => {
+		expect(occurrenceKeyToInstant(key)).toBeNull();
+	});
 });

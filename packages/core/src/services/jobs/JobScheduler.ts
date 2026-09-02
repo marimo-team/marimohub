@@ -18,7 +18,7 @@ import type { ProjectService } from '../content/ProjectService';
 import { occurrenceKey, parseCron, previousOccurrence } from './cron';
 import { indexedJobs } from './JobsService';
 import type { JobsService } from './JobsService';
-import type { ActiveRun, JobRunService } from './JobRunService';
+import type { JobRunService } from './JobRunService';
 import { isActiveRunStatus, isTerminalRunStatus } from './runState';
 
 export interface JobSchedulerConfig {
@@ -102,6 +102,14 @@ export function jobRunFinishEvent(run: JobRun) {
 	};
 }
 
+export function appendJobRunFinishEvent(events: EventService, run: JobRun): Promise<void> {
+	return events.append(jobRunFinishEvent(run), {
+		id: run.run_id.slice(4),
+		timestamp: run.finished_at ?? run.queued_at,
+		onlyIfAbsent: true,
+	});
+}
+
 /**
  * Which queued runs may start now: oldest-eligible first, bounded by the global
  * and per-project caps with `running` already counted against them. Pure, so
@@ -174,12 +182,10 @@ export class JobScheduler {
 		};
 		const now = this.now();
 		const snapshot = await this.deps.catalog.getCurrentSnapshot();
-		let active = await this.deps.runs.listActive();
-
 		for (const { projectId, notebookId, entry } of indexedJobs(snapshot)) {
 			if (!entry.enabled || !entry.schedule) continue;
 			try {
-				const fired = await this.fire(projectId, notebookId, entry.id, entry.schedule, now, active);
+				const fired = await this.fire(projectId, notebookId, entry.id, now);
 				if (fired === 'fired') result.fired++;
 				else if (fired === 'repaired') result.repaired++;
 				else if (fired === 'skipped') result.skipped++;
@@ -198,7 +204,7 @@ export class JobScheduler {
 			}
 		}
 
-		if (result.fired + result.repaired > 0) active = await this.deps.runs.listActive();
+		const active = await this.deps.runs.listActive();
 
 		const queued: JobRun[] = [];
 		const running: JobRun[] = [];
@@ -211,8 +217,17 @@ export class JobScheduler {
 				continue;
 			}
 			if (isTerminalRunStatus(run.status)) {
-				await this.deps.runs.deleteMarker(run);
-				result.markersPruned++;
+				try {
+					await this.finalize(run, marker.continuation_run_id);
+					result.markersPruned++;
+				} catch (err) {
+					result.errors++;
+					logOperationalError(
+						'job_finalization_failed',
+						{ operation: 'job.scheduler.finalize', run_id: run.run_id },
+						err,
+					);
+				}
 				continue;
 			}
 			if (run.status === 'queued') {
@@ -241,83 +256,81 @@ export class JobScheduler {
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
 		jobId: JobRun['job_id'],
-		schedule: NonNullable<JobDefinition['schedule']>,
 		now: number,
-		active: ActiveRun[],
 	): Promise<'fired' | 'repaired' | 'skipped' | 'none'> {
-		let cron;
-		try {
-			cron = parseCron(schedule.cron);
-		} catch (err) {
-			logOperationalError(
-				'job_schedule_invalid',
-				{
-					operation: 'job.scheduler.parse',
-					project_id: projectId,
-					notebook_id: notebookId,
-					job_id: jobId,
-				},
-				err,
-			);
-			return 'none';
-		}
-		const occurrence = previousOccurrence(
-			cron,
-			schedule.timezone,
-			now,
-			this.deps.config.catchupWindowMs,
-		);
-		if (occurrence === null) return 'none';
-		const key = occurrenceKey(occurrence);
-		const scheduledFor = new Date(occurrence).toISOString();
-		const runId = createRunId();
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
-		const claim = await this.deps.runs.claimOccurrence(
-			jobRef,
-			key,
-			runId,
-			new Date(now).toISOString(),
-		);
-		if (!claim.claimed) {
-			// Lost the PUT — another replica or a prior tick fired it. The only work
-			// left is repairing a run record that a crash between the claim and the
-			// record never wrote.
-			const existingRunId = claim.existing?.run_id;
-			if (!existingRunId) return 'none';
-			if (await this.deps.runs.runExists(projectId, notebookId, jobId, existingRunId)) {
+		return this.deps.runs.withJobMutation(jobRef, async () => {
+			if (await this.deps.runs.isJobDeleting(jobRef)) return 'none';
+			const job = await this.loadJob(projectId, notebookId, jobId);
+			if (!job?.enabled || !job.schedule) return 'none';
+			let cron;
+			try {
+				cron = parseCron(job.schedule.cron);
+			} catch (err) {
+				logOperationalError(
+					'job_schedule_invalid',
+					{
+						operation: 'job.scheduler.parse',
+						project_id: projectId,
+						notebook_id: notebookId,
+						job_id: jobId,
+					},
+					err,
+				);
 				return 'none';
 			}
-			const job = await this.loadJob(projectId, notebookId, jobId);
-			if (!job) return 'none';
-			await this.enqueueScheduled(job, existingRunId, scheduledFor);
-			return 'repaired';
-		}
-		const job = await this.loadJob(projectId, notebookId, jobId);
-		if (!job) return 'none';
-		const hasActive = active.some(
-			({ marker, run }) =>
-				marker.project_id === projectId &&
-				marker.job_id === jobId &&
-				!!run &&
-				!isTerminalRunStatus(run.status),
-		);
-		if (job.concurrency_policy === 'forbid' && hasActive) {
-			const skipped = await this.deps.runs.writeSkipped({
-				job,
+			const occurrence = previousOccurrence(
+				cron,
+				job.schedule.timezone,
+				now,
+				this.deps.config.catchupWindowMs,
+			);
+			if (occurrence === null) return 'none';
+			const scheduledFor = new Date(occurrence).toISOString();
+			const active = await this.deps.runs.listActive();
+			const hasActive = active.some(
+				({ marker, run }) =>
+					marker.project_id === projectId &&
+					marker.job_id === jobId &&
+					!!run &&
+					!isTerminalRunStatus(run.status),
+			);
+			const outcome = job.concurrency_policy === 'forbid' && hasActive ? 'skip' : 'run';
+			const runId = createRunId();
+			const claim = await this.deps.runs.claimOccurrence(
+				jobRef,
+				occurrenceKey(occurrence),
 				runId,
-				scheduledFor,
-				sourceVersionId: await this.sourceVersionId(job),
-				timeoutSeconds: this.timeoutSeconds(job),
-				reason: {
-					code: 'CONCURRENCY_FORBIDDEN',
-					message: 'Skipped: the previous run of this job was still active',
-				},
-			});
-			await this.afterRun(skipped);
-			return 'skipped';
-		}
-		await this.enqueueScheduled(job, runId, scheduledFor);
-		return 'fired';
+				new Date(now).toISOString(),
+				outcome,
+			);
+			const claimedRunId = claim.claimed ? runId : claim.existing?.run_id;
+			if (!claimedRunId) return 'none';
+			if (
+				!claim.claimed &&
+				(await this.deps.runs.runExists(projectId, notebookId, jobId, claimedRunId))
+			) {
+				return 'none';
+			}
+			const claimedOutcome = claim.claimed ? outcome : (claim.existing?.outcome ?? 'run');
+			if (claimedOutcome === 'skip') {
+				const skipped = await this.deps.runs.writeSkipped({
+					job,
+					runId: claimedRunId,
+					scheduledFor,
+					sourceVersionId: await this.sourceVersionId(job),
+					timeoutSeconds: this.timeoutSeconds(job),
+					reason: {
+						code: 'CONCURRENCY_FORBIDDEN',
+						message: 'Skipped: the previous run of this job was still active',
+					},
+				});
+				await this.finalize(skipped);
+				return claim.claimed ? 'skipped' : 'repaired';
+			}
+			await this.enqueueScheduled(job, claimedRunId, scheduledFor);
+			return claim.claimed ? 'fired' : 'repaired';
+		});
 	}
 
 	private async loadJob(
@@ -415,7 +428,7 @@ export class JobScheduler {
 				run_id: run.run_id,
 				sandbox_id: run.sandbox_id ?? null,
 			});
-			await this.afterRun(reclaimed);
+			await this.finalize(reclaimed);
 		}
 		return transitioned;
 	}
@@ -425,7 +438,7 @@ export class JobScheduler {
 		this.executing.set(run.run_id, local);
 		const execution = this.deps.runner
 			.execute(run)
-			.then((finished) => (local.finalizedExternally ? undefined : this.afterRun(finished)))
+			.then((finished) => (local.finalizedExternally ? undefined : this.finalize(finished)))
 			.catch((err: unknown) => {
 				logOperationalError(
 					'job_dispatch_failed',
@@ -439,26 +452,43 @@ export class JobScheduler {
 		void this.inFlight.track(execution);
 	}
 
-	/** Post-run policy: audit the outcome, schedule a retry, or notify on the final outcome. */
-	private async afterRun(finished: JobRun): Promise<void> {
+	private async finalize(finished: JobRun, continuationRunId?: RunId): Promise<void> {
 		if (!isTerminalRunStatus(finished.status)) return;
-		if (finished.status === 'cancelled') return;
+		const marker = continuationRunId ? null : await this.deps.runs.getMarker(finished);
+		await this.afterRun(
+			finished,
+			continuationRunId ?? marker?.continuation_run_id ?? createRunId(),
+		);
+		await this.deps.runs.deleteMarker(finished);
+	}
+
+	/** Post-run policy: audit the outcome, schedule a retry, or notify on the final outcome. */
+	private async afterRun(finished: JobRun, continuationRunId: RunId): Promise<void> {
+		if (!isTerminalRunStatus(finished.status)) return;
 		await this.audit(finished);
+		if (finished.status === 'cancelled') return;
 		const job = await this.loadJob(finished.project_id, finished.notebook_id, finished.job_id);
 		if (!job) return;
 		const failed = finished.status === 'failed' || finished.status === 'timed_out';
-		if (failed && job.retry && finished.attempt <= job.retry.max_retries) {
-			await this.deps.runs.enqueue({
-				job,
-				trigger: finished.trigger,
-				triggeredBy: finished.triggered_by,
-				scheduledFor: finished.scheduled_for,
-				parameters: finished.parameters,
-				sourceVersionId: finished.source_version_id,
-				timeoutSeconds: finished.timeout_seconds,
-				attempt: finished.attempt + 1,
-				retryOf: finished.run_id,
-				eligibleAt: new Date(this.now() + job.retry.backoff_seconds * 1000).toISOString(),
+		const retry = job.retry;
+		if (failed && retry && finished.attempt <= retry.max_retries) {
+			await this.deps.runs.withJobMutation(job, async () => {
+				if (await this.deps.runs.isJobDeleting(job)) return;
+				const current = await this.loadJob(job.project_id, job.notebook_id, job.id);
+				if (!current) return;
+				await this.deps.runs.enqueue({
+					job: current,
+					runId: continuationRunId,
+					trigger: finished.trigger,
+					triggeredBy: finished.triggered_by,
+					scheduledFor: finished.scheduled_for,
+					parameters: finished.parameters,
+					sourceVersionId: finished.source_version_id,
+					timeoutSeconds: finished.timeout_seconds,
+					attempt: finished.attempt + 1,
+					retryOf: finished.run_id,
+					eligibleAt: new Date(this.now() + retry.backoff_seconds * 1000).toISOString(),
+				});
 			});
 			this.metrics.increment('jobs.runs.retried');
 			return;
@@ -466,11 +496,11 @@ export class JobScheduler {
 		await this.notify(job, finished);
 	}
 
-	/** Best-effort, like every audit append: a failed write never changes the run. */
+	/** A failed append leaves the finalization marker in place for a later tick. */
 	private async audit(run: JobRun): Promise<void> {
 		if (!this.deps.events) return;
 		try {
-			await this.deps.events.append(jobRunFinishEvent(run));
+			await appendJobRunFinishEvent(this.deps.events, run);
 		} catch (err) {
 			this.metrics.increment('events.append_failed');
 			logOperationalError(
@@ -478,6 +508,7 @@ export class JobScheduler {
 				{ operation: 'job.scheduler.audit', run_id: run.run_id },
 				err,
 			);
+			throw err;
 		}
 	}
 
@@ -525,6 +556,7 @@ export class JobScheduler {
 				},
 				err,
 			);
+			throw err;
 		}
 	}
 

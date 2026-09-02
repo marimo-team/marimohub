@@ -52,6 +52,19 @@ describe('EventService', () => {
 			expect(listed.objects).toHaveLength(2);
 		});
 
+		it('does not duplicate an idempotent append', async () => {
+			const actor = uid('x');
+			await events.append(
+				{ event: 'job.run.finish', actor, status: 'failed' },
+				{ id: 'stable-run', onlyIfAbsent: true },
+			);
+			await events.append(
+				{ event: 'job.run.finish', actor, status: 'failed' },
+				{ id: 'stable-run', onlyIfAbsent: true },
+			);
+			expect(await events.getEvents('2025-03-05')).toHaveLength(1);
+		});
+
 		it('returns events in append order', async () => {
 			await events.append({ event: 'first', actor: uid('a') });
 			await events.append({ event: 'second', actor: uid('b') });

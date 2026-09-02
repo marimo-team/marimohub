@@ -97,7 +97,32 @@ describe('JobRunService', () => {
 		]);
 	});
 
-	it('applies FSM transitions with CAS and drops the marker on a terminal status', async () => {
+	it('fetches a history page with bounded parallel record reads', async () => {
+		for (let index = 0; index < 4; index++) await enqueue();
+		const get = env.bucket.get.bind(env.bucket);
+		let concurrent = 0;
+		let maximum = 0;
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		vi.spyOn(env.bucket, 'get').mockImplementation(async (key) => {
+			if (!key.endsWith('/run.json')) return get(key);
+			concurrent++;
+			maximum = Math.max(maximum, concurrent);
+			if (concurrent === 4) release();
+			await blocked;
+			const result = await get(key);
+			concurrent--;
+			return result;
+		});
+
+		const page = await runs.listRunsPage(pid, nid, job.id, 3);
+		expect(page.items).toHaveLength(3);
+		expect(maximum).toBeGreaterThan(1);
+	});
+
+	it('applies FSM transitions with CAS and retains the marker for finalization', async () => {
 		const run = await enqueue();
 		const provisioning = await runs.transition(run, 'provision', () => ({ sandbox_id: undefined }));
 		expect(provisioning).toMatchObject({ transitioned: true, run: { status: 'provisioning' } });
@@ -109,8 +134,8 @@ describe('JobRunService', () => {
 		expect(running.run.status).toBe('running');
 		const done = await runs.transition(run, 'succeed', () => ({ exit_code: 0 }));
 		expect(done.run).toMatchObject({ status: 'succeeded', exit_code: 0 });
-		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
-		expect(await runs.listActive()).toEqual([]);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+		expect(await runs.listActive()).toMatchObject([{ run: { status: 'succeeded' } }]);
 	});
 
 	it('resolves a cancel racing a completion to exactly one terminal state', async () => {
@@ -170,7 +195,7 @@ describe('JobRunService', () => {
 		expect(await (await env.bucket.get(sessionPath))!.text()).toBe('{"first":true}');
 	});
 
-	it('writes a terminal skipped record without a marker', async () => {
+	it('writes a terminal skipped record with a finalization marker', async () => {
 		const skipped = await runs.writeSkipped({
 			job,
 			timeoutSeconds: 600,
@@ -182,7 +207,7 @@ describe('JobRunService', () => {
 			trigger: 'schedule',
 			finished_at: expect.any(String),
 		});
-		expect(await env.bucket.head(paths.jobRunMarker(pid, skipped.run_id))).toBeNull();
+		expect(await env.bucket.head(paths.jobRunMarker(pid, skipped.run_id))).not.toBeNull();
 	});
 
 	it('cancels every active run of a job and reports their sandboxes', async () => {
@@ -196,7 +221,10 @@ describe('JobRunService', () => {
 		);
 		expect((await runs.getRun(pid, nid, job.id, queued.run_id)).status).toBe('cancelled');
 		expect((await runs.getRun(pid, nid, job.id, active.run_id)).status).toBe('cancelled');
-		expect(await runs.listActive()).toEqual([]);
+		expect((await runs.listActive()).map(({ run }) => run?.status)).toEqual([
+			'cancelled',
+			'cancelled',
+		]);
 	});
 
 	it('prunes terminal runs and occurrence claims past retention, keeping active ones', async () => {
@@ -260,12 +288,12 @@ describe('JobRunService', () => {
 			}),
 		);
 		await bucket.put(staleIndex, '');
-		expect(await service.pruneStaleMarkers(now)).toBe(2);
+		expect(await service.pruneStaleMarkers(now)).toBe(1);
 		expect(await bucket.head(paths.jobRunMarker(pid, fresh))).not.toBeNull();
 		expect(await bucket.head(freshIndex)).not.toBeNull();
 		expect(await bucket.head(paths.jobRunMarker(pid, stale))).toBeNull();
 		expect(await bucket.head(staleIndex)).toBeNull();
-		expect(await bucket.head(paths.jobRunMarker(pid, terminal.run_id))).toBeNull();
+		expect(await bucket.head(paths.jobRunMarker(pid, terminal.run_id))).not.toBeNull();
 	});
 
 	describe('unhappy paths', () => {

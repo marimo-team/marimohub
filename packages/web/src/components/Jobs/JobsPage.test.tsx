@@ -53,6 +53,8 @@ interface World {
 	olderRuns?: JobRun[];
 	html?: string | null;
 	logs?: string | null;
+	htmlFailures?: number;
+	logsFailures?: number;
 	/** Fail the job list request. */
 	jobsError?: boolean;
 	/** The deployment has `MARIMOHUB_JOBS=off`. */
@@ -65,6 +67,8 @@ function makeFetch(world: World = {}) {
 	const jobs = world.jobs ?? [job()];
 	const runs = world.runs ?? [run()];
 	const olderRuns = world.olderRuns ?? [];
+	let htmlFailures = world.htmlFailures ?? 0;
+	let logsFailures = world.logsFailures ?? 0;
 	const calls: { url: string; method: string; body?: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
@@ -110,12 +114,20 @@ function makeFetch(world: World = {}) {
 		if (url.includes('/users'))
 			return jsonOk({ 'u-1': { id: 'u-1', email: 'ana@x.io', name: 'Ana' } });
 		if (url.endsWith('/html')) {
+			if (htmlFailures > 0) {
+				htmlFailures -= 1;
+				return jsonError('FORBIDDEN', 'output unavailable', 403);
+			}
 			if (world.html === null) return jsonError('NO_RUN_OUTPUT', 'none', 404);
 			return new Response(world.html ?? '<html><body>rendered</body></html>', {
 				headers: { 'content-type': 'text/html' },
 			});
 		}
 		if (url.endsWith('/logs')) {
+			if (logsFailures > 0) {
+				logsFailures -= 1;
+				return jsonError('FORBIDDEN', 'logs unavailable', 403);
+			}
 			if (world.logs === null) return jsonError('NO_RUN_OUTPUT', 'none', 404);
 			return new Response(world.logs ?? 'log line', { headers: { 'content-type': 'text/plain' } });
 		}
@@ -261,6 +273,27 @@ describe('JobsPage', () => {
 		expect(await screen.findByText('Traceback: boom')).toBeInTheDocument();
 	});
 
+	it('shows an output request error and retries it', async () => {
+		makeFetch({ htmlFailures: 1 });
+		const user = userEvent.setup();
+		const { container } = renderPage('?job=job-1&run=run_01');
+
+		expect(await screen.findByText('Failed to load run output.')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+	});
+
+	it('shows a logs request error and retries it', async () => {
+		makeFetch({ logsFailures: 1, logs: 'retried logs' });
+		const user = userEvent.setup();
+		renderPage('?job=job-1&run=run_01');
+
+		await user.click(await screen.findByRole('button', { name: 'Logs' }));
+		expect(await screen.findByText('Failed to load run logs.')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(await screen.findByText('retried logs')).toBeInTheDocument();
+	});
+
 	it('hides mutations from viewers and disables the logs tab', async () => {
 		makeFetch({ role: 'viewer' });
 		renderPage('?job=job-1&run=run_01');
@@ -304,6 +337,9 @@ describe('JobsPage', () => {
 
 		await user.click(await screen.findByRole('button', { name: /Cancel run/ }));
 		const dialog = await screen.findByRole('dialog');
+		expect(
+			within(dialog).getByText(/Any output captured before cancellation remains available/),
+		).toBeInTheDocument();
 		await user.click(within(dialog).getByRole('button', { name: 'Cancel run' }));
 		await waitFor(() =>
 			expect(
@@ -428,6 +464,27 @@ describe('JobsPage', () => {
 		renderPage('?job=job-1&run=run_live');
 		expect(await screen.findByText(/running in its own sandbox/)).toBeInTheDocument();
 		expect(world.calls.some((c) => c.url.endsWith('/html'))).toBe(false);
+	});
+
+	it('does not describe or offer cancellation for an unknown run status', async () => {
+		const world = makeFetch({
+			runs: [
+				run({
+					run_id: 'run_future',
+					status: 'unknown',
+					finished_at: undefined,
+					exit_code: undefined,
+					output: undefined,
+				}),
+			],
+		});
+		renderPage('?job=job-1&run=run_future');
+
+		expect(
+			await screen.findByText(/status this version of marimohub does not recognize/),
+		).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /Cancel run/ })).not.toBeInTheDocument();
+		expect(world.calls.some((call) => call.url.endsWith('/html'))).toBe(false);
 	});
 
 	it('toasts when a manual run is rejected', async () => {

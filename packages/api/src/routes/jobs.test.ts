@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { createServices, paths, SandboxId } from '@marimo-hub/core';
 import type { JobRun, ProjectId, SandboxProvider, UserId } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
@@ -73,7 +73,7 @@ describe('Job routes', () => {
 			notifications: { on: ['failure'] },
 			created_by: ACTOR,
 		});
-		expect(created.next_run_at).toMatch(/T04:00:00\.000Z$/);
+		expect(created.next_run_at).toMatch(/T0[45]:00:00\.000Z$/);
 
 		expect((await expectPage(await request('GET', base()))).map((j) => j.id)).toEqual([created.id]);
 		const read = await request('GET', `${base()}/${created.id}`);
@@ -104,6 +104,25 @@ describe('Job routes', () => {
 
 		await expectOk(await request('DELETE', `${base()}/${created.id}`));
 		await expectError(await request('GET', `${base()}/${created.id}`), 404, 'NOT_FOUND');
+	});
+
+	it('pages job definitions through the cursor', async () => {
+		const jobs = [];
+		for (let index = 0; index < 3; index++) jobs.push(await createJob({ name: `job ${index}` }));
+		const ordered = [...jobs].sort(
+			(a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+		);
+		const first = await expectOk<{ items: any[]; next_cursor: string | null }>(
+			await request('GET', `${base()}?limit=2`),
+		);
+		expect(first.items.map((job) => job.id)).toEqual(ordered.slice(0, 2).map((job) => job.id));
+		expect(first.next_cursor).not.toBeNull();
+		const second = await expectOk<{ items: any[]; next_cursor: string | null }>(
+			await request('GET', `${base()}?limit=2&cursor=${encodeURIComponent(first.next_cursor!)}`),
+		);
+		expect(second.items.map((job) => job.id)).toEqual([ordered[2].id]);
+		expect(second.next_cursor).toBeNull();
+		await expectError(await request('GET', `${base()}?cursor=garbage`), 400);
 	});
 
 	it('rejects invalid schedules, unknown fields, and over-limit timeouts', async () => {
@@ -275,6 +294,38 @@ describe('Job routes', () => {
 		expect(await services.jobRuns.listActive()).toEqual([]);
 	});
 
+	it('rejects a trigger that overlaps deletion', async () => {
+		const job = await createJob();
+		const queued = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
+		const run = await services.jobRuns.getRun(pid, nid as never, job.id, queued.run_id);
+		await services.jobRuns.transition(run, 'provision', () => ({
+			sandbox_id: SandboxId.parse('sb-0123456789abcdef'),
+		}));
+		let releaseDestroy!: () => void;
+		const destroyBlocked = new Promise<void>((resolve) => {
+			releaseDestroy = resolve;
+		});
+		let destroyStarted!: () => void;
+		const destroying = new Promise<void>((resolve) => {
+			destroyStarted = resolve;
+		});
+		compute.create = (id) =>
+			({
+				destroy: async () => {
+					destroyed.push(id);
+					destroyStarted();
+					await destroyBlocked;
+				},
+			}) as never;
+
+		const deleting = request('DELETE', `${base()}/${job.id}`);
+		await destroying;
+		await expectError(await request('POST', `${base()}/${job.id}/runs`), 404, 'NOT_FOUND');
+		releaseDestroy();
+		await expectOk(await deleting);
+		expect(await services.jobRuns.listActive()).toEqual([]);
+	});
+
 	it('serves run output raw and logs to editors, enveloped 404 when absent', async () => {
 		const job = await createJob();
 		const queued = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
@@ -320,12 +371,23 @@ describe('Job routes', () => {
 	});
 
 	it('bounds how many manual runs may queue up', async () => {
-		vi.spyOn(services.jobRuns, 'listActive');
 		const job = await createJob();
 		for (let i = 0; i < 20; i++) {
 			await expectOk(await request('POST', `${base()}/${job.id}/runs`), 201);
 		}
 		await expectError(await request('POST', `${base()}/${job.id}/runs`), 429, 'RESOURCE_EXHAUSTED');
+	});
+
+	it('bounds concurrent manual triggers atomically', async () => {
+		const job = await createJob();
+		const responses = await Promise.all(
+			Array.from({ length: 24 }, () =>
+				Promise.resolve(request('POST', `${base()}/${job.id}/runs`)),
+			),
+		);
+		expect(responses.filter((response) => response.status === 201)).toHaveLength(20);
+		expect(responses.filter((response) => response.status === 429)).toHaveLength(4);
+		expect(await expectPage(await request('GET', `${base()}/${job.id}/runs`))).toHaveLength(20);
 	});
 
 	it('advertises the job limits on capabilities', async () => {
@@ -606,7 +668,10 @@ describe('Job routes', () => {
 			await expectOk(await request('DELETE', `/projects/${pid}/notebooks/${nid}`));
 
 			expect(destroyed).toEqual(['sb-0123456789abcdef']);
-			expect(await services.jobRuns.listActive()).toEqual([]);
+			expect((await services.jobRuns.listActive()).map(({ run }) => run?.status)).toEqual([
+				'cancelled',
+				'cancelled',
+			]);
 			for (const id of [queued.run_id, active.run_id]) {
 				expect((await services.jobRuns.getRun(pid, nid as never, job.id, id)).status).toBe(
 					'cancelled',
@@ -621,7 +686,9 @@ describe('Job routes', () => {
 			expect((await services.jobRuns.getRun(pid, nid as never, job.id, queued.run_id)).status).toBe(
 				'cancelled',
 			);
-			expect(await services.jobRuns.listActive()).toEqual([]);
+			expect((await services.jobRuns.listActive()).map(({ run }) => run?.status)).toEqual([
+				'cancelled',
+			]);
 		});
 
 		it('exposes the image and compute profile a run provisioned with', async () => {

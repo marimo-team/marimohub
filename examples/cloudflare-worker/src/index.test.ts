@@ -11,7 +11,15 @@ vi.mock('@marimo-hub/compute-cloudflare', () => ({
 	Sandbox: class Sandbox {},
 }));
 
-import { buildDeps } from './index';
+vi.mock('@marimo-hub/storage-r2', () => ({
+	R2BucketAdapter: function R2BucketAdapter(binding: unknown) {
+		return binding;
+	},
+}));
+
+import { JobScheduler, MaintenanceLock } from '@marimo-hub/core';
+import { MemoryBucket } from '@marimo-hub/core/testing';
+import worker, { buildDeps } from './index';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -114,5 +122,77 @@ describe('Cloudflare Worker configuration', () => {
 				DEFAULT_ROLE: 'admin',
 			} as unknown as Env),
 		).toThrow('Invalid DEFAULT_ROLE: admin (expected manager, editor, viewer, none)');
+	});
+});
+
+describe('Cloudflare Worker scheduled handler', () => {
+	const controller: ScheduledController = {
+		scheduledTime: 0,
+		cron: '*/5 * * * *',
+		noRetry() {},
+	};
+	const executionContext = (waitUntil = vi.fn()): ExecutionContext => ({
+		waitUntil,
+		passThroughOnException() {},
+		props: undefined,
+	});
+	const scheduledEnv = (): Env => ({
+		AUTH_MODE: 'dev',
+		USER_ID: 'user-test',
+		USER_EMAIL: 'test@example.com',
+		NOTEBOOKS_BUCKET: new MemoryBucket() as never,
+		SANDBOX: {} as never,
+		MARIMOHUB_JOBS: 'on',
+	});
+
+	it('runs the job scheduler when the maintenance lease is unavailable', async () => {
+		vi.spyOn(MaintenanceLock.prototype, 'acquire')
+			.mockResolvedValueOnce(false)
+			.mockResolvedValueOnce(true);
+		vi.spyOn(MaintenanceLock.prototype, 'release').mockResolvedValue(undefined);
+		const tick = vi.spyOn(JobScheduler.prototype, 'tick').mockResolvedValue({
+			fired: 0,
+			repaired: 0,
+			skipped: 0,
+			dispatched: 0,
+			timedOut: 0,
+			markersPruned: 0,
+			errors: 0,
+		});
+		vi.spyOn(JobScheduler.prototype, 'prune').mockResolvedValue({
+			runsPruned: 0,
+			markersPruned: 0,
+		});
+		vi.spyOn(JobScheduler.prototype, 'drain').mockResolvedValue(undefined);
+
+		await worker.scheduled(controller, scheduledEnv(), executionContext());
+
+		expect(tick).toHaveBeenCalledOnce();
+	});
+
+	it('registers the execution drain before pruning', async () => {
+		vi.spyOn(MaintenanceLock.prototype, 'acquire')
+			.mockResolvedValueOnce(false)
+			.mockResolvedValueOnce(true);
+		vi.spyOn(MaintenanceLock.prototype, 'release').mockResolvedValue(undefined);
+		vi.spyOn(JobScheduler.prototype, 'tick').mockResolvedValue({
+			fired: 0,
+			repaired: 0,
+			skipped: 0,
+			dispatched: 1,
+			timedOut: 0,
+			markersPruned: 0,
+			errors: 0,
+		});
+		const drainPromise = Promise.resolve();
+		vi.spyOn(JobScheduler.prototype, 'drain').mockReturnValue(drainPromise);
+		vi.spyOn(JobScheduler.prototype, 'prune').mockRejectedValue(new Error('prune failed'));
+		const waitUntil = vi.fn();
+
+		await expect(
+			worker.scheduled(controller, scheduledEnv(), executionContext(waitUntil)),
+		).rejects.toThrow('prune failed');
+
+		expect(waitUntil).toHaveBeenCalledWith(drainPromise);
 	});
 });

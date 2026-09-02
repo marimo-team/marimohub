@@ -5,6 +5,7 @@ import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
 	createSandboxId,
+	JobScheduler,
 	MaintenanceLock,
 	Millis,
 	paths,
@@ -517,6 +518,35 @@ describe('startJobScheduler', () => {
 		expect(parseLoggedEvents(logSpy)).toEqual([]);
 		// The lease is released after the tick, on the scheduler's own key.
 		expect(await bucket.head(paths.jobSchedulerLock)).toBeNull();
+	});
+
+	it('waits for the current tick before draining executions', async () => {
+		let finishTick!: (result: Awaited<ReturnType<JobScheduler['tick']>>) => void;
+		vi.spyOn(JobScheduler.prototype, 'tick').mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finishTick = resolve;
+				}),
+		);
+		const drain = vi.spyOn(JobScheduler.prototype, 'drain').mockResolvedValue(undefined);
+		handle = startJobScheduler(deps, metrics);
+		await flushRun();
+
+		const draining = handle.drain();
+		await Promise.resolve();
+		expect(drain).not.toHaveBeenCalled();
+
+		finishTick({
+			fired: 0,
+			repaired: 0,
+			skipped: 0,
+			dispatched: 0,
+			timedOut: 0,
+			markersPruned: 0,
+			errors: 0,
+		});
+		await draining;
+		expect(drain).toHaveBeenCalledOnce();
 	});
 
 	it('fires a due schedule and logs one tick event', async () => {

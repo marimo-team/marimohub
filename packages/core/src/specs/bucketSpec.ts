@@ -359,6 +359,13 @@ const ARTIFACTS: BucketArtifact[] = [
 		tag: 'job',
 	},
 	{
+		name: 'JobRunSession',
+		key: jobRun.session,
+		summary: 'Write-once marimo session state captured by a job run.',
+		mutability: 'immutable',
+		tag: 'job',
+	},
+	{
 		name: 'GitDirectoryFile',
 		key: notebook.version(VID).gitFile('{relative_path}'),
 		summary: 'Immutable pull-source Git metadata file, addressed relative to `.git`.',
@@ -481,7 +488,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 				'other non-JSON artifacts): idempotency records, integration name claims,',
 				'reconcile orphan markers, sandbox diagnostic leases, advisory locks, and',
 				'version/workspace file',
-				'artifacts (notebook.py, pyproject.toml, notebook.html, session.json,',
+				'artifacts (notebook.py, pyproject.toml, notebook.html, version session.json,',
 				'README.md, workspace files). Pull-source Git metadata and job run outputs',
 				'are included because their immutable, scoped locations are part of a',
 				'contract (the sync contract and the run-history API respectively).',

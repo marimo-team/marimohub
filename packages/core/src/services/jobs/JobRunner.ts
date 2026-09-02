@@ -226,6 +226,13 @@ export class JobRunner {
 	async execute(queued: JobRun): Promise<JobRun> {
 		const { runs } = this.deps;
 		const startedAt = Date.now();
+		const deadlineAt = startedAt + queued.timeout_seconds * 1000 + JOB_PROVISION_ALLOWANCE_MS;
+		const deadline = new Date(deadlineAt).toISOString();
+		const beforeDeadline = <T>(work: PromiseLike<T>): Promise<T> =>
+			withDeadline(work, {
+				timeoutMs: Math.max(0, deadlineAt - Date.now()),
+				timeoutError: () => new RunDeadlineError(),
+			});
 		const fields = {
 			project_id: queued.project_id,
 			notebook_id: queued.notebook_id,
@@ -236,11 +243,13 @@ export class JobRunner {
 		};
 		let context: JobRunContext;
 		try {
-			context = await this.loadContext(queued);
+			context = await beforeDeadline(this.loadContext(queued));
 		} catch (err) {
-			const { run } = await runs.transition(queued, 'fail', () => ({
+			const overran = err instanceof RunDeadlineError;
+			const { run } = await runs.transition(queued, overran ? 'timeout' : 'fail', () => ({
 				finished_at: new Date().toISOString(),
-				error: toRunError(err),
+				deadline_at: deadline,
+				error: overran ? timeoutError(queued.timeout_seconds) : toRunError(err),
 			}));
 			logOperationalError('job_run_context_failed', { operation: 'job.run.load', ...fields }, err);
 			return run;
@@ -248,9 +257,6 @@ export class JobRunner {
 
 		const sandboxId = createSandboxId();
 		const provisionStartedAt = new Date();
-		const deadline = new Date(
-			provisionStartedAt.getTime() + queued.timeout_seconds * 1000 + JOB_PROVISION_ALLOWANCE_MS,
-		).toISOString();
 		const computeResources = toComputeResourceRecord(context.computeProfile.resources);
 		const claimed = await runs.transition(queued, 'provision', () => ({
 			sandbox_id: sandboxId,
@@ -269,26 +275,32 @@ export class JobRunner {
 		let sandbox: SandboxInstance | undefined;
 		let final: JobRun = claimed.run;
 		const stopwatch = new Stopwatch();
+		let counters: Record<string, number> = {};
 		try {
-			const prepared = await this.provisioner.prepare(
-				await this.provisionOptions(context, sandboxId),
+			const prepared = await beforeDeadline(
+				this.provisionOptions(context, sandboxId).then((options) =>
+					this.provisioner.prepare(options),
+				),
 			);
 			sandbox = prepared.sandbox;
 			Object.assign(stopwatch.timings, prepared.timings);
+			counters = prepared.counters;
 
 			const started = await runs.transition(claimed.run, 'start');
 			if (!started.transitioned) throw new RunCancelledError();
 			context.run = started.run;
 
 			const { outcome, exitCode, html, session, logs } = await stopwatch.time('exec', () =>
-				this.runExport(prepared, context.run),
+				beforeDeadline(this.runExport(prepared, context.run)),
 			);
 			const output = await stopwatch.time('capture', () =>
-				runs.putOutputs(context.run, {
-					...(html !== undefined ? { html } : {}),
-					...(session !== undefined ? { session } : {}),
-					logs,
-				}),
+				beforeDeadline(
+					runs.putOutputs(context.run, {
+						...(html !== undefined ? { html } : {}),
+						...(session !== undefined ? { session } : {}),
+						logs,
+					}),
+				),
 			);
 			final = (
 				await runs.transition(context.run, outcome.event, () => ({
@@ -328,7 +340,6 @@ export class JobRunner {
 					err,
 				);
 			}
-			await runs.deleteMarker(queued);
 		}
 		this.metrics.increment('jobs.runs.finished', 1, { status: final.status });
 		logEvent({
@@ -344,6 +355,9 @@ export class JobRunner {
 			duration_ms: Date.now() - startedAt,
 			...Object.fromEntries(
 				Object.entries(stopwatch.timings).map(([phase, ms]) => [`run_${phase}_ms`, ms]),
+			),
+			...Object.fromEntries(
+				Object.entries(counters).map(([name, value]) => [`run_${name}`, value]),
 			),
 		});
 		return final;

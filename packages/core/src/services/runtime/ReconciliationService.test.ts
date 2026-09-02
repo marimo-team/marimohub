@@ -102,6 +102,28 @@ describe('ReconciliationService', () => {
 		expect(compute.destroyed).toEqual([orphanId]);
 	});
 
+	it('Rule 3: does not treat a terminal run marker as live sandbox ownership', async () => {
+		const jobSandboxId = createSandboxId();
+		compute.active = [{ id: jobSandboxId, createdAt: iso(-60 * 60 * 1000) }];
+		const aware = new ReconciliationService(
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			'source',
+			undefined,
+			{
+				activeSandboxIds: async () => [],
+				listActive: async () => [{ run: { sandbox_id: jobSandboxId, status: 'succeeded' } }],
+			},
+		);
+
+		const result = await aware.reconcile();
+
+		expect(result.orphansReaped).toBe(1);
+		expect(compute.destroyed).toEqual([jobSandboxId]);
+	});
+
 	it('Rule 3: skips orphan reaping for the sweep when the job-run index is unreadable', async () => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		compute.active = [{ id: orphanId, createdAt: iso(-60 * 60 * 1000) }];
@@ -124,6 +146,53 @@ describe('ReconciliationService', () => {
 		expect(result.orphansReaped).toBe(0);
 		expect(compute.destroyed).toEqual([]);
 		expect(result.skipped).toBe(false);
+	});
+
+	it('Rule 3: skips orphan reaping when an active job-run record is unreadable', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		compute.active = [{ id: orphanId, createdAt: iso(-60 * 60 * 1000) }];
+		const aware = new ReconciliationService(
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			'source',
+			undefined,
+			{
+				activeSandboxIds: async () => [],
+				listActive: async () => [{ run: null }],
+			},
+		);
+
+		const result = await aware.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(result.orphansReaped).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+	});
+
+	it('Rule 3: preserves timestamp-less orphan markers when active ownership is unavailable', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		compute.active = [{ id: inflightId }];
+		const markerKey = paths.reconcileOrphan(inflightId);
+		await bucket.put(markerKey, JSON.stringify({ first_seen: Date.now() - 60_000 }));
+		const aware = new ReconciliationService(
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			'source',
+			undefined,
+			{
+				activeSandboxIds: async () => {
+					throw new Error('bucket down');
+				},
+			},
+		);
+
+		await aware.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(await bucket.get(markerKey)).not.toBeNull();
+		expect(compute.destroyed).toEqual([]);
 	});
 
 	it('skips cleanly when the provider cannot enumerate', async () => {

@@ -60,6 +60,7 @@ interface ModeLaunch {
 
 /** Job mode's default export target when the caller passes none. */
 const DEFAULT_JOB_OUTPUT_FILE = '__marimo__/job_output.html';
+const DEFAULT_JOB_SESSION_FILE = '__marimo__/session/notebook.py.json';
 
 /**
  * Per-mode launch strategy. `app` maps to `marimo run`, which accepts every
@@ -175,5 +176,21 @@ export function buildMarimoLaunch(
 	params: MarimoLaunchParams,
 	strategy: MarimoLaunchStrategyName = DEFAULT_LAUNCH_STRATEGY,
 ): MarimoLaunchPlan {
-	return MARIMO_LAUNCH_STRATEGIES[strategy](params);
+	const plan = MARIMO_LAUNCH_STRATEGIES[strategy](params);
+	if (params.mode !== 'job') return plan;
+
+	const slash = params.notebookFile.lastIndexOf('/');
+	const notebookDir = slash === -1 ? '' : params.notebookFile.slice(0, slash + 1);
+	const notebookName = params.notebookFile.slice(slash + 1);
+	const sessionFile = `${notebookDir}__marimo__/session/${notebookName}.json`;
+	const sessionDirs = [...new Set(['__marimo__/session', `${notebookDir}__marimo__/session`])];
+	const setup = [
+		...plan.setup,
+		{ name: 'job_output_dir', command: `mkdir -p ${sessionDirs.map(shellQuote).join(' ')}` },
+	];
+	if (sessionFile === DEFAULT_JOB_SESSION_FILE) return { ...plan, setup };
+
+	const copySession = `if [ -f ${shellQuote(sessionFile)} ]; then cp ${shellQuote(sessionFile)} ${shellQuote(DEFAULT_JOB_SESSION_FILE)} || exit $?; fi`;
+	const script = `${plan.start} "$@"; status=$?; ${copySession}; exit "$status"`;
+	return { setup, start: `sh -c ${shellQuote(script)} marimohub-job` };
 }

@@ -11011,7 +11011,10 @@ export interface operations {
 	};
 	'jobs.list': {
 		parameters: {
-			query?: never;
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
 			header?: never;
 			path: {
 				pid: string;

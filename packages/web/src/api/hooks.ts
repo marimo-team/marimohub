@@ -46,7 +46,7 @@ import type {
 
 /** How often the notebook table re-polls runtime status, in ms. */
 const SESSIONS_POLL_INTERVAL_MS = 30_000;
-/** How often a job's run history re-polls while a run is still in progress, in ms. */
+/** How often job run queries re-poll while a run is still in progress, in ms. */
 const RUNS_POLL_INTERVAL_MS = 5_000;
 
 /**
@@ -1837,6 +1837,8 @@ export function useJobRunQuery(
 				}),
 			),
 		enabled: enabled && !!jobId && !!runId,
+		refetchInterval: (query) =>
+			query.state.data && !isTerminalRun(query.state.data) ? RUNS_POLL_INTERVAL_MS : false,
 	});
 }
 

@@ -24,33 +24,34 @@ type JobFormValues = {
 	parameters: string;
 	maxRetries: string;
 	backoffSeconds: string;
-	concurrencyPolicy: 'forbid' | 'allow';
+	concurrencyPolicy: Job['concurrency_policy'];
 	notifyFailure: boolean;
 	notifySuccess: boolean;
 };
 
-const schema = z
-	.object({
-		name: requiredText('Name'),
-		enabled: z.boolean(),
-		scheduled: z.boolean(),
-		cron: z.string().trim(),
-		timezone: z.string().trim(),
-		timeoutSeconds: z.string().trim().regex(/^\d*$/, 'Whole seconds only'),
-		parameters: z.string(),
-		maxRetries: z
-			.string()
-			.trim()
-			.regex(/^[0-5]$/, 'Between 0 and 5'),
-		backoffSeconds: z
-			.string()
-			.trim()
-			.regex(/^\d{1,4}$/, 'Whole seconds, at most 3600'),
-		concurrencyPolicy: z.enum(['forbid', 'allow']),
-		notifyFailure: z.boolean(),
-		notifySuccess: z.boolean(),
-	})
-	.superRefine((values, ctx) => {
+const baseSchema = z.object({
+	name: requiredText('Name'),
+	enabled: z.boolean(),
+	scheduled: z.boolean(),
+	cron: z.string().trim(),
+	timezone: z.string().trim(),
+	timeoutSeconds: z.string().trim().regex(/^\d*$/, 'Whole seconds only'),
+	parameters: z.string(),
+	maxRetries: z
+		.string()
+		.trim()
+		.regex(/^[0-5]$/, 'Between 0 and 5'),
+	backoffSeconds: z
+		.string()
+		.trim()
+		.regex(/^\d{1,4}$/, 'Whole seconds, at most 3600'),
+	concurrencyPolicy: z.enum(['forbid', 'allow', 'unknown']),
+	notifyFailure: z.boolean(),
+	notifySuccess: z.boolean(),
+});
+
+function jobFormSchema(maxTimeout: number | null | undefined) {
+	return baseSchema.superRefine((values, ctx) => {
 		if (values.scheduled) {
 			if (!values.cron)
 				ctx.addIssue({ code: 'custom', path: ['cron'], message: 'Cron expression is required' });
@@ -64,8 +65,22 @@ const schema = z
 				message: `At least ${MIN_TIMEOUT_SECONDS} seconds`,
 			});
 		}
+		if (maxTimeout != null && values.timeoutSeconds && Number(values.timeoutSeconds) > maxTimeout) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['timeoutSeconds'],
+				message: `At most ${maxTimeout} seconds`,
+			});
+		}
 		if (Number(values.backoffSeconds) > 3600) {
 			ctx.addIssue({ code: 'custom', path: ['backoffSeconds'], message: 'At most 3600 seconds' });
+		}
+		if (values.concurrencyPolicy === 'unknown') {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['concurrencyPolicy'],
+				message: 'Choose a supported concurrency policy',
+			});
 		}
 		try {
 			parseJobParameters(values.parameters);
@@ -77,6 +92,7 @@ const schema = z
 			});
 		}
 	});
+}
 
 function localTimeZone(): string {
 	try {
@@ -97,7 +113,7 @@ function seedValues(job: Job | null | undefined): JobFormValues {
 		parameters: formatJobParameters(job?.parameters),
 		maxRetries: String(job?.retry?.max_retries ?? 0),
 		backoffSeconds: String(job?.retry?.backoff_seconds ?? 60),
-		concurrencyPolicy: job?.concurrency_policy === 'allow' ? 'allow' : 'forbid',
+		concurrencyPolicy: job?.concurrency_policy ?? 'forbid',
 		notifyFailure: job?.notifications?.on.includes('failure') ?? false,
 		notifySuccess: job?.notifications?.on.includes('success') ?? false,
 	};
@@ -122,9 +138,14 @@ function toCreateBody(values: JobFormValues): JobCreateBody {
 			? { retry: { max_retries: maxRetries, backoff_seconds: Number(values.backoffSeconds) } }
 			: {}),
 		...(values.timeoutSeconds ? { timeout_seconds: Number(values.timeoutSeconds) } : {}),
-		concurrency_policy: values.concurrencyPolicy,
+		concurrency_policy: supportedConcurrencyPolicy(values.concurrencyPolicy),
 		...(on.length > 0 ? { notifications: { on: [...on] } } : {}),
 	};
+}
+
+function supportedConcurrencyPolicy(policy: Job['concurrency_policy']): 'forbid' | 'allow' {
+	if (policy === 'unknown') throw new Error('Choose a supported concurrency policy');
+	return policy;
 }
 
 /** The update body: every optional section is sent, `null` clearing what the form left empty. */
@@ -169,7 +190,7 @@ export function JobFormDialog({
 	const seed = seedValues(job);
 	const form = useAppForm({
 		defaultValues: seed,
-		validators: schemaValidators(schema),
+		validators: schemaValidators(jobFormSchema(maxTimeout)),
 		onSubmit: async ({ value }) => {
 			try {
 				const saved = job
@@ -312,6 +333,15 @@ export function JobFormDialog({
 					/>
 				)}
 			</form.AppField>
+			<form.Subscribe selector={(state) => state.values.concurrencyPolicy}>
+				{(policy) =>
+					policy === 'unknown' ? (
+						<p className="text-xs text-destructive">
+							This job uses an unsupported concurrency policy. Choose one before saving.
+						</p>
+					) : null
+				}
+			</form.Subscribe>
 
 			{alertsAvailable && (
 				<fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">

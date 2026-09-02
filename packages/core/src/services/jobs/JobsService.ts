@@ -1,12 +1,15 @@
 import type { Bucket } from '../../ports/bucket';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { mapWithConcurrency } from '../../concurrency';
 import {
 	NotFoundError,
 	ResourceExhaustedError,
 	ValidationError,
 	assertVersionMatch,
 } from '../../errors';
-import { createJobId } from '../../ids';
-import type { JobId, NotebookId, ProjectId, UserId } from '../../ids';
+import { createJobId, JobId } from '../../ids';
+import type { NotebookId, ProjectId, UserId } from '../../ids';
+import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import { CURRENT_JOB_VERSION, JobDefinitionSchema, parseStored, readStored } from '../../schema';
 import type {
@@ -21,7 +24,7 @@ import type {
 } from '../../schema';
 import { nextIsoTimestamp } from '../../utcDate';
 import { mutateObject } from '../catalog/cas';
-import { deleteByPrefix, listAllPrefixes, readStoredObjects } from '../catalog/storage';
+import { deleteByPrefix } from '../catalog/storage';
 import type { CatalogService } from '../catalog/CatalogService';
 import { isValidTimeZone, parseCron } from './cron';
 
@@ -87,7 +90,13 @@ function toIndexEntry(job: JobDefinition): SnapshotJobEntry {
 		id: job.id,
 		enabled: job.enabled,
 		...(job.schedule ? { schedule: job.schedule } : {}),
+		updated_at: job.updated_at,
 	};
+}
+
+export interface JobPage {
+	items: JobDefinition[];
+	next: { createdAt: string; jobId: JobId } | null;
 }
 
 /** Every job the snapshot indexes, skipping soft-deleted projects and notebooks. */
@@ -116,17 +125,71 @@ export class JobsService {
 	) {}
 
 	async listJobs(projectId: ProjectId, notebookId: NotebookId): Promise<JobDefinition[]> {
+		const jobs: JobDefinition[] = [];
+		let after: JobPage['next'] = null;
+		do {
+			const page = await this.listJobsPage(projectId, notebookId, 500, after ?? undefined);
+			jobs.push(...page.items);
+			after = page.next;
+		} while (after);
+		return jobs;
+	}
+
+	async listJobsPage(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		limit: number,
+		after?: NonNullable<JobPage['next']>,
+	): Promise<JobPage> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const prefixes = await listAllPrefixes(this.bucket, nb.jobsPrefix);
-		const jobs = await readStoredObjects(
-			this.bucket,
-			prefixes.map((prefix) => `${prefix}job.json`),
-			JobDefinitionSchema,
-			'job.list',
-		);
-		return jobs.sort(
-			(a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
-		);
+		const items: JobDefinition[] = [];
+		let startAfter = after ? nb.jobIndex(after.createdAt, after.jobId) : undefined;
+		let hasMore = false;
+		while (items.length <= limit) {
+			const listed = await this.bucket.list({
+				prefix: nb.jobIndexPrefix,
+				...(startAfter ? { startAfter } : {}),
+				limit: limit + 1 - items.length,
+			});
+			if (listed.objects.length === 0) break;
+			startAfter = listed.objects[listed.objects.length - 1]?.key;
+			const refs = listed.objects.flatMap((object) => {
+				const name = object.key.slice(nb.jobIndexPrefix.length).replace(/\.json$/, '');
+				const separator = name.indexOf('_job-');
+				if (separator === -1) return [];
+				const createdAt = name.slice(0, separator);
+				const candidate = name.slice(separator + 1);
+				if (!Number.isFinite(Date.parse(createdAt)) || !JobId.is(candidate)) return [];
+				return [{ createdAt, jobId: JobId.parse(candidate) }];
+			});
+			const page = await mapWithConcurrency(refs, BUCKET_SCAN_CONCURRENCY, async ({ jobId }) => {
+				try {
+					return await this.getJob(projectId, notebookId, jobId);
+				} catch (err) {
+					if (err instanceof NotFoundError) return;
+					logOperationalError(
+						'stored_object_skipped',
+						{
+							operation: 'job.list',
+							object: nb.job(jobId).head,
+						},
+						err,
+					);
+				}
+			});
+			for (const job of page) {
+				if (job) items.push(job);
+				if (items.length > limit) break;
+			}
+			hasMore = items.length > limit || listed.truncated;
+			if (items.length > limit || !listed.truncated) break;
+		}
+		if (items.length > limit) items.pop();
+		const last = items[items.length - 1];
+		return {
+			items,
+			next: hasMore && last ? { createdAt: last.created_at, jobId: last.id } : null,
+		};
 	}
 
 	async getJob(projectId: ProjectId, notebookId: NotebookId, jobId: JobId): Promise<JobDefinition> {
@@ -145,14 +208,6 @@ export class JobsService {
 	): Promise<JobDefinition> {
 		if (input.schedule) validateJobSchedule(input.schedule);
 		validateTimeout(input.timeout_seconds, limits);
-		if (limits.maxPerNotebook !== undefined) {
-			const existing = await this.listJobs(projectId, notebookId);
-			if (existing.length >= limits.maxPerNotebook) {
-				throw new ResourceExhaustedError(
-					`Job limit reached for this notebook (${limits.maxPerNotebook}). Delete a job before creating another.`,
-				);
-			}
-		}
 		const now = new Date().toISOString();
 		const job = JobDefinitionSchema.parse({
 			schema_version: CURRENT_JOB_VERSION,
@@ -171,9 +226,17 @@ export class JobsService {
 			created_at: now,
 			updated_at: now,
 		});
-		const key = paths.project(projectId).notebook(notebookId).job(job.id).head;
+		const nb = paths.project(projectId).notebook(notebookId);
+		const key = nb.job(job.id).head;
+		const indexKey = nb.jobIndex(job.created_at, job.id);
 		await this.bucket.put(key, JSON.stringify(job), { onlyIfNotExists: true });
-		await this.syncIndex('job.create', actor, job, toIndexEntry(job));
+		await this.bucket.put(indexKey, '', { onlyIfNotExists: true });
+		try {
+			await this.syncIndex('job.create', actor, job, toIndexEntry(job), limits.maxPerNotebook);
+		} catch (err) {
+			await this.bucket.delete([key, indexKey]).catch(() => {});
+			throw err;
+		}
 		return job;
 	}
 
@@ -229,6 +292,9 @@ export class JobsService {
 			this.bucket,
 			paths.project(projectId).notebook(notebookId).job(jobId).base,
 		);
+		await this.bucket.delete(
+			paths.project(projectId).notebook(notebookId).jobIndex(job.created_at, job.id),
+		);
 		await this.syncIndex('job.delete', actor, job, null);
 	}
 
@@ -237,6 +303,7 @@ export class JobsService {
 		actor: UserId,
 		job: JobDefinition,
 		entry: SnapshotJobEntry | null,
+		maxPerNotebook?: number,
 	): Promise<void> {
 		await this.catalog.updateNotebookEntry(
 			operation,
@@ -244,7 +311,20 @@ export class JobsService {
 			job.project_id,
 			job.notebook_id,
 			(notebook) => {
+				const current = (notebook.jobs ?? []).find((candidate) => candidate.id === job.id);
+				if (
+					entry &&
+					current?.updated_at &&
+					current.updated_at.localeCompare(entry.updated_at ?? '') > 0
+				) {
+					return { jobs: notebook.jobs };
+				}
 				const others = (notebook.jobs ?? []).filter((candidate) => candidate.id !== job.id);
+				if (entry && !current && maxPerNotebook !== undefined && others.length >= maxPerNotebook) {
+					throw new ResourceExhaustedError(
+						`Job limit reached for this notebook (${maxPerNotebook}). Delete a job before creating another.`,
+					);
+				}
 				return { jobs: entry ? [...others, entry] : others };
 			},
 			undefined,

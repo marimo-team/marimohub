@@ -136,15 +136,19 @@ These CAS-managed records also have one writer each:
 - `NotebookWorkspaceService` owns each short-lived workspace mutation claim at
   `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`.
 - `JobsService` owns each job definition head at
-  `projects/{pid}/notebooks/{nid}/jobs/{jid}/job.json` and the snapshot's
+  `projects/{pid}/notebooks/{nid}/jobs/{jid}/job.json`, each immutable
+  `job-index/{created-at}_{jid}.json` pagination entry, and the snapshot's
   per-notebook `jobs` index (written through `mutateSnapshot`).
 - `JobRunService` owns each run record at
   `projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/run.json`, each
   immutable occurrence claim at `…/jobs/{jid}/occurrences/{key}.json`
   (create-if-absent), each immutable newest-first history entry at
-  `…/jobs/{jid}/run-index/{reverse-ulid}.json`, and each active-run marker at
-  `_system/job-runs/{pid}/{rid}.json` (create-once, deleted at a terminal
-  status). Run outputs under `runs/{rid}/` are write-once.
+  `…/jobs/{jid}/run-index/{reverse-ulid}.json`, and each execution/finalization
+  marker at `_system/job-runs/{pid}/{rid}.json` (create-once, deleted after
+  terminal side effects finish). `JobRunService` also owns the per-job operation claim at
+  `_system/job-operations/{pid}/{nid}/{jid}.json` and deletion fence at
+  `_system/job-deletions/{pid}/{nid}/{jid}.json`. Run outputs under `runs/{rid}/`
+  are write-once.
 
 Each integration store also owns its immutable `versions/{n}.json` history and
 its `integrations/_names/{name}.json` uniqueness claim. Version writes use

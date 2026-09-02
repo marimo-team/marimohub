@@ -248,28 +248,29 @@ export default {
 		// The Workers scheduled trigger is already a platform singleton; the lease
 		// is belt-and-suspenders, matching the Node deployment's contract.
 		const lock = new MaintenanceLock(bucket);
-		if (!(await lock.acquire('cloudflare-scheduled'))) return;
-		try {
-			await sessions.expireStale();
-			// Reconcile records against the provider. The Cloudflare adapter omits
-			// listActive(), so this cleanly no-ops until that backend can enumerate.
-			await new ReconciliationService(
-				sessions,
-				notebooks,
-				compute,
-				bucket,
-				env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
-				undefined,
-				jobRuns,
-			).reconcile();
-			await sessions.reapTerminated();
-			await maintenance.expireSnapshots();
-			await maintenance.pruneEvents();
-			await idempotency.prune();
-			await proposals.pruneExpiredPayloads();
-			await projects.claimPendingInvites();
-		} finally {
-			await lock.release('cloudflare-scheduled');
+		if (await lock.acquire('cloudflare-scheduled')) {
+			try {
+				await sessions.expireStale();
+				// Reconcile records against the provider. The Cloudflare adapter omits
+				// listActive(), so this cleanly no-ops until that backend can enumerate.
+				await new ReconciliationService(
+					sessions,
+					notebooks,
+					compute,
+					bucket,
+					env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
+					undefined,
+					jobRuns,
+				).reconcile();
+				await sessions.reapTerminated();
+				await maintenance.expireSnapshots();
+				await maintenance.pruneEvents();
+				await idempotency.prune();
+				await proposals.pruneExpiredPayloads();
+				await projects.claimPendingInvites();
+			} finally {
+				await lock.release('cloudflare-scheduled');
+			}
 		}
 
 		// Job scheduler tick, under its own lease. Granularity is the platform cron
@@ -302,8 +303,8 @@ export default {
 				config: DEFAULT_JOBS_CONFIG,
 			});
 			await scheduler.tick();
-			await scheduler.prune(DEFAULT_JOBS_CONFIG.runRetentionMs);
 			ctx.waitUntil(scheduler.drain());
+			await scheduler.prune(DEFAULT_JOBS_CONFIG.runRetentionMs);
 		} finally {
 			await jobsLock.release('cloudflare-scheduled');
 		}

@@ -6,8 +6,9 @@ import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { readStored } from '../../schema';
-import type { Session } from '../../schema';
+import type { RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
+import { isTerminalRunStatus } from '../jobs/runState';
 import { SessionRetirer } from './SessionRetirer';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
@@ -28,6 +29,7 @@ const OrphanMarkerSchema = z.object({ first_seen: z.number() });
 /** A second accounting source: sandboxes held by active job runs (see JobRunService). */
 export interface ActiveSandboxSource {
 	activeSandboxIds(): Promise<string[]>;
+	listActive?(): Promise<readonly { run: { sandbox_id?: string; status: RunStatus } | null }[]>;
 }
 
 export interface ReconcileResult {
@@ -124,7 +126,19 @@ export class ReconciliationService {
 		let reapOrphans = true;
 		if (this.jobRuns) {
 			try {
-				for (const id of await this.jobRuns.activeSandboxIds()) ownedSandboxIds.add(id);
+				if (this.jobRuns.listActive) {
+					const activeRuns = await this.jobRuns.listActive();
+					if (activeRuns.some(({ run }) => run === null)) {
+						throw new Error('Active job-run ownership is incomplete');
+					}
+					for (const { run } of activeRuns) {
+						if (run?.sandbox_id && !isTerminalRunStatus(run.status)) {
+							ownedSandboxIds.add(run.sandbox_id);
+						}
+					}
+				} else {
+					for (const id of await this.jobRuns.activeSandboxIds()) ownedSandboxIds.add(id);
+				}
 			} catch (err) {
 				reapOrphans = false;
 				logOperationalError(
@@ -255,7 +269,7 @@ export class ReconciliationService {
 			}
 		}
 
-		await this.pruneOrphanMarkers(pendingUndated);
+		if (reapOrphans) await this.pruneOrphanMarkers(pendingUndated);
 
 		return {
 			skipped: false,

@@ -294,6 +294,41 @@ describe('bootstrap', () => {
 		expect(dispose).toHaveBeenCalledOnce();
 	});
 
+	it('disposes compute only after the job scheduler is drained', async () => {
+		let finishSchedulerDrain!: () => void;
+		const schedulerDrain = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					finishSchedulerDrain = resolve;
+				}),
+		);
+		const stopScheduler = vi.fn();
+		vi.mocked(startJobScheduler).mockReturnValueOnce({
+			stop: stopScheduler,
+			drain: schedulerDrain,
+		});
+		const dispose = vi.fn().mockResolvedValue(undefined);
+		const compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
+		const harness = makeHarness({ ...deps, compute });
+		const handle = await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			harness.overrides,
+		);
+
+		const draining = handle?.drain();
+		await Promise.resolve();
+		expect(stopScheduler).toHaveBeenCalledOnce();
+		expect(schedulerDrain).toHaveBeenCalledOnce();
+		expect(stopScheduler.mock.invocationCallOrder[0]).toBeLessThan(
+			schedulerDrain.mock.invocationCallOrder[0],
+		);
+		expect(dispose).not.toHaveBeenCalled();
+
+		finishSchedulerDrain();
+		await draining;
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+
 	it('tracks background deliveries and disposes their notifier after they settle', async () => {
 		let finishDelivery: (() => void) | undefined;
 		const delivery = new Promise<void>((resolve) => {

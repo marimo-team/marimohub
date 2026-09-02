@@ -4,7 +4,8 @@ import {
 	JOB_CONCURRENCY_POLICIES,
 	JOB_NOTIFICATION_EVENTS,
 	JOB_PARAMETER_KEY_PATTERN,
-	jobRunFinishEvent,
+	appendJobRunFinishEvent,
+	isTerminalRunStatus,
 	JobId,
 	MAX_JOB_NAME_LENGTH,
 	MAX_JOB_PARAMETER_VALUE_LENGTH,
@@ -238,7 +239,7 @@ const listJobs = createRoute({
 	operationId: 'jobs.list',
 	tags: ['Jobs'],
 	summary: 'List a notebook’s jobs',
-	request: { params: NotebookIdParam },
+	request: { params: NotebookIdParam, query: PaginationQuery },
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: pageSchema(JobResponseSchema, 'JobPage') }),
@@ -537,9 +538,25 @@ app.openapi(listJobs, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
 	await loadAuthorizedNotebook(deps, project, nid, user);
-	const jobs = await deps.services.jobs.listJobs(pid, nid);
+	const query = c.req.valid('query');
+	const cursor = decodeCursor(query.cursor);
+	let after: { createdAt: string; jobId: JobDefinition['id'] } | undefined;
+	if (cursor) {
+		if (!Number.isFinite(Date.parse(cursor[0])) || !JobId.is(cursor[1])) {
+			throw new BadRequestError('Invalid pagination cursor');
+		}
+		after = { createdAt: cursor[0], jobId: JobId.parse(cursor[1]) };
+	}
+	const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+	const page = await deps.services.jobs.listJobsPage(pid, nid, limit, after);
 	return c.json(
-		{ success: true, data: { items: jobs.map(toJobResponse), next_cursor: null } },
+		{
+			success: true,
+			data: {
+				items: page.items.map(toJobResponse),
+				next_cursor: page.next ? encodeCursor(page.next.createdAt, page.next.jobId) : null,
+			},
+		},
 		200,
 	);
 });
@@ -578,14 +595,24 @@ app.openapi(updateJob, async (c) => {
 	const { pid, nid, jid } = c.req.valid('param');
 	await loadWritableJob(c, pid, nid, jid);
 	const body = c.req.valid('json');
-	const job = await deps.services.jobs.updateJob(
-		pid,
-		nid,
-		jid,
-		body,
-		user.id,
-		ifMatchToken(c),
-		jobLimits(deps),
+	const job = await deps.services.jobRuns.withJobMutation(
+		{ project_id: pid, notebook_id: nid, id: jid },
+		async () => {
+			if (
+				await deps.services.jobRuns.isJobDeleting({ project_id: pid, notebook_id: nid, id: jid })
+			) {
+				throw new NotFoundError(`Job ${jid} not found`);
+			}
+			return deps.services.jobs.updateJob(
+				pid,
+				nid,
+				jid,
+				body,
+				user.id,
+				ifMatchToken(c),
+				jobLimits(deps),
+			);
+		},
 	);
 	c.header('ETag', etagFor(job.updated_at));
 	return c.json({ success: true, data: toJobResponse(job) }, 200);
@@ -596,14 +623,24 @@ app.openapi(deleteJob, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, jid } = c.req.valid('param');
 	const { job } = await loadWritableJob(c, pid, nid, jid);
-	// Cancel first so no sandbox outlives its record; the delete then wipes the subtree.
-	const cancelled = await deps.services.jobRuns.cancelRunsOfJob(job, user.id);
-	for (const run of cancelled.runs) {
-		await appendAudit(
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'job.run.finish',
-			() => deps.services.events.append(jobRunFinishEvent(run)),
+	const cancelled = await deps.services.jobRuns.withJobMutation(job, async () => {
+		await deps.services.jobRuns.markJobDeleting(job);
+		const result = await deps.services.jobRuns.cancelRunsOfJob(job, user.id);
+		const cancelledIds = new Set(result.runs.map((run) => run.run_id));
+		const terminal = (await deps.services.jobRuns.listActive()).flatMap(({ marker, run }) =>
+			marker.project_id === pid &&
+			marker.job_id === jid &&
+			run &&
+			isTerminalRunStatus(run.status) &&
+			!cancelledIds.has(run.run_id)
+				? [run]
+				: [],
 		);
+		return { ...result, runs: [...result.runs, ...terminal] };
+	});
+	for (const run of cancelled.runs) {
+		await appendJobRunFinishEvent(deps.services.events, run);
+		await deps.services.jobRuns.deleteMarker(run);
 	}
 	await destroySandboxes(deps, cancelled.sandboxIds, {
 		project_id: pid,
@@ -624,24 +661,32 @@ app.openapi(triggerRun, async (c) => {
 		c,
 		'POST /projects/{pid}/notebooks/{nid}/jobs/{jid}/runs',
 		async () => {
-			const queued = (await deps.services.jobRuns.listActive()).filter(
-				({ marker, run }) => marker.job_id === jid && run?.status === 'queued',
-			);
-			if (queued.length >= MAX_QUEUED_RUNS_PER_JOB) {
-				throw new ResourceExhaustedError(
-					`Too many queued runs for this job (${MAX_QUEUED_RUNS_PER_JOB}); wait for the queue to drain.`,
+			const run = await deps.services.jobRuns.withJobMutation(job, async () => {
+				if (await deps.services.jobRuns.isJobDeleting(job)) {
+					throw new NotFoundError(`Job ${jid} not found`);
+				}
+				const current = await deps.services.jobs.getJob(pid, nid, jid);
+				const queued = (await deps.services.jobRuns.listActive()).filter(
+					({ marker, run }) => marker.job_id === jid && run?.status === 'queued',
 				);
-			}
-			const config = requireJobs(deps);
-			const requestedMs =
-				job.timeout_seconds !== undefined ? job.timeout_seconds * 1000 : config.defaultTimeoutMs;
-			const run = await deps.services.jobRuns.enqueue({
-				job,
-				trigger: 'manual',
-				triggeredBy: user.id,
-				parameters: body?.parameters ?? job.parameters,
-				sourceVersionId: notebook.source.current_version_id ?? undefined,
-				timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
+				if (queued.length >= MAX_QUEUED_RUNS_PER_JOB) {
+					throw new ResourceExhaustedError(
+						`Too many queued runs for this job (${MAX_QUEUED_RUNS_PER_JOB}); wait for the queue to drain.`,
+					);
+				}
+				const config = requireJobs(deps);
+				const requestedMs =
+					current.timeout_seconds !== undefined
+						? current.timeout_seconds * 1000
+						: config.defaultTimeoutMs;
+				return deps.services.jobRuns.enqueue({
+					job: current,
+					trigger: 'manual',
+					triggeredBy: user.id,
+					parameters: body?.parameters ?? current.parameters,
+					sourceVersionId: notebook.source.current_version_id ?? undefined,
+					timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
+				});
 			});
 			await appendAudit(
 				{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
@@ -727,7 +772,7 @@ app.openapi(cancelRun, async (c) => {
 		await appendAudit(
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 			'job.run.finish',
-			() => deps.services.events.append(jobRunFinishEvent(run)),
+			() => appendJobRunFinishEvent(deps.services.events, run),
 		);
 	}
 	return c.json({ success: true, data: toPublicJobRun(run) }, 200);

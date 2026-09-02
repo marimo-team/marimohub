@@ -71,7 +71,7 @@ export interface SessionLifetimeConfig {
 /**
  * Notebook jobs (config: `MARIMOHUB_JOBS_*`). The API validates definitions and
  * enqueues runs against these; the maintenance replica's scheduler dispatches
- * and enforces them. Absent = `DEFAULT_JOBS_CONFIG` (library/Workers wiring).
+ * and enforces them. Entrypoints use `DEFAULT_JOBS_CONFIG` when jobs are enabled.
  */
 export interface JobsConfig {
 	/** Scheduler/dispatcher interval on the maintenance replica. */
@@ -392,8 +392,7 @@ export interface ApiDeps {
 	sandbox: SandboxConfig;
 	/** Deployment-wide authorization / abuse-guard knobs (pure env-derived data). */
 	policy: PolicyConfig;
-	/** Notebook job limits and scheduler knobs; absent = `DEFAULT_JOBS_CONFIG`. */
-	/** Notebook jobs; absent = the feature is off (`MARIMOHUB_JOBS=off`), routes 404 and no scheduler runs. */
+	/** Notebook jobs; absent = the feature is off, routes 404 and no scheduler runs. */
 	jobs?: JobsConfig;
 	/**
 	 * Resource-security collaborators (constraint adapter + subject-context

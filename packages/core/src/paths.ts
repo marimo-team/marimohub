@@ -61,6 +61,8 @@ export interface NotebookPaths {
 	proposal: (proposalId: ProposalId) => ProposalPaths;
 	/** Prefix of the notebook's job definitions: `projects/{pid}/notebooks/{nid}/jobs/`. */
 	jobsPrefix: string;
+	jobIndexPrefix: string;
+	jobIndex: (createdAt: string, jobId: JobId) => string;
 	job: (jobId: JobId) => JobPaths;
 }
 
@@ -203,6 +205,8 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		deps: `${workspace}/pyproject.toml`,
 		version: (vid: VersionId) => versionPaths(base, vid),
 		jobsPrefix: `${base}/jobs/`,
+		jobIndexPrefix: `${base}/job-index/`,
+		jobIndex: (createdAt: string, jobId: JobId) => `${base}/job-index/${createdAt}_${jobId}.json`,
 		job: (jobId: JobId) => jobPaths(base, jobId),
 		proposal: (proposalId: ProposalId) => {
 			const proposalBase = `${base}/proposals/${proposalId}`;
@@ -301,16 +305,17 @@ export const paths = {
 	sandboxDiagnosticLease: (userId: UserId) =>
 		`_system/sandbox-diagnostics/${encodeURIComponent(userId)}.json`,
 	/**
-	 * Active-run markers: one immutable create-if-absent object per non-terminal
-	 * job run, deleted when the run reaches a terminal status. The scheduler's
-	 * dispatch/watchdog and the reconciler enumerate live runs from this prefix
-	 * instead of scanning every notebook's run history. Written only by
-	 * `JobRunService`.
+	 * One immutable marker per run. Terminal markers remain until the scheduler
+	 * completes the run's durable finalization work.
 	 */
 	jobRunMarkersPrefix: '_system/job-runs/',
 	jobRunMarkersForProject: (projectId: ProjectId) => `_system/job-runs/${projectId}/`,
 	jobRunMarker: (projectId: ProjectId, runId: RunId) =>
 		`_system/job-runs/${projectId}/${runId}.json`,
+	jobOperationClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
+		`_system/job-operations/${projectId}/${notebookId}/${jobId}.json`,
+	jobDeletionClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
+		`_system/job-deletions/${projectId}/${notebookId}/${jobId}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops
