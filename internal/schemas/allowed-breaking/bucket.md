@@ -20,6 +20,14 @@ PUT /_system/tokens/{tid}.json `the request body dependentRequired was added: wh
 GET /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 PUT /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 
+Project alert destinations now use distinct variants for each transport. Existing
+stored destinations remain valid.
+
+```text
+GET /projects/{pid}/alerts.json added `subschema #1, subschema #2` to the `destinations/items/` response property `oneOf` list for the response status `200`
+PUT /projects/{pid}/alerts.json removed `subschema #1, subschema #2` from the `destinations/items/` request property `oneOf` list
+```
+
 Event objects written by `EventService` already contain `id`; making it required
 records the existing write contract and needs no stored-data migration.
 
