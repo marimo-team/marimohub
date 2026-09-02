@@ -49,7 +49,7 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
 }
 
 export function isActiveRunStatus(status: RunStatus): boolean {
-	return status === 'provisioning' || status === 'running';
+	return (ACTIVE_RUN_STATUSES as readonly RunStatus[]).includes(status);
 }
 
 /** The status after `event`, or `null` when the edge is illegal (so callers skip the write). */

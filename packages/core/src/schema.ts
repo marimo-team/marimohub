@@ -1150,7 +1150,7 @@ export type JobOccurrence = z.infer<typeof JobOccurrenceSchema>;
 /** Execution/finalization marker under `_system/job-runs/` (see `paths.jobRunMarker`). */
 export const JobRunMarkerSchema = z.object({
 	run_id: RunIdSchema,
-	continuation_run_id: RunIdSchema.optional(),
+	continuation_run_id: RunIdSchema,
 	job_id: JobIdSchema,
 	notebook_id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
@@ -1378,3 +1378,8 @@ export const EventSchema = z.looseObject({
 });
 
 export type Event = z.infer<typeof EventSchema>;
+
+export const EventIdempotencyMarkerSchema = z.object({
+	event_id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/),
+	body: z.string(),
+});

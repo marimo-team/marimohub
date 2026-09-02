@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { XCircle } from 'lucide-react';
 import { useJobRunHtmlQuery, useJobRunLogsQuery, useUsersQuery } from '@/api/hooks';
 import { Button, Skeleton, UserLabel } from '@/components/ui';
@@ -18,8 +19,12 @@ interface RunDetailProps {
 	onCancel: (run: JobRun) => void;
 }
 
+const ARTIFACT_TABS = ['output', 'logs'] as const;
+type ArtifactTab = (typeof ARTIFACT_TABS)[number];
+
 export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }: RunDetailProps) {
-	const [tab, setTab] = useState<'output' | 'logs'>('output');
+	const [tab, setTab] = useState<ArtifactTab>('output');
+	const tabSetId = useId();
 	const terminal = isTerminalRun(run);
 	const active =
 		run.status === 'queued' || run.status === 'provisioning' || run.status === 'running';
@@ -34,6 +39,25 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 	);
 	const duration = runDurationMs(run, now);
 	const { data: users } = useUsersQuery([run.triggered_by, run.cancelled_by]);
+	const moveArtifactTab = (event: KeyboardEvent<HTMLButtonElement>, current: ArtifactTab) => {
+		const tabs: readonly ArtifactTab[] = canEdit ? ARTIFACT_TABS : ['output'];
+		const index = tabs.indexOf(current);
+		const nextIndex =
+			event.key === 'ArrowRight'
+				? (index + 1) % tabs.length
+				: event.key === 'ArrowLeft'
+					? (index - 1 + tabs.length) % tabs.length
+					: event.key === 'Home'
+						? 0
+						: event.key === 'End'
+							? tabs.length - 1
+							: undefined;
+		if (nextIndex === undefined) return;
+		event.preventDefault();
+		const next = tabs[nextIndex];
+		setTab(next);
+		document.getElementById(`${tabSetId}-${next}-tab`)?.focus();
+	};
 
 	return (
 		<section className="flex min-h-0 flex-1 flex-col gap-3" aria-label={`Run ${run.run_id}`}>
@@ -42,7 +66,7 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 				<span>
 					{run.trigger === 'schedule' ? (
 						<>Scheduled for {formatAbsolute(run.scheduled_for)}</>
-					) : (
+					) : run.trigger === 'manual' ? (
 						<>
 							Run manually
 							{run.triggered_by && (
@@ -56,6 +80,8 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 								</>
 							)}
 						</>
+					) : (
+						<>Run trigger not recognized</>
 					)}
 				</span>
 				{run.attempt > 1 && <span>Attempt {run.attempt}</span>}
@@ -83,12 +109,18 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 			)}
 			{terminal ? (
 				<>
-					<div className="flex gap-1 border-b">
-						{(['output', 'logs'] as const).map((key) => (
+					<div role="tablist" aria-label="Run artifacts" className="flex gap-1 border-b">
+						{ARTIFACT_TABS.map((key) => (
 							<button
 								key={key}
 								type="button"
+								role="tab"
+								id={`${tabSetId}-${key}-tab`}
+								aria-controls={`${tabSetId}-panel`}
+								aria-selected={tab === key}
+								tabIndex={tab === key ? 0 : -1}
 								onClick={() => setTab(key)}
+								onKeyDown={(event) => moveArtifactTab(event, key)}
 								disabled={key === 'logs' && !canEdit}
 								className={cn(
 									'-mb-px border-b-2 px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
@@ -101,32 +133,39 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 							</button>
 						))}
 					</div>
-					{tab === 'output' ? (
-						html.isPending ? (
+					<div
+						role="tabpanel"
+						id={`${tabSetId}-panel`}
+						aria-labelledby={`${tabSetId}-${tab}-tab`}
+						className="flex min-h-0 flex-1 flex-col"
+					>
+						{tab === 'output' ? (
+							html.isPending ? (
+								<Skeleton className="h-40 w-full" />
+							) : html.isError ? (
+								<ArtifactError artifact="output" onRetry={() => void html.refetch()} />
+							) : html.data ? (
+								<div className="min-h-[24rem] flex-1 overflow-hidden rounded-md border">
+									<iframe
+										className="size-full min-h-[24rem] border-0"
+										srcDoc={html.data}
+										sandbox="allow-scripts"
+										title={`${job.name} output`}
+									/>
+								</div>
+							) : (
+								<p className="text-xs text-muted-foreground">This run produced no output.</p>
+							)
+						) : logs.isPending ? (
 							<Skeleton className="h-40 w-full" />
-						) : html.isError ? (
-							<ArtifactError artifact="output" onRetry={() => void html.refetch()} />
-						) : html.data ? (
-							<div className="min-h-[24rem] flex-1 overflow-hidden rounded-md border">
-								<iframe
-									className="size-full min-h-[24rem] border-0"
-									srcDoc={html.data}
-									sandbox="allow-scripts"
-									title={`${job.name} output`}
-								/>
-							</div>
+						) : logs.isError ? (
+							<ArtifactError artifact="logs" onRetry={() => void logs.refetch()} />
 						) : (
-							<p className="text-xs text-muted-foreground">This run produced no output.</p>
-						)
-					) : logs.isPending ? (
-						<Skeleton className="h-40 w-full" />
-					) : logs.isError ? (
-						<ArtifactError artifact="logs" onRetry={() => void logs.refetch()} />
-					) : (
-						<pre className="max-h-[32rem] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-							{logs.data ?? 'No logs were captured.'}
-						</pre>
-					)}
+							<pre className="max-h-[32rem] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+								{logs.data ?? 'No logs were captured.'}
+							</pre>
+						)}
+					</div>
 				</>
 			) : run.status === 'unknown' ? (
 				<p className="text-xs text-muted-foreground">

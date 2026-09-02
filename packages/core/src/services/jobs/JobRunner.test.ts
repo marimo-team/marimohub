@@ -28,7 +28,13 @@ interface JobSandbox {
 
 /** A fake sandbox whose export command answers with the given exit status and output. */
 function makeJobSandbox(
-	opts: { exitCode?: number | null; html?: string; stderr?: string; stdout?: string } = {},
+	opts: {
+		exitCode?: number | null;
+		timedOut?: boolean;
+		html?: string;
+		stderr?: string;
+		stdout?: string;
+	} = {},
 ): JobSandbox {
 	const files: Record<string, string> = {};
 	if (opts.html !== undefined) files[OUTPUT] = opts.html;
@@ -42,7 +48,7 @@ function makeJobSandbox(
 		const exitCode = opts.exitCode === undefined ? 0 : opts.exitCode;
 		return {
 			success: true,
-			stdout: `${opts.stdout ?? 'notebook output'}\n${exitCode === null ? '' : `__MARIMOHUB_JOB_EXIT__ ${exitCode}\n`}`,
+			stdout: `${opts.stdout ?? 'notebook output'}\n${exitCode === null ? '' : `__MARIMOHUB_JOB_EXIT__ ${exitCode} ${opts.timedOut ? 'timeout' : 'exit'}\n`}`,
 			stderr: opts.stderr ?? '',
 		};
 	};
@@ -177,7 +183,7 @@ describe('JobRunner', () => {
 	});
 
 	it('marks a timeout exit as timed_out', async () => {
-		const sandbox = makeJobSandbox({ exitCode: 124 });
+		const sandbox = makeJobSandbox({ exitCode: 124, timedOut: true });
 		const run = await runner(sandbox).execute(await enqueue());
 		expect(run).toMatchObject({
 			status: 'timed_out',
@@ -185,6 +191,16 @@ describe('JobRunner', () => {
 			error: { code: 'RUN_TIMED_OUT' },
 		});
 		expect(sandbox.calls.destroy).toBe(1);
+	});
+
+	it('treats a notebook exit 124 as a failure rather than a timeout', async () => {
+		const sandbox = makeJobSandbox({ exitCode: 124 });
+		const run = await runner(sandbox).execute(await enqueue());
+		expect(run).toMatchObject({
+			status: 'failed',
+			exit_code: 124,
+			error: { code: 'NOTEBOOK_FAILED' },
+		});
 	});
 
 	it('fails when the export exits cleanly without producing output', async () => {
@@ -202,8 +218,7 @@ describe('JobRunner', () => {
 			code: 'SERVICE_UNAVAILABLE',
 			message: 'Sandbox compute backend is not available',
 		});
-		// prepare() self-destroyed the partial sandbox; the runner's finally destroys once more (idempotent).
-		expect(calls.destroy).toBeGreaterThanOrEqual(1);
+		expect(calls.destroy).toBe(1);
 		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
 	});
 
@@ -719,11 +734,16 @@ describe('jobShellCommand', () => {
 		const command = jobShellCommand('/w', 'uv run marimo export html', 30, { k: 'v w' });
 		expect(command).toContain("cd '/w'");
 		expect(command).toContain("rm -f '__marimo__/job_output.html'");
-		expect(command).toContain("timeout -k 30 30 uv run marimo export html -- --k 'v w'");
-		expect(command).toMatch(/printf '\\n__MARIMOHUB_JOB_EXIT__ %s\\n' "\$status"$/);
-		expect(parseExitCode('x\n__MARIMOHUB_JOB_EXIT__ 3\n')).toBe(3);
-		expect(parseExitCode('__MARIMOHUB_JOB_EXIT__ 9\nreal output')).toBeUndefined();
-		expect(parseExitCode('__MARIMOHUB_JOB_EXIT__ 9\n__MARIMOHUB_JOB_EXIT__ 3\n')).toBe(3);
+		expect(command).toContain('timeout -k 30 30 sh -c');
+		expect(command).toContain('uv run marimo export html -- --k');
+		expect(command).toContain("'__marimo__/.job_exit_status'");
+		expect(command).toContain('case "$status" in 124|137) outcome=timeout');
+		expect(command).toMatch(/printf '\\n__MARIMOHUB_JOB_EXIT__ %s %s\\n' "\$status" "\$outcome"$/);
+		expect(parseExitCode('x\n__MARIMOHUB_JOB_EXIT__ 3 exit\n')).toBe(3);
+		expect(parseExitCode('__MARIMOHUB_JOB_EXIT__ 9 exit\nreal output')).toBeUndefined();
+		expect(parseExitCode('__MARIMOHUB_JOB_EXIT__ 9 exit\n__MARIMOHUB_JOB_EXIT__ 3 timeout\n')).toBe(
+			3,
+		);
 		expect(parseExitCode('no marker')).toBeUndefined();
 	});
 });
@@ -746,9 +766,15 @@ describe('classifyExport', () => {
 		).toMatchObject({ event: 'fail', error: { code: 'NOTEBOOK_FAILED' } });
 	});
 
-	it('treats exit 124 and an exec-level timeout as timed out', () => {
+	it('uses the timeout outcome or an exec-level timeout', () => {
 		expect(
-			classifyExport({ result: ok, exitCode: 124, hasHtml: false, timeoutSeconds: 60 }),
+			classifyExport({
+				result: ok,
+				exitCode: 124,
+				timedOut: true,
+				hasHtml: false,
+				timeoutSeconds: 60,
+			}),
 		).toEqual({
 			event: 'timeout',
 			error: { code: 'RUN_TIMED_OUT', message: 'The run exceeded its 60s timeout' },
@@ -761,6 +787,12 @@ describe('classifyExport', () => {
 				timeoutSeconds: 60,
 			}).event,
 		).toBe('timeout');
+	});
+
+	it('does not infer a timeout from exit status 124 alone', () => {
+		expect(
+			classifyExport({ result: ok, exitCode: 124, hasHtml: false, timeoutSeconds: 60 }),
+		).toMatchObject({ event: 'fail', error: { code: 'NOTEBOOK_FAILED' } });
 	});
 
 	it('distinguishes a cell failure, a missing export, and an exec failure', () => {

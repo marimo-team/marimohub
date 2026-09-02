@@ -35,6 +35,9 @@ describe('paths', () => {
 		expect(paths.event('2025-03-05', '01HXYZ9ABCDEFGHJKMNPQRSTVW')).toMatchInlineSnapshot(
 			`"_system/events/2025-03-05/01HXYZ9ABCDEFGHJKMNPQRSTVW.json"`,
 		);
+		expect(paths.eventIdempotency('2025-03-05', 'run/a')).toBe(
+			'_system/events/2025-03-05/_idempotency/run%2Fa.json',
+		);
 		expect(paths.jobOperationClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
 			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
 		);

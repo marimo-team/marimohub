@@ -99,7 +99,7 @@ s3-bucket/
 │   │       └── {sandbox-id}.json            ← first-seen marker for an undated orphan
 │   ├── job-runs/
 │   │   └── {project-id}/
-│   │       └── {run-id}.json                ← active-run marker (create-once, deleted when terminal)
+│   │       └── {run-id}.json                ← execution/finalization marker (deleted after finalization)
 │   ├── identities/
 │   │   └── {user-id}.json                  ← user display identity (mutable, CAS-managed)
 │   ├── tokens/
@@ -119,7 +119,9 @@ s3-bucket/
 │   │   └── {digest}.json                   ← replay record with a 24h TTL
 │   ├── events/
 │   │   └── {YYYY-MM-DD}/
-│   │       └── {event-id}.json             ← one immutable object per event
+│   │       ├── {event-id}.json             ← one immutable object per event
+│   │       └── _idempotency/
+│   │           └── {key}.json              ← stable key mapped to one event
 │   ├── sandbox-diagnostics/
 │   │   └── {user-id}.json                  ← per-admin sandbox diagnostic lease (CAS)
 │   ├── _maintenance.lock                   ← advisory maintenance lease
@@ -214,6 +216,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `_system/cli-authorizations/{authorization-id}.json`                      | JSON     | Ten-minute browser-to-CLI PKCE grant. Stores hashes/challenges, never a PAT or plaintext authorization secret. `CliAuthorizationService` CAS-claims it before minting one token, then deletes it. See §4.11.1.                                                                                                                                                                                                                                                                                         |
 | `_system/cli-device-user-codes/{user-code}.json`                          | JSON     | Create-if-absent lookup claim from an eight-letter device user code to its short-lived CLI authorization. `CliAuthorizationService` owns the claim. It deletes the claim after exchange and prunes it after ten minutes. See §4.11.1.                                                                                                                                                                                                                                                                  |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                             | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
+| `_system/events/{YYYY-MM-DD}/_idempotency/{key}.json`                     | JSON     | Create-if-absent mapping from a stable operation key to one event ID and serialized event body. A retry repairs a missing event object from this marker without changing its append position or payload.                                                                                                                                                                                                                                                                                               |
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
 | `_system/reconcile/orphans/{sandbox-id}.json`                             | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
 | `_system/sandbox-diagnostics/{user-id}.json`                              | JSON     | Per-admin CAS lease for a sandbox startup diagnostic (`{ sandbox_id, expires_at }`). It prevents overlapping tests across serving replicas and makes the active sandbox visible to reconciliation. `SandboxDiagnosticLease` owns all writes; release CAS-writes a null free marker, and expiry recovers leases left by a crashed request.                                                                                                                                                              |
@@ -554,7 +557,7 @@ The create route completes the transfer after the replacement reaches
 
 The event log is the primary audit trail. Object stores provide no atomic append, and a single shared per-day file would lose events under concurrent writers (a read-modify-write race). So **each event is written as its own immutable object**, keyed by a monotonic ULID under a per-day prefix. This is write-safe with no locking, and because ULIDs sort lexicographically by time, listing a day's prefix returns events in append order.
 
-Every event carries a `schema_version` field so the log stays parseable as the event shape evolves. Reading a day = list `_system/events/{date}/` and parse each object. A scheduled job may optionally compact a finished day into a single archive file for export/analytics.
+Every event carries a `schema_version` field so the log stays parseable as the event shape evolves. Reading a day lists `_system/events/{date}/`, excludes `_idempotency/`, and parses each event object. Operations that need retry-safe appends first create an immutable `_idempotency/{key}.json` marker that records the event ID and body. A scheduled job may optionally compact a finished day into a single archive file for export/analytics.
 
 ```json
 // _system/events/2025-03-05/01HXYZ9ABCDEFGHJKMNPQRSTVW.json

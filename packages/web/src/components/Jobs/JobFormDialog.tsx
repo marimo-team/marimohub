@@ -41,10 +41,7 @@ const baseSchema = z.object({
 		.string()
 		.trim()
 		.regex(/^[0-5]$/, 'Between 0 and 5'),
-	backoffSeconds: z
-		.string()
-		.trim()
-		.regex(/^\d{1,4}$/, 'Whole seconds, at most 3600'),
+	backoffSeconds: z.string().trim(),
 	concurrencyPolicy: z.enum(['forbid', 'allow', 'unknown']),
 	notifyFailure: z.boolean(),
 	notifySuccess: z.boolean(),
@@ -72,8 +69,16 @@ function jobFormSchema(maxTimeout: number | null | undefined) {
 				message: `At most ${maxTimeout} seconds`,
 			});
 		}
-		if (Number(values.backoffSeconds) > 3600) {
-			ctx.addIssue({ code: 'custom', path: ['backoffSeconds'], message: 'At most 3600 seconds' });
+		if (Number(values.maxRetries) > 0) {
+			if (!/^\d{1,4}$/.test(values.backoffSeconds)) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['backoffSeconds'],
+					message: 'Whole seconds, at most 3600',
+				});
+			} else if (Number(values.backoffSeconds) > 3600) {
+				ctx.addIssue({ code: 'custom', path: ['backoffSeconds'], message: 'At most 3600 seconds' });
+			}
 		}
 		if (values.concurrencyPolicy === 'unknown') {
 			ctx.addIssue({
@@ -183,8 +188,8 @@ export function JobFormDialog({
 }: JobFormDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
 	const alertsAvailable = capabilities?.project_alerts.available ?? false;
-	const maxTimeout = capabilities?.jobs.max_timeout_seconds;
-	const defaultTimeout = capabilities?.jobs.default_timeout_seconds;
+	const maxTimeout = capabilities?.jobs?.max_timeout_seconds;
+	const defaultTimeout = capabilities?.jobs?.default_timeout_seconds;
 	const create = useCreateJob(projectId, notebookId);
 	const update = useUpdateJob(projectId, notebookId);
 	const seed = seedValues(job);

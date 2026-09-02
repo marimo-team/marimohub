@@ -32,6 +32,7 @@ import {
 	mutateObjectWithOutcome,
 	putIfAbsent,
 	releaseSingletonClaim,
+	withCasRetry,
 } from '../catalog/cas';
 import { deleteByPrefix, listAllKeys } from '../catalog/storage';
 import { occurrenceKeyToInstant } from './cron';
@@ -59,6 +60,11 @@ export interface ActiveRun {
 	run: JobRun | null;
 }
 
+export interface ActiveRunSnapshot {
+	entries: ActiveRun[];
+	complete: boolean;
+}
+
 export interface RunOutputs {
 	html?: string;
 	logs?: string;
@@ -84,6 +90,21 @@ const JOB_OPERATION_TTL_MS = Millis.seconds(30);
 const JOB_OPERATION_WAIT_ATTEMPTS = 200;
 const JOB_OPERATION_WAIT_MS = 25;
 
+function parseOperationHolder(raw: unknown): string | null {
+	if (!raw || typeof raw !== 'object' || !('holder' in raw)) {
+		throw new Error('Invalid job operation claim');
+	}
+	const value = raw.holder;
+	if (value !== null && typeof value !== 'string') {
+		throw new Error('Invalid job operation claim holder');
+	}
+	return value;
+}
+
+function operationHolderToken(holder: string): string {
+	return holder.slice(holder.indexOf(':') + 1);
+}
+
 /**
  * Owner of every run record (`runs/{rid}/run.json`, ETag CAS), occurrence
  * claim, immutable history entry, and active marker. Terminal runs are never
@@ -104,21 +125,13 @@ export class JobRunService {
 		work: () => Promise<T>,
 	): Promise<T> {
 		const key = paths.jobOperationClaim(job.project_id, job.notebook_id, job.id);
-		const holder = `${Date.now() + JOB_OPERATION_TTL_MS}:${createRunId()}`;
+		const token = createRunId();
+		let holder = `${Date.now() + JOB_OPERATION_TTL_MS}:${token}`;
 		const claim = {
 			bucket: this.bucket,
 			key,
 			serialize: (value: string | null) => JSON.stringify({ holder: value }),
-			parseHolder: (raw: unknown): string | null => {
-				if (!raw || typeof raw !== 'object' || !('holder' in raw)) {
-					throw new Error('Invalid job operation claim');
-				}
-				const value = raw.holder;
-				if (value !== null && typeof value !== 'string') {
-					throw new Error('Invalid job operation claim holder');
-				}
-				return value;
-			},
+			parseHolder: parseOperationHolder,
 			isHolderLive: async (value: string) => {
 				const expires = Number(value.slice(0, value.indexOf(':')));
 				return Number.isFinite(expires) && expires > Date.now();
@@ -127,15 +140,59 @@ export class JobRunService {
 		for (let attempt = 0; attempt < JOB_OPERATION_WAIT_ATTEMPTS; attempt++) {
 			const acquired = await acquireSingletonClaim(claim, holder);
 			if (acquired.acquired) {
+				let renewalInFlight: Promise<void> | undefined;
+				let leaseLost = false;
+				const renew = () => {
+					if (renewalInFlight) return renewalInFlight;
+					const pending = this.renewJobMutationClaim(key, token)
+						.then((renewed) => {
+							if (renewed) holder = renewed;
+							else leaseLost = true;
+						})
+						.catch((err) => {
+							leaseLost = true;
+							logOperationalError(
+								'job_operation_renew_failed',
+								{ operation: 'job.operation.renew', object: key },
+								err,
+							);
+						});
+					const tracked = pending.finally(() => {
+						if (renewalInFlight === tracked) renewalInFlight = undefined;
+					});
+					renewalInFlight = tracked;
+					return tracked;
+				};
+				const renewalTimer = setInterval(() => {
+					void renew();
+				}, JOB_OPERATION_TTL_MS / 3);
 				try {
-					return await work();
+					const result = await work();
+					if (leaseLost) throw new UnavailableError('Job mutation lease was lost');
+					return result;
 				} finally {
+					clearInterval(renewalTimer);
+					await renewalInFlight;
 					await releaseSingletonClaim(claim, holder);
 				}
 			}
 			await sleep(JOB_OPERATION_WAIT_MS);
 		}
 		throw new UnavailableError('Job is busy; retry the operation');
+	}
+
+	private async renewJobMutationClaim(key: string, token: string): Promise<string | null> {
+		return withCasRetry(this.bucket, async (cas) => {
+			const existing = await this.bucket.get(key);
+			if (!existing) return null;
+			const current = parseOperationHolder(await existing.json());
+			if (!current || operationHolderToken(current) !== token) return null;
+			const renewed = `${Date.now() + JOB_OPERATION_TTL_MS}:${token}`;
+			await cas.put(key, JSON.stringify({ holder: renewed }), {
+				onlyIfEtagMatches: existing.etag,
+			});
+			return renewed;
+		});
 	}
 
 	/**
@@ -408,9 +465,9 @@ export class JobRunService {
 		}
 	}
 
-	/** Every run awaiting execution or finalization, with its record when readable. */
-	async listActive(): Promise<ActiveRun[]> {
+	async listActiveSnapshot(): Promise<ActiveRunSnapshot> {
 		const keys = await listAllKeys(this.bucket, paths.jobRunMarkersPrefix);
+		let complete = true;
 		const active = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
 			const markerObj = await this.bucket.get(key);
 			if (!markerObj) return;
@@ -418,12 +475,12 @@ export class JobRunService {
 			try {
 				marker = await readStored(JobRunMarkerSchema, markerObj, key);
 			} catch (err) {
+				complete = false;
 				logOperationalError(
-					'corrupt_job_run_marker_removed',
+					'corrupt_job_run_marker_preserved',
 					{ operation: 'job.run.marker.read', object: key },
 					err,
 				);
-				await this.bucket.delete(key).catch(() => {});
 				return;
 			}
 			const recordKey = this.runPaths(marker).record;
@@ -432,6 +489,7 @@ export class JobRunService {
 			try {
 				return { marker, run: await readStoredJobRun(recordObj, recordKey) };
 			} catch (err) {
+				complete = false;
 				logOperationalError(
 					'stored_object_skipped',
 					{ operation: 'job.run.active', object: recordKey },
@@ -440,7 +498,11 @@ export class JobRunService {
 				return { marker, run: null };
 			}
 		});
-		return active.filter((entry) => entry !== undefined);
+		return { entries: active.filter((entry) => entry !== undefined), complete };
+	}
+
+	async listActive(): Promise<ActiveRun[]> {
+		return (await this.listActiveSnapshot()).entries;
 	}
 
 	/** Sandbox ids held by active runs — the reconciler's second accounting source. */
@@ -542,15 +604,12 @@ export class JobRunService {
 		const active = (await this.listActive()).filter(({ marker }) => matches(marker));
 		const sandboxIds: string[] = [];
 		const runs: JobRun[] = [];
-		for (const { marker, run } of active) {
-			if (!run) {
-				await this.deleteMarker(marker);
-				continue;
-			}
+		for (const { run } of active) {
+			if (!run) continue;
 			const { run: cancelled, transitioned } = await this.cancel(run, by);
+			if (cancelled.sandbox_id) sandboxIds.push(cancelled.sandbox_id);
 			if (transitioned) {
 				runs.push(cancelled);
-				if (cancelled.sandbox_id) sandboxIds.push(cancelled.sandbox_id);
 			}
 		}
 		return { runs, sandboxIds };
@@ -573,6 +632,9 @@ export class JobRunService {
 			if (!isTerminalRunStatus(run.status)) continue;
 			const endedAt = Date.parse(run.finished_at ?? run.queued_at);
 			if (!(endedAt < cutoff)) continue;
+			if ((await this.bucket.head(paths.jobRunMarker(run.project_id, run.run_id))) !== null) {
+				continue;
+			}
 			await deleteByPrefix(this.bucket, jobPaths.run(run.run_id).base);
 			await this.bucket.delete(jobPaths.runIndex(run.run_id));
 			pruned++;

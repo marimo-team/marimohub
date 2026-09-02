@@ -149,6 +149,12 @@ describe('RunId namespace', () => {
 		expect(RunId.is(`run-${'A'.repeat(26)}`)).toBe(false);
 	});
 
+	it('rejects characters outside the Crockford Base32 alphabet', () => {
+		for (const ambiguous of ['I', 'L', 'O', 'U']) {
+			expect(RunId.is(`run_${ambiguous}${'0'.repeat(25)}`)).toBe(false);
+		}
+	});
+
 	it('parse() and assert() enforce the RunId format', () => {
 		const valid = createRunId();
 		expect(RunId.parse(valid)).toBe(valid);

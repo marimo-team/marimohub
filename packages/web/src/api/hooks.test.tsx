@@ -13,6 +13,7 @@ import {
 	useDownloadWorkspace,
 	useEditorSessionQuery,
 	useJobRunQuery,
+	useJobsQuery,
 	useNotebookHtmlQuery,
 	useNotebookQuery,
 	useRestartApp,
@@ -336,6 +337,27 @@ describe('useJobRunQuery', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('useJobsQuery', () => {
+	it('loads every cursor page of jobs', async () => {
+		const fetchMock = stubFetch(async (url) => {
+			const cursor = new URL(String(url), 'http://test.local').searchParams.get('cursor');
+			return cursor
+				? jsonOk({ items: [{ id: 'job-2', name: 'Second' }], next_cursor: null })
+				: jsonOk({ items: [{ id: 'job-1', name: 'First' }], next_cursor: 'page-2' });
+		});
+
+		const { result } = renderHookWithClient(() => useJobsQuery(PID, NID), { toaster: false });
+
+		await waitFor(() =>
+			expect(result.current.data?.map((job) => job.id)).toEqual(['job-1', 'job-2']),
+		);
+		expect(urlsOf(fetchMock)).toHaveLength(2);
+		expect(new URL(urlsOf(fetchMock)[1], 'http://test.local').searchParams.get('cursor')).toBe(
+			'page-2',
+		);
 	});
 });
 

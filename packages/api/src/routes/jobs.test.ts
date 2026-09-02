@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServices, paths, SandboxId } from '@marimo-hub/core';
 import type { JobRun, ProjectId, SandboxProvider, UserId } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
@@ -310,6 +310,36 @@ describe('Job routes', () => {
 		);
 		expect(await bucket.head(paths.jobRunMarker(pid, queued.run_id))).toBeNull();
 		expect(await services.jobRuns.listActive()).toEqual([]);
+	});
+
+	it('finishes deletion after repeated finish-audit failures', async () => {
+		const job = await createJob();
+		const queued = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
+		const run = await services.jobRuns.getRun(pid, nid as never, job.id, queued.run_id);
+		const sandboxId = SandboxId.parse('sb-0123456789abcdef');
+		await services.jobRuns.transition(run, 'provision', () => ({ sandbox_id: sandboxId }));
+
+		const api = createTestApi({ bucket, compute });
+		const originalAppend = api.deps.services.events.append.bind(api.deps.services.events);
+		let finishAttempts = 0;
+		vi.spyOn(api.deps.services.events, 'append').mockImplementation((event, options) => {
+			if (event.event === 'job.run.finish') {
+				finishAttempts++;
+				return Promise.reject(new Error('audit store unavailable'));
+			}
+			return originalAppend(event, options);
+		});
+
+		await expectOk(
+			await api.request('DELETE', `${base()}/${job.id}`, undefined, {
+				'if-match': job.updated_at,
+			}),
+		);
+
+		expect(finishAttempts).toBe(3);
+		expect(destroyed).toEqual([sandboxId]);
+		expect(await bucket.head(paths.jobRunMarker(pid, queued.run_id))).toBeNull();
+		await expectError(await api.request('GET', `${base()}/${job.id}`), 404, 'NOT_FOUND');
 	});
 
 	it('rejects a trigger that overlaps deletion', async () => {
@@ -717,6 +747,45 @@ describe('Job routes', () => {
 			expect((await services.jobRuns.listActive()).map(({ run }) => run?.status)).toEqual([
 				'cancelled',
 			]);
+		});
+
+		it('continues cleanup after a partially failed notebook-run cancellation', async () => {
+			const job = await createJob();
+			const first = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
+			const second = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
+			const firstRun = await services.jobRuns.getRun(pid, nid as never, job.id, first.run_id);
+			const secondRun = await services.jobRuns.getRun(pid, nid as never, job.id, second.run_id);
+			await services.jobRuns.transition(firstRun, 'provision', () => ({
+				sandbox_id: SandboxId.parse('sb-0123456789abcdef'),
+			}));
+			await services.jobRuns.transition(secondRun, 'provision', () => ({
+				sandbox_id: SandboxId.parse('sb-1234567890abcdef'),
+			}));
+
+			const api = createTestApi({ bucket, compute });
+			vi.spyOn(api.deps.services.jobRuns, 'cancelRunsOfNotebook').mockImplementationOnce(
+				async (_projectId, _notebookId, actor) => {
+					await api.deps.services.jobRuns.cancel(firstRun, actor);
+					throw new Error('bucket write failed');
+				},
+			);
+
+			await expectOk(await api.request('DELETE', `/projects/${pid}/notebooks/${nid}`));
+
+			expect(new Set(destroyed)).toEqual(new Set(['sb-0123456789abcdef', 'sb-1234567890abcdef']));
+			for (const runId of [first.run_id, second.run_id]) {
+				expect((await services.jobRuns.getRun(pid, nid as never, job.id, runId)).status).toBe(
+					'cancelled',
+				);
+			}
+			const events = await services.events.getEvents(new Date().toISOString().slice(0, 10));
+			expect(
+				events.filter(
+					(event) =>
+						event.event === 'job.run.finish' &&
+						[first.run_id, second.run_id].includes(event.run_id as string),
+				),
+			).toHaveLength(2);
 		});
 
 		it('exposes the image and compute profile a run provisioned with', async () => {

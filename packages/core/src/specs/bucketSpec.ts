@@ -19,6 +19,7 @@ import {
 	AppClaimSchema,
 	CatalogSchema,
 	EditorClaimSchema,
+	EventIdempotencyMarkerSchema,
 	EventSchema,
 	FsSnapshotSchema,
 	IdentitySchema,
@@ -340,6 +341,15 @@ const OBJECTS: BucketObject[] = [
 		schema: EventSchema,
 		summary: 'Append-only audit event.',
 		mutability: 'append-only',
+		tag: 'ops',
+	},
+	{
+		name: 'EventIdempotencyMarker',
+		key: template(paths.eventIdempotency('{date}', '{id}')),
+		schema: EventIdempotencyMarkerSchema,
+		summary: 'Create-if-absent mapping from a stable idempotency key to one audit event.',
+		mutability: 'immutable',
+		owner: 'EventService',
 		tag: 'ops',
 	},
 ];

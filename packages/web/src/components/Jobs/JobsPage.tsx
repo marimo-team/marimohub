@@ -41,7 +41,7 @@ function useJobsPageModel() {
 	// Unknown until the probe answers (the list waits, so an off deployment is
 	// never asked); a failed probe assumes on rather than hiding a live feature.
 	const jobsAvailable = capabilities
-		? capabilities.jobs.available
+		? (capabilities.jobs?.available ?? false)
 		: capabilitiesError
 			? true
 			: undefined;
@@ -314,7 +314,7 @@ export function JobsPage() {
 										<RunTable
 											runs={m.runs.data}
 											selectedRunId={selectedRun?.run_id ?? null}
-											onSelect={(run) => m.select({ run: run.run_id })}
+											onSelect={(run) => m.select({ job: selectedJob.id, run: run.run_id })}
 										/>
 									)}
 									{m.runs.hasNextPage && (

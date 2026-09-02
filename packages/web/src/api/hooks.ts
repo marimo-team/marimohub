@@ -1720,14 +1720,19 @@ export function useRestoreVersion(projectId: string, notebookId: string) {
 export function useJobsQuery(projectId: string, notebookId: string, enabled = true) {
 	return useQuery({
 		queryKey: jobKeys.list(projectId, notebookId),
-		queryFn: async () =>
-			(
-				await apiData(
-					apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs', {
-						params: { path: { pid: projectId, nid: notebookId } },
-					}),
-				)
-			).items,
+		queryFn: () =>
+			listAllCursorPages(
+				(cursor) =>
+					apiData(
+						apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs', {
+							params: {
+								path: { pid: projectId, nid: notebookId },
+								query: { limit: 100, ...(cursor ? { cursor } : {}) },
+							},
+						}),
+					),
+				'Job listing did not advance; refusing a partial result.',
+			),
 		enabled,
 	});
 }

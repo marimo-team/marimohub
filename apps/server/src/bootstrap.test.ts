@@ -398,6 +398,9 @@ describe('bootstrap', () => {
 	});
 
 	it('starts the job scheduler with maintenance only when jobs are on', async () => {
+		await bootstrap(BASE_ENV, makeHarness(deps).overrides);
+		expect(startJobScheduler).not.toHaveBeenCalled();
+
 		await bootstrap(
 			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
 			makeHarness(deps).overrides,

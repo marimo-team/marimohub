@@ -89,6 +89,7 @@ describe('startMaintenance', () => {
 		await deps.services.jobRuns.transition(old, 'fail', () => ({
 			finished_at: new Date(Date.now() - 60 * 24 * 3_600_000).toISOString(),
 		}));
+		await deps.services.jobRuns.deleteMarker(old);
 
 		stop = startMaintenance(deps, metrics);
 		await flushRun();
@@ -513,10 +514,11 @@ describe('startJobScheduler', () => {
 	});
 
 	it('runs a tick under its own lease and stays quiet when nothing happened', async () => {
+		const putSpy = vi.spyOn(bucket, 'put');
 		handle = startJobScheduler(deps, metrics);
 		await flushRun();
 		expect(parseLoggedEvents(logSpy)).toEqual([]);
-		// The lease is released after the tick, on the scheduler's own key.
+		expect(putSpy.mock.calls.some(([key]) => key === paths.jobSchedulerLock)).toBe(true);
 		expect(await bucket.head(paths.jobSchedulerLock)).toBeNull();
 	});
 
@@ -579,10 +581,11 @@ describe('startJobScheduler', () => {
 	});
 
 	it('skips the tick when this replica is not the lease holder', async () => {
-		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
+		const acquire = vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
 		const tickSpy = vi.spyOn(deps.services.jobRuns, 'listActive');
 		handle = startJobScheduler(deps, metrics);
 		await flushRun();
+		expect(acquire).toHaveBeenCalledOnce();
 		expect(tickSpy).not.toHaveBeenCalled();
 	});
 

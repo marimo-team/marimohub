@@ -166,7 +166,11 @@ export const AlertDestinationId = defineId<AlertDestinationId>(
 	() => `alert-${randomBody()}`,
 );
 export const JobId = defineId<JobId>('JobId', /^job-[0-9a-z]{16}$/, () => `job-${randomBody()}`);
-export const RunId = defineId<RunId>('RunId', /^run_[0-9A-Z]{26}$/, () => `run_${nextRunUlid()}`);
+export const RunId = defineId<RunId>(
+	'RunId',
+	/^run_[0-9A-HJKMNP-TV-Z]{26}$/,
+	() => `run_${nextRunUlid()}`,
+);
 
 // A brand with no format/generator — `is` only checks "non-empty string". Used
 // for opaque provider ids (see UserId). `parse` brands a trusted value (e.g. an

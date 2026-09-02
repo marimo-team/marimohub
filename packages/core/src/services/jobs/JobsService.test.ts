@@ -196,6 +196,7 @@ describe('JobsService', () => {
 		expect(indexedJobs(await env.catalog.getCurrentSnapshot())).toEqual([]);
 		expect(await env.jobs.isDeleting(job)).toBe(true);
 		await env.jobs.finishDelete(pid, nid, job.id);
+		expect(await env.jobs.isDeleting(job)).toBe(false);
 		expect(await env.bucket.head(jobPaths.head)).toBeNull();
 		expect(await env.bucket.head(jobPaths.occurrence('20260902T0600Z'))).toBeNull();
 		expect(indexedJobs(await env.catalog.getCurrentSnapshot())).toEqual([]);
@@ -289,6 +290,42 @@ describe('JobsService', () => {
 			);
 			expect(await env.jobs.listJobs(pid, nid)).toEqual([]);
 			expect(indexedJobs(await env.catalog.getCurrentSnapshot())).toEqual([]);
+		});
+
+		it('removes the definition when the immutable pagination index write fails', async () => {
+			const put = env.bucket.put.bind(env.bucket);
+			vi.spyOn(env.bucket, 'put').mockImplementation(async (key, ...args) => {
+				if (key.includes('/job-index/')) throw new Error('index down');
+				return put(key, ...args);
+			});
+
+			await expect(env.jobs.createJob(pid, nid, { name: 'nightly' }, ACTOR)).rejects.toThrow(
+				'index down',
+			);
+			expect(await env.jobs.listJobs(pid, nid)).toEqual([]);
+			expect(
+				(
+					await env.bucket.list({
+						prefix: paths.project(pid).notebook(nid).jobsPrefix,
+					})
+				).objects,
+			).toEqual([]);
+		});
+
+		it('restores the definition when catalog synchronization rejects an update', async () => {
+			const job = await env.jobs.createJob(pid, nid, { name: 'nightly', enabled: true }, ACTOR);
+			vi.spyOn(env.catalog, 'updateNotebookEntry').mockRejectedValueOnce(new Error('catalog down'));
+
+			await expect(
+				env.jobs.updateJob(pid, nid, job.id, { name: 'changed', enabled: false }, ACTOR),
+			).rejects.toThrow('catalog down');
+
+			expect(await env.jobs.getJob(pid, nid, job.id)).toEqual(job);
+			expect(indexedJobs(await env.catalog.getCurrentSnapshot())[0].entry).toMatchObject({
+				id: job.id,
+				enabled: true,
+				updated_at: job.updated_at,
+			});
 		});
 	});
 });

@@ -207,7 +207,7 @@ describe('NotificationRouter', () => {
 			notebookTitle: 'Forecast',
 			job: { id: JobId.parse('job-0123456789abcdef'), name: 'Nightly' },
 			run: {
-				run_id: RunId.parse('run_01HXYZ33333RSTUVWXYZABCDEF'),
+				run_id: RunId.parse('run_01HXYZ33333RSTQVWXYZABCDEF'),
 				status: 'timed_out',
 				trigger: 'schedule',
 				attempt: 2,
@@ -223,18 +223,18 @@ describe('NotificationRouter', () => {
 			audience: 'broadcast',
 			title: `Job failed in ${project.name}`,
 			body: 'Nightly (Forecast) timed out (RUN_TIMED_OUT).',
-			link: `https://hub.example/projects/${project.id}/notebooks/nb-0123456789abcdef/jobs?job=job-0123456789abcdef&run=run_01HXYZ33333RSTUVWXYZABCDEF`,
+			link: `https://hub.example/projects/${project.id}/notebooks/nb-0123456789abcdef/jobs?job=job-0123456789abcdef&run=run_01HXYZ33333RSTQVWXYZABCDEF`,
 			data: {
 				job_id: 'job-0123456789abcdef',
 				job_name: 'Nightly',
-				run_id: 'run_01HXYZ33333RSTUVWXYZABCDEF',
+				run_id: 'run_01HXYZ33333RSTQVWXYZABCDEF',
 				status: 'timed_out',
 				trigger: 'schedule',
 				attempt: 2,
 				error_code: 'RUN_TIMED_OUT',
 				duration_seconds: 1800,
 			},
-			dedupe_key: 'job.run.failed:run_01HXYZ33333RSTUVWXYZABCDEF:broadcast',
+			dedupe_key: 'job.run.failed:run_01HXYZ33333RSTQVWXYZABCDEF:broadcast',
 		});
 		const [succeeded] = notificationRouter.render({
 			kind: 'job.run.succeeded',
@@ -243,7 +243,7 @@ describe('NotificationRouter', () => {
 			notebookTitle: 'Forecast',
 			job: { id: JobId.parse('job-0123456789abcdef'), name: 'Nightly' },
 			run: {
-				run_id: RunId.parse('run_01HXYZ33333RSTUVWXYZABCDEF'),
+				run_id: RunId.parse('run_01HXYZ33333RSTQVWXYZABCDEF'),
 				status: 'succeeded',
 				trigger: 'manual',
 				attempt: 1,

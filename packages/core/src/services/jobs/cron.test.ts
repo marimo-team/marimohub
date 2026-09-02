@@ -118,6 +118,12 @@ describe('previousOccurrence', () => {
 		expect(previousOccurrence(daily6, 'UTC', at('2026-09-02T06:00:30Z'), 0)).toBeNull();
 	});
 
+	it('does not round a millisecond window floor down to the previous second', () => {
+		expect(
+			previousOccurrence(daily6, 'UTC', at('2026-09-02T06:10:00.500Z'), 10 * 60_000),
+		).toBeNull();
+	});
+
 	it('fires a wall time lost to the spring-forward gap once the clock catches up', () => {
 		// Berlin springs 02:00 → 03:00 on 2026-03-29; 02:30 CET does not exist and
 		// runs at 03:30 CEST (01:30Z) instead of being dropped for the day.

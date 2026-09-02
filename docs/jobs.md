@@ -15,8 +15,8 @@ notebook.
 ## Enabling jobs
 
 Jobs are **off by default**. Set `MARIMOHUB_JOBS=on` to enable the job API and
-UI, the scheduler loop on the maintenance replica, and the `job.*`
-[project alert](./project-alerts.md) kinds. While off, the jobs routes answer
+UI, the Node maintenance scheduler or Cloudflare `scheduled()` handler, and the
+`job.*` [project alert](./project-alerts.md) kinds. While off, the jobs routes answer
 `404`, `GET /api/v1/capabilities` reports `jobs.available: false`, the UI hides
 its entry points, and stored job definitions and run history are left untouched
 so the feature can be turned back on without loss.
@@ -42,12 +42,13 @@ so the feature can be turned back on without loss.
   shell-interpolated. A manual run can override the job's stored parameters
   for that run only. Parameters are visible to project members who can read the
   job and run history, so they must not contain secrets.
-- **The scheduler lives on the maintenance replica.** The replica running
+- **Node dispatches from the maintenance replica.** The replica running
   `MARIMOHUB_RUN_MAINTENANCE=true` evaluates schedules every
   `MARIMOHUB_JOBS_TICK_SECONDS`, dispatches queued runs under the concurrency
-  caps, enforces run deadlines, and prunes old runs. **Without a maintenance
-  replica jobs are accepted but never run** — manual triggers stay `queued`.
-  See [Operations](./operations.md#scaling).
+  caps, enforces run deadlines, and prunes old runs. Without that replica, a
+  Node deployment accepts jobs but leaves manual triggers queued. The Cloudflare
+  reference deployment instead dispatches from its platform `scheduled()`
+  handler. See [Operations](./operations.md#scaling).
 - **Exactly once, never backfilled.** Every scheduled fire claims an
   occurrence record keyed by its UTC minute, so two replicas evaluating the same
   schedule cannot both fire it. After an outage only the latest missed
@@ -65,7 +66,8 @@ so the feature can be turned back on without loss.
   `timed_out`. A failed or timed-out run is retried up to `max_retries` times
   after `backoff_seconds`; each attempt is its own run linked to the previous one.
 - **Retention.** Run records and outputs older than
-  `MARIMOHUB_JOBS_RUN_RETENTION_DAYS` are pruned by the maintenance cycle.
+  `MARIMOHUB_JOBS_RUN_RETENTION_DAYS` are pruned by the Node maintenance cycle;
+  the Cloudflare scheduled handler prunes with its fixed 30-day retention.
   Deleting a job removes its history immediately; soft-deleting a notebook or
   project cancels its active runs, and the hard-delete sweep reclaims the rest.
 - **Compute image and profile.** A run provisions exactly as a session start
@@ -132,7 +134,8 @@ job, run, status, attempt, and sanitized error code.
 ## API
 
 All routes are under `/api/v1/projects/{pid}/notebooks/{nid}/jobs` and use the
-standard envelope; `POST` routes accept an `Idempotency-Key`.
+standard envelope. Job creation and manual run triggers accept an
+`Idempotency-Key`.
 
 | Method   | Path                       | Notes                                                    |
 | -------- | -------------------------- | -------------------------------------------------------- |
@@ -152,19 +155,19 @@ The CLI exposes the same operations under `jobs …`.
 
 ## Configuration
 
-| Variable                                         | Default | Meaning                                                    |
-| ------------------------------------------------ | ------- | ---------------------------------------------------------- |
-| `MARIMOHUB_JOBS`                                 | `off`   | Turns the feature on (`on`) or off (`off`).                |
-| `MARIMOHUB_JOBS_TICK_SECONDS`                    | `60`    | Scheduler interval on the maintenance replica.             |
-| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS`             | `5`     | Deployment-wide cap on runs holding a sandbox.             |
-| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT` | `2`     | Per-project share of the cap.                              |
-| `MARIMOHUB_JOBS_MAX_PER_NOTEBOOK`                | `5`     | Job definitions per notebook (`0` = unlimited).            |
-| `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS`         | `1800`  | Run deadline when the job sets none.                       |
-| `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS`             | `14400` | Ceiling on a job's `timeout_seconds`.                      |
-| `MARIMOHUB_JOBS_RUN_RETENTION_DAYS`              | `30`    | How long run records and outputs are kept.                 |
-| `MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS`          | `600`   | How stale a missed occurrence may be and still fire, once. |
+| Variable                                         | Default | Meaning                                                               |
+| ------------------------------------------------ | ------- | --------------------------------------------------------------------- |
+| `MARIMOHUB_JOBS`                                 | `off`   | Turns the feature on (`on`) or off (`off`).                           |
+| `MARIMOHUB_JOBS_TICK_SECONDS`                    | `60`    | Node only: scheduler interval on the maintenance replica.             |
+| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS`             | `5`     | Node only: deployment-wide cap on runs holding a sandbox.             |
+| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT` | `2`     | Node only: per-project share of the cap.                              |
+| `MARIMOHUB_JOBS_MAX_PER_NOTEBOOK`                | `5`     | Node only: job definitions per notebook (`0` = unlimited).            |
+| `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS`         | `1800`  | Node only: run deadline when the job sets none.                       |
+| `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS`             | `14400` | Node only: ceiling on a job's `timeout_seconds`.                      |
+| `MARIMOHUB_JOBS_RUN_RETENTION_DAYS`              | `30`    | Node only: how long run records and outputs are kept.                 |
+| `MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS`          | `600`   | Node only: how stale a missed occurrence may be and still fire, once. |
 
-The remaining variables apply only while `MARIMOHUB_JOBS=on`. Jobs grant
+On Node, the tuning variables apply only while `MARIMOHUB_JOBS=on`. Jobs grant
 editors nothing an edit session does not; unattended cost is bounded by the
 caps and timeouts, and a deployment can turn the feature off at any time.
 
@@ -172,7 +175,9 @@ caps and timeouts, and a deployment can turn the feature off at any time.
 The Workers reference deployment reads the same `MARIMOHUB_JOBS` toggle from
 its wrangler vars and ticks the scheduler from its five-minute cron trigger, so
 schedules finer than five minutes are Node-only, and a run is bounded by the
-Workers invocation limits.
+Workers invocation limits. It ignores the tuning variables in the table and
+uses their listed defaults, except that tick cadence comes from the five-minute
+platform trigger.
 :::
 
 See [Configuration](./configuration.md) for the full reference.

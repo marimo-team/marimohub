@@ -1191,6 +1191,47 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/events/{date}/_idempotency/{id}.json:
+    summary: Create-if-absent mapping from a stable idempotency key to one audit event.
+    parameters:
+      - name: date
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: EventService
+    get:
+      operationId: read_system_events_idempotency_json
+      summary: Read EventIdempotencyMarker
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventIdempotencyMarker'
+    put:
+      operationId: write_system_events_idempotency_json
+      summary: Write EventIdempotencyMarker
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventIdempotencyMarker'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/job-index/{created_at}_{job_id}.json:
     summary: Empty create-if-absent job index entry. Lexicographic key order is
       oldest-first by created_at, then job_id.
@@ -2715,6 +2756,7 @@ components:
           pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
       required:
         - run_id
+        - continuation_run_id
         - job_id
         - notebook_id
         - project_id
@@ -3254,3 +3296,14 @@ components:
         - event
         - actor
       additionalProperties: {}
+    EventIdempotencyMarker:
+      type: object
+      properties:
+        event_id:
+          type: string
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+        body:
+          type: string
+      required:
+        - event_id
+        - body

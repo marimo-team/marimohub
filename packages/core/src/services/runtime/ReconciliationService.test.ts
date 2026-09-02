@@ -170,6 +170,28 @@ describe('ReconciliationService', () => {
 		expect(compute.destroyed).toEqual([]);
 	});
 
+	it('Rule 3: skips orphan reaping when job-run marker enumeration is incomplete', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		compute.active = [{ id: orphanId, createdAt: iso(-60 * 60 * 1000) }];
+		const aware = new ReconciliationService(
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			'source',
+			undefined,
+			{
+				activeSandboxIds: async () => [],
+				listActiveSnapshot: async () => ({ entries: [], complete: false }),
+			},
+		);
+
+		const result = await aware.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(result.orphansReaped).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+	});
+
 	it('Rule 3: preserves timestamp-less orphan markers when active ownership is unavailable', async () => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		compute.active = [{ id: inflightId }];

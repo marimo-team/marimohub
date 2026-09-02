@@ -31,7 +31,7 @@ import {
 	VIEWER_MODES,
 	SurfaceForbiddenError,
 } from '@marimo-hub/core';
-import { appendJobRunFinishEvent } from '@marimo-hub/core/jobs';
+import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type {
 	AuthorizationPolicy,
 	AuthorizationSubject,
@@ -49,6 +49,7 @@ import type {
 	SessionScopedAction,
 	Session,
 	TokenGrant,
+	JobRun,
 	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
@@ -520,7 +521,7 @@ export async function cancelJobRuns(
 	actor: UserId,
 	nid?: NotebookId,
 ): Promise<void> {
-	let cancelled;
+	let cancelled: { runs: JobRun[]; sandboxIds: string[] };
 	try {
 		cancelled = nid
 			? await deps.services.jobRuns.cancelRunsOfNotebook(pid, nid, actor)
@@ -533,7 +534,46 @@ export async function cancelJobRuns(
 			notebook_id: nid ?? null,
 			error: describeError(err),
 		});
-		return;
+		const recovered = new Map<string, JobRun>();
+		try {
+			for (const { marker, run } of await deps.services.jobRuns.listActive()) {
+				if (
+					marker.project_id !== pid ||
+					(nid !== undefined && marker.notebook_id !== nid) ||
+					!run
+				) {
+					continue;
+				}
+				try {
+					const candidate = isTerminalRunStatus(run.status)
+						? run
+						: (await deps.services.jobRuns.cancel(run, actor)).run;
+					if (isTerminalRunStatus(candidate.status)) recovered.set(candidate.run_id, candidate);
+				} catch (recoveryError) {
+					logEvent({
+						level: 'error',
+						event: 'job_run_cancel_recovery_failed',
+						project_id: marker.project_id,
+						notebook_id: marker.notebook_id,
+						run_id: marker.run_id,
+						error: describeError(recoveryError),
+					});
+				}
+			}
+		} catch (recoveryError) {
+			logEvent({
+				level: 'error',
+				event: 'job_runs_cancel_recovery_list_failed',
+				project_id: pid,
+				notebook_id: nid ?? null,
+				error: describeError(recoveryError),
+			});
+			return;
+		}
+		cancelled = {
+			runs: [...recovered.values()],
+			sandboxIds: [...new Set([...recovered.values()].flatMap((run) => run.sandbox_id ?? []))],
+		};
 	}
 	for (const run of cancelled.runs) {
 		try {

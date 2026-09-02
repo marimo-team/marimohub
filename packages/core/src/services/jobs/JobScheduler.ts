@@ -4,7 +4,7 @@ import type { ProjectAlertDispatcher } from '../../ports/projectAlerts';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { InFlightWork } from '../../concurrency';
 import { Millis } from '../../duration';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, UnavailableError } from '../../errors';
 import { createRunId, SandboxId, SYSTEM_ACTOR } from '../../ids';
 import type { ProjectId, RunId, VersionId } from '../../ids';
 import { logEvent } from '../../logs';
@@ -218,7 +218,7 @@ export class JobScheduler {
 			}
 			if (isTerminalRunStatus(run.status)) {
 				try {
-					await this.finalize(run, marker.continuation_run_id);
+					await this.finalize(run);
 					result.markersPruned++;
 				} catch (err) {
 					result.errors++;
@@ -325,7 +325,7 @@ export class JobScheduler {
 						message: 'Skipped: the previous run of this job was still active',
 					},
 				});
-				await this.finalize(skipped);
+				await this.finalizeLocked(skipped);
 				return claim.claimed ? 'skipped' : 'repaired';
 			}
 			await this.enqueueScheduled(job, claimedRunId, scheduledFor);
@@ -452,13 +452,22 @@ export class JobScheduler {
 		void this.inFlight.track(execution);
 	}
 
-	private async finalize(finished: JobRun, continuationRunId?: RunId): Promise<void> {
+	private async finalize(finished: JobRun): Promise<void> {
 		if (!isTerminalRunStatus(finished.status)) return;
-		const marker = continuationRunId ? null : await this.deps.runs.getMarker(finished);
-		await this.afterRun(
-			finished,
-			continuationRunId ?? marker?.continuation_run_id ?? createRunId(),
+		await this.deps.runs.withJobMutation(
+			{
+				project_id: finished.project_id,
+				notebook_id: finished.notebook_id,
+				id: finished.job_id,
+			},
+			async () => this.finalizeLocked(finished),
 		);
+	}
+
+	private async finalizeLocked(finished: JobRun): Promise<void> {
+		const marker = await this.deps.runs.getMarker(finished);
+		if (!marker) return;
+		await this.afterRun(finished, marker.continuation_run_id);
 		await this.deps.runs.deleteMarker(finished);
 	}
 
@@ -472,23 +481,21 @@ export class JobScheduler {
 		const failed = finished.status === 'failed' || finished.status === 'timed_out';
 		const retry = job.retry;
 		if (failed && retry && finished.attempt <= retry.max_retries) {
-			await this.deps.runs.withJobMutation(job, async () => {
-				if (await this.deps.jobs.isDeleting(job)) return;
-				const current = await this.loadJob(job.project_id, job.notebook_id, job.id);
-				if (!current) return;
-				await this.deps.runs.enqueue({
-					job: current,
-					runId: continuationRunId,
-					trigger: finished.trigger,
-					triggeredBy: finished.triggered_by,
-					scheduledFor: finished.scheduled_for,
-					parameters: finished.parameters,
-					sourceVersionId: finished.source_version_id,
-					timeoutSeconds: finished.timeout_seconds,
-					attempt: finished.attempt + 1,
-					retryOf: finished.run_id,
-					eligibleAt: new Date(this.now() + retry.backoff_seconds * 1000).toISOString(),
-				});
+			if (await this.deps.jobs.isDeleting(job)) return;
+			const current = await this.loadJob(job.project_id, job.notebook_id, job.id);
+			if (!current) return;
+			await this.deps.runs.enqueue({
+				job: current,
+				runId: continuationRunId,
+				trigger: finished.trigger,
+				triggeredBy: finished.triggered_by,
+				scheduledFor: finished.scheduled_for,
+				parameters: finished.parameters,
+				sourceVersionId: finished.source_version_id,
+				timeoutSeconds: finished.timeout_seconds,
+				attempt: finished.attempt + 1,
+				retryOf: finished.run_id,
+				eligibleAt: new Date(this.now() + retry.backoff_seconds * 1000).toISOString(),
 			});
 			this.metrics.increment('jobs.runs.retried');
 			return;
@@ -544,6 +551,7 @@ export class JobScheduler {
 					project_id: run.project_id,
 					run_id: run.run_id,
 				});
+				throw new UnavailableError('Some project alert destinations failed');
 			}
 		} catch (err) {
 			logOperationalError(

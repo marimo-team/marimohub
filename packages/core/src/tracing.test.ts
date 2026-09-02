@@ -172,10 +172,20 @@ describe('createServices tracing option', () => {
 		const jobId = createJobId();
 		const runId = createRunId();
 
+		await expect(services.jobs.listJobsPage(projectId, notebookId, 10)).resolves.toEqual({
+			items: [],
+			next: null,
+		});
 		await expect(services.jobs.getJob(projectId, notebookId, jobId)).rejects.toThrow();
 		await expect(services.jobRuns.getRun(projectId, notebookId, jobId, runId)).rejects.toThrow();
 
 		const spans = exporter.getFinishedSpans();
+		expect(
+			spans.find((span) => span.name === 'JobsService.listJobsPage')?.attributes,
+		).toMatchObject({
+			'marimohub.project_id': projectId,
+			'marimohub.notebook_id': notebookId,
+		});
 		expect(spans.find((span) => span.name === 'JobsService.getJob')?.attributes).toMatchObject({
 			'marimohub.project_id': projectId,
 			'marimohub.notebook_id': notebookId,

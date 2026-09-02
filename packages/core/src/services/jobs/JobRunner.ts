@@ -38,9 +38,8 @@ export const JOB_PROVISION_ALLOWANCE_MS = Millis.minutes(10);
 /** Tail of stdout+stderr kept on the run record's `logs.txt`. */
 export const MAX_RUN_LOG_BYTES = 256 * 1024;
 const EXIT_MARKER = '__MARIMOHUB_JOB_EXIT__';
-const EXIT_MARKER_PATTERN = /(?:^|\n)__MARIMOHUB_JOB_EXIT__ (\d{1,3})\n?$/;
-/** GNU `timeout` reports 124 when it had to stop the command. */
-const TIMEOUT_EXIT_CODE = 124;
+const EXIT_MARKER_PATTERN = /(?:^|\n)__MARIMOHUB_JOB_EXIT__ (\d{1,3}) (exit|timeout)\n?$/;
+const EXIT_STATUS_FILE = '__marimo__/.job_exit_status';
 /**
  * Slack past `timeout_seconds` before the runner itself abandons the exec:
  * covers `timeout -k 30` plus the exec RPC's own deadline, so the in-process
@@ -125,17 +124,28 @@ export function jobShellCommand(
 	parameters: JobRun['parameters'],
 ): string {
 	const command = `${start}${cliArgs(parameters)}`;
-	const bounded = `if command -v timeout >/dev/null 2>&1; then timeout -k 30 ${timeoutSeconds} ${command}; else ${command}; fi`;
-	return `cd ${shellQuote(workdir)} && rm -f ${shellQuote(JOB_OUTPUT_FILE)} && { ${bounded}; }; status=$?; printf '\\n${EXIT_MARKER} %s\\n' "$status"`;
+	const statusFile = shellQuote(EXIT_STATUS_FILE);
+	const inner = `${command}; status=$?; printf '%s' "$status" > ${statusFile}; exit "$status"`;
+	const bounded =
+		`if command -v timeout >/dev/null 2>&1; then ` +
+		`timeout -k 30 ${timeoutSeconds} sh -c ${shellQuote(inner)}; status=$?; ` +
+		`if [ -f ${statusFile} ]; then status="$(cat ${statusFile})"; outcome=exit; ` +
+		`else case "$status" in 124|137) outcome=timeout ;; *) outcome=exit ;; esac; fi; ` +
+		`else ${command}; status=$?; outcome=exit; fi`;
+	return `cd ${shellQuote(workdir)} && mkdir -p '__marimo__' && rm -f ${shellQuote(JOB_OUTPUT_FILE)} ${statusFile} && { ${bounded}; }; rm -f ${statusFile}; printf '\\n${EXIT_MARKER} %s %s\\n' "$status" "$outcome"`;
+}
+
+function parseExitMarker(stdout: string): { exitCode: number; timedOut: boolean } | undefined {
+	const match = EXIT_MARKER_PATTERN.exec(stdout);
+	return match ? { exitCode: Number(match[1]), timedOut: match[2] === 'timeout' } : undefined;
 }
 
 export function parseExitCode(stdout: string): number | undefined {
-	const match = EXIT_MARKER_PATTERN.exec(stdout);
-	return match ? Number(match[1]) : undefined;
+	return parseExitMarker(stdout)?.exitCode;
 }
 
 function stripExitMarker(stdout: string): string {
-	return stdout.replace(new RegExp(`\\n?${EXIT_MARKER} \\d{1,3}\\n?$`), '');
+	return stdout.replace(new RegExp(`\\n?${EXIT_MARKER} \\d{1,3} (?:exit|timeout)\\n?$`), '');
 }
 
 class RunCancelledError extends Error {
@@ -169,14 +179,14 @@ export interface ExportOutcome {
 export function classifyExport(input: {
 	result: ExecResult;
 	exitCode: number | undefined;
+	timedOut?: boolean;
 	hasHtml: boolean;
 	timeoutSeconds: number;
 }): ExportOutcome {
 	const { result, exitCode, hasHtml, timeoutSeconds } = input;
+	if (input.timedOut) return { event: 'timeout', error: timeoutError(timeoutSeconds) };
 	if (result.success && exitCode === 0 && hasHtml) return { event: 'succeed' };
-	const timedOut =
-		exitCode === TIMEOUT_EXIT_CODE ||
-		(exitCode === undefined && !result.success && /timed out/i.test(result.stderr));
+	const timedOut = exitCode === undefined && !result.success && /timed out/i.test(result.stderr);
 	if (timedOut) return { event: 'timeout', error: timeoutError(timeoutSeconds) };
 	if (exitCode !== undefined) {
 		return {
@@ -326,16 +336,17 @@ export class JobRunner {
 				if (failed) final = failed.run;
 			}
 		} finally {
-			// A lingering sandbox is the expensive failure — destroy on every path,
-			// including the prepare failure (which already self-destroyed; idempotent).
-			try {
-				await (sandbox ?? this.deps.compute.create(sandboxId)).destroy();
-			} catch (err) {
-				logOperationalError(
-					'job_sandbox_destroy_failed',
-					{ operation: 'job.run.destroy', ...fields },
-					err,
-				);
+			// prepare() owns cleanup until it returns a sandbox handle.
+			if (sandbox) {
+				try {
+					await sandbox.destroy();
+				} catch (err) {
+					logOperationalError(
+						'job_sandbox_destroy_failed',
+						{ operation: 'job.run.destroy', ...fields },
+						err,
+					);
+				}
 			}
 		}
 		this.metrics.increment('jobs.runs.finished', 1, { status: final.status });
@@ -377,7 +388,8 @@ export class JobRunner {
 			sandbox.exec(command, { timeout: timeoutMs + Millis.minutes(1) }),
 			{ timeoutMs: timeoutMs + EXEC_GRACE_MS, timeoutError: () => new RunDeadlineError() },
 		);
-		const exitCode = parseExitCode(result.stdout);
+		const marker = parseExitMarker(result.stdout);
+		const exitCode = marker?.exitCode;
 		const logs = logTail(
 			[stripExitMarker(result.stdout), result.stderr].filter((s) => s.trim()).join('\n'),
 			MAX_RUN_LOG_BYTES,
@@ -387,6 +399,7 @@ export class JobRunner {
 		const outcome = classifyExport({
 			result,
 			exitCode,
+			timedOut: marker?.timedOut,
 			hasHtml: html !== undefined,
 			timeoutSeconds: run.timeout_seconds,
 		});

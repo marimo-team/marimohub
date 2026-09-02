@@ -123,12 +123,15 @@ describe('JobFormDialog', () => {
 		const submit = within(dialog).getByRole('button', { name: 'Create job' });
 		expect(submit).toBeDisabled();
 
-		await user.type(within(dialog).getByLabelText('Parameters'), 'nonsense');
+		const parameters = within(dialog).getByLabelText('Parameters');
+		await user.type(parameters, 'nonsense');
+		await user.tab();
 		expect(await within(dialog).findByText(/is not key=value/)).toBeInTheDocument();
-		await user.clear(within(dialog).getByLabelText('Parameters'));
+		await user.clear(parameters);
 
 		const timeout = within(dialog).getByLabelText(/Timeout/);
 		await user.type(timeout, '30');
+		await user.tab();
 		expect(await within(dialog).findByText('At least 60 seconds')).toBeInTheDocument();
 		await user.clear(timeout);
 
@@ -147,6 +150,7 @@ describe('JobFormDialog', () => {
 		await user.clear(cron);
 		const timezone = within(dialog).getByLabelText(/Time zone/);
 		await user.clear(timezone);
+		await user.tab();
 		expect(await within(dialog).findByText('Cron expression is required')).toBeInTheDocument();
 		expect(await within(dialog).findByText('Time zone is required')).toBeInTheDocument();
 		expect(within(dialog).getByRole('button', { name: 'Create job' })).toBeDisabled();
@@ -160,6 +164,7 @@ describe('JobFormDialog', () => {
 		await user.type(within(dialog).getByLabelText('Name'), 'Report');
 		const timeout = await within(dialog).findByLabelText(/Timeout \(seconds, up to 120\)/);
 		await user.type(timeout, '121');
+		await user.tab();
 
 		expect(await within(dialog).findByText('At most 120 seconds')).toBeInTheDocument();
 		expect(within(dialog).getByRole('button', { name: 'Create job' })).toBeDisabled();
@@ -171,6 +176,52 @@ describe('JobFormDialog', () => {
 		const dialog = await screen.findByRole('dialog');
 		await within(dialog).findByLabelText('Name');
 		expect(within(dialog).queryByText(/Notify when a run fails/)).not.toBeInTheDocument();
+	});
+
+	it('preserves existing notifications when project alerts are unavailable', async () => {
+		const calls = makeFetch({ alerts: false });
+		const user = userEvent.setup();
+		renderDialog(job({ notifications: { on: ['failure', 'success'] } }));
+		const dialog = await screen.findByRole('dialog');
+		expect(within(dialog).queryByText(/Notify when a run fails/)).not.toBeInTheDocument();
+
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+				notifications: { on: ['failure', 'success'] },
+			}),
+		);
+	});
+
+	it('allows an empty retry backoff when retries are disabled', async () => {
+		makeFetch();
+		const user = userEvent.setup();
+		renderDialog();
+		const dialog = await screen.findByRole('dialog');
+		await user.type(within(dialog).getByLabelText('Name'), 'Report');
+		await user.clear(within(dialog).getByLabelText('Retry backoff (seconds)'));
+		await user.tab();
+
+		await waitFor(() =>
+			expect(within(dialog).getByRole('button', { name: 'Create job' })).toBeEnabled(),
+		);
+	});
+
+	it('requires a retry backoff when retries are enabled', async () => {
+		makeFetch();
+		const user = userEvent.setup();
+		renderDialog();
+		const dialog = await screen.findByRole('dialog');
+		const retries = within(dialog).getByLabelText('Retries on failure');
+		await user.clear(retries);
+		await user.type(retries, '1');
+		const backoff = within(dialog).getByLabelText('Retry backoff (seconds)');
+		await user.clear(backoff);
+		await user.tab();
+
+		expect(await within(dialog).findByText('Whole seconds, at most 3600')).toBeInTheDocument();
+		expect(within(dialog).getByRole('button', { name: 'Create job' })).toBeDisabled();
 	});
 
 	it('surfaces a server rejection as a toast and keeps the dialog open', async () => {

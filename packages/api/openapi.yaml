@@ -3019,7 +3019,7 @@ components:
       properties:
         run_id:
           type: string
-          pattern: ^run_[0-9A-Z]{26}$
+          pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
         job_id:
           type: string
         notebook_id:
@@ -12668,7 +12668,7 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^run_[0-9A-Z]{26}$
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
             example: run_01HXYZ33333RSTUVWXYZABCDEF
           required: true
           name: rid
@@ -12773,7 +12773,7 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^run_[0-9A-Z]{26}$
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
             example: run_01HXYZ33333RSTUVWXYZABCDEF
           required: true
           name: rid
@@ -12878,7 +12878,7 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^run_[0-9A-Z]{26}$
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
             example: run_01HXYZ33333RSTUVWXYZABCDEF
           required: true
           name: rid
@@ -12973,7 +12973,7 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^run_[0-9A-Z]{26}$
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
             example: run_01HXYZ33333RSTUVWXYZABCDEF
           required: true
           name: rid

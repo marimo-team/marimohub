@@ -193,7 +193,7 @@ describe('JobScheduler', () => {
 				})
 			).objects,
 		).toEqual([]);
-		expect(await env.jobs.isDeleting(job)).toBe(true);
+		expect(await env.jobs.isDeleting(job)).toBe(false);
 	});
 
 	it('fires at most the latest missed occurrence after a gap', async () => {
@@ -393,6 +393,73 @@ describe('JobScheduler', () => {
 		);
 	});
 
+	it('serializes concurrent finalizers so a failed run creates one retry', async () => {
+		const job = await createJob({
+			schedule: undefined,
+			retry: { max_retries: 1, backoff_seconds: 0 },
+		});
+		const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+		const failed = await env.jobRuns.transition(run, 'fail', () => ({
+			finished_at: new Date(now).toISOString(),
+			error: { code: 'NOTEBOOK_FAILED', message: 'boom' },
+		}));
+		expect(failed.transitioned).toBe(true);
+
+		let auditEntered!: () => void;
+		const entered = new Promise<void>((resolve) => {
+			auditEntered = resolve;
+		});
+		let releaseAudit!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			releaseAudit = resolve;
+		});
+		const append = env.events.append.bind(env.events);
+		let pause = true;
+		vi.spyOn(env.events, 'append').mockImplementation(async (...args) => {
+			if (pause && args[0].event === 'job.run.finish') {
+				pause = false;
+				auditEntered();
+				await blocked;
+			}
+			return append(...args);
+		});
+
+		const a = scheduler(fakeRunner(env), { events: env.events });
+		const b = scheduler(fakeRunner(env), { events: env.events });
+		const firstTick = a.tick();
+		await entered;
+		const secondTick = b.tick();
+		releaseAudit();
+		await Promise.all([firstTick, secondTick]);
+
+		const runs = await env.jobRuns.listRuns(pid, nid, job.id);
+		expect(runs.filter((candidate) => candidate.retry_of === run.run_id)).toHaveLength(1);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+		const events = await env.events.getEvents(new Date(now).toISOString().slice(0, 10));
+		expect(events.filter((event) => event.run_id === run.run_id)).toHaveLength(1);
+	});
+
+	it('retries partial alert delivery before deleting the finalization marker', async () => {
+		const deliver = vi
+			.fn<ProjectAlertDispatcher['deliver']>()
+			.mockResolvedValueOnce('partial')
+			.mockResolvedValueOnce('delivered');
+		const job = await createJob({ schedule: undefined, notifications: { on: ['success'] } });
+		const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+		const s = scheduler(fakeRunner(env), {
+			projectAlerts: { deliver, test: vi.fn() },
+		});
+
+		await s.tick();
+		await settle(s);
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+
+		await s.tick();
+		expect(deliver).toHaveBeenCalledTimes(2);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+	});
+
 	it('does not fire jobs of soft-deleted notebooks or disabled jobs', async () => {
 		await createJob({ enabled: false });
 		const disabledOnly = await scheduler(fakeRunner(env)).tick();
@@ -408,6 +475,7 @@ describe('JobScheduler', () => {
 		await env.jobRuns.transition(old, 'fail', () => ({
 			finished_at: new Date(now - 40 * 24 * 60 * MINUTE).toISOString(),
 		}));
+		await env.jobRuns.deleteMarker(old);
 		const s = scheduler(fakeRunner(env));
 		expect(await s.prune(30 * 24 * 60 * MINUTE)).toEqual({ runsPruned: 1, markersPruned: 0 });
 		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toEqual([]);
@@ -502,11 +570,24 @@ describe('JobScheduler', () => {
 					return (await env.jobRuns.cancel(run, ACTOR)).run;
 				},
 			};
-			await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const cancelled = await env.jobRuns.enqueue({
+				job,
+				trigger: 'manual',
+				timeoutSeconds: 60,
+			});
 			const s = scheduler(cancelledRunner, { events: env.events });
 			await s.tick();
 			await settle(s);
-			const statuses = (await env.events.getEvents(today()))
+			const terminalRuns = await Promise.all(
+				[overdue, cancelled].map((run) => env.jobRuns.getRun(pid, nid, job.id, run.run_id)),
+			);
+			const dates = new Set(
+				terminalRuns.map((run) => (run.finished_at ?? run.queued_at).slice(0, 10)),
+			);
+			const events = (
+				await Promise.all([...dates].map((date) => env.events.getEvents(date)))
+			).flat();
+			const statuses = events
 				.filter((e) => e.event === 'job.run.finish')
 				.map((e) => String(e.status))
 				.sort();
@@ -683,6 +764,7 @@ describe('JobScheduler', () => {
 					paths.jobRunMarker(pid, runId),
 					JSON.stringify({
 						run_id: runId,
+						continuation_run_id: createRunId(),
 						job_id: 'job-0123456789abcdef',
 						notebook_id: nid,
 						project_id: pid,
@@ -778,6 +860,7 @@ describe('JobScheduler', () => {
 				await env.jobRuns.transition(run, 'fail', () => ({
 					finished_at: new Date(now - 60 * 24 * 60 * MINUTE).toISOString(),
 				}));
+				await env.jobRuns.deleteMarker(run);
 			}
 			const original = env.jobRuns.pruneJob.bind(env.jobRuns);
 			vi.spyOn(env.jobRuns, 'pruneJob').mockImplementation(async (job, retention, at) => {

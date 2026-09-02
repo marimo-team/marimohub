@@ -284,6 +284,9 @@ export const paths = {
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,
+	eventIdempotencyForDate: (date: string) => `_system/events/${date}/_idempotency/`,
+	eventIdempotency: (date: string, id: string) =>
+		`_system/events/${date}/_idempotency/${encodeURIComponent(id)}.json`,
 	idempotencyPrefix: '_system/idempotency/',
 	idempotencyKey: (digest: string) => `_system/idempotency/${digest}.json`,
 	proposalPayloadMarkersPrefix: '_system/proposal-payloads/',

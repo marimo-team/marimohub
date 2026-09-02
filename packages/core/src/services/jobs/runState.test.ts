@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RUN_STATUSES } from '../../schema';
 import {
+	ACTIVE_RUN_STATUSES,
 	isActiveRunStatus,
 	isTerminalRunStatus,
 	nextRunStatus,
@@ -37,6 +38,9 @@ describe('run state machine', () => {
 
 	it('classifies every status', () => {
 		for (const status of RUN_STATUSES) {
+			expect(isActiveRunStatus(status)).toBe(
+				(ACTIVE_RUN_STATUSES as readonly (typeof status)[]).includes(status),
+			);
 			expect(isTerminalRunStatus(status) || status === 'queued' || isActiveRunStatus(status)).toBe(
 				true,
 			);

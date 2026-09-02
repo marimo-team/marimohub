@@ -28,7 +28,7 @@ import type {
 	SnapshotJobEntry,
 } from '../../schema';
 import { nextIsoTimestamp } from '../../utcDate';
-import { mutateObject, putIfAbsent } from '../catalog/cas';
+import { mutateObject, mutateObjectWithOutcome, putIfAbsent } from '../catalog/cas';
 import { listAllKeys } from '../catalog/storage';
 import type { CatalogService } from '../catalog/CatalogService';
 import { isValidTimeZone, parseCron } from './cron';
@@ -235,8 +235,8 @@ export class JobsService {
 		const key = nb.job(job.id).head;
 		const indexKey = nb.jobIndex(job.created_at, job.id);
 		await this.bucket.put(key, JSON.stringify(job), { onlyIfNotExists: true });
-		await this.bucket.put(indexKey, '', { onlyIfNotExists: true });
 		try {
+			await this.bucket.put(indexKey, '', { onlyIfNotExists: true });
 			await this.syncIndex('job.create', actor, job, toIndexEntry(job), limits.maxPerNotebook);
 		} catch (err) {
 			await this.bucket.delete([key, indexKey]).catch(() => {});
@@ -257,11 +257,13 @@ export class JobsService {
 		if (input.schedule) validateJobSchedule(input.schedule);
 		validateTimeout(input.timeout_seconds ?? undefined, limits);
 		const key = paths.project(projectId).notebook(notebookId).job(jobId).head;
+		let previous: JobDefinition | undefined;
 		const updated = await mutateObject(
 			this.bucket,
 			key,
 			(raw) => parseStoredJobDefinition(raw, key),
 			(current) => {
+				previous = current;
 				assertVersionMatch(current.updated_at, expectedVersion);
 				const next: JobDefinition = { ...current };
 				if (input.name !== undefined) next.name = input.name;
@@ -278,7 +280,38 @@ export class JobsService {
 			},
 			{ notFound: () => new NotFoundError(`Job ${jobId} not found`) },
 		);
-		await this.syncIndex('job.update', actor, updated, toIndexEntry(updated));
+		try {
+			await this.syncIndex('job.update', actor, updated, toIndexEntry(updated));
+		} catch (err) {
+			const prior = previous;
+			if (prior) {
+				const rollback = await mutateObjectWithOutcome(
+					this.bucket,
+					key,
+					(raw) => parseStoredJobDefinition(raw, key),
+					(current) => (current.updated_at === updated.updated_at ? prior : null),
+				).catch((rollbackError) => {
+					logOperationalError(
+						'job_update_rollback_failed',
+						{ operation: 'job.update.rollback', object: key },
+						rollbackError,
+					);
+					return null;
+				});
+				if (rollback?.written) {
+					await this.syncIndex('job.update.rollback', actor, prior, toIndexEntry(prior)).catch(
+						(rollbackError) => {
+							logOperationalError(
+								'job_update_index_rollback_failed',
+								{ operation: 'job.update.index.rollback', object: key },
+								rollbackError,
+							);
+						},
+					);
+				}
+			}
+			throw err;
+		}
 		return updated;
 	}
 
@@ -319,6 +352,7 @@ export class JobsService {
 		);
 		if (subordinate.length > 0) await this.bucket.delete(subordinate);
 		await this.bucket.delete(job.head);
+		await this.bucket.delete(paths.jobDeletionClaim(projectId, notebookId, jobId));
 	}
 
 	private async syncIndex(

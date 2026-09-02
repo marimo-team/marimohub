@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { NotFoundError } from '../../errors';
 import { createRunId, SandboxId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
@@ -98,7 +99,7 @@ describe('JobRunService', () => {
 	});
 
 	it('fetches a history page with bounded parallel record reads', async () => {
-		for (let index = 0; index < 4; index++) await enqueue();
+		for (let index = 0; index < BUCKET_SCAN_CONCURRENCY + 2; index++) await enqueue();
 		const get = env.bucket.get.bind(env.bucket);
 		let concurrent = 0;
 		let maximum = 0;
@@ -110,16 +111,40 @@ describe('JobRunService', () => {
 			if (!key.endsWith('/run.json')) return get(key);
 			concurrent++;
 			maximum = Math.max(maximum, concurrent);
-			if (concurrent === 4) release();
+			if (concurrent === BUCKET_SCAN_CONCURRENCY) release();
 			await blocked;
 			const result = await get(key);
 			concurrent--;
 			return result;
 		});
 
-		const page = await runs.listRunsPage(pid, nid, job.id, 3);
-		expect(page.items).toHaveLength(3);
+		const page = await runs.listRunsPage(pid, nid, job.id, BUCKET_SCAN_CONCURRENCY + 1);
+		expect(page.items).toHaveLength(BUCKET_SCAN_CONCURRENCY + 1);
 		expect(maximum).toBeGreaterThan(1);
+		expect(maximum).toBeLessThanOrEqual(BUCKET_SCAN_CONCURRENCY);
+	});
+
+	it('renews the per-job mutation lease while work is still active', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime('2026-09-02T00:00:00.000Z');
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const mutation = runs.withJobMutation(job, () => blocked);
+		await vi.advanceTimersByTimeAsync(0);
+		const key = paths.jobOperationClaim(pid, nid, job.id);
+		const first = await (await env.bucket.get(key))!.json<{ holder: string }>();
+
+		await vi.advanceTimersByTimeAsync(10_001);
+		const renewed = await (await env.bucket.get(key))!.json<{ holder: string }>();
+		expect(Number(renewed.holder.split(':')[0])).toBeGreaterThan(
+			Number(first.holder.split(':')[0]),
+		);
+
+		release();
+		await mutation;
+		vi.useRealTimers();
 	});
 
 	it('applies FSM transitions with CAS and retains the marker for finalization', async () => {
@@ -227,6 +252,7 @@ describe('JobRunService', () => {
 		const now = Date.parse('2026-09-02T12:00:00.000Z');
 		const old = await enqueue();
 		await runs.transition(old, 'fail', () => ({ finished_at: '2026-07-01T00:00:00.000Z' }));
+		await runs.deleteMarker(old);
 		const recent = await enqueue();
 		await runs.transition(recent, 'fail', () => ({ finished_at: '2026-09-02T11:00:00.000Z' }));
 		const active = await enqueue();
@@ -264,6 +290,7 @@ describe('JobRunService', () => {
 			paths.jobRunMarker(pid, fresh),
 			JSON.stringify({
 				run_id: fresh,
+				continuation_run_id: createRunId(),
 				job_id: job.id,
 				notebook_id: nid,
 				project_id: pid,
@@ -277,6 +304,7 @@ describe('JobRunService', () => {
 			paths.jobRunMarker(pid, stale),
 			JSON.stringify({
 				run_id: stale,
+				continuation_run_id: createRunId(),
 				job_id: job.id,
 				notebook_id: nid,
 				project_id: pid,
@@ -297,25 +325,27 @@ describe('JobRunService', () => {
 			vi.restoreAllMocks();
 		});
 
-		it('removes a corrupt marker and reports a corrupt record as missing when listing active runs', async () => {
+		it('reports incomplete ownership and preserves corrupt markers', async () => {
 			const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 			const healthy = await enqueue();
-			await env.bucket.put(paths.jobRunMarker(pid, createRunId()), '{not json');
+			const corruptMarkerKey = paths.jobRunMarker(pid, createRunId());
+			await env.bucket.put(corruptMarkerKey, '{not json');
 			const corruptRecord = await enqueue();
 			await env.bucket.put(
 				paths.project(pid).notebook(nid).job(job.id).run(corruptRecord.run_id).record,
 				'garbage',
 			);
 
-			const active = await runs.listActive();
+			const snapshot = await runs.listActiveSnapshot();
+			const active = snapshot.entries;
 			const byRun = new Map(active.map((a) => [a.marker.run_id, a.run?.run_id ?? null]));
 			expect(byRun.get(healthy.run_id)).toBe(healthy.run_id);
 			expect(byRun.get(corruptRecord.run_id)).toBeNull();
 			expect(byRun.size).toBe(2);
-			// The corrupt marker is gone; only the two valid ones remain.
-			expect(await runs.listActive()).toHaveLength(2);
+			expect(snapshot.complete).toBe(false);
+			expect(await env.bucket.head(corruptMarkerKey)).not.toBeNull();
 			expect(
-				errorSpy.mock.calls.some((c) => String(c[0]).includes('corrupt_job_run_marker_removed')),
+				errorSpy.mock.calls.some((c) => String(c[0]).includes('corrupt_job_run_marker_preserved')),
 			).toBe(true);
 		});
 
@@ -360,12 +390,13 @@ describe('JobRunService', () => {
 			expect(claim).toEqual({ claimed: false, existing: null });
 		});
 
-		it('drops a dangling marker when cancelling a job’s runs', async () => {
+		it('preserves a fresh dangling marker when cancelling a job’s runs', async () => {
 			const dangling = createRunId();
 			await env.bucket.put(
 				paths.jobRunMarker(pid, dangling),
 				JSON.stringify({
 					run_id: dangling,
+					continuation_run_id: createRunId(),
 					job_id: job.id,
 					notebook_id: nid,
 					project_id: pid,
@@ -373,7 +404,15 @@ describe('JobRunService', () => {
 				}),
 			);
 			expect(await runs.cancelRunsOfJob(job, ACTOR)).toEqual({ runs: [], sandboxIds: [] });
-			expect(await env.bucket.head(paths.jobRunMarker(pid, dangling))).toBeNull();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, dangling))).not.toBeNull();
+		});
+
+		it('returns the sandbox of a run that became terminal before cancellation', async () => {
+			const run = await enqueue();
+			await runs.transition(run, 'provision', () => ({ sandbox_id: SB }));
+			await runs.transition(run, 'fail', () => ({ finished_at: new Date().toISOString() }));
+
+			expect(await runs.cancelRunsOfJob(job, ACTOR)).toEqual({ runs: [], sandboxIds: [SB] });
 		});
 
 		it('stores html-only outputs and reads null for absent artifacts', async () => {
@@ -408,11 +447,28 @@ describe('JobRunService', () => {
 			);
 		});
 
-		it('surfaces a bucket failure from enqueue instead of a half-written run', async () => {
-			vi.spyOn(env.bucket, 'put').mockRejectedValueOnce(new Error('bucket down'));
-			await expect(enqueue()).rejects.toThrow('bucket down');
-			expect(await runs.listActive()).toEqual([]);
-			expect(await runs.listRuns(pid, nid, job.id)).toEqual([]);
+		it('keeps a terminal run while its finalization marker exists', async () => {
+			const run = await enqueue();
+			await runs.transition(run, 'fail', () => ({ finished_at: '2026-01-01T00:00:00.000Z' }));
+
+			expect(await runs.pruneJob(job, 1_000, Date.parse('2026-09-02T00:00:00.000Z'))).toBe(0);
+			expect(await runs.getRun(pid, nid, job.id, run.run_id)).toMatchObject({ status: 'failed' });
+		});
+
+		it('repairs a run whose record write failed after its marker and index', async () => {
+			const runId = createRunId();
+			const put = env.bucket.put.bind(env.bucket);
+			vi.spyOn(env.bucket, 'put')
+				.mockImplementationOnce(put)
+				.mockImplementationOnce(put)
+				.mockRejectedValueOnce(new Error('bucket down'));
+			await expect(enqueue({ runId })).rejects.toThrow('bucket down');
+			expect(await runs.listActive()).toMatchObject([{ marker: { run_id: runId }, run: null }]);
+
+			const repaired = await enqueue({ runId });
+			expect(repaired.run_id).toBe(runId);
+			expect((await runs.listRuns(pid, nid, job.id)).map((run) => run.run_id)).toEqual([runId]);
+			expect((await runs.listActive()).map(({ marker }) => marker.run_id)).toEqual([runId]);
 		});
 	});
 });

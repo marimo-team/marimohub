@@ -27,7 +27,7 @@ import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/j
 import type { JobDefinition, JobRun } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv, JobsConfig } from '../context';
 import { idempotentCreate } from '../idempotency';
-import { appendAudit } from '../log';
+import { appendAudit, describeError, logEvent } from '../log';
 import {
 	decodeCursor,
 	DEFAULT_PAGE_SIZE,
@@ -57,6 +57,8 @@ import {
 	NotebookIdParam,
 	SuccessResponseSchema,
 } from '../shared';
+
+const DELETE_FINISH_AUDIT_ATTEMPTS = 3;
 
 // --- Params ---
 
@@ -634,7 +636,28 @@ app.openapi(deleteJob, async (c) => {
 		return { ...result, runs: [...result.runs, ...terminal] };
 	});
 	for (const run of cancelled.runs) {
-		await appendJobRunFinishEvent(deps.services.events, run);
+		let auditError: unknown;
+		for (let attempt = 0; attempt < DELETE_FINISH_AUDIT_ATTEMPTS; attempt++) {
+			try {
+				await appendJobRunFinishEvent(deps.services.events, run);
+				auditError = undefined;
+				break;
+			} catch (err) {
+				auditError = err;
+			}
+		}
+		if (auditError !== undefined) {
+			logEvent({
+				level: 'error',
+				event: 'job_delete_finish_audit_failed',
+				project_id: run.project_id,
+				notebook_id: run.notebook_id,
+				job_id: run.job_id,
+				run_id: run.run_id,
+				attempts: DELETE_FINISH_AUDIT_ATTEMPTS,
+				error: describeError(auditError),
+			});
+		}
 		await deps.services.jobRuns.deleteMarker(run);
 	}
 	await destroySandboxes(deps, cancelled.sandboxIds, {

@@ -30,6 +30,10 @@ const OrphanMarkerSchema = z.object({ first_seen: z.number() });
 export interface ActiveSandboxSource {
 	activeSandboxIds(): Promise<string[]>;
 	listActive?(): Promise<readonly { run: { sandbox_id?: string; status: RunStatus } | null }[]>;
+	listActiveSnapshot?(): Promise<{
+		entries: readonly { run: { sandbox_id?: string; status: RunStatus } | null }[];
+		complete: boolean;
+	}>;
 }
 
 export interface ReconcileResult {
@@ -126,7 +130,18 @@ export class ReconciliationService {
 		let reapOrphans = true;
 		if (this.jobRuns) {
 			try {
-				if (this.jobRuns.listActive) {
+				if (this.jobRuns.listActiveSnapshot) {
+					const snapshot = await this.jobRuns.listActiveSnapshot();
+					if (!snapshot.complete) throw new Error('Active job-run ownership is incomplete');
+					if (snapshot.entries.some(({ run }) => run === null)) {
+						throw new Error('Active job-run ownership is incomplete');
+					}
+					for (const { run } of snapshot.entries) {
+						if (run?.sandbox_id && !isTerminalRunStatus(run.status)) {
+							ownedSandboxIds.add(run.sandbox_id);
+						}
+					}
+				} else if (this.jobRuns.listActive) {
 					const activeRuns = await this.jobRuns.listActive();
 					if (activeRuns.some(({ run }) => run === null)) {
 						throw new Error('Active job-run ownership is incomplete');

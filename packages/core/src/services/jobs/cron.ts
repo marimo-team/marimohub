@@ -77,9 +77,9 @@ export function previousOccurrence(
 	windowMs: number,
 ): number | null {
 	const cron = cronFor(schedule, timeZone);
-	// `nextRun` is strictly after its argument; step back one second so an
+	// `nextRun` is strictly after its argument; step back one millisecond so an
 	// occurrence exactly at the floor still counts.
-	let cursor = new Date(atMs - windowMs - 1000);
+	let cursor = new Date(atMs - windowMs - 1);
 	let latest: number | null = null;
 	for (;;) {
 		const next = cron.nextRun(cursor);

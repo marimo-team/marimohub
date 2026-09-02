@@ -498,6 +498,7 @@ export function createServices(
 	);
 	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
 		listJobs: notebook,
+		listJobsPage: notebook,
 		createJob: notebook,
 		getJob: job,
 		updateJob: job,
