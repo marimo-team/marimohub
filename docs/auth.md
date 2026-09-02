@@ -99,8 +99,8 @@ Enforcement is server-side. A write with an insufficient role returns
 `403 FORBIDDEN`. By default any authenticated user can create a project; the
 creator becomes the project owner. Set `MARIMOHUB_PROJECT_CREATION=restricted`
 to limit creation to super admins and holders of the `project-creator`
-entitlement, granted by an [OIDC group mapping](./setup/auth/oidc.md) or
-[login-policy module](./setup/auth/oidc.md#login-policy-module). Projects and
+entitlement, granted by an [OIDC group mapping](#groups-and-roles) or
+[login-policy module](#login-policy-module). Projects and
 notebooks can also carry [security labels](./security.md#applying-labels),
 which only remove access on top of the role.
 
