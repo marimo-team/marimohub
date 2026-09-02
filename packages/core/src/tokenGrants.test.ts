@@ -32,6 +32,26 @@ describe('TokenGrant', () => {
 		).toBe(false);
 	});
 
+	it.each([
+		['an unknown action', { actions: ['project.fly'], projects: '*' }],
+		['an empty project list', { actions: '*', projects: [] }],
+		['an invalid project id', { actions: '*', projects: ['project-one'] }],
+		['an unexpected field', { actions: '*', projects: '*', future: true }],
+		['a missing action boundary', { projects: '*' }],
+	])('rejects %s', (_label, value) => {
+		expect(TokenGrantSchema.safeParse(value).success).toBe(false);
+	});
+
+	it('accepts 100 selected projects and rejects 101', () => {
+		const projects = Array.from({ length: 101 }, (_, index) =>
+			ProjectId.parse(`proj-${String(index).padStart(16, '0')}`),
+		);
+		expect(
+			TokenGrantSchema.safeParse({ actions: '*', projects: projects.slice(0, 100) }).success,
+		).toBe(true);
+		expect(TokenGrantSchema.safeParse({ actions: '*', projects }).success).toBe(false);
+	});
+
 	it('applies action and project boundaries independently', () => {
 		const grant: TokenGrant = { actions: ['project.read'], projects: [PROJECT_A] };
 		expect(tokenGrantAllowsAction(grant, 'project.read')).toBe(true);
@@ -44,6 +64,17 @@ describe('TokenGrant', () => {
 		const grant = { actions: '*' as const, projects: [PROJECT_A] };
 		expect(tokenGrantAllowsAction(grant, 'project.create')).toBe(false);
 		expect(tokenGrantAllowsAction(grant, 'project.read')).toBe(true);
+		expect(
+			tokenGrantAllowsAction(
+				{ actions: ['project.create'], projects: [PROJECT_A] },
+				'project.create',
+			),
+		).toBe(false);
+	});
+
+	it('treats an absent legacy grant as unrestricted', () => {
+		expect(tokenGrantAllowsAction(undefined, 'project.delete')).toBe(true);
+		expect(tokenGrantAllowsProject(undefined, PROJECT_B)).toBe(true);
 	});
 
 	it('checks whether an approval narrows a requested grant', () => {
@@ -57,5 +88,26 @@ describe('TokenGrant', () => {
 				{ actions: ['project.read'], projects: [PROJECT_A] },
 			),
 		).toBe(false);
+	});
+
+	it('rejects action and project widening independently', () => {
+		const requested: TokenGrant = {
+			actions: ['project.read'],
+			projects: [PROJECT_A],
+		};
+		expect(
+			tokenGrantIsSubset(
+				{ actions: ['project.read', 'project.update'], projects: [PROJECT_A] },
+				requested,
+			),
+		).toBe(false);
+		expect(
+			tokenGrantIsSubset(
+				{ actions: ['project.read'], projects: [PROJECT_A, PROJECT_B] },
+				requested,
+			),
+		).toBe(false);
+		expect(tokenGrantIsSubset({ actions: '*', projects: [PROJECT_A] }, requested)).toBe(false);
+		expect(tokenGrantIsSubset({ actions: ['project.read'], projects: '*' }, requested)).toBe(false);
 	});
 });

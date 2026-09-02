@@ -106,6 +106,29 @@ describe('ApiTokensDialog', () => {
 		expect(screen.getAllByText(/never used/)).toHaveLength(1);
 	});
 
+	it('labels legacy, preset, and custom grants without implying extra access', async () => {
+		setup([
+			tokenMeta(),
+			tokenMeta({
+				id: '01HXY0S6GWMBASVAG3PZ7Y2K5V',
+				name: 'reader',
+				grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+			}),
+			tokenMeta({
+				id: '01HXY0S6GWMBASVAG3PZ7Y2K5W',
+				name: 'custom',
+				grant: {
+					actions: ['project.read'],
+					projects: ['proj-0000000000000001', 'proj-0000000000000002'],
+				},
+			}),
+		]);
+
+		expect(await screen.findByText('Full access · all projects · legacy')).toBeInTheDocument();
+		expect(screen.getByText('Read access · all projects')).toBeInTheDocument();
+		expect(screen.getByText('Custom access · 2 selected projects')).toBeInTheDocument();
+	});
+
 	it('shows remaining time for a future expiry and elapsed time for a past one', async () => {
 		const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 		const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
@@ -144,6 +167,44 @@ describe('ApiTokensDialog', () => {
 				},
 			},
 		]);
+	});
+
+	it('requires explicit action and project choices before submission', async () => {
+		const user = userEvent.setup();
+		setup([]);
+		const create = await screen.findByRole('button', { name: /create token/i });
+
+		expect(create).toBeDisabled();
+		await user.type(screen.getByLabelText('Name'), 'ci');
+		expect(create).toBeDisabled();
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		expect(create).toBeDisabled();
+		await user.click(screen.getByRole('radio', { name: /^Selected projects/ }));
+		expect(create).toBeDisabled();
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
+		expect(create).toBeEnabled();
+	});
+
+	it('creates a custom action grant from the advanced editor', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup([]);
+
+		await user.type(await screen.findByLabelText('Name'), 'custom');
+		await user.click(screen.getByRole('button', { name: 'Advanced actions' }));
+		await user.click(screen.getByRole('checkbox', { name: 'project.read' }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
+		await user.click(screen.getByRole('button', { name: /create token/i }));
+
+		await waitFor(() =>
+			expect(calls).toContainEqual({
+				url: '/api/v1/me/tokens/scoped',
+				method: 'POST',
+				body: {
+					name: 'custom',
+					grant: { actions: ['project.read'], projects: '*' },
+				},
+			}),
+		);
 	});
 
 	it('rejects a blank name without calling the API', async () => {

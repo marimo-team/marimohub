@@ -1257,6 +1257,12 @@ mod tests {
                     .expect("read request body");
                 request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
                 assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
+                if path.ends_with("/scoped") {
+                    assert!(request.contains(r#""grant":{"actions":"*","projects":"*"}"#));
+                } else {
+                    assert!(request.contains(r#""code_challenge":"challenge""#));
+                    assert!(!request.contains(r#""grant""#));
+                }
                 write!(
 					stream,
 					"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1274,6 +1280,22 @@ mod tests {
         .expect("legacy fallback succeeds");
         server.join().expect("test server");
         assert_eq!(authorization.device_code, "mhub_cli_device");
+    }
+
+    #[test]
+    fn cli_device_authorization_does_not_fall_back_on_other_errors() {
+        let (base_url, server) = serve_cli_device(
+            "/api/cli/v1/device-authorizations/scoped",
+            500,
+            r#"{"success":false,"error":{"code":"INTERNAL","message":"failed"}}"#,
+            r#""grant":{"actions":"*","projects":"*"}"#,
+        );
+
+        let error =
+            request_cli_device_authorization(&base_url, Duration::from_secs(1), "challenge")
+                .expect_err("a non-404 scoped error must not use the legacy route");
+        server.join().expect("test server");
+        assert!(matches!(error, Error::Http(message) if message.contains("HTTP 500")));
     }
 
     #[test]

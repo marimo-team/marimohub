@@ -134,6 +134,31 @@ describe('AuthorizationService: label constraints', () => {
 		});
 	});
 
+	it('masks a missing token action behind a security-label denial', async () => {
+		const scoped: AuthenticatedPrincipal = {
+			...principal(),
+			credential: {
+				kind: 'personal-access-token',
+				grant: { actions: [], projects: '*' },
+			},
+		};
+		const authz = service({ subjectContext: providerOf(null) });
+
+		await expect(authz.authorize(scoped, 'project.read', read)).resolves.toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'missing-context',
+		});
+		const analysis = await authz.analyze(scoped, 'project.read', read);
+		expect(analysis.presentation).toBe('not-found');
+		expect(analysis.trace).toContainEqual({
+			stage: 'credential',
+			status: 'skipped',
+			code: 'prior_stage_denied',
+		});
+	});
+
 	it('denies labels for super admins too — no automatic bypass', async () => {
 		const god = new AuthorizationService({ superAdmins: [OWNER] }, { constraints: local() });
 		await expect(god.authorize(principal(), 'project.read', read)).resolves.toEqual({

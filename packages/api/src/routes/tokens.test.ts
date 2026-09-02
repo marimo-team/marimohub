@@ -21,6 +21,8 @@ interface TokenMeta {
 	grant?: { actions: string[] | '*'; projects: string[] | '*' };
 }
 
+const FULL_GRANT = { actions: '*' as const, projects: '*' as const };
+
 describe('Token routes', () => {
 	let bucket: MemoryBucket;
 	let request: ReturnType<typeof createTestApi>['request'];
@@ -80,6 +82,42 @@ describe('Token routes', () => {
 		expect(created.grant).toEqual(grant);
 		expect((await expectOk<TokenMeta[]>(await request('GET', '/me/tokens')))[0].grant).toEqual(
 			grant,
+		);
+	});
+
+	it.each([
+		['an unknown action', { actions: ['project.fly'], projects: '*' }],
+		['duplicate actions', { actions: ['project.read', 'project.read'], projects: '*' }],
+		['an empty project list', { actions: '*', projects: [] }],
+		['an invalid project id', { actions: '*', projects: ['project-one'] }],
+		['an unexpected grant field', { actions: '*', projects: '*', future: true }],
+		[
+			'101 selected projects',
+			{
+				actions: '*',
+				projects: Array.from(
+					{ length: 101 },
+					(_, index) => `proj-${String(index).padStart(16, '0')}`,
+				),
+			},
+		],
+	])('rejects a scoped token grant with %s', async (_label, grant) => {
+		await expectError(
+			await request('POST', '/me/tokens/scoped', { name: 'invalid', grant }),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
+	it('keeps the scoped creation body strict', async () => {
+		await expectError(
+			await request('POST', '/me/tokens/scoped', {
+				name: 'strict',
+				grant: FULL_GRANT,
+				unexpected: true,
+			}),
+			422,
+			'VALIDATION_ERROR',
 		);
 	});
 
@@ -153,6 +191,15 @@ describe('Token routes', () => {
 			401,
 			'UNAUTHORIZED',
 		);
+		await expectError(
+			await app.request('/api/v1/me/tokens/scoped', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name: 'x', grant: FULL_GRANT }),
+			}),
+			401,
+			'UNAUTHORIZED',
+		);
 		await expectError(await app.request('/api/v1/me/tokens'), 401, 'UNAUTHORIZED');
 		await expectError(
 			await app.request(`/api/v1/me/tokens/${'0'.repeat(26)}`, { method: 'DELETE' }),
@@ -184,12 +231,13 @@ describe('Token routes', () => {
 		expect(await expectOk<TokenMeta[]>(await request('GET', '/me/tokens'))).toEqual([]);
 	});
 
-	it('enforces the per-user cap with 429', async () => {
-		for (let i = 0; i < 20; i++) {
+	it('enforces one per-user cap across legacy and scoped tokens', async () => {
+		for (let i = 0; i < 19; i++) {
 			await request('POST', '/me/tokens', { name: `t${i}` });
 		}
+		await request('POST', '/me/tokens/scoped', { name: 'scoped', grant: FULL_GRANT });
 		await expectError(
-			await request('POST', '/me/tokens', { name: 'over' }),
+			await request('POST', '/me/tokens/scoped', { name: 'over', grant: FULL_GRANT }),
 			429,
 			'RESOURCE_EXHAUSTED',
 		);
@@ -275,6 +323,14 @@ describe('Token routes', () => {
 
 		it('a PAT may not create, list, or revoke tokens', async () => {
 			await expectError(await patRequest('POST', '/me/tokens', { name: 'sneaky' }), 403);
+			await expectError(
+				await patRequest('POST', '/me/tokens/scoped', {
+					name: 'sneaky',
+					grant: FULL_GRANT,
+				}),
+				403,
+				'FORBIDDEN',
+			);
 			await expectError(await patRequest('GET', '/me/tokens'), 403);
 			await expectError(
 				await patRequest('DELETE', `/me/tokens/${'0'.repeat(26)}`),

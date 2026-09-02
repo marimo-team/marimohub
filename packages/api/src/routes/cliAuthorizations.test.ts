@@ -121,6 +121,30 @@ describe('CLI authorization routes', () => {
 		expect(listed.grant).toEqual(grant);
 	});
 
+	it('rejects loopback widening with 400 before creating an authorization', async () => {
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'Narrow', description: 'd' }),
+			201,
+		);
+		await expectError(
+			await request('POST', '/me/cli-authorizations/scoped', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'wider CLI',
+				expires_in_days: 30,
+				requested_grant: { actions: ['project.read'], projects: [project.id] },
+				grant: {
+					actions: ['project.read', 'project.update'],
+					projects: [project.id],
+				},
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+		expect(await expectOk<unknown[]>(await request('GET', '/me/tokens'))).toEqual([]);
+	});
+
 	it('rejects grants on the legacy loopback endpoint', async () => {
 		await expectError(
 			await request('POST', '/me/cli-authorizations', {
@@ -219,6 +243,45 @@ describe('CLI authorization routes', () => {
 		expect(listed.grant).toEqual(grant);
 	});
 
+	it('does not consume a scoped device request after a widening attempt', async () => {
+		const approver = createTestApi({ bucket, userId: uid('scope-narrowing-approver') });
+		await approver.request('GET', '/me');
+		const requestedGrant = { actions: ['project.read'], projects: '*' as const };
+		const device = await expectOk<{ device_code: string; user_code: string }>(
+			await app.request('/api/cli/v1/device-authorizations/scoped', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code_challenge: CHALLENGE, grant: requestedGrant }),
+			}),
+		);
+
+		await expectError(
+			await approver.request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'wider',
+				expires_in_days: 7,
+				grant: FULL_GRANT,
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+		await expectOk(
+			await approver.request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'narrow',
+				expires_in_days: 7,
+				grant: requestedGrant,
+			}),
+		);
+		await expectOk(
+			await app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+			}),
+		);
+	});
+
 	it('does not disclose inaccessible projects during device approval', async () => {
 		const other = createTestApi({ bucket, userId: uid('other-user') }).request;
 		const project = await expectOk<{ id: string }>(
@@ -263,6 +326,28 @@ describe('CLI authorization routes', () => {
 		await expectOk(response);
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
 		expect(response.headers.get('Pragma')).toBe('no-cache');
+	});
+
+	it('rejects scoped fields on legacy device endpoints', async () => {
+		await expectError(
+			await app.request('/api/cli/v1/device-authorizations', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code_challenge: CHALLENGE, grant: FULL_GRANT }),
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		await expectError(
+			await request('POST', '/me/cli-device-authorizations', {
+				user_code: 'BBBB-BBBB',
+				token_name: 'legacy CLI',
+				expires_in_days: 30,
+				grant: FULL_GRANT,
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
 	});
 
 	it('uses the configured public app URL for device verification links', async () => {
@@ -478,6 +563,28 @@ describe('CLI authorization routes', () => {
 			'UNAUTHORIZED',
 		);
 		await expectError(
+			await deny.request('/api/v1/me/cli-authorizations/scoped', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					callback_uri: CALLBACK,
+					state: STATE,
+					code_challenge: CHALLENGE,
+					token_name: 'mohub CLI',
+					expires_in_days: 30,
+					requested_grant: FULL_GRANT,
+					grant: FULL_GRANT,
+				}),
+			}),
+			401,
+			'UNAUTHORIZED',
+		);
+		await expectError(
+			await deny.request('/api/v1/me/cli-device-authorizations/BBBB-BBBB'),
+			401,
+			'UNAUTHORIZED',
+		);
+		await expectError(
 			await deny.request('/api/v1/me/cli-device-authorizations', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
@@ -520,6 +627,26 @@ describe('CLI authorization routes', () => {
 			403,
 			'FORBIDDEN',
 		);
+		await expectError(
+			await patApp.request('/api/v1/me/cli-authorizations/scoped', {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					authorization: `Bearer ${created.token}`,
+				},
+				body: JSON.stringify({
+					callback_uri: CALLBACK,
+					state: STATE,
+					code_challenge: CHALLENGE,
+					token_name: 'mohub CLI',
+					expires_in_days: 30,
+					requested_grant: FULL_GRANT,
+					grant: FULL_GRANT,
+				}),
+			}),
+			403,
+			'FORBIDDEN',
+		);
 
 		const device = await requestDevice();
 		await expectError(
@@ -547,11 +674,21 @@ describe('CLI authorization routes', () => {
 			}
 		).paths;
 		expect(paths['/api/v1/me/cli-authorizations'].post.security).toEqual([{ cookieAuth: [] }]);
+		expect(paths['/api/v1/me/cli-authorizations/scoped'].post.security).toEqual([
+			{ cookieAuth: [] },
+		]);
 		expect(paths['/api/cli/v1/token'].post.security).toEqual([]);
 		expect(paths['/api/v1/me/cli-device-authorizations'].post.security).toEqual([
 			{ cookieAuth: [] },
 		]);
+		expect(paths['/api/v1/me/cli-device-authorizations/{userCode}'].get.security).toEqual([
+			{ cookieAuth: [] },
+		]);
+		expect(paths['/api/v1/me/cli-device-authorizations/scoped'].post.security).toEqual([
+			{ cookieAuth: [] },
+		]);
 		expect(paths['/api/cli/v1/device-authorizations'].post.security).toEqual([]);
+		expect(paths['/api/cli/v1/device-authorizations/scoped'].post.security).toEqual([]);
 		expect(paths['/api/cli/v1/device-token'].post.security).toEqual([]);
 	});
 

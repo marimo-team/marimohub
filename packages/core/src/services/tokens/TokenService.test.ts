@@ -195,6 +195,20 @@ describe('TokenService', () => {
 			expect(await new TokenService(bucket, identities).verify(token)).toBeNull();
 		});
 
+		it('rejects a v2 token copied to a different token id', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			const secret = token.slice(token.lastIndexOf('_') + 1);
+			const copiedId = TokenId.parse('0'.repeat(26));
+			const stored = (await (await bucket.get(
+				paths.token(TokenId.parse(record.id)),
+			))!.json()) as Record<string, unknown>;
+			await bucket.put(paths.token(copiedId), JSON.stringify({ ...stored, id: copiedId }));
+
+			expect(
+				await new TokenService(bucket, identities).verify(`${PAT_PREFIX}${copiedId}_${secret}`),
+			).toBeNull();
+		});
+
 		it.each([
 			{ credential_version: 2 },
 			{ grant: SCOPED_GRANT },
@@ -316,6 +330,29 @@ describe('TokenService', () => {
 			};
 			expect(after.future_field).toBe('keep-me'); // unknown key survived
 			expect(after.last_used_at).not.toBe('2000-01-01T00:00:00.000Z'); // and it did rewrite
+		});
+
+		it('preserves a v2 grant and forward fields when it rewrites last_used_at', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			const key = paths.token(TokenId.parse(record.id));
+			const stored = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			await bucket.put(
+				key,
+				JSON.stringify({
+					...stored,
+					future_field: { keep: true },
+					last_used_at: '2000-01-01T00:00:00.000Z',
+				}),
+			);
+
+			expect(await tokens.verify(token)).toBeTruthy();
+			const after = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			expect(after).toMatchObject({
+				credential_version: 2,
+				grant: SCOPED_GRANT,
+				future_field: { keep: true },
+			});
+			expect(after.last_used_at).not.toBe('2000-01-01T00:00:00.000Z');
 		});
 
 		it('rejects a revoked token immediately in the same process', async () => {

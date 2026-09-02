@@ -8,7 +8,12 @@ import { CliDeviceLoginPage } from './CliDeviceLoginPage';
 const USER_CODE = 'WDJB-MJHT';
 
 function setup(
-	options: { approvalFails?: boolean; approvalThrows?: boolean; scoped?: boolean } = {},
+	options: {
+		approvalFails?: boolean;
+		approvalThrows?: boolean;
+		scoped?: boolean;
+		scopedApprovalFails?: boolean;
+	} = {},
 ) {
 	const calls: { url: string; body?: unknown }[] = [];
 	vi.stubGlobal(
@@ -32,6 +37,9 @@ function setup(
 				return jsonOk({ items: [], next_cursor: null });
 			}
 			if (url === '/api/v1/me/cli-device-authorizations/scoped') {
+				if (options.scopedApprovalFails) {
+					return jsonError('BAD_REQUEST', 'Approved grant exceeds the request', 400);
+				}
 				return jsonOk({ expires_at: '2026-08-25T12:10:00.000Z' });
 			}
 			if (url === '/api/v1/me/cli-device-authorizations') {
@@ -118,6 +126,44 @@ describe('CliDeviceLoginPage', () => {
 				grant: { actions: '*', projects: '*' },
 			},
 		});
+	});
+
+	it('can narrow the requested device grant before approval', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({ scoped: true });
+		await screen.findByText(/dev@example.com/);
+		await screen.findByRole('radio', { name: /^Full/ });
+
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+		expect(calls).toContainEqual({
+			url: '/api/v1/me/cli-device-authorizations/scoped',
+			body: {
+				user_code: USER_CODE,
+				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				grant: {
+					actions: ['project.read', 'integration.read'],
+					projects: '*',
+				},
+			},
+		});
+	});
+
+	it('keeps a scoped approval editable after the server rejects it', async () => {
+		const user = userEvent.setup();
+		setup({ scoped: true, scopedApprovalFails: true });
+		await screen.findByText(/dev@example.com/);
+		await screen.findByRole('radio', { name: /^Full/ });
+
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+		expect(await screen.findByText('Approved grant exceeds the request')).toBeVisible();
+		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeEnabled();
+		expect(
+			screen.queryByRole('heading', { name: 'CLI authorization approved' }),
+		).not.toBeInTheDocument();
 	});
 
 	it('rejects invalid code characters without calling the API', async () => {

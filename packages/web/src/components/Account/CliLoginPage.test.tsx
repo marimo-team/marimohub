@@ -135,6 +135,52 @@ describe('CliLoginPage', () => {
 		});
 	});
 
+	it('can narrow a full request before scoped approval', async () => {
+		const requested = { actions: '*', projects: '*' };
+		window.history.replaceState({}, '', loginPath(CALLBACK, requested));
+		const user = userEvent.setup();
+		const { calls } = setup();
+		await screen.findByText(/dev@example.com/);
+
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+		expect(calls).toContainEqual({
+			url: '/api/v1/me/cli-authorizations/scoped',
+			body: {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				requested_grant: requested,
+				grant: {
+					actions: ['project.read', 'integration.read'],
+					projects: '*',
+				},
+			},
+		});
+	});
+
+	it('disables presets and project modes that would widen the request', async () => {
+		window.history.replaceState(
+			{},
+			'',
+			loginPath(CALLBACK, {
+				actions: ['project.read', 'integration.read'],
+				projects: ['proj-0000000000000001'],
+			}),
+		);
+		setup();
+		await screen.findByText(/dev@example.com/);
+
+		expect(screen.getByRole('radio', { name: /^Read/ })).toBeChecked();
+		expect(screen.getByRole('radio', { name: /^Run notebooks/ })).toBeDisabled();
+		expect(screen.getByRole('radio', { name: /^Full/ })).toBeDisabled();
+		expect(screen.getByRole('radio', { name: /^Selected projects/ })).toBeChecked();
+		expect(screen.getByRole('radio', { name: /^All projects/ })).toBeDisabled();
+	});
+
 	it('offers quick lifetime presets', async () => {
 		const user = userEvent.setup();
 		setup();

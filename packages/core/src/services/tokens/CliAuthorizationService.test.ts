@@ -168,6 +168,43 @@ describe('CliAuthorizationService', () => {
 		});
 	});
 
+	it('does not let legacy and scoped device approval methods cross', async () => {
+		const legacy = await authorizations.requestDevice(await challenge());
+		await expect(authorizations.previewDevice(legacy.userCode)).rejects.toThrow(
+			/invalid or expired/,
+		);
+		await expect(
+			authorizations.approveDeviceScoped(
+				legacy.userCode,
+				{ tokenName: 'wrong method', expiresInDays: 7, grant: FULL_GRANT },
+				OWNER,
+			),
+		).rejects.toThrow(/invalid or expired/);
+		await expect(
+			authorizations.approveDevice(
+				legacy.userCode,
+				{ tokenName: 'legacy', expiresInDays: 7 },
+				OWNER,
+			),
+		).resolves.toBeTruthy();
+
+		const scoped = await authorizations.requestDeviceScoped(await challenge(), FULL_GRANT);
+		await expect(
+			authorizations.approveDevice(
+				scoped.userCode,
+				{ tokenName: 'wrong method', expiresInDays: 7 },
+				OWNER,
+			),
+		).rejects.toThrow(/invalid or expired/);
+		await expect(
+			authorizations.approveDeviceScoped(
+				scoped.userCode,
+				{ tokenName: 'scoped', expiresInDays: 7, grant: FULL_GRANT },
+				OWNER,
+			),
+		).resolves.toBeTruthy();
+	});
+
 	it('rejects a scoped device approval that widens the requested grant', async () => {
 		const requested = await authorizations.requestDeviceScoped(await challenge(), {
 			actions: ['project.read'],
