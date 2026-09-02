@@ -552,13 +552,14 @@ export function createFromEnv(
 	}
 	const services = createServices(bucket, metrics, { tracing: options?.tracing });
 	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
+	const surfaces = surfacesFromEnv(env);
 	const compute = makeCompute(env, {
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 		sandboxExposureMode: exposure.mode,
+		surfaces,
 		libraries: options?.libraries,
 	});
-	const surfaces = surfacesFromEnv(env);
 	if (surfaces?.opencode && exposure.mode === 'proxy') {
 		throw new ConfigError('OpenCode does not support proxy sandbox exposure', {
 			variable: 'MARIMOHUB_SURFACES',

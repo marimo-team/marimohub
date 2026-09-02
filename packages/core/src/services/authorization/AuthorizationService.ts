@@ -589,30 +589,21 @@ export class AuthorizationService {
 	}
 
 	private decideDeployment(subject: AuthSubject, action: DeploymentAction): AuthorizationDecision {
-		const allowed =
-			action === 'project.create'
-				? canCreateProject(subject, this.policy)
-				: isSuperAdmin(subject, this.policy?.superAdmins);
+		const allowed = ((): boolean => {
+			switch (action) {
+				case 'project.create':
+					return canCreateProject(subject, this.policy);
+				case 'directory.search':
+					return this.listsAllProjects(subject);
+				case 'admin.access':
+				case 'org-integration.manage':
+				case 'audit.global.read':
+					return isSuperAdmin(subject, this.policy?.superAdmins);
+			}
+		})();
 		return allowed
 			? { allowed: true, role: null }
 			: { allowed: false, category: 'standing', role: null };
-	}
-
-	/**
-	 * Whether the subject satisfies a resource's labels — the single-decision
-	 * form used by list fallbacks (`null` = known unlabeled → satisfied).
-	 */
-	async constraintsSatisfied(
-		subject: AuthorizationSubject,
-		labels: ResourceSecurityLabels | null,
-	): Promise<boolean> {
-		if (labels === null) return true;
-		const decision = await this.evaluateLabelSets(
-			'project.read',
-			[labels],
-			this.contextResolver(subject),
-		);
-		return decision.satisfied;
 	}
 
 	/**

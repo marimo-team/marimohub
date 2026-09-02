@@ -33,6 +33,7 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
+import { SURFACE_STATE_ROOT } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
@@ -320,11 +321,11 @@ class LocalSandboxInstance implements SandboxInstance {
 		}
 	}
 
-	/** Rewrite `/workspace` references in a shell command to the real root. */
+	/** Rewrite `/workspace` and surface-state references in a shell command to the real root. */
 	private rewriteCmd(cmd: string): string {
 		return rewriteWorkspace(cmd, this.root).replaceAll(
-			'/tmp/.marimohub',
-			path.join(this.root, 'tmp/.marimohub'),
+			SURFACE_STATE_ROOT,
+			path.join(this.root, SURFACE_STATE_ROOT.slice(1)),
 		);
 	}
 

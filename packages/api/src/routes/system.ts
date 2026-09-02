@@ -1,6 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
-	canCreateProject,
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	isSuperAdmin,
 	MAX_REQUEST_BYTES,
@@ -10,6 +9,7 @@ import {
 	viewerSessionModes,
 } from '@marimo-hub/core';
 import {
+	canDeploymentAction,
 	CapabilitiesResponseSchema,
 	createApp,
 	DeploymentInfoResponseSchema,
@@ -21,6 +21,7 @@ import {
 	subjectDefaultRole,
 } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../pagination';
+import { surfaceCapabilities } from './sessionSurfaces';
 
 /**
  * System routes: current user (`/api/v1/me`), deployment metadata (`/api/v1/version`),
@@ -44,7 +45,7 @@ const meRoute = createRoute({
 	},
 });
 
-app.openapi(meRoute, (c) => {
+app.openapi(meRoute, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const logoutUrl = deps.authenticator.logoutUrl?.() ?? null;
@@ -55,7 +56,7 @@ app.openapi(meRoute, (c) => {
 		picture_url: user.pictureUrl ?? null,
 		logout_url: logoutUrl,
 		is_super_admin: isSuperAdmin(user, deps.policy.superAdmins),
-		can_create_projects: canCreateProject(user, deps.policy),
+		can_create_projects: await canDeploymentAction(user, 'project.create', deps),
 	});
 });
 
@@ -144,28 +145,7 @@ app.openapi(capabilitiesRoute, (c) => {
 			...toComputeResourcesResponse(profile.resources),
 		})),
 		compute_profile_override: deps.sandbox.computeProfileOverride ?? 'none',
-		surfaces: [
-			...(deps.sandbox.surfaces?.vscode
-				? [
-						{
-							id: 'vscode' as const,
-							flavor: deps.sandbox.surfaces.vscode.flavor,
-							start: deps.sandbox.surfaces.vscode.start,
-							embed: deps.sandbox.surfaces.vscode.embed,
-						},
-					]
-				: []),
-			...(deps.sandbox.surfaces?.opencode
-				? [
-						{
-							id: 'opencode' as const,
-							start: deps.sandbox.surfaces.opencode.start,
-							embed: deps.sandbox.surfaces.opencode.embed,
-							managed_ai: Boolean(deps.ai),
-						},
-					]
-				: []),
-		],
+		surfaces: surfaceCapabilities(deps),
 	});
 });
 

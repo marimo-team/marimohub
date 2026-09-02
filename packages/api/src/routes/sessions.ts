@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import type {
+	SecondarySurfaceId,
 	ResourceSecurityLabels,
 	Role,
 	AuthUser,
@@ -396,6 +397,22 @@ const takeoverEditorSession = createRoute({
 
 // --- App ---
 
+/**
+ * `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` when configured, else the host this
+ * request arrived on. Eager and on-demand surface starts must agree on this so
+ * a session's surfaces are exposed under one hostname.
+ */
+function resolveSandboxHostname(c: { req: { url: string } }, sandbox: SandboxConfig): string {
+	return sandbox.hostname || new URL(c.req.url).hostname;
+}
+
+function surfaceGrants(granted: boolean): Record<SecondarySurfaceId, boolean> {
+	return Object.fromEntries(SECONDARY_SURFACE_IDS.map((id) => [id, granted])) as Record<
+		SecondarySurfaceId,
+		boolean
+	>;
+}
+
 function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) {
 	if (!s.surfaces) return;
 	return Object.fromEntries(
@@ -441,7 +458,7 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; su
 		can: {
 			attach: can.attach,
 			stop: can.stop,
-			surfaces: { vscode: can.surface, opencode: can.surface },
+			surfaces: surfaceGrants(can.surface),
 		},
 		surfaces: publicSurfaces(s, can),
 		started_at: s.started_at,
@@ -1201,7 +1218,7 @@ app.openapi(createSession, async (c) => {
 
 	const { compute, bucket: bucketHandle, sandbox } = deps;
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
-	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
+	const hostname = resolveSandboxHostname(c, sandbox);
 	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
 		logStoredConfigFallback('base_image'),
@@ -1568,9 +1585,9 @@ app.openapi(createSession, async (c) => {
 						assetUrl: sandbox.assetUrl,
 						startupTimeoutMs: sandbox.startupTimeoutMs,
 						baseUrl,
+						// A second editor writes the notebook file, so marimo must reload it.
 						marimoWatch:
-							mode === 'edit' &&
-							Object.values(sandbox.surfaces ?? {}).some((surface) => surface.marimoWatch),
+							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
 						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
 						image,
 						resources: requestedComputeProfile.resources,
@@ -1924,7 +1941,7 @@ app.openapi(ensureSurfaceRoute, async (c) => {
 		id: surface,
 		workspaceDir: deps.sandbox.workdir,
 		exposure,
-		hostname: deps.sandbox.hostname,
+		hostname: resolveSandboxHostname(c, deps.sandbox),
 		appBaseUrl,
 		open: c.req.valid('json')?.open,
 	});

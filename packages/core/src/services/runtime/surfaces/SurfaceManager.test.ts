@@ -76,7 +76,10 @@ describe('SurfaceManager', () => {
 		expect(second.status).toBe('ready');
 		expect(calls.startProcess).toHaveLength(1);
 		expect(calls.startProcess[0].cmd).toContain('surface.pid');
-		expect(calls.startProcess[0].cmd.match(/cancel-/g)).toHaveLength(2);
+		expect(
+			calls.startProcess[0].cmd.match(/if test -f '[^']*\/vscode\/cancel-[^']*'; then/g),
+		).toHaveLength(2);
+		expect(calls.startProcess[0].cmd).toMatch(/; exec 'code-server' /);
 		expect(calls.waitForPort).toEqual([8443]);
 		expect(calls.exposePort).toEqual([
 			{
@@ -268,6 +271,7 @@ describe('SurfaceManager', () => {
 		await expect(start).rejects.toThrow('cancelled');
 		expect(prepare).not.toHaveBeenCalled();
 		expect(calls.startProcess).toHaveLength(0);
+		expect(calls.exec.at(-1)).toMatch(/^rm -f '[^']*\/vscode\/cancel-[^']*'$/);
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });
@@ -412,6 +416,84 @@ describe('SurfaceManager', () => {
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });
+	});
+
+	it('rejects a start before the sandbox is running without touching the sandbox', async () => {
+		const sessions = new SessionService(new MemoryBucket());
+		const session = await sessions.createSession({
+			project_id: createProjectId(),
+			notebook_id: createNotebookId(),
+			user_id: ACTOR,
+			sandbox_id: createSandboxId(),
+		});
+		const { instance, calls } = makeFakeSandbox();
+		const manager = new SurfaceManager(
+			fakeComputeFrom(instance),
+			sessions,
+			new SurfaceRegistry([marimoSurface, vscodeSurface()]),
+		);
+
+		await expect(manager.begin(session, 'vscode', options())).rejects.toThrow(
+			'The sandbox must be running before a surface can start',
+		);
+		expect(calls.exec).toHaveLength(0);
+		expect(calls.startProcess).toHaveLength(0);
+		expect(
+			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
+		).toBeUndefined();
+	});
+
+	it('kills the process and records a failure when the session terminates mid-start', async () => {
+		const sessions = new SessionService(new MemoryBucket());
+		const created = await sessions.createSession({
+			project_id: createProjectId(),
+			notebook_id: createNotebookId(),
+			user_id: ACTOR,
+			sandbox_id: createSandboxId(),
+		});
+		const session = await sessions.setRunning(
+			created.project_id,
+			created.session_id,
+			'https://sandbox.example/marimo',
+			false,
+		);
+		const { instance, calls } = makeFakeSandbox();
+		let enteredReadiness!: () => void;
+		const waiting = new Promise<void>((resolve) => {
+			enteredReadiness = resolve;
+		});
+		let finishReadiness!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			finishReadiness = resolve;
+		});
+		const kill = vi.fn(async () => {});
+		instance.startProcess = vi.fn(async () => ({
+			id: 'surface-vscode',
+			command: 'code-server',
+			kill,
+			waitForPort: async () => {
+				enteredReadiness();
+				await ready;
+			},
+			getLogs: async () => ({ stdout: '', stderr: '' }),
+		}));
+		const manager = new SurfaceManager(
+			fakeComputeFrom(instance),
+			sessions,
+			new SurfaceRegistry([marimoSurface, vscodeSurface()]),
+		);
+
+		const start = manager.ensure(session, 'vscode', options());
+		await waiting;
+		await sessions.terminate(session.project_id, session.session_id);
+		finishReadiness();
+
+		await expect(start).rejects.toThrow('The sandbox stopped while the surface was starting');
+		expect(kill).toHaveBeenCalledOnce();
+		expect(calls.exposePort).toHaveLength(1);
+		expect(
+			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
+		).toEqual({ status: 'failed', last_error: 'Failed to start vscode (ConflictError)' });
 	});
 
 	it('returns starting to a concurrent ensure without launching twice', async () => {
@@ -624,7 +706,7 @@ describe('SurfaceManager', () => {
 		).toMatchObject({ status: 'stopping', attempt_id: expect.any(String) });
 		finishStop();
 		await stop;
-		expect(calls.exec.at(-1)).toContain('then exit 1');
+		expect(calls.exec.at(-1)).toContain('else exit 1; fi');
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });

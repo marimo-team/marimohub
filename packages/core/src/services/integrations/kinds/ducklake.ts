@@ -20,28 +20,67 @@ import {
 import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
 
 const metadataSchema = z.strictObject({
-	type: z.literal('duckdb'),
+	type: z
+		.literal('duckdb')
+		.describe('Metadata catalog format. Only DuckDB catalog files are supported.'),
 	url: z.string().min(1).describe('Exact HTTPS URL of one immutable DuckLake metadata file'),
-	auth: exactObjectAuthSchema,
-	allow_non_database_suffix: z.boolean().default(false),
+	auth: exactObjectAuthSchema.describe(
+		'How the hub authenticates to the metadata URL. Never forwarded to S3 requests.',
+	),
+	allow_non_database_suffix: z
+		.boolean()
+		.default(false)
+		.describe('Accept a metadata URL that does not end in `.ducklake` or `.duckdb`.'),
 });
 
 const storageSchema = z.strictObject({
-	scheme: z.literal('s3'),
-	endpoint: httpUrlField(),
-	region: z.string().regex(AWS_REGION_REGEX, 'Region name only, e.g. us-east-1'),
-	force_virtual_addressing: z.boolean().default(true),
-	credentials: z.strictObject({ method: z.literal('static'), ...awsStaticCredentials }),
-	broker_read_locations: s3BrokerReadLocationsSchema.min(
-		1,
-		'DuckLake requires at least one guarded S3 read location',
+	scheme: z
+		.literal('s3')
+		.describe('Data-file storage scheme. Only S3-compatible storage is supported.'),
+	endpoint: httpUrlField().describe(
+		'Origin-only HTTPS S3 endpoint, e.g. `https://s3.us-east-1.amazonaws.com`.',
 	),
+	region: z
+		.string()
+		.regex(AWS_REGION_REGEX, 'Region name only, e.g. us-east-1')
+		.describe('AWS region used to sign S3 requests, e.g. `us-east-1`.'),
+	force_virtual_addressing: z
+		.boolean()
+		.default(true)
+		.describe(
+			'Address buckets as `{bucket}.{endpoint}` (virtual-hosted style) instead of `{endpoint}/{bucket}` (path style).',
+		),
+	credentials: z.strictObject({
+		method: z.literal('static').describe('Credential source. Only static keys are supported.'),
+		access_key_id: awsStaticCredentials.access_key_id.describe(
+			'AWS access key ID. Held by the hub broker; never sent to the notebook worker.',
+		),
+		secret_access_key: awsStaticCredentials.secret_access_key.describe(
+			'AWS secret access key. Held by the hub broker; never sent to the notebook worker.',
+		),
+		session_token: awsStaticCredentials.session_token.describe(
+			'AWS session token for temporary credentials.',
+		),
+	}),
+	broker_read_locations: s3BrokerReadLocationsSchema
+		.min(1, 'DuckLake requires at least one guarded S3 read location')
+		.describe(
+			'Bucket prefixes the broker may read data files from. Requests outside these locations are rejected.',
+		),
 });
 
 const snapshotSchema = z
 	.strictObject({
-		version: z.number().int().nonnegative().optional(),
-		timestamp: z.iso.datetime().optional(),
+		version: z
+			.number()
+			.int()
+			.nonnegative()
+			.optional()
+			.describe('Read this DuckLake snapshot version instead of the latest snapshot.'),
+		timestamp: z.iso
+			.datetime()
+			.optional()
+			.describe('Read the snapshot current at this RFC 3339 timestamp instead of the latest.'),
 	})
 	.refine((snapshot) => snapshot.version === undefined || snapshot.timestamp === undefined, {
 		message: 'Set only one of snapshot.version or snapshot.timestamp',
@@ -168,7 +207,6 @@ function duckLakeQueryPlan(
 
 function duckLakeAccess(config: DuckLakeConfig): DuckDBDuckLakeHttpAccess {
 	const storage = config.storage;
-	validateDuckLakeStorage(config.storage);
 	return {
 		kind: 'ducklake',
 		metadata: exactObjectAccess(

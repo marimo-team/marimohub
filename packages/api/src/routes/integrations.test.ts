@@ -8,7 +8,7 @@ import {
 	ProjectId,
 	ProjectIntegrationsStore,
 } from '@marimo-hub/core';
-import type { UserId } from '@marimo-hub/core';
+import type { IntegrationsStoreOptions, UserId } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import type { Page } from '../pagination';
@@ -17,8 +17,8 @@ import { trackedTestBudgets } from './integrations';
 
 const codec = new AesGcmSecretCodec({ kek: '/ECMzY/eM7nlHPPNu+OM2wv0lWiFuHUScSJxNmh64N8=' });
 
-function integrationsDeps(bucket: MemoryBucket) {
-	const options = { bucket, registry: defaultRegistry(), codec };
+function integrationsDeps(bucket: MemoryBucket, extra: Partial<IntegrationsStoreOptions> = {}) {
+	const options = { bucket, registry: defaultRegistry(), codec, ...extra };
 	return {
 		integrations: new ProjectIntegrationsStore(options),
 		orgIntegrations: new OrgIntegrationsStore(options),
@@ -593,6 +593,33 @@ describe('Integrations routes', () => {
 			}),
 			422,
 		);
+	});
+
+	it('forwards the request signal to a database connection test', async () => {
+		const pid = await createProject();
+		const testConnection = vi.fn(async () => ({ ok: true, details: 'reachable' }));
+		const wired = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: integrationsDeps(bucket, {
+				probe: {
+					fetch: () => Promise.reject(new Error('no network in tests')),
+					connect: () => Promise.reject(new Error('no network in tests')),
+				},
+				databaseTesters: { postgres: { provider: 'postgres', testConnection } },
+			}),
+		}).request;
+
+		await expectOk(
+			await wired('POST', `/projects/${pid}/integrations/test`, {
+				source: 'draft',
+				kind: 'postgres',
+				config: PG_CONFIG,
+			}),
+		);
+		expect(testConnection).toHaveBeenCalledWith(expect.objectContaining({ provider: 'postgres' }), {
+			signal: expect.any(AbortSignal),
+		});
 	});
 
 	it('returns every SQL readiness blocker without echoing draft secrets', async () => {

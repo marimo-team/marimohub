@@ -62,6 +62,9 @@ entitlements. The session cookie stores mapped entitlements, not raw groups.
 - If the value contains group IDs, super admins and matching users can create projects.
 
 If no super admin is configured, an empty value prevents every user from creating projects.
+Setting the variable implies `MARIMOHUB_PROJECT_CREATION=restricted`, which also
+works without group mapping; combining it with `MARIMOHUB_PROJECT_CREATION=open`
+is rejected at startup.
 
 An empty value does not require `GROUPS_CLAIM`. A non-empty value requires the claim and creates a group-derived session entitlement.
 
@@ -109,7 +112,10 @@ validation and before session signing. It receives the validated ID-token and
 UserInfo claims as separate read-only objects and returns one bounded result: an
 allow or deny decision, plus the built-in entitlements (`super-admin`,
 `project-creator`, `default-role:viewer`, `default-role:editor`,
-`default-role:manager`).
+`default-role:manager`). `project-creator` is only meaningful when
+`MARIMOHUB_PROJECT_CREATION=restricted`; without it every authenticated user can
+create projects. `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=none` (or unset)
+disables the module.
 
 Login-policy configuration is mutually exclusive with the group variables
 above. A module can reproduce any group rule in code. The module applies to

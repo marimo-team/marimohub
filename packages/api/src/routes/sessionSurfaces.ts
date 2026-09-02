@@ -1,5 +1,7 @@
+import type { z } from '@hono/zod-openapi';
 import type {
 	AuthUser,
+	OpenCodeManagedAiOptions,
 	ProjectId,
 	SandboxExposure,
 	SecondarySurfaceId,
@@ -14,6 +16,7 @@ import {
 	NotFoundError,
 	opencodeSurface,
 	ProxyExposure,
+	SECONDARY_SURFACE_IDS,
 	signProxyToken,
 	SurfaceManager,
 	SurfaceNotEnabledError,
@@ -21,7 +24,7 @@ import {
 	SurfaceUnsupportedProviderError,
 	vscodeSurface,
 } from '@marimo-hub/core';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, SandboxConfig } from '../context';
 import { errorMetadata, logEvent } from '../log';
 import {
 	assertSessionControl,
@@ -29,6 +32,115 @@ import {
 	assertSessionSurfaceAccess,
 	loadVisibleProject,
 } from '../shared';
+import type { CapabilitiesResponseSchema } from '../shared';
+
+type SurfacesConfig = NonNullable<SandboxConfig['surfaces']>;
+type SurfaceConfig<K extends SecondarySurfaceId> = NonNullable<SurfacesConfig[K]>;
+type SurfaceCapability<K extends SecondarySurfaceId> = Extract<
+	z.infer<typeof CapabilitiesResponseSchema>['surfaces'][number],
+	{ id: K }
+>;
+
+interface SurfaceFactoryContext {
+	deps: ApiDeps;
+	user: AuthUser;
+	session: Session;
+	appBaseUrl: string;
+	/** The surface this manager is being built to start. */
+	startingId: SecondarySurfaceId;
+}
+
+interface SurfaceFactory<K extends SecondarySurfaceId> {
+	spec(config: SurfaceConfig<K>, context: SurfaceFactoryContext): Promise<SurfaceSpec>;
+	/** Config-free spec: a running surface stays stoppable after its config is removed. */
+	stopSpec(): SurfaceSpec;
+	capability(config: SurfaceConfig<K>, deps: ApiDeps): SurfaceCapability<K>;
+}
+
+async function managedAiFor(
+	context: SurfaceFactoryContext,
+): Promise<OpenCodeManagedAiOptions | undefined> {
+	const { deps, session, user, appBaseUrl } = context;
+	if (!deps.ai) return undefined;
+	try {
+		return {
+			baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
+			apiKey: await mintAiSessionToken(
+				deps.ai.signingSecret,
+				{
+					projectId: session.project_id,
+					notebookId: session.notebook_id,
+					sessionId: session.session_id,
+					userId: user.id,
+				},
+				{ ttlSeconds: deps.ai.tokenTtlSeconds },
+			),
+			model: deps.ai.model,
+		};
+	} catch (error) {
+		logEvent({
+			level: 'warn',
+			event: 'surface_ai_inject_failed',
+			project_id: session.project_id,
+			notebook_id: session.notebook_id,
+			session_id: session.session_id,
+			surface: 'opencode',
+			error: errorMetadata(error),
+		});
+		return undefined;
+	}
+}
+
+export const SURFACE_FACTORIES: { [K in SecondarySurfaceId]: SurfaceFactory<K> } = {
+	vscode: {
+		async spec(config) {
+			return vscodeSurface({
+				flavor: config.flavor,
+				port: config.port,
+				settings: config.settings,
+				extensionGallery: config.extensionGallery,
+			});
+		},
+		stopSpec: () => vscodeSurface(),
+		capability: (config) => ({
+			id: 'vscode',
+			flavor: config.flavor,
+			start: config.start,
+			embed: config.embed,
+		}),
+	},
+	opencode: {
+		async spec(config, context) {
+			// The session token is minted only for the surface being started so an
+			// unrelated start never spends a token on OpenCode.
+			const managedAi = context.startingId === 'opencode' ? await managedAiFor(context) : undefined;
+			return opencodeSurface({ port: config.port, managedAi });
+		},
+		stopSpec: () => opencodeSurface(),
+		capability: (config, deps) => ({
+			id: 'opencode',
+			start: config.start,
+			embed: config.embed,
+			managed_ai: Boolean(deps.ai),
+		}),
+	},
+};
+
+function specFor<K extends SecondarySurfaceId>(
+	id: K,
+	config: SurfaceConfig<K>,
+	context: SurfaceFactoryContext,
+): Promise<SurfaceSpec> {
+	return SURFACE_FACTORIES[id].spec(config, context);
+}
+
+function capabilityFor<K extends SecondarySurfaceId>(
+	id: K,
+	config: SurfaceConfig<K>,
+	deps: ApiDeps,
+): SurfaceCapability<K> {
+	return SURFACE_FACTORIES[id].capability(config, deps);
+}
 
 export function surfaceConfig(deps: ApiDeps, id: SecondarySurfaceId) {
 	const config = deps.sandbox.surfaces?.[id];
@@ -36,65 +148,25 @@ export function surfaceConfig(deps: ApiDeps, id: SecondarySurfaceId) {
 	return config;
 }
 
-async function createSurfaceManager(
-	deps: ApiDeps,
-	startingId: SecondarySurfaceId,
-	context: { user: AuthUser; session: Session; appBaseUrl: string },
-): Promise<SurfaceManager> {
+/** Enabled surfaces as advertised on `GET /capabilities`, in registry order. */
+export function surfaceCapabilities(deps: ApiDeps): SurfaceCapability<SecondarySurfaceId>[] {
+	return SECONDARY_SURFACE_IDS.flatMap((id) => {
+		const config = deps.sandbox.surfaces?.[id];
+		return config ? [capabilityFor(id, config, deps)] : [];
+	});
+}
+
+async function createSurfaceManager(context: SurfaceFactoryContext): Promise<SurfaceManager> {
+	const { deps } = context;
 	if (deps.compute.capabilities?.multiPort !== true) {
 		throw new SurfaceUnsupportedProviderError(
 			'The compute backend cannot expose a second sandbox port',
 		);
 	}
 	const specs: SurfaceSpec[] = [marimoSurface];
-	const vscodeConfig = deps.sandbox.surfaces?.vscode;
-	if (vscodeConfig) {
-		specs.push(
-			vscodeSurface({
-				flavor: vscodeConfig.flavor,
-				port: vscodeConfig.port,
-				settings: vscodeConfig.settings,
-				extensionGallery: vscodeConfig.extensionGallery,
-			}),
-		);
-	}
-	const openCodeConfig = deps.sandbox.surfaces?.opencode;
-	if (openCodeConfig) {
-		let managedAi;
-		if (deps.ai && startingId === 'opencode') {
-			try {
-				managedAi = {
-					baseUrl: joinUrlPath(context.appBaseUrl, '/api/ai/v1'),
-					apiKey: await mintAiSessionToken(
-						deps.ai.signingSecret,
-						{
-							projectId: context.session.project_id,
-							notebookId: context.session.notebook_id,
-							sessionId: context.session.session_id,
-							userId: context.user.id,
-						},
-						{ ttlSeconds: deps.ai.tokenTtlSeconds },
-					),
-					model: deps.ai.model,
-				};
-			} catch (error) {
-				logEvent({
-					level: 'warn',
-					event: 'surface_ai_inject_failed',
-					project_id: context.session.project_id,
-					notebook_id: context.session.notebook_id,
-					session_id: context.session.session_id,
-					surface: 'opencode',
-					error: errorMetadata(error),
-				});
-			}
-		}
-		specs.push(
-			opencodeSurface({
-				port: openCodeConfig.port,
-				managedAi,
-			}),
-		);
+	for (const id of SECONDARY_SURFACE_IDS) {
+		const config = deps.sandbox.surfaces?.[id];
+		if (config) specs.push(await specFor(id, config, context));
 	}
 	return new SurfaceManager(deps.compute, deps.services.sessions, new SurfaceRegistry(specs));
 }
@@ -103,7 +175,10 @@ export function surfaceStopManager(deps: ApiDeps): SurfaceManager {
 	return new SurfaceManager(
 		deps.compute,
 		deps.services.sessions,
-		new SurfaceRegistry([marimoSurface, vscodeSurface(), opencodeSurface()]),
+		new SurfaceRegistry([
+			marimoSurface,
+			...SECONDARY_SURFACE_IDS.map((id) => SURFACE_FACTORIES[id].stopSpec()),
+		]),
 	);
 }
 
@@ -163,7 +238,7 @@ export async function beginSessionSurface(input: BeginSurfaceInput) {
 		basePath = `/surface-proxy/${token}/${id}`;
 		clientBaseUrl = `${joinUrlPath(appBaseUrl, basePath)}/`;
 	}
-	const manager = await createSurfaceManager(deps, id, { user, session, appBaseUrl });
+	const manager = await createSurfaceManager({ deps, user, session, appBaseUrl, startingId: id });
 	const begun = await manager.begin(session, id, {
 		user,
 		workspaceDir,

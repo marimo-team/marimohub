@@ -3,13 +3,12 @@ import { ConflictError, NotFoundError, PreconditionFailedError } from '../../err
 import { createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
-import { ACTOR, setupTestEnv } from '../../testing';
+import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { IdentityService } from '../identity/IdentityService';
 import type { NotebookService } from './NotebookService';
 import { EventService } from '../catalog/EventService';
-import { LocalResourceConstraintPolicy } from '../authorization/LocalResourceConstraintPolicy';
 import { claimInviteRows, ProjectService } from './ProjectService';
 import { listAllKeys } from '../catalog/storage';
 
@@ -1020,24 +1019,14 @@ describe('ProjectService security labels', () => {
 	});
 
 	const LABELS = { classification: 'SECRET', compartments: ['element-b', 'element-a'] };
-	const CONTEXT = {
-		schemaVersion: 1 as const,
-		classification: 'SECRET',
-		compartments: ['element-a', 'element-b'],
-		policyVersion: 'policy-1',
-		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-	};
+	const CONTEXT = makeSubjectContext();
 	const SUBJECT = {
 		id: ACTOR,
 		email: `${ACTOR}@example.com`,
 		credential: { kind: 'sso' as const },
 	};
-	const security = (context = CONTEXT) => ({
-		constraints: new LocalResourceConstraintPolicy({
-			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-		}),
-		subjectContext: { resolve: async () => context },
-	});
+	const security = (context = CONTEXT) =>
+		localResourceSecurity(['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'], context);
 
 	async function recentEvents() {
 		const events = new EventService(bucket);
@@ -1132,6 +1121,37 @@ describe('ProjectService security labels', () => {
 		expect((await entryFor(p.id))?.security_labels).toBeUndefined();
 		const list = await projects.listProjects({ subject: SUBJECT });
 		expect(list.map((e) => e.id)).toEqual([p.id]);
+	});
+
+	it('restores a determinate projection when a concurrent write rejects the precondition after parking', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		const labeled = await projects.setSecurityLabels(p.id, LABELS, ACTOR);
+		// Another writer lands after the pre-check (which the parked version
+		// passes) and before the CAS callback re-reads the record.
+		const realUpdate = catalog.updateProjectEntry.bind(catalog);
+		const parking = vi
+			.spyOn(catalog, 'updateProjectEntry')
+			.mockImplementation(async (operation, ...rest) => {
+				const snap = await realUpdate(operation, ...rest);
+				if (operation === 'project.security_labels.pending') {
+					vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+					await projects.updateProject(p.id, { name: 'renamed' }, ACTOR);
+				}
+				return snap;
+			});
+		try {
+			await expect(
+				projects.setSecurityLabels(p.id, undefined, ACTOR, labeled.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+		} finally {
+			parking.mockRestore();
+			vi.useRealTimers();
+		}
+		const entry = await entryFor(p.id);
+		expect(entry?.name).toBe('renamed');
+		expect(entry?.security_labels).toEqual(labeled.security_labels);
+		expect(entry?.security_labels_pending).toBeUndefined();
+		expect((await projects.getProject(p.id)).security_labels).toEqual(labeled.security_labels);
 	});
 
 	it('self-heals an indeterminate projection on the next routine write', async () => {

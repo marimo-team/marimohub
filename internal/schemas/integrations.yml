@@ -2069,6 +2069,7 @@ components:
             type:
               type: string
               const: duckdb
+              description: Metadata catalog format. Only DuckDB catalog files are supported.
             url:
               type: string
               minLength: 1
@@ -2116,10 +2117,14 @@ components:
                     - username
                     - password
                   additionalProperties: false
+              description: How the hub authenticates to the metadata URL. Never forwarded to
+                S3 requests.
               discriminator:
                 propertyName: method
             allow_non_database_suffix:
               default: false
+              description: Accept a metadata URL that does not end in `.ducklake` or
+                `.duckdb`.
               type: boolean
           required:
             - type
@@ -2132,16 +2137,22 @@ components:
             scheme:
               type: string
               const: s3
+              description: Data-file storage scheme. Only S3-compatible storage is supported.
             endpoint:
               type: string
               pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+              description: Origin-only HTTPS S3 endpoint, e.g.
+                `https://s3.us-east-1.amazonaws.com`.
             region:
               type: string
               pattern: ^[a-z0-9-]+$
+              description: AWS region used to sign S3 requests, e.g. `us-east-1`.
             force_virtual_addressing:
               default: true
+              description: Address buckets as `{bucket}.{endpoint}` (virtual-hosted style)
+                instead of `{endpoint}/{bucket}` (path style).
               type: boolean
             credentials:
               type: object
@@ -2149,17 +2160,23 @@ components:
                 method:
                   type: string
                   const: static
+                  description: Credential source. Only static keys are supported.
                 access_key_id:
                   type: string
                   minLength: 1
                   x-marimohub-secret: true
+                  description: AWS access key ID. Held by the hub broker; never sent to the
+                    notebook worker.
                   writeOnly: true
                 secret_access_key:
                   type: string
                   minLength: 1
                   x-marimohub-secret: true
+                  description: AWS secret access key. Held by the hub broker; never sent to the
+                    notebook worker.
                   writeOnly: true
                 session_token:
+                  description: AWS session token for temporary credentials.
                   type: string
                   minLength: 1
                   x-marimohub-secret: true
@@ -2186,6 +2203,8 @@ components:
                   - bucket
                   - prefix
                 additionalProperties: false
+              description: Bucket prefixes the broker may read data files from. Requests
+                outside these locations are rejected.
           required:
             - scheme
             - endpoint
@@ -2198,10 +2217,13 @@ components:
           type: object
           properties:
             version:
+              description: Read this DuckLake snapshot version instead of the latest snapshot.
               type: integer
               minimum: 0
               maximum: 9007199254740991
             timestamp:
+              description: Read the snapshot current at this RFC 3339 timestamp instead of the
+                latest.
               type: string
               format: date-time
               pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
@@ -2219,6 +2241,7 @@ components:
             type:
               type: string
               const: duckdb
+              description: Metadata catalog format. Only DuckDB catalog files are supported.
             url:
               type: string
               minLength: 1
@@ -2266,10 +2289,14 @@ components:
                     - username
                     - password
                   additionalProperties: false
+              description: How the hub authenticates to the metadata URL. Never forwarded to
+                S3 requests.
               discriminator:
                 propertyName: method
             allow_non_database_suffix:
               default: false
+              description: Accept a metadata URL that does not end in `.ducklake` or
+                `.duckdb`.
               type: boolean
           required:
             - type
@@ -2283,16 +2310,22 @@ components:
             scheme:
               type: string
               const: s3
+              description: Data-file storage scheme. Only S3-compatible storage is supported.
             endpoint:
               type: string
               pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+              description: Origin-only HTTPS S3 endpoint, e.g.
+                `https://s3.us-east-1.amazonaws.com`.
             region:
               type: string
               pattern: ^[a-z0-9-]+$
+              description: AWS region used to sign S3 requests, e.g. `us-east-1`.
             force_virtual_addressing:
               default: true
+              description: Address buckets as `{bucket}.{endpoint}` (virtual-hosted style)
+                instead of `{endpoint}/{bucket}` (path style).
               type: boolean
             credentials:
               type: object
@@ -2300,21 +2333,27 @@ components:
                 method:
                   type: string
                   const: static
+                  description: Credential source. Only static keys are supported.
                 access_key_id:
                   oneOf:
                     - $ref: '#/components/schemas/ManagedStoredSecret'
                     - $ref: '#/components/schemas/ReferenceStoredSecret'
                   x-marimohub-secret: true
+                  description: AWS access key ID. Held by the hub broker; never sent to the
+                    notebook worker.
                 secret_access_key:
                   oneOf:
                     - $ref: '#/components/schemas/ManagedStoredSecret'
                     - $ref: '#/components/schemas/ReferenceStoredSecret'
                   x-marimohub-secret: true
+                  description: AWS secret access key. Held by the hub broker; never sent to the
+                    notebook worker.
                 session_token:
                   oneOf:
                     - $ref: '#/components/schemas/ManagedStoredSecret'
                     - $ref: '#/components/schemas/ReferenceStoredSecret'
                   x-marimohub-secret: true
+                  description: AWS session token for temporary credentials.
               required:
                 - method
                 - access_key_id
@@ -2337,6 +2376,8 @@ components:
                   - bucket
                   - prefix
                 additionalProperties: false
+              description: Bucket prefixes the broker may read data files from. Requests
+                outside these locations are rejected.
           required:
             - scheme
             - endpoint
@@ -2350,10 +2391,13 @@ components:
           type: object
           properties:
             version:
+              description: Read this DuckLake snapshot version instead of the latest snapshot.
               type: integer
               minimum: 0
               maximum: 9007199254740991
             timestamp:
+              description: Read the snapshot current at this RFC 3339 timestamp instead of the
+                latest.
               type: string
               format: date-time
               pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$

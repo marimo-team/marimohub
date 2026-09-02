@@ -27,6 +27,12 @@ export const DEPLOYMENT_ACTIONS = [
 	'org-integration.manage',
 	/** Read the deployment-wide audit log. */
 	'audit.global.read',
+	/**
+	 * Search the user directory on deployment standing alone: a default role
+	 * (static or entitlement-derived) or super admin. Without it the route
+	 * falls back to requiring project involvement, which needs the catalog.
+	 */
+	'directory.search',
 ] as const;
 
 export const PROJECT_ACTIONS = [
@@ -120,6 +126,7 @@ export const ACTION_RULES: {
 	'admin.access': { scope: 'deployment' },
 	'org-integration.manage': { scope: 'deployment' },
 	'audit.global.read': { scope: 'deployment' },
+	'directory.search': { scope: 'deployment' },
 
 	'project.read': project('viewer', 'not-found'),
 	'project.update': project('manager', 'forbidden'),

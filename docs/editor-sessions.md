@@ -49,6 +49,9 @@ persistent sandbox. A temporary sandbox uses the normal editor compute profile.
 Unlike a restricted viewer sandbox, it receives integration configuration,
 federated credentials, and an AI identity for that editor.
 
+[Session surfaces](./surfaces.md) share the sandbox's lifetime: a takeover or
+teardown stops VS Code and OpenCode together with marimo.
+
 The temporary sandbox loads a copy of the workspace. It does not save:
 
 - notebook code or versions
@@ -66,6 +69,34 @@ temporary editor sandboxes then expose the authenticated user's directory at
 `/mnt/<lowercase-email>`; writes there outlive marimohub's notebook and
 workspace lifecycle. Apps and viewer sandboxes are never created from that
 template.
+
+## Browse and edit workspace files
+
+**Browse files** on a notebook page opens the workspace mirror that the
+sandbox mounts (`workspace/` in the bucket). Project editors can create, edit,
+rename, copy, move, and delete files and directories there without starting a
+sandbox. Viewers can browse and download only.
+
+The browser is read-only when:
+
+- the notebook is Git-synced (`git_source`): the workspace is an immutable
+  copy of the last sync;
+- you are a project viewer (`viewer`);
+- an editor session is running (`active_session`): the sandbox owns the files
+  until it stops, so its next save does not overwrite yours.
+
+`notebook.py` and `pyproject.toml` are protected. Editing them saves a new
+notebook version through the normal save path. They cannot be renamed, moved,
+deleted, or replaced by a copy.
+
+Limits: 25 MB per file, 100 MB per workspace, and 1,000 files. Larger uploads
+are rejected with `413`; a workspace over its total budget with `429`.
+
+The API exposes the same operations under
+`/api/v1/projects/{pid}/notebooks/{nid}/workspace/`, including
+`GET …/workspace/search?query=<text>` for a case-insensitive path search
+(up to 200 results) and `GET …/workspace/entries?path=/&limit=<n>` for paged
+directory listings. See the [API reference](./api.md).
 
 ## Takeover safety
 

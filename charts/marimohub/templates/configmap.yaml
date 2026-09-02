@@ -27,11 +27,9 @@ data:
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY"))
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON"))
     (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_EMBED"))
-    (and $.Values.surfaces.vscode.enabled (eq $k "MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_START"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_PORT"))
     (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_EMBED"))
-    (and $.Values.surfaces.opencode.enabled (eq $k "MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH"))
   ) }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
@@ -55,12 +53,10 @@ data:
   MARIMOHUB_SURFACE_VSCODE_EXTENSION_GALLERY: {{ .Values.surfaces.vscode.extensionGallery | quote }}
   MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON: {{ .Values.surfaces.vscode.settingsJson | quote }}
   MARIMOHUB_SURFACE_VSCODE_EMBED: {{ .Values.surfaces.vscode.embed | quote }}
-  MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH: {{ .Values.surfaces.vscode.marimoWatch | quote }}
   {{- end }}
   {{- if .Values.surfaces.opencode.enabled }}
   MARIMOHUB_SURFACE_OPENCODE_START: {{ .Values.surfaces.opencode.start | quote }}
   MARIMOHUB_SURFACE_OPENCODE_PORT: {{ .Values.surfaces.opencode.port | quote }}
   MARIMOHUB_SURFACE_OPENCODE_EMBED: {{ .Values.surfaces.opencode.embed | quote }}
-  MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH: {{ .Values.surfaces.opencode.marimoWatch | quote }}
   {{- end }}
 {{- end }}

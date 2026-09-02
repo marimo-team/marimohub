@@ -28,16 +28,18 @@ async function fetchWithTimeout(
 	url: string,
 	timeoutMs: number,
 	init?: RequestInit,
+	fetchImpl?: (request: Request) => Promise<Response>,
 ): Promise<Response> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const options: RequestInit = {
+		method: 'GET',
+		redirect: 'follow',
+		...init,
+		signal: controller.signal,
+	};
 	try {
-		return await fetch(url, {
-			method: 'GET',
-			redirect: 'follow',
-			...init,
-			signal: controller.signal,
-		});
+		return await (fetchImpl ? fetchImpl(new Request(url, options)) : fetch(url, options));
 	} finally {
 		clearTimeout(timer);
 	}
@@ -300,25 +302,49 @@ async function checkObjectStorageWif(env: Env): Promise<CheckOutcome> {
 	}
 }
 
+/**
+ * The probe goes through the backend's signing fetch when it has one (Bedrock),
+ * so a 401/403 there means the hub's AWS identity lacks Bedrock access — the
+ * failure a notebook would otherwise first meet as a 502. An unsigned probe
+ * cannot tell a missing key from a provider that gates /models, so for the
+ * openai-compatible backend 401/403 only proves reachability.
+ */
 async function checkAi(deps: ApiDeps): Promise<CheckOutcome> {
 	if (!deps.ai) return { status: 'skipped', message: 'managed AI disabled' };
-	const url = `${deps.ai.upstreamBaseUrl}/models`;
+	const { upstreamBaseUrl, upstreamFetch } = deps.ai;
+	const url = `${upstreamBaseUrl}/models`;
+	const signed = upstreamFetch !== undefined;
 	try {
-		const res = await fetchWithTimeout(url, 2500);
-		// 401/403 still proves the upstream is reachable (some providers gate /models).
-		if (res.ok || res.status === 401 || res.status === 403) {
-			return { status: 'ok', message: `AI upstream reachable (${deps.ai.upstreamBaseUrl})` };
+		const res = await fetchWithTimeout(url, 2500, undefined, upstreamFetch);
+		const ok = res.ok || (!signed && (res.status === 401 || res.status === 403));
+		if (ok) return { status: 'ok', message: `AI upstream reachable (${upstreamBaseUrl})` };
+		if (signed && (res.status === 401 || res.status === 403)) {
+			return {
+				status: 'fail',
+				message: `Bedrock rejected the hub's signed request (${res.status}) for ${url}`,
+				remediation:
+					"Grant the hub's AWS identity (IRSA / EKS Pod Identity) bedrock:InvokeModel and " +
+					'bedrock:InvokeModelWithResponseStream on the configured models; see docs/setup/ai/bedrock.md.',
+			};
 		}
 		return {
 			status: 'fail',
 			message: `AI upstream returned ${res.status} for ${url}`,
-			remediation: 'Set MARIMOHUB_AI_UPSTREAM_BASE_URL to the provider /v1 base URL.',
+			remediation: signed
+				? res.status === 404
+					? 'Set MARIMOHUB_AI_AWS_REGION to a region that serves the Bedrock OpenAI-compatible endpoint.'
+					: res.status === 429
+						? 'Bedrock is throttling the hub; check the account quotas for the configured models.'
+						: 'Bedrock returned a service error; retry, and check the AWS Health Dashboard for the region.'
+				: 'Set MARIMOHUB_AI_UPSTREAM_BASE_URL to the provider /v1 base URL.',
 		};
 	} catch (err) {
 		return {
 			status: 'fail',
 			message: `AI upstream unreachable: ${errMsg(err)}`,
-			remediation: 'Verify MARIMOHUB_AI_UPSTREAM_BASE_URL and network egress to the provider.',
+			remediation: signed
+				? 'Verify the AWS credential chain resolves (IRSA / EKS Pod Identity), MARIMOHUB_AI_AWS_REGION, and network egress to bedrock-runtime.'
+				: 'Verify MARIMOHUB_AI_UPSTREAM_BASE_URL and network egress to the provider.',
 		};
 	}
 }

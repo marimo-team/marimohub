@@ -11,8 +11,7 @@ import {
 import { createNotebookId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
-import { LocalResourceConstraintPolicy } from '../authorization/LocalResourceConstraintPolicy';
-import { ACTOR, setupTestEnv } from '../../testing';
+import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
@@ -2257,24 +2256,14 @@ describe('NotebookService security labels', () => {
 	});
 
 	const LABELS = { classification: 'SECRET', compartments: ['element-b', 'element-a'] };
-	const CONTEXT = {
-		schemaVersion: 1 as const,
-		classification: 'SECRET',
-		compartments: ['element-a', 'element-b'],
-		policyVersion: 'policy-1',
-		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-	};
+	const CONTEXT = makeSubjectContext();
 	const SUBJECT = {
 		id: ACTOR,
 		email: `${ACTOR}@example.com`,
 		credential: { kind: 'sso' as const },
 	};
-	const security = (context = CONTEXT) => ({
-		constraints: new LocalResourceConstraintPolicy({
-			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-		}),
-		subjectContext: { resolve: async () => context },
-	});
+	const security = (context = CONTEXT) =>
+		localResourceSecurity(['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'], context);
 
 	async function createLabeled() {
 		const meta = await notebooks.createNotebook(
@@ -2386,6 +2375,37 @@ describe('NotebookService security labels', () => {
 		// which still carries no override.
 		const list = await notebooks.listNotebooks(pid, { subject: SUBJECT, policy: {} });
 		expect(list.map((n) => n.id)).toContain(meta.id);
+	});
+
+	it('restores a determinate projection when a concurrent write rejects the precondition after parking', async () => {
+		const nid = await createLabeled();
+		const labeled = (await notebooks.getNotebook(pid, nid)).meta;
+		const realUpdate = catalog.updateNotebookEntry.bind(catalog);
+		const parking = vi
+			.spyOn(catalog, 'updateNotebookEntry')
+			.mockImplementation(async (operation, ...rest) => {
+				const snap = await realUpdate(operation, ...rest);
+				if (operation === 'notebook.security_labels.pending') {
+					vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+					await notebooks.updateNotebook(pid, nid, { title: 'renamed' }, ACTOR);
+				}
+				return snap;
+			});
+		try {
+			await expect(
+				notebooks.setSecurityLabels(pid, nid, undefined, ACTOR, labeled.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+		} finally {
+			parking.mockRestore();
+			vi.useRealTimers();
+		}
+		const entry = await entryFor(nid);
+		expect(entry?.title).toBe('renamed');
+		expect(entry?.security_labels).toEqual(labeled.security_labels);
+		expect(entry?.security_labels_pending).toBeUndefined();
+		expect((await notebooks.getNotebook(pid, nid)).meta.security_labels).toEqual(
+			labeled.security_labels,
+		);
 	});
 
 	it('self-heals an indeterminate projection on the next routine write', async () => {

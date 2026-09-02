@@ -13,7 +13,7 @@ import type {
 	SubjectSecurityContext,
 	SubjectSecurityContextProvider,
 } from '../../ports/subjectContext';
-import { makeProject } from '../../testing';
+import { makeProject, makeSubjectContext } from '../../testing';
 import { AuthorizationService } from './AuthorizationService';
 import type { ResourceSecurityPolicy } from './AuthorizationService';
 import { LocalResourceConstraintPolicy } from './LocalResourceConstraintPolicy';
@@ -26,14 +26,7 @@ const principal = (id = 'sec_owner'): AuthenticatedPrincipal => ({
 });
 const bareSubject: AuthSubject = { id: OWNER, email: 'sec_owner@example.com' };
 
-const context = (overrides: Partial<SubjectSecurityContext> = {}): SubjectSecurityContext => ({
-	schemaVersion: 1,
-	classification: 'SECRET',
-	compartments: ['element-a', 'element-b'],
-	policyVersion: 'policy-1',
-	expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-	...overrides,
-});
+const context = makeSubjectContext;
 
 const providerOf = (
 	result: SubjectSecurityContext | null | (() => Promise<SubjectSecurityContext | null>),
@@ -370,23 +363,6 @@ describe('AuthorizationService: label constraints', () => {
 		} finally {
 			warn.mockRestore();
 		}
-	});
-
-	it('constraintsSatisfied mirrors single decisions for the list fallback', async () => {
-		const authz = service({ subjectContext: providerOf(context()) });
-		await expect(authz.constraintsSatisfied(principal(), null)).resolves.toBe(true);
-		await expect(
-			authz.constraintsSatisfied(principal(), {
-				classification: 'SECRET',
-				compartments: ['element-a'],
-			}),
-		).resolves.toBe(true);
-		await expect(
-			authz.constraintsSatisfied(principal(), {
-				classification: 'TOP_SECRET',
-				compartments: [],
-			}),
-		).resolves.toBe(false);
 	});
 });
 

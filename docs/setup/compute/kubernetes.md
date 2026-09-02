@@ -33,7 +33,9 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 ```
 
 For proxy exposure, omit `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and the Ingress/TLS
-settings. marimohub uses the internal Service URL and does not manage Ingresses:
+settings. marimohub uses the internal Service URL and does not manage Ingresses,
+so a `MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE` that uses `{host}` or
+`{token}` is rejected at boot:
 
 ```bash
 MARIMOHUB_COMPUTE_BACKEND=kubernetes

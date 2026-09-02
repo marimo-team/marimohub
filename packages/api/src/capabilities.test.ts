@@ -231,13 +231,11 @@ describe('GET /api/v1/capabilities', () => {
 				settings: {},
 				extensionGallery: 'openvsx',
 				embed: 'tab',
-				marimoWatch: true,
 			},
 			opencode: {
 				start: 'eager',
 				port: 4096,
 				embed: 'iframe',
-				marimoWatch: true,
 			},
 		};
 		deps.ai = {

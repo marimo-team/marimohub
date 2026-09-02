@@ -1148,6 +1148,7 @@ components:
                   - admin.access
                   - org-integration.manage
                   - audit.global.read
+                  - directory.search
                   - project.read
                   - project.update
                   - project.delete
@@ -1579,6 +1580,7 @@ components:
             - admin.access
             - org-integration.manage
             - audit.global.read
+            - directory.search
             - project.read
             - project.update
             - project.delete
@@ -4595,6 +4597,12 @@ paths:
           required: true
           name: pid
           in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
       requestBody:
         required: true
         content:
@@ -4646,6 +4654,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           description: Request body too large
           content:
@@ -4692,6 +4706,12 @@ paths:
           required: true
           name: pid
           in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
       responses:
         '200':
           description: Security labels removed
@@ -4733,6 +4753,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
           content:
             application/json:
               schema:
@@ -6754,6 +6780,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
@@ -6871,6 +6911,20 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
           content:
             application/json:
               schema:
@@ -7014,6 +7068,13 @@ paths:
             type: string
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+          required: false
+          name: limit
           in: query
       responses:
         '200':
@@ -9040,6 +9101,12 @@ paths:
           required: true
           name: nid
           in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
       requestBody:
         required: true
         content:
@@ -9087,6 +9154,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
           content:
             application/json:
               schema:
@@ -9144,6 +9217,12 @@ paths:
           required: true
           name: nid
           in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
       responses:
         '200':
           description: Security labels removed
@@ -9185,6 +9264,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
           content:
             application/json:
               schema:

@@ -2,6 +2,7 @@ import type { Bucket } from '../../ports/bucket';
 import { roleAtLeast } from '../../authz';
 import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
+import { filterByLabelConstraints } from '../authorization/labelFilter';
 import type {
 	AuthorizationPolicy,
 	ResourceSecurityPolicy,
@@ -11,12 +12,19 @@ import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
-import { assertVersionMatch, ConflictError, NotFoundError, ValidationError } from '../../errors';
+import {
+	assertVersionMatch,
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+	ValidationError,
+} from '../../errors';
 import { createProjectId, SYSTEM_ACTOR } from '../../ids';
 import type { ProjectId, SnapshotId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import { metricsObserver, saga } from '../../saga';
 import { parseStored, ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
 import { normalizeSecurityLabels } from '../../securityLabels';
@@ -258,37 +266,14 @@ export class ProjectService {
 			);
 			visible = matching.filter((_, i) => visibility[i]);
 		}
-		return (await this.filterBySecurityLabels(authz, filter.subject, visible)).map(
-			toPublicProjectEntry,
-		);
-	}
-
-	/**
-	 * Security-label filter over membership-visible entries. Labels only remove
-	 * entries — super admins get no automatic bypass. Indeterminate label
-	 * states (a legacy entry, or a label mutation in flight) are resolved from
-	 * the authoritative record BEFORE one batch constraint decision, so a page
-	 * never costs one adapter call per entry; an unreadable authoritative
-	 * record fails closed.
-	 */
-	private async filterBySecurityLabels(
-		authz: AuthorizationService,
-		subject: AuthSubject,
-		entries: SnapshotProjectEntry[],
-	): Promise<SnapshotProjectEntry[]> {
-		if (entries.every((entry) => entry.security_labels === null)) return entries;
-		const states = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
-			if (entry.security_labels !== undefined) return { labels: entry.security_labels };
-			try {
-				return { labels: (await this.getProject(entry.id)).security_labels ?? null };
-			} catch {
-				return null;
-			}
-		});
-		const readable = entries.filter((_, i) => states[i] !== null);
-		const labelStates = states.flatMap((state) => (state === null ? [] : [state.labels]));
-		const satisfied = await authz.projectLabelConstraints(subject, labelStates);
-		return readable.filter((_, i) => satisfied[i]);
+		return (
+			await filterByLabelConstraints(
+				authz,
+				filter.subject,
+				visible,
+				async (entry) => (await this.getProject(entry.id)).security_labels ?? null,
+			)
+		).map(toPublicProjectEntry);
 	}
 
 	// Only reached when the fast path above didn't return, i.e. the caller is
@@ -429,9 +414,16 @@ export class ProjectService {
 		id: ProjectId,
 		labels: ResourceSecurityLabels | undefined,
 		actor: UserId,
+		expectedVersion?: string,
 	): Promise<Project> {
 		const key = paths.project(id).meta;
 		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
+		// A stale precondition is checked BEFORE parking the projection so a
+		// rejected request never leaves the entry indeterminate; the CAS callback
+		// repeats the authoritative check.
+		if (expectedVersion !== undefined) {
+			assertVersionMatch((await this.getProject(id)).updated_at, expectedVersion);
+		}
 
 		// Park the projection at indeterminate AND mark the mutation in flight:
 		// the marker keeps concurrent routine projections from resurrecting the
@@ -445,24 +437,38 @@ export class ProjectService {
 		);
 
 		let previous: ResourceSecurityLabels | null = null;
-		const updated = await mutateObject(
-			this.bucket,
-			key,
-			(raw) => parseStored(ProjectSchema, raw, key),
-			(current) => {
-				if (current.status === 'deleted') {
-					throw new NotFoundError(`Project ${id} not found`);
-				}
-				previous = current.security_labels ?? null;
-				const { security_labels: _cleared, ...rest } = current;
-				return {
-					...rest,
-					...(normalized !== undefined ? { security_labels: normalized } : {}),
-					updated_at: new Date().toISOString(),
-				};
-			},
-			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
-		);
+		let updated: Project;
+		try {
+			updated = await mutateObject(
+				this.bucket,
+				key,
+				(raw) => parseStored(ProjectSchema, raw, key),
+				(current) => {
+					assertVersionMatch(current.updated_at, expectedVersion);
+					if (current.status === 'deleted') {
+						throw new NotFoundError(`Project ${id} not found`);
+					}
+					previous = current.security_labels ?? null;
+					const { security_labels: _cleared, ...rest } = current;
+					return {
+						...rest,
+						...(normalized !== undefined ? { security_labels: normalized } : {}),
+						updated_at: new Date().toISOString(),
+					};
+				},
+				{ notFound: () => new NotFoundError(`Project ${id} not found`) },
+			);
+		} catch (err) {
+			// These are thrown by the callback BEFORE the conditional put (a lost
+			// CAS is retried, and a failed put surfaces as its own error), so the
+			// authoritative record is untouched and the parked projection can be
+			// re-derived from it. Any other failure is ambiguous — the put may have
+			// committed — and must leave the projection indeterminate.
+			if (err instanceof PreconditionFailedError || err instanceof NotFoundError) {
+				await this.unparkSecurityLabels(id, actor);
+			}
+			throw err;
+		}
 
 		await this.catalog.updateProjectEntry(
 			'project.security_labels',
@@ -477,6 +483,34 @@ export class ProjectService {
 		);
 
 		return updated;
+	}
+
+	/**
+	 * Restore a determinate projection after a label mutation was rejected
+	 * between parking and its authoritative write. Re-projecting the record
+	 * (rather than restoring the labels captured at park time) stays correct
+	 * when the rejection was caused by another label mutation that has already
+	 * committed its record but not yet finalized. A failed rollback is logged,
+	 * not raised: the projection is merely still indeterminate, and the caller
+	 * must see the original rejection.
+	 */
+	private async unparkSecurityLabels(id: ProjectId, actor: UserId): Promise<void> {
+		try {
+			await this.catalog.updateProjectEntry(
+				'project.security_labels.rollback',
+				actor,
+				id,
+				(entry) =>
+					loadProjectCatalogPatch(this.bucket, id, entry, { finalizeSecurityLabels: true }),
+				{ project_id: id },
+			);
+		} catch (err) {
+			logOperationalError(
+				'security_labels_rollback_failed',
+				{ operation: 'project.security_labels.rollback', project_id: id },
+				err,
+			);
+		}
 	}
 
 	/**

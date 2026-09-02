@@ -899,6 +899,20 @@ export const EditorClaimSchema = z.looseObject({
 
 export type EditorClaim = z.infer<typeof EditorClaimSchema>;
 
+// Per-notebook workspace mutation lease at
+// `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`, written only
+// by `NotebookWorkspaceService`. A lease past `expires_at` is stale and gets
+// replaced, so a crashed mutator cannot wedge the workspace. `holder: null` is
+// the free marker a release CAS-writes in place of a delete. A union rather
+// than a refine so the generated bucket contract encodes the two valid states
+// (released or held) instead of accepting a mixed one.
+export const WorkspaceMutationClaimSchema = z.union([
+	z.object({ holder: z.null(), expires_at: z.null() }),
+	z.object({ holder: z.string().min(1), expires_at: z.iso.datetime() }),
+]);
+
+export type WorkspaceMutationClaim = z.infer<typeof WorkspaceMutationClaimSchema>;
+
 // --- Identity ---
 //
 // A directory record mapping a stable user id (the auth `sub`) to its current

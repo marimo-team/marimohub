@@ -19,12 +19,12 @@ export interface SurfaceContext {
 	userDataDir: string;
 }
 
-export interface SurfaceProbe {
-	[key: string]: unknown;
+/** Persisted on the session and returned to clients; keep it to these fields. */
+export type SurfaceProbe = {
 	available: boolean;
 	reason?: string;
 	version?: string;
-}
+};
 
 export interface SurfaceSpec {
 	id: SurfaceId;

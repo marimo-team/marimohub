@@ -844,6 +844,47 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json:
+    summary: Short-lived lease serializing workspace file mutations for one notebook.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: NotebookWorkspaceService
+    get:
+      operationId: read_projects_notebooks_workspace_mutation_claim_json
+      summary: Read WorkspaceMutationClaim
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMutationClaim'
+    put:
+      operationId: write_projects_notebooks_workspace_mutation_claim_json
+      summary: Write WorkspaceMutationClaim
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceMutationClaim'
+      responses:
+        '204':
+          description: Stored.
   /_system/identities/{uid}.json:
     summary: User directory record mapping the auth sub to its display identity.
     parameters:
@@ -2351,6 +2392,29 @@ components:
         - sharing
         - claimed_at
       additionalProperties: {}
+    WorkspaceMutationClaim:
+      anyOf:
+        - type: object
+          properties:
+            holder:
+              type: 'null'
+            expires_at:
+              type: 'null'
+          required:
+            - holder
+            - expires_at
+        - type: object
+          properties:
+            holder:
+              type: string
+              minLength: 1
+            expires_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - holder
+            - expires_at
     Identity:
       type: object
       properties:

@@ -221,13 +221,16 @@ export async function authorizeProxyRequest(
 			? Math.min(authorizationDeadline, contextDeadline)
 			: (authorizationDeadline ?? contextDeadline);
 
+	// Records written before `proxy_path` was persisted route by the configured
+	// VS Code flavor; code-server (the default) strips the prefix.
+	const proxyPath =
+		surfaceState?.proxy_path ??
+		(surfaceId === 'vscode' && deps.sandbox.surfaces?.vscode?.flavor === 'openvscode'
+			? 'preserve-prefix'
+			: 'strip-prefix');
 	const upstreamPath =
-		surfaceId === 'vscode' &&
-		(surfaceState?.proxy_path ??
-			(deps.sandbox.surfaces?.vscode?.flavor === 'openvscode'
-				? 'preserve-prefix'
-				: 'strip-prefix')) === 'strip-prefix'
-			? url.pathname.slice(surfaceMatch![0].length) || '/'
+		surfaceMatch && proxyPath === 'strip-prefix'
+			? url.pathname.slice(surfaceMatch[0].length) || '/'
 			: url.pathname;
 	const targetUrl = `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}`;
 	return {

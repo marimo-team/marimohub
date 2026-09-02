@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createIntegrationId } from '../../../ids';
 import { ducklake, normalizeDuckLakeMetadataUrl } from './ducklake';
 import { defaultRegistry } from './index';
+import { SAMPLE_CONFIGS } from './sampleConfigs';
 
 const integration = {
 	id: createIntegrationId(),
@@ -11,25 +12,7 @@ const integration = {
 };
 
 function parse(overrides: Record<string, unknown> = {}) {
-	return ducklake.configSchema.parse({
-		metadata: {
-			type: 'duckdb',
-			url: 'https://data.example.com/catalog/releases/42.ducklake',
-			auth: { method: 'none' },
-		},
-		storage: {
-			scheme: 's3',
-			endpoint: 'https://s3.us-east-1.amazonaws.com',
-			region: 'us-east-1',
-			credentials: {
-				method: 'static',
-				access_key_id: 'parent-key',
-				secret_access_key: 'parent-secret',
-			},
-			broker_read_locations: [{ bucket: 'warehouse', prefix: 'ducklake/data/' }],
-		},
-		...overrides,
-	});
+	return ducklake.configSchema.parse({ ...(SAMPLE_CONFIGS.ducklake as object), ...overrides });
 }
 
 describe('ducklake schema', () => {
@@ -165,7 +148,7 @@ describe('ducklake schema', () => {
 			parse({
 				metadata: {
 					...base.metadata,
-					url: 'https://warehouse.s3.us-east-1.amazonaws.com/ducklake/data-private/catalog.ducklake',
+					url: 'https://warehouse.s3.example.test/ducklake/data-private/catalog.ducklake',
 				},
 			}),
 		).not.toThrow();
@@ -175,7 +158,7 @@ describe('ducklake schema', () => {
 		const base = parse();
 		const metadata = {
 			...base.metadata,
-			url: 'https://warehouse.s3.us-east-1.amazonaws.com/ducklake//data/catalog.ducklake',
+			url: 'https://warehouse.s3.example.test/ducklake//data/catalog.ducklake',
 		};
 		expect(() =>
 			parse({
@@ -222,15 +205,15 @@ describe('ducklake query plan', () => {
 			kind: 'ducklake',
 			metadata: {
 				kind: 'http-database',
-				url: 'https://data.example.com/catalog/releases/42.ducklake',
+				url: 'https://data.example.test/releases/catalog.ducklake',
 			},
 			storage: {
-				endpoint: 'https://s3.us-east-1.amazonaws.com/',
+				endpoint: 'https://s3.example.test/',
 				locations: [{ bucket: 'warehouse', prefix: 'ducklake/data' }],
 			},
 		});
-		expect(JSON.stringify(plan?.setup)).not.toContain('parent-key');
-		expect(JSON.stringify(plan?.setup)).not.toContain('parent-secret');
+		expect(JSON.stringify(plan?.setup)).not.toContain('AKIAEXAMPLE');
+		expect(JSON.stringify(plan?.setup)).not.toContain('s3-secret');
 		expect(JSON.stringify(plan?.setup)).not.toContain('AUTOMATIC_MIGRATION');
 		expect(plan?.cleanup?.map(({ text }) => text)).toEqual([
 			expect.stringContaining('DROP SECRET'),

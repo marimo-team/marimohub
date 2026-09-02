@@ -155,13 +155,11 @@ export interface SandboxConfig {
 			settings: Record<string, unknown>;
 			extensionGallery: string;
 			embed: 'tab' | 'iframe';
-			marimoWatch: boolean;
 		};
 		opencode?: {
 			start: 'on-demand' | 'eager';
 			port: number;
 			embed: 'tab' | 'iframe';
-			marimoWatch: boolean;
 		};
 	};
 }

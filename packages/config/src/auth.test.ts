@@ -706,4 +706,99 @@ describe('makeAuth oidc login policy', () => {
 		expect(error.opts.variable).toBe(key);
 		expect(error.message).toMatch(/only valid with MARIMOHUB_AUTH_BACKEND=oidc/);
 	});
+
+	it('treats MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=none as unset', () => {
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'None' }),
+		).not.toThrow();
+		expect(() =>
+			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'none' }),
+		).not.toThrow();
+		// Group mapping stays available: `none` is not a selected policy.
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'none',
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+			}),
+		).not.toThrow();
+	});
+
+	it('still rejects orphaned login-policy variables next to backend=none', () => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'none',
+				MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: '/etc/marimohub/policy.mjs',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY');
+		expect(error.message).toMatch(/LOGIN_POLICY_BACKEND=library/);
+	});
+});
+
+describe('projectCreationRestricted (MARIMOHUB_PROJECT_CREATION)', () => {
+	const policy = { evaluate: () => ({ decision: 'deny' as const }) };
+	const libraryEnv = {
+		...oidcEnv,
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library',
+		MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY: '/etc/marimohub/policy.mjs',
+	};
+
+	it('restricts creation under the login-policy backend, where the groups var is forbidden', () => {
+		const env = { ...libraryEnv, MARIMOHUB_PROJECT_CREATION: 'restricted' };
+		expect(() => makeAuth(env, { oidcLoginPolicy: policy })).not.toThrow();
+		expect(projectCreationRestricted(env)).toBe(true);
+		expect(projectCreationRestricted(libraryEnv)).toBe(false);
+	});
+
+	it('restricts creation on non-OIDC backends (super admins only)', () => {
+		for (const backend of [
+			proxyHeaderEnv,
+			{ MARIMOHUB_AUTH_BACKEND: 'dev' },
+			{ MARIMOHUB_AUTH_BACKEND: 'cloudflare-access' },
+		]) {
+			const restricted = { ...backend, MARIMOHUB_PROJECT_CREATION: 'restricted' };
+			expect(projectCreationRestricted(restricted)).toBe(true);
+			expect(projectCreationRestricted({ ...backend, MARIMOHUB_PROJECT_CREATION: 'open' })).toBe(
+				false,
+			);
+			expect(projectCreationRestricted(backend)).toBe(false);
+		}
+	});
+
+	it('is case-insensitive and ignores blank values', () => {
+		const padded = { ...oidcEnv, MARIMOHUB_PROJECT_CREATION: ' Restricted ' };
+		expect(projectCreationRestricted(padded)).toBe(true);
+		expect(projectCreationRestricted({ ...oidcEnv, MARIMOHUB_PROJECT_CREATION: '  ' })).toBe(false);
+	});
+
+	it('rejects open combined with the OIDC groups var as a contradiction', () => {
+		const error = getConfigError(() =>
+			projectCreationRestricted({
+				...oidcEnv,
+				MARIMOHUB_PROJECT_CREATION: 'open',
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: '',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_PROJECT_CREATION');
+		expect(error.message).toMatch(/contradicts MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS/);
+		// Explicit `restricted` next to the groups var is consistent, not a contradiction.
+		expect(
+			projectCreationRestricted({
+				...oidcEnv,
+				MARIMOHUB_PROJECT_CREATION: 'restricted',
+				MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS: 'project-creators',
+			}),
+		).toBe(true);
+	});
+
+	it('rejects an unknown value', () => {
+		const error = getConfigError(() =>
+			projectCreationRestricted({ ...oidcEnv, MARIMOHUB_PROJECT_CREATION: 'admins' }),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_PROJECT_CREATION');
+		expect(error.message).toMatch(/expected open, restricted/);
+	});
 });

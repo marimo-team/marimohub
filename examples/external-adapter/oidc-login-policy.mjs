@@ -65,7 +65,9 @@ export default {
 					decision: 'allow',
 					// Only the built-in entitlements are accepted: 'super-admin',
 					// 'project-creator', 'default-role:viewer', 'default-role:editor',
-					// 'default-role:manager'.
+					// 'default-role:manager'. 'project-creator' only matters when
+					// MARIMOHUB_PROJECT_CREATION=restricted; otherwise everyone can
+					// create projects.
 					entitlements: ['default-role:editor'],
 				};
 			},

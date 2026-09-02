@@ -5,16 +5,22 @@
  * so the centralization (and any future constraint work) cannot change them
  * silently.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
-import { LocalResourceConstraintPolicy, UserId } from '@marimo-hub/core';
-import type { Authenticator } from '@marimo-hub/core';
-import { makeFakeCompute, MemoryBucket } from '@marimo-hub/core/testing';
-import { createTestApi, expectError, expectOk } from './testing';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NotebookId, ProjectId, UserId } from '@marimo-hub/core';
+import type { Authenticator, SubjectSecurityContext } from '@marimo-hub/core';
+import {
+	localResourceSecurity,
+	makeFakeCompute,
+	makeSubjectContext,
+	MemoryBucket,
+} from '@marimo-hub/core/testing';
+import { createInitializedBucket, createTestApi, expectError, expectOk } from './testing';
 
 const OWNER = UserId.parse('char-owner');
 const VIEWER = UserId.parse('char-viewer');
 const EDITOR = UserId.parse('char-editor');
 const STRANGER = UserId.parse('char-stranger');
+const ORDER = ['UNCLASSIFIED', 'SECRET'];
 
 function apiFor(bucket: MemoryBucket, userId: UserId, deps = {}) {
 	return createTestApi({ bucket, userId, deps });
@@ -145,6 +151,58 @@ describe('authorization characterization: deployment standing', () => {
 			policy: { projectCreationRestricted: true, superAdmins: [STRANGER] },
 		});
 		await expectOk(await god.request('POST', '/projects', { name: 'yes', description: '' }), 201);
+	});
+
+	it('grants project creation to a project-creator entitlement under restriction', async () => {
+		const bucket = new MemoryBucket();
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: STRANGER,
+				email: `${STRANGER}@example.com`,
+				credential: { kind: 'sso' },
+				entitlements: ['project-creator'],
+			}),
+		};
+		const creator = createTestApi({
+			bucket,
+			deps: { authenticator, policy: { projectCreationRestricted: true } },
+		});
+		expect(
+			(await expectOk<{ can_create_projects: boolean }>(await creator.request('GET', '/me')))
+				.can_create_projects,
+		).toBe(true);
+		await expectOk(
+			await creator.request('POST', '/projects', { name: 'ok', description: '' }),
+			201,
+		);
+	});
+
+	it('gates directory search on deployment standing, else project involvement', async () => {
+		// Pre-initialized: auto-init would otherwise seed a default project owned
+		// by the first caller, making the stranger "involved".
+		const bucket = await createInitializedBucket();
+		// Members-only deployment (no default role): an uninvolved account is refused.
+		await expectError(
+			await apiFor(bucket, STRANGER).request('GET', '/users/search?q=char'),
+			403,
+			'FORBIDDEN',
+		);
+		await expectOk(
+			await apiFor(bucket, STRANGER, { policy: { defaultRole: 'viewer' } }).request(
+				'GET',
+				'/users/search?q=char',
+			),
+		);
+		await expectOk(
+			await apiFor(bucket, STRANGER, { policy: { superAdmins: [STRANGER] } }).request(
+				'GET',
+				'/users/search?q=char',
+			),
+		);
+		// Involvement still opens the directory without deployment standing.
+		const pid = await seedProject(bucket);
+		await addMember(apiFor(bucket, OWNER), pid, { user_id: STRANGER, role: 'viewer' });
+		await expectOk(await apiFor(bucket, STRANGER).request('GET', '/users/search?q=char'));
 	});
 });
 
@@ -314,22 +372,11 @@ describe('authorization characterization: unhappy paths', () => {
 
 describe('authorization characterization: resource security labels', () => {
 	const LABELS = { classification: 'SECRET', compartments: ['element-a'] };
-	const context = (overrides: Record<string, unknown> = {}) => ({
-		schemaVersion: 1,
-		classification: 'SECRET',
-		compartments: ['element-a', 'element-b'],
-		policyVersion: 'policy-1',
-		expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
-		...overrides,
-	});
-	const security = (resolved: Record<string, unknown> | null) => ({
-		constraints: new LocalResourceConstraintPolicy({
-			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-		}),
-		subjectContext: { resolve: async () => resolved as never },
-	});
+	const context = makeSubjectContext;
+	const security = (resolved: SubjectSecurityContext | null) =>
+		localResourceSecurity(['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'], resolved);
 
-	async function seedLabeled(bucket: MemoryBucket, resolved: Record<string, unknown> | null) {
+	async function seedLabeled(bucket: MemoryBucket, resolved: SubjectSecurityContext | null) {
 		const pid = await seedProject(bucket);
 		const god = apiFor(bucket, OWNER, {
 			policy: { superAdmins: [OWNER] },
@@ -447,11 +494,7 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 	const LABELS = { classification: 'SECRET', compartments: ['element-a'] };
 	const wired = (extra: Record<string, unknown> = {}) => ({
 		policy: { superAdmins: [OWNER] },
-		resourceSecurity: {
-			constraints: new LocalResourceConstraintPolicy({
-				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-			}),
-		},
+		resourceSecurity: localResourceSecurity(ORDER),
 		...extra,
 	});
 
@@ -528,25 +571,148 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 		);
 	});
 
-	it('lets a super admin with a dominating context clear labels', async () => {
+	it('rejects a stale If-Match on project label mutations with 412', async () => {
 		const bucket = new MemoryBucket();
-		const ctx = {
-			schemaVersion: 1,
-			classification: 'SECRET',
-			compartments: ['element-a'],
-			policyVersion: 'p1',
-			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-		};
 		const god = apiFor(
 			bucket,
 			OWNER,
 			wired({
-				resourceSecurity: {
-					constraints: new LocalResourceConstraintPolicy({
-						classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-					}),
-					subjectContext: { resolve: async () => ctx as never },
-				},
+				resourceSecurity: localResourceSecurity(
+					ORDER,
+					makeSubjectContext({ compartments: ['element-a'] }),
+				),
+			}),
+		);
+		const pid = await createProject(god);
+		await expectError(
+			await god.request('PUT', `/projects/${pid}/security-labels`, LABELS, {
+				'If-Match': '"stale"',
+			}),
+			412,
+			'PRECONDITION_FAILED',
+		);
+		// A rejected precondition leaves the projection determinate (still unlabeled).
+		const entry = (await god.deps.services.catalog.getCurrentSnapshot()).projects.find(
+			(p) => p.id === pid,
+		);
+		expect(entry?.security_labels).toBeNull();
+		expect(entry?.security_labels_pending).toBeUndefined();
+
+		const set = await god.request('PUT', `/projects/${pid}/security-labels`, LABELS);
+		const etag = set.headers.get('ETag');
+		await expectOk(set);
+		await expectError(
+			await god.request('DELETE', `/projects/${pid}/security-labels`, undefined, {
+				'If-Match': '"stale"',
+			}),
+			412,
+			'PRECONDITION_FAILED',
+		);
+		await expectOk(
+			await god.request('DELETE', `/projects/${pid}/security-labels`, undefined, {
+				'If-Match': etag!,
+			}),
+		);
+	});
+
+	it('rejects a stale If-Match on notebook label mutations with 412', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(
+			bucket,
+			OWNER,
+			wired({
+				resourceSecurity: localResourceSecurity(
+					ORDER,
+					makeSubjectContext({ compartments: ['element-a'] }),
+				),
+			}),
+		);
+		const pid = await createProject(god);
+		const nid = await createNotebook(god, pid);
+		const path = `/projects/${pid}/notebooks/${nid}/security-labels`;
+		await expectError(
+			await god.request('PUT', path, LABELS, { 'If-Match': '"stale"' }),
+			412,
+			'PRECONDITION_FAILED',
+		);
+		const set = await god.request('PUT', path, LABELS);
+		const etag = set.headers.get('ETag');
+		await expectOk(set);
+		await expectError(
+			await god.request('DELETE', path, undefined, { 'If-Match': '"stale"' }),
+			412,
+			'PRECONDITION_FAILED',
+		);
+		await expectOk(await god.request('DELETE', path, undefined, { 'If-Match': etag! }));
+	});
+
+	it('rejects a label change that raced a concurrent mutation even without If-Match (412)', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(
+			bucket,
+			OWNER,
+			wired({
+				resourceSecurity: localResourceSecurity(
+					ORDER,
+					makeSubjectContext({ compartments: ['element-a', 'element-b'] }),
+				),
+			}),
+		);
+		const pid = ProjectId.parse(await createProject(god));
+		const nid = NotebookId.parse(await createNotebook(god, pid));
+		const { projects, notebooks } = god.deps.services;
+		const RAISED = { classification: 'SECRET', compartments: ['element-b'] };
+		// A second admin's raise commits after the handler authorized its own
+		// change against the unlabeled record but before the write.
+		vi.spyOn(projects, 'setSecurityLabels').mockImplementationOnce(async (...args) => {
+			vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+			await projects.setSecurityLabels(pid, RAISED, OWNER);
+			return projects.setSecurityLabels(...args);
+		});
+		vi.spyOn(notebooks, 'setSecurityLabels').mockImplementationOnce(async (...args) => {
+			vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+			await notebooks.setSecurityLabels(pid, nid, RAISED, OWNER);
+			return notebooks.setSecurityLabels(...args);
+		});
+		try {
+			await expectError(
+				await god.request('PUT', `/projects/${pid}/security-labels`, LABELS),
+				412,
+				'PRECONDITION_FAILED',
+			);
+			await expectError(
+				await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, LABELS),
+				412,
+				'PRECONDITION_FAILED',
+			);
+		} finally {
+			vi.useRealTimers();
+			vi.restoreAllMocks();
+		}
+		// The concurrent writer's labels stand, and the rejected attempt left
+		// both projections determinate.
+		expect((await projects.getProject(pid)).security_labels).toEqual(RAISED);
+		expect((await notebooks.getNotebook(pid, nid)).meta.security_labels).toEqual(RAISED);
+		const project = (await god.deps.services.catalog.getCurrentSnapshot()).projects.find(
+			(p) => p.id === pid,
+		);
+		expect(project?.security_labels).toEqual(RAISED);
+		expect(project?.security_labels_pending).toBeUndefined();
+		const notebook = project?.notebooks.find((n) => n.id === nid);
+		expect(notebook?.security_labels).toEqual(RAISED);
+		expect(notebook?.security_labels_pending).toBeUndefined();
+	});
+
+	it('lets a super admin with a dominating context clear labels', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(
+			bucket,
+			OWNER,
+			wired({
+				resourceSecurity: localResourceSecurity(
+					ORDER,
+					makeSubjectContext({ compartments: ['element-a'] }),
+				),
 			}),
 		);
 		const pid = await createProject(god);
@@ -572,21 +738,9 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 
 	it('masks deep notebook reads behind an unsatisfied override', async () => {
 		const bucket = new MemoryBucket();
-		const ctx = {
-			schemaVersion: 1,
-			classification: 'SECRET',
-			compartments: [],
-			policyVersion: 'p1',
-			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-		};
 		const god = apiFor(bucket, OWNER, {
 			policy: { superAdmins: [OWNER] },
-			resourceSecurity: {
-				constraints: new LocalResourceConstraintPolicy({
-					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-				}),
-				subjectContext: { resolve: async () => ctx as never },
-			},
+			resourceSecurity: localResourceSecurity(ORDER, makeSubjectContext({ compartments: [] })),
 		});
 		const pid = await createProject(god);
 		const nid = await createNotebook(god, pid);
@@ -608,23 +762,45 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 		);
 	});
 
+	it('refuses to lower or clear a notebook override the super admin does not satisfy', async () => {
+		// The lower/clear decision must carry the notebook's existing override:
+		// an admin outside the compartment cannot relax it to gain visibility.
+		const bucket = new MemoryBucket();
+		const god = apiFor(bucket, OWNER, {
+			policy: { superAdmins: [OWNER] },
+			resourceSecurity: localResourceSecurity(ORDER, makeSubjectContext({ compartments: [] })),
+		});
+		const pid = await createProject(god);
+		const nid = await createNotebook(god, pid);
+		await expectOk(
+			await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, {
+				classification: 'SECRET',
+				compartments: ['element-z'],
+			}),
+		);
+		await expectError(
+			await god.request('DELETE', `/projects/${pid}/notebooks/${nid}/security-labels`),
+			404,
+			'NOT_FOUND',
+		);
+		await expectError(
+			await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, {
+				classification: 'UNCLASSIFIED',
+				compartments: [],
+			}),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
 	it('bounds the session to the entitlement expiry when it is earlier than the context', async () => {
 		const bucket = new MemoryBucket();
 		const contextExpiry = new Date(Date.now() + 3_600_000).toISOString();
 		const entitlementExpiry = new Date(Date.now() + 600_000).toISOString();
-		const ctx = {
-			schemaVersion: 1,
-			classification: 'SECRET',
-			compartments: ['element-a'],
-			policyVersion: 'p1',
-			expiresAt: contextExpiry,
-		};
-		const security = {
-			constraints: new LocalResourceConstraintPolicy({
-				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-			}),
-			subjectContext: { resolve: async () => ctx as never },
-		};
+		const security = localResourceSecurity(
+			ORDER,
+			makeSubjectContext({ compartments: ['element-a'], expiresAt: contextExpiry }),
+		);
 		const god = apiFor(bucket, OWNER, {
 			policy: { superAdmins: [OWNER] },
 			resourceSecurity: security,
@@ -666,21 +842,13 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 
 describe('authorization characterization: notebook overrides on mutations and sessions', () => {
 	const OVERRIDE = { classification: 'SECRET', compartments: ['element-x'] };
-	const ctxWith = (compartments: string[]) => ({
-		schemaVersion: 1,
-		classification: 'SECRET',
-		compartments,
-		policyVersion: 'p1',
-		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-	});
+	const ctxWith = (compartments: string[]) => makeSubjectContext({ compartments });
 	// Per-principal contexts: the owner clears the override, the viewer does not.
 	const perUserSecurity = () => ({
-		constraints: new LocalResourceConstraintPolicy({
-			classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-		}),
+		...localResourceSecurity(ORDER),
 		subjectContext: {
 			resolve: async (principal: { id: string }) =>
-				(principal.id === OWNER ? ctxWith(['element-x']) : ctxWith([])) as never,
+				principal.id === OWNER ? ctxWith(['element-x']) : ctxWith([]),
 		},
 	});
 
@@ -799,19 +967,10 @@ describe('authorization characterization: deadline instant comparison', () => {
 		const baseMs = Math.floor((Date.now() + 600_000) / 1000) * 1000;
 		const entitlementExpiry = new Date(baseMs).toISOString().replace('.000Z', 'Z');
 		const contextExpiry = new Date(baseMs + 900).toISOString();
-		const ctx = {
-			schemaVersion: 1,
-			classification: 'SECRET',
-			compartments: [],
-			policyVersion: 'p1',
-			expiresAt: contextExpiry,
-		};
-		const security = {
-			constraints: new LocalResourceConstraintPolicy({
-				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-			}),
-			subjectContext: { resolve: async () => ctx as never },
-		};
+		const security = localResourceSecurity(
+			ORDER,
+			makeSubjectContext({ compartments: [], expiresAt: contextExpiry }),
+		);
 		const god = apiFor(bucket, OWNER, {
 			policy: { superAdmins: [OWNER] },
 			resourceSecurity: security,

@@ -28,19 +28,8 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
-import {
-	Button as AriaButton,
-	Dialog,
-	DialogTrigger,
-	Heading,
-	Input,
-	Link,
-	Modal,
-	ModalOverlay,
-	Size,
-	ToggleButton,
-} from 'react-aria-components';
-import { Button, DialogModal, Tooltip } from '@/components/ui';
+import { Button as AriaButton, Input, Link, Size, ToggleButton } from 'react-aria-components';
+import { ConfirmDialog, DialogModal, Tooltip } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import { fetchWorkspaceAccess, workspaceAdapter } from './workspaceAdapter';
 import { WorkspaceFilePreview } from './WorkspaceFilePreview';
@@ -282,10 +271,12 @@ function Toolbar({
 	view,
 	setView,
 	access,
+	onDelete,
 }: {
 	view: ViewMode;
 	setView: (view: ViewMode) => void;
 	access: WorkspaceAccess;
+	onDelete: (paths: string[]) => void;
 }) {
 	const selection = useFinder((state) => [...state.selectedPaths]);
 	const canMove = canApplyWorkspaceOperation(access, selection, 'move');
@@ -326,7 +317,13 @@ function Toolbar({
 			<Finder.Button action="rename" className={controlClass} isDisabled={!canMove}>
 				Rename
 			</Finder.Button>
-			<DeleteButton isDisabled={!canDelete} />
+			<AriaButton
+				className={cn(controlClass, 'text-destructive')}
+				isDisabled={!canDelete}
+				onPress={() => onDelete(selection)}
+			>
+				Delete
+			</AriaButton>
 			<Finder.SearchInput className="group ml-1 min-w-40 flex-1">
 				<Input
 					className="h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
@@ -369,44 +366,22 @@ function Toolbar({
 	);
 }
 
-function DeleteButton({ isDisabled }: { isDisabled: boolean }) {
+/** The one confirmation every delete path (toolbar, context menu, Delete key) goes through. */
+function DeleteConfirmation({ paths, onClose }: { paths: string[] | null; onClose: () => void }) {
+	const store = useFinderStore();
+	const count = paths?.length ?? 0;
 	return (
-		<DialogTrigger>
-			<Finder.Button
-				action="delete"
-				trigger
-				className={cn(controlClass, 'text-destructive')}
-				isDisabled={isDisabled}
-			>
-				Delete
-			</Finder.Button>
-			<ModalOverlay className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50">
-				<Modal className="w-full max-w-sm rounded-lg border bg-card p-5 shadow-xl">
-					<Dialog className="outline-none">
-						{({ close }) => (
-							<>
-								<Heading slot="title" className="font-semibold">
-									Delete selected files?
-								</Heading>
-								<p className="mt-2 text-sm text-muted-foreground">
-									Directories and their contents will be deleted permanently.
-								</p>
-								<div className="mt-5 flex justify-end gap-2">
-									<Button onPress={close}>Cancel</Button>
-									<Finder.Button
-										action="delete"
-										className="h-9 rounded-md bg-destructive px-3 text-sm text-white"
-										onPress={close}
-									>
-										Delete
-									</Finder.Button>
-								</div>
-							</>
-						)}
-					</Dialog>
-				</Modal>
-			</ModalOverlay>
-		</DialogTrigger>
+		<ConfirmDialog
+			isOpen={paths !== null}
+			onClose={onClose}
+			title={count === 1 ? 'Delete this entry?' : `Delete ${count} entries?`}
+			description="Directories and their contents will be deleted permanently."
+			confirmLabel="Delete"
+			onConfirm={() => {
+				if (paths) void store.getState().deleteItems(paths);
+				onClose();
+			}}
+		/>
 	);
 }
 
@@ -425,8 +400,13 @@ function Breadcrumbs() {
 	);
 }
 
-function ContextMenu({ access }: { access: WorkspaceAccess }) {
-	const store = useFinderStore();
+function ContextMenu({
+	access,
+	onDelete,
+}: {
+	access: WorkspaceAccess;
+	onDelete: (paths: string[]) => void;
+}) {
 	return (
 		<Finder.ContextMenu className={menuClass} popoverProps={{ className: 'z-[80]' }}>
 			{({ target, selection, close }) => {
@@ -469,10 +449,8 @@ function ContextMenu({ access }: { access: WorkspaceAccess }) {
 								isDisabled={!canDelete}
 								className={cn(menuItemClass, 'text-destructive')}
 								onAction={() => {
-									if (window.confirm('Delete the selected workspace entries?')) {
-										void store.getState().deleteItems(targets.map((item) => item.path));
-									}
 									close();
+									onDelete(paths);
 								}}
 							>
 								Delete
@@ -485,7 +463,13 @@ function ContextMenu({ access }: { access: WorkspaceAccess }) {
 	);
 }
 
-function ConfirmedDeleteShortcut({ access }: { access: WorkspaceAccess }) {
+function DeleteShortcut({
+	access,
+	onDelete,
+}: {
+	access: WorkspaceAccess;
+	onDelete: (paths: string[]) => void;
+}) {
 	const store = useFinderStore();
 	useEffect(() => {
 		const deleteSelected = (event: KeyboardEvent) => {
@@ -496,13 +480,11 @@ function ConfirmedDeleteShortcut({ access }: { access: WorkspaceAccess }) {
 			const paths = [...store.getState().selectedPaths];
 			if (!canApplyWorkspaceOperation(access, paths, 'delete')) return;
 			event.preventDefault();
-			if (window.confirm('Delete the selected workspace entries?')) {
-				void store.getState().deleteItems(paths);
-			}
+			onDelete(paths);
 		};
 		window.addEventListener('keydown', deleteSelected);
 		return () => window.removeEventListener('keydown', deleteSelected);
-	}, [access, store]);
+	}, [access, onDelete, store]);
 	return null;
 }
 
@@ -533,6 +515,11 @@ function Explorer({
 	);
 	const [view, setView] = useState<ViewMode>('list');
 	const [openPath, setOpenPath] = useState<string | null>(null);
+	const [deleteRequest, setDeleteRequest] = useState<string[] | null>(null);
+	const requestDelete = useCallback((paths: string[]) => {
+		if (paths.length > 0) setDeleteRequest(paths);
+	}, []);
+	const clearDeleteRequest = useCallback(() => setDeleteRequest(null), []);
 	const dirty = useRef(false);
 	const [error, setError] = useState<FinderError | null>(null);
 	const activeCollection = useRef<'tree' | 'content'>('content');
@@ -641,7 +628,7 @@ function Explorer({
 				onFocusCapture={() => (activeCollection.current = 'content')}
 				onPointerDownCapture={() => (activeCollection.current = 'content')}
 			>
-				<Toolbar view={view} setView={setView} access={access} />
+				<Toolbar view={view} setView={setView} access={access} onDelete={requestDelete} />
 				<Breadcrumbs />
 				{error ? (
 					<div className="flex items-center justify-between border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -678,8 +665,9 @@ function Explorer({
 			<section className="min-h-0 min-w-0 overflow-hidden bg-card">
 				<WorkspaceFilePreview path={openPath} access={access} onDirtyChange={setDirtyState} />
 			</section>
-			<ContextMenu access={access} />
-			<ConfirmedDeleteShortcut access={access} />
+			<ContextMenu access={access} onDelete={requestDelete} />
+			<DeleteShortcut access={access} onDelete={requestDelete} />
+			<DeleteConfirmation paths={deleteRequest} onClose={clearDeleteRequest} />
 		</Finder>
 	);
 }

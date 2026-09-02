@@ -14,6 +14,7 @@ import type {
 	BrowsePage,
 	BrowsePageRequest,
 	DatabaseBrowser,
+	DatabaseTestOptions,
 	DataQueryExecution,
 	DataQueryExecutorFactory,
 	DataQueryResult,
@@ -54,6 +55,27 @@ const WORKER_LIMITS = Object.freeze({
 	stackSizeMb: 4,
 });
 
+/** Deadlines and caps for a runtime wired without the data browser's env overrides. */
+export const DEFAULT_POSTGRES_RUNTIME_LIMITS = Object.freeze({
+	resolveTimeoutMs: 10_000,
+	metadataTimeoutMs: 10_000,
+	previewTimeoutMs: 30_000,
+	previewMaxBytes: 8 * 1024 * 1024,
+});
+
+const FAILURE_MESSAGES: Record<Exclude<PostgresFailureCode, 'query_rejected'>, string> = {
+	target_denied: 'The PostgreSQL target is not permitted.',
+	authentication: 'PostgreSQL authentication failed.',
+	tls: 'The PostgreSQL TLS connection failed.',
+	connection: 'The PostgreSQL connection failed.',
+	timeout: 'The PostgreSQL request timed out.',
+	malformed_result: 'PostgreSQL returned an invalid result.',
+	worker_failure: 'The PostgreSQL worker failed.',
+};
+const CANCELLED_MESSAGE = 'The PostgreSQL request was cancelled.';
+/** Messages safe to echo from a failed connection test; anything else may carry details. */
+const SAFE_TEST_MESSAGES = new Set([...Object.values(FAILURE_MESSAGES), CANCELLED_MESSAGE]);
+
 export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	readonly provider = 'postgres' as const;
 	readonly preview: boolean;
@@ -79,10 +101,10 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 		);
 	}
 
-	async testConnection(source: PostgresConnectionCapability) {
+	async testConnection(source: PostgresConnectionCapability, options: DatabaseTestOptions = {}) {
 		const started = performance.now();
 		try {
-			await this.run<{ connected: true }>(source, { type: 'test' }, 'test');
+			await this.run<{ connected: true }>(source, { type: 'test' }, 'test', options.signal);
 			return {
 				ok: true,
 				latency_ms: Math.round(performance.now() - started),
@@ -396,16 +418,7 @@ function mappedFailure(failure: PostgresWorkerFailure | PostgresFailureCode): Er
 				: ` (SQLSTATE ${details.sqlState}${details.position === undefined ? '' : ` at character ${details.position}`})`;
 		return new DataQueryUserError(`PostgreSQL rejected this read-only query${location}.`);
 	}
-	const messages: Record<Exclude<PostgresFailureCode, 'query_rejected'>, string> = {
-		target_denied: 'The PostgreSQL target is not permitted.',
-		authentication: 'PostgreSQL authentication failed.',
-		tls: 'The PostgreSQL TLS connection failed.',
-		connection: 'The PostgreSQL connection failed.',
-		timeout: 'The PostgreSQL request timed out.',
-		malformed_result: 'PostgreSQL returned an invalid result.',
-		worker_failure: 'The PostgreSQL worker failed.',
-	};
-	return new UnavailableError(messages[code]);
+	return new UnavailableError(FAILURE_MESSAGES[code]);
 }
 
 function failureOutcome(error: unknown): string {
@@ -415,22 +428,13 @@ function failureOutcome(error: unknown): string {
 }
 
 function postgresTestFailure(error: unknown): string {
-	const safeMessages = new Set([
-		'The PostgreSQL target is not permitted.',
-		'PostgreSQL authentication failed.',
-		'The PostgreSQL TLS connection failed.',
-		'The PostgreSQL connection failed.',
-		'The PostgreSQL request timed out.',
-		'PostgreSQL returned an invalid result.',
-		'The PostgreSQL worker failed.',
-	]);
-	return error instanceof Error && safeMessages.has(error.message)
+	return error instanceof Error && SAFE_TEST_MESSAGES.has(error.message)
 		? error.message
 		: 'The PostgreSQL connection test failed.';
 }
 
 function aborted(): Error {
-	const error = new UnavailableError('The PostgreSQL request was cancelled.');
+	const error = new UnavailableError(CANCELLED_MESSAGE);
 	error.name = 'AbortError';
 	return error;
 }

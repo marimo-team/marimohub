@@ -810,7 +810,13 @@ app.openapi(testIntegration, async (c) => {
 		(id) => integrations.get(pid, id),
 		() => makeObjectBrowseContext(deps, project, user, c.req.raw.signal),
 	);
-	return c.json({ success: true, data: await integrations.test(pid, body, objectContext) }, 200);
+	return c.json(
+		{
+			success: true,
+			data: await integrations.test(pid, body, objectContext, { signal: c.req.raw.signal }),
+		},
+		200,
+	);
 });
 
 app.openapi(queryReadiness, async (c) => {
@@ -956,7 +962,13 @@ app.openapi(testOrgIntegration, async (c) => {
 				signal: c.req.raw.signal,
 			}),
 	);
-	return c.json({ success: true, data: await integrations.test(body, objectContext) }, 200);
+	return c.json(
+		{
+			success: true,
+			data: await integrations.test(body, objectContext, { signal: c.req.raw.signal }),
+		},
+		200,
+	);
 });
 
 app.openapi(queryOrgReadiness, async (c) => {

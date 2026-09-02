@@ -36,9 +36,6 @@ plans/
 # Local-only deployment working folder (k8s manifests, secrets — do not commit)
 deployment/
 
-# Vendored prebuilt SDK output must be committed (overrides the global `dist` rule above)
-!vendor/cwsandbox/dist/
-
 # VitePress (dist is covered by the `dist` rule above)
 **/.vitepress/cache/
 **/.vitepress/.temp/

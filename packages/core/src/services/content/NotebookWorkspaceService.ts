@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
 	MAX_WORKSPACE_BYTES,
 	MAX_WORKSPACE_FILE_BYTES,
@@ -15,6 +16,7 @@ import {
 import { VersionId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import {
+	isProtectedWorkspacePath,
 	isWorkspaceDirectoryMarkerPath,
 	workspaceDirectoryFromMarkerPath,
 	workspaceDirectoryMarkerPath,
@@ -30,8 +32,10 @@ import {
 } from '../../integrations/workspaceFiles';
 import { paths } from '../../paths';
 import type { Bucket, BucketObject } from '../../ports/bucket';
-import type { Source } from '../../schema';
-import { acquireSingletonClaim, releaseSingletonClaim } from '../catalog/cas';
+import { parseStored, readStoredJson, WorkspaceMutationClaimSchema } from '../../schema';
+import type { Source, WorkspaceMutationClaim } from '../../schema';
+import { acquireSingletonClaim, releaseSingletonClaim, withCasRetry } from '../catalog/cas';
+import type { SingletonClaimConfig } from '../catalog/cas';
 import { listAllObjects } from '../catalog/storage';
 import type { NotebookDetail } from './NotebookService';
 
@@ -39,6 +43,8 @@ const DEFAULT_PAGE_SIZE = 200;
 const WORKSPACE_MUTATION_LEASE_MS = 2 * 60_000;
 const WORKSPACE_MUTATION_WAIT_ATTEMPTS = 100;
 const WORKSPACE_MUTATION_RETRY_MS = 20;
+/** Objects processed between lease renewals inside a multi-object mutation. */
+export const WORKSPACE_MUTATION_HEARTBEAT_EVERY = 50;
 export const MAX_WORKSPACE_SEARCH_RESULTS = 200;
 
 export interface WorkspaceFileItem {
@@ -66,10 +72,47 @@ interface WorkspaceServiceOwner {
 	): Promise<void>;
 }
 
+export interface WorkspaceMutationOptions {
+	/**
+	 * Re-run once the mutation lease is held. The API passes its active-session
+	 * check here: a session that starts between the route's pre-flight check and
+	 * the lease would otherwise restore over (and later mirror-delete) the write.
+	 */
+	assertMutable?: () => Promise<void>;
+}
+
+interface MutationLease {
+	/** Extend the lease; throws `ConflictError` when another mutator took it over. */
+	heartbeat(): Promise<void>;
+}
+
 interface WorkspaceContext {
 	detail: NotebookDetail;
 	prefix: string | null;
 }
+
+interface ParsedWorkspaceMutationClaim {
+	holder: string | null;
+	expiresAt: number | null;
+}
+
+const LegacyWorkspaceMutationClaimSchema = z.object({ holder: z.string().nullable() });
+
+/** A heartbeat found the lease released or held by another mutator. */
+class MutationLeaseLostError extends ConflictError {
+	constructor(message = 'Workspace mutation lease was lost; retry the operation') {
+		super(message);
+		this.name = 'MutationLeaseLostError';
+	}
+}
+
+const DENIED_VERBS: Record<WorkspaceOperation, string> = {
+	create: 'created as a directory',
+	write: 'written',
+	move: 'moved',
+	copy: 'replaced by a copy',
+	delete: 'deleted',
+};
 
 function fileItem(path: string, object: BucketObject): WorkspaceFileItem {
 	return {
@@ -94,21 +137,34 @@ function assertTextSource(path: string, bytes: Uint8Array): string {
 	}
 }
 
-function parseWorkspaceMutationHolder(raw: unknown): string | null {
-	if (typeof raw !== 'object' || raw === null || !('holder' in raw)) {
-		throw new Error('Invalid workspace mutation claim');
+function parseWorkspaceMutationClaim(raw: unknown, key: string): ParsedWorkspaceMutationClaim {
+	const claim = WorkspaceMutationClaimSchema.safeParse(raw);
+	if (claim.success) {
+		const { holder, expires_at } = claim.data;
+		return { holder, expiresAt: expires_at === null ? null : Date.parse(expires_at) };
 	}
-	const holder = raw.holder;
-	if (holder !== null && typeof holder !== 'string') {
-		throw new Error('Invalid workspace mutation claim holder');
-	}
-	return holder;
+	// Pre-release bodies encoded the expiry in the holder as `<id>:<epoch-ms>`.
+	// A body that fits neither shape is corrupt and surfaces to the CAS helper.
+	const legacy = parseStored(LegacyWorkspaceMutationClaimSchema, raw, key);
+	if (legacy.holder === null) return { holder: null, expiresAt: null };
+	const separator = legacy.holder.lastIndexOf(':');
+	const expiresAt = Number(legacy.holder.slice(separator + 1));
+	return {
+		holder: legacy.holder,
+		expiresAt: separator > 0 && Number.isFinite(expiresAt) ? expiresAt : null,
+	};
 }
 
-function workspaceMutationHolderIsLive(holder: string): boolean {
-	const separator = holder.lastIndexOf(':');
-	const expiresAt = Number(holder.slice(separator + 1));
-	return separator > 0 && Number.isFinite(expiresAt) && expiresAt > Date.now();
+function claimIsLive(claim: ParsedWorkspaceMutationClaim): boolean {
+	return claim.holder !== null && claim.expiresAt !== null && claim.expiresAt > Date.now();
+}
+
+function serializeWorkspaceMutationClaim(holder: string | null): string {
+	const claim: WorkspaceMutationClaim =
+		holder === null
+			? { holder: null, expires_at: null }
+			: { holder, expires_at: new Date(Date.now() + WORKSPACE_MUTATION_LEASE_MS).toISOString() };
+	return JSON.stringify(claim);
 }
 
 export class NotebookWorkspaceService {
@@ -234,8 +290,9 @@ export class NotebookWorkspaceService {
 		bytes: Uint8Array,
 		actor: UserId,
 		createOnly = false,
+		options: WorkspaceMutationOptions = {},
 	): Promise<WorkspaceFileItem> {
-		return this.withMutation(projectId, notebookId, () =>
+		return this.withMutation(projectId, notebookId, options, () =>
 			this.writeUnlocked(projectId, notebookId, path, bytes, actor, createOnly),
 		);
 	}
@@ -293,8 +350,9 @@ export class NotebookWorkspaceService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		path: string,
+		options: WorkspaceMutationOptions = {},
 	): Promise<WorkspaceFileItem> {
-		return this.withMutation(projectId, notebookId, () =>
+		return this.withMutation(projectId, notebookId, options, () =>
 			this.createDirectoryUnlocked(projectId, notebookId, path),
 		);
 	}
@@ -306,6 +364,7 @@ export class NotebookWorkspaceService {
 	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'create', path);
 		const relative = normalizeWorkspacePathInput(path);
+		this.assertTargetUnprotected(context.detail.source, 'create', relative);
 		if (await this.exists(context.prefix, relative)) {
 			throw new ConflictError(`Workspace entry ${relative} already exists`);
 		}
@@ -327,9 +386,14 @@ export class NotebookWorkspaceService {
 		return directoryItem(relative);
 	}
 
-	async delete(projectId: ProjectId, notebookId: NotebookId, path: string): Promise<void> {
-		return this.withMutation(projectId, notebookId, () =>
-			this.deleteUnlocked(projectId, notebookId, path),
+	async delete(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		path: string,
+		options: WorkspaceMutationOptions = {},
+	): Promise<void> {
+		return this.withMutation(projectId, notebookId, options, (lease) =>
+			this.deleteUnlocked(projectId, notebookId, path, lease),
 		);
 	}
 
@@ -337,6 +401,7 @@ export class NotebookWorkspaceService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		path: string,
+		lease: MutationLease,
 	): Promise<void> {
 		const context = await this.mutableContext(projectId, notebookId, 'delete', path);
 		const relative = normalizeWorkspacePathInput(path);
@@ -348,7 +413,11 @@ export class NotebookWorkspaceService {
 		}
 		const objects = await listAllObjects(this.bucket, `${key}/`);
 		if (objects.length === 0) throw new NotFoundError(`Workspace entry ${relative} not found`);
-		await this.bucket.delete(objects.map((object) => object.key));
+		for (let index = 0; index < objects.length; index += WORKSPACE_MUTATION_HEARTBEAT_EVERY) {
+			if (index > 0) await lease.heartbeat();
+			const batch = objects.slice(index, index + WORKSPACE_MUTATION_HEARTBEAT_EVERY);
+			await this.bucket.delete(batch.map((object) => object.key));
+		}
 	}
 
 	async copy(
@@ -356,9 +425,10 @@ export class NotebookWorkspaceService {
 		notebookId: NotebookId,
 		from: string,
 		to: string,
+		options: WorkspaceMutationOptions = {},
 	): Promise<WorkspaceFileItem> {
-		return this.withMutation(projectId, notebookId, () =>
-			this.copyUnlocked(projectId, notebookId, from, to),
+		return this.withMutation(projectId, notebookId, options, (lease) =>
+			this.copyUnlocked(projectId, notebookId, from, to, lease),
 		);
 	}
 
@@ -367,10 +437,12 @@ export class NotebookWorkspaceService {
 		notebookId: NotebookId,
 		from: string,
 		to: string,
+		lease: MutationLease,
 	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'copy', from);
 		const source = normalizeWorkspacePathInput(from);
 		const target = normalizeWorkspacePathInput(to);
+		this.assertTargetUnprotected(context.detail.source, 'copy', target);
 		if (source === target || target.startsWith(`${source}/`)) {
 			throw new BadRequestError('Cannot copy a workspace entry into itself');
 		}
@@ -396,6 +468,9 @@ export class NotebookWorkspaceService {
 		const written: string[] = [];
 		try {
 			for (const object of sourceObjects) {
+				if (written.length > 0 && written.length % WORKSPACE_MUTATION_HEARTBEAT_EVERY === 0) {
+					await lease.heartbeat();
+				}
 				const suffix = direct ? '' : object.key.slice(sourceKey.length);
 				const targetKey = `${context.prefix}${target}${suffix}`;
 				const body = await this.bucket.get(object.key);
@@ -404,6 +479,11 @@ export class NotebookWorkspaceService {
 				written.push(targetKey);
 			}
 		} catch (error) {
+			if (!(await this.ownsWrites(lease, error))) {
+				throw new MutationLeaseLostError(
+					`Workspace mutation lease was lost; the copy to ${target} was interrupted and may be partial`,
+				);
+			}
 			if (written.length > 0) await this.bucket.delete(written).catch(() => {});
 			if (error instanceof PreconditionFailedError) {
 				throw new ConflictError(`Workspace entry ${target} already exists`);
@@ -418,9 +498,10 @@ export class NotebookWorkspaceService {
 		notebookId: NotebookId,
 		from: string,
 		to: string,
+		options: WorkspaceMutationOptions = {},
 	): Promise<WorkspaceFileItem> {
-		return this.withMutation(projectId, notebookId, () =>
-			this.moveUnlocked(projectId, notebookId, from, to),
+		return this.withMutation(projectId, notebookId, options, (lease) =>
+			this.moveUnlocked(projectId, notebookId, from, to, lease),
 		);
 	}
 
@@ -429,29 +510,51 @@ export class NotebookWorkspaceService {
 		notebookId: NotebookId,
 		from: string,
 		to: string,
+		lease: MutationLease,
 	): Promise<WorkspaceFileItem> {
 		await this.mutableContext(projectId, notebookId, 'move', from);
 		await this.mutableContext(projectId, notebookId, 'move', to);
-		const copied = await this.copyUnlocked(projectId, notebookId, from, to);
+		const copied = await this.copyUnlocked(projectId, notebookId, from, to, lease);
 		try {
-			await this.deleteUnlocked(projectId, notebookId, from);
+			await this.deleteUnlocked(projectId, notebookId, from, lease);
 		} catch (error) {
-			await this.deleteUnlocked(projectId, notebookId, to).catch(() => {});
+			if (await this.ownsWrites(lease, error)) {
+				await this.deleteUnlocked(projectId, notebookId, to, lease).catch(() => {});
+			}
 			throw error;
 		}
 		return copied;
 	}
 
+	/**
+	 * Whether a failed mutation may still delete what it wrote. The Bucket port
+	 * has no conditional delete, so ownership is proven by renewing the lease
+	 * instead: every mutator takes the lease before writing, so a renewal that
+	 * succeeds means nobody else has touched these keys since the mutation
+	 * began. Once the lease is gone the partial output is left for the new
+	 * holder rather than risk deleting its writes.
+	 */
+	private async ownsWrites(lease: MutationLease, error: unknown): Promise<boolean> {
+		if (error instanceof MutationLeaseLostError) return false;
+		try {
+			await lease.heartbeat();
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	private async withMutation<T>(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		mutation: () => Promise<T>,
+		options: WorkspaceMutationOptions,
+		mutation: (lease: MutationLease) => Promise<T>,
 	): Promise<T> {
 		const queueKey = `${projectId}/${notebookId}`;
 		const previous = this.mutationQueues.get(queueKey) ?? Promise.resolve();
 		const run = previous
 			.catch(() => {})
-			.then(() => this.withMutationClaim(projectId, notebookId, mutation));
+			.then(() => this.withMutationClaim(projectId, notebookId, options, mutation));
 		const settled = run.then(
 			() => {},
 			() => {},
@@ -467,23 +570,17 @@ export class NotebookWorkspaceService {
 	private async withMutationClaim<T>(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		mutation: () => Promise<T>,
+		options: WorkspaceMutationOptions,
+		mutation: (lease: MutationLease) => Promise<T>,
 	): Promise<T> {
 		const key = paths.project(projectId).notebook(notebookId).workspaceMutationClaim;
-		const claim = {
-			bucket: this.bucket,
-			key,
-			serialize: (holder: string | null) => JSON.stringify({ holder }),
-			parseHolder: parseWorkspaceMutationHolder,
-			isHolderLive: async (holder: string) => workspaceMutationHolderIsLive(holder),
-		};
-		const claimId = VersionId.create();
-		let holder = '';
+		const claim = this.claimConfig(key);
+		const holder = VersionId.create();
 		for (let attempt = 0; attempt < WORKSPACE_MUTATION_WAIT_ATTEMPTS; attempt++) {
-			holder = `${claimId}:${Date.now() + WORKSPACE_MUTATION_LEASE_MS}`;
 			if ((await acquireSingletonClaim(claim, holder)).acquired) {
 				try {
-					return await mutation();
+					await options.assertMutable?.();
+					return await mutation({ heartbeat: () => this.renewClaim(key, holder) });
 				} finally {
 					await releaseSingletonClaim(claim, holder);
 				}
@@ -491,6 +588,45 @@ export class NotebookWorkspaceService {
 			await sleep(WORKSPACE_MUTATION_RETRY_MS);
 		}
 		throw new ConflictError('Workspace is busy with another mutation; retry the operation');
+	}
+
+	/** The mutation lease over `workspace_mutation_claim.json` (see WorkspaceMutationClaimSchema). */
+	private claimConfig(key: string): SingletonClaimConfig {
+		return {
+			bucket: this.bucket,
+			key,
+			serialize: serializeWorkspaceMutationClaim,
+			// An expired lease reads as released, so the CAS helper replaces it in
+			// place instead of waiting on a holder that will never come back.
+			parseHolder: (raw) => {
+				const claim = parseWorkspaceMutationClaim(raw, key);
+				return claimIsLive(claim) ? claim.holder : null;
+			},
+			isHolderLive: async () => true,
+		};
+	}
+
+	/**
+	 * Extend the lease while a long mutation runs. `acquireSingletonClaim` is a
+	 * no-op for the current holder, so renewal needs its own CAS write.
+	 */
+	private async renewClaim(key: string, holder: string): Promise<void> {
+		const renewed = await withCasRetry(this.bucket, async (cas) => {
+			const existing = await this.bucket.get(key);
+			if (!existing) return false;
+			let current: ParsedWorkspaceMutationClaim;
+			try {
+				current = parseWorkspaceMutationClaim(await readStoredJson(existing, key), key);
+			} catch {
+				return false;
+			}
+			if (current.holder !== holder) return false;
+			await cas.put(key, serializeWorkspaceMutationClaim(holder), {
+				onlyIfEtagMatches: existing.etag,
+			});
+			return true;
+		});
+		if (!renewed) throw new MutationLeaseLostError();
 	}
 
 	private async context(projectId: ProjectId, notebookId: NotebookId): Promise<WorkspaceContext> {
@@ -519,11 +655,21 @@ export class NotebookWorkspaceService {
 		return { ...context, prefix: context.prefix };
 	}
 
+	private assertTargetUnprotected(
+		source: Source,
+		operation: 'copy' | 'create',
+		target: string,
+	): void {
+		if (isProtectedWorkspacePath(source, target)) {
+			throw new ForbiddenError(this.deniedMessage(source, operation, target));
+		}
+	}
+
 	private deniedMessage(source: Source, operation: WorkspaceOperation, path: string): string {
 		if (!workspaceSourcePolicy(source).workspaceWritable) {
 			return 'Git-backed workspaces are read-only';
 		}
-		return `${path} cannot be ${operation === 'delete' ? 'deleted' : 'moved'}`;
+		return `${path} cannot be ${DENIED_VERBS[operation]}`;
 	}
 
 	private async statIn(prefix: string, relative: string): Promise<WorkspaceFileItem> {

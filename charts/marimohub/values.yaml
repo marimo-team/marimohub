@@ -52,13 +52,11 @@ surfaces:
     extensionGallery: openvsx
     settingsJson: '{}'
     embed: tab
-    marimoWatch: true
   opencode:
     enabled: false
     start: on-demand
     port: 4096
     embed: tab
-    marimoWatch: true
 
 # Singleton session reaper. Exactly one must run; the chart pins it to one
 # replica + Recreate. Don't scale it.

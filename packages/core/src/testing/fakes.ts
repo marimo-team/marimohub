@@ -310,11 +310,20 @@ export interface FakeCompute extends SandboxProvider {
 	lastCreateOptions?: CreateSandboxOptions;
 }
 
+export interface FakeComputeOptions {
+	/** Advertised provider capabilities; omit to model a single-port backend. */
+	capabilities?: SandboxProvider['capabilities'];
+}
+
 /** Wrap a `SandboxInstance` in a single-sandbox `SandboxProvider`. */
-export function fakeComputeFrom(instance: SandboxInstance): FakeCompute {
+export function fakeComputeFrom(
+	instance: SandboxInstance,
+	options: FakeComputeOptions = {},
+): FakeCompute {
 	const provider: FakeCompute = {
-		create(_id, options) {
-			provider.lastCreateOptions = options;
+		...(options.capabilities ? { capabilities: options.capabilities } : {}),
+		create(_id, createOptions) {
+			provider.lastCreateOptions = createOptions;
 			return instance;
 		},
 		proxy: async () => null,
@@ -327,8 +336,9 @@ export function fakeComputeFrom(instance: SandboxInstance): FakeCompute {
  * branches — e.g. `makeFakeCompute({ failExec: 'true' })` makes the reachability
  * check throw so provisioning rejects.
  */
-export function makeFakeCompute(opts: FakeSandboxOptions = {}): FakeCompute {
-	return fakeComputeFrom(makeFakeSandbox(opts).instance);
+export function makeFakeCompute(opts: FakeSandboxOptions & FakeComputeOptions = {}): FakeCompute {
+	const { capabilities, ...sandbox } = opts;
+	return fakeComputeFrom(makeFakeSandbox(sandbox).instance, { capabilities });
 }
 
 /**

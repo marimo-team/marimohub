@@ -26,7 +26,7 @@ import {
 	toPublicVersion,
 	VersionId,
 } from '@marimo-hub/core';
-import type { WorkspaceFileItem } from '@marimo-hub/core';
+import type { SessionService, WorkspaceFileItem, WorkspaceMutationOptions } from '@marimo-hub/core';
 import {
 	assertProjectActionOn,
 	assertSessionAuthenticated,
@@ -62,6 +62,7 @@ import {
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
+import { safeObjectContentType } from './objectBrowse';
 import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
 import type { HonoEnv, SandboxConfig } from '../context';
 import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
@@ -170,7 +171,10 @@ const WorkspaceItemSchema = z
 	.openapi('WorkspaceItem');
 
 const WorkspacePathQuery = z.object({ path: z.string().optional().default('/') });
-const WorkspaceListQuery = WorkspacePathQuery.extend({ cursor: z.string().optional() });
+const WorkspaceListQuery = WorkspacePathQuery.extend({
+	cursor: z.string().optional(),
+	limit: z.coerce.number().int().min(1).max(500).optional(),
+});
 const WorkspaceSearchQuery = WorkspacePathQuery.extend({ query: z.string().min(1) });
 const WorkspaceFilePathQuery = z.object({ path: z.string().min(1) });
 const WorkspaceFileQuery = WorkspaceFilePathQuery.extend({
@@ -484,7 +488,11 @@ const setNotebookSecurityLabels = createRoute({
 		'Sets an override enforced IN ADDITION to the project labels, so it can only add ' +
 		'restrictions. Requires super-admin standing — no project role grants label authority.',
 	security: SESSION_ONLY_SECURITY,
-	request: { params: NotebookIdParam, body: jsonBody(SecurityLabelsBodySchema) },
+	request: {
+		params: NotebookIdParam,
+		headers: IfMatchHeader,
+		body: jsonBody(SecurityLabelsBodySchema),
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: NotebookMetaResponseSchema }),
@@ -492,7 +500,7 @@ const setNotebookSecurityLabels = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 412),
 	},
 });
 
@@ -503,7 +511,7 @@ const clearNotebookSecurityLabels = createRoute({
 	tags: ['Notebooks'],
 	summary: 'Remove a notebook security-label override',
 	security: SESSION_ONLY_SECURITY,
-	request: { params: NotebookIdParam },
+	request: { params: NotebookIdParam, headers: IfMatchHeader },
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: NotebookMetaResponseSchema }),
@@ -511,7 +519,7 @@ const clearNotebookSecurityLabels = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 412),
 	},
 });
 
@@ -776,7 +784,7 @@ const readWorkspaceFile = createRoute({
 			description: 'Raw workspace file bytes',
 		},
 		...commonErrors(),
-		...errorResponses(400, 404),
+		...errorResponses(400, 404, 429),
 	},
 });
 
@@ -801,7 +809,7 @@ const writeWorkspaceFile = createRoute({
 			'Workspace file saved',
 		),
 		...commonErrors(),
-		...errorResponses(400, 403, 404, 409),
+		...errorResponses(400, 403, 404, 409, 413, 429),
 	},
 });
 
@@ -824,6 +832,25 @@ function toWorkspaceItem(item: WorkspaceFileItem) {
 	};
 }
 
+async function editSessionActive(
+	sessions: SessionService,
+	pid: ProjectId,
+	nid: NotebookId,
+): Promise<boolean> {
+	const active = await sessions.listActiveByProject(pid);
+	return active.some((session) => session.notebook_id === nid && sessionMode(session) === 'edit');
+}
+
+async function assertNoEditSession(
+	sessions: SessionService,
+	pid: ProjectId,
+	nid: NotebookId,
+): Promise<void> {
+	if (await editSessionActive(sessions, pid, nid)) {
+		throw new ConflictError('Workspace files cannot be changed while an edit session is active');
+	}
+}
+
 async function workspaceState(
 	c: Context<HonoEnv>,
 	pid: ProjectId,
@@ -833,16 +860,13 @@ async function workspaceState(
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { notebooks, projects, sessions } = deps.services;
-	const [project, active] = await Promise.all([
+	const [project, editorActive] = await Promise.all([
 		mutation
 			? assertProjectRole(projects, pid, user, 'notebook.write', deps)
 			: loadVisibleProject(projects, pid, user, deps),
-		sessions.listActiveByProject(pid),
+		editSessionActive(sessions, pid, nid),
 	]);
 	await loadAuthorizedNotebook(deps, project, nid, user);
-	const editorActive = active.some(
-		(session) => session.notebook_id === nid && sessionMode(session) === 'edit',
-	);
 	const role = effectiveRole(project, user, deps.policy);
 	const sourceAccess = await notebooks.workspace.access(pid, nid);
 	const readOnlyReason = !sourceAccess.writable
@@ -860,6 +884,31 @@ async function workspaceState(
 		readOnlyReason,
 		protectedPaths: sourceAccess.protectedPaths,
 	};
+}
+
+/**
+ * Authorize a workspace mutation and return the options the service re-checks
+ * under its lease. The pre-flight check above rejects early; the hook catches a
+ * session that started after it, before the write can land in the mirror.
+ */
+async function workspaceMutation(
+	c: Context<HonoEnv>,
+	pid: ProjectId,
+	nid: NotebookId,
+): Promise<WorkspaceMutationOptions> {
+	await workspaceState(c, pid, nid, true);
+	const { sessions } = c.get('deps').services;
+	return { assertMutable: () => assertNoEditSession(sessions, pid, nid) };
+}
+
+/** The raw file routes bypass the OpenAPI request parser, so validate by hand. */
+function parseWorkspaceRawRequest(c: Context<HonoEnv>) {
+	const pid = c.req.param('pid');
+	const nid = c.req.param('nid');
+	if (!ProjectId.is(pid) || !NotebookId.is(nid)) throw new NotFoundError('Notebook not found');
+	const path = c.req.query('path');
+	if (!path) throw new BadRequestError('path is required');
+	return { pid, nid, path };
 }
 
 app.openapi(getWorkspaceAccess, async (c) => {
@@ -890,7 +939,13 @@ app.openapi(listWorkspaceEntries, async (c) => {
 		await loadAuthorizedNotebook(deps, project, nid, user);
 	}
 	const query = c.req.valid('query');
-	const result = await deps.services.notebooks.workspace.list(pid, nid, query.path, query.cursor);
+	const result = await deps.services.notebooks.workspace.list(
+		pid,
+		nid,
+		query.path,
+		query.cursor,
+		query.limit,
+	);
 	return c.json(
 		{
 			success: true,
@@ -919,11 +974,12 @@ app.openapi(searchWorkspace, async (c) => {
 app.openapi(createWorkspaceDirectory, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid } = c.req.valid('param');
-	await workspaceState(c, pid, nid, true);
+	const options = await workspaceMutation(c, pid, nid);
 	const item = await deps.services.notebooks.workspace.createDirectory(
 		pid,
 		nid,
 		c.req.valid('json').path,
+		options,
 	);
 	return c.json({ success: true, data: toWorkspaceItem(item) }, 201);
 });
@@ -931,37 +987,33 @@ app.openapi(createWorkspaceDirectory, async (c) => {
 app.openapi(deleteWorkspaceEntry, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid } = c.req.valid('param');
-	await workspaceState(c, pid, nid, true);
-	await deps.services.notebooks.workspace.delete(pid, nid, c.req.valid('query').path);
+	const options = await workspaceMutation(c, pid, nid);
+	await deps.services.notebooks.workspace.delete(pid, nid, c.req.valid('query').path, options);
 	return c.json({ success: true }, 200);
 });
 
 app.openapi(moveWorkspaceEntry, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid } = c.req.valid('param');
-	await workspaceState(c, pid, nid, true);
+	const options = await workspaceMutation(c, pid, nid);
 	const body = c.req.valid('json');
-	const item = await deps.services.notebooks.workspace.move(pid, nid, body.from, body.to);
+	const item = await deps.services.notebooks.workspace.move(pid, nid, body.from, body.to, options);
 	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
 });
 
 app.openapi(copyWorkspaceEntry, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid } = c.req.valid('param');
-	await workspaceState(c, pid, nid, true);
+	const options = await workspaceMutation(c, pid, nid);
 	const body = c.req.valid('json');
-	const item = await deps.services.notebooks.workspace.copy(pid, nid, body.from, body.to);
+	const item = await deps.services.notebooks.workspace.copy(pid, nid, body.from, body.to, options);
 	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
 });
 
 app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	const pid = c.req.param('pid');
-	const nid = c.req.param('nid');
-	if (!ProjectId.is(pid) || !NotebookId.is(nid)) throw new NotFoundError('Notebook not found');
-	const path = c.req.query('path');
-	if (!path) throw new BadRequestError('path is required');
+	const { pid, nid, path } = parseWorkspaceRawRequest(c);
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
 		await loadAuthorizedNotebook(deps, project, nid, user);
@@ -971,7 +1023,7 @@ app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 		headers: {
 			'cache-control': 'private, no-store',
 			'content-disposition': objectContentDisposition(file.item.name, false),
-			'content-type': file.item.mimeType ?? 'application/octet-stream',
+			'content-type': safeObjectContentType(file.item.mimeType ?? '', false),
 			'x-content-type-options': 'nosniff',
 		},
 	});
@@ -980,16 +1032,12 @@ app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 app.put('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	const pid = c.req.param('pid');
-	const nid = c.req.param('nid');
-	if (!ProjectId.is(pid) || !NotebookId.is(nid)) throw new NotFoundError('Notebook not found');
-	const path = c.req.query('path');
-	if (!path) throw new BadRequestError('path is required');
+	const { pid, nid, path } = parseWorkspaceRawRequest(c);
 	const create = c.req.query('create');
 	if (create !== undefined && create !== 'true' && create !== 'false') {
 		throw new BadRequestError('create must be true or false');
 	}
-	await workspaceState(c, pid, nid, true);
+	const options = await workspaceMutation(c, pid, nid);
 	const declaredSize = Number(c.req.header('content-length'));
 	if (Number.isFinite(declaredSize) && declaredSize > MAX_WORKSPACE_FILE_BYTES) {
 		return fail(
@@ -1007,6 +1055,7 @@ app.put('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 		bytes,
 		user.id,
 		create === 'true',
+		options,
 	);
 	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
 });
@@ -1253,8 +1302,19 @@ async function mutateNotebookSecurityLabels(
 			: labels !== undefined && isMonotonicRestrictionIncrease(previous, labels)
 				? 'security-labels.raise'
 				: 'security-labels.lower';
-	await assertProjectActionOn(project, user, action, deps);
-	const meta = await deps.services.notebooks.setSecurityLabels(pid, nid, labels, user.id);
+	// Carry the existing override: lowering (or clearing) it must be decided
+	// against the notebook's current labels, not the project's alone, or a
+	// super admin outside the compartment could clear it to gain visibility.
+	await assertProjectActionOn(project, user, action, deps, previous ?? null);
+	// Same as the project flow: pin the write to the version the decision was
+	// made against when the client sent no precondition.
+	const meta = await deps.services.notebooks.setSecurityLabels(
+		pid,
+		nid,
+		labels,
+		user.id,
+		ifMatchToken(c) ?? existing.meta.updated_at,
+	);
 	c.header('ETag', etagFor(meta.updated_at));
 	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 200);
 }

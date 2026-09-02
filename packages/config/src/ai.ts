@@ -16,6 +16,23 @@ import { ConfigError } from './errors';
 
 const DOCS = 'docs/ai.md';
 
+/** Upstream-URL/key vars that only the openai-compatible backend reads. */
+const BEDROCK_ORPHAN_VARS = [
+	'MARIMOHUB_AI_UPSTREAM_BASE_URL',
+	'MARIMOHUB_AI_UPSTREAM_API_KEY',
+	'MARIMOHUB_AI_UPSTREAM_PROJECT',
+] as const;
+
+const BEDROCK_REGION_VARS = [
+	'MARIMOHUB_AI_AWS_REGION',
+	'AWS_REGION',
+	'AWS_DEFAULT_REGION',
+] as const;
+
+// Partition prefixes are not always two letters (`eusc-de-east-1`); only the
+// hostname-safe shape matters, since the value becomes part of the endpoint.
+const AWS_REGION_PATTERN = /^[a-z]+(-[a-z]+)+-\d+$/;
+
 export function sqlGenerationInstructions(
 	dialect: 'duckdb' | 'postgresql',
 	rules?: string,
@@ -30,15 +47,47 @@ export function sqlGenerationInstructions(
 function bedrockRegion(env: Env): string {
 	// First non-empty candidate: an explicitly empty MARIMOHUB_AI_AWS_REGION must
 	// not mask a valid AWS_REGION / AWS_DEFAULT_REGION fallback.
-	const region = [env.MARIMOHUB_AI_AWS_REGION, env.AWS_REGION, env.AWS_DEFAULT_REGION]
-		.map((v) => v?.trim())
-		.find((v) => v);
-	if (region) return region;
+	const source = BEDROCK_REGION_VARS.find((key) => env[key]?.trim());
+	if (!source) {
+		throw new ConfigError(
+			'Missing required env var: MARIMOHUB_AI_AWS_REGION (AWS_REGION and AWS_DEFAULT_REGION are also accepted)',
+			{
+				variable: 'MARIMOHUB_AI_AWS_REGION',
+				remediation: 'Set the AWS region that hosts the Bedrock models, e.g. eu-west-1.',
+				docs: DOCS,
+			},
+		);
+	}
+	const region = (env[source] ?? '').trim();
+	if (!AWS_REGION_PATTERN.test(region)) {
+		throw new ConfigError(
+			`Invalid ${source}: ${region} (expected an AWS region id such as eu-west-1); ` +
+				'it becomes the bedrock-runtime hostname and the SigV4 credential scope.',
+			{
+				variable: source,
+				remediation: 'Set the lowercase region id that hosts the Bedrock models, e.g. eu-west-1.',
+				docs: DOCS,
+			},
+		);
+	}
+	return region;
+}
+
+/**
+ * Bedrock derives its endpoint from the region and signs with the AWS identity,
+ * so a leftover upstream URL/key would be silently unused — fail closed instead,
+ * like orphaned login-policy vars.
+ */
+function rejectBedrockOrphans(env: Env): void {
+	const orphaned = BEDROCK_ORPHAN_VARS.find((key) => env[key]?.trim());
+	if (!orphaned) return;
 	throw new ConfigError(
-		'Missing required env var: MARIMOHUB_AI_AWS_REGION (AWS_REGION and AWS_DEFAULT_REGION are also accepted)',
+		`${orphaned} is set with MARIMOHUB_AI_BACKEND=bedrock, which ignores it; ` +
+			'refusing to silently drop upstream configuration.',
 		{
-			variable: 'MARIMOHUB_AI_AWS_REGION',
-			remediation: 'Set the AWS region that hosts the Bedrock models, e.g. eu-west-1.',
+			variable: orphaned,
+			remediation:
+				'Unset it, or set MARIMOHUB_AI_BACKEND=openai-compatible to front that upstream instead.',
 			docs: DOCS,
 		},
 	);
@@ -79,6 +128,7 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 			},
 		);
 	}
+	if (backend === 'bedrock') rejectBedrockOrphans(env);
 	const awsRegion = backend === 'bedrock' ? bedrockRegion(env) : undefined;
 	const upstreamBaseUrl =
 		awsRegion !== undefined

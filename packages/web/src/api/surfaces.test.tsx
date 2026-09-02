@@ -92,6 +92,45 @@ it('reports a terminal polling failure without caching the surface', async () =>
 	expect(result.current.states.opencode).toBeUndefined();
 });
 
+it('gives up once the start deadline passes', async () => {
+	vi.useFakeTimers();
+	const fetchMock = stubFetch(async () => jsonOk({ id: 'vscode', status: 'starting' }));
+	const { result } = renderHookWithClient(() => useSurfaceActions(PID, NID));
+	let completion!: ReturnType<typeof result.current.start.mutateAsync>;
+	act(() => {
+		completion = result.current.start.mutateAsync({ surfaceId: 'vscode', sessionId: 'sess-1' });
+	});
+	const rejected = expect(completion).rejects.toThrow('VS Code did not become ready');
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(SURFACE_START_TIMEOUT_MS + 1_000);
+		await rejected;
+	});
+
+	expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(SURFACE_START_TIMEOUT_MS / 1_000);
+	expect(result.current.states.vscode).toBeUndefined();
+});
+
+it('stops polling when the hook unmounts mid-start', async () => {
+	vi.useFakeTimers();
+	const fetchMock = stubFetch(async () => jsonOk({ id: 'vscode', status: 'starting' }));
+	const { result, unmount } = renderHookWithClient(() => useSurfaceActions(PID, NID));
+	let completion!: ReturnType<typeof result.current.start.mutateAsync>;
+	act(() => {
+		completion = result.current.start.mutateAsync({ surfaceId: 'vscode', sessionId: 'sess-1' });
+	});
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(1_000);
+	});
+	expect(fetchMock).toHaveBeenCalledTimes(2);
+
+	const rejected = expect(completion).rejects.toMatchObject({ name: 'AbortError' });
+	unmount();
+	await rejected;
+	await vi.advanceTimersByTimeAsync(10_000);
+
+	expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
 it('keeps the ready state when stopping the surface fails', async () => {
 	stubFetch(async (_url, init) => {
 		if (init?.method === 'POST') {
@@ -150,4 +189,40 @@ it('tracks concurrent surface starts independently', async () => {
 		expect(result.current.starting.size).toBe(0);
 		expect(result.current.states.opencode?.surface.status).toBe('ready');
 	});
+});
+
+it('stops polling the previous notebook when the route swaps ids', async () => {
+	vi.useFakeTimers();
+	const fetchMock = stubFetch(async () => jsonOk({ id: 'vscode', status: 'starting' }));
+	const { result, rerender } = renderHookWithClient(
+		({ pid, nid }: { pid: string; nid: string }) => useSurfaceActions(pid, nid),
+		{ initialProps: { pid: PID, nid: NID } },
+	);
+	let completion!: ReturnType<typeof result.current.start.mutateAsync>;
+	act(() => {
+		completion = result.current.start.mutateAsync({ surfaceId: 'vscode', sessionId: 'sess-1' });
+	});
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(1_000);
+	});
+	expect(fetchMock).toHaveBeenCalledTimes(2);
+
+	const rejected = expect(completion).rejects.toMatchObject({ name: 'AbortError' });
+	rerender({ pid: PID, nid: 'nb-2' });
+	await rejected;
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(10_000);
+	});
+	expect(fetchMock).toHaveBeenCalledTimes(2);
+	expect(result.current.starting.size).toBe(0);
+
+	// The fresh controller must let the new notebook start polling again.
+	act(() => {
+		result.current.start.mutate({ surfaceId: 'vscode', sessionId: 'sess-2' });
+	});
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(1_000);
+	});
+	expect(fetchMock).toHaveBeenCalledTimes(4);
+	expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('/notebooks/nb-2/');
 });

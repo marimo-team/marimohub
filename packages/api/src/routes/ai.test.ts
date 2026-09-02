@@ -277,6 +277,33 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(upstreamFetch).toHaveBeenCalledOnce();
 	});
 
+	it('cancels the in-flight upstream request when the client aborts', async () => {
+		const upstreamFetch = vi.fn(
+			(request: Request) =>
+				new Promise<Response>((_resolve, reject) => {
+					request.signal.addEventListener(
+						'abort',
+						() => reject(new DOMException('Aborted', 'AbortError')),
+						{ once: true },
+					);
+				}),
+		);
+		const controller = new AbortController();
+		const pending = app({ ai: { ...AI, upstreamFetch } }).request('/api/ai/v1/chat/completions', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', authorization: `Bearer ${await token()}` },
+			body: JSON.stringify({ model: 'gpt-4o-mini', messages: [] }),
+			signal: controller.signal,
+		});
+		await vi.waitFor(() => expect(upstreamFetch).toHaveBeenCalledOnce());
+		controller.abort();
+		const res = await pending;
+		// The upstream promise rejected with the abort, and the proxy reported a
+		// cancellation rather than an upstream outage.
+		expect(res.status).toBe(400);
+		await expectOpenAiError(res, 'Request cancelled by the client', 'cancelled');
+	});
+
 	it('falls back to the default model when off the allowlist', async () => {
 		const fetchMock = vi
 			.spyOn(globalThis, 'fetch')

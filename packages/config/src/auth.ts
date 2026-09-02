@@ -140,12 +140,13 @@ const LOGIN_POLICY_VARS = [
 	'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS',
 ] as const;
 
-/** True when the OIDC login-policy library backend is explicitly selected. */
+/** True when the OIDC login-policy library backend is explicitly selected (`none` = unset). */
 export function oidcLoginPolicySelected(env: Env): boolean {
 	return (
 		parseEnum(env, 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND', {
 			allowed: ['library'],
-			remediation: 'Set it to library, or unset it to disable the external login policy.',
+			offValues: ['none'],
+			remediation: 'Set it to library, or none (or unset) to disable the external login policy.',
 			docs: 'docs/configuration.md#auth',
 		}) === 'library'
 	);
@@ -156,7 +157,11 @@ export function oidcLoginPolicySelected(env: Env): boolean {
  * configuration; fail closed instead of silently ignoring an access policy.
  */
 function assertNoLoginPolicyVars(env: Env, backend: string): void {
-	const configured = LOGIN_POLICY_VARS.find((key) => env[key]?.trim());
+	const configured = LOGIN_POLICY_VARS.find((key) =>
+		key === 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND'
+			? oidcLoginPolicySelected(env)
+			: env[key]?.trim(),
+	);
 	if (!configured) return;
 	throw new ConfigError(
 		`${configured} is only valid with MARIMOHUB_AUTH_BACKEND=oidc (got ${backend}).`,
@@ -373,12 +378,35 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 	};
 }
 
+/**
+ * Whether project creation is limited to super admins and `project-creator`
+ * entitlement holders. `MARIMOHUB_PROJECT_CREATION=restricted` works on every
+ * auth backend (a login-policy module or proxy deployment can then restrict
+ * creation too); the OIDC groups variable keeps implying it.
+ */
 export function projectCreationRestricted(env: Env): boolean {
+	const mode = parseEnum(env, 'MARIMOHUB_PROJECT_CREATION', {
+		allowed: ['open', 'restricted'],
+		fallback: 'open',
+		remediation: 'Set it to open (default) or restricted.',
+		docs: 'docs/configuration.md#server--api',
+	});
 	// Raw presence is intentional: checkedGroups collapses empty and omitted values,
 	// but this policy needs that distinction. createFromEnv calls makeAuth first to validate it.
-	return (
-		authBackend(env) === 'oidc' && env.MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS !== undefined
-	);
+	const groupsConfigured = env.MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS !== undefined;
+	if (mode === 'open' && groupsConfigured && env.MARIMOHUB_PROJECT_CREATION?.trim()) {
+		throw new ConfigError(
+			'MARIMOHUB_PROJECT_CREATION=open contradicts MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS, ' +
+				'which restricts project creation.',
+			{
+				variable: 'MARIMOHUB_PROJECT_CREATION',
+				remediation:
+					'Set MARIMOHUB_PROJECT_CREATION=restricted, or unset one of the two variables.',
+				docs: 'docs/configuration.md#server--api',
+			},
+		);
+	}
+	return mode === 'restricted' || (authBackend(env) === 'oidc' && groupsConfigured);
 }
 
 export function makeAuth(

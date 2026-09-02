@@ -1,9 +1,10 @@
+import { MARIMO_PORT } from '../../../constants';
 import type { SurfaceSpec } from './types';
 
 export const marimoSurface: SurfaceSpec = {
 	id: 'marimo',
 	primary: true,
-	defaultPort: 2718,
+	defaultPort: MARIMO_PORT,
 	supportedExposures: ['proxy', 'subdomain'],
 	proxyPath: 'preserve-prefix',
 	async probe() {

@@ -16,12 +16,14 @@ const SUBJECT_CONTEXT_VARS = [
 	'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY',
 ] as const;
 
-/** True when the external subject-context library backend is explicitly selected. */
+/** True when the external subject-context library backend is selected (`none` = unset). */
 export function subjectContextBackendSelected(env: Env): boolean {
 	return (
 		parseEnum(env, 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND', {
 			allowed: ['library'],
-			remediation: 'Set it to library, or unset it to run without a subject-context provider.',
+			offValues: ['none'],
+			remediation:
+				'Set it to library, or none (or unset) to run without a subject-context provider.',
 			docs: 'docs/configuration.md#server--api',
 		}) === 'library'
 	);
@@ -53,7 +55,11 @@ export function validateResourceSecurityEnv(env: Env): {
 	if (order === undefined) {
 		// Subject-context configuration without a classification order is copied
 		// or stale config; fail closed instead of silently ignoring it.
-		const orphaned = SUBJECT_CONTEXT_VARS.find((key) => env[key]?.trim());
+		const orphaned = SUBJECT_CONTEXT_VARS.find((key) =>
+			key === 'MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND'
+				? subjectContextBackendSelected(env)
+				: env[key]?.trim(),
+		);
 		if (orphaned) {
 			throw new ConfigError(
 				`${orphaned} requires MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER — a subject-context ` +

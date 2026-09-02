@@ -44,6 +44,11 @@ import type {
 import type { PreviewCredentialVars } from './data-preview/programs';
 import type { DataQueryResult } from './data-query';
 
+export interface IntegrationTestOptions {
+	/** Cancels an in-flight database probe when the caller goes away. */
+	signal?: AbortSignal;
+}
+
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
 	listKinds(): KindDescriptor[];
@@ -73,6 +78,7 @@ export interface ProjectIntegrationsService {
 		projectId: ProjectId,
 		request: TestIntegrationRequest,
 		objectContext?: ObjectBrowseContext,
+		options?: IntegrationTestOptions,
 	): Promise<TestResult>;
 	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[];
 	/**
@@ -195,6 +201,10 @@ export interface OrgIntegrationsService {
 		id: IntegrationId,
 		page?: IntegrationVersionPageRequest,
 	): Promise<IntegrationVersionPage>;
-	test(request: TestIntegrationRequest, objectContext?: ObjectBrowseContext): Promise<TestResult>;
+	test(
+		request: TestIntegrationRequest,
+		objectContext?: ObjectBrowseContext,
+		options?: IntegrationTestOptions,
+	): Promise<TestResult>;
 	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[];
 }

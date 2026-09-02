@@ -189,10 +189,12 @@ describe('attachSandboxProxyUpgrade', () => {
 		let upstream: ReturnType<typeof createServer>;
 		let upstreamOrigin: string;
 		let lastUpstreamHeaders: http.IncomingHttpHeaders | undefined;
+		let lastUpstreamUrl: string | undefined;
 
 		beforeAll(async () => {
 			upstream = createServer((req, res) => {
 				lastUpstreamHeaders = req.headers;
+				lastUpstreamUrl = req.url;
 				res.writeHead(404, 'Not Found');
 				res.end();
 			});
@@ -262,6 +264,64 @@ describe('attachSandboxProxyUpgrade', () => {
 			expect(lastUpstreamHeaders!.authorization).toBeUndefined();
 			expect(lastUpstreamHeaders!['cf-access-jwt-assertion']).toBeUndefined();
 			expect(lastUpstreamHeaders!['x-custom']).toBe('passes');
+		});
+
+		it('dials a strip-prefix surface at the path beneath its proxy prefix', async () => {
+			const bucket = await createInitializedBucket();
+			const services = createServices(bucket);
+			const project = await services.projects.createProject(
+				{ name: 'Owned', description: 'd' },
+				ACTOR,
+			);
+			const pid = project.id as ProjectId;
+			const notebook = await services.notebooks.createNotebook(
+				pid,
+				{ title: 'NB', description: 'd', code: 'import marimo as mo' },
+				ACTOR,
+			);
+			const session = await services.sessions.createSession({
+				notebook_id: notebook.id,
+				project_id: pid,
+				user_id: ACTOR,
+			});
+			await services.sessions.setRunning(
+				pid,
+				session.session_id,
+				'/proxy/x/',
+				false,
+				'http://kernel',
+			);
+			await services.sessions.setSurfaceState(pid, session.session_id, 'vscode', {
+				status: 'ready',
+				origin_url: upstreamOrigin,
+				proxy_path: 'strip-prefix',
+			});
+			const token = await signProxyToken(pid, session.session_id, SECRET);
+			const deps: ApiDeps = makeTestDeps(bucket, {
+				authenticator: authAs(ACTOR),
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					exposure: new ProxyExposure(SECRET),
+				},
+			});
+			const server = fakeUpgradeServer();
+			attachSandboxProxyUpgrade(server, deps);
+
+			const socket = new PassThrough();
+			const out = collect(socket);
+			lastUpstreamUrl = undefined;
+			server.listeners[0](
+				fakeIncomingMessage(`/surface-proxy/${token}/vscode/stable/out.js?v=1`),
+				socket,
+				Buffer.alloc(0),
+			);
+
+			await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+			expect(out.text()).toMatch(/^HTTP\/1\.1 404/);
+			expect(lastUpstreamUrl).toBe('/stable/out.js?v=1');
 		});
 
 		it('strips Set-Cookie from a successful upgrade handshake', async () => {

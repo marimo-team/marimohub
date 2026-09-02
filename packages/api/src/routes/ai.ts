@@ -73,10 +73,13 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 		const headers: Record<string, string> = { 'content-type': 'application/json' };
 		if (ai.upstreamApiKey) headers.authorization = `Bearer ${ai.upstreamApiKey}`;
 		if (ai.upstreamProject) headers['openai-project'] = ai.upstreamProject;
+		// The client's abort must reach the upstream: a cancelled completion
+		// otherwise keeps generating (and billing) to the end of the stream.
 		const res = await proxy(`${ai.upstreamBaseUrl}${path}`, {
 			method: 'POST',
 			headers,
 			body: JSON.stringify(payload),
+			signal: c.req.raw.signal,
 			customFetch: ai.upstreamFetch,
 		});
 		logEvent({
@@ -92,6 +95,19 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 		});
 		return res;
 	} catch (err) {
+		if (c.req.raw.signal.aborted) {
+			// The abort is the client's own (forwarded above); nobody is waiting
+			// for the response, so this is not an upstream failure.
+			logEvent({
+				level: 'info',
+				event: 'ai_proxy_cancelled',
+				path,
+				project_id: claims.projectId,
+				session_id: claims.sessionId,
+				model,
+			});
+			return openAiError('Request cancelled by the client', 'cancelled', 400);
+		}
 		logEvent({
 			level: 'error',
 			event: 'ai_proxy_upstream_error',

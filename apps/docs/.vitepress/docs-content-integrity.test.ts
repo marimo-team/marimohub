@@ -39,9 +39,17 @@ function slugify(heading: string): string {
 		.toLowerCase();
 }
 
-function anchors(file: string): Set<string> {
+function anchors(file: string, visited = new Set<string>()): Set<string> {
+	if (visited.has(file)) return new Set();
+	visited.add(file);
+
 	const source = readFileSync(file, 'utf8').replaceAll(/```[\s\S]*?```/g, '');
-	return new Set([...source.matchAll(/^#{1,6}\s+(.+?)\s*$/gm)].map((match) => slugify(match[1])));
+	const headings = [...source.matchAll(/^#{1,6}\s+(.+?)\s*$/gm)].map((match) => slugify(match[1]));
+	const includedHeadings = [...source.matchAll(/<!--@include:\s+(.+?)\s*-->/g)].flatMap((match) => {
+		const included = path.resolve(path.dirname(file), match[1]);
+		return existsSync(included) ? [...anchors(included, visited)] : [];
+	});
+	return new Set([...headings, ...includedHeadings]);
 }
 
 function resolveDocsTarget(sourceFile: string, href: string): string | undefined {

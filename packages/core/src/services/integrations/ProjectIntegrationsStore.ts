@@ -16,6 +16,8 @@ import { paths } from '../../paths';
 import type { IntegrationPaths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
+import { createSlidingWindowBudget } from '../../rateLimit';
+import type { SlidingWindowBudget } from '../../rateLimit';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { DataPreviewService } from './data-preview/DataPreviewService';
@@ -116,7 +118,11 @@ import {
 } from './secretFields';
 import type { StoredSecretValue } from './secretFields';
 import type { IntegrationDefinition } from './sdk';
-import type { OrgIntegrationsService, ProjectIntegrationsService } from './contracts';
+import type {
+	IntegrationTestOptions,
+	OrgIntegrationsService,
+	ProjectIntegrationsService,
+} from './contracts';
 
 /** Page size when a caller states none; the API passes its own page policy. */
 const DEFAULT_VERSION_PAGE_SIZE = 100;
@@ -255,12 +261,29 @@ export interface IntegrationsStoreOptions {
 	dataQuery?: DataQueryService;
 	databaseTestGate?: IntegrationQueryGate;
 	queryGate?: IntegrationQueryGate;
+	/**
+	 * Per-minute cap on native database connection tests. Defaults to one
+	 * process-wide budget shared by the project and org facades, so the cap
+	 * matches the HTTP probe's instead of multiplying per store.
+	 */
+	databaseTestBudget?: SlidingWindowBudget<'test'>;
 }
 
 export type IntegrationQueryGate = (input: {
 	kind: string;
 	config: unknown;
 }) => QueryReadinessCheck | undefined;
+
+/**
+ * Database tests bypass the HTTP probe, so they get the same per-minute cap the
+ * probe enforces for HTTP kinds (`createGuardedProbe` in `@marimo-hub/config`).
+ */
+const DEFAULT_MAX_PROBES_PER_MINUTE = 30;
+
+const sharedDatabaseTestBudget: SlidingWindowBudget<'test'> = createSlidingWindowBudget({
+	limit: DEFAULT_MAX_PROBES_PER_MINUTE,
+	windowMs: 60_000,
+});
 
 /**
  * Scope-generic machinery shared by the project and org tiers. Not exported:
@@ -282,6 +305,7 @@ class ScopedIntegrationsStore {
 	private readonly dataQuery?: DataQueryService;
 	private readonly databaseTestGate?: IntegrationQueryGate;
 	private readonly queryGate?: IntegrationQueryGate;
+	private readonly databaseTestBudget: SlidingWindowBudget<'test'>;
 
 	constructor(options: IntegrationsStoreOptions) {
 		this.bucket = options.bucket;
@@ -301,6 +325,7 @@ class ScopedIntegrationsStore {
 		this.dataQuery = options.dataQuery;
 		this.databaseTestGate = options.databaseTestGate;
 		this.queryGate = options.queryGate;
+		this.databaseTestBudget = options.databaseTestBudget ?? sharedDatabaseTestBudget;
 	}
 
 	private queryGateBlocker(kind: string, config: unknown): QueryReadinessCheck | undefined {
@@ -762,6 +787,7 @@ class ScopedIntegrationsStore {
 		scope: IntegrationScope,
 		request: TestIntegrationRequest,
 		objectContext?: ObjectBrowseContext,
+		options: IntegrationTestOptions = {},
 	): Promise<TestResult> {
 		let def: IntegrationDefinition;
 		let resolved: Record<string, unknown>;
@@ -827,8 +853,11 @@ class ScopedIntegrationsStore {
 			if (!tester || tester.provider !== source.provider) {
 				throw new ValidationError('Database connection testing is not enabled on this deployment.');
 			}
+			if (!this.databaseTestBudget.consume('test')) {
+				throw new ResourceExhaustedError('Too many integration requests — try again in a minute.');
+			}
 			try {
-				return await tester.testConnection(source);
+				return await tester.testConnection(source, { signal: options.signal });
 			} catch {
 				return { ok: false, details: 'Database connection test failed.' };
 			}
@@ -1916,8 +1945,9 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		projectId: ProjectId,
 		request: TestIntegrationRequest,
 		objectContext?: ObjectBrowseContext,
+		options?: IntegrationTestOptions,
 	): Promise<TestResult> {
-		return this.store.test(projectScope(projectId), request, objectContext);
+		return this.store.test(projectScope(projectId), request, objectContext, options);
 	}
 
 	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[] {
@@ -2198,8 +2228,12 @@ export class OrgIntegrationsStore implements OrgIntegrationsService {
 		return this.store.listVersions(ORG_SCOPE, id, page);
 	}
 
-	test(request: TestIntegrationRequest, objectContext?: ObjectBrowseContext): Promise<TestResult> {
-		return this.store.test(ORG_SCOPE, request, objectContext);
+	test(
+		request: TestIntegrationRequest,
+		objectContext?: ObjectBrowseContext,
+		options?: IntegrationTestOptions,
+	): Promise<TestResult> {
+		return this.store.test(ORG_SCOPE, request, objectContext, options);
 	}
 
 	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[] {

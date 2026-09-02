@@ -3053,6 +3053,14 @@
 					"repeatable": false
 				},
 				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
 					"name": "path",
 					"cli_name": "path",
 					"in": "query",
