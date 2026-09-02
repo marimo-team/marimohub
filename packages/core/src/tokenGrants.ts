@@ -27,30 +27,21 @@ export const TokenGrantSchema = z.strictObject({
 
 export type TokenGrant = z.infer<typeof TokenGrantSchema>;
 
+const READ_TOKEN_ACTIONS = ['project.read', 'integration.read'] as const;
+const RUN_TOKEN_ACTIONS = [
+	...READ_TOKEN_ACTIONS,
+	'integration.use',
+	'session.start',
+	'session.attach',
+	'session.stop',
+	'session.surface',
+	'session.proxy',
+] as const;
+
 export const TOKEN_GRANT_PRESETS = {
-	read: ['project.read', 'integration.read'],
-	run: [
-		'project.read',
-		'integration.read',
-		'integration.use',
-		'session.start',
-		'session.attach',
-		'session.stop',
-		'session.surface',
-		'session.proxy',
-	],
-	edit: [
-		'project.read',
-		'integration.read',
-		'integration.use',
-		'session.start',
-		'session.attach',
-		'session.stop',
-		'session.surface',
-		'session.proxy',
-		'notebook.write',
-		'change-request.publish',
-	],
+	read: READ_TOKEN_ACTIONS,
+	run: RUN_TOKEN_ACTIONS,
+	edit: [...RUN_TOKEN_ACTIONS, 'notebook.write', 'change-request.publish'],
 	full: '*',
 } as const satisfies Record<string, '*' | readonly AuthorizationAction[]>;
 

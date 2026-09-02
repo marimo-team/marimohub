@@ -625,19 +625,16 @@ A scoped token has this version 2 shape:
 ```
 
 `actions` is `"*"` or a unique canonical action list. `projects` is `"*"` or
-1 to 100 unique project IDs. The record rejects version 2 without a grant. It
-also rejects a grant without version 2 and all unknown credential versions.
-The parser remains loose for other fields. This preserves forward fields when
-the daily `last_used_at` update rewrites a record.
+1 to 100 unique project IDs. Parsing fails for a missing, inconsistent, or
+unknown credential version. Other fields remain loose so the daily
+`last_used_at` rewrite preserves fields from later releases.
 
 **Why keyed by token id.** The presented bearer is
-`mhub_pat_<tokenId>_<secret>`. Verification needs one GET by the embedded ULID.
-It does not need a mutable index object. Version 1 stores the SHA-256 hash of
-the secret. Version 2 stores the SHA-256 hash of
+`mhub_pat_<tokenId>_<secret>`. The embedded ULID enables one-GET verification
+without a mutable index. Version 1 hashes the secret. Version 2 hashes
 `mhub_pat:v2:<tokenId>:<secret>`. This domain separation prevents a legacy
 verifier from authenticating a scoped token after prefix rewriting. The
-plaintext is returned once and never stored. Per-user listing scans the token
-prefix, which is bounded by the 20-token cap.
+plaintext is never stored. The 20-token cap bounds per-user prefix scans.
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
 
@@ -660,12 +657,11 @@ attempts to five per user and limits polling separately.
 `device_pending_v2`, `pending_v2`, and `claimed_v2`. The v2 records carry the
 requested grant. Approved and claimed records also carry the narrowed grant.
 
-Exchange uses CAS to change a pending record to claimed before it creates the
-PAT. This step prevents replay and concurrent token creation. Exchange deletes
-the grant and user-code claim. Creating a loopback grant prunes at most 100
-expired authorization records. Creating a device grant prunes the same records
-and at most 100 expired user-code claims. Device approval, exchange, and polling
-do not prune records.
+Exchange uses CAS to claim a pending record before PAT creation. This prevents
+replay and concurrent token creation. Exchange then deletes the authorization
+and user-code claim. Creation prunes at most 100 expired authorization records.
+Device creation also prunes at most 100 expired user-code claims. Approval,
+exchange, and polling do not prune records.
 
 Old replicas reject the v2 states. During a mixed rollout, they can reject a
 scoped authorization or token. They cannot mint or authenticate it as a legacy

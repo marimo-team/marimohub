@@ -295,16 +295,16 @@ notebook overrides use the deny-only `ResourceConstraintPolicy` port. The
 data for each principal, never from raw provider claims. A labeled resource
 fails closed and returns 404 when its constraints are not satisfied.
 
-Personal access token grants add a third, deny-only boundary. Authorization is
-the intersection of current user authority, resource-security constraints, and
-the credential grant. The grant restricts canonical actions and project IDs.
-Project list fast paths, fallback visibility, session capability projections,
-directory fallback, and analyzer traces use the same centralized decision.
+PAT grants add a third deny-only boundary:
 
-An out-of-grant project produces `credential-resource` and maps to 404. A
-missing granted action produces `credential-action` and maps to 403. Lifecycle,
-visibility, and security-label masking take precedence over the action denial.
-Legacy PAT credentials have no grant and remain unrestricted.
+```text
+allowed = current user authority ∧ resource security ∧ credential grant
+```
+
+`AuthorizationService` applies this boundary to every fast path and projection.
+It masks an out-of-grant project as 404 and returns 403 for an omitted action.
+Lifecycle, visibility, and label masking still take precedence. See
+[`auth.md`](./auth.md#personal-access-token-grants) for grant semantics.
 
 > **Scaling note.** The global catalog snapshot lists projects by `owner` only;
 > per-project `members` live in `project.json`. Authorized listing for a

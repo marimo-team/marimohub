@@ -8,8 +8,8 @@ import {
 	ResourceExhaustedError,
 	TokenGrantSchema,
 } from '@marimo-hub/core';
-import type { CreatedToken, SlidingWindowBudget } from '@marimo-hub/core';
-import { appendAudit } from '../log';
+import type { SlidingWindowBudget } from '@marimo-hub/core';
+import { auditTokenCreation } from '../tokenAudit';
 import {
 	assertSessionAuthenticated,
 	assertTokenGrantProjectsVisible,
@@ -135,27 +135,6 @@ function preventCaching(c: { header(name: string, value: string): void }): void 
 	c.header('Pragma', 'no-cache');
 }
 
-async function auditTokenCreation(c: Context<HonoEnv>, credential: CreatedToken): Promise<void> {
-	const { record } = credential;
-	await appendAudit(
-		{
-			requestId: c.get('requestId'),
-			method: c.req.method,
-			path: c.req.path,
-			userId: record.user_id,
-		},
-		'token.create',
-		() =>
-			c.get('deps').services.events.append({
-				event: 'token.create',
-				actor: record.user_id,
-				token_id: record.id,
-				token_name: record.name,
-				...(record.grant !== undefined ? { grant: record.grant } : {}),
-			}),
-	);
-}
-
 function assertExchangeAllowed(code: string): void {
 	const authorization = parseCliAuthorizationCode(code);
 	if (authorization === null) return;
@@ -218,6 +197,34 @@ function loopbackCallback(raw: string): URL {
 		throw new BadRequestError('callback_uri must be an HTTP loopback URL ending in /callback');
 	}
 	return url;
+}
+
+function loopbackApprovalData(
+	callback: URL,
+	state: string,
+	approved: { code: string; expiresAt: string },
+) {
+	callback.searchParams.set('code', approved.code);
+	callback.searchParams.set('state', state);
+	return { redirect_uri: callback.toString(), expires_at: approved.expiresAt };
+}
+
+function deviceAuthorizationData(
+	c: Context<HonoEnv>,
+	requested: { code: string; userCode: string },
+) {
+	const publicBaseUrl = resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl);
+	const verification = new URL(joinUrlPath(publicBaseUrl, '/cli/device'));
+	const complete = new URL(verification);
+	complete.searchParams.set('user_code', requested.userCode);
+	return {
+		device_code: requested.code,
+		user_code: requested.userCode,
+		verification_uri: verification.toString(),
+		verification_uri_complete: complete.toString(),
+		expires_in: 10 * 60,
+		interval: 5,
+	};
 }
 
 const approveAuthorization = createRoute({
@@ -463,13 +470,11 @@ app.openapi(approveAuthorization, async (c) => {
 		},
 		c.get('user').id,
 	);
-	callback.searchParams.set('code', approved.code);
-	callback.searchParams.set('state', body.state);
 	preventCaching(c);
 	return c.json(
 		{
 			success: true as const,
-			data: { redirect_uri: callback.toString(), expires_at: approved.expiresAt },
+			data: loopbackApprovalData(callback, body.state, approved),
 		},
 		201,
 	);
@@ -492,13 +497,11 @@ app.openapi(approveScopedAuthorization, async (c) => {
 		},
 		user.id,
 	);
-	callback.searchParams.set('code', approved.code);
-	callback.searchParams.set('state', body.state);
 	preventCaching(c);
 	return c.json(
 		{
 			success: true as const,
-			data: { redirect_uri: callback.toString(), expires_at: approved.expiresAt },
+			data: loopbackApprovalData(callback, body.state, approved),
 		},
 		201,
 	);
@@ -568,22 +571,11 @@ cliTokenApp.openapi(requestDeviceAuthorization, async (c) => {
 	const requested = await c
 		.get('deps')
 		.services.cliAuthorizations.requestDevice(c.req.valid('json').code_challenge);
-	const publicBaseUrl = resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl);
-	const verification = new URL(joinUrlPath(publicBaseUrl, '/cli/device'));
-	const complete = new URL(verification);
-	complete.searchParams.set('user_code', requested.userCode);
 	preventCaching(c);
 	return c.json(
 		{
 			success: true as const,
-			data: {
-				device_code: requested.code,
-				user_code: requested.userCode,
-				verification_uri: verification.toString(),
-				verification_uri_complete: complete.toString(),
-				expires_in: 10 * 60,
-				interval: 5,
-			},
+			data: deviceAuthorizationData(c, requested),
 		},
 		200,
 	);
@@ -595,22 +587,11 @@ cliTokenApp.openapi(requestScopedDeviceAuthorization, async (c) => {
 	const requested = await c
 		.get('deps')
 		.services.cliAuthorizations.requestDeviceScoped(body.code_challenge, body.grant);
-	const publicBaseUrl = resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl);
-	const verification = new URL(joinUrlPath(publicBaseUrl, '/cli/device'));
-	const complete = new URL(verification);
-	complete.searchParams.set('user_code', requested.userCode);
 	preventCaching(c);
 	return c.json(
 		{
 			success: true as const,
-			data: {
-				device_code: requested.code,
-				user_code: requested.userCode,
-				verification_uri: verification.toString(),
-				verification_uri_complete: complete.toString(),
-				expires_in: 10 * 60,
-				interval: 5,
-			},
+			data: deviceAuthorizationData(c, requested),
 		},
 		200,
 	);

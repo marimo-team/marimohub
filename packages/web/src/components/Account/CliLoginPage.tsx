@@ -24,6 +24,8 @@ export function CliLoginPage({
 		actions: request?.requestedGrant?.actions ?? null,
 		projects: request?.requestedGrant?.projects ?? null,
 	}));
+	const grant = tokenGrantFromDraft(grantDraft);
+	const isPending = approve.isPending || approveScoped.isPending;
 
 	if (!request) {
 		return (
@@ -48,7 +50,6 @@ export function CliLoginPage({
 			return;
 		}
 		try {
-			const grant = tokenGrantFromDraft(grantDraft);
 			if (request.requestedGrant && !grant) return;
 			const common = {
 				callback_uri: request.callback.toString(),
@@ -152,7 +153,7 @@ export function CliLoginPage({
 					<div className="flex justify-end gap-2 border-t pt-5">
 						<Button
 							type="button"
-							isDisabled={approve.isPending || approveScoped.isPending}
+							isDisabled={isPending}
 							onPress={() => navigate(cancellationUrl(request))}
 						>
 							Cancel
@@ -160,16 +161,10 @@ export function CliLoginPage({
 						<Button
 							type="submit"
 							variant="primary"
-							isDisabled={
-								approve.isPending ||
-								approveScoped.isPending ||
-								(request.requestedGrant !== undefined && tokenGrantFromDraft(grantDraft) === null)
-							}
+							isDisabled={isPending || (request.requestedGrant !== undefined && grant === null)}
 						>
-							{approve.isPending || approveScoped.isPending ? 'Connecting…' : 'Authorize CLI'}
-							{!approve.isPending && !approveScoped.isPending ? (
-								<ArrowRight className="size-4" />
-							) : null}
+							{isPending ? 'Connecting…' : 'Authorize CLI'}
+							{isPending ? null : <ArrowRight className="size-4" />}
 						</Button>
 					</div>
 				</form>

@@ -229,11 +229,11 @@ export class ProjectService {
 			resourceSecurity?: ResourceSecurityPolicy;
 		},
 	): Promise<PublicProjectEntry[]> {
-		if (filter) {
-			const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
-			if (!authz.credentialAllowsAction(filter.subject, 'project.read')) {
-				throw new ForbiddenError('Token grant does not permit project listing');
-			}
+		const authz = filter
+			? new AuthorizationService(filter.policy, filter.resourceSecurity)
+			: undefined;
+		if (filter && authz && !authz.credentialAllowsAction(filter.subject, 'project.read')) {
+			throw new ForbiddenError('Token grant does not permit project listing');
 		}
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		let matching = snapshot.projects.filter(
@@ -253,12 +253,11 @@ export class ProjectService {
 			);
 			matching = matching.filter((_, index) => tagMatches[index]);
 		}
-		if (!filter) return matching.map(toPublicProjectEntry);
+		if (!filter || !authz) return matching.map(toPublicProjectEntry);
 		// Visibility routes through the authorization service so listings and
 		// direct reads cannot drift. Both filters run BEFORE pagination (the
 		// caller pages the returned entries), so a hidden project never leaks
 		// through page counts or cursors.
-		const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
 		let visible = matching;
 		if (!authz.listsAllProjects(filter.subject)) {
 			const visibility = await mapWithConcurrency(

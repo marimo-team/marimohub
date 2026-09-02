@@ -39,6 +39,7 @@ token id, `service-account`, or `development`) and, when bounded, its expiry.
 PAT credentials can also carry an immutable `TokenGrant`. The grant contains
 an action boundary and a project boundary. An absent PAT grant means legacy
 unrestricted behavior.
+
 The authenticator result owns this: consumers such as the API's PAT-only route
 guard read `credential.kind` and never re-derive the credential from request
 headers, which can disagree with the adapter over parsing. A PAT-shaped bearer
@@ -47,8 +48,7 @@ so a revoked token can never fall through to SSO.
 
 ## Personal access token grants
 
-`AuthorizationService` evaluates a PAT grant after role and resource-security
-checks. A request must pass all three boundaries:
+`AuthorizationService` evaluates each request against three boundaries:
 
 ```text
 allowed = current user authority ∧ resource security ∧ credential grant
@@ -64,25 +64,23 @@ The grant shape is strict:
 ```
 
 `'*'` actions include future PAT-accessible actions. An explicit array denies
-actions that a later release adds. `'*'` projects include future projects that
-the user can access. A selected list contains 1 to 100 unique project IDs.
-
-The issuer expands Read, Run notebooks, and Edit notebooks presets to action
-arrays. Full uses the action wildcard. Existing tokens do not change when a
-preset changes.
+new actions by default. `'*'` projects include future projects that the user
+can access. A selected list contains 1 to 100 unique project IDs. The issuer
+expands presets when it creates the token, so later preset changes do not alter
+existing grants.
 
 A selected-project grant denies deployment-level actions. It also filters
 project lists before pagination. Super-admin standing and deployment default
 roles do not bypass this boundary. Direct access outside the list returns 404.
 An omitted action returns 403 only after lifecycle, visibility, and labels pass.
 
-The analyzer includes a `credential` trace stage. Synthetic cases can supply a
-grant. `credential-resource` denotes a masked resource denial.
-`credential-action` denotes an action denial.
+The analyzer uses `credential-resource` for a masked project denial and
+`credential-action` for an action denial. Its `credential` trace stage supports
+both live and synthetic grants.
 
-Scoped tokens use credential version 2. Old replicas reject v2 records and v2
-CLI states during a rolling upgrade. They never accept them without the grant.
-A mixed deployment can reject valid scoped tokens until every replica updates.
+Scoped tokens use credential version 2. Old replicas reject v2 token records
+and CLI states. During a rolling upgrade, an old replica can reject a valid
+scoped token but cannot accept it without its grant.
 
 PAT expiry and revocation block later authentication. They do not stop a
 session that is already running. A token that can start a sandbox can run

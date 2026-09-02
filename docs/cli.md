@@ -88,10 +88,9 @@ mohub login
 ```
 
 The CLI opens the selected Hub in your browser. Review the account, token
-lifetime, actions, and projects. Then select **Authorize CLI**. The default
-lifetime is 30 days. The CLI requests a full grant in this release. You can
-narrow that grant on the approval page. The page cannot add access beyond the
-CLI request.
+lifetime, actions, and projects. The default lifetime is 30 days. This release
+requests a full grant, but you can narrow it on the approval page. Then select
+**Authorize CLI**.
 
 The CLI exchanges the one-time approval code and stores the token in the
 operating system credential store.
@@ -112,13 +111,8 @@ WARNING: If the browser and terminal show different codes, do not approve the
 request. An attacker can use a code that they send to you to access your account.
 
 `--no-browser` is an alias for `--device-code`. Both login flows use PKCE and a
-one-time grant. They preserve the requested token grant through approval and
-exchange. The Hub never puts the personal access token in a browser URL.
-
-Device login first uses the scoped authorization endpoint. It uses the legacy
-endpoint only when the server returns 404. This fallback is safe because this
-CLI release requests full access. A future narrow request must not use the
-legacy fallback.
+one-time approval code. The approved grant cannot exceed the CLI request. The
+Hub never puts the personal access token in a browser URL.
 
 You can also create the default profile and sign in in one command:
 

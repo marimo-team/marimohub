@@ -59,6 +59,8 @@ export function CliDeviceLoginPage({
 		: null;
 	const grantDraft =
 		normalizedCode && grantOverride?.code === normalizedCode ? grantOverride.draft : requestedDraft;
+	const grant = grantDraft ? tokenGrantFromDraft(grantDraft) : null;
+	const isPending = approve.isPending || approveScoped.isPending;
 	const updateGrantDraft = (draft: TokenGrantDraft) => {
 		if (normalizedCode) setGrantOverride({ code: normalizedCode, draft });
 	};
@@ -81,7 +83,6 @@ export function CliDeviceLoginPage({
 				expires_in_days: days,
 			};
 			if (preview.data) {
-				const grant = grantDraft ? tokenGrantFromDraft(grantDraft) : null;
 				if (!grant) return;
 				await approveScoped.mutateAsync({ ...common, grant });
 			} else {
@@ -185,7 +186,7 @@ export function CliDeviceLoginPage({
 						<div className="flex justify-end gap-2 border-t pt-5">
 							<Button
 								type="button"
-								isDisabled={approve.isPending || approveScoped.isPending}
+								isDisabled={isPending}
 								onPress={() => navigate(withBasePath('/'))}
 							>
 								Cancel
@@ -194,17 +195,11 @@ export function CliDeviceLoginPage({
 								type="submit"
 								variant="primary"
 								isDisabled={
-									approve.isPending ||
-									approveScoped.isPending ||
-									preview.isFetching ||
-									(preview.data !== undefined &&
-										(grantDraft === null || tokenGrantFromDraft(grantDraft) === null))
+									isPending || preview.isFetching || (preview.data !== undefined && grant === null)
 								}
 							>
-								{approve.isPending || approveScoped.isPending ? 'Connecting…' : 'Authorize CLI'}
-								{approve.isPending || approveScoped.isPending ? null : (
-									<ArrowRight className="size-4" />
-								)}
+								{isPending ? 'Connecting…' : 'Authorize CLI'}
+								{isPending ? null : <ArrowRight className="size-4" />}
 							</Button>
 						</div>
 					</form>

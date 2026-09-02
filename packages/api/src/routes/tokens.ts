@@ -1,7 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { TokenGrantSchema, TokenId } from '@marimo-hub/core';
-import type { PublicToken } from '@marimo-hub/core';
+import type { CreatedToken, PublicToken } from '@marimo-hub/core';
 import { appendAudit } from '../log';
+import { auditTokenCreation } from '../tokenAudit';
 import {
 	assertSessionAuthenticated,
 	assertTokenGrantProjectsVisible,
@@ -151,6 +152,10 @@ function toResponse(record: PublicToken) {
 	};
 }
 
+function createdTokenData({ token, record }: CreatedToken) {
+	return { ...toResponse(record), token };
+}
+
 const app = createApp();
 
 app.openapi(createToken, async (c) => {
@@ -159,22 +164,12 @@ app.openapi(createToken, async (c) => {
 	const user = c.get('user');
 	const { name, expires_in_days } = c.req.valid('json');
 
-	const { token, record } = await deps.services.tokens.create(
+	const credential = await deps.services.tokens.create(
 		{ name, expiresInDays: expires_in_days },
 		user.id,
 	);
-	await appendAudit(
-		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-		'token.create',
-		() =>
-			deps.services.events.append({
-				event: 'token.create',
-				actor: user.id,
-				token_id: record.id,
-				token_name: name,
-			}),
-	);
-	return c.json({ success: true, data: { ...toResponse(record), token } }, 201);
+	await auditTokenCreation(c, credential);
+	return c.json({ success: true as const, data: createdTokenData(credential) }, 201);
 });
 
 app.openapi(createScopedToken, async (c) => {
@@ -184,23 +179,12 @@ app.openapi(createScopedToken, async (c) => {
 	const { name, expires_in_days, grant } = c.req.valid('json');
 	await assertTokenGrantProjectsVisible(deps, user, grant);
 
-	const { token, record } = await deps.services.tokens.create(
+	const credential = await deps.services.tokens.create(
 		{ name, expiresInDays: expires_in_days, grant },
 		user.id,
 	);
-	await appendAudit(
-		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-		'token.create',
-		() =>
-			deps.services.events.append({
-				event: 'token.create',
-				actor: user.id,
-				token_id: record.id,
-				token_name: name,
-				grant,
-			}),
-	);
-	return c.json({ success: true, data: { ...toResponse(record), token } }, 201);
+	await auditTokenCreation(c, credential);
+	return c.json({ success: true as const, data: createdTokenData(credential) }, 201);
 });
 
 app.openapi(listTokens, async (c) => {

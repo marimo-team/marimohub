@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
-import { composeAuthenticators, createCliAuthorizationId } from '@marimo-hub/core';
+import { composeAuthenticators, createCliAuthorizationId, ProjectId } from '@marimo-hub/core';
+import type { TokenGrant } from '@marimo-hub/core';
 import { createApi, generateOpenApiDocument } from '../createApi';
 import {
 	createInitializedBucket,
@@ -45,7 +46,7 @@ describe('CLI authorization routes', () => {
 		);
 	}
 
-	async function requestDevice() {
+	async function requestDevice(grant?: TokenGrant) {
 		return expectOk<{
 			device_code: string;
 			user_code: string;
@@ -54,11 +55,14 @@ describe('CLI authorization routes', () => {
 			expires_in: number;
 			interval: number;
 		}>(
-			await app.request('/api/cli/v1/device-authorizations', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ code_challenge: CHALLENGE }),
-			}),
+			await app.request(
+				grant ? '/api/cli/v1/device-authorizations/scoped' : '/api/cli/v1/device-authorizations',
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ code_challenge: CHALLENGE, ...(grant ? { grant } : {}) }),
+				},
+			),
 		);
 	}
 
@@ -208,13 +212,7 @@ describe('CLI authorization routes', () => {
 	});
 
 	it('previews and narrows a scoped device grant', async () => {
-		const device = await expectOk<{ device_code: string; user_code: string }>(
-			await app.request('/api/cli/v1/device-authorizations/scoped', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ code_challenge: CHALLENGE, grant: FULL_GRANT }),
-			}),
-		);
+		const device = await requestDevice(FULL_GRANT);
 		const previewResponse = await request(
 			'GET',
 			`/me/cli-device-authorizations/${device.user_code}`,
@@ -246,14 +244,8 @@ describe('CLI authorization routes', () => {
 	it('does not consume a scoped device request after a widening attempt', async () => {
 		const approver = createTestApi({ bucket, userId: uid('scope-narrowing-approver') });
 		await approver.request('GET', '/me');
-		const requestedGrant = { actions: ['project.read'], projects: '*' as const };
-		const device = await expectOk<{ device_code: string; user_code: string }>(
-			await app.request('/api/cli/v1/device-authorizations/scoped', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ code_challenge: CHALLENGE, grant: requestedGrant }),
-			}),
-		);
+		const requestedGrant: TokenGrant = { actions: ['project.read'], projects: '*' };
+		const device = await requestDevice(requestedGrant);
 
 		await expectError(
 			await approver.request('POST', '/me/cli-device-authorizations/scoped', {
@@ -288,16 +280,7 @@ describe('CLI authorization routes', () => {
 			await other('POST', '/projects', { name: 'Private', description: 'd' }),
 			201,
 		);
-		const device = await expectOk<{ user_code: string }>(
-			await app.request('/api/cli/v1/device-authorizations/scoped', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					code_challenge: CHALLENGE,
-					grant: { actions: '*', projects: [project.id] },
-				}),
-			}),
-		);
+		const device = await requestDevice({ actions: '*', projects: [ProjectId.parse(project.id)] });
 
 		await expectError(
 			await request('GET', `/me/cli-device-authorizations/${device.user_code}`),

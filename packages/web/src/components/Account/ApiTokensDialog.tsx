@@ -72,6 +72,7 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 		actions: null,
 		projects: null,
 	});
+	const grant = tokenGrantFromDraft(grantDraft);
 	const confirmRevoke = useDialogTarget<ApiToken>();
 
 	const handleCreate = async () => {
@@ -85,7 +86,6 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 			toast.error('Expiry must be a whole number of days.');
 			return;
 		}
-		const grant = tokenGrantFromDraft(grantDraft);
 		if (!grant) {
 			toast.error('Choose an action preset and a project scope.');
 			return;
@@ -201,7 +201,7 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 						<Button
 							type="submit"
 							variant="primary"
-							isDisabled={createToken.isPending || tokenGrantFromDraft(grantDraft) === null}
+							isDisabled={createToken.isPending || grant === null}
 						>
 							<Plus className="size-4" />
 							{createToken.isPending ? 'Creating...' : 'Create token'}

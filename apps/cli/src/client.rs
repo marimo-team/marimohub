@@ -959,7 +959,7 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, BufReader};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
 
     use super::*;
 
@@ -981,6 +981,32 @@ mod tests {
             .iter()
             .find(|operation| operation.id == id)
             .expect("operation exists")
+    }
+
+    fn read_http_request(stream: &TcpStream) -> String {
+        let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
+        let mut request = String::new();
+        let mut content_length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read request header");
+            assert!(!line.is_empty(), "request ended before its headers");
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().expect("numeric content length");
+                }
+            }
+            request.push_str(&line);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut request_body = vec![0; content_length];
+        reader
+            .read_exact(&mut request_body)
+            .expect("read request body");
+        request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+        request
     }
 
     fn serve_once(status: u16, body: &str) -> (String, thread::JoinHandle<()>) {
@@ -1039,28 +1065,7 @@ mod tests {
         let body = body.to_owned();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept request");
-            let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
-            let mut request = String::new();
-            let mut content_length = 0;
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).expect("read request header");
-                assert!(!line.is_empty(), "request ended before its headers");
-                if let Some((name, value)) = line.split_once(':') {
-                    if name.eq_ignore_ascii_case("content-length") {
-                        content_length = value.trim().parse().expect("numeric content length");
-                    }
-                }
-                request.push_str(&line);
-                if line == "\r\n" {
-                    break;
-                }
-            }
-            let mut request_body = vec![0; content_length];
-            reader
-                .read_exact(&mut request_body)
-                .expect("read request body");
-            request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+            let request = read_http_request(&stream);
             assert!(request.starts_with("POST /api/cli/v1/token HTTP/1.1"));
             assert!(!request.to_ascii_lowercase().contains("authorization:"));
             assert!(request.contains(r#""code":"mhub_cli_code""#));
@@ -1102,28 +1107,7 @@ mod tests {
             .collect::<String>();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept request");
-            let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
-            let mut request = String::new();
-            let mut content_length = 0;
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).expect("read request header");
-                assert!(!line.is_empty(), "request ended before its headers");
-                if let Some((name, value)) = line.split_once(':') {
-                    if name.eq_ignore_ascii_case("content-length") {
-                        content_length = value.trim().parse().expect("numeric content length");
-                    }
-                }
-                request.push_str(&line);
-                if line == "\r\n" {
-                    break;
-                }
-            }
-            let mut request_body = vec![0; content_length];
-            reader
-                .read_exact(&mut request_body)
-                .expect("read request body");
-            request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+            let request = read_http_request(&stream);
             assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
             assert!(!request.to_ascii_lowercase().contains("authorization:"));
             assert!(request.contains(&expected_body));
@@ -1234,28 +1218,7 @@ mod tests {
                 ),
             ] {
                 let (mut stream, _) = listener.accept().expect("accept request");
-                let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
-                let mut request = String::new();
-                let mut content_length = 0;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).expect("read request header");
-                    assert!(!line.is_empty(), "request ended before its headers");
-                    if let Some((name, value)) = line.split_once(':') {
-                        if name.eq_ignore_ascii_case("content-length") {
-                            content_length = value.trim().parse().expect("numeric content length");
-                        }
-                    }
-                    request.push_str(&line);
-                    if line == "\r\n" {
-                        break;
-                    }
-                }
-                let mut request_body = vec![0; content_length];
-                reader
-                    .read_exact(&mut request_body)
-                    .expect("read request body");
-                request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+                let request = read_http_request(&stream);
                 assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
                 if path.ends_with("/scoped") {
                     assert!(request.contains(r#""grant":{"actions":"*","projects":"*"}"#));

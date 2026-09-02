@@ -314,10 +314,11 @@ export async function sessionGrantsFor(
 	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<{ attach: boolean; stop: boolean; surface: boolean }> {
 	const resource = { kind: 'session' as const, project, session, notebookLabels };
+	const authz = authorizationService(deps);
 	const decisions = await Promise.all([
-		authorizationService(deps).authorize(subject, 'session.attach', resource),
-		authorizationService(deps).authorize(subject, 'session.stop', resource),
-		authorizationService(deps).authorize(subject, 'session.surface', resource),
+		authz.authorize(subject, 'session.attach', resource),
+		authz.authorize(subject, 'session.stop', resource),
+		authz.authorize(subject, 'session.surface', resource),
 	]);
 	return {
 		attach: decisions[0].allowed,
