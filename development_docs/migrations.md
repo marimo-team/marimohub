@@ -63,6 +63,15 @@ remains a `z.looseObject`, so an old replica preserves this field during a CAS
 read-modify-write. New replicas treat an absent map as a session with no started
 secondary surfaces. No stored-data migration is required.
 
+Project and notebook snapshot entries may carry a `security_labels` projection —
+labels, `null` for known unlabeled, or absent for indeterminate — plus a
+transient `security_labels_pending` marker while a label mutation is in flight.
+Both ride through an old replica's read-modify-write unchanged (`looseObject`).
+A new replica treats an absent projection as indeterminate and resolves it from
+the authoritative `project.json` / `meta.json` (failing closed if that read
+fails), so a mixed-version rollout never widens access; the next routine
+projection write repairs the state. No stored-data migration is required.
+
 Lazy/fan-out migration handles the **old data → new code** direction. The
 dangerous direction during a rolling deploy is the opposite one: a **new-version
 replica writes an object an old-version replica then reads, mutates, and

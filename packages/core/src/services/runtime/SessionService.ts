@@ -1,7 +1,7 @@
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT } from '../../constants';
 import type { EditorSandboxSharing, SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
@@ -277,7 +277,7 @@ export class SessionService {
 					...session.surfaces,
 					marimo: {
 						status: 'ready',
-						port: 2718,
+						port: MARIMO_PORT,
 						url: sandboxUrl,
 						started_at: new Date().toISOString(),
 					},

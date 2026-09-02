@@ -40,7 +40,11 @@ export {
 	MAX_WORKSPACE_SEARCH_RESULTS,
 	NotebookWorkspaceService,
 } from './content/NotebookWorkspaceService';
-export type { WorkspaceFileItem, WorkspaceListResult } from './content/NotebookWorkspaceService';
+export type {
+	WorkspaceFileItem,
+	WorkspaceListResult,
+	WorkspaceMutationOptions,
+} from './content/NotebookWorkspaceService';
 export {
 	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
 	DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS,
@@ -101,7 +105,11 @@ export type {
 	IntegrationQueryGate,
 	IntegrationsStoreOptions,
 } from './integrations/ProjectIntegrationsStore';
-export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
+export type {
+	IntegrationTestOptions,
+	OrgIntegrationsService,
+	ProjectIntegrationsService,
+} from './integrations/contracts';
 export {
 	assertValidDataQuerySql,
 	DataQueryService,

@@ -227,6 +227,49 @@ describe('makeCompute fail-fast', () => {
 		});
 	});
 
+	it('rejects a public hostname template under kubernetes proxy exposure', () => {
+		for (const template of ['https://{id}.{host}', 'http://{name}.{namespace}/{token}']) {
+			const error = getConfigError(() =>
+				makeCompute(
+					{
+						MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+						MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: template,
+					},
+					{ sandboxExposureMode: 'proxy' },
+				),
+			);
+			expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
+			expect(error.message).toContain(template);
+			expect(error.opts.remediation).toContain('{name}.{namespace}');
+		}
+	});
+
+	it('keeps in-cluster hostname templates under kubernetes proxy exposure', () => {
+		const template = 'http://{name}.{namespace}.svc:{port}';
+		expect(
+			configOf(
+				makeCompute(
+					{
+						MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+						MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: template,
+					},
+					{ sandboxExposureMode: 'proxy' },
+				),
+			),
+		).toMatchObject({ exposureMode: 'proxy', hostnameTemplate: template });
+		expect(
+			configOf(
+				makeCompute(
+					{
+						MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+						MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'https://{id}.{host}',
+					},
+					{ sandboxExposureMode: 'subdomain' },
+				),
+			),
+		).toMatchObject({ hostnameTemplate: 'https://{id}.{host}' });
+	});
+
 	it('rejects an invalid kubernetes image pull policy', () => {
 		expect(() =>
 			makeCompute({

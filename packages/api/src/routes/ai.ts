@@ -73,10 +73,13 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 		const headers: Record<string, string> = { 'content-type': 'application/json' };
 		if (ai.upstreamApiKey) headers.authorization = `Bearer ${ai.upstreamApiKey}`;
 		if (ai.upstreamProject) headers['openai-project'] = ai.upstreamProject;
+		// The client's abort must reach the upstream: a cancelled completion
+		// otherwise keeps generating (and billing) to the end of the stream.
 		const res = await proxy(`${ai.upstreamBaseUrl}${path}`, {
 			method: 'POST',
 			headers,
 			body: JSON.stringify(payload),
+			signal: c.req.raw.signal,
 			customFetch: ai.upstreamFetch,
 		});
 		logEvent({

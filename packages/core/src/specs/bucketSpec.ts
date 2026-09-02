@@ -33,6 +33,7 @@ import {
 	TokenSchema,
 	VersionSchema,
 	VersionPruneCutoffSchema,
+	WorkspaceMutationClaimSchema,
 } from '../schema';
 
 // Placeholder ids threaded through the real `paths` builders, so the templates
@@ -259,6 +260,15 @@ const OBJECTS: BucketObject[] = [
 		mutability: 'cas',
 		owner: 'SessionService',
 		tag: 'session',
+	},
+	{
+		name: 'WorkspaceMutationClaim',
+		key: paths.project(PID).notebook(NID).workspaceMutationClaim,
+		schema: WorkspaceMutationClaimSchema,
+		summary: 'Short-lived lease serializing workspace file mutations for one notebook.',
+		mutability: 'cas',
+		owner: 'NotebookWorkspaceService',
+		tag: 'notebook',
 	},
 	{
 		name: 'Identity',

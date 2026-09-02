@@ -10,6 +10,23 @@ const aiEnv = {
 	MARIMOHUB_AI_MODEL: 'gpt-4o-mini',
 };
 
+const bedrockEnv = {
+	MARIMOHUB_AI_BACKEND: 'bedrock',
+	MARIMOHUB_AUTH_SESSION_SECRET: 'secret',
+	MARIMOHUB_AI_AWS_REGION: 'eu-west-1',
+	MARIMOHUB_AI_MODEL: 'eu.anthropic.claude-opus-4-7',
+};
+
+function getConfigError(run: () => unknown): ConfigError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(ConfigError);
+		return error as ConfigError;
+	}
+	throw new Error('Expected configuration to fail');
+}
+
 describe('makeAi', () => {
 	it('selects SQL generation instructions from the advertised dialect', () => {
 		expect(sqlGenerationInstructions('duckdb')).toContain('generate DuckDB SQL');
@@ -63,6 +80,59 @@ describe('makeAi', () => {
 				MARIMOHUB_AI_MODEL: 'model',
 			}),
 		).toThrow(/MARIMOHUB_AI_AWS_REGION/);
+	});
+
+	it('falls back to AWS_REGION when MARIMOHUB_AI_AWS_REGION is explicitly empty', () => {
+		const { ai } = makeAi({
+			...bedrockEnv,
+			MARIMOHUB_AI_AWS_REGION: '',
+			AWS_REGION: 'us-gov-west-1',
+		});
+		expect(ai?.upstreamBaseUrl).toBe(
+			'https://bedrock-runtime.us-gov-west-1.amazonaws.com/openai/v1',
+		);
+	});
+
+	it.each(['EU-WEST-1', 'eu-west', 'eu-west-1.amazonaws.com', 'euwest1'])(
+		'rejects a malformed Bedrock region %s',
+		(region) => {
+			const error = getConfigError(() =>
+				makeAi({ ...bedrockEnv, MARIMOHUB_AI_AWS_REGION: region }),
+			);
+			expect(error.message).toMatch(/Invalid MARIMOHUB_AI_AWS_REGION/);
+			expect(error.opts.variable).toBe('MARIMOHUB_AI_AWS_REGION');
+		},
+	);
+
+	it('names the fallback variable when it carries the malformed region', () => {
+		const error = getConfigError(() =>
+			makeAi({ ...bedrockEnv, MARIMOHUB_AI_AWS_REGION: undefined, AWS_DEFAULT_REGION: 'nope' }),
+		);
+		expect(error.message).toMatch(/Invalid AWS_DEFAULT_REGION: nope/);
+		expect(error.opts.variable).toBe('AWS_DEFAULT_REGION');
+	});
+
+	it.each([
+		'MARIMOHUB_AI_UPSTREAM_BASE_URL',
+		'MARIMOHUB_AI_UPSTREAM_API_KEY',
+		'MARIMOHUB_AI_UPSTREAM_PROJECT',
+	])('fails closed when %s is set alongside the Bedrock backend', (key) => {
+		const error = getConfigError(() => makeAi({ ...bedrockEnv, [key]: 'leftover' }));
+		expect(error.message).toContain(`${key} is set with MARIMOHUB_AI_BACKEND=bedrock`);
+		expect(error.opts.variable).toBe(key);
+		expect(error.opts.remediation).toContain('openai-compatible');
+	});
+
+	it('treats a blank upstream var as unset under Bedrock', () => {
+		expect(() => makeAi({ ...bedrockEnv, MARIMOHUB_AI_UPSTREAM_API_KEY: ' ' })).not.toThrow();
+	});
+
+	it('lets an explicit allowlist override the Bedrock default-model-only restriction', () => {
+		const { ai } = makeAi({
+			...bedrockEnv,
+			MARIMOHUB_AI_ALLOWED_MODELS: 'eu.anthropic.claude-opus-4-7, eu.amazon.nova-pro-v1:0',
+		});
+		expect(ai?.allowedModels).toEqual(['eu.anthropic.claude-opus-4-7', 'eu.amazon.nova-pro-v1:0']);
 	});
 
 	it('leaves the token TTL undefined when unset (mint falls back to its default)', () => {

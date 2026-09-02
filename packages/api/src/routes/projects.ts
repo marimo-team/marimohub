@@ -1,9 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ASSIGNABLE_ROLES,
-	canCreateProject,
 	effectiveRole,
-	ForbiddenError,
 	isMonotonicRestrictionIncrease,
 	notificationRouter,
 	ProjectId,
@@ -22,6 +20,7 @@ import type {
 	Role,
 } from '@marimo-hub/core';
 import {
+	assertDeploymentAction,
 	assertProjectActionOn,
 	assertProjectRole,
 	assertSessionAuthenticated,
@@ -240,7 +239,11 @@ const setSecurityLabels = createRoute({
 		'— no project role grants label authority — and the deployment must have resource security ' +
 		'configured. Labels only add restrictions on top of role checks.',
 	security: SESSION_ONLY_SECURITY,
-	request: { params: ProjectIdParam, body: jsonBody(SecurityLabelsBodySchema) },
+	request: {
+		params: ProjectIdParam,
+		headers: IfMatchHeader,
+		body: jsonBody(SecurityLabelsBodySchema),
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: ProjectResponseSchema }),
@@ -248,7 +251,7 @@ const setSecurityLabels = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 412),
 	},
 });
 
@@ -259,7 +262,7 @@ const clearSecurityLabels = createRoute({
 	tags: ['Projects'],
 	summary: 'Remove project security labels',
 	security: SESSION_ONLY_SECURITY,
-	request: { params: ProjectIdParam },
+	request: { params: ProjectIdParam, headers: IfMatchHeader },
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: ProjectResponseSchema }),
@@ -267,7 +270,7 @@ const clearSecurityLabels = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 412),
 	},
 });
 
@@ -368,9 +371,12 @@ app.openapi(listProjects, async (c) => {
 app.openapi(createProject, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	if (!canCreateProject(user, deps.policy)) {
-		throw new ForbiddenError('Project creation is restricted to authorized users');
-	}
+	await assertDeploymentAction(
+		user,
+		'project.create',
+		deps,
+		'Project creation is restricted to authorized users',
+	);
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(c, 'POST /projects', async () => {
 		const project = await deps.services.projects.createProject(body, user.id);
@@ -433,7 +439,7 @@ async function mutateSecurityLabels(
 				? 'security-labels.raise'
 				: 'security-labels.lower';
 	await assertProjectActionOn(project, user, action, deps);
-	const updated = await projects.setSecurityLabels(pid, labels, user.id);
+	const updated = await projects.setSecurityLabels(pid, labels, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(updated.updated_at));
 	return c.json({ success: true, data: projectResponse(updated, user, deps.policy) }, 200);
 }

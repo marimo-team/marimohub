@@ -3,13 +3,12 @@ import { ConflictError, NotFoundError, PreconditionFailedError } from '../../err
 import { createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
-import { ACTOR, setupTestEnv } from '../../testing';
+import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { IdentityService } from '../identity/IdentityService';
 import type { NotebookService } from './NotebookService';
 import { EventService } from '../catalog/EventService';
-import { LocalResourceConstraintPolicy } from '../authorization/LocalResourceConstraintPolicy';
 import { claimInviteRows, ProjectService } from './ProjectService';
 import { listAllKeys } from '../catalog/storage';
 
@@ -1020,24 +1019,14 @@ describe('ProjectService security labels', () => {
 	});
 
 	const LABELS = { classification: 'SECRET', compartments: ['element-b', 'element-a'] };
-	const CONTEXT = {
-		schemaVersion: 1 as const,
-		classification: 'SECRET',
-		compartments: ['element-a', 'element-b'],
-		policyVersion: 'policy-1',
-		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-	};
+	const CONTEXT = makeSubjectContext();
 	const SUBJECT = {
 		id: ACTOR,
 		email: `${ACTOR}@example.com`,
 		credential: { kind: 'sso' as const },
 	};
-	const security = (context = CONTEXT) => ({
-		constraints: new LocalResourceConstraintPolicy({
-			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-		}),
-		subjectContext: { resolve: async () => context },
-	});
+	const security = (context = CONTEXT) =>
+		localResourceSecurity(['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'], context);
 
 	async function recentEvents() {
 		const events = new EventService(bucket);

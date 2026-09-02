@@ -348,16 +348,27 @@ function adapterContext(env: Env, kind: AdapterKind): AdapterFactoryContext {
 }
 
 /**
- * Load and validate a trusted OIDC login-policy module. Unlike storage/compute
- * factories, its context is only the environment record: the module maps
- * validated claims to a bounded decision and needs no wired services.
+ * Load and validate a trusted single-method adapter (login policy, subject
+ * context). Unlike storage/compute factories, its context is only the
+ * environment record: the module maps bounded input to a bounded result and
+ * needs no wired services.
  */
-async function loadOidcLoginPolicyLibrary(env: Env, specifier: string): Promise<OidcLoginPolicy> {
-	const kind = 'oidc-login-policy';
+async function loadMethodAdapter<T>(
+	kind: 'oidc-login-policy' | 'subject-security-context',
+	env: Env,
+	specifier: string,
+	contract: {
+		guard: (value: unknown) => value is T;
+		/** The noun in shape-failure remediation ("policy object", "provider object"). */
+		noun: string;
+		method: string;
+		remediation: string;
+	},
+): Promise<T> {
 	const manifest = await importLibraryManifest(kind, specifier);
-	let policy: unknown;
+	let adapter: unknown;
 	try {
-		policy = await manifest.create({ env });
+		adapter = await manifest.create({ env });
 	} catch (error) {
 		throw adapterConfigError(
 			kind,
@@ -365,62 +376,42 @@ async function loadOidcLoginPolicyLibrary(env: Env, specifier: string): Promise<
 		);
 	}
 	try {
-		if (isOidcLoginPolicy(policy)) return policy;
+		if (contract.guard(adapter)) return adapter;
 	} catch (error) {
 		throw adapterConfigError(
 			kind,
 			`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" could not be validated: ${errorMessage(error)}`,
-			{
-				remediation: 'Return a plain policy object whose properties can be read safely.',
-			},
+			{ remediation: `Return a plain ${contract.noun} whose properties can be read safely.` },
 		);
 	}
 	throw adapterConfigError(
 		kind,
-		`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable evaluate method`,
-		{
-			remediation:
-				'Return an object with evaluate(input) from create(); see the OIDC login-policy contract in @marimo-hub/auth-oidc.',
-		},
+		`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable ${contract.method} method`,
+		{ remediation: contract.remediation },
 	);
 }
 
-/**
- * Load and validate a trusted subject-security-context provider. Like the
- * login-policy kind, its factory context is only the environment record.
- */
-async function loadSubjectContextLibrary(
+function loadOidcLoginPolicyLibrary(env: Env, specifier: string): Promise<OidcLoginPolicy> {
+	return loadMethodAdapter('oidc-login-policy', env, specifier, {
+		guard: isOidcLoginPolicy,
+		noun: 'policy object',
+		method: 'evaluate',
+		remediation:
+			'Return an object with evaluate(input) from create(); see the OIDC login-policy contract in @marimo-hub/auth-oidc.',
+	});
+}
+
+function loadSubjectContextLibrary(
 	env: Env,
 	specifier: string,
 ): Promise<SubjectSecurityContextProvider> {
-	const kind = 'subject-security-context';
-	const manifest = await importLibraryManifest(kind, specifier);
-	let provider: unknown;
-	try {
-		provider = await manifest.create({ env });
-	} catch (error) {
-		throw adapterConfigError(
-			kind,
-			`${LIBRARY_CONFIG[kind].label} adapter library "${specifier}" failed to initialize: ${errorMessage(error)}`,
-		);
-	}
-	try {
-		if (isSubjectSecurityContextProvider(provider)) return provider;
-	} catch (error) {
-		throw adapterConfigError(
-			kind,
-			`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" could not be validated: ${errorMessage(error)}`,
-			{ remediation: 'Return a plain provider object whose properties can be read safely.' },
-		);
-	}
-	throw adapterConfigError(
-		kind,
-		`${LIBRARY_CONFIG[kind].label} adapter from "${specifier}" is missing a callable resolve method`,
-		{
-			remediation:
-				'Return an object with resolve(principal, signal) from create(); see the SubjectSecurityContextProvider port.',
-		},
-	);
+	return loadMethodAdapter('subject-security-context', env, specifier, {
+		guard: isSubjectSecurityContextProvider,
+		noun: 'provider object',
+		method: 'resolve',
+		remediation:
+			'Return an object with resolve(principal, signal) from create(); see the SubjectSecurityContextProvider port.',
+	});
 }
 
 function requiredLibrarySpecifier(env: Env, kind: AdapterKind): string {

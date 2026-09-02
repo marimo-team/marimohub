@@ -59,6 +59,8 @@ stop the sandbox. For Modal, the adapter sets the provider-side idle timeout to
 - `proxy`: kernel traffic is forwarded through the app origin.
 
 See [Security -> Kernel exposure](./security.md#kernel-exposure) for the trust
+model.
+
 OpenCode supports only `subdomain` exposure. Configuration fails when OpenCode
 and `proxy` mode are both enabled.
 

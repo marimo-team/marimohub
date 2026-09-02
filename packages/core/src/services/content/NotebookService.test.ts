@@ -11,8 +11,7 @@ import {
 import { createNotebookId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
-import { LocalResourceConstraintPolicy } from '../authorization/LocalResourceConstraintPolicy';
-import { ACTOR, setupTestEnv } from '../../testing';
+import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
@@ -2257,24 +2256,14 @@ describe('NotebookService security labels', () => {
 	});
 
 	const LABELS = { classification: 'SECRET', compartments: ['element-b', 'element-a'] };
-	const CONTEXT = {
-		schemaVersion: 1 as const,
-		classification: 'SECRET',
-		compartments: ['element-a', 'element-b'],
-		policyVersion: 'policy-1',
-		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-	};
+	const CONTEXT = makeSubjectContext();
 	const SUBJECT = {
 		id: ACTOR,
 		email: `${ACTOR}@example.com`,
 		credential: { kind: 'sso' as const },
 	};
-	const security = (context = CONTEXT) => ({
-		constraints: new LocalResourceConstraintPolicy({
-			classificationOrder: ['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'],
-		}),
-		subjectContext: { resolve: async () => context },
-	});
+	const security = (context = CONTEXT) =>
+		localResourceSecurity(['UNCLASSIFIED', 'CUI', 'SECRET', 'TOP_SECRET'], context);
 
 	async function createLabeled() {
 		const meta = await notebooks.createNotebook(

@@ -116,7 +116,8 @@ API key. Project configuration and bring-your-own-key providers can override it.
   server privileges — load only pinned, reviewed modules, identical on every
   replica. The host fails closed on module load errors, timeouts, exceptions,
   and out-of-contract results, and accepts only an allow/deny decision plus the
-  built-in entitlements. The host keeps raw provider claims out of cookies,
+  built-in entitlements (`project-creator` only matters under
+  `MARIMOHUB_PROJECT_CREATION=restricted`). The host keeps raw provider claims out of cookies,
   storage, logs, and client errors — but the module sees every claim and could
   log or persist them itself, so require and review that policy code does
   neither. Policy sessions expire within one hour. The module
@@ -151,9 +152,13 @@ provider resolves this context at request time, never from raw login claims.
 A request with a missing, expired, or invalid context fails closed. The API
 returns 404. Super admins do not bypass labels.
 
-Lists filter labels before pagination. Sessions and kernel proxies use the
-earlier of the credential and subject-context expiry. Label changes require
-super-admin standing and record the old and new labels in the audit log.
+Lists filter labels before pagination. Sessions and kernel proxies are bounded
+by the earlier of the entitlement expiry and the subject-context expiry
+(`authorization_expires_at`); the credential's own lifetime is not consulted.
+Each subject-context resolution and constraint evaluation has a fixed 5-second
+deadline; a timeout denies like any other failure and emits an operator event.
+Label changes require super-admin standing and record the old and new labels in
+the audit log.
 
 Known limits:
 
@@ -162,6 +167,9 @@ Known limits:
 - Deployment-wide sandbox storage credentials can cross project boundaries.
   Use scoped credentials (WIF) or non-persistent workspaces.
 
+Project creation is open to every authenticated user unless
+`MARIMOHUB_PROJECT_CREATION=restricted` (or `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS`)
+limits it to super admins and holders of the `project-creator` entitlement.
 Project reads require an effective `viewer` role, obtained through ownership,
 membership, or `MARIMOHUB_DEFAULT_ROLE`. Non-members cannot see a project when
 the default role is `none`. Notebook writes require `editor` or higher against
@@ -182,6 +190,30 @@ Persistent editor access also depends on the
 Use `exclusive` when a sandbox contains user-specific files or settings. Use
 `shared` only when every project editor is trusted with the sandbox's process,
 files, environment, secrets, and credentials.
+
+### Applying labels
+
+Super admins set and clear labels through four endpoints, from a browser
+session only (personal access tokens are refused):
+
+- `PUT` / `DELETE /api/v1/projects/{pid}/security-labels`
+- `PUT` / `DELETE /api/v1/projects/{pid}/notebooks/{nid}/security-labels`
+
+Prerequisites: the caller holds super-admin standing (`MARIMOHUB_SUPER_ADMINS`
+or the `super-admin` entitlement), and the deployment sets
+`MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER`. Without an evaluator a `PUT` is rejected
+as a validation error, because labels nobody can satisfy would lock the resource
+for everyone.
+
+Every mutation needs super-admin standing and, on an already-labeled resource,
+a subject context that satisfies its current labels: an admin outside a
+compartment cannot relax a label to gain visibility. Adding labels, or raising
+them to a compartment superset with the same classification, is a **raise**;
+anything else — clearing labels, changing the classification, dropping a
+compartment — is a **lower**, a separately audited action. A notebook override
+is evaluated in addition to the project labels, so it can only add
+restrictions. The responses carry an `ETag`; send it back as `If-Match` to
+reject a concurrent change with `412`.
 
 ## Request safety
 

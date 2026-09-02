@@ -354,7 +354,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_SURFACE_VSCODE_FLAVOR',
 						name: 'VS Code flavor',
-						description: 'Browser editor implementation (`code-server` or `openvscode`).',
+						description:
+							'Browser editor implementation (`code-server` or `openvscode`). `openvscode` is experimental: no published sandbox image ships it, and selecting it logs a warning at boot.',
 						default: 'code-server',
 						optIn: true,
 					},
@@ -397,13 +398,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH',
-						name: 'Watch VS Code edits in marimo',
-						description: 'Pass `--watch` to marimo edit when the VS Code surface is enabled.',
-						default: 'true',
-						optIn: true,
-					},
-					{
 						id: 'MARIMOHUB_SURFACE_OPENCODE_START',
 						name: 'OpenCode start policy',
 						description: 'Start OpenCode on demand or with every authorized edit session.',
@@ -423,13 +417,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'OpenCode presentation',
 						description: 'Open OpenCode in an application tab or split view (`tab` or `iframe`).',
 						default: 'tab',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH',
-						name: 'Watch OpenCode edits in marimo',
-						description: 'Pass `--watch` to marimo edit when OpenCode is enabled.',
-						default: 'true',
 						optIn: true,
 					},
 				],
@@ -477,7 +464,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
 						name: 'CoreWeave kernel Ingress namespace',
 						description:
-							"Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. Omit on runners that publish `public` kernel services themselves.",
+							"Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. The Ingress carries no `tls` block or annotations, so Traefik must serve it from its default TLSStore (a wildcard certificate for the sandbox hostname). Omit on runners that publish `public` kernel services themselves.",
 						example: 'org-ns-ab12cd',
 						optIn: true,
 					},
@@ -485,8 +472,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS',
 						name: 'CoreWeave kernel Ingress class',
 						description:
-							'IngressClass for hub-published kernel Ingresses. Only meaningful with `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` (rejected at boot without it).',
-						default: 'traefik (with the ingress namespace)',
+							'IngressClass for hub-published kernel Ingresses. Only meaningful with `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` (rejected at boot without it); the default applies once that namespace is set.',
+						default: 'traefik',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID',
@@ -1031,7 +1019,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS',
 						name: 'Project creation groups',
 						description:
-							'Exact comma-separated group IDs permitted to create projects. Unset allows all authenticated users. An empty value allows only super admins.',
+							'Exact comma-separated group IDs permitted to create projects. Setting it (even empty) restricts creation like `MARIMOHUB_PROJECT_CREATION=restricted`: unset allows all authenticated users, an empty value allows only super admins.',
 						optIn: true,
 					},
 					{
@@ -1064,7 +1052,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
 						name: 'Login-policy backend',
 						description:
-							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables.',
+							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
 						example: 'library',
 						optIn: true,
 					},
@@ -1292,6 +1280,18 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'admin@example.com,user_01HXY00000000000000000000',
 					},
 					{
+						id: 'MARIMOHUB_PROJECT_CREATION',
+						name: 'Project creation',
+						description:
+							'Who may create projects (open | restricted). `open` lets every authenticated user ' +
+							'create projects. `restricted` allows only super admins and holders of the ' +
+							'`project-creator` entitlement (from an OIDC group mapping or login-policy module), ' +
+							'on any auth backend. Setting `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` implies ' +
+							'`restricted`; combining it with `open` is a configuration error.',
+						example: 'restricted',
+						default: 'open',
+					},
+					{
 						id: 'MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER',
 						name: 'Classification order',
 						description:
@@ -1307,7 +1307,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Set `library` to load a trusted subject-context provider. The provider resolves ' +
 							'clearance and compartments for each principal. A classification order is required. ' +
-							'Without a provider, all labeled resources are denied.',
+							'`none` (or unset) runs without a provider, so all labeled resources are denied.',
 						example: 'library',
 						optIn: true,
 					},
@@ -1519,7 +1519,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'eu-west-1',
 						required: true,
 					},
-					AI_MODEL,
+					{ ...AI_MODEL, example: 'eu.anthropic.claude-opus-4-7' },
 					AI_ALLOWED_MODELS,
 					AI_MAX_TOKENS,
 					AI_RULES,
@@ -1822,7 +1822,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT',
 						name: 'PostgreSQL insecure transport',
 						description:
-							'Allows PostgreSQL TLS modes that do not verify both the CA and hostname: `disable`, `prefer`, and `require`. Disabled by default.',
+							'Allows PostgreSQL TLS modes that do not verify both the CA and hostname: `disable`, `prefer`, and `require`. Gates connection tests as well as browsing and Run SQL. Disabled by default.',
 						default: 'off',
 					},
 					{

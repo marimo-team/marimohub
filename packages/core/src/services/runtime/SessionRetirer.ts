@@ -9,7 +9,7 @@ import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { sessionPersistsEdits } from './sessionState';
 import type { SessionService, TakeoverDrainStage } from './SessionService';
-import { shellQuote } from './shell';
+import { stopSurfaceProcessCommand, surfaceCancelFile, surfacePidFile } from './surfaces/state';
 import type { SurfaceId } from './surfaces/types';
 
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
@@ -368,13 +368,13 @@ export class SessionRetirer {
 		const fenced = await this.deps.sessions.getSession(session.project_id, session.session_id);
 		await Promise.all(
 			surfaces.map(async ([id]) => {
-				const userDataDir = `/tmp/.marimohub/surfaces/${session.session_id}/${id}`;
-				const pidFile = `${userDataDir}/surface.pid`;
+				const surface = id as SurfaceId;
 				const cancelledAttemptId = fenced.surfaces?.[id]?.cancelled_attempt_id;
-				const stop = `if test ! -f ${shellQuote(pidFile)}; then exit 0; fi; pid="$(cat ${shellQuote(pidFile)})"; case "$pid" in ''|*[!0-9]*) exit 1;; esac; kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 10; do sleep 0.5; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; sleep 0.1; kill -0 "$pid" 2>/dev/null && exit 1; rm -f ${shellQuote(pidFile)}`;
-				const command = cancelledAttemptId
-					? `mkdir -p ${shellQuote(userDataDir)} && touch ${shellQuote(`${userDataDir}/cancel-${cancelledAttemptId}`)} && { ${stop}; }`
-					: stop;
+				const command = stopSurfaceProcessCommand(surfacePidFile(session.session_id, surface), {
+					cancelFile: cancelledAttemptId
+						? surfaceCancelFile(session.session_id, surface, cancelledAttemptId)
+						: undefined,
+				});
 				const result = await sandbox.exec(command, { timeout: 10_000 });
 				if (!result.success) throw new Error(`Failed to stop ${id} before session retirement`);
 			}),

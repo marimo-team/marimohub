@@ -27,18 +27,18 @@ managed AI is injected into **every** session deployment-wide.
 
 The full set of variables:
 
-| Variable                         | Required | Description                                                                                                          |
-| -------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| `MARIMOHUB_AI_BACKEND`           | —        | `none` (default), `bedrock`, or `openai-compatible`.                                                                 |
-| `MARIMOHUB_AI_AWS_REGION`        | Bedrock  | AWS region for Bedrock. Falls back to `AWS_REGION` or `AWS_DEFAULT_REGION`.                                          |
-| `MARIMOHUB_AI_UPSTREAM_BASE_URL` | API key  | Upstream OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`. The proxy POSTs to `<base>/chat/completions`. |
-| `MARIMOHUB_AI_UPSTREAM_API_KEY`  | API key  | The real upstream key. Held server-side; never injected into a sandbox.                                              |
-| `MARIMOHUB_AI_MODEL`             | yes      | Default model id surfaced to marimo, e.g. `gpt-4o-mini`.                                                             |
-| `MARIMOHUB_AI_ALLOWED_MODELS`    | no       | Comma-separated allowlist; off-list requests fall back to the default model.                                         |
-| `MARIMOHUB_AI_UPSTREAM_PROJECT`  | no       | Optional `OpenAI-Project` header forwarded upstream (e.g. W&B Inference `entity/project` attribution).               |
-| `MARIMOHUB_AI_MAX_TOKENS`        | no       | `[ai] max_tokens` written into the notebook config.                                                                  |
-| `MARIMOHUB_AI_RULES`             | no       | `[ai] rules` — custom assistant instructions.                                                                        |
-| `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | no       | AI session-token lifetime in seconds (default: `3600`). Shorter lifetimes reduce the revocation window.              |
+| Variable                         | Required | Description                                                                                                                                                                          |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MARIMOHUB_AI_BACKEND`           | —        | `none` (default), `bedrock`, or `openai-compatible`.                                                                                                                                 |
+| `MARIMOHUB_AI_AWS_REGION`        | Bedrock  | AWS region for Bedrock. Falls back to `AWS_REGION` or `AWS_DEFAULT_REGION`.                                                                                                          |
+| `MARIMOHUB_AI_UPSTREAM_BASE_URL` | API key  | Upstream OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`. The proxy POSTs to `<base>/chat/completions`.                                                                 |
+| `MARIMOHUB_AI_UPSTREAM_API_KEY`  | API key  | The real upstream key. Held server-side; never injected into a sandbox.                                                                                                              |
+| `MARIMOHUB_AI_MODEL`             | yes      | Default model id surfaced to marimo, e.g. `gpt-4o-mini`.                                                                                                                             |
+| `MARIMOHUB_AI_ALLOWED_MODELS`    | no       | Comma-separated allowlist; off-list requests fall back to the default model. Unset allows any model on OpenAI-compatible upstreams; on Bedrock it restricts to `MARIMOHUB_AI_MODEL`. |
+| `MARIMOHUB_AI_UPSTREAM_PROJECT`  | no       | Optional `OpenAI-Project` header forwarded upstream (e.g. W&B Inference `entity/project` attribution).                                                                               |
+| `MARIMOHUB_AI_MAX_TOKENS`        | no       | `[ai] max_tokens` written into the notebook config.                                                                                                                                  |
+| `MARIMOHUB_AI_RULES`             | no       | `[ai] rules` — custom assistant instructions.                                                                                                                                        |
+| `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | no       | AI session-token lifetime in seconds (default: `3600`). Shorter lifetimes reduce the revocation window.                                                                              |
 
 Managed AI also requires `MARIMOHUB_AUTH_SESSION_SECRET` — the per-session tokens
 are signed with it (the same secret that signs login cookies).

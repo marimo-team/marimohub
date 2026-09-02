@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { EXPERIMENTS } from './experiments';
 import { CONFIG_SPEC, CONFIG_DOCUMENTED_IDS, CONFIG_VAR_IDS } from './spec';
+import type { ConfigVar } from './spec';
 
 // Files that read the env surface; scanned for MARIMOHUB_*/PORT literals.
 const WIRING_SOURCES = [
@@ -71,12 +72,14 @@ describe('config registry sanity', () => {
 	});
 
 	it('reuses one definition when a variable applies to multiple backends', () => {
-		const definitions = new Map<string, object>();
+		// Only `example` may differ per backend (a Bedrock model id is not an OpenAI one).
+		const shared = ({ example: _example, ...rest }: ConfigVar) => rest;
+		const definitions = new Map<string, ConfigVar>();
 		for (const variable of CONFIG_SPEC.flatMap((group) =>
 			group.backends.flatMap((backend) => backend.vars),
 		)) {
 			const existing = definitions.get(variable.id);
-			if (existing) expect(variable, variable.id).toBe(existing);
+			if (existing) expect(shared(variable), variable.id).toEqual(shared(existing));
 			else definitions.set(variable.id, variable);
 		}
 		expect(sorted(definitions.keys())).toEqual(sorted(CONFIG_VAR_IDS));

@@ -26,6 +26,7 @@ import {
 } from '../../schema';
 import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
+import { filterByLabelConstraints } from '../authorization/labelFilter';
 import type {
 	AuthorizationPolicy,
 	ResourceSecurityPolicy,
@@ -215,24 +216,13 @@ export class NotebookService {
 		// indeterminate (legacy or mutation-in-flight) projections resolved from
 		// the authoritative notebook record, failing closed when unreadable.
 		const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
-		const subject = filter.subject;
-		if (matching.every((entry) => entry.security_labels === null)) {
-			return matching.map(toPublicNotebookEntry);
-		}
-		const states = await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (entry) => {
-			if (entry.security_labels !== undefined) return { labels: entry.security_labels };
-			try {
+		return (
+			await filterByLabelConstraints(authz, filter.subject, matching, (entry) =>
 				// Meta-only read: an unavailable readme/source blob must not hide a
 				// notebook whose label state is perfectly resolvable.
-				return { labels: await this.getSecurityLabels(projectId, entry.id) };
-			} catch {
-				return null;
-			}
-		});
-		const readable = matching.filter((_, i) => states[i] !== null);
-		const labelStates = states.flatMap((state) => (state === null ? [] : [state.labels]));
-		const satisfied = await authz.projectLabelConstraints(subject, labelStates);
-		return readable.filter((_, i) => satisfied[i]).map(toPublicNotebookEntry);
+				this.getSecurityLabels(projectId, entry.id),
+			)
+		).map(toPublicNotebookEntry);
 	}
 
 	async getNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookDetail> {
@@ -490,8 +480,19 @@ export class NotebookService {
 		notebookId: NotebookId,
 		labels: ResourceSecurityLabels | undefined,
 		actor: UserId,
+		expectedVersion?: string,
 	): Promise<NotebookMeta> {
 		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
+		const nb = paths.project(projectId).notebook(notebookId);
+		// A stale precondition is checked BEFORE parking the projection so a
+		// rejected request never leaves the entry indeterminate; the CAS callback
+		// repeats the authoritative check.
+		if (expectedVersion !== undefined) {
+			const metaObj = await this.bucket.get(nb.meta);
+			if (!metaObj) throw new NotFoundError(`Notebook ${notebookId} not found`);
+			const current = await readStored(NotebookMetaSchema, metaObj, nb.meta);
+			assertVersionMatch(current.updated_at, expectedVersion);
+		}
 		// Park the projection at indeterminate AND mark the mutation in flight:
 		// the marker keeps concurrent routine projections from resurrecting the
 		// pre-mutation labels before finalization clears it.
@@ -503,13 +504,13 @@ export class NotebookService {
 			() => ({ security_labels: undefined, security_labels_pending: true }),
 		);
 
-		const nb = paths.project(projectId).notebook(notebookId);
 		let previous: ResourceSecurityLabels | null = null;
 		const updated = await mutateObject(
 			this.bucket,
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
 			(current) => {
+				assertVersionMatch(current.updated_at, expectedVersion);
 				if (current.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${notebookId} not found`);
 				}

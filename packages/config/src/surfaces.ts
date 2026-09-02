@@ -1,23 +1,28 @@
 import type { SandboxConfig } from '@marimo-hub/api';
 import { MARIMO_PORT, SECONDARY_SURFACE_IDS } from '@marimo-hub/core';
-import { parseBool, parseEnumOr, parseIntEnv, parseList } from './env';
+import type { SecondarySurfaceId } from '@marimo-hub/core';
+import { parseEnumOr, parseIntEnv, parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
 const SURFACE_IDS = ['marimo', ...SECONDARY_SURFACE_IDS] as const;
 
-type VscodeConfig = NonNullable<NonNullable<SandboxConfig['surfaces']>['vscode']>;
-type OpenCodeConfig = NonNullable<NonNullable<SandboxConfig['surfaces']>['opencode']>;
+type SurfacesConfig = NonNullable<SandboxConfig['surfaces']>;
+export type SurfaceConfig<K extends SecondarySurfaceId> = NonNullable<SurfacesConfig[K]>;
 
-function surfacePort(env: Env, variable: string, defaultPort: number): number {
-	const port = parseIntEnv(env, variable) ?? defaultPort;
-	if (port < 1 || port > 65_535 || port === MARIMO_PORT) {
-		throw new ConfigError(`Invalid ${variable}: ${port}`, { variable });
-	}
-	return port;
+interface BaseSurfaceConfig {
+	start: 'on-demand' | 'eager';
+	port: number;
+	embed: 'tab' | 'iframe';
 }
 
-function vscodeFromEnv(env: Env, port: number): VscodeConfig {
+interface SurfaceEnv<K extends SecondarySurfaceId> {
+	defaultPort: number;
+	variables: Record<keyof BaseSurfaceConfig, string>;
+	build(base: BaseSurfaceConfig, env: Env): SurfaceConfig<K>;
+}
+
+function vscodeExtrasFromEnv(env: Env) {
 	let settings: Record<string, unknown> = {};
 	if (env.MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON) {
 		try {
@@ -46,41 +51,65 @@ function vscodeFromEnv(env: Env, port: number): VscodeConfig {
 			);
 		}
 	}
-
-	return {
-		flavor: parseEnumOr(
-			env,
-			'MARIMOHUB_SURFACE_VSCODE_FLAVOR',
-			['code-server', 'openvscode'],
-			'code-server',
-		),
-		start: parseEnumOr(env, 'MARIMOHUB_SURFACE_VSCODE_START', ['on-demand', 'eager'], 'on-demand'),
-		port,
-		settings,
-		extensionGallery,
-		embed: parseEnumOr(env, 'MARIMOHUB_SURFACE_VSCODE_EMBED', ['tab', 'iframe'], 'tab'),
-		marimoWatch:
-			env.MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH === undefined
-				? true
-				: parseBool(env, 'MARIMOHUB_SURFACE_VSCODE_MARIMO_WATCH'),
-	};
+	const flavor = parseEnumOr(
+		env,
+		'MARIMOHUB_SURFACE_VSCODE_FLAVOR',
+		['code-server', 'openvscode'],
+		'code-server',
+	);
+	if (flavor === 'openvscode') {
+		console.warn(
+			'[marimohub] MARIMOHUB_SURFACE_VSCODE_FLAVOR=openvscode is experimental: no published marimo-sandbox image ships openvscode-server.',
+		);
+	}
+	return { flavor, settings, extensionGallery };
 }
 
-function openCodeFromEnv(env: Env, port: number): OpenCodeConfig {
-	return {
-		start: parseEnumOr(
-			env,
-			'MARIMOHUB_SURFACE_OPENCODE_START',
-			['on-demand', 'eager'],
-			'on-demand',
-		),
-		port,
-		embed: parseEnumOr(env, 'MARIMOHUB_SURFACE_OPENCODE_EMBED', ['tab', 'iframe'], 'tab'),
-		marimoWatch:
-			env.MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH === undefined
-				? true
-				: parseBool(env, 'MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH'),
+const SURFACE_ENV: { [K in SecondarySurfaceId]: SurfaceEnv<K> } = {
+	vscode: {
+		defaultPort: 8443,
+		variables: {
+			start: 'MARIMOHUB_SURFACE_VSCODE_START',
+			port: 'MARIMOHUB_SURFACE_VSCODE_PORT',
+			embed: 'MARIMOHUB_SURFACE_VSCODE_EMBED',
+		},
+		build: (base, env) => ({ ...base, ...vscodeExtrasFromEnv(env) }),
+	},
+	opencode: {
+		defaultPort: 4096,
+		variables: {
+			start: 'MARIMOHUB_SURFACE_OPENCODE_START',
+			port: 'MARIMOHUB_SURFACE_OPENCODE_PORT',
+			embed: 'MARIMOHUB_SURFACE_OPENCODE_EMBED',
+		},
+		build: (base) => base,
+	},
+};
+
+function surfacePort(env: Env, variable: string, defaultPort: number): number {
+	const port = parseIntEnv(env, variable) ?? defaultPort;
+	if (port < 1 || port > 65_535 || port === MARIMO_PORT) {
+		throw new ConfigError(`Invalid ${variable}: ${port}`, { variable });
+	}
+	return port;
+}
+
+export function surfaceFromEnv<K extends SecondarySurfaceId>(id: K, env: Env): SurfaceConfig<K> {
+	const spec = SURFACE_ENV[id];
+	const base: BaseSurfaceConfig = {
+		start: parseEnumOr(env, spec.variables.start, ['on-demand', 'eager'], 'on-demand'),
+		port: surfacePort(env, spec.variables.port, spec.defaultPort),
+		embed: parseEnumOr(env, spec.variables.embed, ['tab', 'iframe'], 'tab'),
 	};
+	return spec.build(base, env);
+}
+
+function setSurface<K extends SecondarySurfaceId>(
+	surfaces: SurfacesConfig,
+	id: K,
+	config: SurfaceConfig<K>,
+): void {
+	surfaces[id] = config;
 }
 
 export function surfacesFromEnv(env: Env): SandboxConfig['surfaces'] {
@@ -92,24 +121,27 @@ export function surfacesFromEnv(env: Env): SandboxConfig['surfaces'] {
 			});
 		}
 	}
-	if (!SECONDARY_SURFACE_IDS.some((id) => enabled.has(id))) return undefined;
+	const ids = SECONDARY_SURFACE_IDS.filter((id) => enabled.has(id));
+	if (ids.length === 0) return undefined;
 
-	const vscodePort = enabled.has('vscode')
-		? surfacePort(env, 'MARIMOHUB_SURFACE_VSCODE_PORT', 8443)
-		: undefined;
-	const openCodePort = enabled.has('opencode')
-		? surfacePort(env, 'MARIMOHUB_SURFACE_OPENCODE_PORT', 4096)
-		: undefined;
-	if (vscodePort !== undefined && vscodePort === openCodePort) {
-		throw new ConfigError(`VS Code and OpenCode cannot share sandbox port ${vscodePort}`, {
-			variable: 'MARIMOHUB_SURFACES',
-		});
+	const surfaces: SurfacesConfig = {};
+	const portOwners = new Map<number, SecondarySurfaceId>();
+	for (const id of ids) {
+		const config = surfaceFromEnv(id, env);
+		const owner = portOwners.get(config.port);
+		if (owner) {
+			throw new ConfigError(
+				`Surfaces ${owner} and ${id} cannot share sandbox port ${config.port}`,
+				{ variable: 'MARIMOHUB_SURFACES' },
+			);
+		}
+		portOwners.set(config.port, id);
+		setSurface(surfaces, id, config);
 	}
-	const vscode = vscodePort === undefined ? undefined : vscodeFromEnv(env, vscodePort);
-	const opencode = openCodePort === undefined ? undefined : openCodeFromEnv(env, openCodePort);
+	return surfaces;
+}
 
-	return {
-		...(vscode ? { vscode } : {}),
-		...(opencode ? { opencode } : {}),
-	};
+/** Ports of every enabled secondary surface, in registry order. */
+export function surfacePorts(surfaces: SandboxConfig['surfaces']): number[] {
+	return SECONDARY_SURFACE_IDS.flatMap((id) => surfaces?.[id]?.port ?? []);
 }

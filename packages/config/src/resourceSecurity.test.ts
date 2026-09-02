@@ -47,6 +47,31 @@ describe('makeResourceSecurity', () => {
 		expect(error.message).toMatch(/CLASSIFICATION_ORDER/);
 	});
 
+	it('treats MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND=none as unset', () => {
+		expect(
+			makeResourceSecurity({ MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND: 'none' }),
+		).toBeUndefined();
+		const security = makeResourceSecurity({
+			MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER: 'CUI,SECRET',
+			MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND: 'NONE',
+		});
+		expect(security?.constraints).toBeInstanceOf(LocalResourceConstraintPolicy);
+		expect(security?.subjectContext).toBeUndefined();
+	});
+
+	it('still rejects an orphaned module path next to backend=none', () => {
+		for (const env of [{}, { MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER: 'CUI,SECRET' }]) {
+			const error = getConfigError(() =>
+				makeResourceSecurity({
+					...env,
+					MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND: 'none',
+					MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY: '/etc/marimohub/subject-context.mjs',
+				}),
+			);
+			expect(error.opts.variable).toBe('MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY');
+		}
+	});
+
 	it('rejects an unknown subject-context backend', () => {
 		const error = getConfigError(() =>
 			makeResourceSecurity({

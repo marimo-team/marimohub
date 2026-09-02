@@ -8,10 +8,10 @@ A **project manager** can connect a data source once for one project. A
 [super admin](./auth.md#super-admins-marimohub_super_admins) can connect a data
 source for the whole organization. Supported sources include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
-Snowflake, BigQuery, Redshift, MotherDuck, DuckLake), query engines (Trino, Spark Connect,
+Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
 Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
-Blob), remote DuckDB databases, ML platforms (Weights & Biases, Hugging Face), and environment
-variables.
+Blob), remote DuckDB databases and DuckLake catalogs, ML platforms (Weights &
+Biases, Hugging Face), and environment variables.
 
 Each new, non-ephemeral session receives the applicable connection
 configuration as environment variables and files. Notebook code never accesses
@@ -349,6 +349,7 @@ snapshot until the longest possible Run SQL request has ended.
 
 The `ducklake` integration reads one DuckDB metadata catalog and its S3 data files.
 The integration is available only for Run SQL. It does not add files or variables to notebook sessions.
+It has no **Test connection** action. Run a query to verify access.
 
 The pinned DuckDB 1.4.3 extension supports DuckLake specification version `0.3`.
 It does not support automatic migration. Create the metadata catalog with DuckDB 1.4.3.
@@ -1003,6 +1004,9 @@ and CGNAT addresses. It also limits response size, duration, and request rate.
 
 Set `MARIMOHUB_INTEGRATIONS_PROBE=private` for private targets. Set it to `off`
 to disable connection tests.
+
+PostgreSQL connection tests open a native guarded socket instead of an HTTP
+probe. They use the same address policy, deadline, and request rate.
 
 New sessions use configuration changes. Restart a running session to apply them.
 

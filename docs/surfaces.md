@@ -43,16 +43,17 @@ another surface.
 
 The compute adapter must expose multiple ports from one sandbox. The `local`,
 `e2b`, `cloudflare`, and `coreweave` adapters support this feature. Configuration
-fails for other adapters. Docker, Podman, Kubernetes, Modal, and W&B need
-create-time port reservation support.
+fails for other adapters. Docker, Podman, Kubernetes, and Modal need create-time
+port reservation support. W&B runs on the CoreWeave adapter but is not yet wired
+to reserve surface ports.
 
 Port 2718 belongs to marimo. Each secondary surface must use a unique port. If
 an image lacks a required binary, only that surface becomes unavailable.
 
 ## Editing and state
 
-- marimo watches files when either surface requests this behavior. A saved file
-  then reloads in marimo.
+- marimo runs with `--watch` whenever a secondary surface is enabled. A file
+  saved from VS Code or OpenCode then reloads in marimo.
 - VS Code opens the notebook entry path. OpenCode starts in the workspace without
   a notebook path.
 - VS Code autosaves after one second. Concurrent writes use last-writer-wins.
@@ -64,6 +65,31 @@ an image lacks a required binary, only that surface becomes unavailable.
   survive session teardown.
 - Temporary edit sessions can use surfaces. Their changes are discarded with
   the sandbox.
+
+## API
+
+Surfaces are per session. All routes live under
+`/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}`,
+where `surface` is `vscode` or `opencode`.
+
+| Method   | Purpose                                                                    |
+| -------- | -------------------------------------------------------------------------- |
+| `POST`   | Start the surface, or return it when running. Body: `{ "open": "<path>" }` |
+| `GET`    | Read the surface state (`starting`, `ready`, `failed`, ...).               |
+| `DELETE` | Stop the surface. Requires session control.                                |
+
+`open` is a workspace-relative file path; only VS Code accepts it.
+
+`POST` returns `202` with `Retry-After: 1` while the surface is `starting`, and
+`200` once it is `ready`. Poll `GET` until the status leaves `starting`. A
+`ready` surface includes its `url`; a `failed` or `unavailable` surface includes
+`last_error`.
+
+Session create (`POST .../sessions`) accepts a `surfaces` array of surface ids
+to start with the session; only edit sessions may list surfaces. Every session
+response carries `can.surfaces`, one boolean per surface id, so clients render
+the start controls from the caller's evaluated grant instead of re-deriving
+policy.
 
 ## OpenCode AI providers
 

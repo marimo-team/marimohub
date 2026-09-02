@@ -27,9 +27,14 @@ export interface PostgresConnectionCapability {
 
 export type DatabaseSource = PostgresConnectionCapability;
 
+export interface DatabaseTestOptions {
+	/** Cancels the probe when the caller goes away (e.g. the HTTP request aborts). */
+	signal?: AbortSignal;
+}
+
 export interface DatabaseConnectionTester {
 	readonly provider: DatabaseSource['provider'];
-	testConnection(source: DatabaseSource): Promise<TestResult>;
+	testConnection(source: DatabaseSource, options?: DatabaseTestOptions): Promise<TestResult>;
 }
 
 export type DatabaseConnectionTesterRegistry = Partial<

@@ -27,5 +27,8 @@ jobs:
         with:
           version: 0.9.12
           directory: .
-          scope: changed
+          # PRs report only what they introduce; pushes to main scan the whole
+          # project so the project-wide rules (unused-file/export, circular
+          # dependencies) are evaluated in CI too.
+          scope: ${{ github.event_name == 'pull_request' && 'changed' || 'full' }}
           blocking: warning

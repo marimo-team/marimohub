@@ -453,21 +453,27 @@ saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 ### Authentication — `MARIMOHUB_AUTH_*`
 
-| Variable                                               | Purpose                                                                     |
-| ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| `MARIMOHUB_AUTH_BACKEND`                               | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev`                    |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`                           | OIDC issuer URL                                                             |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`                        | OAuth client ID                                                             |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`                    | OAuth client secret (secret)                                                |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`                         | Deprecated and ignored; `aud` must contain client ID                        |
-| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND`             | `library` loads a trusted external login-policy module                      |
-| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY`             | External npm package or ESM file when the login-policy backend is `library` |
-| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS`     | Login-policy evaluation timeout (1–30s, default 5)                          |
-| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS` | Policy-session lifetime (300–3600s, default 3600)                           |
-| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL`                | Fixed identity for the `dev` bypass (local only)                            |
+| Variable                                               | Purpose                                                                        |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `MARIMOHUB_AUTH_BACKEND`                               | `oidc` \| `proxy-header` \| `cloudflare-access` \| `dev`                       |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`                           | OIDC issuer URL                                                                |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`                        | OAuth client ID                                                                |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`                    | OAuth client secret (secret)                                                   |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`                         | Deprecated and ignored; `aud` must contain client ID                           |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND`             | `library` loads a trusted external login-policy module                         |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY`             | External npm package or ESM file when the login-policy backend is `library`    |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS`     | Login-policy evaluation timeout (1–30s, default 5)                             |
+| `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_SESSION_TTL_SECONDS` | Policy-session lifetime (300–3600s, default 3600)                              |
+| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL`                | Fixed identity for the `dev` bypass (local only)                               |
+| `MARIMOHUB_PROJECT_CREATION`                           | `open` (default) \| `restricted`: super admins + `project-creator` entitlement |
+| `MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER`                 | Classification lattice for security labels, lowest to highest                  |
+| `MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND`              | `library` loads a trusted subject-context provider (requires the order)        |
+| `MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY`              | External npm package or ESM file when the subject-context backend is `library` |
 
-> Authorization needs no env vars: roles are data in the notebook storage
-> ([§3.4](#34-authorization-authz)).
+> Roles need no env vars — they are data in the notebook storage
+> ([§3.4](#34-authorization-authz)). The `MARIMOHUB_PROJECT_CREATION` and
+> `MARIMOHUB_AUTHZ_*` variables above configure deployment standing and the
+> deny-only resource-security layer, independent of the auth backend.
 
 > **Cloudflare Worker example** — the `examples/cloudflare-worker` entrypoint
 > reads a flatter set of vars from the Workers runtime binding
@@ -487,10 +493,12 @@ prebuilt artifact (the Worker, or the Docker image). A small `@marimo-hub/config
 package reads the env, selects each adapter from its `*_BACKEND` selector, and
 wires the system together. No code required.
 
-### External adapter library (custom storage, compute, or OIDC login policy)
+### External adapter library (custom storage, compute, OIDC login policy, or subject context)
 
-The Node server can load an external adapter without a custom entrypoint. Select
-`library` and provide an npm package or ESM file:
+The Node server can load an external adapter without a custom entrypoint. Four
+kinds exist — `storage`, `compute`, `oidc-login-policy`, and
+`subject-security-context`. Select `library` and provide an npm package or ESM
+file:
 
 ```sh
 MARIMOHUB_STORAGE_BACKEND=library
@@ -499,6 +507,8 @@ MARIMOHUB_COMPUTE_BACKEND=library
 MARIMOHUB_COMPUTE_LIBRARY=@myorg/marimohub-compute
 MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library   # oidc backend only
 MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY=/etc/marimohub/oidc-login-policy.mjs
+MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND=library    # requires MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER
+MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_LIBRARY=/etc/marimohub/subject-context.mjs
 ```
 
 At startup, the server loads each module once and validates its version and port
@@ -605,7 +615,7 @@ packages/
   notify-smtp/            SMTP notification adapter
   notify-slack/           Slack incoming-webhook notification adapter
   notify-webhook/         signed JSON webhook notification adapter
-  credentials-aws/        AWS credential broker (OIDC federation)
+  credentials-aws/        AWS credential broker (OIDC federation) + SigV4 fetch for the Bedrock AI backend
   credentials-coreweave/  CoreWeave CAIOS credential broker (OIDC federation)
   secrets-aws/            AWS Secrets Manager adapter
   auth-oidc/              generic OIDC adapter

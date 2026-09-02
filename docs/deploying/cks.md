@@ -271,7 +271,9 @@ details, and your own email:
 nodeSelector:
   compute.coreweave.com/node-pool: marimohub-prod
 
-# Grants the hub a Role to create per-kernel Ingresses. Must equal
+# Grants the hub a Role in this namespace with create, delete, and
+# deletecollection on ingresses (teardown deletes by label selector, which
+# Kubernetes authorizes as deletecollection). Must equal
 # MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE below.
 sandboxIngress:
   namespace: org-ns-<ORG-ID>

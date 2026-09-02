@@ -8,12 +8,20 @@ import {
 } from '@marimo-hub/core';
 import type { DataQueryExecution } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
+import { DEFAULT_POSTGRES_RUNTIME_LIMITS } from '@marimo-hub/postgres-runtime/node';
 import { ConfigError } from './errors';
+import type * as integrationProbe from './integrationProbe';
+import { createGuardedHostResolver } from './integrationProbe';
 import {
 	makeIntegrations,
 	objectBrowserDeadlinesFromEnv,
 	objectBrowserLimitsFromEnv,
 } from './integrations';
+
+vi.mock('./integrationProbe', async (importOriginal) => {
+	const actual = await importOriginal<typeof integrationProbe>();
+	return { ...actual, createGuardedHostResolver: vi.fn(actual.createGuardedHostResolver) };
+});
 
 const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password: 'pw' };
 
@@ -631,6 +639,45 @@ describe('makeIntegrations data-browser lockdown', () => {
 			objectBrowser: { allowServerAmbientCredentials: false },
 		});
 		expect(defaulted.dataBrowser?.checkPreview).toBeUndefined();
+	});
+
+	it('shares one guarded resolver between object browsers and the PostgreSQL runtime', () => {
+		const runtimeOptions = (env: Record<string, string>) => {
+			vi.mocked(createGuardedHostResolver).mockClear();
+			const store = (
+				makeIntegrations(env, new MemoryBucket()).integrations as unknown as {
+					store: {
+						databaseTesters: { postgres: { options: Record<string, unknown> } };
+						objectBrowsers?: object;
+					};
+				}
+			).store;
+			return {
+				resolvers: vi.mocked(createGuardedHostResolver).mock.calls,
+				postgres: store.databaseTesters.postgres.options,
+				objectBrowsers: store.objectBrowsers,
+			};
+		};
+
+		const browsing = runtimeOptions({ MARIMOHUB_DATA_BROWSER: 'metadata' });
+		expect(browsing.resolvers).toEqual([[{ allowPrivate: false, timeoutMs: 30_000 }]]);
+		expect(browsing.objectBrowsers).toBeDefined();
+		expect(browsing.postgres).toMatchObject({ mode: 'metadata', metadataTimeoutMs: 30_000 });
+
+		const testerOnly = runtimeOptions({
+			MARIMOHUB_DATA_BROWSER: 'off',
+			MARIMOHUB_INTEGRATIONS_PROBE: 'private',
+		});
+		expect(testerOnly.resolvers).toEqual([
+			[{ allowPrivate: true, timeoutMs: DEFAULT_POSTGRES_RUNTIME_LIMITS.resolveTimeoutMs }],
+		]);
+		expect(testerOnly.objectBrowsers).toEqual({});
+		expect(testerOnly.postgres).toMatchObject({
+			mode: 'metadata',
+			metadataTimeoutMs: DEFAULT_POSTGRES_RUNTIME_LIMITS.metadataTimeoutMs,
+			previewTimeoutMs: DEFAULT_POSTGRES_RUNTIME_LIMITS.previewTimeoutMs,
+			previewMaxBytes: DEFAULT_POSTGRES_RUNTIME_LIMITS.previewMaxBytes,
+		});
 	});
 
 	it('keeps the PostgreSQL runtime preview-disabled in metadata mode', () => {

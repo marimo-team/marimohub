@@ -2,6 +2,7 @@ import type { Bucket } from '../../ports/bucket';
 import { roleAtLeast } from '../../authz';
 import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
+import { filterByLabelConstraints } from '../authorization/labelFilter';
 import type {
 	AuthorizationPolicy,
 	ResourceSecurityPolicy,
@@ -258,37 +259,14 @@ export class ProjectService {
 			);
 			visible = matching.filter((_, i) => visibility[i]);
 		}
-		return (await this.filterBySecurityLabels(authz, filter.subject, visible)).map(
-			toPublicProjectEntry,
-		);
-	}
-
-	/**
-	 * Security-label filter over membership-visible entries. Labels only remove
-	 * entries — super admins get no automatic bypass. Indeterminate label
-	 * states (a legacy entry, or a label mutation in flight) are resolved from
-	 * the authoritative record BEFORE one batch constraint decision, so a page
-	 * never costs one adapter call per entry; an unreadable authoritative
-	 * record fails closed.
-	 */
-	private async filterBySecurityLabels(
-		authz: AuthorizationService,
-		subject: AuthSubject,
-		entries: SnapshotProjectEntry[],
-	): Promise<SnapshotProjectEntry[]> {
-		if (entries.every((entry) => entry.security_labels === null)) return entries;
-		const states = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
-			if (entry.security_labels !== undefined) return { labels: entry.security_labels };
-			try {
-				return { labels: (await this.getProject(entry.id)).security_labels ?? null };
-			} catch {
-				return null;
-			}
-		});
-		const readable = entries.filter((_, i) => states[i] !== null);
-		const labelStates = states.flatMap((state) => (state === null ? [] : [state.labels]));
-		const satisfied = await authz.projectLabelConstraints(subject, labelStates);
-		return readable.filter((_, i) => satisfied[i]);
+		return (
+			await filterByLabelConstraints(
+				authz,
+				filter.subject,
+				visible,
+				async (entry) => (await this.getProject(entry.id)).security_labels ?? null,
+			)
+		).map(toPublicProjectEntry);
 	}
 
 	// Only reached when the fast path above didn't return, i.e. the caller is
@@ -429,9 +407,16 @@ export class ProjectService {
 		id: ProjectId,
 		labels: ResourceSecurityLabels | undefined,
 		actor: UserId,
+		expectedVersion?: string,
 	): Promise<Project> {
 		const key = paths.project(id).meta;
 		const normalized = labels === undefined ? undefined : normalizeSecurityLabels(labels);
+		// A stale precondition is checked BEFORE parking the projection so a
+		// rejected request never leaves the entry indeterminate; the CAS callback
+		// repeats the authoritative check.
+		if (expectedVersion !== undefined) {
+			assertVersionMatch((await this.getProject(id)).updated_at, expectedVersion);
+		}
 
 		// Park the projection at indeterminate AND mark the mutation in flight:
 		// the marker keeps concurrent routine projections from resurrecting the
@@ -450,6 +435,7 @@ export class ProjectService {
 			key,
 			(raw) => parseStored(ProjectSchema, raw, key),
 			(current) => {
+				assertVersionMatch(current.updated_at, expectedVersion);
 				if (current.status === 'deleted') {
 					throw new NotFoundError(`Project ${id} not found`);
 				}

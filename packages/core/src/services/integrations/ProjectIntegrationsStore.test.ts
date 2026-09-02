@@ -2013,7 +2013,44 @@ describe('ProjectIntegrationsStore', () => {
 				database: 'analytics',
 				password: 'database-secret',
 			}),
+			{ signal: undefined },
 		);
+	});
+
+	it('forwards the caller signal to the database adapter and caps tests per minute', async () => {
+		const testConnection = vi.fn(async () => ({ ok: true, details: 'ok' }));
+		let clock = Date.parse('2026-03-01T00:00:00.000Z');
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			probe: stubProbe,
+			now: () => new Date(clock).toISOString(),
+			databaseTesters: { postgres: { provider: 'postgres', testConnection } },
+		});
+		const request = {
+			source: 'draft' as const,
+			kind: 'postgres',
+			config: {
+				host: 'database.example.test',
+				database: 'analytics',
+				username: 'reader',
+				password: 'database-secret',
+			},
+		};
+		const controller = new AbortController();
+
+		await store.test(pid, request, undefined, { signal: controller.signal });
+		expect(testConnection).toHaveBeenLastCalledWith(expect.anything(), {
+			signal: controller.signal,
+		});
+
+		for (let attempt = 1; attempt < 30; attempt++) await store.test(pid, request);
+		await expect(store.test(pid, request)).rejects.toThrow(ResourceExhaustedError);
+		expect(testConnection).toHaveBeenCalledTimes(30);
+
+		clock += 60_001;
+		await expect(store.test(pid, request)).resolves.toMatchObject({ ok: true });
 	});
 });
 

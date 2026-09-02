@@ -12,6 +12,12 @@ import type { SessionService } from '../SessionService';
 import { shellQuote } from '../shell';
 import type { SurfaceContext, SurfaceId, SurfaceSpec } from './types';
 import type { SurfaceRegistry } from './registry';
+import {
+	stopSurfaceProcessCommand,
+	surfaceCancelFile,
+	surfacePidFile,
+	surfaceStateDir,
+} from './state';
 
 export interface EnsureSurfaceOptions {
 	user: AuthUser;
@@ -62,17 +68,6 @@ async function validateOpenInSandbox(
 		{ timeout: 10_000 },
 	);
 	if (!result.success) throw new SurfaceOpenInvalidError('Surface open path escapes the workspace');
-}
-
-function cancellationFile(userDataDir: string, attemptId: string): string {
-	return `${userDataDir}/cancel-${attemptId}`;
-}
-
-function stopProcessCommand(pidFile: string, requirePid = false, cancelFile?: string): string {
-	const cancel = cancelFile
-		? `mkdir -p ${shellQuote(pidFile.slice(0, pidFile.lastIndexOf('/')))} && touch ${shellQuote(cancelFile)} && `
-		: '';
-	return `${cancel}if test ! -f ${shellQuote(pidFile)}; then ${requirePid ? 'exit 1' : 'exit 0'}; fi; pid="$(cat ${shellQuote(pidFile)})"; case "$pid" in ''|*[!0-9]*) exit 1;; esac; kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 10; do sleep 0.5; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; sleep 0.1; kill -0 "$pid" 2>/dev/null && exit 1; rm -f ${shellQuote(pidFile)}`;
 }
 
 function processAliveCommand(pidFile: string): string {
@@ -153,9 +148,9 @@ export class SurfaceManager {
 			editIntent: session.ephemeral ? ('temporary' as const) : ('persistent' as const),
 			exposure: options.exposure,
 			basePath: options.basePath,
-			userDataDir: `/tmp/.marimohub/surfaces/${session.session_id}/${id}`,
+			userDataDir: surfaceStateDir(session.session_id, id),
 		};
-		const pidFile = `${context.userDataDir}/surface.pid`;
+		const pidFile = surfacePidFile(session.session_id, id);
 		const readinessPath = surfaceReadinessPath(spec, context);
 		let begun = await this.sessions.beginSurfaceStart(session.project_id, session.session_id, id);
 		let current = begun.session.surfaces?.[id];
@@ -233,10 +228,12 @@ export class SurfaceManager {
 		} = input;
 		let process: SandboxProcess | undefined;
 		try {
-			const pidFile = `${context.userDataDir}/surface.pid`;
-			const cancelFile = cancellationFile(context.userDataDir, attemptId);
+			const pidFile = surfacePidFile(session.session_id, id);
+			const cancelFile = surfaceCancelFile(session.session_id, id, attemptId);
 			if (cleanupExistingProcess) {
-				const stopped = await instance.exec(stopProcessCommand(pidFile), { timeout: 10_000 });
+				const stopped = await instance.exec(stopSurfaceProcessCommand(pidFile), {
+					timeout: 10_000,
+				});
 				if (!stopped.success) {
 					throw new UnavailableError(`Failed to replace the existing ${id} process`);
 				}
@@ -334,8 +331,7 @@ export class SurfaceManager {
 		this.secondary(id);
 		const current = await this.sessions.getSession(session.project_id, session.session_id);
 		if (!current.sandbox_id) throw new ConflictError('The session has no sandbox');
-		const userDataDir = `/tmp/.marimohub/surfaces/${session.session_id}/${id}`;
-		const pidFile = `${userDataDir}/surface.pid`;
+		const pidFile = surfacePidFile(session.session_id, id);
 		const instance = this.provider.create(current.sandbox_id);
 		const begun = await this.sessions.beginSurfaceStop(session.project_id, session.session_id, id);
 		if (!begun.transitioned) {
@@ -346,11 +342,12 @@ export class SurfaceManager {
 		const cancelledAttemptId = begun.session.surfaces?.[id]?.cancelled_attempt_id;
 		try {
 			const stopped = await instance.exec(
-				stopProcessCommand(
-					pidFile,
-					begun.previousStatus === 'ready',
-					cancelledAttemptId ? cancellationFile(userDataDir, cancelledAttemptId) : undefined,
-				),
+				stopSurfaceProcessCommand(pidFile, {
+					requirePid: begun.previousStatus === 'ready',
+					cancelFile: cancelledAttemptId
+						? surfaceCancelFile(session.session_id, id, cancelledAttemptId)
+						: undefined,
+				}),
 				{ timeout: 10_000 },
 			);
 			if (!stopped.success) throw new Error('stop command failed');

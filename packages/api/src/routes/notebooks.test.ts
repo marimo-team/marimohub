@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
 import {
 	createNotebookId,
@@ -1006,6 +1006,110 @@ describe('Notebook routes', () => {
 			);
 		});
 
+		it('paginates directory listings with an explicit limit', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+			for (const name of ['a.txt', 'b.txt']) {
+				await expectOk(
+					await app.request(
+						`/api/v1${workspace}/files?path=${encodeURIComponent(`/${name}`)}&create=true`,
+						{ method: 'PUT', body: name },
+					),
+				);
+			}
+
+			const first = await expectOk<any>(
+				await request('GET', `${workspace}/entries?path=/&limit=2`),
+			);
+			expect(first.items).toHaveLength(2);
+			expect(first.cursor).toBeTruthy();
+			const rest = await expectOk<any>(
+				await request(
+					'GET',
+					`${workspace}/entries?path=/&limit=2&cursor=${encodeURIComponent(first.cursor)}`,
+				),
+			);
+			expect(rest.items).toHaveLength(2);
+			expect(rest.cursor).toBeUndefined();
+			expect(
+				[...first.items, ...rest.items]
+					.map((item: any) => item.path as string)
+					.sort((a, b) => a.localeCompare(b)),
+			).toEqual(['/a.txt', '/b.txt', '/notebook.py', '/pyproject.toml']);
+			for (const limit of ['0', '501', 'many']) {
+				await expectError(
+					await request('GET', `${workspace}/entries?path=/&limit=${limit}`),
+					422,
+					'VALIDATION_ERROR',
+				);
+			}
+		});
+
+		it('refuses protected source paths as copy and directory targets', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+			await expectOk(
+				await app.request(
+					`/api/v1${workspace}/files?path=${encodeURIComponent('/raw.py')}&create=true`,
+					{ method: 'PUT', body: 'print(2)' },
+				),
+			);
+
+			await expectError(
+				await request('POST', `${workspace}/copy`, { from: '/raw.py', to: '/notebook.py' }),
+				403,
+				'FORBIDDEN',
+			);
+			await expectError(
+				await request('POST', `${workspace}/directories`, { path: '/pyproject.toml' }),
+				403,
+				'FORBIDDEN',
+			);
+			expect((await expectOk<any>(await request('GET', nb(`/${created.id}/content`)))).code).toBe(
+				'print(1)',
+			);
+			expect(await expectPage(await request('GET', nb(`/${created.id}/versions`)))).toHaveLength(1);
+		});
+
+		it('rejects a mutation when an edit session starts after the pre-flight check', async () => {
+			const created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
+				201,
+			);
+			const workspace = nb(`/${created.id}/workspace`);
+			const sessions = services.sessions;
+			const listActive = sessions.listActiveByProject.bind(sessions);
+			let raced = false;
+			vi.spyOn(sessions, 'listActiveByProject').mockImplementation(async (pid) => {
+				const active = await listActive(pid);
+				if (!raced) {
+					raced = true;
+					await sessions.createSession({
+						project_id: projectId,
+						notebook_id: created.id,
+						user_id: ACTOR,
+						mode: 'edit',
+					});
+				}
+				return active;
+			});
+
+			await expectError(
+				await request('POST', `${workspace}/directories`, { path: '/raced' }),
+				409,
+				'CONFLICT',
+			);
+			expect(raced).toBe(true);
+			const root = await expectOk<any>(await request('GET', `${workspace}/entries?path=/`));
+			expect(root.items.map((item: any) => item.path)).not.toContain('/raced');
+		});
+
 		it('returns stable errors for collisions, traversal, and oversized uploads', async () => {
 			const created = await expectOk<any>(
 				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'print(1)' }),
@@ -1108,7 +1212,7 @@ describe('Notebook routes', () => {
 			await expectOk(await app.request(url, { method: 'PUT', body: '<script>alert(1)</script>' }));
 
 			const response = await app.request(url);
-			expect(response.headers.get('content-type')).toContain('text/html');
+			expect(response.headers.get('content-type')).toBe('application/octet-stream');
 			expect(response.headers.get('content-disposition')).toBe(
 				`attachment; filename="${filename}"; filename*=UTF-8''payload%21o%27clock%28x%29%2A.html`,
 			);

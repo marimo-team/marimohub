@@ -36,7 +36,13 @@ import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { sandboxProxyMiddleware } from './sandboxProxy';
-import { createApp, ErrorResponseSchema, fail, resolvePublicBaseUrl } from './shared';
+import {
+	authMethodFor,
+	createApp,
+	ErrorResponseSchema,
+	fail,
+	resolvePublicBaseUrl,
+} from './shared';
 import type { ErrorCode } from './shared';
 
 function internalErrorMessage(requestId: string | undefined): string {
@@ -440,7 +446,7 @@ export function createApi(rawDeps: ApiDeps) {
 		// Credential provenance is owned by the authenticator result — never
 		// re-derived from request headers, which can disagree with the adapter over
 		// parsing. Decided here, once, and read by the token-management guard.
-		c.set('authMethod', user.credential.kind === 'personal-access-token' ? 'pat' : 'session');
+		c.set('authMethod', authMethodFor(user.credential.kind));
 
 		// Refresh this user's identity-directory record so opaque ids (author /
 		// session user_id) resolve to a name+email at read time. Best-effort and

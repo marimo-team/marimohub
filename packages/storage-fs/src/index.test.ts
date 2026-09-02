@@ -12,13 +12,8 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, afterAll } from 'vitest';
-import {
-	createNotebookId,
-	createProjectId,
-	createVersionId,
-	NotebookWorkspaceService,
-	PreconditionFailedError,
-} from '@marimo-hub/core';
+import { createNotebookId, createProjectId, PreconditionFailedError } from '@marimo-hub/core';
+import { makeWorkspaceService } from '@marimo-hub/core/testing';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { FsStorage } from './index';
 
@@ -40,18 +35,7 @@ describe('FsStorage', () => {
 		const bucket = new FsStorage({ root: makeRoot() });
 		const projectId = createProjectId();
 		const notebookId = createNotebookId();
-		const service = new NotebookWorkspaceService(bucket, {
-			getNotebook: async () => ({
-				meta: { status: 'active' } as never,
-				readme: null,
-				source: {
-					schema_version: 1,
-					type: 'local',
-					current_version_id: createVersionId(),
-				},
-			}),
-			saveSourceFile: async () => {},
-		});
+		const { service } = makeWorkspaceService(bucket);
 
 		await service.createDirectory(projectId, notebookId, 'empty/nested');
 

@@ -94,6 +94,30 @@ describe('PostgresDatabaseBrowser', () => {
 		expect(resolverSignal?.aborted).toBe(true);
 	});
 
+	it('cancels a connection test with the caller signal', async () => {
+		let resolverSignal: AbortSignal | undefined;
+		const resolveHost = vi.fn(async (_host: string, signal?: AbortSignal) => {
+			resolverSignal = signal;
+			return new Promise<never>(() => {});
+		});
+		const runtime = new PostgresDatabaseBrowser({
+			resolveHost,
+			mode: 'metadata',
+			metadataTimeoutMs: 1_000,
+			previewTimeoutMs: 1_000,
+			previewMaxBytes: 1024,
+		});
+		const controller = new AbortController();
+		const pending = runtime.testConnection(source, { signal: controller.signal });
+		controller.abort();
+
+		await expect(pending).resolves.toMatchObject({
+			ok: false,
+			details: 'The PostgreSQL request was cancelled.',
+		});
+		expect(resolverSignal?.aborted).toBe(true);
+	});
+
 	it('rejects direct mutation before DNS resolution', async () => {
 		const resolveHost = vi.fn(async () => [{ address: '203.0.113.10', family: 4 }]);
 		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });

@@ -203,7 +203,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `_system/sandbox-diagnostics/{user-id}.json`                              | JSON     | Per-admin CAS lease for a sandbox startup diagnostic (`{ sandbox_id, expires_at }`). It prevents overlapping tests across serving replicas and makes the active sandbox visible to reconciliation. `SandboxDiagnosticLease` owns all writes; release CAS-writes a null free marker, and expiry recovers leases left by a crashed request.                                                                                                                                                              |
 | `_system/_maintenance.lock`                                               | JSON     | Advisory lease for snapshot and event retention. `MaintenanceLock` owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `_system/_session_lifecycle.lock`                                         | JSON     | Advisory lease for the session lifecycle and reconciliation sweep. The lifecycle loop owns this key.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `projects/{pid}/project.json`                                             | JSON     | Project metadata: name, description, owner, members, tags.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `projects/{pid}/project.json`                                             | JSON     | Project metadata: name, description, owner, members, tags. Optional `security_labels` (classification + compartments), written only by `ProjectService.setSecurityLabels` under super-admin standing; see §4.3.                                                                                                                                                                                                                                                                                        |
 | `projects/{pid}/alerts.json`                                              | JSON     | Project-scoped Slack and signed-webhook destinations. CAS-managed and written only by `ProjectAlertStore`; endpoint URLs and signing secrets are path-bound managed ciphertext. The record is retained through the soft-delete window so the final project deletion alert can be delivered.                                                                                                                                                                                                            |
 | `projects/{pid}/integrations/{iid}/integration.json`                      | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                                                                                            |
 | `projects/{pid}/integrations/{iid}/versions/{n}.json`                     | JSON     | Immutable integration config version, keyed by zero-padded number so key order matches version order. Written create-if-absent. Secret fields contain managed ciphertext envelopes or external reference markers, never resolved plaintext. Sessions pin these version numbers, so history is never rewritten.                                                                                                                                                                                         |
@@ -211,7 +211,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `_system/integrations/{iid}/integration.json`                             | JSON     | Organization-wide integration head. It has the same fields as a project integration head, except it has no `project_id`. `OrgIntegrationsStore` is its only writer. See §4.12.                                                                                                                                                                                                                                                                                                                         |
 | `_system/integrations/{iid}/versions/{n}.json`                            | JSON     | Immutable organization-wide configuration version. It follows the same create-if-absent and secret-handling rules as a project integration version.                                                                                                                                                                                                                                                                                                                                                    |
 | `_system/integrations/_names/{name}.json`                                 | JSON     | Organization-wide name claim. Claims are unique within this tier, so a project integration can use the same name.                                                                                                                                                                                                                                                                                                                                                                                      |
-| `projects/{pid}/notebooks/{nid}/meta.json`                                | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `projects/{pid}/notebooks/{nid}/meta.json`                                | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths. Optional `security_labels` override, written only by `NotebookService.setSecurityLabels`; see §4.4.                                                                                                                                                                                                                                                                                            |
 | `projects/{pid}/notebooks/{nid}/README.md`                                | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `projects/{pid}/notebooks/{nid}/source.json`                              | JSON     | Typed source record. `local` stores the current version pointer. `git` stores Git coordinates, mode, sync state, and the current synced version.                                                                                                                                                                                                                                                                                                                                                       |
 | `projects/{pid}/notebooks/{nid}/integration_sync_token.json`              | JSON     | Push-sync credential for one notebook. The record stores a token hash, not the plaintext token. Present only for push-mode Git notebooks.                                                                                                                                                                                                                                                                                                                                                              |
@@ -222,6 +222,8 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `projects/{pid}/notebooks/{nid}/workspace/notebook.py`                    | Python   | Latest local notebook code. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `projects/{pid}/notebooks/{nid}/workspace/pyproject.toml`                 | TOML     | Latest local Python dependency manifest. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `projects/{pid}/notebooks/{nid}/workspace/{path}`                         | any      | Runtime files mirrored from a local notebook sandbox. Present only under `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only and non-versioned.                                                                                                                                                                                                                                                                                                                                                       |
+| `projects/{pid}/notebooks/{nid}/workspace/{dir}/.marimohub-directory`     | empty    | Directory marker that keeps an otherwise empty workspace directory listable. Written create-if-absent by `NotebookWorkspaceService.createDirectory`; hidden from listings, search, and sandbox restores; reserved as a path segment.                                                                                                                                                                                                                                                                   |
+| `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`            | JSON     | Short-lived lease (`{ holder, expires_at }`) serializing workspace-browser mutations for one notebook. CAS-managed and written only by `NotebookWorkspaceService`; renewed during long copies and deletes, released to `{ holder: null, expires_at: null }`, and replaced in place once expired.                                                                                                                                                                                                       |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py`               | Python   | Immutable version snapshot of the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml`            | TOML     | Dependency snapshot at time of version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`              | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -270,6 +272,7 @@ field controls how the service reads the structure.
 			"created_at": "2025-01-10T09:00:00Z",
 			"updated_at": "2025-03-05T14:22:00Z",
 			"notebook_count": 3,
+			"security_labels": null,
 			"notebooks": [
 				{
 					"id": "nb-5g43rv2s9pfw8w4d",
@@ -282,6 +285,7 @@ field controls how the service reads the structure.
 					"updated_at": "2025-03-05T14:22:00Z",
 					"tags": ["finance", "monthly"],
 					"last_run_at": "2025-03-04T08:30:00Z",
+					"security_labels": null,
 					"key_prefix": "projects/proj-7h2k9qm4xz7rp3w8/notebooks/nb-5g43rv2s9pfw8w4d"
 				}
 			]
@@ -292,6 +296,22 @@ field controls how the service reads the structure.
 
 > `key_prefix` is an internal physical locator. The service removes it from API
 > responses. Clients address notebooks by `{project_id, notebook_id}`.
+
+**Security-label projection.** Project and notebook entries carry a tri-state
+`security_labels`: an object (labeled), `null` (known unlabeled), or absent
+(indeterminate — a legacy entry, or a mutation in flight). List filtering
+decides labeled/unlabeled entries in one batch and resolves indeterminate ones
+from the authoritative `project.json` / `meta.json`, failing closed on a read
+error. `security_labels_pending: true` marks a mutation in flight so routine
+projection writes (`projectCatalogPatch` and friends) do not resurrect the
+pre-mutation labels; only the mutation's own finalizing commit clears it. Both
+fields are written through `CatalogService.mutateSnapshot` like every other
+entry field.
+
+| Field                     | Values                                             | Writer                                                                                               |
+| ------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `security_labels`         | `{ classification, compartments }`, `null`, absent | Routine projections (from the authoritative record); parked absent by a label mutation               |
+| `security_labels_pending` | `true` or absent                                   | Set by `ProjectService`/`NotebookService.setSecurityLabels`, cleared by the same mutation's finalize |
 
 ### 4.3 `projects/{pid}/project.json`
 
@@ -307,9 +327,12 @@ field controls how the service reads the structure.
 	],
 	"created_at": "2025-01-10T09:00:00Z",
 	"updated_at": "2025-03-05T14:22:00Z",
-	"tags": ["analytics", "internal"]
+	"tags": ["analytics", "internal"],
+	"security_labels": { "classification": "SECRET", "compartments": ["element-a"] }
 }
 ```
+
+> **Security labels** (optional): a classification plus required compartments, normalized on write (compartments deduplicated and sorted). Present only on labeled projects; absent means unlabeled. Written only by `ProjectService.setSecurityLabels` — an ETag CAS `mutateObject` on this record, bracketed by two catalog commits (`project.security_labels.pending`, then `project.security_labels`) that form the audit trail and park the snapshot projection indeterminate while the record changes (§4.2). Requires super-admin standing (`security-labels.raise` / `security-labels.lower`); no project role grants label authority. `If-Match` is honored (412 on a stale version, checked before the projection is parked).
 
 > **Member roles:** `manager` has full project control, including member management. `editor` can change notebooks. `viewer` has read-only access. `admin` is reserved for the project owner, deployment super admins, and grandfathered member rows. See §12.
 
@@ -332,11 +355,14 @@ Contains only notebook-level concerns. No code, no paths, no source details — 
 	"runtime": {
 		"python_version": "3.11",
 		"marimo_version": "0.9.0"
-	}
+	},
+	"security_labels": { "classification": "SECRET", "compartments": ["element-a", "element-z"] }
 }
 ```
 
 **Valid `status` values:** `draft` · `active` · `archived` · `deleted`
+
+> **Security labels** (optional): a notebook-level override enforced **in addition to** the project labels, so it can only add restrictions. Same write discipline as `project.json` (§4.3): only `NotebookService.setSecurityLabels`, ETag CAS, `notebook.security_labels.pending` / `notebook.security_labels` catalog commits, super-admin standing, `If-Match` honored. Lowering or clearing an override is decided against the notebook's current labels, so an admin outside the compartment cannot relax it.
 
 ### 4.5 `source.json`
 

@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { surfacesFromEnv } from './surfaces';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { surfaceFromEnv, surfacePorts, surfacesFromEnv } from './surfaces';
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe('surfacesFromEnv', () => {
 	it('keeps secondary surfaces disabled by default', () => {
@@ -7,6 +11,7 @@ describe('surfacesFromEnv', () => {
 	});
 
 	it('parses the VS Code surface configuration', () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
 		expect(
 			surfacesFromEnv({
 				MARIMOHUB_SURFACES: 'marimo,vscode',
@@ -22,9 +27,22 @@ describe('surfacesFromEnv', () => {
 				settings: { 'editor.fontSize': 14 },
 				extensionGallery: 'openvsx',
 				embed: 'tab',
-				marimoWatch: true,
 			},
 		});
+	});
+
+	it('warns once at boot when the experimental openvscode flavor is selected', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+		surfacesFromEnv({ MARIMOHUB_SURFACES: 'marimo,vscode' });
+		expect(warn).not.toHaveBeenCalled();
+
+		surfacesFromEnv({
+			MARIMOHUB_SURFACES: 'marimo,vscode',
+			MARIMOHUB_SURFACE_VSCODE_FLAVOR: 'openvscode',
+		});
+		expect(warn).toHaveBeenCalledOnce();
+		expect(String(warn.mock.calls[0][0])).toContain('openvscode is experimental');
 	});
 
 	it('parses OpenCode and both secondary surfaces', () => {
@@ -34,7 +52,6 @@ describe('surfacesFromEnv', () => {
 				MARIMOHUB_SURFACE_OPENCODE_START: 'eager',
 				MARIMOHUB_SURFACE_OPENCODE_PORT: '5096',
 				MARIMOHUB_SURFACE_OPENCODE_EMBED: 'iframe',
-				MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH: 'false',
 			}),
 		).toEqual({
 			vscode: expect.objectContaining({ port: 8443 }),
@@ -42,7 +59,6 @@ describe('surfacesFromEnv', () => {
 				start: 'eager',
 				port: 5096,
 				embed: 'iframe',
-				marimoWatch: false,
 			},
 		});
 	});
@@ -53,7 +69,6 @@ describe('surfacesFromEnv', () => {
 				start: 'on-demand',
 				port: 4096,
 				embed: 'tab',
-				marimoWatch: true,
 			},
 		});
 	});
@@ -91,25 +106,10 @@ describe('surfacesFromEnv', () => {
 				MARIMOHUB_SURFACES: 'marimo,vscode,opencode',
 				MARIMOHUB_SURFACE_VSCODE_PORT: '4096',
 			}),
-		).toThrow(/cannot share sandbox port/);
+		).toThrow(/vscode and opencode cannot share sandbox port 4096/);
 	});
 
-	it.each([
-		['MARIMOHUB_SURFACE_OPENCODE_START', 'sometimes'],
-		['MARIMOHUB_SURFACE_OPENCODE_EMBED', 'window'],
-		['MARIMOHUB_SURFACE_OPENCODE_MARIMO_WATCH', 'yes'],
-		['MARIMOHUB_SURFACE_OPENCODE_PORT', '4096.5'],
-		['MARIMOHUB_SURFACE_OPENCODE_PORT', '65536'],
-	] as const)('rejects invalid OpenCode value %s=%s', (variable, value) => {
-		expect(() =>
-			surfacesFromEnv({
-				MARIMOHUB_SURFACES: 'marimo,opencode',
-				[variable]: value,
-			}),
-		).toThrow(new RegExp(variable));
-	});
-
-	it('trims surface names without enabling empty entries', () => {
+	it('trims the surface list without enabling empty entries', () => {
 		expect(
 			surfacesFromEnv({
 				MARIMOHUB_SURFACES: ' marimo, , opencode, ',
@@ -132,5 +132,30 @@ describe('surfacesFromEnv', () => {
 				MARIMOHUB_SURFACE_VSCODE_SETTINGS_JSON: '[]',
 			}),
 		).toHaveProperty('opencode');
+	});
+});
+
+describe('surfaceFromEnv', () => {
+	it('parses one surface by id with its own variables', () => {
+		expect(
+			surfaceFromEnv('opencode', {
+				MARIMOHUB_SURFACE_OPENCODE_PORT: '5000',
+				MARIMOHUB_SURFACE_VSCODE_PORT: '9443',
+			}),
+		).toEqual({ start: 'on-demand', port: 5000, embed: 'tab' });
+	});
+});
+
+describe('surfacePorts', () => {
+	it('lists enabled surface ports in registry order', () => {
+		expect(surfacePorts(undefined)).toEqual([]);
+		expect(
+			surfacePorts(
+				surfacesFromEnv({
+					MARIMOHUB_SURFACES: 'opencode,vscode',
+					MARIMOHUB_SURFACE_VSCODE_PORT: '9443',
+				}),
+			),
+		).toEqual([9443, 4096]);
 	});
 });

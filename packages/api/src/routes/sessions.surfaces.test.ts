@@ -15,6 +15,8 @@ import { createInitializedBucket, createTestApi, expectError, expectOk } from '.
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
 
+type SurfacesConfig = NonNullable<ApiDeps['sandbox']['surfaces']>;
+
 type ApiSession = Session & {
 	can: { attach: boolean; stop: boolean; surfaces?: { vscode: boolean; opencode: boolean } };
 	reused?: boolean;
@@ -51,12 +53,30 @@ describe('Session surface routes', () => {
 		persistWorkspace: 'source',
 		...overrides,
 	});
+	const multiPort = { capabilities: { multiPort: true } } as const;
+	const vscodeSurfaceConfig = (
+		overrides: Partial<SurfacesConfig['vscode']> = {},
+	): NonNullable<SurfacesConfig['vscode']> => ({
+		flavor: 'code-server',
+		start: 'on-demand',
+		port: 8443,
+		settings: {},
+		extensionGallery: 'openvsx',
+		embed: 'tab',
+		...overrides,
+	});
+	const opencodeSurfaceConfig = (
+		overrides: Partial<SurfacesConfig['opencode']> = {},
+	): NonNullable<SurfacesConfig['opencode']> => ({
+		start: 'on-demand',
+		port: 4096,
+		embed: 'tab',
+		...overrides,
+	});
 
 	it('starts, reports, and stops a VS Code surface on an edit sandbox', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const compute = Object.assign(fakeComputeFrom(instance), {
-			capabilities: { multiPort: true } as const,
-		});
+		const compute = fakeComputeFrom(instance, multiPort);
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -64,15 +84,7 @@ describe('Session surface routes', () => {
 			deps: {
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'on-demand',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -124,22 +136,12 @@ describe('Session surface routes', () => {
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: Object.assign(fakeComputeFrom(instance), {
-				capabilities: { multiPort: true } as const,
-			}),
+			compute: fakeComputeFrom(instance, multiPort),
 			deps: {
 				backgroundTasks: { defer: (task) => deferred.push(task) },
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'on-demand',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -170,22 +172,12 @@ describe('Session surface routes', () => {
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: Object.assign(fakeComputeFrom(instance), {
-				capabilities: { multiPort: true } as const,
-			}),
+			compute: fakeComputeFrom(instance, multiPort),
 			deps: {
 				backgroundTasks: { defer: (task) => deferred.push(task) },
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'on-demand',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -214,9 +206,7 @@ describe('Session surface routes', () => {
 	it('lets a manager stop an exclusive surface after VS Code is disabled', async () => {
 		await createServices(bucket).projects.addMember(pid, { user_id: MANAGER }, 'manager', ACTOR);
 		const { instance, calls } = makeFakeSandbox();
-		const compute = Object.assign(fakeComputeFrom(instance), {
-			capabilities: { multiPort: true } as const,
-		});
+		const compute = fakeComputeFrom(instance, multiPort);
 		const ownerRequest = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -225,15 +215,7 @@ describe('Session surface routes', () => {
 				policy: { editorSandboxSharing: 'exclusive' },
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'on-demand',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -260,6 +242,80 @@ describe('Session surface routes', () => {
 		expect(
 			(await createServices(bucket).sessions.getSession(pid, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });
+	});
+
+	it('rejects an on-demand start on a single-port compute backend', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(instance),
+			deps: { sandbox: sandboxConfig({ surfaces: { vscode: vscodeSurfaceConfig() } }) },
+		}).request;
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		const processCount = calls.startProcess.length;
+
+		await expectError(
+			await request('POST', sessionsPath(`/${session.session_id}/surfaces/vscode`)),
+			409,
+			'SURFACE_UNSUPPORTED_PROVIDER',
+		);
+		expect(calls.startProcess).toHaveLength(processCount);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, session.session_id)).surfaces?.vscode,
+		).toBeUndefined();
+	});
+
+	it('exposes an on-demand surface on the request host when no sandbox hostname is set', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(instance, multiPort),
+			deps: {
+				sandbox: sandboxConfig({ hostname: '', surfaces: { vscode: vscodeSurfaceConfig() } }),
+			},
+		}).request;
+		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		const path = sessionsPath(`/${session.session_id}/surfaces/vscode`);
+
+		await expectOk(await request('POST', path), 202);
+		await vi.waitFor(async () => {
+			expect(await expectOk(await request('GET', path))).toMatchObject({ status: 'ready' });
+		});
+
+		const hostnames = calls.exposePort.map((call) => call.options?.hostname);
+		expect(hostnames).toEqual(['localhost', 'localhost']);
+	});
+
+	it('runs marimo with --watch only when a secondary surface is enabled', async () => {
+		const marimoCommand = (calls: ReturnType<typeof makeFakeSandbox>['calls']) =>
+			calls.startProcess.find(({ cmd }) => cmd.includes('marimo'))?.cmd ?? '';
+		const plain = makeFakeSandbox();
+		const plainRequest = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(plain.instance, multiPort),
+		}).request;
+		await expectOk<ApiSession>(await plainRequest('POST', sessionsPath()));
+		expect(marimoCommand(plain.calls)).not.toContain('--watch');
+
+		const watched = await createServices(bucket).notebooks.createNotebook(
+			pid,
+			{ title: 'Watched', description: 'd', code: 'import marimo as mo' },
+			ACTOR,
+		);
+		const surfaced = makeFakeSandbox();
+		const surfacedRequest = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(surfaced.instance, multiPort),
+			deps: { sandbox: sandboxConfig({ surfaces: { opencode: opencodeSurfaceConfig() } }) },
+		}).request;
+		await expectOk<ApiSession>(
+			await surfacedRequest('POST', `/projects/${pid}/notebooks/${watched.id}/sessions`),
+		);
+		expect(marimoCommand(surfaced.calls)).toContain('--watch');
 	});
 
 	it('rejects disabled and duplicate requested surfaces without provisioning', async () => {
@@ -311,20 +367,13 @@ describe('Session surface routes', () => {
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: Object.assign(fakeComputeFrom(instance), {
-				capabilities: { multiPort: true } as const,
-			}),
+			compute: fakeComputeFrom(instance, multiPort),
 			deps: {
 				sandbox: sandboxConfig({
 					appBaseUrl: 'https://hub.example',
 					exposure: new ProxyExposure('test-signing-secret'),
 					surfaces: {
-						opencode: {
-							start: 'on-demand',
-							port: 4096,
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						opencode: opencodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -346,9 +395,7 @@ describe('Session surface routes', () => {
 
 	it('starts requested OpenCode with managed AI and rejects its open path', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const compute = Object.assign(fakeComputeFrom(instance), {
-			capabilities: { multiPort: true } as const,
-		});
+		const compute = fakeComputeFrom(instance, multiPort);
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -362,12 +409,7 @@ describe('Session surface routes', () => {
 				},
 				sandbox: sandboxConfig({
 					surfaces: {
-						opencode: {
-							start: 'on-demand',
-							port: 4096,
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						opencode: opencodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -431,18 +473,11 @@ describe('Session surface routes', () => {
 			const request = createTestApi({
 				bucket,
 				userId: ACTOR,
-				compute: Object.assign(fakeComputeFrom(instance), {
-					capabilities: { multiPort: true } as const,
-				}),
+				compute: fakeComputeFrom(instance, multiPort),
 				deps: {
 					sandbox: sandboxConfig({
 						surfaces: {
-							opencode: {
-								start: 'on-demand',
-								port: 4096,
-								embed: 'tab',
-								marimoWatch: true,
-							},
+							opencode: opencodeSurfaceConfig(),
 						},
 					}),
 				},
@@ -481,27 +516,12 @@ describe('Session surface routes', () => {
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: Object.assign(fakeComputeFrom(instance), {
-				capabilities: { multiPort: true } as const,
-			}),
+			compute: fakeComputeFrom(instance, multiPort),
 			deps: {
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'on-demand',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
-						opencode: {
-							start: 'on-demand',
-							port: 4096,
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig(),
+						opencode: opencodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -524,9 +544,7 @@ describe('Session surface routes', () => {
 
 	it('rejects an unsafe VS Code open path without starting the surface', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const compute = Object.assign(fakeComputeFrom(instance), {
-			capabilities: { multiPort: true } as const,
-		});
+		const compute = fakeComputeFrom(instance, multiPort);
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -534,15 +552,7 @@ describe('Session surface routes', () => {
 			deps: {
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'on-demand',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig(),
 					},
 				}),
 			},
@@ -565,9 +575,7 @@ describe('Session surface routes', () => {
 
 	it('does not eagerly start secondary surfaces for a viewer-owned ephemeral session', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const compute = Object.assign(fakeComputeFrom(instance), {
-			capabilities: { multiPort: true } as const,
-		});
+		const compute = fakeComputeFrom(instance, multiPort);
 		const request = createTestApi({
 			bucket,
 			userId: STRANGER,
@@ -575,21 +583,8 @@ describe('Session surface routes', () => {
 			deps: {
 				sandbox: sandboxConfig({
 					surfaces: {
-						vscode: {
-							flavor: 'code-server',
-							start: 'eager',
-							port: 8443,
-							settings: {},
-							extensionGallery: 'openvsx',
-							embed: 'tab',
-							marimoWatch: true,
-						},
-						opencode: {
-							start: 'eager',
-							port: 4096,
-							embed: 'tab',
-							marimoWatch: true,
-						},
+						vscode: vscodeSurfaceConfig({ start: 'eager' }),
+						opencode: opencodeSurfaceConfig({ start: 'eager' }),
 					},
 				}),
 				policy: { defaultRole: 'viewer', viewerMode: 'ephemeral-sandbox' },
@@ -631,15 +626,7 @@ describe('Session surface routes', () => {
 				deps: {
 					sandbox: sandboxConfig({
 						surfaces: {
-							vscode: {
-								flavor: 'code-server',
-								start: 'eager',
-								port: 8443,
-								settings: {},
-								extensionGallery: 'openvsx',
-								embed: 'tab',
-								marimoWatch: true,
-							},
+							vscode: vscodeSurfaceConfig({ start: 'eager' }),
 						},
 					}),
 				},

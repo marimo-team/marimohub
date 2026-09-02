@@ -2,12 +2,6 @@
 # pnpm refuses to remove a foreign node_modules without a TTY, so it must not be copied.
 **/node_modules
 **/dist
-# The CoreWeave SDK is VENDORED as prebuilt output — its dist/ is the actual
-# package code (no build step installs it), so it must survive the **/dist rule
-# above or the image bundles an empty @coreweave/cwsandbox and crashes at boot
-# with ERR_MODULE_NOT_FOUND. Mirrors the !vendor/cwsandbox/dist/ .gitignore rule.
-!vendor/cwsandbox/dist
-!vendor/cwsandbox/dist/**
 **/.vite
 **/.vite-hooks
 **/*.tsbuildinfo

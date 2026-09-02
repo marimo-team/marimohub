@@ -500,3 +500,102 @@ describe('compute.object-storage-wif check', () => {
 		expect(report.fatal).toBe(false);
 	});
 });
+
+describe('ai.upstream check', () => {
+	const ai = (overrides: Partial<ApiDeps['ai']> = {}) =>
+		makeDeps({
+			ai: {
+				upstreamBaseUrl: 'https://api.example.com/v1',
+				upstreamApiKey: 'key',
+				model: 'm',
+				signingSecret: 's',
+				...overrides,
+			} as ApiDeps['ai'],
+		});
+	const upstream = (status: number) =>
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status }));
+
+	it('skipped when managed AI is disabled', async () => {
+		expect((await run({}, makeDeps())).by('ai.upstream')).toBeUndefined();
+	});
+
+	it('ok when an unsigned upstream answers /models', async () => {
+		const spy = upstream(200);
+		expect((await run({}, ai())).by('ai.upstream')?.status).toBe('ok');
+		expect(spy).toHaveBeenCalledWith(
+			'https://api.example.com/v1/models',
+			expect.objectContaining({ method: 'GET' }),
+		);
+	});
+
+	it.each([401, 403])(
+		'ok on %s for an unsigned upstream (providers may gate /models by key)',
+		async (status) => {
+			upstream(status);
+			expect((await run({}, ai())).by('ai.upstream')?.status).toBe('ok');
+		},
+	);
+
+	it('fail with a base-URL remediation when an unsigned upstream errors', async () => {
+		upstream(502);
+		const { by } = await run({}, ai());
+		expect(by('ai.upstream')?.status).toBe('fail');
+		expect(by('ai.upstream')?.remediation).toContain('MARIMOHUB_AI_UPSTREAM_BASE_URL');
+	});
+
+	describe('request-signed backend (Bedrock)', () => {
+		const bedrockBase = 'https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1';
+		const signedAi = (upstreamFetch: (request: Request) => Promise<Response>) =>
+			ai({ upstreamBaseUrl: bedrockBase, upstreamApiKey: undefined, upstreamFetch });
+
+		it('probes through the signing fetch, never the global one', async () => {
+			const globalFetch = vi.spyOn(globalThis, 'fetch');
+			const upstreamFetch = vi.fn(async () => new Response(null, { status: 200 }));
+			const { by } = await run({}, signedAi(upstreamFetch));
+			expect(by('ai.upstream')?.status).toBe('ok');
+			expect(globalFetch).not.toHaveBeenCalled();
+			expect(upstreamFetch).toHaveBeenCalledOnce();
+			const [request] = upstreamFetch.mock.calls[0] as unknown as [Request];
+			expect(request.url).toBe(`${bedrockBase}/models`);
+			expect(request.method).toBe('GET');
+		});
+
+		it.each([401, 403])(
+			'fail (non-fatal) on %s: the runtime identity lacks Bedrock access',
+			async (status) => {
+				const { report, by } = await run(
+					{},
+					signedAi(async () => new Response(null, { status })),
+				);
+				expect(by('ai.upstream')?.status).toBe('fail');
+				expect(by('ai.upstream')?.fatal).toBeUndefined();
+				expect(report.fatal).toBe(false);
+				expect(by('ai.upstream')?.remediation).toContain('bedrock:InvokeModel');
+				expect(by('ai.upstream')?.remediation).toContain('IRSA');
+				expect(by('ai.upstream')?.remediation).not.toContain('MARIMOHUB_AI_UPSTREAM_BASE_URL');
+			},
+		);
+
+		it('points at the region, not an upstream URL, on other errors', async () => {
+			const { by } = await run(
+				{},
+				signedAi(async () => new Response(null, { status: 404 })),
+			);
+			expect(by('ai.upstream')?.status).toBe('fail');
+			expect(by('ai.upstream')?.remediation).toContain('MARIMOHUB_AI_AWS_REGION');
+			expect(by('ai.upstream')?.remediation).not.toContain('MARIMOHUB_AI_UPSTREAM_BASE_URL');
+		});
+
+		it('fail with a credential-chain remediation when signing itself throws', async () => {
+			const { by } = await run(
+				{},
+				signedAi(async () => {
+					throw new Error('Could not load credentials from any providers');
+				}),
+			);
+			expect(by('ai.upstream')?.status).toBe('fail');
+			expect(by('ai.upstream')?.message).toContain('Could not load credentials');
+			expect(by('ai.upstream')?.remediation).toContain('IRSA');
+		});
+	});
+});

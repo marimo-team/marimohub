@@ -4014,7 +4014,9 @@ export interface operations {
 	'projects.securityLabels.set': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				'if-match'?: string;
+			};
 			path: {
 				pid: string;
 			};
@@ -4068,6 +4070,15 @@ export interface operations {
 					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Request body too large */
 			413: {
 				headers: {
@@ -4111,7 +4122,9 @@ export interface operations {
 	'projects.securityLabels.clear': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				'if-match'?: string;
+			};
 			path: {
 				pid: string;
 			};
@@ -4154,6 +4167,15 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -6168,6 +6190,17 @@ export interface operations {
 					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Internal server error */
 			500: {
 				headers: {
@@ -6279,6 +6312,17 @@ export interface operations {
 			/** @description Validation error */
 			422: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {
@@ -6404,6 +6448,7 @@ export interface operations {
 			query?: {
 				path?: string;
 				cursor?: string;
+				limit?: number;
 			};
 			header?: never;
 			path: {
@@ -8345,7 +8390,9 @@ export interface operations {
 	'notebooks.securityLabels.set': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				'if-match'?: string;
+			};
 			path: {
 				pid: string;
 				nid: string;
@@ -8400,6 +8447,15 @@ export interface operations {
 					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Request body too large */
 			413: {
 				headers: {
@@ -8443,7 +8499,9 @@ export interface operations {
 	'notebooks.securityLabels.clear': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				'if-match'?: string;
+			};
 			path: {
 				pid: string;
 				nid: string;
@@ -8487,6 +8545,15 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
 				headers: {
 					[name: string]: unknown;
 				};

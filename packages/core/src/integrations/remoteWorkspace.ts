@@ -191,6 +191,15 @@ export function workspaceOperationDenied(
 }
 
 /**
+ * Whether `path` is a protected root anchor (`notebook.py`, `pyproject.toml`
+ * for local sources). Such paths may only be written through the source owner,
+ * so they are refused as the *target* of a copy or directory creation too.
+ */
+export function isProtectedWorkspacePath(source: Source, path: string): boolean {
+	return workspaceSourcePolicy(source).protectedPaths.some((rule) => rule.path === path);
+}
+
+/**
  * The workspace-relative entry notebook for a synced (read-only) source, or
  * `null` for a local source whose code lives in the bucket. Lets read paths pick
  * between `workspace/<entry>` and the local `notebook.py` without a type switch.

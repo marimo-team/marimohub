@@ -15,7 +15,10 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
 import { GcsObjectBrowser } from '@marimo-hub/object-browser-gcs';
 import { AzureBlobObjectBrowser } from '@marimo-hub/object-browser-azure';
-import { PostgresDatabaseBrowser } from '@marimo-hub/postgres-runtime/node';
+import {
+	DEFAULT_POSTGRES_RUNTIME_LIMITS,
+	PostgresDatabaseBrowser,
+} from '@marimo-hub/postgres-runtime/node';
 import { parseBool, parseIntEnv, parseOnOff, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -63,24 +66,33 @@ export function makeIntegrations(
 	// data-browser setting instead fails fast in makeBrowseProbe.
 	const dataBrowser = !requested.explicit && policy === 'off' ? 'off' : requested.mode;
 	const enabledDataQuery = dataBrowser === 'full' ? dataQuery : undefined;
+	// Object browsers and the PostgreSQL runtime share one resolver: with the
+	// data browser on, both run under its deadlines; with it off, only the
+	// PostgreSQL connection tester remains and uses the runtime's own defaults.
+	const browseDeadlines =
+		dataBrowser === 'off' ? undefined : objectBrowserDeadlinesFromEnv(env, dataBrowser);
+	const browseLimits =
+		dataBrowser === 'off' ? undefined : objectBrowserLimitsFromEnv(env, dataBrowser);
+	const resolveHost =
+		policy === 'off'
+			? undefined
+			: createGuardedHostResolver({
+					allowPrivate: policy === 'private',
+					timeoutMs:
+						browseDeadlines?.resolveTimeoutMs ?? DEFAULT_POSTGRES_RUNTIME_LIMITS.resolveTimeoutMs,
+				});
 	const objectBrowsers =
-		dataBrowser === 'off'
+		dataBrowser === 'off' || !browseDeadlines || !browseLimits || !resolveHost
 			? undefined
 			: (() => {
-					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);
-					const limits = objectBrowserLimitsFromEnv(env, dataBrowser);
-					const resolveHost = createGuardedHostResolver({
-						allowPrivate: policy === 'private',
-						timeoutMs: deadlines.resolveTimeoutMs,
-					});
 					const browserOptions = {
 						mode: dataBrowser,
 						metrics,
 						resolveHost,
 						limits: {
-							...limits,
-							metadataTimeoutMs: deadlines.metadataTimeoutMs,
-							previewTimeoutMs: deadlines.previewTimeoutMs,
+							...browseLimits,
+							metadataTimeoutMs: browseDeadlines.metadataTimeoutMs,
+							previewTimeoutMs: browseDeadlines.previewTimeoutMs,
 						},
 					};
 					return {
@@ -89,35 +101,19 @@ export function makeIntegrations(
 						azure_blob: new AzureBlobObjectBrowser(browserOptions),
 					};
 				})();
-	const postgresRuntime =
-		policy === 'off'
-			? undefined
-			: (() => {
-					const mode = dataBrowser === 'full' ? 'full' : 'metadata';
-					const deadlines =
-						dataBrowser === 'off'
-							? {
-									metadataTimeoutMs: 10_000,
-									previewTimeoutMs: DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs,
-									resolveTimeoutMs: 10_000,
-								}
-							: objectBrowserDeadlinesFromEnv(env, mode);
-					const limits =
-						dataBrowser === 'off'
-							? DEFAULT_S3_OBJECT_BROWSER_LIMITS
-							: objectBrowserLimitsFromEnv(env, mode);
-					return new PostgresDatabaseBrowser({
-						mode,
-						metrics,
-						resolveHost: createGuardedHostResolver({
-							allowPrivate: policy === 'private',
-							timeoutMs: deadlines.resolveTimeoutMs,
-						}),
-						metadataTimeoutMs: deadlines.metadataTimeoutMs,
-						previewTimeoutMs: deadlines.previewTimeoutMs,
-						previewMaxBytes: limits.previewMaxBytes,
-					});
-				})();
+	const postgresRuntime = resolveHost
+		? new PostgresDatabaseBrowser({
+				mode: dataBrowser === 'full' ? 'full' : 'metadata',
+				metrics,
+				resolveHost,
+				metadataTimeoutMs:
+					browseDeadlines?.metadataTimeoutMs ?? DEFAULT_POSTGRES_RUNTIME_LIMITS.metadataTimeoutMs,
+				previewTimeoutMs:
+					browseDeadlines?.previewTimeoutMs ?? DEFAULT_POSTGRES_RUNTIME_LIMITS.previewTimeoutMs,
+				previewMaxBytes:
+					browseLimits?.previewMaxBytes ?? DEFAULT_POSTGRES_RUNTIME_LIMITS.previewMaxBytes,
+			})
+		: undefined;
 	// dataBrowser !== 'off' implies policy !== 'off': the default degrades above
 	// and an explicit setting fails fast in makeBrowseProbe.
 	const databaseBrowsers =

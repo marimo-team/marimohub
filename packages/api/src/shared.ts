@@ -34,10 +34,12 @@ import type {
 	AuthorizationPolicy,
 	AuthSubject,
 	AuthzPolicy,
+	CredentialKind,
 	ResourceSecurityLabels,
 	ResourceSecurityPolicy,
 	NotebookDetail,
 	ComputeResources,
+	DeploymentAction,
 	EditorSandboxSharing,
 	Project,
 	ProjectAction,
@@ -115,17 +117,21 @@ export function authorizationService(deps: AuthzDeps): AuthorizationService {
  * `visibility` denial is **404** (a soft-deleted or hidden project is
  * indistinguishable from a nonexistent one — super admins included), a `role`
  * denial is a tier-named **403**. The subject is the request's principal —
- * membership matches by user id or (invite) email.
+ * membership matches by user id or (invite) email. Pass `notebookLabels` when
+ * the action targets a notebook carrying its own override, so the caller must
+ * satisfy that override too (the decision fails closed on either label set).
  */
 export async function assertProjectActionOn(
 	project: Project,
 	subject: AuthSubject,
 	action: ProjectAction,
 	deps: AuthzDeps = {},
+	notebookLabels: ResourceSecurityLabels | null = null,
 ): Promise<void> {
 	const decision = await authorizationService(deps).authorize(subject, action, {
 		kind: 'project',
 		project,
+		notebookLabels,
 	});
 	if (decision.allowed) return;
 	if (decision.category === 'role') {
@@ -243,6 +249,26 @@ export const SESSION_ONLY_SECURITY = [{ cookieAuth: [] }];
 export function assertSessionAuthenticated(c: Context<HonoEnv>, action: string): void {
 	if (c.get('authMethod') === 'pat') {
 		throw new ForbiddenError(`Personal access tokens cannot ${action} — sign in to do this`);
+	}
+}
+
+/**
+ * Classify a credential for the session-only guard. Exhaustive on purpose: a
+ * new credential kind must decide here whether it is interactive (`session`)
+ * or a bearer secret (`pat`) rather than silently inheriting session powers.
+ */
+export function authMethodFor(kind: CredentialKind): HonoEnv['Variables']['authMethod'] {
+	switch (kind) {
+		case 'sso':
+		case 'development':
+			return 'session';
+		case 'personal-access-token':
+		case 'service-account':
+			return 'pat';
+		default: {
+			const unreachable: never = kind;
+			throw new Error(`Unhandled credential kind: ${String(unreachable)}`);
+		}
 	}
 }
 
@@ -1334,3 +1360,31 @@ export const CapabilitiesResponseSchema = z
 		),
 	})
 	.openapi('Capabilities');
+
+/**
+ * Whether the caller holds deployment standing for `action` (project creation
+ * under a restricted deployment, directory search, super-admin surfaces).
+ * Boolean form for capability flags such as `GET /me`.
+ */
+export async function canDeploymentAction(
+	subject: AuthSubject,
+	action: DeploymentAction,
+	deps: AuthzDeps = {},
+): Promise<boolean> {
+	const decision = await authorizationService(deps).authorize(subject, action, {
+		kind: 'deployment',
+	});
+	return decision.allowed;
+}
+
+/** {@link canDeploymentAction} as a guard: a standing denial is a plain 403. */
+export async function assertDeploymentAction(
+	subject: AuthSubject,
+	action: DeploymentAction,
+	deps: AuthzDeps = {},
+	message = 'Requires super admin',
+): Promise<void> {
+	if (!(await canDeploymentAction(subject, action, deps))) {
+		throw new ForbiddenError(message);
+	}
+}

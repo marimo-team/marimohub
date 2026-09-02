@@ -713,6 +713,24 @@ describe('createFromEnv oidc email-domain allowlist', () => {
 		expect(groupRestricted.policy.projectCreationRestricted).toBe(true);
 	});
 
+	it('wires MARIMOHUB_PROJECT_CREATION=restricted on any auth backend', () => {
+		const proxy = createFromEnv({
+			MARIMOHUB_STORAGE_BACKEND: 'memory',
+			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+			MARIMOHUB_COMPUTE_BACKEND: 'none',
+			MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+			MARIMOHUB_PROJECT_CREATION: 'restricted',
+		});
+		expect(proxy.policy.projectCreationRestricted).toBe(true);
+		const open = createFromEnv({
+			...oidcEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+			MARIMOHUB_PROJECT_CREATION: 'open',
+		});
+		expect(open.policy.projectCreationRestricted).toBeUndefined();
+	});
+
 	it('ignores OIDC project-creation groups for other auth backends', () => {
 		const deps = createFromEnv({
 			MARIMOHUB_STORAGE_BACKEND: 'memory',

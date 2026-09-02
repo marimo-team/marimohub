@@ -277,6 +277,25 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(upstreamFetch).toHaveBeenCalledOnce();
 	});
 
+	it('propagates the client abort to the upstream request', async () => {
+		const seen: Request[] = [];
+		const upstreamFetch = vi.fn(async (request: Request) => {
+			seen.push(request);
+			return new Response('{}', { status: 200 });
+		});
+		const controller = new AbortController();
+		const res = await app({ ai: { ...AI, upstreamFetch } }).request('/api/ai/v1/chat/completions', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', authorization: `Bearer ${await token()}` },
+			body: JSON.stringify({ model: 'gpt-4o-mini', messages: [] }),
+			signal: controller.signal,
+		});
+		expect(res.status).toBe(200);
+		expect(seen[0]?.signal.aborted).toBe(false);
+		controller.abort();
+		expect(seen[0]?.signal.aborted).toBe(true);
+	});
+
 	it('falls back to the default model when off the allowlist', async () => {
 		const fetchMock = vi
 			.spyOn(globalThis, 'fetch')

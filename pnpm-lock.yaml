@@ -54,6 +54,9 @@ catalogs:
     '@codemirror/view':
       specifier: ^6.43.7
       version: 6.43.7
+    '@coreweave/cwsandbox':
+      specifier: 0.4.0-beta.0
+      version: 0.4.0-beta.0
     '@duckdb/duckdb-wasm':
       specifier: 1.32.0
       version: 1.32.0
@@ -782,7 +785,7 @@ importers:
   packages/compute-coreweave:
     dependencies:
       '@coreweave/cwsandbox':
-        specifier: 0.4.0-beta.0
+        specifier: 'catalog:'
         version: 0.4.0-beta.0
       '@marimo-hub/compute-commons':
         specifier: workspace:*

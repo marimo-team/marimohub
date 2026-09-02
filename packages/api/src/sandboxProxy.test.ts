@@ -5,14 +5,19 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
-	LocalResourceConstraintPolicy,
 	ProxyExposure,
 	signProxyToken,
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
 import type { Authenticator, ProjectId, UserId } from '@marimo-hub/core';
-import { ACTOR, makeFakeCompute, uid } from '@marimo-hub/core/testing';
+import {
+	ACTOR,
+	localResourceSecurity,
+	makeFakeCompute,
+	makeSubjectContext,
+	uid,
+} from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createApi } from './createApi';
 import { createInitializedBucket, makeTestDeps } from './testing';
@@ -155,11 +160,7 @@ describe('authorizeProxyRequest', () => {
 			{ classification: 'SECRET', compartments: ['element-a'] },
 			ACTOR,
 		);
-		const security = {
-			constraints: new LocalResourceConstraintPolicy({
-				classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-			}),
-		};
+		const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET']);
 		// Wired but contextless, and unwired entirely: both fail closed and mask.
 		for (const override of [{ resourceSecurity: security }, {}]) {
 			const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
@@ -182,11 +183,7 @@ describe('authorizeProxyRequest', () => {
 		);
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
 			...deps(ACTOR),
-			resourceSecurity: {
-				constraints: new LocalResourceConstraintPolicy({
-					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-				}),
-			},
+			resourceSecurity: localResourceSecurity(['UNCLASSIFIED', 'SECRET']),
 		});
 		expect(d).toMatchObject({ kind: 'reject', status: 404, message: 'Session not found' });
 	});
@@ -212,21 +209,10 @@ describe('authorizeProxyRequest', () => {
 		const contextExpiry = new Date(Date.now() + 60_000).toISOString();
 		const d = await authorizeProxyRequest(req(`/proxy/${farToken}/`), {
 			...deps(ACTOR),
-			resourceSecurity: {
-				constraints: new LocalResourceConstraintPolicy({
-					classificationOrder: ['UNCLASSIFIED', 'SECRET'],
-				}),
-				subjectContext: {
-					resolve: async () =>
-						({
-							schemaVersion: 1,
-							classification: 'SECRET',
-							compartments: [],
-							policyVersion: 'p1',
-							expiresAt: contextExpiry,
-						}) as never,
-				},
-			},
+			resourceSecurity: localResourceSecurity(
+				['UNCLASSIFIED', 'SECRET'],
+				makeSubjectContext({ compartments: [], expiresAt: contextExpiry }),
+			),
 		});
 		expect(d).toMatchObject({ kind: 'forward' });
 		// The CURRENT context expiry wins over the deadline stamped at start.
@@ -391,7 +377,6 @@ describe('authorizeProxyRequest', () => {
 				settings: {},
 				extensionGallery: 'openvsx',
 				embed: 'tab',
-				marimoWatch: true,
 			},
 		};
 		const path = `/surface-proxy/${token}/vscode/stable/out.js?v=1`;
@@ -431,7 +416,6 @@ describe('authorizeProxyRequest', () => {
 				settings: {},
 				extensionGallery: 'openvsx',
 				embed: 'tab',
-				marimoWatch: true,
 			},
 		};
 
@@ -447,6 +431,24 @@ describe('authorizeProxyRequest', () => {
 		expect(allowed).toMatchObject({
 			kind: 'forward',
 			targetUrl: `http://vscode.internal:8443${expectedPath}`,
+		});
+	});
+
+	it('strips the prefix for any surface whose persisted routing says so', async () => {
+		await createServices(bucket).sessions.setSurfaceState(pid, sessionId as never, 'opencode', {
+			status: 'ready',
+			origin_url: 'http://opencode.internal:4096',
+			proxy_path: 'strip-prefix',
+		});
+
+		const allowed = await authorizeProxyRequest(
+			req(`/surface-proxy/${token}/opencode/global/health?x=1`),
+			deps(ACTOR),
+		);
+
+		expect(allowed).toMatchObject({
+			kind: 'forward',
+			targetUrl: 'http://opencode.internal:4096/global/health?x=1',
 		});
 	});
 

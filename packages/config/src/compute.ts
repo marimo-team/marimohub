@@ -1,5 +1,6 @@
 import { Millis, Seconds } from '@marimo-hub/core';
 import type { SandboxExposureMode, SandboxProvider } from '@marimo-hub/core';
+import type { SandboxConfig } from '@marimo-hub/api';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { CoreWeaveCompute, createKernelIngressPublisher } from '@marimo-hub/compute-coreweave';
@@ -18,7 +19,7 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import type { LoadedAdapterLibraries } from './library';
 import { CONFIG_SPEC } from './spec';
-import { surfacesFromEnv } from './surfaces';
+import { surfacePorts } from './surfaces';
 
 const COMPUTE_BACKEND_VALUES = [
 	...(CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [])
@@ -132,6 +133,8 @@ export interface ComputeOptions {
 	sessionMaxLifetimeSeconds?: Seconds;
 	/** Effective marimohub idle deadline; Modal uses 1.5× this as a fallback. */
 	sessionIdleTimeoutMs?: Millis;
+	/** Enabled secondary surfaces; backends that reserve ports at create time read theirs here. */
+	surfaces?: SandboxConfig['surfaces'];
 	libraries?: LoadedAdapterLibraries;
 }
 
@@ -209,11 +212,8 @@ export function usesSandboxNativeObjectStorage(env: Env): boolean {
  * create-time only). Deriving them here keeps `multiPort` honest: it is
  * advertised exactly when the configured surfaces' ports are on every sandbox.
  */
-function coreWeaveExtraPorts(env: Env): readonly number[] | undefined {
-	const surfaces = surfacesFromEnv(env);
-	const ports = [surfaces?.vscode?.port, surfaces?.opencode?.port].filter(
-		(port): port is number => port !== undefined,
-	);
+function coreWeaveExtraPorts(surfaces: SandboxConfig['surfaces']): readonly number[] | undefined {
+	const ports = surfacePorts(surfaces);
 	return ports.length > 0 ? ports : undefined;
 }
 
@@ -325,7 +325,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			}
 			return new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
-				extraPorts: coreWeaveExtraPorts(env),
+				extraPorts: coreWeaveExtraPorts(opts?.surfaces),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
@@ -448,6 +448,20 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY;
 			const proxyExposure = opts?.sandboxExposureMode === 'proxy';
 			const ingressTlsMode = proxyExposure ? undefined : kubernetesIngressTlsMode(env);
+			const hostnameTemplate = env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE;
+			// Proxy exposure publishes no Ingress, so a template built on the public
+			// host (the subdomain default) would yield a URL with nothing behind it.
+			if (proxyExposure && hostnameTemplate && /\{host\}|\{token\}/.test(hostnameTemplate)) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE for proxy exposure: ${hostnameTemplate} ` +
+						'(proxy mode reaches the Service inside the cluster and creates no Ingress for {host}/{token} URLs)',
+					{
+						variable: 'MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE',
+						remediation:
+							'Unset it, or use an in-cluster template such as http://{name}.{namespace}.svc.cluster.local:{port}.',
+					},
+				);
+			}
 			if (pullPolicy && !['Always', 'IfNotPresent', 'Never'].includes(pullPolicy)) {
 				throw new ConfigError(
 					`Invalid MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: ${pullPolicy}`,
@@ -462,7 +476,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
 				image: defaultImage,
 				hostname: proxyExposure ? undefined : env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
-				hostnameTemplate: env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE,
+				hostnameTemplate,
 				ingressClassName: proxyExposure
 					? undefined
 					: env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
