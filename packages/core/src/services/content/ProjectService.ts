@@ -12,12 +12,19 @@ import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
-import { assertVersionMatch, ConflictError, NotFoundError, ValidationError } from '../../errors';
+import {
+	assertVersionMatch,
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+	ValidationError,
+} from '../../errors';
 import { createProjectId, SYSTEM_ACTOR } from '../../ids';
 import type { ProjectId, SnapshotId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import { metricsObserver, saga } from '../../saga';
 import { parseStored, ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
 import { normalizeSecurityLabels } from '../../securityLabels';
@@ -430,25 +437,38 @@ export class ProjectService {
 		);
 
 		let previous: ResourceSecurityLabels | null = null;
-		const updated = await mutateObject(
-			this.bucket,
-			key,
-			(raw) => parseStored(ProjectSchema, raw, key),
-			(current) => {
-				assertVersionMatch(current.updated_at, expectedVersion);
-				if (current.status === 'deleted') {
-					throw new NotFoundError(`Project ${id} not found`);
-				}
-				previous = current.security_labels ?? null;
-				const { security_labels: _cleared, ...rest } = current;
-				return {
-					...rest,
-					...(normalized !== undefined ? { security_labels: normalized } : {}),
-					updated_at: new Date().toISOString(),
-				};
-			},
-			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
-		);
+		let updated: Project;
+		try {
+			updated = await mutateObject(
+				this.bucket,
+				key,
+				(raw) => parseStored(ProjectSchema, raw, key),
+				(current) => {
+					assertVersionMatch(current.updated_at, expectedVersion);
+					if (current.status === 'deleted') {
+						throw new NotFoundError(`Project ${id} not found`);
+					}
+					previous = current.security_labels ?? null;
+					const { security_labels: _cleared, ...rest } = current;
+					return {
+						...rest,
+						...(normalized !== undefined ? { security_labels: normalized } : {}),
+						updated_at: new Date().toISOString(),
+					};
+				},
+				{ notFound: () => new NotFoundError(`Project ${id} not found`) },
+			);
+		} catch (err) {
+			// These are thrown by the callback BEFORE the conditional put (a lost
+			// CAS is retried, and a failed put surfaces as its own error), so the
+			// authoritative record is untouched and the parked projection can be
+			// re-derived from it. Any other failure is ambiguous — the put may have
+			// committed — and must leave the projection indeterminate.
+			if (err instanceof PreconditionFailedError || err instanceof NotFoundError) {
+				await this.unparkSecurityLabels(id, actor);
+			}
+			throw err;
+		}
 
 		await this.catalog.updateProjectEntry(
 			'project.security_labels',
@@ -463,6 +483,34 @@ export class ProjectService {
 		);
 
 		return updated;
+	}
+
+	/**
+	 * Restore a determinate projection after a label mutation was rejected
+	 * between parking and its authoritative write. Re-projecting the record
+	 * (rather than restoring the labels captured at park time) stays correct
+	 * when the rejection was caused by another label mutation that has already
+	 * committed its record but not yet finalized. A failed rollback is logged,
+	 * not raised: the projection is merely still indeterminate, and the caller
+	 * must see the original rejection.
+	 */
+	private async unparkSecurityLabels(id: ProjectId, actor: UserId): Promise<void> {
+		try {
+			await this.catalog.updateProjectEntry(
+				'project.security_labels.rollback',
+				actor,
+				id,
+				(entry) =>
+					loadProjectCatalogPatch(this.bucket, id, entry, { finalizeSecurityLabels: true }),
+				{ project_id: id },
+			);
+		} catch (err) {
+			logOperationalError(
+				'security_labels_rollback_failed',
+				{ operation: 'project.security_labels.rollback', project_id: id },
+				err,
+			);
+		}
 	}
 
 	/**

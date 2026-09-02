@@ -13,9 +13,11 @@ import { shellQuote } from '../shell';
 import type { SurfaceContext, SurfaceId, SurfaceSpec } from './types';
 import type { SurfaceRegistry } from './registry';
 import {
+	launchSurfaceProcessCommand,
 	stopSurfaceProcessCommand,
 	surfaceCancelFile,
 	surfacePidFile,
+	surfaceProcessAliveCommand,
 	surfaceStateDir,
 } from './state';
 
@@ -70,10 +72,6 @@ async function validateOpenInSandbox(
 	if (!result.success) throw new SurfaceOpenInvalidError('Surface open path escapes the workspace');
 }
 
-function processAliveCommand(pidFile: string): string {
-	return `test -f ${shellQuote(pidFile)} && pid="$(cat ${shellQuote(pidFile)})" && case "$pid" in ''|*[!0-9]*) exit 1;; esac && kill -0 "$pid" 2>/dev/null`;
-}
-
 async function surfaceIsReady(
 	instance: ReturnType<SandboxProvider['create']>,
 	pidFile: string,
@@ -81,7 +79,7 @@ async function surfaceIsReady(
 	path: string,
 ): Promise<boolean> {
 	if (port === undefined) return false;
-	const alive = await instance.exec(processAliveCommand(pidFile), { timeout: 5_000 });
+	const alive = await instance.exec(surfaceProcessAliveCommand(pidFile), { timeout: 5_000 });
 	if (!alive.success) return false;
 	if (instance.isPortReady) {
 		return instance.isPortReady(port, { mode: 'http', path });
@@ -268,7 +266,7 @@ export class SurfaceManager {
 			const port = options.port ?? spec.defaultPort;
 			const launch = spec.command(context, port);
 			process = await instance.startProcess(
-				`mkdir -p ${shellQuote(context.userDataDir)} && test ! -f ${shellQuote(cancelFile)} && echo $$ > ${shellQuote(pidFile)} && test ! -f ${shellQuote(cancelFile)} && exec ${commandLine(launch.cmd)}`,
+				launchSurfaceProcessCommand(pidFile, cancelFile, commandLine(launch.cmd)),
 				{ cwd: context.workspaceDir, env: launch.env, processId: `surface-${id}` },
 			);
 			const afterLaunch = await this.sessions.getSession(session.project_id, session.session_id);
@@ -314,7 +312,22 @@ export class SurfaceManager {
 			}
 			return { status: 'ready', state };
 		} catch (error) {
-			await process?.kill().catch(() => {});
+			const killed = process
+				? await process.kill().then(
+						() => true,
+						() => false,
+					)
+				: true;
+			// A stop that fenced this attempt left a cancellation marker for its
+			// launcher. Once no launcher can still read it (never launched, or
+			// killed), drop it so repeated cancellations do not pile up in /tmp.
+			if (killed) {
+				await instance
+					.exec(`rm -f ${shellQuote(surfaceCancelFile(session.session_id, id, attemptId))}`, {
+						timeout: 5_000,
+					})
+					.catch(() => {});
+			}
 			if (!(error instanceof SurfaceUnavailableError)) {
 				await this.sessions
 					.setSurfaceStateForAttempt(session.project_id, session.session_id, id, attemptId, {

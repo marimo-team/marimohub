@@ -95,6 +95,19 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 		});
 		return res;
 	} catch (err) {
+		if (c.req.raw.signal.aborted) {
+			// The abort is the client's own (forwarded above); nobody is waiting
+			// for the response, so this is not an upstream failure.
+			logEvent({
+				level: 'info',
+				event: 'ai_proxy_cancelled',
+				path,
+				project_id: claims.projectId,
+				session_id: claims.sessionId,
+				model,
+			});
+			return openAiError('Request cancelled by the client', 'cancelled', 400);
+		}
 		logEvent({
 			level: 'error',
 			event: 'ai_proxy_upstream_error',

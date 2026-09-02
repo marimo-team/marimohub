@@ -93,6 +93,14 @@ describe('makeAi', () => {
 		);
 	});
 
+	it.each(['eusc-de-east-1', 'us-gov-west-1', 'ap-southeast-7'])(
+		'accepts the Bedrock region %s',
+		(region) => {
+			const { ai } = makeAi({ ...bedrockEnv, MARIMOHUB_AI_AWS_REGION: region });
+			expect(ai?.upstreamBaseUrl).toBe(`https://bedrock-runtime.${region}.amazonaws.com/openai/v1`);
+		},
+	);
+
 	it.each(['EU-WEST-1', 'eu-west', 'eu-west-1.amazonaws.com', 'euwest1'])(
 		'rejects a malformed Bedrock region %s',
 		(region) => {

@@ -63,13 +63,14 @@ export function useSurfaceActions(projectId: string, notebookId: string) {
 	const [states, setStates] = useState<Partial<Record<SecondarySurfaceId, SurfaceActionState>>>({});
 	const invalidate = useInvalidate();
 	// A start can poll for minutes; unmounting must end the loop rather than let
-	// it keep hitting the API (and setting state) for a page that is gone.
+	// it keep hitting the API (and setting state) for a page that is gone. The
+	// same applies when the route swaps notebooks under a mounted NotebookPage.
 	const lifetime = useRef<AbortController | null>(null);
 	useEffect(() => {
 		const controller = new AbortController();
 		lifetime.current = controller;
 		return () => controller.abort();
-	}, []);
+	}, [projectId, notebookId]);
 	const startKey = ['surface', projectId, notebookId, 'start'] as const;
 	const stopKey = ['surface', projectId, notebookId, 'stop'] as const;
 	const start = useMutation({

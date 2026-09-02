@@ -3,7 +3,12 @@ import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { Millis } from '../../duration';
-import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
+import {
+	assertVersionMatch,
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+} from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR, VersionId } from '../../ids';
 import {
 	isWorkspaceDirectoryMarkerPath,
@@ -505,25 +510,36 @@ export class NotebookService {
 		);
 
 		let previous: ResourceSecurityLabels | null = null;
-		const updated = await mutateObject(
-			this.bucket,
-			nb.meta,
-			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
-			(current) => {
-				assertVersionMatch(current.updated_at, expectedVersion);
-				if (current.status === 'deleted') {
-					throw new NotFoundError(`Notebook ${notebookId} not found`);
-				}
-				previous = current.security_labels ?? null;
-				const { security_labels: _cleared, ...rest } = current;
-				return {
-					...rest,
-					...(normalized !== undefined ? { security_labels: normalized } : {}),
-					updated_at: new Date().toISOString(),
-				};
-			},
-			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
-		);
+		let updated: NotebookMeta;
+		try {
+			updated = await mutateObject(
+				this.bucket,
+				nb.meta,
+				(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+				(current) => {
+					assertVersionMatch(current.updated_at, expectedVersion);
+					if (current.status === 'deleted') {
+						throw new NotFoundError(`Notebook ${notebookId} not found`);
+					}
+					previous = current.security_labels ?? null;
+					const { security_labels: _cleared, ...rest } = current;
+					return {
+						...rest,
+						...(normalized !== undefined ? { security_labels: normalized } : {}),
+						updated_at: new Date().toISOString(),
+					};
+				},
+				{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
+			);
+		} catch (err) {
+			// Thrown by the callback BEFORE the conditional put, so the record is
+			// untouched and the projection can be re-derived from it (see the
+			// project flow for why a put failure must stay indeterminate instead).
+			if (err instanceof PreconditionFailedError || err instanceof NotFoundError) {
+				await this.unparkSecurityLabels(projectId, notebookId, actor);
+			}
+			throw err;
+		}
 
 		await this.catalog.updateNotebookEntry(
 			'notebook.security_labels',
@@ -544,6 +560,36 @@ export class NotebookService {
 		);
 
 		return updated;
+	}
+
+	/** Notebook twin of `ProjectService.unparkSecurityLabels`; same rationale. */
+	private async unparkSecurityLabels(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+	): Promise<void> {
+		try {
+			await this.catalog.updateNotebookEntry(
+				'notebook.security_labels.rollback',
+				actor,
+				projectId,
+				notebookId,
+				(entry) =>
+					loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry, {
+						finalizeSecurityLabels: true,
+					}),
+			);
+		} catch (err) {
+			logOperationalError(
+				'security_labels_rollback_failed',
+				{
+					operation: 'notebook.security_labels.rollback',
+					project_id: projectId,
+					notebook_id: notebookId,
+				},
+				err,
+			);
+		}
 	}
 
 	async updateNotebook(

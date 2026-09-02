@@ -76,7 +76,10 @@ describe('SurfaceManager', () => {
 		expect(second.status).toBe('ready');
 		expect(calls.startProcess).toHaveLength(1);
 		expect(calls.startProcess[0].cmd).toContain('surface.pid');
-		expect(calls.startProcess[0].cmd.match(/cancel-/g)).toHaveLength(2);
+		expect(
+			calls.startProcess[0].cmd.match(/if test -f '[^']*\/vscode\/cancel-[^']*'; then/g),
+		).toHaveLength(2);
+		expect(calls.startProcess[0].cmd).toMatch(/; exec 'code-server' /);
 		expect(calls.waitForPort).toEqual([8443]);
 		expect(calls.exposePort).toEqual([
 			{
@@ -268,6 +271,7 @@ describe('SurfaceManager', () => {
 		await expect(start).rejects.toThrow('cancelled');
 		expect(prepare).not.toHaveBeenCalled();
 		expect(calls.startProcess).toHaveLength(0);
+		expect(calls.exec.at(-1)).toMatch(/^rm -f '[^']*\/vscode\/cancel-[^']*'$/);
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });
@@ -702,7 +706,7 @@ describe('SurfaceManager', () => {
 		).toMatchObject({ status: 'stopping', attempt_id: expect.any(String) });
 		finishStop();
 		await stop;
-		expect(calls.exec.at(-1)).toContain('then exit 1');
+		expect(calls.exec.at(-1)).toContain('else exit 1; fi');
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toEqual({ status: 'stopped' });

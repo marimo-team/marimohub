@@ -63,6 +63,8 @@ class PutFailingBucket extends MemoryBucket {
 class ClaimObservingBucket extends MemoryBucket {
 	claimWrites: string[] = [];
 	stealClaimAfterPuts: number | null = null;
+	/** Objects the intruder writes right after taking the lease. */
+	intruderWrites: [key: string, value: string][] = [];
 	targetPuts = 0;
 
 	override async put(...args: Parameters<MemoryBucket['put']>) {
@@ -80,6 +82,9 @@ class ClaimObservingBucket extends MemoryBucket {
 						expires_at: new Date(Date.now() + 60_000).toISOString(),
 					}),
 				);
+				for (const [intruderKey, intruderValue] of this.intruderWrites) {
+					await super.put(intruderKey, intruderValue);
+				}
 			}
 		}
 		return super.put(...args);
@@ -425,7 +430,7 @@ describe('NotebookWorkspaceService', () => {
 		}
 	});
 
-	it('aborts and rolls back a copy whose lease was taken over', async () => {
+	it('leaves a partial copy in place when the lease is taken over', async () => {
 		vi.useFakeTimers();
 		try {
 			const observing = new ClaimObservingBucket();
@@ -436,12 +441,21 @@ describe('NotebookWorkspaceService', () => {
 			}
 			observing.targetPuts = 0;
 			observing.stealClaimAfterPuts = WORKSPACE_MUTATION_HEARTBEAT_EVERY;
+			// The new holder overwrites one key the interrupted copy already wrote
+			// and adds one of its own; a blind rollback would delete both.
+			observing.intruderWrites = [
+				[nb.workspaceFile('target/0.txt'), 'intruder'],
+				[nb.workspaceFile('target/own.txt'), 'intruder'],
+			];
 
-			await expect(service.copy(PROJECT_ID, NOTEBOOK_ID, 'source', 'target')).rejects.toThrow(
-				ConflictError,
-			);
-			await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'target')).rejects.toThrow('not found');
+			const copy = service.copy(PROJECT_ID, NOTEBOOK_ID, 'source', 'target');
+			await expect(copy).rejects.toThrow(ConflictError);
+			await expect(copy).rejects.toThrow('may be partial');
 			expect((await readClaim(observing)).holder).toBe('intruder');
+			for (const path of ['target/0.txt', 'target/own.txt']) {
+				const { bytes } = await service.read(PROJECT_ID, NOTEBOOK_ID, path);
+				expect(new TextDecoder().decode(bytes)).toBe('intruder');
+			}
 		} finally {
 			vi.useRealTimers();
 		}

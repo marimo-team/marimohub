@@ -439,7 +439,15 @@ async function mutateSecurityLabels(
 				? 'security-labels.raise'
 				: 'security-labels.lower';
 	await assertProjectActionOn(project, user, action, deps);
-	const updated = await projects.setSecurityLabels(pid, labels, user.id, ifMatchToken(c));
+	// The raise/lower decision was made against `project`; without a client
+	// precondition, pin the write to that version so a concurrent label change
+	// yields 412 instead of being overwritten by a decision on stale labels.
+	const updated = await projects.setSecurityLabels(
+		pid,
+		labels,
+		user.id,
+		ifMatchToken(c) ?? project.updated_at,
+	);
 	c.header('ETag', etagFor(updated.updated_at));
 	return c.json({ success: true, data: projectResponse(updated, user, deps.policy) }, 200);
 }

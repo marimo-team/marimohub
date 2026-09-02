@@ -5,8 +5,8 @@
  * so the centralization (and any future constraint work) cannot change them
  * silently.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
-import { UserId } from '@marimo-hub/core';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NotebookId, ProjectId, UserId } from '@marimo-hub/core';
 import type { Authenticator, SubjectSecurityContext } from '@marimo-hub/core';
 import {
 	localResourceSecurity,
@@ -644,6 +644,63 @@ describe('authorization characterization: label mutation unhappy paths', () => {
 			'PRECONDITION_FAILED',
 		);
 		await expectOk(await god.request('DELETE', path, undefined, { 'If-Match': etag! }));
+	});
+
+	it('rejects a label change that raced a concurrent mutation even without If-Match (412)', async () => {
+		const bucket = new MemoryBucket();
+		const god = apiFor(
+			bucket,
+			OWNER,
+			wired({
+				resourceSecurity: localResourceSecurity(
+					ORDER,
+					makeSubjectContext({ compartments: ['element-a', 'element-b'] }),
+				),
+			}),
+		);
+		const pid = ProjectId.parse(await createProject(god));
+		const nid = NotebookId.parse(await createNotebook(god, pid));
+		const { projects, notebooks } = god.deps.services;
+		const RAISED = { classification: 'SECRET', compartments: ['element-b'] };
+		// A second admin's raise commits after the handler authorized its own
+		// change against the unlabeled record but before the write.
+		vi.spyOn(projects, 'setSecurityLabels').mockImplementationOnce(async (...args) => {
+			vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+			await projects.setSecurityLabels(pid, RAISED, OWNER);
+			return projects.setSecurityLabels(...args);
+		});
+		vi.spyOn(notebooks, 'setSecurityLabels').mockImplementationOnce(async (...args) => {
+			vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+			await notebooks.setSecurityLabels(pid, nid, RAISED, OWNER);
+			return notebooks.setSecurityLabels(...args);
+		});
+		try {
+			await expectError(
+				await god.request('PUT', `/projects/${pid}/security-labels`, LABELS),
+				412,
+				'PRECONDITION_FAILED',
+			);
+			await expectError(
+				await god.request('PUT', `/projects/${pid}/notebooks/${nid}/security-labels`, LABELS),
+				412,
+				'PRECONDITION_FAILED',
+			);
+		} finally {
+			vi.useRealTimers();
+			vi.restoreAllMocks();
+		}
+		// The concurrent writer's labels stand, and the rejected attempt left
+		// both projections determinate.
+		expect((await projects.getProject(pid)).security_labels).toEqual(RAISED);
+		expect((await notebooks.getNotebook(pid, nid)).meta.security_labels).toEqual(RAISED);
+		const project = (await god.deps.services.catalog.getCurrentSnapshot()).projects.find(
+			(p) => p.id === pid,
+		);
+		expect(project?.security_labels).toEqual(RAISED);
+		expect(project?.security_labels_pending).toBeUndefined();
+		const notebook = project?.notebooks.find((n) => n.id === nid);
+		expect(notebook?.security_labels).toEqual(RAISED);
+		expect(notebook?.security_labels_pending).toBeUndefined();
 	});
 
 	it('lets a super admin with a dominating context clear labels', async () => {

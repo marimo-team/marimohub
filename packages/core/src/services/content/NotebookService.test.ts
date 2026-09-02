@@ -2377,6 +2377,37 @@ describe('NotebookService security labels', () => {
 		expect(list.map((n) => n.id)).toContain(meta.id);
 	});
 
+	it('restores a determinate projection when a concurrent write rejects the precondition after parking', async () => {
+		const nid = await createLabeled();
+		const labeled = (await notebooks.getNotebook(pid, nid)).meta;
+		const realUpdate = catalog.updateNotebookEntry.bind(catalog);
+		const parking = vi
+			.spyOn(catalog, 'updateNotebookEntry')
+			.mockImplementation(async (operation, ...rest) => {
+				const snap = await realUpdate(operation, ...rest);
+				if (operation === 'notebook.security_labels.pending') {
+					vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+					await notebooks.updateNotebook(pid, nid, { title: 'renamed' }, ACTOR);
+				}
+				return snap;
+			});
+		try {
+			await expect(
+				notebooks.setSecurityLabels(pid, nid, undefined, ACTOR, labeled.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+		} finally {
+			parking.mockRestore();
+			vi.useRealTimers();
+		}
+		const entry = await entryFor(nid);
+		expect(entry?.title).toBe('renamed');
+		expect(entry?.security_labels).toEqual(labeled.security_labels);
+		expect(entry?.security_labels_pending).toBeUndefined();
+		expect((await notebooks.getNotebook(pid, nid)).meta.security_labels).toEqual(
+			labeled.security_labels,
+		);
+	});
+
 	it('self-heals an indeterminate projection on the next routine write', async () => {
 		const nid = await createLabeled();
 		await catalog.updateNotebookEntry('test.strip', ACTOR, pid, nid, () => ({

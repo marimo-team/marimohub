@@ -1306,12 +1306,14 @@ async function mutateNotebookSecurityLabels(
 	// against the notebook's current labels, not the project's alone, or a
 	// super admin outside the compartment could clear it to gain visibility.
 	await assertProjectActionOn(project, user, action, deps, previous ?? null);
+	// Same as the project flow: pin the write to the version the decision was
+	// made against when the client sent no precondition.
 	const meta = await deps.services.notebooks.setSecurityLabels(
 		pid,
 		nid,
 		labels,
 		user.id,
-		ifMatchToken(c),
+		ifMatchToken(c) ?? existing.meta.updated_at,
 	);
 	c.header('ETag', etagFor(meta.updated_at));
 	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 200);

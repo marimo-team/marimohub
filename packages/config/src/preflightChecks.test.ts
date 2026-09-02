@@ -576,7 +576,7 @@ describe('ai.upstream check', () => {
 			},
 		);
 
-		it('points at the region, not an upstream URL, on other errors', async () => {
+		it('points at the region, not an upstream URL, on 404', async () => {
 			const { by } = await run(
 				{},
 				signedAi(async () => new Response(null, { status: 404 })),
@@ -584,6 +584,23 @@ describe('ai.upstream check', () => {
 			expect(by('ai.upstream')?.status).toBe('fail');
 			expect(by('ai.upstream')?.remediation).toContain('MARIMOHUB_AI_AWS_REGION');
 			expect(by('ai.upstream')?.remediation).not.toContain('MARIMOHUB_AI_UPSTREAM_BASE_URL');
+		});
+
+		it('does not blame the region for throttling or service errors', async () => {
+			for (const status of [429, 500, 503]) {
+				const { by } = await run(
+					{},
+					signedAi(async () => new Response(null, { status })),
+				);
+				expect(by('ai.upstream')?.status).toBe('fail');
+				expect(by('ai.upstream')?.remediation).not.toContain('MARIMOHUB_AI_AWS_REGION');
+				expect(by('ai.upstream')?.remediation).not.toContain('MARIMOHUB_AI_UPSTREAM_BASE_URL');
+			}
+			const throttled = await run(
+				{},
+				signedAi(async () => new Response(null, { status: 429 })),
+			);
+			expect(throttled.by('ai.upstream')?.remediation).toContain('throttling');
 		});
 
 		it('fail with a credential-chain remediation when signing itself throws', async () => {

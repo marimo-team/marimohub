@@ -277,23 +277,31 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(upstreamFetch).toHaveBeenCalledOnce();
 	});
 
-	it('propagates the client abort to the upstream request', async () => {
-		const seen: Request[] = [];
-		const upstreamFetch = vi.fn(async (request: Request) => {
-			seen.push(request);
-			return new Response('{}', { status: 200 });
-		});
+	it('cancels the in-flight upstream request when the client aborts', async () => {
+		const upstreamFetch = vi.fn(
+			(request: Request) =>
+				new Promise<Response>((_resolve, reject) => {
+					request.signal.addEventListener(
+						'abort',
+						() => reject(new DOMException('Aborted', 'AbortError')),
+						{ once: true },
+					);
+				}),
+		);
 		const controller = new AbortController();
-		const res = await app({ ai: { ...AI, upstreamFetch } }).request('/api/ai/v1/chat/completions', {
+		const pending = app({ ai: { ...AI, upstreamFetch } }).request('/api/ai/v1/chat/completions', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json', authorization: `Bearer ${await token()}` },
 			body: JSON.stringify({ model: 'gpt-4o-mini', messages: [] }),
 			signal: controller.signal,
 		});
-		expect(res.status).toBe(200);
-		expect(seen[0]?.signal.aborted).toBe(false);
+		await vi.waitFor(() => expect(upstreamFetch).toHaveBeenCalledOnce());
 		controller.abort();
-		expect(seen[0]?.signal.aborted).toBe(true);
+		const res = await pending;
+		// The upstream promise rejected with the abort, and the proxy reported a
+		// cancellation rather than an upstream outage.
+		expect(res.status).toBe(400);
+		await expectOpenAiError(res, 'Request cancelled by the client', 'cancelled');
 	});
 
 	it('falls back to the default model when off the allowlist', async () => {

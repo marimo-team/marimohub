@@ -29,7 +29,9 @@ const BEDROCK_REGION_VARS = [
 	'AWS_DEFAULT_REGION',
 ] as const;
 
-const AWS_REGION_PATTERN = /^[a-z]{2}(-[a-z]+)+-\d+$/;
+// Partition prefixes are not always two letters (`eusc-de-east-1`); only the
+// hostname-safe shape matters, since the value becomes part of the endpoint.
+const AWS_REGION_PATTERN = /^[a-z]+(-[a-z]+)+-\d+$/;
 
 export function sqlGenerationInstructions(
 	dialect: 'duckdb' | 'postgresql',

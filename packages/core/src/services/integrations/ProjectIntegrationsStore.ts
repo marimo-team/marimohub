@@ -261,6 +261,12 @@ export interface IntegrationsStoreOptions {
 	dataQuery?: DataQueryService;
 	databaseTestGate?: IntegrationQueryGate;
 	queryGate?: IntegrationQueryGate;
+	/**
+	 * Per-minute cap on native database connection tests. Defaults to one
+	 * process-wide budget shared by the project and org facades, so the cap
+	 * matches the HTTP probe's instead of multiplying per store.
+	 */
+	databaseTestBudget?: SlidingWindowBudget<'test'>;
 }
 
 export type IntegrationQueryGate = (input: {
@@ -273,6 +279,11 @@ export type IntegrationQueryGate = (input: {
  * probe enforces for HTTP kinds (`createGuardedProbe` in `@marimo-hub/config`).
  */
 const DEFAULT_MAX_PROBES_PER_MINUTE = 30;
+
+const sharedDatabaseTestBudget: SlidingWindowBudget<'test'> = createSlidingWindowBudget({
+	limit: DEFAULT_MAX_PROBES_PER_MINUTE,
+	windowMs: 60_000,
+});
 
 /**
  * Scope-generic machinery shared by the project and org tiers. Not exported:
@@ -314,11 +325,7 @@ class ScopedIntegrationsStore {
 		this.dataQuery = options.dataQuery;
 		this.databaseTestGate = options.databaseTestGate;
 		this.queryGate = options.queryGate;
-		this.databaseTestBudget = createSlidingWindowBudget({
-			limit: DEFAULT_MAX_PROBES_PER_MINUTE,
-			windowMs: 60_000,
-			now: () => Date.parse(this.now()),
-		});
+		this.databaseTestBudget = options.databaseTestBudget ?? sharedDatabaseTestBudget;
 	}
 
 	private queryGateBlocker(kind: string, config: unknown): QueryReadinessCheck | undefined {

@@ -16,6 +16,7 @@ import { ObjectBrowseError } from '../../ports/objectBrowser';
 import type { ObjectBrowseContext, ObjectBrowser } from '../../ports/objectBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
 import type { SecretResolver } from '../../ports/secrets';
+import { createSlidingWindowBudget } from '../../rateLimit';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
 import { INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
@@ -2027,6 +2028,11 @@ describe('ProjectIntegrationsStore', () => {
 			probe: stubProbe,
 			now: () => new Date(clock).toISOString(),
 			databaseTesters: { postgres: { provider: 'postgres', testConnection } },
+			databaseTestBudget: createSlidingWindowBudget({
+				limit: 30,
+				windowMs: 60_000,
+				now: () => clock,
+			}),
 		});
 		const request = {
 			source: 'draft' as const,
@@ -2051,6 +2057,48 @@ describe('ProjectIntegrationsStore', () => {
 
 		clock += 60_001;
 		await expect(store.test(pid, request)).resolves.toMatchObject({ ok: true });
+	});
+
+	it('shares one default database test budget between the project and org facades', async () => {
+		vi.useFakeTimers();
+		try {
+			// The default budget is process-wide, so first age out whatever earlier
+			// tests in this module consumed.
+			vi.advanceTimersByTime(60_001);
+			const testConnection = vi.fn(async () => ({ ok: true, details: 'ok' }));
+			const options = {
+				bucket,
+				registry: defaultRegistry(),
+				codec,
+				probe: stubProbe,
+				databaseTesters: { postgres: { provider: 'postgres' as const, testConnection } },
+			};
+			const project = new ProjectIntegrationsStore(options);
+			const org = new OrgIntegrationsStore(options);
+			const request = {
+				source: 'draft' as const,
+				kind: 'postgres',
+				config: {
+					host: 'database.example.test',
+					database: 'analytics',
+					username: 'reader',
+					password: 'database-secret',
+				},
+			};
+
+			for (let attempt = 0; attempt < 15; attempt++) {
+				await project.test(pid, request);
+				await org.test(request);
+			}
+			expect(testConnection).toHaveBeenCalledTimes(30);
+			await expect(project.test(pid, request)).rejects.toThrow(ResourceExhaustedError);
+			await expect(org.test(request)).rejects.toThrow(ResourceExhaustedError);
+
+			vi.advanceTimersByTime(60_001);
+			await expect(org.test(request)).resolves.toMatchObject({ ok: true });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

@@ -331,7 +331,11 @@ async function checkAi(deps: ApiDeps): Promise<CheckOutcome> {
 			status: 'fail',
 			message: `AI upstream returned ${res.status} for ${url}`,
 			remediation: signed
-				? 'Set MARIMOHUB_AI_AWS_REGION to a region that serves the Bedrock OpenAI-compatible endpoint.'
+				? res.status === 404
+					? 'Set MARIMOHUB_AI_AWS_REGION to a region that serves the Bedrock OpenAI-compatible endpoint.'
+					: res.status === 429
+						? 'Bedrock is throttling the hub; check the account quotas for the configured models.'
+						: 'Bedrock returned a service error; retry, and check the AWS Health Dashboard for the region.'
 				: 'Set MARIMOHUB_AI_UPSTREAM_BASE_URL to the provider /v1 base URL.',
 		};
 	} catch (err) {

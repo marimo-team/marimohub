@@ -1123,6 +1123,37 @@ describe('ProjectService security labels', () => {
 		expect(list.map((e) => e.id)).toEqual([p.id]);
 	});
 
+	it('restores a determinate projection when a concurrent write rejects the precondition after parking', async () => {
+		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
+		const labeled = await projects.setSecurityLabels(p.id, LABELS, ACTOR);
+		// Another writer lands after the pre-check (which the parked version
+		// passes) and before the CAS callback re-reads the record.
+		const realUpdate = catalog.updateProjectEntry.bind(catalog);
+		const parking = vi
+			.spyOn(catalog, 'updateProjectEntry')
+			.mockImplementation(async (operation, ...rest) => {
+				const snap = await realUpdate(operation, ...rest);
+				if (operation === 'project.security_labels.pending') {
+					vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+					await projects.updateProject(p.id, { name: 'renamed' }, ACTOR);
+				}
+				return snap;
+			});
+		try {
+			await expect(
+				projects.setSecurityLabels(p.id, undefined, ACTOR, labeled.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+		} finally {
+			parking.mockRestore();
+			vi.useRealTimers();
+		}
+		const entry = await entryFor(p.id);
+		expect(entry?.name).toBe('renamed');
+		expect(entry?.security_labels).toEqual(labeled.security_labels);
+		expect(entry?.security_labels_pending).toBeUndefined();
+		expect((await projects.getProject(p.id)).security_labels).toEqual(labeled.security_labels);
+	});
+
 	it('self-heals an indeterminate projection on the next routine write', async () => {
 		const p = await projects.createProject({ name: 'L', description: 'l' }, ACTOR);
 		await catalog.updateProjectEntry('test.strip', ACTOR, p.id, () => ({

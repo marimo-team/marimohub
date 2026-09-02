@@ -98,6 +98,14 @@ interface ParsedWorkspaceMutationClaim {
 
 const LegacyWorkspaceMutationClaimSchema = z.object({ holder: z.string().nullable() });
 
+/** A heartbeat found the lease released or held by another mutator. */
+class MutationLeaseLostError extends ConflictError {
+	constructor(message = 'Workspace mutation lease was lost; retry the operation') {
+		super(message);
+		this.name = 'MutationLeaseLostError';
+	}
+}
+
 const DENIED_VERBS: Record<WorkspaceOperation, string> = {
 	create: 'created as a directory',
 	write: 'written',
@@ -471,6 +479,11 @@ export class NotebookWorkspaceService {
 				written.push(targetKey);
 			}
 		} catch (error) {
+			if (!(await this.ownsWrites(lease, error))) {
+				throw new MutationLeaseLostError(
+					`Workspace mutation lease was lost; the copy to ${target} was interrupted and may be partial`,
+				);
+			}
 			if (written.length > 0) await this.bucket.delete(written).catch(() => {});
 			if (error instanceof PreconditionFailedError) {
 				throw new ConflictError(`Workspace entry ${target} already exists`);
@@ -505,10 +518,30 @@ export class NotebookWorkspaceService {
 		try {
 			await this.deleteUnlocked(projectId, notebookId, from, lease);
 		} catch (error) {
-			await this.deleteUnlocked(projectId, notebookId, to, lease).catch(() => {});
+			if (await this.ownsWrites(lease, error)) {
+				await this.deleteUnlocked(projectId, notebookId, to, lease).catch(() => {});
+			}
 			throw error;
 		}
 		return copied;
+	}
+
+	/**
+	 * Whether a failed mutation may still delete what it wrote. The Bucket port
+	 * has no conditional delete, so ownership is proven by renewing the lease
+	 * instead: every mutator takes the lease before writing, so a renewal that
+	 * succeeds means nobody else has touched these keys since the mutation
+	 * began. Once the lease is gone the partial output is left for the new
+	 * holder rather than risk deleting its writes.
+	 */
+	private async ownsWrites(lease: MutationLease, error: unknown): Promise<boolean> {
+		if (error instanceof MutationLeaseLostError) return false;
+		try {
+			await lease.heartbeat();
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	private async withMutation<T>(
@@ -593,9 +626,7 @@ export class NotebookWorkspaceService {
 			});
 			return true;
 		});
-		if (!renewed) {
-			throw new ConflictError('Workspace mutation lease was lost; retry the operation');
-		}
+		if (!renewed) throw new MutationLeaseLostError();
 	}
 
 	private async context(projectId: ProjectId, notebookId: NotebookId): Promise<WorkspaceContext> {
