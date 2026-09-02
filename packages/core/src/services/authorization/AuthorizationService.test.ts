@@ -6,8 +6,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { AuthSubject } from '../../authz';
-import { UserId } from '../../ids';
+import { ProjectId, UserId } from '../../ids';
+import type { AuthenticatedPrincipal } from '../../ports/auth';
 import { makeProject } from '../../testing';
+import type { TokenGrant } from '../../tokenGrants';
 import { AuthorizationService } from './AuthorizationService';
 import type { AuthorizationResource, SessionAdmissionRecord } from './AuthorizationService';
 import { ACTION_RULES, AUTHORIZATION_ACTIONS, PROJECT_ACTIONS } from './actions';
@@ -21,6 +23,10 @@ const MANAGER = subject('user_manager');
 const EDITOR = subject('user_editor');
 const VIEWER = subject('user_viewer');
 const STRANGER = subject('user_stranger');
+
+function pat(who: AuthSubject, grant: TokenGrant): AuthenticatedPrincipal {
+	return { ...who, credential: { kind: 'personal-access-token', grant } };
+}
 
 const project = makeProject({
 	owner: OWNER.id,
@@ -145,6 +151,100 @@ describe('AuthorizationService: deployment actions', () => {
 		await expect(
 			restricted.authorize(creator, 'project.create', { kind: 'deployment' }),
 		).resolves.toEqual({ allowed: true, role: null });
+	});
+});
+
+describe('AuthorizationService: credential grants', () => {
+	it('intersects explicit actions with the current project role', async () => {
+		const readOnly = pat(OWNER, { actions: ['project.read'], projects: '*' });
+		await expect(service().authorize(readOnly, 'project.read', onProject())).resolves.toMatchObject(
+			{
+				allowed: true,
+			},
+		);
+		await expect(service().authorize(readOnly, 'project.update', onProject())).resolves.toEqual({
+			allowed: false,
+			category: 'credential-action',
+			role: 'admin',
+		});
+
+		const wildcardViewer = pat(VIEWER, { actions: '*', projects: '*' });
+		await expect(
+			service().authorize(wildcardViewer, 'project.update', onProject()),
+		).resolves.toEqual({ allowed: false, category: 'role', role: 'viewer' });
+	});
+
+	it('masks projects outside a selected-project grant', async () => {
+		const anotherProject = ProjectId.parse('proj-0000000000000002');
+		const selected = pat(OWNER, { actions: '*', projects: [anotherProject] });
+		await expect(service().authorize(selected, 'project.read', onProject())).resolves.toEqual({
+			allowed: false,
+			category: 'credential-resource',
+			role: 'admin',
+		});
+		await expect(service().authorize(selected, 'project.update', onProject())).resolves.toEqual({
+			allowed: false,
+			category: 'credential-resource',
+			role: 'admin',
+		});
+		const excludedStranger = pat(STRANGER, {
+			actions: '*',
+			projects: [anotherProject],
+		});
+		await expect(
+			service().authorize(excludedStranger, 'project.update', onProject()),
+		).resolves.toEqual({
+			allowed: false,
+			category: 'credential-resource',
+			role: null,
+		});
+	});
+
+	it('denies deployment actions when a grant selects projects', async () => {
+		const selected = pat(OWNER, { actions: '*', projects: [project.id] });
+		await expect(
+			service().authorize(selected, 'project.create', { kind: 'deployment' }),
+		).resolves.toEqual({ allowed: false, category: 'credential-resource', role: null });
+		await expect(
+			service().authorize(selected, 'admin.access', { kind: 'deployment' }),
+		).resolves.toEqual({ allowed: false, category: 'credential-resource', role: null });
+	});
+
+	it('preserves lifecycle and visibility masking before credential denials', async () => {
+		const excluded = pat(OWNER, { actions: [], projects: [project.id] });
+		await expect(
+			service().authorize(excluded, 'project.read', onProject(deletedProject)),
+		).resolves.toEqual({ allowed: false, category: 'lifecycle', role: null });
+
+		const hidden = pat(STRANGER, { actions: [], projects: [project.id] });
+		await expect(service().authorize(hidden, 'project.read', onProject())).resolves.toEqual({
+			allowed: false,
+			category: 'visibility',
+			role: null,
+		});
+	});
+
+	it('applies credential grants in batch decisions', async () => {
+		const another = makeProject({ id: ProjectId.parse('proj-0000000000000002'), owner: OWNER.id });
+		const selected = pat(OWNER, { actions: ['project.read'], projects: [project.id] });
+		const decisions = await service().authorizeMany(selected, 'project.read', [
+			onProject(),
+			onProject(another),
+		]);
+		expect(decisions[0]).toMatchObject({ allowed: true });
+		expect(decisions[1]).toMatchObject({
+			allowed: false,
+			category: 'credential-resource',
+		});
+	});
+
+	it('includes the credential stage in analyzer output', async () => {
+		const readOnly = pat(OWNER, { actions: ['project.read'], projects: '*' });
+		const analysis = await service().analyze(readOnly, 'project.update', onProject());
+		expect(analysis.presentation).toBe('forbidden');
+		expect(analysis.trace).toContainEqual(
+			expect.objectContaining({ stage: 'credential', status: 'failed' }),
+		);
 	});
 });
 

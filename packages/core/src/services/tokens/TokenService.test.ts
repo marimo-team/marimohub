@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { advanceTime, MemoryBucket, restoreClock, uid } from '../../testing';
 import { NotFoundError, ResourceExhaustedError, UnavailableError } from '../../errors';
-import { TokenId } from '../../ids';
+import { ProjectId, TokenId } from '../../ids';
 import { paths } from '../../paths';
+import type { TokenGrant } from '../../tokenGrants';
 import { IdentityService } from '../identity/IdentityService';
 import {
 	bearerToken,
 	hashPatSecret,
+	hashScopedPatSecret,
 	isPatRequest,
 	isPersonalAccessToken,
 	PAT_PREFIX,
@@ -19,6 +21,8 @@ const withAuth = (value?: string): Request =>
 	});
 
 const OWNER = uid('sub-owner');
+const PROJECT = ProjectId.parse('proj-0000000000000001');
+const SCOPED_GRANT: TokenGrant = { actions: ['project.read'], projects: [PROJECT] };
 
 describe('TokenService', () => {
 	let bucket: MemoryBucket;
@@ -56,6 +60,21 @@ describe('TokenService', () => {
 			};
 			expect(stored.hash).toBe(await hashPatSecret(secret));
 			expect(JSON.stringify(stored)).not.toContain(secret);
+		});
+
+		it('creates a domain-separated v2 record for an explicit grant', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			const secret = token.slice(token.lastIndexOf('_') + 1);
+			const stored = (await (await bucket.get(paths.token(TokenId.parse(record.id))))!.json()) as {
+				credential_version: number;
+				grant: unknown;
+				hash: string;
+			};
+
+			expect(stored).toMatchObject({ credential_version: 2, grant: SCOPED_GRANT });
+			expect(stored.hash).toBe(await hashScopedPatSecret(TokenId.parse(record.id), secret));
+			expect(stored.hash).not.toBe(await hashPatSecret(secret));
+			expect(record.grant).toEqual(SCOPED_GRANT);
 		});
 
 		it('stamps expires_at from expiresInDays', async () => {
@@ -155,6 +174,52 @@ describe('TokenService', () => {
 				name: 'Owner',
 				credential: { kind: 'personal-access-token', id: record.id },
 			});
+		});
+
+		it('attaches a v2 grant to the credential', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			expect((await tokens.verify(token))?.credential).toEqual({
+				kind: 'personal-access-token',
+				id: record.id,
+				grant: SCOPED_GRANT,
+			});
+		});
+
+		it('rejects a v2 record that contains a legacy hash', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			const secret = token.slice(token.lastIndexOf('_') + 1);
+			const key = paths.token(TokenId.parse(record.id));
+			const stored = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			await bucket.put(key, JSON.stringify({ ...stored, hash: await hashPatSecret(secret) }));
+
+			expect(await new TokenService(bucket, identities).verify(token)).toBeNull();
+		});
+
+		it('rejects a v2 token copied to a different token id', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			const secret = token.slice(token.lastIndexOf('_') + 1);
+			const copiedId = TokenId.parse('0'.repeat(26));
+			const stored = (await (await bucket.get(
+				paths.token(TokenId.parse(record.id)),
+			))!.json()) as Record<string, unknown>;
+			await bucket.put(paths.token(copiedId), JSON.stringify({ ...stored, id: copiedId }));
+
+			expect(
+				await new TokenService(bucket, identities).verify(`${PAT_PREFIX}${copiedId}_${secret}`),
+			).toBeNull();
+		});
+
+		it.each([
+			{ credential_version: 2 },
+			{ grant: SCOPED_GRANT },
+			{ credential_version: 3, grant: SCOPED_GRANT },
+		])('rejects an inconsistent stored record: %j', async (fields) => {
+			const { token, record } = await tokens.create({ name: 'legacy' }, OWNER);
+			const key = paths.token(TokenId.parse(record.id));
+			const stored = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			await bucket.put(key, JSON.stringify({ ...stored, ...fields }));
+
+			expect(await new TokenService(bucket, identities).verify(token)).toBeNull();
 		});
 
 		it('carries the token expiry as bounded credential provenance', async () => {
@@ -265,6 +330,29 @@ describe('TokenService', () => {
 			};
 			expect(after.future_field).toBe('keep-me'); // unknown key survived
 			expect(after.last_used_at).not.toBe('2000-01-01T00:00:00.000Z'); // and it did rewrite
+		});
+
+		it('preserves a v2 grant and forward fields when it rewrites last_used_at', async () => {
+			const { token, record } = await tokens.create({ name: 'scoped', grant: SCOPED_GRANT }, OWNER);
+			const key = paths.token(TokenId.parse(record.id));
+			const stored = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			await bucket.put(
+				key,
+				JSON.stringify({
+					...stored,
+					future_field: { keep: true },
+					last_used_at: '2000-01-01T00:00:00.000Z',
+				}),
+			);
+
+			expect(await tokens.verify(token)).toBeTruthy();
+			const after = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			expect(after).toMatchObject({
+				credential_version: 2,
+				grant: SCOPED_GRANT,
+				future_field: { keep: true },
+			});
+			expect(after.last_used_at).not.toBe('2000-01-01T00:00:00.000Z');
 		});
 
 		it('rejects a revoked token immediately in the same process', async () => {

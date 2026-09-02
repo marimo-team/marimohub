@@ -4,10 +4,11 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
+	BUCKET_SCAN_CONCURRENCY,
 	DOMAIN_ERROR_CODES,
 	MAX_SECURITY_COMPARTMENTS,
+	mapWithConcurrency,
 	SECURITY_LABEL_TOKEN,
-	effectiveRole,
 	ForbiddenError,
 	NotebookId,
 	NotFoundError,
@@ -21,7 +22,6 @@ import {
 	SESSION_MODES,
 	SESSION_STATUSES,
 	SessionId,
-	sessionGrants,
 	sessionPersistsEdits,
 	subjectDefaultRole,
 	SessionRetirer,
@@ -32,23 +32,21 @@ import {
 } from '@marimo-hub/core';
 import type {
 	AuthorizationPolicy,
+	AuthorizationSubject,
 	AuthSubject,
-	AuthzPolicy,
 	CredentialKind,
 	ResourceSecurityLabels,
 	ResourceSecurityPolicy,
 	NotebookDetail,
 	ComputeResources,
 	DeploymentAction,
-	EditorSandboxSharing,
 	Project,
 	ProjectAction,
 	ProjectService,
 	SessionAdmissionRecord,
 	SessionScopedAction,
 	Session,
-	SessionActor,
-	ViewerMode,
+	TokenGrant,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
@@ -123,7 +121,7 @@ export function authorizationService(deps: AuthzDeps): AuthorizationService {
  */
 export async function assertProjectActionOn(
 	project: Project,
-	subject: AuthSubject,
+	subject: AuthorizationSubject,
 	action: ProjectAction,
 	deps: AuthzDeps = {},
 	notebookLabels: ResourceSecurityLabels | null = null,
@@ -134,6 +132,9 @@ export async function assertProjectActionOn(
 		notebookLabels,
 	});
 	if (decision.allowed) return;
+	if (decision.category === 'credential-action') {
+		throw new ForbiddenError(`Token grant does not permit '${action}' on project ${project.id}`);
+	}
 	if (decision.category === 'role') {
 		throw new ForbiddenError(
 			`Requires '${projectActionMinRole(action)}' role on project ${project.id}`,
@@ -153,13 +154,40 @@ export async function assertProjectActionOn(
 export async function assertProjectRole(
 	projects: ProjectService,
 	pid: ProjectId,
-	subject: AuthSubject,
+	subject: AuthorizationSubject,
 	action: ProjectAction,
 	deps: AuthzDeps = {},
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
 	await assertProjectActionOn(project, subject, action, deps);
 	return project;
+}
+
+export async function assertTokenGrantProjectsVisible(
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	subject: AuthorizationSubject,
+	grant: TokenGrant,
+): Promise<void> {
+	if (grant.projects === '*') return;
+	let projects: Project[];
+	try {
+		projects = await mapWithConcurrency(grant.projects, BUCKET_SCAN_CONCURRENCY, (projectId) =>
+			deps.services.projects.getProject(projectId),
+		);
+	} catch (error) {
+		if (error instanceof NotFoundError) {
+			throw new NotFoundError('One or more selected projects were not found');
+		}
+		throw error;
+	}
+	const decisions = await authorizationService(deps).authorizeMany(
+		subject,
+		'project.read',
+		projects.map((project) => ({ kind: 'project' as const, project })),
+	);
+	if (decisions.some((decision) => !decision.allowed)) {
+		throw new NotFoundError('One or more selected projects were not found');
+	}
 }
 
 /**
@@ -223,11 +251,17 @@ export async function assertSessionNotebookVisible(
  * Enforce that the caller is a deployment super admin (`MARIMOHUB_SUPER_ADMINS`).
  * Gates org-scoped resources, which no project role can reach.
  */
-export async function assertSuperAdmin(subject: AuthSubject, deps: AuthzDeps = {}): Promise<void> {
+export async function assertSuperAdmin(
+	subject: AuthorizationSubject,
+	deps: AuthzDeps = {},
+): Promise<void> {
 	const decision = await authorizationService(deps).authorize(subject, 'admin.access', {
 		kind: 'deployment',
 	});
 	if (!decision.allowed) {
+		if (decision.category === 'credential-resource') {
+			throw new NotFoundError('Deployment resource not found');
+		}
 		throw new ForbiddenError('Requires super admin');
 	}
 }
@@ -274,38 +308,26 @@ export function authMethodFor(kind: CredentialKind): HonoEnv['Variables']['authM
 
 export { subjectDefaultRole };
 
-/** The slice of PolicyConfig the session gates need. */
-export type SessionPolicy = AuthzPolicy & {
-	viewerMode?: ViewerMode;
-	editorSandboxSharing?: EditorSandboxSharing;
-};
-
-/**
- * The caller as `sessionCan` sees them, with the role evaluated against the
- * loaded project. Roles are re-evaluated per request — ownership of a stamped
- * record alone must not outlive a revoked membership.
- */
-export function sessionActorFor(
-	project: Project,
-	subject: AuthSubject,
-	policy: SessionPolicy,
-): SessionActor {
-	return {
-		userId: subject.id,
-		role: effectiveRole(project, subject, policy),
-		viewerMode: policy.viewerMode,
-		editorSandboxSharing: policy.editorSandboxSharing,
-	};
-}
-
 /** The caller's evaluated grants on a session — the `can` object in responses. */
-export function sessionGrantsFor(
+export async function sessionGrantsFor(
 	project: Project,
-	subject: AuthSubject,
+	subject: AuthorizationSubject,
 	session: SessionAdmissionRecord,
-	policy: SessionPolicy,
-): { attach: boolean; stop: boolean; surface: boolean } {
-	return sessionGrants(sessionActorFor(project, subject, policy), session);
+	deps: AuthzDeps,
+	notebookLabels: ResourceSecurityLabels | null = null,
+): Promise<{ attach: boolean; stop: boolean; surface: boolean }> {
+	const resource = { kind: 'session' as const, project, session, notebookLabels };
+	const authz = authorizationService(deps);
+	const decisions = await Promise.all([
+		authz.authorize(subject, 'session.attach', resource),
+		authz.authorize(subject, 'session.stop', resource),
+		authz.authorize(subject, 'session.surface', resource),
+	]);
+	return {
+		attach: decisions[0].allowed,
+		stop: decisions[1].allowed,
+		surface: decisions[2].allowed,
+	};
 }
 
 async function assertSession(
@@ -326,7 +348,7 @@ async function assertSession(
 	if (!decision.allowed) {
 		// A security-label denial masks the session as nonexistent, like every
 		// other constraint denial; only role/session denials use the gate's 403.
-		if (decision.category === 'constraint') {
+		if (decision.category === 'constraint' || decision.category === 'credential-resource') {
 			throw new NotFoundError('Session not found');
 		}
 		throw error();
@@ -1367,7 +1389,7 @@ export const CapabilitiesResponseSchema = z
  * Boolean form for capability flags such as `GET /me`.
  */
 export async function canDeploymentAction(
-	subject: AuthSubject,
+	subject: AuthorizationSubject,
 	action: DeploymentAction,
 	deps: AuthzDeps = {},
 ): Promise<boolean> {
@@ -1379,12 +1401,17 @@ export async function canDeploymentAction(
 
 /** {@link canDeploymentAction} as a guard: a standing denial is a plain 403. */
 export async function assertDeploymentAction(
-	subject: AuthSubject,
+	subject: AuthorizationSubject,
 	action: DeploymentAction,
 	deps: AuthzDeps = {},
 	message = 'Requires super admin',
 ): Promise<void> {
-	if (!(await canDeploymentAction(subject, action, deps))) {
-		throw new ForbiddenError(message);
+	const decision = await authorizationService(deps).authorize(subject, action, {
+		kind: 'deployment',
+	});
+	if (decision.allowed) return;
+	if (decision.category === 'credential-resource') {
+		throw new NotFoundError('Deployment resource not found');
 	}
+	throw new ForbiddenError(message);
 }

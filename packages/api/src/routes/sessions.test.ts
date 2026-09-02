@@ -1517,6 +1517,37 @@ describe('Session routes', () => {
 		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)));
 	});
 
+	it('derives session capabilities from the PAT action grant', async () => {
+		const sid = await startSession();
+		const scoped = createTestApi({
+			bucket,
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: ACTOR,
+						email: `${ACTOR}@example.com`,
+						credential: {
+							kind: 'personal-access-token',
+							grant: {
+								actions: ['project.read', 'session.attach'],
+								projects: [pid],
+							},
+						},
+					}),
+				},
+			},
+		}).request;
+
+		const session = await expectOk<ApiSession>(await scoped('GET', sessionsPath(`/${sid}`)));
+		expect(session.can).toEqual({
+			attach: true,
+			stop: false,
+			surfaces: { vscode: false, opencode: false },
+		});
+		await expectOk(await scoped('POST', sessionsPath(`/${sid}/heartbeat`)));
+		await expectError(await scoped('DELETE', sessionsPath(`/${sid}`)), 403, 'FORBIDDEN');
+	});
+
 	it('super admins do not bypass the per-user session cap', async () => {
 		const god = createTestApi({
 			bucket,
@@ -1951,6 +1982,37 @@ describe('Session routes', () => {
 			const byId = new Map(all.map((s) => [s.session_id, s.status]));
 			expect(byId.get(first.session_id)).toBe('terminated');
 			expect(byId.get(second.session_id)).toBe('running');
+		});
+
+		it('does not retire an edit session when the PAT omits session.stop', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const scoped = createTestApi({
+				bucket,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					kernelProbe: async () => 'dead' as const,
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: {
+								kind: 'personal-access-token',
+								grant: {
+									actions: ['project.read', 'session.start'],
+									projects: [pid],
+								},
+							},
+						}),
+					},
+				},
+			}).request;
+
+			const first = await expectOk<ApiSession>(await scoped('POST', sessionsPath()));
+			const second = await expectOk<ApiSession>(await scoped('POST', sessionsPath()));
+
+			expect(second.session_id).toBe(first.session_id);
+			expect(second.reused).toBe(true);
+			expect(calls.destroy).toBe(0);
 		});
 
 		it('resumes a healthy reused session without reprovisioning (probe alive)', async () => {

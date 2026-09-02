@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
-import { composeAuthenticators, createCliAuthorizationId } from '@marimo-hub/core';
+import { composeAuthenticators, createCliAuthorizationId, ProjectId } from '@marimo-hub/core';
+import type { TokenGrant } from '@marimo-hub/core';
 import { createApi, generateOpenApiDocument } from '../createApi';
 import {
 	createInitializedBucket,
@@ -16,6 +17,7 @@ const CALLBACK = 'http://127.0.0.1:49152/callback';
 const STATE = 's'.repeat(32);
 const VERIFIER = 'v'.repeat(64);
 const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
+const FULL_GRANT = { actions: '*' as const, projects: '*' as const };
 
 describe('CLI authorization routes', () => {
 	let bucket: MemoryBucket;
@@ -44,7 +46,7 @@ describe('CLI authorization routes', () => {
 		);
 	}
 
-	async function requestDevice() {
+	async function requestDevice(grant?: TokenGrant) {
 		return expectOk<{
 			device_code: string;
 			user_code: string;
@@ -53,11 +55,14 @@ describe('CLI authorization routes', () => {
 			expires_in: number;
 			interval: number;
 		}>(
-			await app.request('/api/cli/v1/device-authorizations', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ code_challenge: CHALLENGE }),
-			}),
+			await app.request(
+				grant ? '/api/cli/v1/device-authorizations/scoped' : '/api/cli/v1/device-authorizations',
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ code_challenge: CHALLENGE, ...(grant ? { grant } : {}) }),
+				},
+			),
 		);
 	}
 
@@ -88,6 +93,74 @@ describe('CLI authorization routes', () => {
 			}),
 		);
 		expect(me.id).toBe(ACTOR);
+	});
+
+	it('carries a narrowed grant through scoped loopback approval', async () => {
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'Scoped', description: 'd' }),
+			201,
+		);
+		const grant = { actions: ['project.read'], projects: [project.id] };
+		const approved = await expectOk<{ redirect_uri: string }>(
+			await request('POST', '/me/cli-authorizations/scoped', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'scoped CLI',
+				expires_in_days: 30,
+				requested_grant: FULL_GRANT,
+				grant,
+			}),
+			201,
+		);
+		const code = new URL(approved.redirect_uri).searchParams.get('code')!;
+		await expectOk(
+			await app.request('/api/cli/v1/token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code, code_verifier: VERIFIER }),
+			}),
+		);
+		const [listed] = await expectOk<{ grant?: unknown }[]>(await request('GET', '/me/tokens'));
+		expect(listed.grant).toEqual(grant);
+	});
+
+	it('rejects loopback widening with 400 before creating an authorization', async () => {
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'Narrow', description: 'd' }),
+			201,
+		);
+		await expectError(
+			await request('POST', '/me/cli-authorizations/scoped', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'wider CLI',
+				expires_in_days: 30,
+				requested_grant: { actions: ['project.read'], projects: [project.id] },
+				grant: {
+					actions: ['project.read', 'project.update'],
+					projects: [project.id],
+				},
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+		expect(await expectOk<unknown[]>(await request('GET', '/me/tokens'))).toEqual([]);
+	});
+
+	it('rejects grants on the legacy loopback endpoint', async () => {
+		await expectError(
+			await request('POST', '/me/cli-authorizations', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'legacy CLI',
+				expires_in_days: 30,
+				grant: FULL_GRANT,
+			}),
+			422,
+		);
 	});
 
 	it('approves a device login from any browser and returns the PAT through polling', async () => {
@@ -138,6 +211,107 @@ describe('CLI authorization routes', () => {
 		);
 	});
 
+	it('identifies a legacy device authorization in the approval preview', async () => {
+		const device = await requestDevice();
+		const previewResponse = await request(
+			'GET',
+			`/me/cli-device-authorizations/${device.user_code}`,
+		);
+		const preview = await expectOk<{ status: string; expires_at: string }>(previewResponse);
+		expect(preview).toMatchObject({ status: 'legacy' });
+		expect(preview).not.toHaveProperty('requested_grant');
+		expect(previewResponse.headers.get('Cache-Control')).toBe('no-store');
+	});
+
+	it('previews and narrows a scoped device grant', async () => {
+		const device = await requestDevice(FULL_GRANT);
+		const previewResponse = await request(
+			'GET',
+			`/me/cli-device-authorizations/${device.user_code}`,
+		);
+		const preview = await expectOk<{ status: string; requested_grant: unknown }>(previewResponse);
+		expect(preview.status).toBe('scoped');
+		expect(preview.requested_grant).toEqual(FULL_GRANT);
+		expect(previewResponse.headers.get('Cache-Control')).toBe('no-store');
+
+		const grant = { actions: ['project.read'], projects: '*' };
+		await expectOk(
+			await request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'scoped device CLI',
+				expires_in_days: 7,
+				grant,
+			}),
+		);
+		await expectOk(
+			await app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+			}),
+		);
+		const [listed] = await expectOk<{ grant?: unknown }[]>(await request('GET', '/me/tokens'));
+		expect(listed.grant).toEqual(grant);
+	});
+
+	it('does not consume a scoped device request after a widening attempt', async () => {
+		const approver = createTestApi({ bucket, userId: uid('scope-narrowing-approver') });
+		await approver.request('GET', '/me');
+		const requestedGrant: TokenGrant = { actions: ['project.read'], projects: '*' };
+		const device = await requestDevice(requestedGrant);
+
+		await expectError(
+			await approver.request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'wider',
+				expires_in_days: 7,
+				grant: FULL_GRANT,
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+		await expectOk(
+			await approver.request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'narrow',
+				expires_in_days: 7,
+				grant: requestedGrant,
+			}),
+		);
+		await expectOk(
+			await app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+			}),
+		);
+	});
+
+	it('does not disclose inaccessible projects during device approval', async () => {
+		const other = createTestApi({ bucket, userId: uid('other-user') }).request;
+		const project = await expectOk<{ id: string }>(
+			await other('POST', '/projects', { name: 'Private', description: 'd' }),
+			201,
+		);
+		const device = await requestDevice({ actions: '*', projects: [ProjectId.parse(project.id)] });
+
+		await expectError(
+			await request('GET', `/me/cli-device-authorizations/${device.user_code}`),
+			404,
+			'NOT_FOUND',
+		);
+		await expectError(
+			await request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'probe',
+				expires_in_days: 7,
+				grant: { actions: '*', projects: '*' },
+			}),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
 	it('marks device authorization instructions as non-cacheable', async () => {
 		const response = await app.request('/api/cli/v1/device-authorizations', {
 			method: 'POST',
@@ -148,6 +322,28 @@ describe('CLI authorization routes', () => {
 		await expectOk(response);
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
 		expect(response.headers.get('Pragma')).toBe('no-cache');
+	});
+
+	it('rejects scoped fields on legacy device endpoints', async () => {
+		await expectError(
+			await app.request('/api/cli/v1/device-authorizations', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code_challenge: CHALLENGE, grant: FULL_GRANT }),
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		await expectError(
+			await request('POST', '/me/cli-device-authorizations', {
+				user_code: 'BBBB-BBBB',
+				token_name: 'legacy CLI',
+				expires_in_days: 30,
+				grant: FULL_GRANT,
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
 	});
 
 	it('uses the configured public app URL for device verification links', async () => {
@@ -222,6 +418,39 @@ describe('CLI authorization routes', () => {
 				token_name: 'remote CLI',
 				expires_in_days: 30,
 			}),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+	});
+
+	it('budgets device previews separately from approvals', async () => {
+		const approver = createTestApi({ bucket, userId: uid('device-preview-approver') });
+		await approver.request('GET', '/me');
+
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const device = await requestDevice(FULL_GRANT);
+			await expectOk(
+				await approver.request('GET', `/me/cli-device-authorizations/${device.user_code}`),
+			);
+			await expectOk(
+				await approver.request('POST', '/me/cli-device-authorizations/scoped', {
+					user_code: device.user_code,
+					token_name: `scoped CLI ${attempt}`,
+					expires_in_days: 30,
+					grant: FULL_GRANT,
+				}),
+			);
+		}
+
+		for (let attempt = 3; attempt < 5; attempt += 1) {
+			const device = await requestDevice(FULL_GRANT);
+			await expectOk(
+				await approver.request('GET', `/me/cli-device-authorizations/${device.user_code}`),
+			);
+		}
+		const limited = await requestDevice(FULL_GRANT);
+		await expectError(
+			await approver.request('GET', `/me/cli-device-authorizations/${limited.user_code}`),
 			429,
 			'RESOURCE_EXHAUSTED',
 		);
@@ -363,6 +592,28 @@ describe('CLI authorization routes', () => {
 			'UNAUTHORIZED',
 		);
 		await expectError(
+			await deny.request('/api/v1/me/cli-authorizations/scoped', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					callback_uri: CALLBACK,
+					state: STATE,
+					code_challenge: CHALLENGE,
+					token_name: 'mohub CLI',
+					expires_in_days: 30,
+					requested_grant: FULL_GRANT,
+					grant: FULL_GRANT,
+				}),
+			}),
+			401,
+			'UNAUTHORIZED',
+		);
+		await expectError(
+			await deny.request('/api/v1/me/cli-device-authorizations/BBBB-BBBB'),
+			401,
+			'UNAUTHORIZED',
+		);
+		await expectError(
 			await deny.request('/api/v1/me/cli-device-authorizations', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
@@ -405,6 +656,26 @@ describe('CLI authorization routes', () => {
 			403,
 			'FORBIDDEN',
 		);
+		await expectError(
+			await patApp.request('/api/v1/me/cli-authorizations/scoped', {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					authorization: `Bearer ${created.token}`,
+				},
+				body: JSON.stringify({
+					callback_uri: CALLBACK,
+					state: STATE,
+					code_challenge: CHALLENGE,
+					token_name: 'mohub CLI',
+					expires_in_days: 30,
+					requested_grant: FULL_GRANT,
+					grant: FULL_GRANT,
+				}),
+			}),
+			403,
+			'FORBIDDEN',
+		);
 
 		const device = await requestDevice();
 		await expectError(
@@ -432,11 +703,21 @@ describe('CLI authorization routes', () => {
 			}
 		).paths;
 		expect(paths['/api/v1/me/cli-authorizations'].post.security).toEqual([{ cookieAuth: [] }]);
+		expect(paths['/api/v1/me/cli-authorizations/scoped'].post.security).toEqual([
+			{ cookieAuth: [] },
+		]);
 		expect(paths['/api/cli/v1/token'].post.security).toEqual([]);
 		expect(paths['/api/v1/me/cli-device-authorizations'].post.security).toEqual([
 			{ cookieAuth: [] },
 		]);
+		expect(paths['/api/v1/me/cli-device-authorizations/{userCode}'].get.security).toEqual([
+			{ cookieAuth: [] },
+		]);
+		expect(paths['/api/v1/me/cli-device-authorizations/scoped'].post.security).toEqual([
+			{ cookieAuth: [] },
+		]);
 		expect(paths['/api/cli/v1/device-authorizations'].post.security).toEqual([]);
+		expect(paths['/api/cli/v1/device-authorizations/scoped'].post.security).toEqual([]);
 		expect(paths['/api/cli/v1/device-token'].post.security).toEqual([]);
 	});
 

@@ -13,6 +13,7 @@ import { readStored, TokenSchema, toPublicToken } from '../../schema';
 import type { PublicToken, Token } from '../../schema';
 import { listAllKeys } from '../catalog/storage';
 import type { IdentityService } from '../identity/IdentityService';
+import type { TokenGrant } from '../../tokenGrants';
 
 /**
  * Personal access token format: `mhub_pat_<tokenId>_<secret>`. The fixed
@@ -70,6 +71,10 @@ export async function hashPatSecret(secret: string): Promise<string> {
 	return toHex(new Uint8Array(digest));
 }
 
+export async function hashScopedPatSecret(tokenId: TokenId, secret: string): Promise<string> {
+	return hashPatSecret(`mhub_pat:v2:${tokenId}:${secret}`);
+}
+
 /**
  * Parse a stored token object, tolerating BOTH non-JSON bytes and schema drift —
  * a single corrupt record must never take down verify/list/revoke (it just reads
@@ -93,6 +98,8 @@ export interface CreateTokenInput {
 	name: string;
 	/** Days until expiry; omitted = the token never expires. */
 	expiresInDays?: number;
+	/** An explicit grant creates a v2 credential. Omission preserves legacy v1 behavior. */
+	grant?: TokenGrant;
 }
 
 export interface CreatedToken {
@@ -143,11 +150,10 @@ export class TokenService {
 		const id = createTokenId();
 		const secret = generateSecret();
 		const now = new Date(nowMs);
-		const record: Token = {
+		const commonRecord = {
 			id,
 			user_id: userId,
 			name: input.name,
-			hash: await hashPatSecret(secret),
 			created_at: now.toISOString(),
 			...(input.expiresInDays !== undefined
 				? {
@@ -157,6 +163,15 @@ export class TokenService {
 					}
 				: {}),
 		};
+		const record: Token =
+			input.grant === undefined
+				? { ...commonRecord, hash: await hashPatSecret(secret) }
+				: {
+						...commonRecord,
+						hash: await hashScopedPatSecret(id, secret),
+						credential_version: 2,
+						grant: input.grant,
+					};
 		await this.bucket.put(paths.token(id), JSON.stringify(record));
 		return { token: `${PAT_PREFIX}${id}_${secret}`, record: toPublicToken(record) };
 	}
@@ -167,7 +182,8 @@ export class TokenService {
 	 * `verify` is a single GET, which rules out a per-user prefix here without a
 	 * separate mutable index (which the store's single-CAS-object invariant
 	 * forbids). Acceptable because listing/creating are cold self-service paths,
-	 * bounded by users × MAX_TOKENS_PER_USER — not the request hot path.
+	 * not the request hot path. The scan includes expired token records, so the
+	 * per-user live-token cap does not bound its cost.
 	 */
 	async list(userId: UserId): Promise<PublicToken[]> {
 		const keys = await listAllKeys(this.bucket, paths.tokensPrefix);
@@ -220,7 +236,11 @@ export class TokenService {
 		// earlier (id-existence is not hidden), but the 160-bit secret is what
 		// gates access, and comparing it in constant time defeats a timing probe.
 		const encoder = new TextEncoder();
-		const presented = encoder.encode(await hashPatSecret(secret));
+		const presented = encoder.encode(
+			record.credential_version === 2
+				? await hashScopedPatSecret(tokenId, secret)
+				: await hashPatSecret(secret),
+		);
 		if (!timingSafeEqual(presented, encoder.encode(record.hash))) return null;
 
 		// Expired when the deadline is now or already past.
@@ -237,6 +257,7 @@ export class TokenService {
 				kind: 'personal-access-token',
 				id: tokenId,
 				...(record.expires_at !== undefined ? { expiresAt: record.expires_at } : {}),
+				...(record.grant !== undefined ? { grant: record.grant } : {}),
 			},
 		};
 	}

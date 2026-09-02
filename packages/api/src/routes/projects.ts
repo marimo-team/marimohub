@@ -175,6 +175,7 @@ const createProject = createRoute({
 			'Project created',
 		),
 		...commonErrors(),
+		...errorResponses(404),
 	},
 });
 

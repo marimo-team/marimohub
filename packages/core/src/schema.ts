@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ResourceSecurityLabelsSchema } from './securityLabels';
+import { TokenGrantSchema } from './tokenGrants';
 import { DomainError } from './errors';
 import {
 	NOTEBOOK_STATUSES,
@@ -944,7 +945,7 @@ export type Identity = z.infer<typeof IdentitySchema>;
 // would strip fields a newer replica added and silently downgrade the object.
 // The API projection (`toResponse` in routes/tokens.ts) is an explicit pick, so
 // preserved unknown keys never leak into a response.
-export const TokenSchema = z.looseObject({
+const TokenBaseSchema = {
 	id: TokenIdSchema,
 	user_id: UserIdSchema,
 	name: z.string(),
@@ -954,7 +955,24 @@ export const TokenSchema = z.looseObject({
 	expires_at: z.iso.datetime().optional(),
 	/** Daily-coalesced usage marker; concurrent touches are intentionally last-writer-wins. */
 	last_used_at: z.iso.datetime().optional(),
-});
+};
+
+export const TokenSchema = z
+	.looseObject({
+		...TokenBaseSchema,
+		credential_version: z.literal(2).optional(),
+		grant: TokenGrantSchema.optional(),
+	})
+	.refine(
+		(token) => (token.credential_version === 2) === (token.grant !== undefined),
+		'A version 2 token must have a grant, and a grant requires version 2',
+	)
+	.meta({
+		dependentRequired: {
+			credential_version: ['grant'],
+			grant: ['credential_version'],
+		},
+	});
 
 export type Token = z.infer<typeof TokenSchema>;
 
@@ -964,7 +982,7 @@ export type Token = z.infer<typeof TokenSchema>;
 // `toPublicProjectEntry`). The one field to hide is `hash`.
 export type PublicToken = Pick<
 	Token,
-	'id' | 'user_id' | 'name' | 'created_at' | 'expires_at' | 'last_used_at'
+	'id' | 'user_id' | 'name' | 'created_at' | 'expires_at' | 'last_used_at' | 'grant'
 >;
 export function toPublicToken(token: Token): PublicToken {
 	return {
@@ -974,6 +992,7 @@ export function toPublicToken(token: Token): PublicToken {
 		created_at: token.created_at,
 		...(token.expires_at !== undefined ? { expires_at: token.expires_at } : {}),
 		...(token.last_used_at !== undefined ? { last_used_at: token.last_used_at } : {}),
+		...(token.grant !== undefined ? { grant: token.grant } : {}),
 	};
 }
 

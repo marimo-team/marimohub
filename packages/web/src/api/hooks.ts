@@ -37,6 +37,7 @@ import type {
 	SandboxStartupReport,
 	PolicySuiteV1,
 	PolicySuiteResult,
+	TokenGrant,
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -104,6 +105,14 @@ export function useCreateApiToken() {
 	);
 }
 
+export function useCreateScopedApiToken() {
+	return useApiMutation(
+		(body: { name: string; expires_in_days?: number; grant: TokenGrant }) =>
+			apiData(apiClient.POST('/api/v1/me/tokens/scoped', { body })),
+		() => [userKeys.tokens()],
+	);
+}
+
 export function useRevokeApiToken() {
 	return useApiMutation(
 		(tokenId: string) =>
@@ -129,11 +138,50 @@ export function useApproveCliAuthorization() {
 	);
 }
 
+export function useApproveScopedCliAuthorization() {
+	return useApiMutation(
+		(body: {
+			callback_uri: string;
+			state: string;
+			code_challenge: string;
+			token_name: string;
+			expires_in_days: number;
+			requested_grant: TokenGrant;
+			grant: TokenGrant;
+		}) => apiData(apiClient.POST('/api/v1/me/cli-authorizations/scoped', { body })),
+		() => [userKeys.tokens()],
+	);
+}
+
 export function useApproveCliDeviceAuthorization() {
 	return useApiMutation(
 		(body: { user_code: string; token_name: string; expires_in_days: number }) =>
 			apiData(apiClient.POST('/api/v1/me/cli-device-authorizations', { body })),
 		() => [userKeys.tokens()],
+		{ suppressErrorToast: true },
+	);
+}
+
+export function useCliDeviceAuthorizationPreview(userCode: string | null) {
+	return useQuery({
+		queryKey: ['cli-device-authorization', userCode],
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/me/cli-device-authorizations/{userCode}', {
+					params: { path: { userCode: userCode as string } },
+				}),
+			),
+		enabled: userCode !== null,
+		retry: false,
+	});
+}
+
+export function useApproveScopedCliDeviceAuthorization() {
+	return useApiMutation(
+		(body: { user_code: string; token_name: string; expires_in_days: number; grant: TokenGrant }) =>
+			apiData(apiClient.POST('/api/v1/me/cli-device-authorizations/scoped', { body })),
+		() => [userKeys.tokens()],
+		{ suppressErrorToast: true },
 	);
 }
 
@@ -276,7 +324,10 @@ export function useEvaluatePolicySuite() {
 }
 
 // Projects
-export function useProjectsQuery(filters: ProjectListFilters = {}) {
+export function useProjectsQuery(
+	filters: ProjectListFilters = {},
+	options: { enabled?: boolean; throwOnError?: boolean } = {},
+) {
 	return useQuery({
 		queryKey: projectKeys.filteredList(filters),
 		queryFn: async () =>
@@ -288,7 +339,8 @@ export function useProjectsQuery(filters: ProjectListFilters = {}) {
 				)
 			).items,
 		placeholderData: keepPreviousData,
-		throwOnError: true,
+		enabled: options.enabled,
+		throwOnError: options.throwOnError ?? true,
 	});
 }
 

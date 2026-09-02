@@ -5,12 +5,13 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
+	ProjectId,
 	ProxyExposure,
 	signProxyToken,
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
-import type { Authenticator, ProjectId, UserId } from '@marimo-hub/core';
+import type { Authenticator, TokenGrant, UserId } from '@marimo-hub/core';
 import {
 	ACTOR,
 	localResourceSecurity,
@@ -37,6 +38,16 @@ function authAs(userId: UserId | null): Authenticator {
 						credential: { kind: 'development' as const },
 					}
 				: null,
+	};
+}
+
+function authWithGrant(grant: TokenGrant): Authenticator {
+	return {
+		authenticate: async () => ({
+			id: ACTOR,
+			email: `${ACTOR}@example.com`,
+			credential: { kind: 'personal-access-token', grant },
+		}),
 	};
 }
 
@@ -122,6 +133,23 @@ describe('authorizeProxyRequest', () => {
 	it('rejects a caller without project access with 403', async () => {
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(STRANGER));
 		expect(d).toMatchObject({ kind: 'reject', status: 403 });
+	});
+
+	it('applies project and action grants to the sandbox proxy', async () => {
+		const selectedElsewhere = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+			...deps(ACTOR),
+			authenticator: authWithGrant({
+				actions: '*',
+				projects: [ProjectId.parse('proj-0000000000000002')],
+			}),
+		});
+		expect(selectedElsewhere).toMatchObject({ kind: 'reject', status: 404 });
+
+		const missingAction = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+			...deps(ACTOR),
+			authenticator: authWithGrant({ actions: ['project.read'], projects: [pid] }),
+		});
+		expect(missingAction).toMatchObject({ kind: 'reject', status: 403 });
 	});
 
 	it('rejects a suspended user with 403 and leaves the running session alive', async () => {

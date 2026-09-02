@@ -87,7 +87,7 @@ const listGlobalEvents = createRoute({
 			'Deployment audit events, newest first',
 		),
 		...commonErrors(),
-		...errorResponses(400, 403),
+		...errorResponses(400, 403, 404),
 	},
 });
 

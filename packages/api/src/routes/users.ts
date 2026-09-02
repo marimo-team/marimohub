@@ -1,7 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { ForbiddenError, UserId } from '@marimo-hub/core';
+import { ForbiddenError, NotFoundError, UserId } from '@marimo-hub/core';
 import {
-	canDeploymentAction,
+	authorizationService,
 	createApp,
 	errorResponses,
 	jsonContent,
@@ -68,7 +68,7 @@ const searchUsers = createRoute({
 			z.object({ success: z.literal(true), data: z.array(UserResponseSchema) }),
 			'Matching users, name-sorted',
 		),
-		...errorResponses(401, 403, 422),
+		...errorResponses(401, 403, 404, 422),
 	},
 });
 
@@ -81,13 +81,27 @@ app.openapi(searchUsers, async (c) => {
 	const { identities, catalog } = deps.services;
 	const user = c.get('user');
 	const { q, limit } = c.req.valid('query');
+	const authz = authorizationService(deps);
+	const credentialDecision = authz.credentialDecision(user, 'directory.search', {
+		kind: 'deployment',
+	});
+	if (!credentialDecision.allowed) {
+		if (credentialDecision.category === 'credential-resource') {
+			throw new NotFoundError('Directory search is not available');
+		}
+		throw new ForbiddenError('Token grant does not permit user search');
+	}
 
 	// The directory holds emails and names, so searching needs some standing.
 	// With a default role every authenticated user is already a collaborator on
 	// every project; under members-only, require at least one project involvement
 	// (decided from the catalog snapshot — no per-project loads) so a drive-by
 	// account cannot harvest the directory by substring.
-	if (!(await canDeploymentAction(user, 'directory.search', deps))) {
+	const { credential: _credential, ...directorySubject } = user;
+	const directoryDecision = await authz.authorize(directorySubject, 'directory.search', {
+		kind: 'deployment',
+	});
+	if (!directoryDecision.allowed) {
 		const snapshot = await catalog.getCurrentSnapshot();
 		const email = user.email.toLowerCase();
 		const involved = snapshot.projects.some(

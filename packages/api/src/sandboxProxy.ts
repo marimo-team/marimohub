@@ -198,7 +198,11 @@ export async function authorizeProxyRequest(
 		{ kind: 'session', project, session, notebookLabels },
 	);
 	if (!decision.allowed) {
-		if (decision.category === 'lifecycle' || decision.category === 'constraint') {
+		if (
+			decision.category === 'lifecycle' ||
+			decision.category === 'constraint' ||
+			decision.category === 'credential-resource'
+		) {
 			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 		}
 		return {

@@ -24,6 +24,23 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/cli/v1/device-authorizations/scoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Start a scoped CLI device login */
+		post: operations['auth.cli.device.requestScoped'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/cli/v1/device-token': {
 		parameters: {
 			query?: never;
@@ -1528,6 +1545,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/me/tokens/scoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Create a scoped personal access token
+		 * @description Mint a v2 personal access token with an immutable action and project grant. Selected projects must be visible to the caller when the token is created.
+		 */
+		post: operations['auth.tokens.createScoped'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/me/tokens/{tokenId}': {
 		parameters: {
 			query?: never;
@@ -1568,6 +1605,23 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/me/cli-authorizations/scoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Approve a scoped CLI login */
+		post: operations['auth.cli.approveScoped'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/me/cli-device-authorizations': {
 		parameters: {
 			query?: never;
@@ -1582,6 +1636,40 @@ export interface paths {
 		 * @description Approves a short-lived device code for the signed-in user. Requires a browser session. Personal access tokens cannot approve device logins.
 		 */
 		post: operations['auth.cli.device.approve'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/me/cli-device-authorizations/{userCode}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Preview a CLI device login */
+		get: operations['auth.cli.device.preview'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/me/cli-device-authorizations/scoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Approve a scoped CLI device login */
+		post: operations['auth.cli.device.approveScoped'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2147,13 +2235,29 @@ export interface components {
 			/** @enum {string|null} */
 			role: 'viewer' | 'editor' | 'manager' | 'admin' | null;
 			/** @enum {string} */
-			category?: 'lifecycle' | 'visibility' | 'role' | 'session' | 'standing' | 'constraint';
+			category?:
+				| 'lifecycle'
+				| 'visibility'
+				| 'role'
+				| 'session'
+				| 'standing'
+				| 'constraint'
+				| 'credential-resource'
+				| 'credential-action';
 			/** @enum {string} */
 			constraint_reason?: 'missing-context' | 'constraint' | 'unavailable';
 		};
 		PolicyAuthorizationTraceStep: {
 			/** @enum {string} */
-			stage: 'action' | 'lifecycle' | 'role' | 'standing' | 'session' | 'constraint' | 'final';
+			stage:
+				| 'action'
+				| 'lifecycle'
+				| 'role'
+				| 'standing'
+				| 'session'
+				| 'constraint'
+				| 'credential'
+				| 'final';
 			/** @enum {string} */
 			status: 'passed' | 'failed' | 'skipped';
 			code: string;
@@ -2222,6 +2326,37 @@ export interface components {
 					| 'default-role:editor'
 					| 'default-role:manager'
 				)[];
+				grant?: {
+					actions:
+						| '*'
+						| (
+								| 'project.create'
+								| 'admin.access'
+								| 'org-integration.manage'
+								| 'audit.global.read'
+								| 'directory.search'
+								| 'project.read'
+								| 'project.update'
+								| 'project.delete'
+								| 'project.members.manage'
+								| 'project.events.read'
+								| 'project.alerts.manage'
+								| 'notebook.write'
+								| 'notebook.manage'
+								| 'integration.read'
+								| 'integration.use'
+								| 'integration.manage'
+								| 'change-request.publish'
+								| 'security-labels.raise'
+								| 'security-labels.lower'
+								| 'session.attach'
+								| 'session.stop'
+								| 'session.surface'
+								| 'session.proxy'
+								| 'session.start'
+						  )[];
+					projects: '*' | string[];
+				};
 			};
 			/** @enum {string} */
 			action:
@@ -2260,7 +2395,9 @@ export interface components {
 					| 'role'
 					| 'session'
 					| 'standing'
-					| 'constraint';
+					| 'constraint'
+					| 'credential-resource'
+					| 'credential-action';
 			};
 		};
 		PolicyAuthorizationResourceV1: {
@@ -3104,6 +3241,37 @@ export interface components {
 			expires_at?: string;
 			/** Format: date-time */
 			last_used_at?: string;
+			grant?: {
+				actions:
+					| '*'
+					| (
+							| 'project.create'
+							| 'admin.access'
+							| 'org-integration.manage'
+							| 'audit.global.read'
+							| 'directory.search'
+							| 'project.read'
+							| 'project.update'
+							| 'project.delete'
+							| 'project.members.manage'
+							| 'project.events.read'
+							| 'project.alerts.manage'
+							| 'notebook.write'
+							| 'notebook.manage'
+							| 'integration.read'
+							| 'integration.use'
+							| 'integration.manage'
+							| 'change-request.publish'
+							| 'security-labels.raise'
+							| 'security-labels.lower'
+							| 'session.attach'
+							| 'session.stop'
+							| 'session.surface'
+							| 'session.proxy'
+							| 'session.start'
+					  )[];
+				projects: '*' | string[];
+			};
 		};
 	};
 	responses: never;
@@ -3126,6 +3294,126 @@ export interface operations {
 				'application/json': {
 					/** @description Base64url-encoded SHA-256 PKCE challenge generated by the CLI. */
 					code_challenge: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Device and user verification codes */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							device_code: string;
+							user_code: string;
+							/** Format: uri */
+							verification_uri: string;
+							/** Format: uri */
+							verification_uri_complete: string;
+							expires_in: number;
+							interval: number;
+						};
+					};
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.cli.device.requestScoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @description Base64url-encoded SHA-256 PKCE challenge generated by the CLI. */
+					code_challenge: string;
+					grant: {
+						actions:
+							| '*'
+							| (
+									| 'project.create'
+									| 'admin.access'
+									| 'org-integration.manage'
+									| 'audit.global.read'
+									| 'directory.search'
+									| 'project.read'
+									| 'project.update'
+									| 'project.delete'
+									| 'project.members.manage'
+									| 'project.events.read'
+									| 'project.alerts.manage'
+									| 'notebook.write'
+									| 'notebook.manage'
+									| 'integration.read'
+									| 'integration.use'
+									| 'integration.manage'
+									| 'change-request.publish'
+									| 'security-labels.raise'
+									| 'security-labels.lower'
+									| 'session.attach'
+									| 'session.stop'
+									| 'session.surface'
+									| 'session.proxy'
+									| 'session.start'
+							  )[];
+						projects: '*' | string[];
+					};
 				};
 			};
 		};
@@ -3650,6 +3938,15 @@ export interface operations {
 			};
 			/** @description Access forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -5361,6 +5658,15 @@ export interface operations {
 			};
 			/** @description Access forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -13904,6 +14210,15 @@ export interface operations {
 					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Validation error */
 			422: {
 				headers: {
@@ -14078,6 +14393,149 @@ export interface operations {
 			};
 			/** @description Access forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.tokens.createScoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example ci-deploy */
+					name: string;
+					/**
+					 * @description Days until expiry; omit for a non-expiring token.
+					 * @example 90
+					 */
+					expires_in_days?: number;
+					grant: {
+						actions:
+							| '*'
+							| (
+									| 'project.create'
+									| 'admin.access'
+									| 'org-integration.manage'
+									| 'audit.global.read'
+									| 'directory.search'
+									| 'project.read'
+									| 'project.update'
+									| 'project.delete'
+									| 'project.members.manage'
+									| 'project.events.read'
+									| 'project.alerts.manage'
+									| 'notebook.write'
+									| 'notebook.manage'
+									| 'integration.read'
+									| 'integration.use'
+									| 'integration.manage'
+									| 'change-request.publish'
+									| 'security-labels.raise'
+									| 'security-labels.lower'
+									| 'session.attach'
+									| 'session.stop'
+									| 'session.surface'
+									| 'session.proxy'
+									| 'session.start'
+							  )[];
+						projects: '*' | string[];
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description The new token — copy it now; it is never shown again */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ApiTokenCreated'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -14347,6 +14805,201 @@ export interface operations {
 			};
 		};
 	};
+	'auth.cli.approveScoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/**
+					 * Format: uri
+					 * @description HTTP loopback callback using 127.0.0.1 or [::1], an explicit port, and the exact /callback path.
+					 * @example http://127.0.0.1:49152/callback
+					 */
+					callback_uri: string;
+					/** @description Opaque base64url CSRF state generated by the CLI. */
+					state: string;
+					/** @description Base64url-encoded SHA-256 PKCE challenge generated by the CLI. */
+					code_challenge: string;
+					/** @description Name shown in the user's personal access token list. */
+					token_name: string;
+					/** @description Lifetime of the personal access token minted during exchange. */
+					expires_in_days: number;
+					requested_grant: {
+						actions:
+							| '*'
+							| (
+									| 'project.create'
+									| 'admin.access'
+									| 'org-integration.manage'
+									| 'audit.global.read'
+									| 'directory.search'
+									| 'project.read'
+									| 'project.update'
+									| 'project.delete'
+									| 'project.members.manage'
+									| 'project.events.read'
+									| 'project.alerts.manage'
+									| 'notebook.write'
+									| 'notebook.manage'
+									| 'integration.read'
+									| 'integration.use'
+									| 'integration.manage'
+									| 'change-request.publish'
+									| 'security-labels.raise'
+									| 'security-labels.lower'
+									| 'session.attach'
+									| 'session.stop'
+									| 'session.surface'
+									| 'session.proxy'
+									| 'session.start'
+							  )[];
+						projects: '*' | string[];
+					};
+					grant: {
+						actions:
+							| '*'
+							| (
+									| 'project.create'
+									| 'admin.access'
+									| 'org-integration.manage'
+									| 'audit.global.read'
+									| 'directory.search'
+									| 'project.read'
+									| 'project.update'
+									| 'project.delete'
+									| 'project.members.manage'
+									| 'project.events.read'
+									| 'project.alerts.manage'
+									| 'notebook.write'
+									| 'notebook.manage'
+									| 'integration.read'
+									| 'integration.use'
+									| 'integration.manage'
+									| 'change-request.publish'
+									| 'security-labels.raise'
+									| 'security-labels.lower'
+									| 'session.attach'
+									| 'session.stop'
+									| 'session.surface'
+									| 'session.proxy'
+									| 'session.start'
+							  )[];
+						projects: '*' | string[];
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description Loopback callback carrying the one-time authorization code */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uri */
+							redirect_uri: string;
+							/** Format: date-time */
+							expires_at: string;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'auth.cli.device.approve': {
 		parameters: {
 			query?: never;
@@ -14402,6 +15055,313 @@ export interface operations {
 			};
 			/** @description Access forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.cli.device.preview': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				userCode: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description CLI device authorization type and requested grant */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data:
+							| {
+									/** @enum {string} */
+									status: 'legacy';
+									/** Format: date-time */
+									expires_at: string;
+							  }
+							| {
+									/** @enum {string} */
+									status: 'scoped';
+									requested_grant: {
+										actions:
+											| '*'
+											| (
+													| 'project.create'
+													| 'admin.access'
+													| 'org-integration.manage'
+													| 'audit.global.read'
+													| 'directory.search'
+													| 'project.read'
+													| 'project.update'
+													| 'project.delete'
+													| 'project.members.manage'
+													| 'project.events.read'
+													| 'project.alerts.manage'
+													| 'notebook.write'
+													| 'notebook.manage'
+													| 'integration.read'
+													| 'integration.use'
+													| 'integration.manage'
+													| 'change-request.publish'
+													| 'security-labels.raise'
+													| 'security-labels.lower'
+													| 'session.attach'
+													| 'session.stop'
+													| 'session.surface'
+													| 'session.proxy'
+													| 'session.start'
+											  )[];
+										projects: '*' | string[];
+									};
+									/** Format: date-time */
+									expires_at: string;
+							  };
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.cli.device.approveScoped': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					user_code: string;
+					/** @description Name shown in the user's personal access token list. */
+					token_name: string;
+					/** @description Lifetime of the personal access token minted during exchange. */
+					expires_in_days: number;
+					grant: {
+						actions:
+							| '*'
+							| (
+									| 'project.create'
+									| 'admin.access'
+									| 'org-integration.manage'
+									| 'audit.global.read'
+									| 'directory.search'
+									| 'project.read'
+									| 'project.update'
+									| 'project.delete'
+									| 'project.members.manage'
+									| 'project.events.read'
+									| 'project.alerts.manage'
+									| 'notebook.write'
+									| 'notebook.manage'
+									| 'integration.read'
+									| 'integration.use'
+									| 'integration.manage'
+									| 'change-request.publish'
+									| 'security-labels.raise'
+									| 'security-labels.lower'
+									| 'session.attach'
+									| 'session.stop'
+									| 'session.surface'
+									| 'session.proxy'
+									| 'session.start'
+							  )[];
+						projects: '*' | string[];
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description Device authorization approved */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: date-time */
+							expires_at: string;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

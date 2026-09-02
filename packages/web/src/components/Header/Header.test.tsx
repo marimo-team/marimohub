@@ -28,6 +28,7 @@ function setup(
 			const url = String(input);
 			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/me/tokens') return jsonOk([]);
+			if (url === '/api/v1/projects') return jsonOk({ items: [], next_cursor: null });
 			if (url === '/api/v1/integrations/kinds') return jsonOk([]);
 			if (url.startsWith('/api/v1/org/integrations?')) {
 				return jsonOk({

@@ -8,6 +8,15 @@ A break here means already-stored bucket objects stop parsing or readers lose
 required fields — allowlist one only with a migration or upgrade seam in place
 (see development_docs/migrations.md).
 
+Version 2 token records require both `credential_version` and `grant`. Legacy
+records omit both fields and remain valid. This restriction makes malformed or
+partially written scoped credentials fail closed.
+
+```text
+PUT /_system/tokens/{tid}.json `the request body dependentRequired was added: when `credential_version` is present, `grant` are required`
+PUT /_system/tokens/{tid}.json `the request body dependentRequired was added: when `grant` is present, `credential_version` are required`
+```
+
 GET /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 PUT /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 

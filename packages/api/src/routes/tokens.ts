@@ -1,9 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { TokenId } from '@marimo-hub/core';
-import type { PublicToken } from '@marimo-hub/core';
+import { TokenGrantSchema, TokenId } from '@marimo-hub/core';
+import type { CreatedToken, PublicToken } from '@marimo-hub/core';
 import { appendAudit } from '../log';
+import { auditTokenCreation } from '../tokenAudit';
 import {
 	assertSessionAuthenticated,
+	assertTokenGrantProjectsVisible,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -23,6 +25,7 @@ const TokenResponseSchema = z
 		expires_at: z.string().openapi({ format: 'date-time' }).optional(),
 		/** Coarse (daily) usage marker; absent until the token is first used. */
 		last_used_at: z.string().openapi({ format: 'date-time' }).optional(),
+		grant: TokenGrantSchema.optional(),
 	})
 	.openapi('ApiToken');
 
@@ -31,7 +34,7 @@ const TokenCreatedResponseSchema = TokenResponseSchema.extend({
 	token: z.string(),
 }).openapi('ApiTokenCreated');
 
-const CreateTokenBodySchema = z.object({
+const CreateTokenBodySchema = z.strictObject({
 	// Trim first so a whitespace-only name fails the non-empty check (mirrors the
 	// UI) and the stored name has no leading/trailing padding.
 	name: z.string().trim().min(1).max(100).openapi({ example: 'ci-deploy' }),
@@ -39,6 +42,10 @@ const CreateTokenBodySchema = z.object({
 		description: 'Days until expiry; omit for a non-expiring token.',
 		example: 90,
 	}),
+});
+
+const CreateScopedTokenBodySchema = CreateTokenBodySchema.extend({
+	grant: TokenGrantSchema,
 });
 
 const TokenIdParam = z.object({
@@ -70,6 +77,27 @@ const createToken = createRoute({
 		),
 		...commonErrors(),
 		...errorResponses(403, 429),
+	},
+});
+
+const createScopedToken = createRoute({
+	method: 'post',
+	path: '/me/tokens/scoped',
+	operationId: 'auth.tokens.createScoped',
+	tags: ['Auth'],
+	summary: 'Create a scoped personal access token',
+	description:
+		'Mint a v2 personal access token with an immutable action and project grant. ' +
+		'Selected projects must be visible to the caller when the token is created.',
+	security: SESSION_ONLY_SECURITY,
+	request: { body: jsonBody(CreateScopedTokenBodySchema) },
+	responses: {
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: TokenCreatedResponseSchema }),
+			'The new token — copy it now; it is never shown again',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
 	},
 });
 
@@ -120,7 +148,12 @@ function toResponse(record: PublicToken) {
 		created_at: record.created_at,
 		...(record.expires_at !== undefined ? { expires_at: record.expires_at } : {}),
 		...(record.last_used_at !== undefined ? { last_used_at: record.last_used_at } : {}),
+		...(record.grant !== undefined ? { grant: record.grant } : {}),
 	};
+}
+
+function createdTokenData({ token, record }: CreatedToken) {
+	return { ...toResponse(record), token };
 }
 
 const app = createApp();
@@ -131,22 +164,27 @@ app.openapi(createToken, async (c) => {
 	const user = c.get('user');
 	const { name, expires_in_days } = c.req.valid('json');
 
-	const { token, record } = await deps.services.tokens.create(
+	const credential = await deps.services.tokens.create(
 		{ name, expiresInDays: expires_in_days },
 		user.id,
 	);
-	await appendAudit(
-		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-		'token.create',
-		() =>
-			deps.services.events.append({
-				event: 'token.create',
-				actor: user.id,
-				token_id: record.id,
-				token_name: name,
-			}),
+	await auditTokenCreation(c, credential);
+	return c.json({ success: true as const, data: createdTokenData(credential) }, 201);
+});
+
+app.openapi(createScopedToken, async (c) => {
+	assertSessionAuthenticated(c, 'manage tokens');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { name, expires_in_days, grant } = c.req.valid('json');
+	await assertTokenGrantProjectsVisible(deps, user, grant);
+
+	const credential = await deps.services.tokens.create(
+		{ name, expiresInDays: expires_in_days, grant },
+		user.id,
 	);
-	return c.json({ success: true, data: { ...toResponse(record), token } }, 201);
+	await auditTokenCreation(c, credential);
+	return c.json({ success: true as const, data: createdTokenData(credential) }, 201);
 });
 
 app.openapi(listTokens, async (c) => {

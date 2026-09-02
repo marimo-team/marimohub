@@ -8,7 +8,6 @@ import {
 	ConflictError,
 	createGitSource,
 	DomainError,
-	effectiveRole,
 	ForbiddenError,
 	joinUrlPath,
 	NotebookId,
@@ -16,7 +15,6 @@ import {
 	MAX_WORKSPACE_FILE_BYTES,
 	notificationRouter,
 	ProjectId,
-	roleAtLeast,
 	sessionMode,
 	sourceDrift,
 	isMonotonicRestrictionIncrease,
@@ -28,6 +26,7 @@ import {
 } from '@marimo-hub/core';
 import type { SessionService, WorkspaceFileItem, WorkspaceMutationOptions } from '@marimo-hub/core';
 import {
+	authorizationService,
 	assertProjectActionOn,
 	assertSessionAuthenticated,
 	SecurityLabelsBodySchema,
@@ -866,12 +865,16 @@ async function workspaceState(
 			: loadVisibleProject(projects, pid, user, deps),
 		editSessionActive(sessions, pid, nid),
 	]);
-	await loadAuthorizedNotebook(deps, project, nid, user);
-	const role = effectiveRole(project, user, deps.policy);
+	const notebook = await loadAuthorizedNotebook(deps, project, nid, user);
+	const writeDecision = await authorizationService(deps).authorize(user, 'notebook.write', {
+		kind: 'project',
+		project,
+		notebookLabels: notebook.meta.security_labels ?? null,
+	});
 	const sourceAccess = await notebooks.workspace.access(pid, nid);
 	const readOnlyReason = !sourceAccess.writable
 		? ('git_source' as const)
-		: !roleAtLeast(role, 'editor')
+		: !writeDecision.allowed
 			? ('viewer' as const)
 			: editorActive
 				? ('active_session' as const)

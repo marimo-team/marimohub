@@ -295,6 +295,17 @@ notebook overrides use the deny-only `ResourceConstraintPolicy` port. The
 data for each principal, never from raw provider claims. A labeled resource
 fails closed and returns 404 when its constraints are not satisfied.
 
+PAT grants add a third deny-only boundary:
+
+```text
+allowed = current user authority ∧ resource security ∧ credential grant
+```
+
+`AuthorizationService` applies this boundary to every fast path and projection.
+It masks an out-of-grant project as 404 and returns 403 for an omitted action.
+Lifecycle, visibility, and label masking still take precedence. See
+[`auth.md`](./auth.md#personal-access-token-grants) for grant semantics.
+
 > **Scaling note.** The global catalog snapshot lists projects by `owner` only;
 > per-project `members` live in `project.json`. Authorized listing for a
 > non-owner therefore costs more than the 2-GET "list everything" path — it must

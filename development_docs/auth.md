@@ -36,11 +36,56 @@ property.
 Every adapter returns an `AuthenticatedPrincipal` — the user plus a required
 `credential` naming the provenance (`sso`, `personal-access-token` with the
 token id, `service-account`, or `development`) and, when bounded, its expiry.
+PAT credentials can also carry an immutable `TokenGrant`. The grant contains
+an action boundary and a project boundary. An absent PAT grant means legacy
+unrestricted behavior.
+
 The authenticator result owns this: consumers such as the API's PAT-only route
 guard read `credential.kind` and never re-derive the credential from request
 headers, which can disagree with the adapter over parsing. A PAT-shaped bearer
 still resolves exclusively through the token path (`composeAuthenticators`),
 so a revoked token can never fall through to SSO.
+
+## Personal access token grants
+
+`AuthorizationService` evaluates each request against three boundaries:
+
+```text
+allowed = current user authority ∧ resource security ∧ credential grant
+```
+
+The grant shape is strict:
+
+```ts
+{
+	actions: '*' | AuthorizationAction[];
+	projects: '*' | ProjectId[];
+}
+```
+
+`'*'` actions include future PAT-accessible actions. An explicit array denies
+new actions by default. `'*'` projects include future projects that the user
+can access. A selected list contains 1 to 100 unique project IDs. The issuer
+expands presets when it creates the token, so later preset changes do not alter
+existing grants.
+
+A selected-project grant denies deployment-level actions. It also filters
+project lists before pagination. Super-admin standing and deployment default
+roles do not bypass this boundary. Direct access outside the list returns 404.
+An omitted action returns 403 only after lifecycle, visibility, and labels pass.
+
+The analyzer uses `credential-resource` for a masked project denial and
+`credential-action` for an action denial. Its `credential` trace stage supports
+both live and synthetic grants.
+
+Scoped tokens use credential version 2. Old replicas reject v2 token records
+and CLI states. During a rolling upgrade, an old replica can reject a valid
+scoped token but cannot accept it without its grant.
+
+PAT expiry and revocation block later authentication. They do not stop a
+session that is already running. A token that can start a sandbox can run
+arbitrary notebook code. API action scopes do not confine that code or remove
+credentials that the Hub injects into the kernel.
 
 ## OIDC (`MARIMOHUB_AUTH_BACKEND=oidc`)
 

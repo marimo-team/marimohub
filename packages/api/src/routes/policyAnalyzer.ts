@@ -12,6 +12,7 @@ import {
 	SessionId,
 	SESSION_MODES,
 	SubjectSecurityContextSchema,
+	TokenGrantSchema,
 	UserId,
 	validateSubjectSecurityContext,
 } from '@marimo-hub/core';
@@ -121,6 +122,7 @@ const AuthorizationStageSchema = z
 			email: z.string().min(3).max(320),
 			entitlement_source: z.enum(['explicit', 'login']),
 			entitlements: z.array(EntitlementSchema).optional(),
+			grant: TokenGrantSchema.optional(),
 		}),
 		action: AuthorizationActionSchema,
 		resource: AnalysisResourceSchema,
@@ -128,7 +130,16 @@ const AuthorizationStageSchema = z
 		expected: z.strictObject({
 			allowed: z.boolean(),
 			denial_category: z
-				.enum(['lifecycle', 'visibility', 'role', 'session', 'standing', 'constraint'])
+				.enum([
+					'lifecycle',
+					'visibility',
+					'role',
+					'session',
+					'standing',
+					'constraint',
+					'credential-resource',
+					'credential-action',
+				])
 				.optional(),
 		}),
 	})
@@ -185,7 +196,16 @@ const AuthorizationDecisionSchema = z
 		allowed: z.boolean(),
 		role: z.enum(['viewer', 'editor', 'manager', 'admin']).nullable(),
 		category: z
-			.enum(['lifecycle', 'visibility', 'role', 'session', 'standing', 'constraint'])
+			.enum([
+				'lifecycle',
+				'visibility',
+				'role',
+				'session',
+				'standing',
+				'constraint',
+				'credential-resource',
+				'credential-action',
+			])
 			.optional(),
 		constraint_reason: z.enum(['missing-context', 'constraint', 'unavailable']).optional(),
 	})
@@ -193,7 +213,16 @@ const AuthorizationDecisionSchema = z
 
 const AuthorizationTraceStepSchema = z
 	.strictObject({
-		stage: z.enum(['action', 'lifecycle', 'role', 'standing', 'session', 'constraint', 'final']),
+		stage: z.enum([
+			'action',
+			'lifecycle',
+			'role',
+			'standing',
+			'session',
+			'constraint',
+			'credential',
+			'final',
+		]),
 		status: z.enum(['passed', 'failed', 'skipped']),
 		code: z.string(),
 		details: z.record(z.string(), z.unknown()).optional(),
@@ -496,13 +525,31 @@ async function evaluateCase(
 					id: UserId.parse(stage.subject.id),
 					email: stage.subject.email,
 					entitlements,
+					...(stage.subject.grant
+						? {
+								credential: {
+									kind: 'personal-access-token' as const,
+									grant: stage.subject.grant,
+								},
+							}
+						: {}),
 				};
 				let context: Parameters<AuthorizationService['analyze']>[3];
 				if (stage.context.mode === 'live-self') {
 					if (subject.id !== caller.id || subject.email !== caller.email) {
 						throw new Error('live_context_requires_self');
 					}
-					subject = { ...caller, entitlements };
+					subject = stage.subject.grant
+						? {
+								...caller,
+								entitlements,
+								credential: {
+									...caller.credential,
+									kind: 'personal-access-token',
+									grant: stage.subject.grant,
+								},
+							}
+						: { ...caller, entitlements };
 					context = { mode: 'live' };
 				} else {
 					const supplied = stage.context.value;

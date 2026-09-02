@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LocalResourceConstraintPolicy } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
@@ -318,6 +318,86 @@ describe('policy analyzer routes', () => {
 		expect(data.cases[0].errors).toEqual([
 			{ stage: 'authorization', code: 'live_context_requires_self' },
 		]);
+	});
+
+	it('preserves caller credential context when analyzing a live scoped grant', async () => {
+		const subjectContext = vi.fn(
+			async (principal: { credential: { subjectContextRef?: string } }) =>
+				principal.credential.subjectContextRef === 'clearance-1'
+					? {
+							schemaVersion: 1 as const,
+							classification: 'LEVEL_1',
+							compartments: [],
+							policyVersion: 'policy-1',
+							expiresAt: new Date(Date.now() + 60_000).toISOString(),
+						}
+					: null,
+		);
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				credential: {
+					kind: 'sso',
+					id: 'sso-session-1',
+					expiresAt: new Date(Date.now() + 120_000).toISOString(),
+					subjectContextRef: 'clearance-1',
+				},
+			}),
+		};
+		const { request } = createTestApi({
+			deps: {
+				authenticator,
+				policy: { superAdmins: [ACTOR] },
+				resourceSecurity: {
+					constraints: new LocalResourceConstraintPolicy({
+						classificationOrder: ['LEVEL_1'],
+					}),
+					subjectContext: { resolve: subjectContext },
+				},
+			},
+		});
+		const grant = { actions: ['project.read'] as const, projects: '*' as const };
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					authorizationCase({
+						subject: {
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							entitlement_source: 'explicit',
+							entitlements: [],
+							grant,
+						},
+						resource: {
+							source: 'synthetic',
+							kind: 'project',
+							project: {
+								owner: ACTOR,
+								members: [],
+								status: 'active',
+								security_labels: { classification: 'LEVEL_1', compartments: [] },
+							},
+						},
+						context: { mode: 'live-self' },
+					}),
+				],
+			}),
+		);
+
+		expect(data.valid).toBe(true);
+		expect(subjectContext).toHaveBeenCalledWith(
+			expect.objectContaining({
+				credential: expect.objectContaining({
+					kind: 'personal-access-token',
+					id: 'sso-session-1',
+					subjectContextRef: 'clearance-1',
+					grant,
+				}),
+			}),
+			expect.any(AbortSignal),
+		);
 	});
 
 	it('checks the actual notebook labels before analyzing a stored session', async () => {

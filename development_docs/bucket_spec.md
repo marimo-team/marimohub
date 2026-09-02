@@ -586,7 +586,9 @@ If the identity provider supplies no display name, `name` uses the email local-p
 
 ### 4.11 `_system/tokens/{token-id}.json`
 
-A personal access token record — the machine-credential counterpart of a session cookie. A token acts as its issuing user (`user_id` resolves through the identity directory and inherits the user's memberships), so no authz changes hang off this object.
+A personal access token record is the machine-credential counterpart of a
+session cookie. The token acts as its issuing user. A scoped record can only
+reduce the user's current authority.
 
 ```json
 // _system/tokens/01HXY0S6GWMBASVAG3PZ7Y2K5T.json
@@ -601,7 +603,42 @@ A personal access token record — the machine-credential counterpart of a sessi
 }
 ```
 
-**Why keyed by token id.** The presented bearer is `mhub_pat_<tokenId>_<secret>`, so verification is a **single GET** by the embedded ULID — no scan and, critically, no mutable index object that would need its own CAS discipline. `hash` is the SHA-256 of the secret; the plaintext is returned once at creation and never stored. Per-user listing is a prefix scan of `_system/tokens/` (fine at the 20-per-user cap).
+This record is a legacy version 1 token. It has no `credential_version` or
+`grant`. It grants full PAT access within the user's current authority.
+
+A scoped token has this version 2 shape:
+
+```json
+{
+	"id": "01HXY0S6GWMBASVAG3PZ7Y2K5T",
+	"user_id": "user_abc123",
+	"name": "notebook-runner",
+	"hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+	"credential_version": 2,
+	"grant": {
+		"actions": ["project.read", "integration.read", "integration.use", "session.start"],
+		"projects": ["proj-7h2k9qm4xz7rp3w8"]
+	},
+	"created_at": "2026-07-24T14:30:00Z",
+	"expires_at": "2026-10-22T14:30:00Z"
+}
+```
+
+`actions` is `"*"` or a unique canonical action list. `projects` is `"*"` or
+1 to 100 unique project IDs. Parsing fails for a missing, inconsistent, or
+unknown credential version. Other fields remain loose so the daily
+`last_used_at` rewrite preserves fields from later releases.
+
+**Why keyed by token id.** The presented bearer is
+`mhub_pat_<tokenId>_<secret>`. The embedded ULID enables one-GET verification
+without a mutable index. Version 1 hashes the secret. Version 2 hashes
+`mhub_pat:v2:<tokenId>:<secret>`. This domain separation prevents a legacy
+verifier from authenticating a scoped token after prefix rewriting. The
+plaintext is never stored.
+
+Token listing and creation scan the deployment-wide `_system/tokens/` namespace.
+They filter the records by user after the scan. The scan includes expired
+records. The 20-token live-token cap does not bound this storage cost.
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
 
@@ -611,19 +648,28 @@ A loopback grant binds the user, PAT lifetime, and PKCE challenge to a one-time
 `mhub_cli_…` code. A device grant starts without a user. It has an eight-letter,
 base-20 user code. The create-if-absent user-code claim provides an exact lookup.
 Browser approval uses CAS to add the user and PAT lifetime. Grants expire after
-ten minutes.
+ten minutes. Scoped requests also bind a requested token grant. Approval can
+remove actions or projects but cannot add them.
 
 The CLI receives the authorization secret. Storage contains only its SHA-256
 hash. Device polling must also supply the PKCE verifier before it reveals the
-grant status. User codes are case-insensitive. Each process limits approval
-attempts to five per user and limits polling separately.
+grant status. User codes are case-insensitive. Each process limits preview and
+approval attempts separately to five per user. Polling has a separate limit.
 
-`CliAuthorizationService` is the only writer. Exchange uses CAS to change the
-grant from `pending` to `claimed` before it creates the PAT. This step prevents
-replay and concurrent token creation. Exchange deletes the grant and user-code
-claim. Creating a loopback grant prunes at most 100 expired authorization records.
-Creating a device grant prunes the same records and at most 100 expired user-code
-claims. Device approval, exchange, and polling do not prune records.
+`CliAuthorizationService` is the only writer. Legacy records use
+`device_pending`, `pending`, and `claimed`. Scoped records use
+`device_pending_v2`, `pending_v2`, and `claimed_v2`. The v2 records carry the
+requested grant. Approved and claimed records also carry the narrowed grant.
+
+Exchange uses CAS to claim a pending record before PAT creation. This prevents
+replay and concurrent token creation. Exchange then deletes the authorization
+and user-code claim. Creation prunes at most 100 expired authorization records.
+Device creation also prunes at most 100 expired user-code claims. Approval,
+exchange, and polling do not prune records.
+
+Old replicas reject the v2 states. During a mixed rollout, they can reject a
+scoped authorization or token. They cannot mint or authenticate it as a legacy
+full-access token.
 
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 

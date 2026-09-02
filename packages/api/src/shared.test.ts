@@ -163,6 +163,30 @@ describe('assertProjectRole', () => {
 		).rejects.toThrow(new ForbiddenError(`Requires 'editor' role on project ${id}`));
 	});
 
+	it('identifies a PAT action denial instead of blaming the project role', async () => {
+		const bucket = new MemoryBucket();
+		const { id } = await seedProject(bucket, { owner: uid('owner-1'), members: [] });
+		const { projects } = createServices(bucket);
+
+		await expect(
+			assertProjectRole(
+				projects,
+				id,
+				{
+					id: uid('owner-1'),
+					email: 'owner-1@example.com',
+					credential: {
+						kind: 'personal-access-token',
+						grant: { actions: ['project.read'], projects: '*' },
+					},
+				},
+				'notebook.write',
+			),
+		).rejects.toThrow(
+			new ForbiddenError(`Token grant does not permit 'notebook.write' on project ${id}`),
+		);
+	});
+
 	it('names the action tier and masks hidden projects with the canonical messages', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, { owner: uid('someone-else'), members: [] });

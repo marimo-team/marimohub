@@ -6,11 +6,13 @@ import {
 	joinUrlPath,
 	parseCliAuthorizationCode,
 	ResourceExhaustedError,
+	TokenGrantSchema,
 } from '@marimo-hub/core';
-import type { CreatedToken, SlidingWindowBudget } from '@marimo-hub/core';
-import { appendAudit } from '../log';
+import type { SlidingWindowBudget } from '@marimo-hub/core';
+import { auditTokenCreation } from '../tokenAudit';
 import {
 	assertSessionAuthenticated,
+	assertTokenGrantProjectsVisible,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -49,7 +51,7 @@ const TokenLifetimeSchema = z
 	.max(3650)
 	.openapi({ description: 'Lifetime of the personal access token minted during exchange.' });
 
-const ApproveBodySchema = z.object({
+const ApproveBodySchema = z.strictObject({
 	callback_uri: CallbackUriSchema,
 	state: StateSchema,
 	code_challenge: CodeChallengeSchema,
@@ -57,22 +59,35 @@ const ApproveBodySchema = z.object({
 	expires_in_days: TokenLifetimeSchema,
 });
 
-const ExchangeBodySchema = z.object({
+const ScopedApproveBodySchema = ApproveBodySchema.extend({
+	requested_grant: TokenGrantSchema,
+	grant: TokenGrantSchema,
+});
+
+const ExchangeBodySchema = z.strictObject({
 	code: AuthorizationCodeSchema,
 	code_verifier: CodeVerifierSchema,
 });
 
-const DeviceAuthorizationBodySchema = z.object({
+const DeviceAuthorizationBodySchema = z.strictObject({
 	code_challenge: CodeChallengeSchema,
 });
 
-const DeviceApprovalBodySchema = z.object({
+const ScopedDeviceAuthorizationBodySchema = DeviceAuthorizationBodySchema.extend({
+	grant: TokenGrantSchema,
+});
+
+const DeviceApprovalBodySchema = z.strictObject({
 	user_code: z.string().trim().min(8).max(20),
 	token_name: TokenNameSchema,
 	expires_in_days: TokenLifetimeSchema,
 });
 
-const DevicePollBodySchema = z.object({
+const ScopedDeviceApprovalBodySchema = DeviceApprovalBodySchema.extend({
+	grant: TokenGrantSchema,
+});
+
+const DevicePollBodySchema = z.strictObject({
 	device_code: AuthorizationCodeSchema,
 	code_verifier: CodeVerifierSchema,
 });
@@ -110,6 +125,10 @@ const userCodeAttemptBudget = createSlidingWindowBudget<string>({
 	limit: USER_CODE_ATTEMPT_LIMIT,
 	windowMs: USER_CODE_ATTEMPT_WINDOW_MS,
 });
+const userCodePreviewBudget = createSlidingWindowBudget<string>({
+	limit: USER_CODE_ATTEMPT_LIMIT,
+	windowMs: USER_CODE_ATTEMPT_WINDOW_MS,
+});
 
 function consumeBudget<Key>(budget: SlidingWindowBudget<Key>, key: Key, message: string): void {
 	if (!budget.consume(key)) throw new ResourceExhaustedError(message);
@@ -118,26 +137,6 @@ function consumeBudget<Key>(budget: SlidingWindowBudget<Key>, key: Key, message:
 function preventCaching(c: { header(name: string, value: string): void }): void {
 	c.header('Cache-Control', 'no-store');
 	c.header('Pragma', 'no-cache');
-}
-
-async function auditTokenCreation(c: Context<HonoEnv>, credential: CreatedToken): Promise<void> {
-	const { record } = credential;
-	await appendAudit(
-		{
-			requestId: c.get('requestId'),
-			method: c.req.method,
-			path: c.req.path,
-			userId: record.user_id,
-		},
-		'token.create',
-		() =>
-			c.get('deps').services.events.append({
-				event: 'token.create',
-				actor: record.user_id,
-				token_id: record.id,
-				token_name: record.name,
-			}),
-	);
 }
 
 function assertExchangeAllowed(code: string): void {
@@ -186,6 +185,14 @@ function assertUserCodeAttemptAllowed(userId: string): void {
 	);
 }
 
+function assertUserCodePreviewAllowed(userId: string): void {
+	consumeBudget(
+		userCodePreviewBudget,
+		userId,
+		'Too many CLI device code previews; try again later.',
+	);
+}
+
 function loopbackCallback(raw: string): URL {
 	const url = new URL(raw);
 	const loopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]';
@@ -202,6 +209,34 @@ function loopbackCallback(raw: string): URL {
 		throw new BadRequestError('callback_uri must be an HTTP loopback URL ending in /callback');
 	}
 	return url;
+}
+
+function loopbackApprovalData(
+	callback: URL,
+	state: string,
+	approved: { code: string; expiresAt: string },
+) {
+	callback.searchParams.set('code', approved.code);
+	callback.searchParams.set('state', state);
+	return { redirect_uri: callback.toString(), expires_at: approved.expiresAt };
+}
+
+function deviceAuthorizationData(
+	c: Context<HonoEnv>,
+	requested: { code: string; userCode: string },
+) {
+	const publicBaseUrl = resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl);
+	const verification = new URL(joinUrlPath(publicBaseUrl, '/cli/device'));
+	const complete = new URL(verification);
+	complete.searchParams.set('user_code', requested.userCode);
+	return {
+		device_code: requested.code,
+		user_code: requested.userCode,
+		verification_uri: verification.toString(),
+		verification_uri_complete: complete.toString(),
+		expires_in: 10 * 60,
+		interval: 5,
+	};
 }
 
 const approveAuthorization = createRoute({
@@ -229,6 +264,31 @@ const approveAuthorization = createRoute({
 		),
 		...commonErrors(),
 		...errorResponses(400, 403, 429),
+	},
+});
+
+const approveScopedAuthorization = createRoute({
+	method: 'post',
+	path: '/me/cli-authorizations/scoped',
+	operationId: 'auth.cli.approveScoped',
+	'x-cli-hidden': true,
+	tags: ['Auth'],
+	summary: 'Approve a scoped CLI login',
+	security: SESSION_ONLY_SECURITY,
+	request: { body: jsonBody(ScopedApproveBodySchema) },
+	responses: {
+		201: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({
+					redirect_uri: z.url(),
+					expires_at: z.string().openapi({ format: 'date-time' }),
+				}),
+			}),
+			'Loopback callback carrying the one-time authorization code',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 429),
 	},
 });
 
@@ -281,6 +341,69 @@ const approveDeviceAuthorization = createRoute({
 	},
 });
 
+const previewDeviceAuthorization = createRoute({
+	method: 'get',
+	path: '/me/cli-device-authorizations/{userCode}',
+	operationId: 'auth.cli.device.preview',
+	'x-cli-hidden': true,
+	tags: ['Auth'],
+	summary: 'Preview a CLI device login',
+	security: SESSION_ONLY_SECURITY,
+	request: {
+		params: z.object({
+			userCode: z
+				.string()
+				.trim()
+				.min(8)
+				.max(20)
+				.openapi({ param: { name: 'userCode', in: 'path' } }),
+		}),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.discriminatedUnion('status', [
+					z.object({
+						status: z.literal('legacy'),
+						expires_at: z.string().openapi({ format: 'date-time' }),
+					}),
+					z.object({
+						status: z.literal('scoped'),
+						requested_grant: TokenGrantSchema,
+						expires_at: z.string().openapi({ format: 'date-time' }),
+					}),
+				]),
+			}),
+			'CLI device authorization type and requested grant',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 429),
+	},
+});
+
+const approveScopedDeviceAuthorization = createRoute({
+	method: 'post',
+	path: '/me/cli-device-authorizations/scoped',
+	operationId: 'auth.cli.device.approveScoped',
+	'x-cli-hidden': true,
+	tags: ['Auth'],
+	summary: 'Approve a scoped CLI device login',
+	security: SESSION_ONLY_SECURITY,
+	request: { body: jsonBody(ScopedDeviceApprovalBodySchema) },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ expires_at: z.string().openapi({ format: 'date-time' }) }),
+			}),
+			'Device authorization approved',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 429),
+	},
+});
+
 const requestDeviceAuthorization = createRoute({
 	method: 'post',
 	path: '/device-authorizations',
@@ -310,6 +433,18 @@ const requestDeviceAuthorization = createRoute({
 		),
 		...errorResponses(413, 422, 429, 500, 503),
 	},
+});
+
+const requestScopedDeviceAuthorization = createRoute({
+	method: 'post',
+	path: '/device-authorizations/scoped',
+	operationId: 'auth.cli.device.requestScoped',
+	'x-cli-hidden': true,
+	tags: ['Auth'],
+	summary: 'Start a scoped CLI device login',
+	security: [],
+	request: { body: jsonBody(ScopedDeviceAuthorizationBodySchema) },
+	responses: requestDeviceAuthorization.responses,
 });
 
 const pollDeviceAuthorization = createRoute({
@@ -354,13 +489,38 @@ app.openapi(approveAuthorization, async (c) => {
 		},
 		c.get('user').id,
 	);
-	callback.searchParams.set('code', approved.code);
-	callback.searchParams.set('state', body.state);
 	preventCaching(c);
 	return c.json(
 		{
 			success: true as const,
-			data: { redirect_uri: callback.toString(), expires_at: approved.expiresAt },
+			data: loopbackApprovalData(callback, body.state, approved),
+		},
+		201,
+	);
+});
+
+app.openapi(approveScopedAuthorization, async (c) => {
+	assertSessionAuthenticated(c, 'approve CLI logins');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const body = c.req.valid('json');
+	const callback = loopbackCallback(body.callback_uri);
+	await assertTokenGrantProjectsVisible(deps, user, body.grant);
+	const approved = await deps.services.cliAuthorizations.approveScoped(
+		{
+			codeChallenge: body.code_challenge,
+			tokenName: body.token_name,
+			expiresInDays: body.expires_in_days,
+			requestedGrant: body.requested_grant,
+			grant: body.grant,
+		},
+		user.id,
+	);
+	preventCaching(c);
+	return c.json(
+		{
+			success: true as const,
+			data: loopbackApprovalData(callback, body.state, approved),
 		},
 		201,
 	);
@@ -382,6 +542,59 @@ app.openapi(approveDeviceAuthorization, async (c) => {
 	return c.json({ success: true as const, data: { expires_at: approved.expiresAt } }, 200);
 });
 
+app.openapi(previewDeviceAuthorization, async (c) => {
+	assertSessionAuthenticated(c, 'approve CLI device logins');
+	preventCaching(c);
+	const deps = c.get('deps');
+	const user = c.get('user');
+	assertUserCodePreviewAllowed(user.id);
+	const preview = await deps.services.cliAuthorizations.previewDevice(
+		c.req.valid('param').userCode,
+	);
+	if (preview.status === 'scoped') {
+		await assertTokenGrantProjectsVisible(deps, user, preview.requestedGrant);
+	}
+	return c.json(
+		{
+			success: true as const,
+			data:
+				preview.status === 'scoped'
+					? {
+							status: 'scoped' as const,
+							requested_grant: preview.requestedGrant,
+							expires_at: preview.expiresAt,
+						}
+					: { status: 'legacy' as const, expires_at: preview.expiresAt },
+		},
+		200,
+	);
+});
+
+app.openapi(approveScopedDeviceAuthorization, async (c) => {
+	assertSessionAuthenticated(c, 'approve CLI device logins');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	assertUserCodeAttemptAllowed(user.id);
+	const body = c.req.valid('json');
+	const preview = await deps.services.cliAuthorizations.previewDevice(body.user_code);
+	if (preview.status !== 'scoped') {
+		throw new BadRequestError('CLI authorization code is invalid or expired');
+	}
+	await assertTokenGrantProjectsVisible(deps, user, preview.requestedGrant);
+	await assertTokenGrantProjectsVisible(deps, user, body.grant);
+	const approved = await deps.services.cliAuthorizations.approveDeviceScoped(
+		body.user_code,
+		{
+			tokenName: body.token_name,
+			expiresInDays: body.expires_in_days,
+			grant: body.grant,
+		},
+		user.id,
+	);
+	preventCaching(c);
+	return c.json({ success: true as const, data: { expires_at: approved.expiresAt } }, 200);
+});
+
 export const cliTokenApp = createApp();
 
 cliTokenApp.openapi(requestDeviceAuthorization, async (c) => {
@@ -389,22 +602,27 @@ cliTokenApp.openapi(requestDeviceAuthorization, async (c) => {
 	const requested = await c
 		.get('deps')
 		.services.cliAuthorizations.requestDevice(c.req.valid('json').code_challenge);
-	const publicBaseUrl = resolvePublicBaseUrl(c, c.get('deps').sandbox.appBaseUrl);
-	const verification = new URL(joinUrlPath(publicBaseUrl, '/cli/device'));
-	const complete = new URL(verification);
-	complete.searchParams.set('user_code', requested.userCode);
 	preventCaching(c);
 	return c.json(
 		{
 			success: true as const,
-			data: {
-				device_code: requested.code,
-				user_code: requested.userCode,
-				verification_uri: verification.toString(),
-				verification_uri_complete: complete.toString(),
-				expires_in: 10 * 60,
-				interval: 5,
-			},
+			data: deviceAuthorizationData(c, requested),
+		},
+		200,
+	);
+});
+
+cliTokenApp.openapi(requestScopedDeviceAuthorization, async (c) => {
+	assertDeviceRequestAllowed();
+	const body = c.req.valid('json');
+	const requested = await c
+		.get('deps')
+		.services.cliAuthorizations.requestDeviceScoped(body.code_challenge, body.grant);
+	preventCaching(c);
+	return c.json(
+		{
+			success: true as const,
+			data: deviceAuthorizationData(c, requested),
 		},
 		200,
 	);

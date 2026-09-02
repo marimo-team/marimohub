@@ -1,10 +1,18 @@
 import { useState } from 'react';
 import { ArrowRight, CheckCircle2, Clock3, ShieldAlert, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
-import { useApproveCliDeviceAuthorization } from '@/api/hooks';
+import {
+	useApproveCliDeviceAuthorization,
+	useApproveScopedCliDeviceAuthorization,
+	useCliDeviceAuthorizationPreview,
+} from '@/api/hooks';
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
 import { withBasePath } from '@/lib/basePath';
+import { errorMessage } from '@/lib/errors';
+import { TokenGrantEditor } from './TokenGrantEditor';
+import { tokenGrantFromDraft } from './tokenGrantDraft';
+import type { TokenGrantDraft } from './tokenGrantDraft';
 
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
 const TOKEN_LIFETIME_PRESETS = ['7', '30', '90'] as const;
@@ -33,13 +41,44 @@ export function CliDeviceLoginPage({
 	const initialCode = new URLSearchParams(window.location.search).get('user_code') ?? '';
 	const { user } = useAuth();
 	const approve = useApproveCliDeviceAuthorization();
+	const approveScoped = useApproveScopedCliDeviceAuthorization();
 	const [userCode, setUserCode] = useState(initialCode);
 	const [expiresInDays, setExpiresInDays] = useState('30');
 	const [approved, setApproved] = useState(false);
+	const normalizedCode = normalizeUserCode(userCode);
+	const preview = useCliDeviceAuthorizationPreview(
+		normalizedCode ? formatUserCode(normalizedCode) : null,
+	);
+	const [grantOverride, setGrantOverride] = useState<{
+		code: string;
+		draft: TokenGrantDraft;
+	} | null>(null);
+	const requestedDraft: TokenGrantDraft | null =
+		preview.data?.status === 'scoped'
+			? {
+					actions: preview.data.requested_grant.actions,
+					projects: preview.data.requested_grant.projects,
+				}
+			: null;
+	const grantDraft =
+		normalizedCode && grantOverride?.code === normalizedCode ? grantOverride.draft : requestedDraft;
+	const grant = grantDraft ? tokenGrantFromDraft(grantDraft) : null;
+	const isPending = approve.isPending || approveScoped.isPending;
+	const approvalError = preview.data?.status === 'scoped' ? approveScoped.error : approve.error;
+	const resetApprovalErrors = () => {
+		approve.reset();
+		approveScoped.reset();
+	};
+	const updateGrantDraft = (draft: TokenGrantDraft) => {
+		if (normalizedCode) {
+			approveScoped.reset();
+			setGrantOverride({ code: normalizedCode, draft });
+		}
+	};
 
 	const submit = async () => {
-		const normalizedCode = normalizeUserCode(userCode);
-		if (!normalizedCode) {
+		const code = normalizeUserCode(userCode);
+		if (!code) {
 			toast.error('Enter the 8-letter code shown by the mohub CLI.');
 			return;
 		}
@@ -49,12 +88,19 @@ export function CliDeviceLoginPage({
 			return;
 		}
 		try {
-			await approve.mutateAsync({
-				user_code: formatUserCode(normalizedCode),
+			if (!preview.data) return;
+			const common = {
+				user_code: formatUserCode(code),
 				token_name: 'mohub CLI',
 				expires_in_days: days,
-			});
-			setUserCode(formatUserCode(normalizedCode));
+			};
+			if (preview.data.status === 'scoped') {
+				if (!grant) return;
+				await approveScoped.mutateAsync({ ...common, grant });
+			} else {
+				await approve.mutateAsync(common);
+			}
+			setUserCode(formatUserCode(code));
 			setApproved(true);
 		} catch {
 			return;
@@ -82,6 +128,31 @@ export function CliDeviceLoginPage({
 						<div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
 							<Terminal className="size-6" />
 						</div>
+
+						{preview.isError ? (
+							<div
+								role="alert"
+								className="flex w-full flex-col gap-2 rounded-md border p-3 text-left"
+							>
+								<p className="text-sm font-medium">Could not load this CLI authorization</p>
+								<p className="text-xs text-destructive">{errorMessage(preview.error)}</p>
+								<Button
+									size="sm"
+									onPress={() => {
+										resetApprovalErrors();
+										void preview.refetch();
+									}}
+								>
+									Retry preview
+								</Button>
+							</div>
+						) : preview.data?.status === 'scoped' && grantDraft ? (
+							<TokenGrantEditor
+								value={grantDraft}
+								onChange={updateGrantDraft}
+								upperBound={preview.data.requested_grant}
+							/>
+						) : null}
 						<div className="flex flex-col gap-1">
 							<h1 className="text-xl font-semibold">Connect a remote mohub CLI</h1>
 							<p className="text-sm text-muted-foreground">
@@ -101,7 +172,10 @@ export function CliDeviceLoginPage({
 						<TextField
 							label="Device code"
 							value={userCode}
-							onChange={setUserCode}
+							onChange={(value) => {
+								resetApprovalErrors();
+								setUserCode(value);
+							}}
 							placeholder="WDJB-MJHT"
 							autoComplete="one-time-code"
 						/>
@@ -123,7 +197,10 @@ export function CliDeviceLoginPage({
 								className="flex-1"
 								label="Token lifetime (days)"
 								value={expiresInDays}
-								onChange={setExpiresInDays}
+								onChange={(value) => {
+									resetApprovalErrors();
+									setExpiresInDays(value);
+								}}
 								inputMode="numeric"
 							/>
 							<div className="mb-1 flex gap-1">
@@ -141,17 +218,34 @@ export function CliDeviceLoginPage({
 							</div>
 						</div>
 
+						{approvalError ? (
+							<div role="alert" className="rounded-md border p-3 text-sm text-destructive">
+								{errorMessage(approvalError)}
+							</div>
+						) : null}
+
 						<div className="flex justify-end gap-2 border-t pt-5">
 							<Button
 								type="button"
-								isDisabled={approve.isPending}
+								isDisabled={isPending}
 								onPress={() => navigate(withBasePath('/'))}
 							>
 								Cancel
 							</Button>
-							<Button type="submit" variant="primary" isDisabled={approve.isPending}>
-								{approve.isPending ? 'Connecting…' : 'Authorize CLI'}
-								{approve.isPending ? null : <ArrowRight className="size-4" />}
+							<Button
+								type="submit"
+								variant="primary"
+								isDisabled={
+									isPending ||
+									(normalizedCode !== null &&
+										(preview.isFetching ||
+											preview.isError ||
+											preview.data === undefined ||
+											(preview.data.status === 'scoped' && grant === null)))
+								}
+							>
+								{isPending ? 'Connecting…' : 'Authorize CLI'}
+								{isPending ? null : <ArrowRight className="size-4" />}
 							</Button>
 						</div>
 					</form>

@@ -13,6 +13,7 @@
 		"./data-query-contracts": "./src/services/integrations/data-query/contracts.ts",
 		"./ports": "./src/ports/index.ts",
 		"./url": "./src/url.ts",
+		"./token-grants": "./src/tokenGrants.ts",
 		"./testing": "./src/testing/index.ts",
 		"./testing/memory-bucket": "./src/testing/MemoryBucket.ts",
 		"./testing/contract": "./src/testing/bucketContract.ts",
