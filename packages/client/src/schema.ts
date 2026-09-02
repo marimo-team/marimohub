@@ -2166,12 +2166,19 @@ export interface components {
 			name?: string;
 			cases: components['schemas']['PolicyCaseV1'][];
 		};
-		PolicyCaseV1: {
-			id: string;
-			name: string;
-			login?: components['schemas']['PolicyLoginStageV1'];
-			authorization?: components['schemas']['PolicyAuthorizationStageV1'];
-		};
+		PolicyCaseV1:
+			| {
+					id: string;
+					name: string;
+					login: components['schemas']['PolicyLoginStageV1'];
+					authorization?: components['schemas']['PolicyAuthorizationStageV1'];
+			  }
+			| {
+					id: string;
+					name: string;
+					login?: components['schemas']['PolicyLoginStageV1'];
+					authorization: components['schemas']['PolicyAuthorizationStageV1'];
+			  };
 		PolicyLoginStageV1: {
 			identity: {
 				id: string;
@@ -2185,17 +2192,22 @@ export interface components {
 			};
 			expected: components['schemas']['PolicyLoginExpectationV1'];
 		};
-		PolicyLoginExpectationV1: {
-			/** @enum {string} */
-			outcome: 'allow' | 'deny';
-			entitlements?: (
-				| 'super-admin'
-				| 'project-creator'
-				| 'default-role:viewer'
-				| 'default-role:editor'
-				| 'default-role:manager'
-			)[];
-		};
+		PolicyLoginExpectationV1:
+			| {
+					/** @enum {string} */
+					outcome: 'allow';
+					entitlements?: (
+						| 'super-admin'
+						| 'project-creator'
+						| 'default-role:viewer'
+						| 'default-role:editor'
+						| 'default-role:manager'
+					)[];
+			  }
+			| {
+					/** @enum {string} */
+					outcome: 'deny';
+			  };
 		PolicyAuthorizationStageV1: {
 			subject: {
 				id: string;

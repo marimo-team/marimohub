@@ -1440,24 +1440,45 @@ components:
         - cases
       additionalProperties: false
     PolicyCaseV1:
-      type: object
-      properties:
-        id:
-          type: string
-          minLength: 1
-          maxLength: 128
-        name:
-          type: string
-          minLength: 1
-          maxLength: 200
-        login:
-          $ref: '#/components/schemas/PolicyLoginStageV1'
-        authorization:
-          $ref: '#/components/schemas/PolicyAuthorizationStageV1'
-      required:
-        - id
-        - name
-      additionalProperties: false
+      anyOf:
+        - type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            name:
+              type: string
+              minLength: 1
+              maxLength: 200
+            login:
+              $ref: '#/components/schemas/PolicyLoginStageV1'
+            authorization:
+              $ref: '#/components/schemas/PolicyAuthorizationStageV1'
+          required:
+            - id
+            - name
+            - login
+          additionalProperties: false
+        - type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            name:
+              type: string
+              minLength: 1
+              maxLength: 200
+            login:
+              $ref: '#/components/schemas/PolicyLoginStageV1'
+            authorization:
+              $ref: '#/components/schemas/PolicyAuthorizationStageV1'
+          required:
+            - id
+            - name
+            - authorization
+          additionalProperties: false
     PolicyLoginStageV1:
       type: object
       properties:
@@ -1489,26 +1510,35 @@ components:
         - expected
       additionalProperties: false
     PolicyLoginExpectationV1:
-      type: object
-      properties:
-        outcome:
-          type: string
-          enum:
-            - allow
-            - deny
-        entitlements:
-          type: array
-          items:
-            type: string
-            enum:
-              - super-admin
-              - project-creator
-              - default-role:viewer
-              - default-role:editor
-              - default-role:manager
-      required:
-        - outcome
-      additionalProperties: false
+      oneOf:
+        - type: object
+          properties:
+            outcome:
+              type: string
+              enum:
+                - allow
+            entitlements:
+              type: array
+              items:
+                type: string
+                enum:
+                  - super-admin
+                  - project-creator
+                  - default-role:viewer
+                  - default-role:editor
+                  - default-role:manager
+          required:
+            - outcome
+          additionalProperties: false
+        - type: object
+          properties:
+            outcome:
+              type: string
+              enum:
+                - deny
+          required:
+            - outcome
+          additionalProperties: false
     PolicyAuthorizationStageV1:
       type: object
       properties:

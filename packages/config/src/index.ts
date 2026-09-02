@@ -48,7 +48,13 @@ import type {
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import { evaluateLoginPolicy } from '@marimo-hub/auth-oidc';
 import { makeAi } from './ai';
-import { authBackend, makeAuth, oidcLoginPolicySelected, projectCreationRestricted } from './auth';
+import {
+	authBackend,
+	makeAuth,
+	oidcLoginPolicySelected,
+	oidcLoginPolicyTimeoutSeconds,
+	projectCreationRestricted,
+} from './auth';
 import { buildConfigSummary } from './configSummary';
 import { computeBackend, makeCompute, resolveSandboxImages } from './compute';
 import {
@@ -646,8 +652,7 @@ export function createFromEnv(
 						loginPolicy: {
 							evaluate: (input) =>
 								evaluateLoginPolicy(configuredLoginPolicy, input, {
-									timeoutMs:
-										Number(env.MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS ?? '5') * 1000,
+									timeoutMs: oidcLoginPolicyTimeoutSeconds(env) * 1000,
 								}),
 						},
 					}

@@ -633,6 +633,21 @@ describe('createFromEnv oidc login-policy library', () => {
 		).resolves.toMatchObject({ outcome: 'deny' });
 	});
 
+	it('uses the authentication timeout default when the timeout variable is blank', async () => {
+		const oidcLoginPolicy = { evaluate: () => ({ decision: 'deny' as const }) };
+		const deps = createFromEnv(
+			{ ...loginPolicyEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS: '  ' },
+			undefined,
+			{ libraries: { oidcLoginPolicy } },
+		);
+		await expect(
+			deps.policyAnalyzer?.loginPolicy?.evaluate({
+				identity: { id: ACTOR, email: 'actor@example.com' },
+				idTokenClaims: {},
+			}),
+		).resolves.toMatchObject({ outcome: 'deny' });
+	});
+
 	// The full loaded-module → callback-decision wiring is proven end to end in
 	// loginPolicyComposition.test.ts (it needs the oauth4webapi mock).
 });

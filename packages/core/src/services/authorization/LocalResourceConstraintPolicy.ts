@@ -50,9 +50,23 @@ export class LocalResourceConstraintPolicy implements ResourceConstraintPolicy {
 			classificationSatisfied,
 			missingCompartments,
 		};
-		return classificationSatisfied && missingCompartments.length === 0
-			? { satisfied: true, evidence }
-			: { satisfied: false, reason: 'constraint', evidence };
+		if (classificationSatisfied && missingCompartments.length === 0) {
+			return {
+				satisfied: true,
+				evidence: { ...evidence, classificationSatisfied: true, missingCompartments: [] },
+			};
+		}
+		return {
+			satisfied: false,
+			reason: 'constraint',
+			evidence: classificationSatisfied
+				? {
+						...evidence,
+						classificationSatisfied: true,
+						missingCompartments: missingCompartments as [string, ...string[]],
+					}
+				: { ...evidence, classificationSatisfied: false },
+		};
 	}
 
 	async evaluateMany(

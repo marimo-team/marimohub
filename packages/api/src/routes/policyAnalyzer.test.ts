@@ -164,6 +164,87 @@ describe('policy analyzer routes', () => {
 		expect(auditJson).not.toContain('new@example.com');
 	});
 
+	it('does not assert login entitlements when the expectation omits them', async () => {
+		const { request } = createTestApi({
+			deps: {
+				policy: { superAdmins: [ACTOR] },
+				policyAnalyzer: {
+					classificationOrder: [],
+					loginPolicy: {
+						evaluate: async () => ({
+							outcome: 'allow',
+							entitlements: ['project-creator'],
+							durationMs: 2,
+						}),
+					},
+				},
+			},
+		});
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					{
+						id: 'outcome-only',
+						name: 'Allow without entitlement assertion',
+						login: {
+							identity: { id: 'new-user', email: 'new@example.com' },
+							id_token_claims: {},
+							expected: { outcome: 'allow' },
+						},
+					},
+				],
+			}),
+		);
+		expect(data).toMatchObject({
+			valid: true,
+			cases: [
+				{
+					valid: true,
+					login: {
+						outcome: 'allow',
+						entitlements: ['project-creator'],
+						assertion: { passed: true },
+					},
+				},
+			],
+		});
+	});
+
+	it('rejects entitlement expectations for a denied login', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		await expectError(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					{
+						id: 'invalid-denial',
+						name: 'Denied login with entitlements',
+						login: {
+							identity: { id: 'new-user', email: 'new@example.com' },
+							id_token_claims: {},
+							expected: { outcome: 'deny', entitlements: [] },
+						},
+					},
+				],
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
+	it('rejects a case without a login or authorization stage', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		await expectError(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [{ id: 'empty', name: 'No stages' }],
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
 	it('treats an expected login denial as valid and skips linked authorization', async () => {
 		const { request } = createTestApi({
 			deps: {

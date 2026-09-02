@@ -267,11 +267,12 @@ export function usePolicyAnalyzerMetadataQuery() {
 }
 
 export function useEvaluatePolicySuite() {
-	return useMutation({
-		mutationFn: (body: PolicySuiteV1): Promise<PolicySuiteResult> =>
+	return useApiMutation(
+		(body: PolicySuiteV1): Promise<PolicySuiteResult> =>
 			apiData(apiClient.POST('/api/v1/admin/policy-analyzer/evaluate', { body })),
-		meta: { suppressErrorToast: true },
-	});
+		() => [auditKeys.all],
+		{ suppressErrorToast: true },
+	);
 }
 
 // Projects

@@ -37,6 +37,8 @@ import type {
 	ConstraintDenialReason,
 	ConstraintEvidence,
 	ResourceConstraintPolicy,
+	SatisfiedConstraintEvidence,
+	UnsatisfiedConstraintEvidence,
 } from '../../ports/resourceConstraints';
 import { validateSubjectSecurityContext } from '../../ports/subjectContext';
 import type {
@@ -198,28 +200,52 @@ const CONSTRAINT_DENIAL_REASONS: ReadonlySet<string> = new Set([
 	'unavailable',
 ]);
 
+interface ParsedConstraintDecision {
+	decision: ConstraintDecision;
+	invalidEvidence: boolean;
+}
+
+interface IndexedConstraintEvidence extends ConstraintEvidence {
+	labelSetIndex: number;
+}
+
 /**
- * Shape-validate an adapter's decision — external output, not a trusted type.
- * A truthy-but-not-`true` `satisfied` or an unknown denial reason yields
- * `null`, which the caller treats as an `unavailable` denial.
+ * Evidence is diagnostic only: drop malformed evidence, but preserve a valid
+ * adapter verdict. A malformed verdict still fails closed.
  */
-function parseConstraintDecision(value: unknown): ConstraintDecision | null {
+function parseConstraintDecision(value: unknown): ParsedConstraintDecision | null {
 	if (typeof value !== 'object' || value === null) return null;
 	const decision = value as { satisfied?: unknown; reason?: unknown; evidence?: unknown };
-	const evidence = parseConstraintEvidence(decision.evidence);
-	if (decision.evidence !== undefined && evidence === null) return null;
 	if (decision.satisfied === true) {
-		return { satisfied: true, ...(evidence ? { evidence } : {}) };
+		const evidence = parseConstraintEvidence(decision.evidence);
+		const validEvidence =
+			evidence?.classificationSatisfied === true && evidence.missingCompartments.length === 0
+				? (evidence as SatisfiedConstraintEvidence)
+				: null;
+		return {
+			decision: { satisfied: true, ...(validEvidence ? { evidence: validEvidence } : {}) },
+			invalidEvidence: decision.evidence !== undefined && validEvidence === null,
+		};
 	}
 	if (
 		decision.satisfied === false &&
 		typeof decision.reason === 'string' &&
 		CONSTRAINT_DENIAL_REASONS.has(decision.reason)
 	) {
+		const reason = decision.reason as ConstraintDenialReason;
+		const evidence = parseConstraintEvidence(decision.evidence);
+		const validEvidence =
+			reason === 'constraint' &&
+			evidence !== null &&
+			(!evidence.classificationSatisfied || evidence.missingCompartments.length > 0)
+				? (evidence as UnsatisfiedConstraintEvidence)
+				: null;
 		return {
-			satisfied: false,
-			reason: decision.reason as ConstraintDenialReason,
-			...(evidence ? { evidence } : {}),
+			decision:
+				reason === 'constraint'
+					? { satisfied: false, reason, ...(validEvidence ? { evidence: validEvidence } : {}) }
+					: { satisfied: false, reason },
+			invalidEvidence: decision.evidence !== undefined && validEvidence === null,
 		};
 	}
 	return null;
@@ -229,7 +255,14 @@ function parseConstraintEvidence(value: unknown): ConstraintEvidence | null {
 	if (value === undefined) return null;
 	if (typeof value !== 'object' || value === null) return null;
 	const evidence = value as Record<string, unknown>;
+	const keys = new Set([
+		'heldClassification',
+		'requiredClassification',
+		'classificationSatisfied',
+		'missingCompartments',
+	]);
 	if (
+		Object.keys(evidence).some((key) => !keys.has(key)) ||
 		(evidence.heldClassification !== null &&
 			(typeof evidence.heldClassification !== 'string' ||
 				!SECURITY_LABEL_TOKEN.test(evidence.heldClassification))) ||
@@ -622,10 +655,16 @@ export class AuthorizationService {
 				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, 'project.read');
 				return labelStates.map((labels) => labels === null);
 			}
-			return decisions.map(
-				(decision, index) =>
-					labelStates[index] === null || parseConstraintDecision(decision)?.satisfied === true,
-			);
+			let invalidEvidence = false;
+			const allowed = decisions.map((decision, index) => {
+				const parsed = parseConstraintDecision(decision);
+				if (parsed?.invalidEvidence) invalidEvidence = true;
+				return labelStates[index] === null || parsed?.decision.satisfied === true;
+			});
+			if (invalidEvidence) {
+				this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, 'project.read');
+			}
+			return allowed;
 		} catch (error) {
 			this.emitConstraintFailure(error, 'project.read');
 			return labelStates.map((labels) => labels === null);
@@ -685,18 +724,18 @@ export class AuthorizationService {
 		| {
 				satisfied: true;
 				contextExpiresAt: string;
-				evidence?: readonly ConstraintEvidence[];
+				evidence?: readonly IndexedConstraintEvidence[];
 		  }
 		| {
 				satisfied: false;
 				reason: ConstraintDenialReason;
-				evidence?: readonly ConstraintEvidence[];
+				evidence?: readonly IndexedConstraintEvidence[];
 		  }
 	> {
 		const batch = await this.constraintBatch(action, labelSets, getContext);
 		if (!batch.ok) return { satisfied: false, reason: batch.reason };
-		const evidence = batch.decisions.flatMap((decision) =>
-			decision.evidence ? [decision.evidence] : [],
+		const evidence = batch.decisions.flatMap((decision, labelSetIndex) =>
+			'evidence' in decision && decision.evidence ? [{ labelSetIndex, ...decision.evidence }] : [],
 		);
 		const denied = batch.decisions.find((decision) => !decision.satisfied);
 		if (denied?.satisfied === false) {
@@ -763,8 +802,8 @@ export class AuthorizationService {
 			let invalid = false;
 			const decisions = raw.map((decision) => {
 				const parsed = parseConstraintDecision(decision);
-				if (parsed === null) invalid = true;
-				return parsed ?? { satisfied: false as const, reason: 'unavailable' as const };
+				if (parsed === null || parsed.invalidEvidence) invalid = true;
+				return parsed?.decision ?? { satisfied: false as const, reason: 'unavailable' as const };
 			});
 			if (invalid) this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, action);
 			return { ok: true, decisions, contextExpiresAt: context.expiresAt };

@@ -48,10 +48,13 @@ const SecurityLabelsSchema = z.strictObject({
 });
 
 const ExpectedLoginSchema = z
-	.strictObject({
-		outcome: z.enum(['allow', 'deny']),
-		entitlements: z.array(EntitlementSchema).optional(),
-	})
+	.discriminatedUnion('outcome', [
+		z.strictObject({
+			outcome: z.literal('allow'),
+			entitlements: z.array(EntitlementSchema).optional(),
+		}),
+		z.strictObject({ outcome: z.literal('deny') }),
+	])
 	.openapi('PolicyLoginExpectationV1');
 
 const LoginStageSchema = z
@@ -131,16 +134,24 @@ const AuthorizationStageSchema = z
 	})
 	.openapi('PolicyAuthorizationStageV1');
 
+const PolicyCaseBaseShape = {
+	id: z.string().min(1).max(128),
+	name: z.string().min(1).max(200),
+};
+
 export const PolicyCaseSchema = z
-	.strictObject({
-		id: z.string().min(1).max(128),
-		name: z.string().min(1).max(200),
-		login: LoginStageSchema.optional(),
-		authorization: AuthorizationStageSchema.optional(),
-	})
-	.refine((entry) => entry.login !== undefined || entry.authorization !== undefined, {
-		message: 'A policy case must contain a login or authorization stage.',
-	})
+	.union([
+		z.strictObject({
+			...PolicyCaseBaseShape,
+			login: LoginStageSchema,
+			authorization: AuthorizationStageSchema.optional(),
+		}),
+		z.strictObject({
+			...PolicyCaseBaseShape,
+			login: LoginStageSchema.optional(),
+			authorization: AuthorizationStageSchema,
+		}),
+	])
 	.openapi('PolicyCaseV1');
 
 export const PolicySuiteV1Schema = z
@@ -301,10 +312,12 @@ function normalizedEntitlements(values: readonly AuthEntitlement[]): AuthEntitle
 function loginAssertion(stage: LoginStage, result: LoginPolicyAnalysisResult | undefined): boolean {
 	if (!result || (result.outcome !== 'allow' && result.outcome !== 'deny')) return false;
 	if (result.outcome !== stage.expected.outcome) return false;
-	if (result.outcome === 'deny') return true;
+	if (stage.expected.outcome === 'deny') return true;
+	if (result.outcome !== 'allow') return false;
+	if (stage.expected.entitlements === undefined) return true;
 	return (
 		JSON.stringify(normalizedEntitlements(result.entitlements)) ===
-		JSON.stringify(normalizedEntitlements(stage.expected.entitlements ?? []))
+		JSON.stringify(normalizedEntitlements(stage.expected.entitlements))
 	);
 }
 

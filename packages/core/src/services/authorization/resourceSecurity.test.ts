@@ -445,6 +445,117 @@ describe('AuthorizationService: adapter trust boundary', () => {
 		).resolves.toEqual([true, false]);
 	});
 
+	it.each([
+		[
+			'contradicts a satisfied verdict',
+			{
+				heldClassification: 'SECRET',
+				requiredClassification: 'SECRET',
+				classificationSatisfied: false,
+				missingCompartments: [],
+			},
+		],
+		[
+			'contains an invalid classification',
+			{
+				heldClassification: 'NOT A LABEL',
+				requiredClassification: 'SECRET',
+				classificationSatisfied: true,
+				missingCompartments: [],
+			},
+		],
+		[
+			'contains an unexpected field',
+			{
+				heldClassification: 'SECRET',
+				requiredClassification: 'SECRET',
+				classificationSatisfied: true,
+				missingCompartments: [],
+				secretExplanation: 'adapter detail',
+			},
+		],
+	] as const)(
+		'drops evidence that %s without changing an allow verdict',
+		async (_name, evidence) => {
+			const response = { satisfied: true, evidence };
+			const constraints: ResourceConstraintPolicy = {
+				evaluate: async () => response as never,
+				evaluateMany: async (_ctx, _action, resources) => resources.map(() => response as never),
+			};
+			const authz = service({ constraints, subjectContext: providerOf(context()) });
+
+			await expect(authz.authorize(principal(), 'project.read', read)).resolves.toMatchObject({
+				allowed: true,
+			});
+			await expect(authz.authorizeMany(principal(), 'project.read', [read])).resolves.toMatchObject(
+				[{ allowed: true }],
+			);
+			await expect(
+				authz.projectLabelConstraints(principal(), [labeled.security_labels ?? null]),
+			).resolves.toEqual([true]);
+
+			const analysis = await authz.analyze(principal(), 'project.read', read);
+			const constraintStep = analysis.trace.find((step) => step.stage === 'constraint');
+			expect(constraintStep).toMatchObject({
+				status: 'passed',
+				code: 'resource_constraints_satisfied',
+				details: { labelSetCount: 1 },
+			});
+			expect(constraintStep?.details).not.toHaveProperty('evidence');
+		},
+	);
+
+	it('drops evidence that contradicts a denied verdict without changing the denial', async () => {
+		const response = {
+			satisfied: false,
+			reason: 'constraint',
+			evidence: {
+				heldClassification: 'SECRET',
+				requiredClassification: 'SECRET',
+				classificationSatisfied: true,
+				missingCompartments: [],
+			},
+		};
+		const authz = service({
+			constraints: {
+				evaluate: async () => response as never,
+				evaluateMany: async (_ctx, _action, resources) => resources.map(() => response as never),
+			},
+			subjectContext: providerOf(context()),
+		});
+
+		const analysis = await authz.analyze(principal(), 'project.read', read);
+		expect(analysis.decision).toEqual({
+			allowed: false,
+			category: 'constraint',
+			role: 'admin',
+			constraintReason: 'constraint',
+		});
+		const constraintStep = analysis.trace.find((step) => step.stage === 'constraint');
+		expect(constraintStep?.details).not.toHaveProperty('evidence');
+	});
+
+	it('indexes sparse evidence by its label-set position', async () => {
+		const evidence = {
+			heldClassification: 'SECRET',
+			requiredClassification: 'CUI',
+			classificationSatisfied: true as const,
+			missingCompartments: [] as const,
+		};
+		const constraints: ResourceConstraintPolicy = {
+			evaluate: async () => ({ satisfied: true }),
+			evaluateMany: async () => [{ satisfied: true }, { satisfied: true, evidence }],
+		};
+		const authz = service({ constraints, subjectContext: providerOf(context()) });
+		const analysis = await authz.analyze(principal(), 'project.read', {
+			...read,
+			notebookLabels: { classification: 'CUI', compartments: [] },
+		});
+
+		const constraintStep = analysis.trace.find((step) => step.stage === 'constraint');
+		expect(constraintStep?.details?.evidence).toEqual([{ labelSetIndex: 1, ...evidence }]);
+	});
+
 	it('never delegates a labeled resource to the adapter without a context', async () => {
 		// A hostile or buggy adapter that satisfies everything must still be
 		// unable to open a labeled resource for a context-less subject.
