@@ -237,6 +237,10 @@ describe('JobsPage', () => {
 		expect(rows).toHaveLength(1);
 		expect(within(rows[0]).getByText('Succeeded')).toBeInTheDocument();
 		expect(within(rows[0]).getByText('schedule')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Nightly refresh/ })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
 	});
 
 	it('loads additional run-history pages', async () => {
@@ -294,7 +298,9 @@ describe('JobsPage', () => {
 		const user = userEvent.setup();
 		renderPage();
 		const row = (await screen.findAllByTestId('run-row'))[0];
-		within(row).getByRole('button').focus();
+		const button = within(row).getByRole('button');
+		button.focus();
+		expect(button).toHaveClass('focus-visible:ring-2');
 		await user.keyboard('{Enter}');
 		expect(await screen.findByText(/Duration 2m/)).toBeInTheDocument();
 	});
@@ -319,6 +325,15 @@ describe('JobsPage', () => {
 
 		await user.click(await screen.findByRole('tab', { name: 'Logs' }));
 		expect(await screen.findByText('Traceback: boom')).toBeInTheDocument();
+	});
+
+	it('shows an empty state when a run has no logs', async () => {
+		makeFetch({ logs: ' \n' });
+		const user = userEvent.setup();
+		renderPage('?job=job-1&run=run_01');
+
+		await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+		expect(await screen.findByText('No logs were captured for this run.')).toHaveClass('italic');
 	});
 
 	it('associates artifact tabs with their panel and supports arrow-key navigation', async () => {

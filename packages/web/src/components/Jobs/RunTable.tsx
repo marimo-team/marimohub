@@ -35,7 +35,7 @@ export function RunTable({ runs, selectedRunId, onSelect }: RunTableProps) {
 							key={run.run_id}
 							data-testid="run-row"
 							className={cn(
-								'relative cursor-pointer border-b transition-colors hover:bg-muted/50 focus-within:ring-2 focus-within:ring-ring',
+								'relative cursor-pointer border-b transition-colors hover:bg-muted/50',
 								run.run_id === selectedRunId && 'bg-muted',
 							)}
 						>
@@ -45,16 +45,18 @@ export function RunTable({ runs, selectedRunId, onSelect }: RunTableProps) {
 									aria-label={`Open run ${run.run_id}`}
 									aria-pressed={run.run_id === selectedRunId}
 									onClick={() => onSelect(run)}
-									className="absolute inset-0 z-10 focus-visible:outline-none"
+									className="absolute inset-0 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
 								/>
 								<RunStatusChip run={run} />
 							</td>
 							<td className="py-1.5 pr-3 capitalize">{run.trigger}</td>
-							<td className="py-1.5 pr-3" title={formatAbsolute(run.queued_at)}>
+							<td className="py-1.5 pr-3 tabular-nums" title={formatAbsolute(run.queued_at)}>
 								{formatRelative(run.queued_at)}
 							</td>
-							<td className="py-1.5 pr-3">{duration === null ? '—' : formatElapsed(duration)}</td>
-							<td className="py-1.5">{run.attempt}</td>
+							<td className="py-1.5 pr-3 tabular-nums">
+								{duration === null ? '—' : formatElapsed(duration)}
+							</td>
+							<td className="py-1.5 tabular-nums">{run.attempt}</td>
 						</tr>
 					);
 				})}

@@ -226,6 +226,7 @@ export function JobsPage() {
 										<button
 											type="button"
 											data-testid="job-row"
+											aria-pressed={job.id === selectedJob?.id}
 											onClick={() => m.select({ job: job.id })}
 											className={cn(
 												'flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted/60',
@@ -371,7 +372,7 @@ export function JobsPage() {
 				title="Delete job"
 				description={`Delete "${m.deleteDialog.target?.name ?? ''}" and its run history? Active runs are cancelled.`}
 				confirmLabel="Delete"
-				pendingLabel="Deleting..."
+				pendingLabel="Deleting…"
 				isPending={m.removePending}
 				onConfirm={() => void m.confirmDelete()}
 			/>
@@ -381,7 +382,7 @@ export function JobsPage() {
 				title="Cancel run"
 				description="Stop this run and destroy its sandbox? Any output captured before cancellation remains available."
 				confirmLabel="Cancel run"
-				pendingLabel="Cancelling..."
+				pendingLabel="Cancelling…"
 				isPending={m.cancelPending}
 				onConfirm={() => void m.confirmCancel()}
 			/>

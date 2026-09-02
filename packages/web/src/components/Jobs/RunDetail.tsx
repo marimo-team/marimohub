@@ -160,10 +160,14 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 							<Skeleton className="h-40 w-full" />
 						) : logs.isError ? (
 							<ArtifactError artifact="logs" onRetry={() => void logs.refetch()} />
-						) : (
+						) : logs.data?.trim() ? (
 							<pre className="max-h-[32rem] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-								{logs.data ?? 'No logs were captured.'}
+								{logs.data}
 							</pre>
+						) : (
+							<p className="rounded-md border bg-muted/20 px-3 py-6 text-center text-xs text-muted-foreground italic">
+								No logs were captured for this run.
+							</p>
 						)}
 					</div>
 				</>

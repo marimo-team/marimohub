@@ -115,6 +115,17 @@ describe('job parameters', () => {
 });
 
 describe('JobFormDialog', () => {
+	it('uses the wider job-form layout', async () => {
+		makeFetch();
+		renderDialog();
+		const dialog = await screen.findByRole('dialog');
+
+		expect(dialog.parentElement).toHaveClass('max-w-2xl');
+		expect(
+			await within(dialog).findByLabelText('Timeout (seconds, up to 14400)'),
+		).toBeInTheDocument();
+	});
+
 	it('blocks submit until the name is set and shows field errors once touched', async () => {
 		makeFetch();
 		const user = userEvent.setup();

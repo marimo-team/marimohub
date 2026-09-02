@@ -223,8 +223,8 @@ export function JobFormDialog({
 			onClose={onClose}
 			title={job ? 'Edit job' : 'New job'}
 			submitLabel={job ? 'Save' : 'Create job'}
-			pendingLabel="Saving..."
-			width="lg"
+			pendingLabel="Saving…"
+			width="form"
 		>
 			<form.AppField name="name">
 				{(field) => <field.TextField label="Name" placeholder="Nightly refresh" autoFocus />}
@@ -302,7 +302,7 @@ export function JobFormDialog({
 				)}
 			</form.AppField>
 
-			<div className="grid gap-3 sm:grid-cols-3">
+			<div className="grid gap-3 sm:grid-cols-[minmax(12rem,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
 				<form.AppField name="timeoutSeconds">
 					{(field) => (
 						<field.TextField
