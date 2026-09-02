@@ -1148,6 +1148,7 @@ components:
                   - admin.access
                   - org-integration.manage
                   - audit.global.read
+                  - directory.search
                   - project.read
                   - project.update
                   - project.delete
@@ -1579,6 +1580,7 @@ components:
             - admin.access
             - org-integration.manage
             - audit.global.read
+            - directory.search
             - project.read
             - project.update
             - project.delete
