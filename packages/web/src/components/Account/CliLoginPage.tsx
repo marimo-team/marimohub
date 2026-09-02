@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { ArrowRight, Check, Clock3, ShieldCheck, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
-import { useApproveCliAuthorization } from '@/api/hooks';
+import { useApproveCliAuthorization, useApproveScopedCliAuthorization } from '@/api/hooks';
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
 import { cancellationUrl, parseCliLoginRequest } from './cliLoginRequest';
+import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
+import type { TokenGrantDraft } from './TokenGrantEditor';
 
 export interface CliLoginPageProps {
 	navigate?: (url: string) => void;
@@ -16,7 +18,12 @@ export function CliLoginPage({
 	const request = parseCliLoginRequest(window.location.search);
 	const { user } = useAuth();
 	const approve = useApproveCliAuthorization();
+	const approveScoped = useApproveScopedCliAuthorization();
 	const [expiresInDays, setExpiresInDays] = useState('30');
+	const [grantDraft, setGrantDraft] = useState<TokenGrantDraft>(() => ({
+		actions: request?.requestedGrant?.actions ?? null,
+		projects: request?.requestedGrant?.projects ?? null,
+	}));
 
 	if (!request) {
 		return (
@@ -41,13 +48,22 @@ export function CliLoginPage({
 			return;
 		}
 		try {
-			const result = await approve.mutateAsync({
+			const grant = tokenGrantFromDraft(grantDraft);
+			if (request.requestedGrant && !grant) return;
+			const common = {
 				callback_uri: request.callback.toString(),
 				state: request.state,
 				code_challenge: request.codeChallenge,
 				token_name: 'mohub CLI',
 				expires_in_days: days,
-			});
+			};
+			const result = request.requestedGrant
+				? await approveScoped.mutateAsync({
+						...common,
+						requested_grant: request.requestedGrant,
+						grant: grant!,
+					})
+				: await approve.mutateAsync(common);
 			navigate(result.redirect_uri);
 		} catch {
 			return;
@@ -64,6 +80,14 @@ export function CliLoginPage({
 					<div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
 						<Terminal className="size-6" />
 					</div>
+
+					{request.requestedGrant ? (
+						<TokenGrantEditor
+							value={grantDraft}
+							onChange={setGrantDraft}
+							upperBound={request.requestedGrant}
+						/>
+					) : null}
 					<div className="flex flex-col gap-1">
 						<h1 className="text-xl font-semibold">Connect the mohub CLI</h1>
 						<p className="text-sm text-muted-foreground">
@@ -128,14 +152,24 @@ export function CliLoginPage({
 					<div className="flex justify-end gap-2 border-t pt-5">
 						<Button
 							type="button"
-							isDisabled={approve.isPending}
+							isDisabled={approve.isPending || approveScoped.isPending}
 							onPress={() => navigate(cancellationUrl(request))}
 						>
 							Cancel
 						</Button>
-						<Button type="submit" variant="primary" isDisabled={approve.isPending}>
-							{approve.isPending ? 'Connecting…' : 'Authorize CLI'}
-							{!approve.isPending && <ArrowRight className="size-4" />}
+						<Button
+							type="submit"
+							variant="primary"
+							isDisabled={
+								approve.isPending ||
+								approveScoped.isPending ||
+								(request.requestedGrant !== undefined && tokenGrantFromDraft(grantDraft) === null)
+							}
+						>
+							{approve.isPending || approveScoped.isPending ? 'Connecting…' : 'Authorize CLI'}
+							{!approve.isPending && !approveScoped.isPending ? (
+								<ArrowRight className="size-4" />
+							) : null}
 						</Button>
 					</div>
 				</form>

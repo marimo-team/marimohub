@@ -10,12 +10,13 @@ const CALLBACK = 'http://127.0.0.1:49152/callback';
 const STATE = 's'.repeat(32);
 const CHALLENGE = 'c'.repeat(43);
 
-function loginPath(callback = CALLBACK): string {
+function loginPath(callback = CALLBACK, grant?: unknown): string {
 	const query = new URLSearchParams({
 		callback_uri: callback,
 		state: STATE,
 		code_challenge: CHALLENGE,
 	});
+	if (grant !== undefined) query.set('grant', JSON.stringify(grant));
 	return `/cli/login?${query}`;
 }
 
@@ -41,6 +42,18 @@ function setup(options: { approvalFails?: boolean } = {}) {
 					},
 					{ status: 201 },
 				);
+			}
+			if (url === '/api/v1/me/cli-authorizations/scoped') {
+				return jsonOk(
+					{
+						redirect_uri: `${CALLBACK}?code=mhub_cli_code&state=${STATE}`,
+						expires_at: '2026-08-24T12:10:00.000Z',
+					},
+					{ status: 201 },
+				);
+			}
+			if (url.startsWith('/api/v1/projects')) {
+				return jsonOk({ items: [], next_cursor: null });
 			}
 			throw new Error(`unexpected request: ${url}`);
 		}),
@@ -93,6 +106,31 @@ describe('CliLoginPage', () => {
 				code_challenge: CHALLENGE,
 				token_name: 'mohub CLI',
 				expires_in_days: 45,
+			},
+		});
+	});
+
+	it('starts at the requested grant and uses scoped approval', async () => {
+		const grant = { actions: '*', projects: '*' };
+		window.history.replaceState({}, '', loginPath(CALLBACK, grant));
+		const user = userEvent.setup();
+		const { calls } = setup();
+		await screen.findByText(/dev@example.com/);
+		expect(await screen.findByRole('radio', { name: /^Full/ })).toBeChecked();
+		expect(screen.getByRole('radio', { name: /^All projects/ })).toBeChecked();
+
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+		expect(calls).toContainEqual({
+			url: '/api/v1/me/cli-authorizations/scoped',
+			body: {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				requested_grant: grant,
+				grant,
 			},
 		});
 	});
@@ -158,5 +196,15 @@ describe('CliLoginPage', () => {
 
 		expect(screen.getByRole('heading', { name: 'Invalid CLI login request' })).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Authorize CLI' })).not.toBeInTheDocument();
+	});
+
+	it('rejects a malformed requested grant', () => {
+		expect(
+			parseCliLoginRequest(
+				loginPath(CALLBACK, { actions: ['not-an-action'], projects: '*' }).slice(
+					'/cli/login'.length,
+				),
+			),
+		).toBeNull();
 	});
 });

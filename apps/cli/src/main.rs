@@ -15,6 +15,7 @@ use update_informer::{registry, Check};
 use url::Url;
 
 const CLI_LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const FULL_TOKEN_GRANT: &str = r#"{"actions":"*","projects":"*"}"#;
 
 fn write_stdout(arguments: std::fmt::Arguments<'_>) -> Result<(), Error> {
     match io::stdout().lock().write_fmt(arguments) {
@@ -227,7 +228,8 @@ fn cli_login_url(
     url.query_pairs_mut()
         .append_pair("callback_uri", callback_uri)
         .append_pair("state", state)
-        .append_pair("code_challenge", code_challenge);
+        .append_pair("code_challenge", code_challenge)
+        .append_pair("grant", FULL_TOKEN_GRANT);
     Ok(url)
 }
 
@@ -970,6 +972,24 @@ mod tests {
         assert_eq!(
             next_device_poll_interval(Duration::from_secs(60), base, None),
             Duration::from_secs(60),
+        );
+    }
+
+    #[test]
+    fn browser_login_url_requests_an_explicit_full_grant() {
+        let url = cli_login_url(
+            "https://example.com",
+            "http://127.0.0.1:49152/callback",
+            &"s".repeat(32),
+            &"c".repeat(43),
+        )
+        .expect("valid login URL");
+
+        assert_eq!(
+            url.query_pairs()
+                .find(|(name, _)| name == "grant")
+                .map(|(_, value)| value.into_owned()),
+            Some(FULL_TOKEN_GRANT.to_owned())
         );
     }
 

@@ -800,12 +800,25 @@ pub fn request_cli_device_authorization(
     timeout: Duration,
     code_challenge: &str,
 ) -> Result<CliDeviceAuthorization, Error> {
-    let (status, envelope) = post_cli_json(
+    let full_grant = serde_json::json!({ "actions": "*", "projects": "*" });
+    let scoped = post_cli_response(
         base_url,
         timeout,
-        "/api/cli/v1/device-authorizations",
-        serde_json::json!({ "code_challenge": code_challenge }),
+        "/api/cli/v1/device-authorizations/scoped",
+        serde_json::json!({ "code_challenge": code_challenge, "grant": full_grant }),
     )?;
+    let response = if scoped.status == 404 {
+        post_cli_response(
+            base_url,
+            timeout,
+            "/api/cli/v1/device-authorizations",
+            serde_json::json!({ "code_challenge": code_challenge }),
+        )?
+    } else {
+        scoped
+    };
+    let status = response.status;
+    let envelope = ensure_success(&response)?;
     expect_cli_status(status, 200, "CLI device authorization")?;
     let response: CliDeviceAuthorization = cli_data(&envelope, "CLI device authorization")?;
     if response.device_code.is_empty()
@@ -1184,10 +1197,10 @@ mod tests {
     #[test]
     fn cli_device_authorization_parses_the_verification_instructions() {
         let (base_url, server) = serve_cli_device(
-            "/api/cli/v1/device-authorizations",
+            "/api/cli/v1/device-authorizations/scoped",
             200,
             r#"{"success":true,"data":{"device_code":"mhub_cli_device","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","verification_uri_complete":"https://hub.example.com/cli/device?user_code=WDJB-MJHT","expires_in":600,"interval":5}}"#,
-            r#""code_challenge":"challenge""#,
+            r#""grant":{"actions":"*","projects":"*"}"#,
         );
 
         let authorization =
@@ -1199,6 +1212,68 @@ mod tests {
         assert_eq!(authorization.user_code, "WDJB-MJHT");
         assert_eq!(authorization.expires_in, 600);
         assert_eq!(authorization.interval, 5);
+    }
+
+    #[test]
+    fn cli_device_authorization_falls_back_only_when_scoped_route_is_missing() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = thread::spawn(move || {
+            for (path, status, reason, body) in [
+                (
+                    "/api/cli/v1/device-authorizations/scoped",
+                    404,
+                    "Not Found",
+                    r#"{"success":false,"error":{"code":"NOT_FOUND","message":"missing"}}"#,
+                ),
+                (
+                    "/api/cli/v1/device-authorizations",
+                    200,
+                    "OK",
+                    r#"{"success":true,"data":{"device_code":"mhub_cli_device","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","expires_in":600,"interval":5}}"#,
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
+                let mut request = String::new();
+                let mut content_length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read request header");
+                    assert!(!line.is_empty(), "request ended before its headers");
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            content_length = value.trim().parse().expect("numeric content length");
+                        }
+                    }
+                    request.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut request_body = vec![0; content_length];
+                reader
+                    .read_exact(&mut request_body)
+                    .expect("read request body");
+                request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+                assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
+                write!(
+					stream,
+					"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+					body.len()
+				)
+				.expect("write response");
+            }
+        });
+
+        let authorization = request_cli_device_authorization(
+            &format!("http://{address}"),
+            Duration::from_secs(1),
+            "challenge",
+        )
+        .expect("legacy fallback succeeds");
+        server.join().expect("test server");
+        assert_eq!(authorization.device_code, "mhub_cli_device");
     }
 
     #[test]
@@ -1307,10 +1382,10 @@ mod tests {
             r#"{"success":true,"data":{"device_code":"mhub_cli_device","user_code":"WDJB-MJHT","verification_uri":"https://hub.example.com/cli/device","expires_in":"600","interval":5}}"#,
         ] {
             let (base_url, server) = serve_cli_device(
-                "/api/cli/v1/device-authorizations",
+                "/api/cli/v1/device-authorizations/scoped",
                 200,
                 body,
-                r#""code_challenge":"challenge""#,
+                r#""grant":{"actions":"*","projects":"*"}"#,
             );
 
             let error =

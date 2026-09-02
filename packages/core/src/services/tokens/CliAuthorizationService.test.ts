@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeTime } from 'ulidx';
 import { advanceTime, MemoryBucket, restoreClock, uid } from '../../testing';
 import { PreconditionFailedError } from '../../errors';
-import { CliAuthorizationId, createCliAuthorizationId } from '../../ids';
+import { CliAuthorizationId, createCliAuthorizationId, ProjectId } from '../../ids';
 import { toBase64Url } from '../../internal/base64url';
 import { paths } from '../../paths';
 import { IdentityService } from '../identity/IdentityService';
@@ -11,6 +11,8 @@ import { CliAuthorizationService } from './CliAuthorizationService';
 
 const OWNER = uid('cli-owner');
 const VERIFIER = 'v'.repeat(64);
+const PROJECT = ProjectId.parse('proj-0000000000000001');
+const FULL_GRANT = { actions: '*' as const, projects: '*' as const };
 
 async function challenge(verifier = VERIFIER): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
@@ -62,6 +64,62 @@ describe('CliAuthorizationService', () => {
 		);
 	});
 
+	it('carries a narrowed scoped grant through loopback exchange', async () => {
+		const approved = await authorizations.approveScoped(
+			{
+				codeChallenge: await challenge(),
+				tokenName: 'scoped CLI',
+				expiresInDays: 30,
+				requestedGrant: FULL_GRANT,
+				grant: { actions: ['project.read'], projects: [PROJECT] },
+			},
+			OWNER,
+		);
+		const created = await authorizations.exchange(approved.code, VERIFIER);
+		expect(created.record.grant).toEqual({
+			actions: ['project.read'],
+			projects: [PROJECT],
+		});
+		expect((await tokens.verify(created.token))?.credential.grant).toEqual(created.record.grant);
+	});
+
+	it('rejects a loopback approval that widens the requested grant', async () => {
+		await expect(
+			authorizations.approveScoped(
+				{
+					codeChallenge: await challenge(),
+					tokenName: 'wider',
+					expiresInDays: 30,
+					requestedGrant: { actions: ['project.read'], projects: [PROJECT] },
+					grant: FULL_GRANT,
+				},
+				OWNER,
+			),
+		).rejects.toThrow(/cannot exceed/);
+	});
+
+	it('rejects a stored v2 authorization whose grant exceeds its request', async () => {
+		const approved = await authorizations.approveScoped(
+			{
+				codeChallenge: await challenge(),
+				tokenName: 'scoped CLI',
+				expiresInDays: 30,
+				requestedGrant: { actions: ['project.read'], projects: [PROJECT] },
+				grant: { actions: ['project.read'], projects: [PROJECT] },
+			},
+			OWNER,
+		);
+		const id = CliAuthorizationId.parse(approved.code.split('_')[2]);
+		const key = paths.cliAuthorization(id);
+		const object = await bucket.get(key);
+		const record = JSON.parse(await object!.text()) as Record<string, unknown>;
+		await bucket.put(key, JSON.stringify({ ...record, grant: FULL_GRANT }));
+
+		await expect(authorizations.exchange(approved.code, VERIFIER)).rejects.toThrow(
+			/invalid or expired/,
+		);
+	});
+
 	it('polls a device grant until a browser session approves it', async () => {
 		const requested = await authorizations.requestDevice(await challenge());
 		expect(requested.userCode).toMatch(/^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/);
@@ -85,6 +143,43 @@ describe('CliAuthorizationService', () => {
 		await expect(authorizations.pollDevice(requested.code, VERIFIER)).rejects.toThrow(
 			/invalid or expired/,
 		);
+	});
+
+	it('previews and narrows a scoped device grant', async () => {
+		const requested = await authorizations.requestDeviceScoped(await challenge(), FULL_GRANT);
+		await expect(authorizations.previewDevice(requested.userCode)).resolves.toMatchObject({
+			requestedGrant: FULL_GRANT,
+		});
+		await authorizations.approveDeviceScoped(
+			requested.userCode,
+			{
+				tokenName: 'scoped device',
+				expiresInDays: 7,
+				grant: { actions: ['project.read'], projects: [PROJECT] },
+			},
+			OWNER,
+		);
+		const result = await authorizations.pollDevice(requested.code, VERIFIER);
+		expect(result.status).toBe('approved');
+		if (result.status !== 'approved') throw new Error('expected approved device grant');
+		expect(result.credential.record.grant).toEqual({
+			actions: ['project.read'],
+			projects: [PROJECT],
+		});
+	});
+
+	it('rejects a scoped device approval that widens the requested grant', async () => {
+		const requested = await authorizations.requestDeviceScoped(await challenge(), {
+			actions: ['project.read'],
+			projects: [PROJECT],
+		});
+		await expect(
+			authorizations.approveDeviceScoped(
+				requested.userCode,
+				{ tokenName: 'wider', expiresInDays: 7, grant: FULL_GRANT },
+				OWNER,
+			),
+		).rejects.toThrow(/cannot exceed/);
 	});
 
 	it('does not let a device code cross the loopback exchange endpoints', async () => {

@@ -1517,6 +1517,37 @@ describe('Session routes', () => {
 		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)));
 	});
 
+	it('derives session capabilities from the PAT action grant', async () => {
+		const sid = await startSession();
+		const scoped = createTestApi({
+			bucket,
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: ACTOR,
+						email: `${ACTOR}@example.com`,
+						credential: {
+							kind: 'personal-access-token',
+							grant: {
+								actions: ['project.read', 'session.attach'],
+								projects: [pid],
+							},
+						},
+					}),
+				},
+			},
+		}).request;
+
+		const session = await expectOk<ApiSession>(await scoped('GET', sessionsPath(`/${sid}`)));
+		expect(session.can).toEqual({
+			attach: true,
+			stop: false,
+			surfaces: { vscode: false, opencode: false },
+		});
+		await expectOk(await scoped('POST', sessionsPath(`/${sid}/heartbeat`)));
+		await expectError(await scoped('DELETE', sessionsPath(`/${sid}`)), 403, 'FORBIDDEN');
+	});
+
 	it('super admins do not bypass the per-user session cap', async () => {
 		const god = createTestApi({
 			bucket,

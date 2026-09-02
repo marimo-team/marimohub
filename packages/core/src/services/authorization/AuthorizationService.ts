@@ -48,8 +48,9 @@ import type {
 import type { ResourceSecurityLabels } from '../../securityLabels';
 import { MAX_SECURITY_COMPARTMENTS, SECURITY_LABEL_TOKEN } from '../../securityLabels';
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
-import type { UserId } from '../../ids';
+import type { ProjectId, UserId } from '../../ids';
 import type { Project, Session } from '../../schema';
+import { tokenGrantAllowsAction, tokenGrantAllowsProject } from '../../tokenGrants';
 import { canStartSessionMode, sessionCan } from '../runtime/sessionAuthz';
 import type { SessionAction } from '../runtime/sessionAuthz';
 import { ACTION_RULES } from './actions';
@@ -119,7 +120,9 @@ export type AuthorizationDenialCategory =
 	| 'role'
 	| 'session'
 	| 'standing'
-	| 'constraint';
+	| 'constraint'
+	| 'credential-resource'
+	| 'credential-action';
 
 export type AuthorizationDecision =
 	| {
@@ -144,7 +147,15 @@ export type AuthorizationDecision =
 	  };
 
 export interface AuthorizationTraceStep {
-	stage: 'action' | 'lifecycle' | 'role' | 'standing' | 'session' | 'constraint' | 'final';
+	stage:
+		| 'action'
+		| 'lifecycle'
+		| 'role'
+		| 'standing'
+		| 'session'
+		| 'constraint'
+		| 'credential'
+		| 'final';
 	status: 'passed' | 'failed' | 'skipped';
 	code: string;
 	details?: Readonly<Record<string, unknown>>;
@@ -287,6 +298,7 @@ function parseConstraintEvidence(value: unknown): ConstraintEvidence | null {
 
 /** A catalog snapshot entry as list visibility reads it (denormalized members). */
 export interface ProjectEntryVisibilityInput {
+	id?: ProjectId;
 	owner: UserId;
 	member_ids?: UserId[];
 	member_emails?: string[];
@@ -304,21 +316,33 @@ export class AuthorizationService {
 		resource: AuthorizationResource,
 	): Promise<AuthorizationDecision> {
 		const { decision, labelSets } = this.decideBaseline(subject, action, resource);
-		if (!decision.allowed || labelSets.length === 0) return decision;
-		const constraint = await this.evaluateLabelSets(
-			action,
-			labelSets,
-			this.contextResolver(subject),
-		);
-		if (!constraint.satisfied) {
-			return {
-				allowed: false,
-				category: 'constraint',
-				role: decision.role,
-				constraintReason: constraint.reason,
-			};
+		if (!decision.allowed) {
+			if (decision.category === 'lifecycle' || decision.category === 'visibility') return decision;
+			const credential = this.decideCredential(subject, action, resource, decision.role);
+			return !credential.allowed && credential.category === 'credential-resource'
+				? credential
+				: decision;
 		}
-		return { ...decision, subjectContextExpiresAt: constraint.contextExpiresAt };
+		if (labelSets.length > 0) {
+			const constraint = await this.evaluateLabelSets(
+				action,
+				labelSets,
+				this.contextResolver(subject),
+			);
+			if (!constraint.satisfied) {
+				return {
+					allowed: false,
+					category: 'constraint',
+					role: decision.role,
+					constraintReason: constraint.reason,
+				};
+			}
+			const credential = this.decideCredential(subject, action, resource, decision.role);
+			return credential.allowed
+				? { ...credential, subjectContextExpiresAt: constraint.contextExpiresAt }
+				: credential;
+		}
+		return this.decideCredential(subject, action, resource, decision.role);
 	}
 
 	async analyze(
@@ -330,6 +354,18 @@ export class AuthorizationService {
 		const trace: AuthorizationTraceStep[] = [];
 		const { decision: baseline, labelSets } = this.decideBaseline(subject, action, resource, trace);
 		let decision = baseline;
+		let credentialResourcePrecedence = false;
+		if (
+			!baseline.allowed &&
+			baseline.category !== 'lifecycle' &&
+			baseline.category !== 'visibility'
+		) {
+			const credential = this.decideCredential(subject, action, resource, baseline.role);
+			if (!credential.allowed && credential.category === 'credential-resource') {
+				decision = credential;
+				credentialResourcePrecedence = true;
+			}
+		}
 		if (baseline.allowed && labelSets.length > 0) {
 			const constraint = await this.evaluateLabelSets(
 				action,
@@ -365,11 +401,35 @@ export class AuthorizationService {
 				code: 'baseline_denied',
 			});
 		}
+		if (decision.allowed) {
+			const prior = decision;
+			const credential = this.decideCredential(subject, action, resource, decision.role);
+			decision =
+				credential.allowed && 'subjectContextExpiresAt' in prior
+					? { ...credential, subjectContextExpiresAt: prior.subjectContextExpiresAt }
+					: credential;
+			trace.push({
+				stage: 'credential',
+				status: decision.allowed ? 'passed' : 'failed',
+				code: decision.allowed
+					? 'credential_grant_satisfied'
+					: `credential_grant_${decision.category}`,
+			});
+		} else if (credentialResourcePrecedence) {
+			trace.push({
+				stage: 'credential',
+				status: 'failed',
+				code: 'credential_grant_credential-resource',
+			});
+		} else {
+			trace.push({ stage: 'credential', status: 'skipped', code: 'prior_stage_denied' });
+		}
 		const presentation = decision.allowed
 			? 'allowed'
 			: decision.category === 'lifecycle' ||
 				  decision.category === 'visibility' ||
-				  decision.category === 'constraint'
+				  decision.category === 'constraint' ||
+				  decision.category === 'credential-resource'
 				? 'not-found'
 				: 'forbidden';
 		trace.push({
@@ -402,33 +462,61 @@ export class AuthorizationService {
 				: [],
 		);
 		const out = baselines.map((baseline) => baseline.decision);
-		if (labeled.length === 0) return out;
-		const batch = await this.constraintBatch(
-			action,
-			labeled.flatMap((entry) => entry.labelSets),
-			this.contextResolver(subject),
-		);
-		let cursor = 0;
-		for (const { index, decision, labelSets } of labeled) {
-			const deny = (reason: ConstraintDenialReason): void => {
-				out[index] = {
-					allowed: false,
-					category: 'constraint',
-					role: decision.role,
-					constraintReason: reason,
-				};
-			};
-			if (!batch.ok) {
-				deny(batch.reason);
-				continue;
+		for (let index = 0; index < out.length; index++) {
+			const decision = out[index];
+			if (
+				!decision.allowed &&
+				decision.category !== 'lifecycle' &&
+				decision.category !== 'visibility'
+			) {
+				const credential = this.decideCredential(subject, action, resources[index], decision.role);
+				if (!credential.allowed && credential.category === 'credential-resource') {
+					out[index] = credential;
+				}
 			}
-			const slice = batch.decisions.slice(cursor, cursor + labelSets.length);
-			cursor += labelSets.length;
-			const denied = slice.find((entry) => !entry.satisfied);
-			if (denied?.satisfied === false) {
-				deny(denied.reason);
-			} else {
-				out[index] = { ...decision, subjectContextExpiresAt: batch.contextExpiresAt };
+		}
+		if (labeled.length > 0) {
+			const batch = await this.constraintBatch(
+				action,
+				labeled.flatMap((entry) => entry.labelSets),
+				this.contextResolver(subject),
+			);
+			let cursor = 0;
+			for (const { index, decision, labelSets } of labeled) {
+				const deny = (reason: ConstraintDenialReason): void => {
+					out[index] = {
+						allowed: false,
+						category: 'constraint',
+						role: decision.role,
+						constraintReason: reason,
+					};
+				};
+				if (!batch.ok) {
+					deny(batch.reason);
+					continue;
+				}
+				const slice = batch.decisions.slice(cursor, cursor + labelSets.length);
+				cursor += labelSets.length;
+				const denied = slice.find((entry) => !entry.satisfied);
+				if (denied?.satisfied === false) {
+					deny(denied.reason);
+				} else {
+					out[index] = { ...decision, subjectContextExpiresAt: batch.contextExpiresAt };
+				}
+			}
+		}
+		for (let index = 0; index < out.length; index++) {
+			const decision = out[index];
+			if (decision.allowed) {
+				const credential = this.decideCredential(subject, action, resources[index], decision.role);
+				out[index] = credential.allowed
+					? {
+							...credential,
+							...('subjectContextExpiresAt' in decision
+								? { subjectContextExpiresAt: decision.subjectContextExpiresAt }
+								: {}),
+						}
+					: credential;
 			}
 		}
 		return out;
@@ -571,7 +659,14 @@ export class AuthorizationService {
 	 * List fast path: subjects who see every project (super admins, or anyone a
 	 * deployment default role makes at least a viewer) skip per-entry checks.
 	 */
-	listsAllProjects(subject: AuthSubject): boolean {
+	listsAllProjects(subject: AuthorizationSubject): boolean {
+		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		if (
+			!this.credentialAllowsAction(subject, 'project.read') ||
+			(grant && grant.projects !== '*')
+		) {
+			return false;
+		}
 		return (
 			subjectDefaultRole(subject, this.policy) != null ||
 			isSuperAdmin(subject, this.policy?.superAdmins)
@@ -584,8 +679,58 @@ export class AuthorizationService {
 	 * decide from the authoritative project record instead — never treat
 	 * indeterminate as visible.
 	 */
-	projectEntryVisibility(subject: AuthSubject, entry: ProjectEntryVisibilityInput): boolean | null {
+	projectEntryVisibility(
+		subject: AuthorizationSubject,
+		entry: ProjectEntryVisibilityInput,
+	): boolean | null {
+		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		if (
+			!this.credentialAllowsAction(subject, 'project.read') ||
+			(grant !== undefined &&
+				grant.projects !== '*' &&
+				(entry.id === undefined || !tokenGrantAllowsProject(grant, entry.id)))
+		) {
+			return false;
+		}
 		return canSeeProjectEntry(entry, subject, this.policy);
+	}
+
+	credentialAllowsAction(subject: AuthorizationSubject, action: AuthorizationAction): boolean {
+		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		return tokenGrantAllowsAction(grant, action);
+	}
+
+	credentialDecision(
+		subject: AuthorizationSubject,
+		action: AuthorizationAction,
+		resource: AuthorizationResource,
+	): AuthorizationDecision {
+		if (ACTION_RULES[action].scope !== resource.kind) {
+			throw new Error(
+				`Action ${action} requires a ${ACTION_RULES[action].scope} resource, got ${resource.kind}`,
+			);
+		}
+		return this.decideCredential(subject, action, resource, null);
+	}
+
+	private decideCredential(
+		subject: AuthorizationSubject,
+		action: AuthorizationAction,
+		resource: AuthorizationResource,
+		role: Role | null,
+	): AuthorizationDecision {
+		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		if (!grant) return { allowed: true, role };
+		if (resource.kind === 'deployment') {
+			if (grant.projects !== '*') {
+				return { allowed: false, category: 'credential-resource', role };
+			}
+		} else if (!tokenGrantAllowsProject(grant, resource.project.id)) {
+			return { allowed: false, category: 'credential-resource', role };
+		}
+		return tokenGrantAllowsAction(grant, action)
+			? { allowed: true, role }
+			: { allowed: false, category: 'credential-action', role };
 	}
 
 	private decideDeployment(subject: AuthSubject, action: DeploymentAction): AuthorizationDecision {

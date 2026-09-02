@@ -11,6 +11,8 @@ import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { readStored, UserIdSchema } from '../../schema';
 import type { CreatedToken, TokenService } from './TokenService';
+import { TokenGrantSchema, tokenGrantIsSubset } from '../../tokenGrants';
+import type { TokenGrant } from '../../tokenGrants';
 
 const AUTHORIZATION_PREFIX = 'mhub_cli_';
 const AUTHORIZATION_RE = /^mhub_cli_([0-9A-Z]{26})_([0-9a-z]{32})$/;
@@ -45,28 +47,61 @@ const ApprovedAuthorizationSchema = {
 	expires_in_days: z.number().int().min(1).max(3650),
 };
 
-const CliAuthorizationSchema = z.discriminatedUnion('status', [
-	z.looseObject({
-		...AuthorizationCommonSchema,
-		flow: z.literal('device'),
-		status: z.literal('device_pending'),
-		user_code: z.string().regex(USER_CODE_RE),
-	}),
-	z.looseObject({ ...ApprovedAuthorizationSchema, status: z.literal('pending') }),
-	z.looseObject({ ...ApprovedAuthorizationSchema, status: z.literal('claimed') }),
-]);
+const CliAuthorizationSchema = z
+	.discriminatedUnion('status', [
+		z.looseObject({
+			...AuthorizationCommonSchema,
+			flow: z.literal('device'),
+			status: z.literal('device_pending'),
+			user_code: z.string().regex(USER_CODE_RE),
+		}),
+		z.looseObject({ ...ApprovedAuthorizationSchema, status: z.literal('pending') }),
+		z.looseObject({ ...ApprovedAuthorizationSchema, status: z.literal('claimed') }),
+		z.looseObject({
+			...AuthorizationCommonSchema,
+			flow: z.literal('device'),
+			status: z.literal('device_pending_v2'),
+			user_code: z.string().regex(USER_CODE_RE),
+			requested_grant: TokenGrantSchema,
+		}),
+		z.looseObject({
+			...ApprovedAuthorizationSchema,
+			status: z.literal('pending_v2'),
+			requested_grant: TokenGrantSchema,
+			grant: TokenGrantSchema,
+		}),
+		z.looseObject({
+			...ApprovedAuthorizationSchema,
+			status: z.literal('claimed_v2'),
+			requested_grant: TokenGrantSchema,
+			grant: TokenGrantSchema,
+		}),
+	])
+	.superRefine((record, context) => {
+		if (
+			(record.status === 'pending_v2' || record.status === 'claimed_v2') &&
+			!tokenGrantIsSubset(record.grant, record.requested_grant)
+		) {
+			context.addIssue({ code: 'custom', message: 'Grant exceeds requested grant' });
+		}
+	});
 
 const DeviceUserCodeClaimSchema = z.object({
 	authorization_id: z.string().refine(CliAuthorizationId.is),
 });
 
 type CliAuthorization = z.infer<typeof CliAuthorizationSchema>;
-type PendingCliAuthorization = Extract<CliAuthorization, { status: 'pending' }>;
+type PendingCliAuthorization = Extract<CliAuthorization, { status: 'pending' | 'pending_v2' }>;
 
 export interface ApproveCliAuthorizationInput {
 	codeChallenge: string;
 	tokenName: string;
 	expiresInDays: number;
+}
+
+export interface ApproveScopedCliAuthorizationInput extends ApproveCliAuthorizationInput {
+	requestedGrant: TokenGrant;
+	grant: TokenGrant;
 }
 
 export interface ApprovedCliAuthorization {
@@ -76,6 +111,11 @@ export interface ApprovedCliAuthorization {
 
 export interface RequestedCliDeviceAuthorization extends ApprovedCliAuthorization {
 	userCode: string;
+}
+
+export interface CliDeviceAuthorizationPreview {
+	expiresAt: string;
+	requestedGrant: TokenGrant;
 }
 
 export type CliDevicePollResult =
@@ -205,7 +245,49 @@ export class CliAuthorizationService {
 		};
 	}
 
+	async approveScoped(
+		input: ApproveScopedCliAuthorizationInput,
+		userId: UserId,
+	): Promise<ApprovedCliAuthorization> {
+		if (!tokenGrantIsSubset(input.grant, input.requestedGrant)) {
+			throw new BadRequestError('Approved grant cannot exceed the requested grant');
+		}
+		await this.pruneExpired();
+		const { id, secret, expiresAt, common } = await createAuthorization(input.codeChallenge);
+		const record: PendingCliAuthorization = {
+			...common,
+			flow: 'loopback',
+			user_id: userId,
+			token_name: input.tokenName,
+			expires_in_days: input.expiresInDays,
+			status: 'pending_v2',
+			requested_grant: input.requestedGrant,
+			grant: input.grant,
+		};
+		await this.bucket.put(paths.cliAuthorization(id), JSON.stringify(record), {
+			onlyIfNotExists: true,
+		});
+		return {
+			code: `${AUTHORIZATION_PREFIX}${id}_${secret}`,
+			expiresAt: expiresAt.toISOString(),
+		};
+	}
+
 	async requestDevice(codeChallenge: string): Promise<RequestedCliDeviceAuthorization> {
+		return this.createDeviceAuthorization(codeChallenge);
+	}
+
+	async requestDeviceScoped(
+		codeChallenge: string,
+		requestedGrant: TokenGrant,
+	): Promise<RequestedCliDeviceAuthorization> {
+		return this.createDeviceAuthorization(codeChallenge, requestedGrant);
+	}
+
+	private async createDeviceAuthorization(
+		codeChallenge: string,
+		requestedGrant?: TokenGrant,
+	): Promise<RequestedCliDeviceAuthorization> {
 		await Promise.all([this.pruneExpired(), this.pruneExpiredUserCodes()]);
 		for (let attempt = 0; attempt < USER_CODE_CREATE_ATTEMPTS; attempt += 1) {
 			const { id, secret, expiresAt, common } = await createAuthorization(codeChallenge);
@@ -224,7 +306,9 @@ export class CliAuthorizationService {
 				...common,
 				flow: 'device',
 				user_code: userCode,
-				status: 'device_pending',
+				...(requestedGrant === undefined
+					? { status: 'device_pending' as const }
+					: { status: 'device_pending_v2' as const, requested_grant: requestedGrant }),
 			};
 			try {
 				await this.bucket.put(paths.cliAuthorization(id), JSON.stringify(record), {
@@ -243,34 +327,19 @@ export class CliAuthorizationService {
 		throw new ResourceExhaustedError('Could not allocate a unique CLI device code');
 	}
 
+	async previewDevice(userCode: string): Promise<CliDeviceAuthorizationPreview> {
+		const { record } = await this.readDevicePending(userCode);
+		if (record.status !== 'device_pending_v2') throw invalidAuthorization();
+		return { expiresAt: record.expires_at, requestedGrant: record.requested_grant };
+	}
+
 	async approveDevice(
 		userCode: string,
 		input: Omit<ApproveCliAuthorizationInput, 'codeChallenge'>,
 		userId: UserId,
 	): Promise<{ expiresAt: string }> {
-		const normalized = normalizeCliDeviceUserCode(userCode);
-		if (!normalized) throw invalidAuthorization();
-		const claimKey = paths.cliDeviceUserCode(normalized);
-		const claimObject = await this.bucket.get(claimKey);
-		if (!claimObject) throw invalidAuthorization();
-		let claim: z.infer<typeof DeviceUserCodeClaimSchema>;
-		try {
-			claim = await readStored(DeviceUserCodeClaimSchema, claimObject, claimKey);
-		} catch {
-			throw invalidAuthorization();
-		}
-		const id = CliAuthorizationId.parse(claim.authorization_id);
-		const key = paths.cliAuthorization(id);
-		const object = await this.bucket.get(key);
-		if (!object) throw invalidAuthorization();
-		const record = await readAuthorization(object, key);
-		if (
-			record?.status !== 'device_pending' ||
-			record.user_code !== normalized ||
-			new Date(record.expires_at).getTime() <= Date.now()
-		) {
-			throw invalidAuthorization();
-		}
+		const { key, object, record } = await this.readDevicePending(userCode);
+		if (record.status !== 'device_pending') throw invalidAuthorization();
 		try {
 			await this.bucket.put(
 				key,
@@ -290,9 +359,70 @@ export class CliAuthorizationService {
 		return { expiresAt: record.expires_at };
 	}
 
+	async approveDeviceScoped(
+		userCode: string,
+		input: Omit<ApproveCliAuthorizationInput, 'codeChallenge'> & { grant: TokenGrant },
+		userId: UserId,
+	): Promise<{ expiresAt: string }> {
+		const { key, object, record } = await this.readDevicePending(userCode);
+		if (record.status !== 'device_pending_v2') throw invalidAuthorization();
+		if (!tokenGrantIsSubset(input.grant, record.requested_grant)) {
+			throw new BadRequestError('Approved grant cannot exceed the requested grant');
+		}
+		try {
+			await this.bucket.put(
+				key,
+				JSON.stringify({
+					...record,
+					status: 'pending_v2',
+					user_id: userId,
+					token_name: input.tokenName,
+					expires_in_days: input.expiresInDays,
+					grant: input.grant,
+				}),
+				{ onlyIfEtagMatches: object.etag },
+			);
+		} catch (error) {
+			if (error instanceof PreconditionFailedError) throw invalidAuthorization();
+			throw error;
+		}
+		return { expiresAt: record.expires_at };
+	}
+
+	private async readDevicePending(userCode: string) {
+		const normalized = normalizeCliDeviceUserCode(userCode);
+		if (!normalized) throw invalidAuthorization();
+		const claimKey = paths.cliDeviceUserCode(normalized);
+		const claimObject = await this.bucket.get(claimKey);
+		if (!claimObject) throw invalidAuthorization();
+		let claim: z.infer<typeof DeviceUserCodeClaimSchema>;
+		try {
+			claim = await readStored(DeviceUserCodeClaimSchema, claimObject, claimKey);
+		} catch {
+			throw invalidAuthorization();
+		}
+		const id = CliAuthorizationId.parse(claim.authorization_id);
+		const key = paths.cliAuthorization(id);
+		const object = await this.bucket.get(key);
+		if (!object) throw invalidAuthorization();
+		const record = await readAuthorization(object, key);
+		if (
+			!record ||
+			(record.status !== 'device_pending' && record.status !== 'device_pending_v2') ||
+			record.user_code !== normalized ||
+			new Date(record.expires_at).getTime() <= Date.now()
+		) {
+			throw invalidAuthorization();
+		}
+		return { normalized, key, object, record };
+	}
+
 	async exchange(code: string, codeVerifier: string): Promise<CreatedToken> {
 		const presented = await this.readPresented(code, codeVerifier);
-		if (presented.record.flow !== 'loopback' || presented.record.status !== 'pending') {
+		if (
+			presented.record.flow !== 'loopback' ||
+			(presented.record.status !== 'pending' && presented.record.status !== 'pending_v2')
+		) {
 			throw invalidAuthorization();
 		}
 		return this.claimPresented(presented.key, presented.object, presented.record);
@@ -301,8 +431,15 @@ export class CliAuthorizationService {
 	async pollDevice(code: string, codeVerifier: string): Promise<CliDevicePollResult> {
 		const presented = await this.readPresented(code, codeVerifier);
 		if (presented.record.flow !== 'device') throw invalidAuthorization();
-		if (presented.record.status === 'device_pending') return { status: 'pending' };
-		if (presented.record.status !== 'pending') throw invalidAuthorization();
+		if (
+			presented.record.status === 'device_pending' ||
+			presented.record.status === 'device_pending_v2'
+		) {
+			return { status: 'pending' };
+		}
+		if (presented.record.status !== 'pending' && presented.record.status !== 'pending_v2') {
+			throw invalidAuthorization();
+		}
 		return {
 			status: 'approved',
 			credential: await this.claimPresented(presented.key, presented.object, presented.record),
@@ -320,6 +457,7 @@ export class CliAuthorizationService {
 		if (
 			!record ||
 			record.status === 'claimed' ||
+			record.status === 'claimed_v2' ||
 			new Date(record.expires_at).getTime() <= Date.now()
 		) {
 			throw invalidAuthorization();
@@ -343,9 +481,16 @@ export class CliAuthorizationService {
 		record: PendingCliAuthorization,
 	): Promise<CreatedToken> {
 		try {
-			await this.bucket.put(key, JSON.stringify({ ...record, status: 'claimed' }), {
-				onlyIfEtagMatches: object.etag,
-			});
+			await this.bucket.put(
+				key,
+				JSON.stringify({
+					...record,
+					status: record.status === 'pending_v2' ? 'claimed_v2' : 'claimed',
+				}),
+				{
+					onlyIfEtagMatches: object.etag,
+				},
+			);
 		} catch (error) {
 			if (error instanceof PreconditionFailedError) throw invalidAuthorization();
 			throw error;
@@ -353,7 +498,11 @@ export class CliAuthorizationService {
 
 		try {
 			return await this.tokens.create(
-				{ name: record.token_name, expiresInDays: record.expires_in_days },
+				{
+					name: record.token_name,
+					expiresInDays: record.expires_in_days,
+					...(record.status === 'pending_v2' ? { grant: record.grant } : {}),
+				},
 				record.user_id,
 			);
 		} finally {

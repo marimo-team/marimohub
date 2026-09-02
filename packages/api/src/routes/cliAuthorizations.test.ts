@@ -16,6 +16,7 @@ const CALLBACK = 'http://127.0.0.1:49152/callback';
 const STATE = 's'.repeat(32);
 const VERIFIER = 'v'.repeat(64);
 const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
+const FULL_GRANT = { actions: '*' as const, projects: '*' as const };
 
 describe('CLI authorization routes', () => {
 	let bucket: MemoryBucket;
@@ -90,6 +91,50 @@ describe('CLI authorization routes', () => {
 		expect(me.id).toBe(ACTOR);
 	});
 
+	it('carries a narrowed grant through scoped loopback approval', async () => {
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'Scoped', description: 'd' }),
+			201,
+		);
+		const grant = { actions: ['project.read'], projects: [project.id] };
+		const approved = await expectOk<{ redirect_uri: string }>(
+			await request('POST', '/me/cli-authorizations/scoped', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'scoped CLI',
+				expires_in_days: 30,
+				requested_grant: FULL_GRANT,
+				grant,
+			}),
+			201,
+		);
+		const code = new URL(approved.redirect_uri).searchParams.get('code')!;
+		await expectOk(
+			await app.request('/api/cli/v1/token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code, code_verifier: VERIFIER }),
+			}),
+		);
+		const [listed] = await expectOk<{ grant?: unknown }[]>(await request('GET', '/me/tokens'));
+		expect(listed.grant).toEqual(grant);
+	});
+
+	it('rejects grants on the legacy loopback endpoint', async () => {
+		await expectError(
+			await request('POST', '/me/cli-authorizations', {
+				callback_uri: CALLBACK,
+				state: STATE,
+				code_challenge: CHALLENGE,
+				token_name: 'legacy CLI',
+				expires_in_days: 30,
+				grant: FULL_GRANT,
+			}),
+			422,
+		);
+	});
+
 	it('approves a device login from any browser and returns the PAT through polling', async () => {
 		const device = await requestDevice();
 		expect(device.device_code).toMatch(/^mhub_cli_/);
@@ -135,6 +180,76 @@ describe('CLI authorization routes', () => {
 			}),
 			400,
 			'BAD_REQUEST',
+		);
+	});
+
+	it('previews and narrows a scoped device grant', async () => {
+		const device = await expectOk<{ device_code: string; user_code: string }>(
+			await app.request('/api/cli/v1/device-authorizations/scoped', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code_challenge: CHALLENGE, grant: FULL_GRANT }),
+			}),
+		);
+		const previewResponse = await request(
+			'GET',
+			`/me/cli-device-authorizations/${device.user_code}`,
+		);
+		const preview = await expectOk<{ requested_grant: unknown }>(previewResponse);
+		expect(preview.requested_grant).toEqual(FULL_GRANT);
+		expect(previewResponse.headers.get('Cache-Control')).toBe('no-store');
+
+		const grant = { actions: ['project.read'], projects: '*' };
+		await expectOk(
+			await request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'scoped device CLI',
+				expires_in_days: 7,
+				grant,
+			}),
+		);
+		await expectOk(
+			await app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+			}),
+		);
+		const [listed] = await expectOk<{ grant?: unknown }[]>(await request('GET', '/me/tokens'));
+		expect(listed.grant).toEqual(grant);
+	});
+
+	it('does not disclose inaccessible projects during device approval', async () => {
+		const other = createTestApi({ bucket, userId: uid('other-user') }).request;
+		const project = await expectOk<{ id: string }>(
+			await other('POST', '/projects', { name: 'Private', description: 'd' }),
+			201,
+		);
+		const device = await expectOk<{ user_code: string }>(
+			await app.request('/api/cli/v1/device-authorizations/scoped', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					code_challenge: CHALLENGE,
+					grant: { actions: '*', projects: [project.id] },
+				}),
+			}),
+		);
+
+		await expectError(
+			await request('GET', `/me/cli-device-authorizations/${device.user_code}`),
+			404,
+			'NOT_FOUND',
+		);
+		await expectError(
+			await request('POST', '/me/cli-device-authorizations/scoped', {
+				user_code: device.user_code,
+				token_name: 'probe',
+				expires_in_days: 7,
+				grant: { actions: '*', projects: '*' },
+			}),
+			404,
+			'NOT_FOUND',
 		);
 	});
 

@@ -111,6 +111,7 @@ export type IntegrationObjectPreview = ClientIntegrationObjectPreview;
 export type ResolvedUser = ClientResolvedUser;
 /** A personal access token's metadata (never the secret). */
 export type ApiToken = ClientApiToken;
+export type TokenGrant = NonNullable<ClientApiToken['grant']>;
 /** The token-create response: metadata plus the one-time plaintext `token`. */
 export type ApiTokenCreated = ClientApiTokenCreated;
 export type AuditLogEntry = ClientAuditLogEntry;

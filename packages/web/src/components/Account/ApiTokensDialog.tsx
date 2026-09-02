@@ -10,10 +10,13 @@ import {
 	TextField,
 	WriteOnceWarning,
 } from '@/components/ui';
-import { useApiTokensQuery, useCreateApiToken, useRevokeApiToken } from '@/api/hooks';
+import { useApiTokensQuery, useCreateScopedApiToken, useRevokeApiToken } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { formatDuration, formatRelative } from '@/lib/time';
 import type { ApiToken, ApiTokenCreated } from '@/types';
+import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
+import type { TokenGrantDraft } from './TokenGrantEditor';
+import { TOKEN_GRANT_PRESETS } from '@marimo-hub/core/token-grants';
 
 export interface ApiTokensDialogProps {
 	isOpen: boolean;
@@ -32,6 +35,26 @@ function expiryLabel(iso: string, now: number = Date.now()): string {
 	return `expires in ${formatDuration(new Date(now).toISOString(), deadline)}`;
 }
 
+function grantLabel(token: ApiToken): string {
+	if (!token.grant) return 'Full access · all projects · legacy';
+	const grant = token.grant;
+	const preset = Object.entries(TOKEN_GRANT_PRESETS).find(([, actions]) => {
+		if (actions === '*' || grant.actions === '*') return actions === grant.actions;
+		return (
+			actions.length === grant.actions.length &&
+			actions.every((action) => grant.actions.includes(action))
+		);
+	});
+	const actions = preset
+		? `${preset[0][0].toUpperCase()}${preset[0].slice(1)} access`
+		: 'Custom access';
+	const projects =
+		grant.projects === '*'
+			? 'all projects'
+			: `${grant.projects.length} selected project${grant.projects.length === 1 ? '' : 's'}`;
+	return `${actions} · ${projects}`;
+}
+
 /**
  * Self-service personal access tokens for the API (CI, scripts, the CLI). The
  * plaintext is server-side hashed, so it is shown exactly once, right after
@@ -39,12 +62,16 @@ function expiryLabel(iso: string, now: number = Date.now()): string {
  */
 export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 	const { data: tokens } = useApiTokensQuery(isOpen);
-	const createToken = useCreateApiToken();
+	const createToken = useCreateScopedApiToken();
 	const revokeToken = useRevokeApiToken();
 
 	const [name, setName] = useState('');
 	const [expiresInDays, setExpiresInDays] = useState('');
 	const [created, setCreated] = useState<ApiTokenCreated | null>(null);
+	const [grantDraft, setGrantDraft] = useState<TokenGrantDraft>({
+		actions: null,
+		projects: null,
+	});
 	const confirmRevoke = useDialogTarget<ApiToken>();
 
 	const handleCreate = async () => {
@@ -58,14 +85,21 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 			toast.error('Expiry must be a whole number of days.');
 			return;
 		}
+		const grant = tokenGrantFromDraft(grantDraft);
+		if (!grant) {
+			toast.error('Choose an action preset and a project scope.');
+			return;
+		}
 		try {
 			const result = await createToken.mutateAsync({
 				name: trimmed,
 				...(days ? { expires_in_days: Number(days) } : {}),
+				grant,
 			});
 			setCreated(result);
 			setName('');
 			setExpiresInDays('');
+			setGrantDraft({ actions: null, projects: null });
 		} catch {
 			return;
 		}
@@ -88,7 +122,7 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 	};
 
 	return (
-		<DialogModal isOpen={isOpen} onClose={close} title="API tokens" width="md">
+		<DialogModal isOpen={isOpen} onClose={close} title="API tokens" width="lg">
 			<div className="flex flex-col gap-4 text-sm">
 				<p className="text-muted-foreground">
 					Personal access tokens let CI, scripts, and the CLI call the API as you: send one as{' '}
@@ -117,6 +151,9 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 								>
 									<span className="flex min-w-0 flex-col">
 										<span className="truncate text-xs font-medium">{token.name}</span>
+										<span className="truncate text-xs text-muted-foreground">
+											{grantLabel(token)}
+										</span>
 										<span className="truncate text-xs text-muted-foreground">
 											created {formatRelative(token.created_at)}
 											{token.expires_at ? ` · ${expiryLabel(token.expires_at)}` : ''}
@@ -159,8 +196,13 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 							/>
 						</div>
 					</div>
+					<TokenGrantEditor value={grantDraft} onChange={setGrantDraft} />
 					<div className="flex justify-end">
-						<Button type="submit" variant="primary" isDisabled={createToken.isPending}>
+						<Button
+							type="submit"
+							variant="primary"
+							isDisabled={createToken.isPending || tokenGrantFromDraft(grantDraft) === null}
+						>
 							<Plus className="size-4" />
 							{createToken.isPending ? 'Creating...' : 'Create token'}
 						</Button>

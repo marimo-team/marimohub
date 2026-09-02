@@ -1,10 +1,10 @@
 import type { Bucket } from '../../ports/bucket';
 import { roleAtLeast } from '../../authz';
-import type { AuthSubject } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
 import { filterByLabelConstraints } from '../authorization/labelFilter';
 import type {
 	AuthorizationPolicy,
+	AuthorizationSubject,
 	ResourceSecurityPolicy,
 } from '../authorization/AuthorizationService';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
@@ -15,6 +15,7 @@ import { Millis } from '../../duration';
 import {
 	assertVersionMatch,
 	ConflictError,
+	ForbiddenError,
 	NotFoundError,
 	PreconditionFailedError,
 	ValidationError,
@@ -223,11 +224,17 @@ export class ProjectService {
 	 */
 	async listProjects(
 		filter?: ListFilters<Project['status']> & {
-			subject: AuthSubject;
+			subject: AuthorizationSubject;
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
 		},
 	): Promise<PublicProjectEntry[]> {
+		if (filter) {
+			const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
+			if (!authz.credentialAllowsAction(filter.subject, 'project.read')) {
+				throw new ForbiddenError('Token grant does not permit project listing');
+			}
+		}
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		let matching = snapshot.projects.filter(
 			createListFilter<SnapshotProjectEntry>(
@@ -285,9 +292,21 @@ export class ProjectService {
 	private async canSeeProject(
 		authz: AuthorizationService,
 		id: ProjectId,
-		subject: AuthSubject,
+		subject: AuthorizationSubject,
 	): Promise<boolean> {
-		return authz.role(subject, await this.getProject(id)) !== null;
+		const project = await this.getProject(id);
+		return (
+			authz.projectEntryVisibility(subject, {
+				id,
+				owner: project.owner,
+				member_ids: project.members.flatMap((member) =>
+					member.user_id === undefined ? [] : [member.user_id],
+				),
+				member_emails: project.members.flatMap((member) =>
+					member.email === undefined ? [] : [normalizeEmail(member.email)],
+				),
+			}) === true
+		);
 	}
 
 	async getProject(id: ProjectId): Promise<Project> {

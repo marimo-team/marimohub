@@ -547,7 +547,7 @@ async function authorizeSessionStart(
 		// read routes; role denials keep the canonical editor-gate 403
 		// (session.start admits every editor+; the caller already 404'd a deleted
 		// project).
-		if (decision.category === 'constraint') {
+		if (decision.category === 'constraint' || decision.category === 'credential-resource') {
 			throw new NotFoundError(`Project ${project.id} not found`);
 		}
 		throw new ForbiddenError(`Requires 'editor' role on project ${project.id}`);
@@ -723,7 +723,7 @@ async function admittedSessionNotebooks(
 	user: AuthUser,
 	project: Project,
 	notebookIds: readonly NotebookId[],
-): Promise<Set<NotebookId>> {
+): Promise<Map<NotebookId, ResourceSecurityLabels | null>> {
 	const distinct = [...new Set(notebookIds)];
 	const states = await Promise.all(
 		distinct.map(async (nid) => {
@@ -734,7 +734,9 @@ async function admittedSessionNotebooks(
 			}
 		}),
 	);
-	const admitted = new Set(states.flatMap((s) => (s?.labels === null ? [s.nid] : [])));
+	const admitted = new Map<NotebookId, ResourceSecurityLabels | null>(
+		states.flatMap((state) => (state?.labels === null ? ([[state.nid, null]] as const) : [])),
+	);
 	const labeled = states.filter(
 		(s): s is { nid: NotebookId; labels: ResourceSecurityLabels } =>
 			s !== null && s.labels !== null,
@@ -746,7 +748,7 @@ async function admittedSessionNotebooks(
 			labeled.map((s) => ({ kind: 'project' as const, project, notebookLabels: s.labels })),
 		);
 		decisions.forEach((decision, index) => {
-			if (decision.allowed) admitted.add(labeled[index].nid);
+			if (decision.allowed) admitted.set(labeled[index].nid, labeled[index].labels);
 		});
 	}
 	return admitted;
@@ -770,14 +772,24 @@ app.openapi(listSessions, async (c) => {
 		active.map((s) => s.notebook_id),
 	);
 	const visible = active.filter((s) => admitted.has(s.notebook_id));
-	const data = paginate(
-		visible.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
-		c.req.valid('query'),
-		{
-			key: (s) => s.started_at,
-			tiebreak: (s) => s.session_id,
-		},
+	const responses = await Promise.all(
+		visible.map(async (session) =>
+			toSessionResponse(
+				session,
+				await sessionGrantsFor(
+					project,
+					user,
+					session,
+					deps,
+					admitted.get(session.notebook_id) ?? null,
+				),
+			),
+		),
 	);
+	const data = paginate(responses, c.req.valid('query'), {
+		key: (s) => s.started_at,
+		tiebreak: (s) => s.session_id,
+	});
 	return c.json({ success: true, data }, 200);
 });
 
@@ -794,11 +806,14 @@ app.openapi(getSession, async (c) => {
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
-	await assertSessionNotebookVisible(deps, project, session, user);
+	const labels = await assertSessionNotebookVisible(deps, project, session, user);
 	return c.json(
 		{
 			success: true,
-			data: toSessionResponse(session, sessionGrantsFor(project, user, session, deps.policy)),
+			data: toSessionResponse(
+				session,
+				await sessionGrantsFor(project, user, session, deps, labels),
+			),
 		},
 		200,
 	);
@@ -1143,16 +1158,19 @@ app.openapi(createSession, async (c) => {
 		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
 	}
 	const ephemeral = authorization.ephemeral || editorTemporary;
-	const surfaceGrant = sessionGrantsFor(
-		project,
-		user,
-		{
-			mode,
-			ephemeral,
-			user_id: user.id,
-			editor_sandbox_sharing: sharing,
-		},
-		deps.policy,
+	const surfaceGrant = (
+		await sessionGrantsFor(
+			project,
+			user,
+			{
+				mode,
+				ephemeral,
+				user_id: user.id,
+				editor_sandbox_sharing: sharing,
+			},
+			deps,
+			notebook.meta.security_labels ?? null,
+		)
 	).surface;
 	const requestedSurfaces = body?.surfaces ?? [];
 	if (requestedSurfaces.length > 0 && mode !== 'edit') {
@@ -1170,7 +1188,8 @@ app.openapi(createSession, async (c) => {
 			: undefined;
 	const profileOverrideEligible = authorization.profileOverrideEligible;
 	const restrictedViewerCredentials = authorization.restrictedViewerCredentials;
-	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
+	const grants = (session: Session) =>
+		sessionGrantsFor(project, user, session, deps, notebook.meta.security_labels ?? null);
 	const tightenAuthorizationDeadline = (session: Session) =>
 		authorizationExpiresAt
 			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
@@ -1262,7 +1281,7 @@ app.openapi(createSession, async (c) => {
 		// else's running app. Only a caller who could stop it outright may
 		// retire-and-replace it — otherwise a viewer's create (or a probe
 		// false-negative under load) tears the app down under everyone.
-		const mayRetire = !MODE_POLICY[mode].singleton || grants(reusable).stop;
+		const mayRetire = !MODE_POLICY[mode].singleton || (await grants(reusable)).stop;
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
 		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
 		const kernelUrl =
@@ -1288,7 +1307,7 @@ app.openapi(createSession, async (c) => {
 				{
 					success: true,
 					data: {
-						...toSessionResponse(reusable, grants(reusable)),
+						...toSessionResponse(reusable, await grants(reusable)),
 						reused: true,
 						...(mode === 'edit'
 							? {
@@ -1718,7 +1737,7 @@ app.openapi(createSession, async (c) => {
 					{
 						success: true,
 						data: {
-							...toSessionResponse(winner, grants(winner)),
+							...toSessionResponse(winner, await grants(winner)),
 							reused: true,
 							editor_session: {
 								sharing,
@@ -1750,7 +1769,10 @@ app.openapi(createSession, async (c) => {
 					throw new ConflictError('The app session authorization expired. Retry shortly.');
 				}
 				return c.json(
-					{ success: true, data: { ...toSessionResponse(winner, grants(winner)), reused: true } },
+					{
+						success: true,
+						data: { ...toSessionResponse(winner, await grants(winner)), reused: true },
+					},
 					200,
 				);
 			}
@@ -1838,7 +1860,7 @@ app.openapi(createSession, async (c) => {
 		{
 			success: true,
 			data: {
-				...toSessionResponse(updated!, grants(updated!)),
+				...toSessionResponse(updated!, await grants(updated!)),
 				reused: false,
 				...(mode === 'edit'
 					? {
@@ -1921,7 +1943,10 @@ app.openapi(heartbeatSession, async (c) => {
 	return c.json(
 		{
 			success: true,
-			data: toSessionResponse(updated, sessionGrantsFor(project, user, updated, deps.policy)),
+			data: toSessionResponse(
+				updated,
+				await sessionGrantsFor(project, user, updated, deps, labels),
+			),
 		},
 		200,
 	);

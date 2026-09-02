@@ -1,10 +1,16 @@
 import { useState } from 'react';
 import { ArrowRight, CheckCircle2, Clock3, ShieldAlert, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
-import { useApproveCliDeviceAuthorization } from '@/api/hooks';
+import {
+	useApproveCliDeviceAuthorization,
+	useApproveScopedCliDeviceAuthorization,
+	useCliDeviceAuthorizationPreview,
+} from '@/api/hooks';
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
 import { withBasePath } from '@/lib/basePath';
+import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
+import type { TokenGrantDraft } from './TokenGrantEditor';
 
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
 const TOKEN_LIFETIME_PRESETS = ['7', '30', '90'] as const;
@@ -33,13 +39,33 @@ export function CliDeviceLoginPage({
 	const initialCode = new URLSearchParams(window.location.search).get('user_code') ?? '';
 	const { user } = useAuth();
 	const approve = useApproveCliDeviceAuthorization();
+	const approveScoped = useApproveScopedCliDeviceAuthorization();
 	const [userCode, setUserCode] = useState(initialCode);
 	const [expiresInDays, setExpiresInDays] = useState('30');
 	const [approved, setApproved] = useState(false);
+	const normalizedCode = normalizeUserCode(userCode);
+	const preview = useCliDeviceAuthorizationPreview(
+		normalizedCode ? formatUserCode(normalizedCode) : null,
+	);
+	const [grantOverride, setGrantOverride] = useState<{
+		code: string;
+		draft: TokenGrantDraft;
+	} | null>(null);
+	const requestedDraft: TokenGrantDraft | null = preview.data
+		? {
+				actions: preview.data.requested_grant.actions,
+				projects: preview.data.requested_grant.projects,
+			}
+		: null;
+	const grantDraft =
+		normalizedCode && grantOverride?.code === normalizedCode ? grantOverride.draft : requestedDraft;
+	const updateGrantDraft = (draft: TokenGrantDraft) => {
+		if (normalizedCode) setGrantOverride({ code: normalizedCode, draft });
+	};
 
 	const submit = async () => {
-		const normalizedCode = normalizeUserCode(userCode);
-		if (!normalizedCode) {
+		const code = normalizeUserCode(userCode);
+		if (!code) {
 			toast.error('Enter the 8-letter code shown by the mohub CLI.');
 			return;
 		}
@@ -49,12 +75,19 @@ export function CliDeviceLoginPage({
 			return;
 		}
 		try {
-			await approve.mutateAsync({
-				user_code: formatUserCode(normalizedCode),
+			const common = {
+				user_code: formatUserCode(code),
 				token_name: 'mohub CLI',
 				expires_in_days: days,
-			});
-			setUserCode(formatUserCode(normalizedCode));
+			};
+			if (preview.data) {
+				const grant = grantDraft ? tokenGrantFromDraft(grantDraft) : null;
+				if (!grant) return;
+				await approveScoped.mutateAsync({ ...common, grant });
+			} else {
+				await approve.mutateAsync(common);
+			}
+			setUserCode(formatUserCode(code));
 			setApproved(true);
 		} catch {
 			return;
@@ -82,6 +115,14 @@ export function CliDeviceLoginPage({
 						<div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
 							<Terminal className="size-6" />
 						</div>
+
+						{preview.data && grantDraft ? (
+							<TokenGrantEditor
+								value={grantDraft}
+								onChange={updateGrantDraft}
+								upperBound={preview.data.requested_grant}
+							/>
+						) : null}
 						<div className="flex flex-col gap-1">
 							<h1 className="text-xl font-semibold">Connect a remote mohub CLI</h1>
 							<p className="text-sm text-muted-foreground">
@@ -144,14 +185,26 @@ export function CliDeviceLoginPage({
 						<div className="flex justify-end gap-2 border-t pt-5">
 							<Button
 								type="button"
-								isDisabled={approve.isPending}
+								isDisabled={approve.isPending || approveScoped.isPending}
 								onPress={() => navigate(withBasePath('/'))}
 							>
 								Cancel
 							</Button>
-							<Button type="submit" variant="primary" isDisabled={approve.isPending}>
-								{approve.isPending ? 'Connecting…' : 'Authorize CLI'}
-								{approve.isPending ? null : <ArrowRight className="size-4" />}
+							<Button
+								type="submit"
+								variant="primary"
+								isDisabled={
+									approve.isPending ||
+									approveScoped.isPending ||
+									preview.isFetching ||
+									(preview.data !== undefined &&
+										(grantDraft === null || tokenGrantFromDraft(grantDraft) === null))
+								}
+							>
+								{approve.isPending || approveScoped.isPending ? 'Connecting…' : 'Authorize CLI'}
+								{approve.isPending || approveScoped.isPending ? null : (
+									<ArrowRight className="size-4" />
+								)}
 							</Button>
 						</div>
 					</form>

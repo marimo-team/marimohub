@@ -33,6 +33,9 @@ function makeFetch(tokens: ApiToken[]) {
 		const method = init?.method ?? 'GET';
 		const body = init?.body ? JSON.parse(init.body as string) : undefined;
 		if (method !== 'GET') calls.push({ url, method, body });
+		if (url.includes('/projects') && method === 'GET') {
+			return ok({ items: [], next_cursor: null });
+		}
 
 		if (url.includes('/me/tokens')) {
 			if (method === 'GET') return ok(tokens);
@@ -124,15 +127,21 @@ describe('ApiTokensDialog', () => {
 
 		await user.type(await screen.findByLabelText('Name'), 'ci-deploy');
 		await user.type(screen.getByLabelText('Expires in days'), '90');
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
 		await user.click(screen.getByRole('button', { name: /create token/i }));
 
 		expect(await screen.findByLabelText('API token')).toHaveValue(PLAINTEXT);
 		expect(screen.getByText(/shown once and cannot be retrieved later/i)).toBeInTheDocument();
 		expect(calls).toEqual([
 			{
-				url: '/api/v1/me/tokens',
+				url: '/api/v1/me/tokens/scoped',
 				method: 'POST',
-				body: { name: 'ci-deploy', expires_in_days: 90 },
+				body: {
+					name: 'ci-deploy',
+					expires_in_days: 90,
+					grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+				},
 			},
 		]);
 	});
@@ -142,6 +151,8 @@ describe('ApiTokensDialog', () => {
 		const { calls } = setup([]);
 
 		await screen.findByText('No tokens yet.');
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
 		await user.click(screen.getByRole('button', { name: /create token/i }));
 
 		expect(await screen.findByText(/name the token/i)).toBeInTheDocument();
@@ -154,6 +165,8 @@ describe('ApiTokensDialog', () => {
 
 		await user.type(await screen.findByLabelText('Name'), 'ci');
 		await user.type(screen.getByLabelText('Expires in days'), 'soon');
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
 		await user.click(screen.getByRole('button', { name: /create token/i }));
 
 		expect(await screen.findByText(/whole number of days/i)).toBeInTheDocument();
@@ -166,6 +179,9 @@ describe('ApiTokensDialog', () => {
 			'fetch',
 			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 				const method = init?.method ?? 'GET';
+				if (String(input).includes('/projects') && method === 'GET') {
+					return ok({ items: [], next_cursor: null });
+				}
 				if (String(input).includes('/me/tokens') && method === 'GET') return ok([]);
 				return new Response(
 					JSON.stringify({
@@ -186,6 +202,8 @@ describe('ApiTokensDialog', () => {
 		render(<ApiTokensDialog isOpen onClose={vi.fn()} />, { wrapper });
 
 		await user.type(await screen.findByLabelText('Name'), 'ci');
+		await user.click(screen.getByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
 		await user.click(screen.getByRole('button', { name: /create token/i }));
 
 		expect(await screen.findByText('Token limit reached')).toBeInTheDocument();

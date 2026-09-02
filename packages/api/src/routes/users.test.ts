@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { ProjectId } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
@@ -124,6 +125,40 @@ describe('User routes', () => {
 			);
 			const ada = createTestApi({ bucket, userId: uid('ada') }).request;
 			expect(await expectOk(await ada('GET', '/users/search?q=adam'))).toHaveLength(1);
+		});
+
+		it('does not let project involvement bypass a PAT action grant', async () => {
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					credential: {
+						kind: 'personal-access-token',
+						grant: { actions: ['project.read'], projects: '*' },
+					},
+					id: ACTOR,
+					email: `${ACTOR}@example.com`,
+				}),
+			};
+			const pat = createTestApi({ bucket, deps: { authenticator } }).request;
+			await expectError(await pat('GET', '/users/search?q=adam'), 403, 'FORBIDDEN');
+		});
+
+		it('masks deployment search from a selected-project PAT', async () => {
+			const project = await expectOk<{ id: string }>(
+				await request('POST', '/projects', { name: 'Selected', description: 'd' }),
+				201,
+			);
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					credential: {
+						kind: 'personal-access-token',
+						grant: { actions: '*', projects: [ProjectId.parse(project.id)] },
+					},
+					id: ACTOR,
+					email: `${ACTOR}@example.com`,
+				}),
+			};
+			const pat = createTestApi({ bucket, deps: { authenticator } }).request;
+			await expectError(await pat('GET', '/users/search?q=adam'), 404, 'NOT_FOUND');
 		});
 
 		it('anyone may search when a default role opens the deployment', async () => {

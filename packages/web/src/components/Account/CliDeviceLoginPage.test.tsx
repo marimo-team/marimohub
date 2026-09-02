@@ -7,7 +7,9 @@ import { CliDeviceLoginPage } from './CliDeviceLoginPage';
 
 const USER_CODE = 'WDJB-MJHT';
 
-function setup(options: { approvalFails?: boolean; approvalThrows?: boolean } = {}) {
+function setup(
+	options: { approvalFails?: boolean; approvalThrows?: boolean; scoped?: boolean } = {},
+) {
 	const calls: { url: string; body?: unknown }[] = [];
 	vi.stubGlobal(
 		'fetch',
@@ -17,6 +19,20 @@ function setup(options: { approvalFails?: boolean; approvalThrows?: boolean } = 
 			calls.push({ url, body });
 			if (url === '/api/v1/me') {
 				return jsonOk({ id: 'user-one', email: 'dev@example.com', logout_url: null });
+			}
+			if (url === `/api/v1/me/cli-device-authorizations/${USER_CODE}`) {
+				return options.scoped
+					? jsonOk({
+							requested_grant: { actions: '*', projects: '*' },
+							expires_at: '2026-08-25T12:10:00.000Z',
+						})
+					: jsonError('BAD_REQUEST', 'CLI authorization code is invalid or expired', 400);
+			}
+			if (url.startsWith('/api/v1/projects')) {
+				return jsonOk({ items: [], next_cursor: null });
+			}
+			if (url === '/api/v1/me/cli-device-authorizations/scoped') {
+				return jsonOk({ expires_at: '2026-08-25T12:10:00.000Z' });
 			}
 			if (url === '/api/v1/me/cli-device-authorizations') {
 				if (options.approvalThrows) throw new TypeError('network unavailable');
@@ -81,6 +97,29 @@ describe('CliDeviceLoginPage', () => {
 		});
 	});
 
+	it('starts from the requested grant and uses scoped approval', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({ scoped: true });
+		await screen.findByText(/dev@example.com/);
+		expect(await screen.findByRole('radio', { name: /^Full/ })).toBeChecked();
+		expect(screen.getByRole('radio', { name: /^All projects/ })).toBeChecked();
+
+		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
+
+		expect(
+			await screen.findByRole('heading', { name: 'CLI authorization approved' }),
+		).toBeVisible();
+		expect(calls).toContainEqual({
+			url: '/api/v1/me/cli-device-authorizations/scoped',
+			body: {
+				user_code: USER_CODE,
+				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				grant: { actions: '*', projects: '*' },
+			},
+		});
+	});
+
 	it('rejects invalid code characters without calling the API', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup();
@@ -91,7 +130,9 @@ describe('CliDeviceLoginPage', () => {
 		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
 
 		expect(await screen.findByText(/8-letter code shown by the mohub CLI/i)).toBeVisible();
-		expect(calls.filter((call) => call.url.includes('cli-device'))).toEqual([]);
+		expect(
+			calls.filter((call) => call.url.includes('cli-device') && call.body !== undefined),
+		).toEqual([]);
 	});
 
 	it.each(['0', '3651', '1.5', 'abc', ''])('rejects invalid token lifetime %j', async (value) => {
@@ -104,7 +145,9 @@ describe('CliDeviceLoginPage', () => {
 		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
 
 		expect(await screen.findByText(/between 1 and 3650 days/i)).toBeVisible();
-		expect(calls.filter((call) => call.url.includes('cli-device'))).toEqual([]);
+		expect(
+			calls.filter((call) => call.url.includes('cli-device') && call.body !== undefined),
+		).toEqual([]);
 	});
 
 	it('keeps the approval form open when the code is invalid or expired', async () => {
@@ -137,7 +180,9 @@ describe('CliDeviceLoginPage', () => {
 		await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
 		expect(navigate).toHaveBeenCalledWith('/');
-		expect(calls.filter((call) => call.url.includes('cli-device'))).toEqual([]);
+		expect(
+			calls.filter((call) => call.url.includes('cli-device') && call.body !== undefined),
+		).toEqual([]);
 	});
 
 	it('includes the deployment prefix in the hard-navigation cancel URL', async () => {

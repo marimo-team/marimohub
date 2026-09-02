@@ -8,6 +8,7 @@
  * OIDC redirect flow) does so through its own package, not through this port.
  */
 import type { UserId } from '../ids';
+import type { TokenGrant } from '../tokenGrants';
 
 export const AUTH_ENTITLEMENTS = [
 	'super-admin',
@@ -57,6 +58,8 @@ export interface AuthCredential {
 	readonly id?: string;
 	/** ISO expiry of the credential itself, when it is bounded. */
 	readonly expiresAt?: string;
+	/** Immutable authorization boundary attached to a scoped personal access token. */
+	readonly grant?: TokenGrant;
 	/**
 	 * Opaque reference a `SubjectSecurityContextProvider` can resolve into a
 	 * bounded runtime security context. Never raw claims or attributes.

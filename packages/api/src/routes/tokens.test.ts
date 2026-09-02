@@ -8,6 +8,7 @@ import {
 	createTestApi,
 	expectError,
 	expectOk,
+	expectPage,
 	makeTestDeps,
 } from '../testing';
 
@@ -17,6 +18,7 @@ interface TokenMeta {
 	created_at: string;
 	expires_at?: string;
 	last_used_at?: string;
+	grant?: { actions: string[] | '*'; projects: string[] | '*' };
 }
 
 describe('Token routes', () => {
@@ -53,6 +55,49 @@ describe('Token routes', () => {
 			201,
 		);
 		expect(data.expires_at).toBeTruthy();
+	});
+
+	it('keeps the legacy creation body strict', async () => {
+		await expectError(
+			await request('POST', '/me/tokens', {
+				name: 'legacy',
+				grant: { actions: '*', projects: '*' },
+			}),
+			422,
+		);
+	});
+
+	it('creates and lists a v2 token with an explicit grant', async () => {
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'Scoped', description: 'd' }),
+			201,
+		);
+		const grant = { actions: ['project.read'], projects: [project.id] };
+		const created = await expectOk<TokenMeta & { token: string }>(
+			await request('POST', '/me/tokens/scoped', { name: 'read-only', grant }),
+			201,
+		);
+		expect(created.grant).toEqual(grant);
+		expect((await expectOk<TokenMeta[]>(await request('GET', '/me/tokens')))[0].grant).toEqual(
+			grant,
+		);
+	});
+
+	it('does not disclose an inaccessible selected project', async () => {
+		const other = createTestApi({ bucket, userId: uid('sub-other') });
+		await other.request('GET', '/me');
+		const project = await expectOk<{ id: string }>(
+			await other.request('POST', '/projects', { name: 'Other', description: 'd' }),
+			201,
+		);
+		await expectError(
+			await request('POST', '/me/tokens/scoped', {
+				name: 'probe',
+				grant: { actions: '*', projects: [project.id] },
+			}),
+			404,
+			'NOT_FOUND',
+		);
 	});
 
 	it('rejects a blank name (422)', async () => {
@@ -178,6 +223,17 @@ describe('Token routes', () => {
 		expect(tokenEvents[0]).toMatchObject({ actor: ACTOR, token_id: created.id });
 	});
 
+	it('records a scoped grant in token.create audit metadata', async () => {
+		const { deps, request: req } = createTestApi({ bucket, userId: ACTOR });
+		await req('GET', '/me');
+		const grant = { actions: ['project.read'], projects: '*' as const };
+		await expectOk(await req('POST', '/me/tokens/scoped', { name: 'audited-scope', grant }), 201);
+
+		const day = new Date().toISOString().slice(0, 10);
+		const events = await deps.services.events.getEvents(day);
+		expect(events.find((event) => event.event === 'token.create')).toMatchObject({ grant });
+	});
+
 	describe('with the composed (PAT-aware) authenticator', () => {
 		let patRequest: (method: string, path: string, body?: unknown) => Promise<Response>;
 		let patRequestWith: (
@@ -292,6 +348,82 @@ describe('Token routes', () => {
 				headers: { authorization: `Bearer ${token}` },
 			});
 			expect((await expectOk<{ your_role: string }>(res)).your_role).toBe('admin');
+		});
+
+		it('a scoped PAT filters projects before pagination and limits a super admin', async () => {
+			const session = createTestApi({
+				bucket,
+				userId: ACTOR,
+				deps: { policy: { superAdmins: [ACTOR] } },
+			});
+			const allowed = await expectOk<{ id: string }>(
+				await session.request('POST', '/projects', { name: 'Allowed', description: 'd' }),
+				201,
+			);
+			const hidden = await expectOk<{ id: string }>(
+				await session.request('POST', '/projects', { name: 'Hidden', description: 'd' }),
+				201,
+			);
+			const scoped = await expectOk<{ token: string }>(
+				await session.request('POST', '/me/tokens/scoped', {
+					name: 'one-project-reader',
+					grant: { actions: ['project.read'], projects: [allowed.id] },
+				}),
+				201,
+			);
+			const app = createApi({
+				...session.deps,
+				authenticator: composeAuthenticators(session.deps.services.tokens, {
+					authenticate: async () => null,
+				}),
+			});
+			const scopedRequest = (method: string, path: string, body?: unknown) =>
+				app.request(`/api/v1${path}`, {
+					method,
+					headers: {
+						authorization: `Bearer ${scoped.token}`,
+						...(body ? { 'content-type': 'application/json' } : {}),
+					},
+					...(body ? { body: JSON.stringify(body) } : {}),
+				});
+
+			expect(
+				(await expectPage<{ id: string }>(await scopedRequest('GET', '/projects?limit=1'))).map(
+					(project) => project.id,
+				),
+			).toEqual([allowed.id]);
+			await expectOk(await scopedRequest('GET', `/projects/${allowed.id}`));
+			await expectError(await scopedRequest('GET', `/projects/${hidden.id}`), 404, 'NOT_FOUND');
+			await expectError(await scopedRequest('DELETE', `/projects/${allowed.id}`), 403, 'FORBIDDEN');
+			await expectError(
+				await scopedRequest('POST', '/projects', { name: 'Denied', description: 'd' }),
+				404,
+				'NOT_FOUND',
+			);
+		});
+
+		it('a scoped PAT without project.read cannot list projects', async () => {
+			const session = createTestApi({ bucket, userId: ACTOR });
+			const scoped = await expectOk<{ token: string }>(
+				await session.request('POST', '/me/tokens/scoped', {
+					name: 'no-read',
+					grant: { actions: [], projects: '*' },
+				}),
+				201,
+			);
+			const app = createApi({
+				...session.deps,
+				authenticator: composeAuthenticators(session.deps.services.tokens, {
+					authenticate: async () => null,
+				}),
+			});
+			await expectError(
+				await app.request('/api/v1/projects', {
+					headers: { authorization: `Bearer ${scoped.token}` },
+				}),
+				403,
+				'FORBIDDEN',
+			);
 		});
 	});
 });
