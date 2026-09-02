@@ -5,14 +5,12 @@ import {
 	TOKEN_GRANT_PRESETS,
 } from '@marimo-hub/core/token-grants';
 import type { AuthorizationAction } from '@marimo-hub/core/token-grants';
-import { SearchField } from '@/components/ui';
+import { Button, SearchField } from '@/components/ui';
 import { useProjectsQuery } from '@/api/hooks';
+import { errorMessage } from '@/lib/errors';
+import { cn } from '@/lib/utils';
 import type { TokenGrant } from '@/types';
-
-export interface TokenGrantDraft {
-	actions: TokenGrant['actions'] | null;
-	projects: TokenGrant['projects'] | null;
-}
+import type { TokenGrantDraft } from './tokenGrantDraft';
 
 interface TokenGrantEditorProps {
 	value: TokenGrantDraft;
@@ -38,32 +36,53 @@ function presetActions(id: (typeof PRESETS)[number]['id']): TokenGrant['actions'
 
 function sameActions(a: TokenGrant['actions'] | null, b: TokenGrant['actions']): boolean {
 	if (a === '*' || b === '*') return a === b;
-	return a !== null && a.length === b.length && a.every((action) => b.includes(action));
+	if (a === null || a.length !== b.length) return false;
+	const expected = new Set(b);
+	return a.every((action) => expected.has(action));
 }
 
-function actionsFit(actions: TokenGrant['actions'], upperBound: TokenGrant | undefined): boolean {
+function actionsFit(
+	actions: TokenGrant['actions'],
+	upperBound: TokenGrant | undefined,
+	upperBoundActions: ReadonlySet<AuthorizationAction> | null,
+): boolean {
 	return (
 		!upperBound ||
 		upperBound.actions === '*' ||
-		(actions !== '*' && actions.every((action) => upperBound.actions.includes(action)))
+		(actions !== '*' && actions.every((action) => upperBoundActions?.has(action)))
 	);
 }
 
 export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEditorProps) {
 	const [advanced, setAdvanced] = useState(false);
 	const [search, setSearch] = useState('');
-	const { data: projects = [] } = useProjectsQuery({ q: search.trim() || undefined });
+	const selectedProjects = Array.isArray(value.projects) ? value.projects : [];
+	const projectsQuery = useProjectsQuery(
+		{ q: search.trim() || undefined },
+		{ enabled: Array.isArray(value.projects), throwOnError: false },
+	);
+	const upperBoundActions = useMemo(
+		() => (Array.isArray(upperBound?.actions) ? new Set(upperBound.actions) : null),
+		[upperBound?.actions],
+	);
+	const upperBoundProjects = useMemo(
+		() => (Array.isArray(upperBound?.projects) ? new Set(upperBound.projects) : null),
+		[upperBound?.projects],
+	);
+	const selectedProjectIds = useMemo(
+		() => new Set(Array.isArray(value.projects) ? value.projects : []),
+		[value.projects],
+	);
 	const selectedPreset = PRESETS.find((preset) =>
 		sameActions(value.actions, presetActions(preset.id)),
 	);
 	const showAdvanced = advanced || (value.actions !== null && selectedPreset === undefined);
 	const allowedProjects = useMemo(() => {
-		const bound = upperBound?.projects;
-		return bound === '*' || bound === undefined
+		const projects = projectsQuery.data ?? [];
+		return upperBoundProjects === null
 			? projects
-			: projects.filter((project) => bound.includes(project.id));
-	}, [projects, upperBound?.projects]);
-	const selectedProjects = Array.isArray(value.projects) ? value.projects : [];
+			: projects.filter((project) => upperBoundProjects.has(project.id));
+	}, [projectsQuery.data, upperBoundProjects]);
 
 	const setAction = (action: AuthorizationAction, selected: boolean) => {
 		const current = value.actions === '*' || value.actions === null ? [] : value.actions;
@@ -80,18 +99,23 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 				<div className="grid gap-2 sm:grid-cols-2">
 					{PRESETS.map((preset) => {
 						const actions = presetActions(preset.id);
-						const disabled = !actionsFit(actions, upperBound);
+						const disabled = !actionsFit(actions, upperBound, upperBoundActions);
+						const checked = selectedPreset?.id === preset.id && !showAdvanced;
 						return (
 							<label
 								key={preset.id}
 								aria-label={preset.label}
-								className="flex cursor-pointer gap-2 rounded-md border p-2 has-checked:border-primary has-checked:bg-primary/5 has-disabled:cursor-not-allowed has-disabled:opacity-50"
+								className={cn(
+									'flex gap-2 rounded-md border p-2',
+									checked && 'border-primary bg-primary/5',
+									disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+								)}
 							>
 								<input
 									aria-label={preset.label}
 									type="radio"
 									name="token-action-preset"
-									checked={selectedPreset?.id === preset.id && !showAdvanced}
+									checked={checked}
 									disabled={disabled}
 									onChange={() => {
 										setAdvanced(false);
@@ -122,12 +146,9 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 					Advanced actions
 				</button>
 				{showAdvanced ? (
-					<div className="grid max-h-48 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2">
+					<div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2">
 						{AUTHORIZATION_ACTIONS.map((action) => {
-							const disabled =
-								upperBound?.actions !== undefined &&
-								upperBound.actions !== '*' &&
-								!upperBound.actions.includes(action);
+							const disabled = upperBoundActions !== null && !upperBoundActions.has(action);
 							return (
 								<label key={action} className="flex items-center gap-2 text-xs">
 									<input
@@ -179,30 +200,39 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 							onChange={setSearch}
 							placeholder="Project name"
 						/>
-						<div className="max-h-40 overflow-y-auto">
-							{allowedProjects.map((project) => (
-								<label key={project.id} className="flex items-center gap-2 py-1 text-xs">
-									<input
-										aria-label={project.name}
-										type="checkbox"
-										checked={selectedProjects.includes(project.id)}
-										disabled={
-											!selectedProjects.includes(project.id) &&
-											selectedProjects.length >= MAX_TOKEN_GRANT_PROJECTS
-										}
-										onChange={(event) => {
-											onChange({
-												...value,
-												projects: event.target.checked
-													? [...selectedProjects, project.id]
-													: selectedProjects.filter((id) => id !== project.id),
-											});
-										}}
-									/>
-									{project.name}
-								</label>
-							))}
-						</div>
+						{projectsQuery.isError ? (
+							<div role="alert" className="flex flex-col gap-2 text-xs text-destructive">
+								<span>{errorMessage(projectsQuery.error)}</span>
+								<Button type="button" size="sm" onPress={() => void projectsQuery.refetch()}>
+									Retry projects
+								</Button>
+							</div>
+						) : (
+							<div className="max-h-40 overflow-y-auto">
+								{allowedProjects.map((project) => {
+									const selected = selectedProjectIds.has(project.id);
+									return (
+										<label key={project.id} className="flex items-center gap-2 py-1 text-xs">
+											<input
+												aria-label={project.name}
+												type="checkbox"
+												checked={selected}
+												disabled={!selected && selectedProjects.length >= MAX_TOKEN_GRANT_PROJECTS}
+												onChange={(event) => {
+													onChange({
+														...value,
+														projects: event.target.checked
+															? [...selectedProjects, project.id]
+															: selectedProjects.filter((id) => id !== project.id),
+													});
+												}}
+											/>
+											{project.name}
+										</label>
+									);
+								})}
+							</div>
+						)}
 						<span className="text-xs text-muted-foreground">
 							{selectedProjects.length} of {MAX_TOKEN_GRANT_PROJECTS} projects selected
 						</span>
@@ -211,10 +241,4 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 			</fieldset>
 		</div>
 	);
-}
-
-export function tokenGrantFromDraft(value: TokenGrantDraft): TokenGrant | null {
-	if (value.actions === null || value.projects === null) return null;
-	if (Array.isArray(value.projects) && value.projects.length === 0) return null;
-	return { actions: value.actions, projects: value.projects };
 }

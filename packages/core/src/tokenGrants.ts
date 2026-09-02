@@ -13,7 +13,10 @@ const uniqueArray = <T>(values: T[]): boolean => new Set(values).size === values
 export const TokenGrantSchema = z.strictObject({
 	actions: z.union([
 		z.literal('*'),
-		z.array(z.enum(AUTHORIZATION_ACTIONS)).refine(uniqueArray, 'Actions must be unique'),
+		z
+			.array(z.enum(AUTHORIZATION_ACTIONS))
+			.refine(uniqueArray, 'Actions must be unique')
+			.meta({ uniqueItems: true }),
 	]),
 	projects: z.union([
 		z.literal('*'),
@@ -21,7 +24,8 @@ export const TokenGrantSchema = z.strictObject({
 			.array(z.string().regex(ProjectId.regex).transform(ProjectId.parse))
 			.min(1)
 			.max(MAX_TOKEN_GRANT_PROJECTS)
-			.refine(uniqueArray, 'Projects must be unique'),
+			.refine(uniqueArray, 'Projects must be unique')
+			.meta({ uniqueItems: true }),
 	]),
 });
 

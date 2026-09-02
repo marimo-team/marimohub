@@ -45,6 +45,38 @@ describe.each(SPECS)('internal/schemas/$file', ({ file, doc }) => {
 	});
 });
 
+describe('bucket schema contracts', () => {
+	const doc = buildBucketSpec() as {
+		components: { schemas: Record<string, Record<string, unknown>> };
+	};
+
+	it('keeps the token schema concrete and publishes grant uniqueness', () => {
+		const token = doc.components.schemas.Token as {
+			type: string;
+			properties: {
+				credential_version: { const: number };
+				grant: {
+					properties: Record<string, { anyOf: Record<string, unknown>[] }>;
+				};
+			};
+			dependentRequired: Record<string, string[]>;
+		};
+		expect(token.type).toBe('object');
+		expect(token.properties.credential_version.const).toBe(2);
+		expect(token.dependentRequired).toEqual({
+			credential_version: ['grant'],
+			grant: ['credential_version'],
+		});
+
+		for (const boundary of ['actions', 'projects']) {
+			const array = token.properties.grant.properties[boundary].anyOf.find(
+				(branch) => branch.type === 'array',
+			);
+			expect(array?.uniqueItems).toBe(true);
+		}
+	});
+});
+
 describe('integration schema contracts', () => {
 	const doc = buildIntegrationsSpec() as {
 		paths: Record<string, Record<string, unknown>>;

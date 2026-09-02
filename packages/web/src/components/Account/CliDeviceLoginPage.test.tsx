@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
 import type { TokenGrant } from '@/types';
@@ -16,6 +16,8 @@ function setup(
 		scopedApprovalFails?: boolean;
 		requestedGrant?: TokenGrant;
 		previewFailures?: number;
+		failPreviewAttempts?: number[];
+		toaster?: boolean;
 	} = {},
 ) {
 	const calls: { url: string; body?: unknown }[] = [];
@@ -31,7 +33,10 @@ function setup(
 			}
 			if (url === `/api/v1/me/cli-device-authorizations/${USER_CODE}`) {
 				previewAttempts++;
-				if (previewAttempts <= (options.previewFailures ?? 0)) {
+				if (
+					previewAttempts <= (options.previewFailures ?? 0) ||
+					options.failPreviewAttempts?.includes(previewAttempts)
+				) {
 					return jsonError('UNAVAILABLE', 'Preview unavailable', 503);
 				}
 				return options.scoped
@@ -65,12 +70,13 @@ function setup(
 		}),
 	);
 	const navigate = vi.fn();
-	renderWithClient(
+	const { client } = renderWithClient(
 		<AuthProvider>
 			<CliDeviceLoginPage navigate={navigate} />
 		</AuthProvider>,
+		{ toaster: options.toaster },
 	);
-	return { calls, navigate };
+	return { calls, client, navigate };
 }
 
 beforeEach(() => {
@@ -204,17 +210,32 @@ describe('CliDeviceLoginPage', () => {
 
 	it('keeps a scoped approval editable after the server rejects it', async () => {
 		const user = userEvent.setup();
-		setup({ scoped: true, scopedApprovalFails: true });
+		setup({ scoped: true, scopedApprovalFails: true, toaster: false });
 		await screen.findByText(/dev@example.com/);
 		await screen.findByRole('radio', { name: /^Full/ });
 
 		await user.click(screen.getByRole('button', { name: 'Authorize CLI' }));
 
-		expect(await screen.findByText('Approved grant exceeds the request')).toBeVisible();
+		const alert = await screen.findByRole('alert');
+		expect(alert).toHaveTextContent('Approved grant exceeds the request');
 		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeEnabled();
 		expect(
 			screen.queryByRole('heading', { name: 'CLI authorization approved' }),
 		).not.toBeInTheDocument();
+	});
+
+	it('disables approval when refreshing a cached preview fails', async () => {
+		const { client, calls } = setup({ scoped: true, failPreviewAttempts: [2] });
+		await screen.findByRole('radio', { name: /^Full/ });
+		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeEnabled();
+
+		await act(async () => {
+			await client.refetchQueries({ queryKey: ['cli-device-authorization', USER_CODE] });
+		});
+
+		expect(await screen.findByText('Preview unavailable')).toBeVisible();
+		expect(screen.getByRole('button', { name: 'Authorize CLI' })).toBeDisabled();
+		expect(calls.filter((call) => call.body !== undefined)).toEqual([]);
 	});
 
 	it('rejects invalid code characters without calling the API', async () => {

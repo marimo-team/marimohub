@@ -14,8 +14,9 @@ import { useApiTokensQuery, useCreateScopedApiToken, useRevokeApiToken } from '@
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { formatDuration, formatRelative } from '@/lib/time';
 import type { ApiToken, ApiTokenCreated } from '@/types';
-import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
-import type { TokenGrantDraft } from './TokenGrantEditor';
+import { TokenGrantEditor } from './TokenGrantEditor';
+import { tokenGrantFromDraft } from './tokenGrantDraft';
+import type { TokenGrantDraft } from './tokenGrantDraft';
 import { TOKEN_GRANT_PRESETS } from '@marimo-hub/core/token-grants';
 
 export interface ApiTokensDialogProps {
@@ -38,11 +39,12 @@ function expiryLabel(iso: string, now: number = Date.now()): string {
 function grantLabel(token: ApiToken): string {
 	if (!token.grant) return 'Full access · all projects · legacy';
 	const grant = token.grant;
+	const grantedActions = grant.actions === '*' ? null : new Set(grant.actions);
 	const preset = Object.entries(TOKEN_GRANT_PRESETS).find(([, actions]) => {
 		if (actions === '*' || grant.actions === '*') return actions === grant.actions;
 		return (
 			actions.length === grant.actions.length &&
-			actions.every((action) => grant.actions.includes(action))
+			actions.every((action) => grantedActions?.has(action))
 		);
 	});
 	const actions = preset

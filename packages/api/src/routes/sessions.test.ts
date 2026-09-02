@@ -1984,6 +1984,37 @@ describe('Session routes', () => {
 			expect(byId.get(second.session_id)).toBe('running');
 		});
 
+		it('does not retire an edit session when the PAT omits session.stop', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const scoped = createTestApi({
+				bucket,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					kernelProbe: async () => 'dead' as const,
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: {
+								kind: 'personal-access-token',
+								grant: {
+									actions: ['project.read', 'session.start'],
+									projects: [pid],
+								},
+							},
+						}),
+					},
+				},
+			}).request;
+
+			const first = await expectOk<ApiSession>(await scoped('POST', sessionsPath()));
+			const second = await expectOk<ApiSession>(await scoped('POST', sessionsPath()));
+
+			expect(second.session_id).toBe(first.session_id);
+			expect(second.reused).toBe(true);
+			expect(calls.destroy).toBe(0);
+		});
+
 		it('resumes a healthy reused session without reprovisioning (probe alive)', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const app = createTestApi({

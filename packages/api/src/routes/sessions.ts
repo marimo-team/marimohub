@@ -1277,11 +1277,11 @@ app.openapi(createSession, async (c) => {
 		// edits must stop being discarded). A stale-class session is retired below
 		// like a dead kernel instead of reused.
 		const classMismatch = !!reusable.ephemeral !== ephemeral;
-		// findReusable is user-blind for the shared app, so this may be someone
-		// else's running app. Only a caller who could stop it outright may
-		// retire-and-replace it — otherwise a viewer's create (or a probe
-		// false-negative under load) tears the app down under everyone.
-		const mayRetire = !MODE_POLICY[mode].singleton || (await grants(reusable)).stop;
+		// Retirement is a stop operation in every mode. In particular, findReusable
+		// is user-blind for the shared app, so skipping this check could let a viewer
+		// tear down another caller's app after a probe false-negative.
+		const reusableGrants = await grants(reusable);
+		const mayRetire = reusableGrants.stop;
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
 		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
 		const kernelUrl =
@@ -1307,7 +1307,7 @@ app.openapi(createSession, async (c) => {
 				{
 					success: true,
 					data: {
-						...toSessionResponse(reusable, await grants(reusable)),
+						...toSessionResponse(reusable, reusableGrants),
 						reused: true,
 						...(mode === 'edit'
 							? {
@@ -1332,6 +1332,9 @@ app.openapi(createSession, async (c) => {
 		// the notebook back from the still-live container and cuts a version the fresh
 		// sandbox restores — then fall through to provision a new one. Best-effort, so a
 		// concurrent refresh that also saw `dead` does no harm.
+		if (!mayRetire) {
+			throw new ForbiddenError('Not permitted to stop the reusable session');
+		}
 		const claimed = await sessions.beginTerminating(reusable.project_id, reusable.session_id);
 		// Skip the sandbox work unless this call won the terminating transition —
 		// a concurrent stop that won owns the teardown.

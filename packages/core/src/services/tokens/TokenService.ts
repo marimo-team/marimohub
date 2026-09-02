@@ -182,7 +182,8 @@ export class TokenService {
 	 * `verify` is a single GET, which rules out a per-user prefix here without a
 	 * separate mutable index (which the store's single-CAS-object invariant
 	 * forbids). Acceptable because listing/creating are cold self-service paths,
-	 * bounded by users × MAX_TOKENS_PER_USER — not the request hot path.
+	 * not the request hot path. The scan includes expired token records, so the
+	 * per-user live-token cap does not bound its cost.
 	 */
 	async list(userId: UserId): Promise<PublicToken[]> {
 		const keys = await listAllKeys(this.bucket, paths.tokensPrefix);

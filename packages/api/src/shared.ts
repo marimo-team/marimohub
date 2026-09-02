@@ -132,7 +132,10 @@ export async function assertProjectActionOn(
 		notebookLabels,
 	});
 	if (decision.allowed) return;
-	if (decision.category === 'role' || decision.category === 'credential-action') {
+	if (decision.category === 'credential-action') {
+		throw new ForbiddenError(`Token grant does not permit '${action}' on project ${project.id}`);
+	}
+	if (decision.category === 'role') {
 		throw new ForbiddenError(
 			`Requires '${projectActionMinRole(action)}' role on project ${project.id}`,
 		);

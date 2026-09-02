@@ -158,6 +158,7 @@ export function useApproveCliDeviceAuthorization() {
 		(body: { user_code: string; token_name: string; expires_in_days: number }) =>
 			apiData(apiClient.POST('/api/v1/me/cli-device-authorizations', { body })),
 		() => [userKeys.tokens()],
+		{ suppressErrorToast: true },
 	);
 }
 
@@ -180,6 +181,7 @@ export function useApproveScopedCliDeviceAuthorization() {
 		(body: { user_code: string; token_name: string; expires_in_days: number; grant: TokenGrant }) =>
 			apiData(apiClient.POST('/api/v1/me/cli-device-authorizations/scoped', { body })),
 		() => [userKeys.tokens()],
+		{ suppressErrorToast: true },
 	);
 }
 
@@ -322,7 +324,10 @@ export function useEvaluatePolicySuite() {
 }
 
 // Projects
-export function useProjectsQuery(filters: ProjectListFilters = {}) {
+export function useProjectsQuery(
+	filters: ProjectListFilters = {},
+	options: { enabled?: boolean; throwOnError?: boolean } = {},
+) {
 	return useQuery({
 		queryKey: projectKeys.filteredList(filters),
 		queryFn: async () =>
@@ -334,7 +339,8 @@ export function useProjectsQuery(filters: ProjectListFilters = {}) {
 				)
 			).items,
 		placeholderData: keepPreviousData,
-		throwOnError: true,
+		enabled: options.enabled,
+		throwOnError: options.throwOnError ?? true,
 	});
 }
 

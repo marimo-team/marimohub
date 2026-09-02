@@ -957,18 +957,22 @@ const TokenBaseSchema = {
 	last_used_at: z.iso.datetime().optional(),
 };
 
-export const TokenSchema = z.union([
-	z.looseObject({
+export const TokenSchema = z
+	.looseObject({
 		...TokenBaseSchema,
-		credential_version: z.never().optional(),
-		grant: z.never().optional(),
-	}),
-	z.looseObject({
-		...TokenBaseSchema,
-		credential_version: z.literal(2),
-		grant: TokenGrantSchema,
-	}),
-]);
+		credential_version: z.literal(2).optional(),
+		grant: TokenGrantSchema.optional(),
+	})
+	.refine(
+		(token) => (token.credential_version === 2) === (token.grant !== undefined),
+		'A version 2 token must have a grant, and a grant requires version 2',
+	)
+	.meta({
+		dependentRequired: {
+			credential_version: ['grant'],
+			grant: ['credential_version'],
+		},
+	});
 
 export type Token = z.infer<typeof TokenSchema>;
 

@@ -14,6 +14,10 @@ const PROJECT_B = ProjectId.parse('proj-0000000000000002');
 
 describe('TokenGrant', () => {
 	it('expands presets to immutable action arrays', () => {
+		const readActions = expandTokenGrantPreset('read');
+		expect(readActions).toEqual(['project.read', 'integration.read']);
+		if (readActions === '*') throw new Error('The read preset must expand to an action list');
+		readActions.push('project.delete');
 		expect(expandTokenGrantPreset('read')).toEqual(['project.read', 'integration.read']);
 		expect(expandTokenGrantPreset('run')).toContain('session.start');
 		expect(expandTokenGrantPreset('edit')).toContain('notebook.write');

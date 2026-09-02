@@ -142,6 +142,25 @@ describe('User routes', () => {
 			await expectError(await pat('GET', '/users/search?q=adam'), 403, 'FORBIDDEN');
 		});
 
+		it('does not require project.read when a PAT can search under a default role', async () => {
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					credential: {
+						kind: 'personal-access-token',
+						grant: { actions: ['directory.search'], projects: '*' },
+					},
+					id: uid('ada'),
+					email: 'ada@example.com',
+				}),
+			};
+			const pat = createTestApi({
+				bucket,
+				deps: { authenticator, policy: { defaultRole: 'viewer' } },
+			}).request;
+
+			expect(await expectOk(await pat('GET', '/users/search?q=adam'))).toHaveLength(1);
+		});
+
 		it('masks deployment search from a selected-project PAT', async () => {
 			const project = await expectOk<{ id: string }>(
 				await request('POST', '/projects', { name: 'Selected', description: 'd' }),

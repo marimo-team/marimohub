@@ -634,7 +634,11 @@ unknown credential version. Other fields remain loose so the daily
 without a mutable index. Version 1 hashes the secret. Version 2 hashes
 `mhub_pat:v2:<tokenId>:<secret>`. This domain separation prevents a legacy
 verifier from authenticating a scoped token after prefix rewriting. The
-plaintext is never stored. The 20-token cap bounds per-user prefix scans.
+plaintext is never stored.
+
+Token listing and creation scan the deployment-wide `_system/tokens/` namespace.
+They filter the records by user after the scan. The scan includes expired
+records. The 20-token live-token cap does not bound this storage cost.
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
 

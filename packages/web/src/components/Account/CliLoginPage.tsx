@@ -5,8 +5,9 @@ import { useApproveCliAuthorization, useApproveScopedCliAuthorization } from '@/
 import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
 import { cancellationUrl, parseCliLoginRequest } from './cliLoginRequest';
-import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
-import type { TokenGrantDraft } from './TokenGrantEditor';
+import { TokenGrantEditor } from './TokenGrantEditor';
+import { tokenGrantFromDraft } from './tokenGrantDraft';
+import type { TokenGrantDraft } from './tokenGrantDraft';
 
 export interface CliLoginPageProps {
 	navigate?: (url: string) => void;

@@ -19,7 +19,8 @@ In the app, open the user menu (top right) → **API tokens** → **Create a
 token**. Name it after its consumer, such as `ci-deploy`. Select an action
 preset and a project mode. You can also set an expiry in days.
 
-The presets expand to a fixed action list when you create the token:
+Read, Run notebooks, and Edit notebooks expand to fixed action lists when you
+create the token. Full stores the `"*"` action wildcard instead.
 
 | Preset         | Access                                                                             |
 | -------------- | ---------------------------------------------------------------------------------- |
@@ -87,7 +88,13 @@ mhub_pat_<id>_<secret>
 
 The fixed `mhub_pat_` prefix identifies leaked tokens to secret scanners.
 Register it in the scanning tools you use. The `id` is the public token ID. The
-160-bit `secret` exists only in the create response and as a server-side hash.
+server returns the 160-bit `secret` only in the create response. It does not
+store the secret.
+
+The server stores a SHA-256 digest, not the plaintext token. A legacy token
+hashes the secret. A scoped token hashes the domain-separated input
+`mhub_pat:v2:<id>:<secret>`. The token ID in this input binds the digest to the
+version 2 record.
 
 Use `POST /api/v1/me/tokens/scoped` with a required `grant`. The legacy
 `POST /api/v1/me/tokens` route rejects `grant` and creates an unrestricted

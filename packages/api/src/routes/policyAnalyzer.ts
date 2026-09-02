@@ -544,6 +544,7 @@ async function evaluateCase(
 								...caller,
 								entitlements,
 								credential: {
+									...caller.credential,
 									kind: 'personal-access-token',
 									grant: stage.subject.grant,
 								},

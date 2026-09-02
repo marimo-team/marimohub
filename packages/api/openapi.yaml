@@ -1607,6 +1607,7 @@ components:
                           - session.surface
                           - session.proxy
                           - session.start
+                      uniqueItems: true
                 projects:
                   anyOf:
                     - type: string
@@ -1618,6 +1619,7 @@ components:
                         pattern: ^proj-[0-9a-z]{16}$
                       minItems: 1
                       maxItems: 100
+                      uniqueItems: true
               required:
                 - actions
                 - projects
@@ -3711,6 +3713,7 @@ components:
                       - session.surface
                       - session.proxy
                       - session.start
+                  uniqueItems: true
             projects:
               anyOf:
                 - type: string
@@ -3722,6 +3725,7 @@ components:
                     pattern: ^proj-[0-9a-z]{16}$
                   minItems: 1
                   maxItems: 100
+                  uniqueItems: true
           required:
             - actions
             - projects
@@ -3896,6 +3900,7 @@ paths:
                               - session.surface
                               - session.proxy
                               - session.start
+                          uniqueItems: true
                     projects:
                       anyOf:
                         - type: string
@@ -3907,6 +3912,7 @@ paths:
                             pattern: ^proj-[0-9a-z]{16}$
                           minItems: 1
                           maxItems: 100
+                          uniqueItems: true
                   required:
                     - actions
                     - projects
@@ -15525,6 +15531,7 @@ paths:
                               - session.surface
                               - session.proxy
                               - session.start
+                          uniqueItems: true
                     projects:
                       anyOf:
                         - type: string
@@ -15536,6 +15543,7 @@ paths:
                             pattern: ^proj-[0-9a-z]{16}$
                           minItems: 1
                           maxItems: 100
+                          uniqueItems: true
                   required:
                     - actions
                     - projects
@@ -15916,6 +15924,7 @@ paths:
                               - session.surface
                               - session.proxy
                               - session.start
+                          uniqueItems: true
                     projects:
                       anyOf:
                         - type: string
@@ -15927,6 +15936,7 @@ paths:
                             pattern: ^proj-[0-9a-z]{16}$
                           minItems: 1
                           maxItems: 100
+                          uniqueItems: true
                   required:
                     - actions
                     - projects
@@ -15967,6 +15977,7 @@ paths:
                               - session.surface
                               - session.proxy
                               - session.start
+                          uniqueItems: true
                     projects:
                       anyOf:
                         - type: string
@@ -15978,6 +15989,7 @@ paths:
                             pattern: ^proj-[0-9a-z]{16}$
                           minItems: 1
                           maxItems: 100
+                          uniqueItems: true
                   required:
                     - actions
                     - projects
@@ -16295,6 +16307,7 @@ paths:
                                         - session.surface
                                         - session.proxy
                                         - session.start
+                                    uniqueItems: true
                               projects:
                                 anyOf:
                                   - type: string
@@ -16306,6 +16319,7 @@ paths:
                                       pattern: ^proj-[0-9a-z]{16}$
                                     minItems: 1
                                     maxItems: 100
+                                    uniqueItems: true
                             required:
                               - actions
                               - projects
@@ -16455,6 +16469,7 @@ paths:
                               - session.surface
                               - session.proxy
                               - session.start
+                          uniqueItems: true
                     projects:
                       anyOf:
                         - type: string
@@ -16466,6 +16481,7 @@ paths:
                             pattern: ^proj-[0-9a-z]{16}$
                           minItems: 1
                           maxItems: 100
+                          uniqueItems: true
                   required:
                     - actions
                     - projects

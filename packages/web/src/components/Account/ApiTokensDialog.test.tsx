@@ -26,15 +26,32 @@ function ok(data: unknown, status = 200) {
 }
 
 /** Route the dialog's requests; the GET list serves `tokens` (mutable). */
-function makeFetch(tokens: ApiToken[]) {
+function makeFetch(
+	tokens: ApiToken[],
+	options: {
+		projectFailures?: number;
+		projects?: { id: string; name: string }[];
+	} = {},
+) {
 	const calls: { url: string; method: string; body: unknown }[] = [];
+	let projectAttempts = 0;
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
 		const body = init?.body ? JSON.parse(init.body as string) : undefined;
 		if (method !== 'GET') calls.push({ url, method, body });
 		if (url.includes('/projects') && method === 'GET') {
-			return ok({ items: [], next_cursor: null });
+			projectAttempts++;
+			if (projectAttempts <= (options.projectFailures ?? 0)) {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'UNAVAILABLE', message: 'Projects unavailable' },
+					}),
+					{ status: 503, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return ok({ items: options.projects ?? [], next_cursor: null });
 		}
 
 		if (url.includes('/me/tokens')) {
@@ -53,8 +70,8 @@ function makeFetch(tokens: ApiToken[]) {
 	return calls;
 }
 
-function setup(tokens: ApiToken[] = []) {
-	const calls = makeFetch(tokens);
+function setup(tokens: ApiToken[] = [], options: Parameters<typeof makeFetch>[1] = {}) {
+	const calls = makeFetch(tokens, options);
 	const onClose = vi.fn();
 	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
@@ -183,6 +200,43 @@ describe('ApiTokensDialog', () => {
 		expect(create).toBeDisabled();
 		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
 		expect(create).toBeEnabled();
+	});
+
+	it('shows project picker failures locally and retries the request', async () => {
+		const user = userEvent.setup();
+		setup([], {
+			projectFailures: 1,
+			projects: [{ id: 'proj-0000000000000001', name: 'Analytics' }],
+		});
+
+		await user.click(await screen.findByRole('radio', { name: /^Selected projects/ }));
+		expect(await screen.findByText('Projects unavailable')).toBeVisible();
+
+		await user.click(screen.getByRole('button', { name: 'Retry projects' }));
+		expect(await screen.findByRole('checkbox', { name: 'Analytics' })).toBeVisible();
+	});
+
+	it('can create an all-project token after the project picker fails', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup([], { projectFailures: 1 });
+
+		await user.click(await screen.findByRole('radio', { name: /^Read/ }));
+		await user.click(screen.getByRole('radio', { name: /^Selected projects/ }));
+		expect(await screen.findByText('Projects unavailable')).toBeVisible();
+
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
+		await user.type(screen.getByLabelText('Name'), 'all-projects');
+		await user.click(screen.getByRole('button', { name: /create token/i }));
+
+		expect(await screen.findByLabelText('API token')).toHaveValue(PLAINTEXT);
+		expect(calls).toContainEqual({
+			url: '/api/v1/me/tokens/scoped',
+			method: 'POST',
+			body: {
+				name: 'all-projects',
+				grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+			},
+		});
 	});
 
 	it('creates a custom action grant from the advanced editor', async () => {

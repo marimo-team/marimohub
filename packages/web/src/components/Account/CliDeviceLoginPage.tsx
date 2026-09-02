@@ -10,8 +10,9 @@ import { useAuth } from '@/context/AuthContext';
 import { Brand, Button, TextField } from '@/components/ui';
 import { withBasePath } from '@/lib/basePath';
 import { errorMessage } from '@/lib/errors';
-import { TokenGrantEditor, tokenGrantFromDraft } from './TokenGrantEditor';
-import type { TokenGrantDraft } from './TokenGrantEditor';
+import { TokenGrantEditor } from './TokenGrantEditor';
+import { tokenGrantFromDraft } from './tokenGrantDraft';
+import type { TokenGrantDraft } from './tokenGrantDraft';
 
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
 const TOKEN_LIFETIME_PRESETS = ['7', '30', '90'] as const;
@@ -63,8 +64,16 @@ export function CliDeviceLoginPage({
 		normalizedCode && grantOverride?.code === normalizedCode ? grantOverride.draft : requestedDraft;
 	const grant = grantDraft ? tokenGrantFromDraft(grantDraft) : null;
 	const isPending = approve.isPending || approveScoped.isPending;
+	const approvalError = preview.data?.status === 'scoped' ? approveScoped.error : approve.error;
+	const resetApprovalErrors = () => {
+		approve.reset();
+		approveScoped.reset();
+	};
 	const updateGrantDraft = (draft: TokenGrantDraft) => {
-		if (normalizedCode) setGrantOverride({ code: normalizedCode, draft });
+		if (normalizedCode) {
+			approveScoped.reset();
+			setGrantOverride({ code: normalizedCode, draft });
+		}
 	};
 
 	const submit = async () => {
@@ -127,7 +136,13 @@ export function CliDeviceLoginPage({
 							>
 								<p className="text-sm font-medium">Could not load this CLI authorization</p>
 								<p className="text-xs text-destructive">{errorMessage(preview.error)}</p>
-								<Button size="sm" onPress={() => void preview.refetch()}>
+								<Button
+									size="sm"
+									onPress={() => {
+										resetApprovalErrors();
+										void preview.refetch();
+									}}
+								>
 									Retry preview
 								</Button>
 							</div>
@@ -157,7 +172,10 @@ export function CliDeviceLoginPage({
 						<TextField
 							label="Device code"
 							value={userCode}
-							onChange={setUserCode}
+							onChange={(value) => {
+								resetApprovalErrors();
+								setUserCode(value);
+							}}
 							placeholder="WDJB-MJHT"
 							autoComplete="one-time-code"
 						/>
@@ -179,7 +197,10 @@ export function CliDeviceLoginPage({
 								className="flex-1"
 								label="Token lifetime (days)"
 								value={expiresInDays}
-								onChange={setExpiresInDays}
+								onChange={(value) => {
+									resetApprovalErrors();
+									setExpiresInDays(value);
+								}}
 								inputMode="numeric"
 							/>
 							<div className="mb-1 flex gap-1">
@@ -197,6 +218,12 @@ export function CliDeviceLoginPage({
 							</div>
 						</div>
 
+						{approvalError ? (
+							<div role="alert" className="rounded-md border p-3 text-sm text-destructive">
+								{errorMessage(approvalError)}
+							</div>
+						) : null}
+
 						<div className="flex justify-end gap-2 border-t pt-5">
 							<Button
 								type="button"
@@ -212,6 +239,7 @@ export function CliDeviceLoginPage({
 									isPending ||
 									(normalizedCode !== null &&
 										(preview.isFetching ||
+											preview.isError ||
 											preview.data === undefined ||
 											(preview.data.status === 'scoped' && grant === null)))
 								}

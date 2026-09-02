@@ -97,7 +97,8 @@ app.openapi(searchUsers, async (c) => {
 	// every project; under members-only, require at least one project involvement
 	// (decided from the catalog snapshot — no per-project loads) so a drive-by
 	// account cannot harvest the directory by substring.
-	const directoryDecision = await authz.authorize(user, 'directory.search', {
+	const { credential: _credential, ...directorySubject } = user;
+	const directoryDecision = await authz.authorize(directorySubject, 'directory.search', {
 		kind: 'deployment',
 	});
 	if (!directoryDecision.allowed) {
