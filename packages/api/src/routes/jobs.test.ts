@@ -241,12 +241,30 @@ describe('Job routes', () => {
 		).filter((event) => event.event === 'job.run.finish' && event.run_id === queued.run_id);
 		expect(finishEvents).toHaveLength(1);
 		expect(finishEvents[0]).toMatchObject({ status: 'cancelled', actor: ACTOR });
-		// Cancelling again is a no-op that still reports the terminal record.
 		const again = await expectOk<any>(
 			await request('POST', `${base()}/${job.id}/runs/${queued.run_id}/cancel`),
 		);
 		expect(again.status).toBe('cancelled');
 		expect(destroyed).toHaveLength(1);
+	});
+
+	it('audits cancellation of a queued run as a terminal finish', async () => {
+		const job = await createJob();
+		const queued = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);
+
+		const cancelled = await expectOk<any>(
+			await request('POST', `${base()}/${job.id}/runs/${queued.run_id}/cancel`),
+		);
+
+		expect(cancelled).toMatchObject({ status: 'cancelled', cancelled_by: ACTOR });
+		expect(destroyed).toEqual([]);
+		const runEvents = (
+			await services.events.getEvents(new Date().toISOString().slice(0, 10))
+		).filter((event) => event.run_id === queued.run_id);
+		expect(runEvents.filter((event) => event.event === 'job.run.cancel')).toHaveLength(1);
+		expect(runEvents.filter((event) => event.event === 'job.run.finish')).toEqual([
+			expect.objectContaining({ status: 'cancelled', actor: ACTOR }),
+		]);
 	});
 
 	it('deleting a job cancels its active runs first', async () => {

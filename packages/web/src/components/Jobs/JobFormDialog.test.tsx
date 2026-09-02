@@ -72,6 +72,17 @@ describe('job parameters', () => {
 		);
 	});
 
+	it('round-trips every string value through the editor format', () => {
+		const parameters = {
+			leading: ' value',
+			trailing: 'value ',
+			multiline: 'line one\nline two',
+			quote: '"literal"',
+			carriageReturn: 'before\rafter',
+		};
+		expect(parseJobParameters(formatJobParameters(parameters))).toEqual(parameters);
+	});
+
 	it('rejects lines without a flag-safe key', () => {
 		expect(() => parseJobParameters('just text')).toThrow('is not key=value');
 		expect(() => parseJobParameters('b = two')).toThrow('is not key=value');

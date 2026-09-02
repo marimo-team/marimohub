@@ -78,6 +78,25 @@ describe('JobRunService', () => {
 		expect(second.nextRunId).toBeNull();
 	});
 
+	it('fetches only the records needed for one history page', async () => {
+		const created = [];
+		for (let i = 0; i < 6; i++) created.push(await enqueue());
+		const get = vi.spyOn(env.bucket, 'get');
+
+		const page = await runs.listRunsPage(pid, nid, job.id, 2);
+
+		expect(page.items.map((run) => run.run_id)).toEqual([created[5].run_id, created[4].run_id]);
+		const recordKeys = new Set(
+			created.map((run) => paths.project(pid).notebook(nid).job(job.id).run(run.run_id).record),
+		);
+		const fetchedRecords = get.mock.calls.map(([key]) => key).filter((key) => recordKeys.has(key));
+		expect(fetchedRecords).toEqual([
+			paths.project(pid).notebook(nid).job(job.id).run(created[5].run_id).record,
+			paths.project(pid).notebook(nid).job(job.id).run(created[4].run_id).record,
+			paths.project(pid).notebook(nid).job(job.id).run(created[3].run_id).record,
+		]);
+	});
+
 	it('applies FSM transitions with CAS and drops the marker on a terminal status', async () => {
 		const run = await enqueue();
 		const provisioning = await runs.transition(run, 'provision', () => ({ sandbox_id: undefined }));
@@ -133,13 +152,22 @@ describe('JobRunService', () => {
 
 	it('never overwrites captured outputs on a repeated capture', async () => {
 		const run = await enqueue();
-		await runs.putOutputs(run, { html: 'first', logs: 'original' });
-		expect(await runs.putOutputs(run, { html: 'replacement', logs: 'new' })).toEqual({
+		await runs.putOutputs(run, { html: 'first', session: '{"first":true}', logs: 'original' });
+		expect(
+			await runs.putOutputs(run, {
+				html: 'replacement',
+				session: '{"replacement":true}',
+				logs: 'new',
+			}),
+		).toEqual({
 			html_bytes: 5,
+			session_bytes: 14,
 			logs_bytes: 8,
 		});
 		expect(await runs.readHtml(run)).toBe('first');
 		expect(await runs.readLogs(run)).toBe('original');
+		const sessionPath = paths.project(pid).notebook(nid).job(job.id).run(run.run_id).session;
+		expect(await (await env.bucket.get(sessionPath))!.text()).toBe('{"first":true}');
 	});
 
 	it('writes a terminal skipped record without a marker', async () => {
