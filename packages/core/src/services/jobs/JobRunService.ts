@@ -616,22 +616,24 @@ export class JobRunService {
 	}
 
 	/**
-	 * Retention: delete terminal runs (whole `runs/{rid}/` prefixes) and occurrence
-	 * claims older than `retentionMs`. Returns the number of runs removed.
+	 * Delete terminal runs past `retentionMs` and occurrence claims past the longer
+	 * of run retention and `occurrenceRetentionMs`.
 	 */
 	async pruneJob(
 		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
 		retentionMs: number,
 		now: number = Date.now(),
+		occurrenceRetentionMs: number = retentionMs,
 	): Promise<number> {
-		const cutoff = now - retentionMs;
+		const runCutoff = now - retentionMs;
+		const occurrenceCutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
 		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
 		const runs = await this.listRuns(job.project_id, job.notebook_id, job.id);
 		let pruned = 0;
 		for (const run of runs) {
 			if (!isTerminalRunStatus(run.status)) continue;
 			const endedAt = Date.parse(run.finished_at ?? run.queued_at);
-			if (!(endedAt < cutoff)) continue;
+			if (!(endedAt < runCutoff)) continue;
 			if ((await this.bucket.head(paths.jobRunMarker(run.project_id, run.run_id))) !== null) {
 				continue;
 			}
@@ -643,7 +645,7 @@ export class JobRunService {
 		const staleOccurrences = occurrenceKeys.filter((key) => {
 			const name = key.slice(jobPaths.occurrencesPrefix.length).replace(/\.json$/, '');
 			const instant = occurrenceKeyToInstant(name);
-			return instant !== null && instant < cutoff;
+			return instant !== null && instant < occurrenceCutoff;
 		});
 		if (staleOccurrences.length > 0) await this.bucket.delete(staleOccurrences);
 		if (pruned > 0) this.metrics.increment('jobs.runs.pruned', pruned);

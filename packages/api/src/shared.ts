@@ -756,12 +756,17 @@ export const EtagResponseHeader = z.object({
 	}),
 });
 
-/** OpenAPI request schema for the optional `If-Match` precondition header. */
+const IfMatchValueSchema = z.string().openapi({
+	param: { name: 'if-match', in: 'header' },
+	example: '"2025-03-05T14:00:00Z"',
+});
+
 export const IfMatchHeader = z.object({
-	'if-match': z
-		.string()
-		.optional()
-		.openapi({ param: { name: 'if-match', in: 'header' }, example: '"2025-03-05T14:00:00Z"' }),
+	'if-match': IfMatchValueSchema.optional(),
+});
+
+export const RequiredIfMatchHeader = z.object({
+	'if-match': IfMatchValueSchema,
 });
 
 /** A retry key shared by the optional and required idempotency header schemas. */

@@ -55,6 +55,7 @@ import {
 	loadAuthorizedNotebook,
 	loadVisibleProject,
 	NotebookIdParam,
+	RequiredIfMatchHeader,
 	SuccessResponseSchema,
 } from '../shared';
 
@@ -333,7 +334,7 @@ const deleteJob = createRoute({
 	tags: ['Jobs'],
 	summary: 'Delete a job and its run history',
 	description: 'Active runs are cancelled and their sandboxes destroyed first.',
-	request: { params: JobIdParam, headers: IfMatchHeader },
+	request: { params: JobIdParam, headers: RequiredIfMatchHeader },
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Job deleted'),
 		...commonErrors(),

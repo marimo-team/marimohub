@@ -111,7 +111,7 @@ function useJobsPageModel() {
 		const job = deleteDialog.target;
 		if (!job) return;
 		try {
-			await remove.mutateAsync(job.id);
+			await remove.mutateAsync({ jobId: job.id, updatedAt: job.updated_at });
 			deleteDialog.close();
 			if (selectedJobId === job.id) select({ job: null });
 			toast.success('Job deleted');

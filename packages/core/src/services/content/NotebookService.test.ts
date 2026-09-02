@@ -8,7 +8,7 @@ import {
 	PreconditionFailedError,
 	ValidationError,
 } from '../../errors';
-import { createNotebookId, createVersionId } from '../../ids';
+import { createJobId, createNotebookId, createRunId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
@@ -2098,6 +2098,28 @@ describe('NotebookService', () => {
 			expect(siblingKeysBefore.length).toBeGreaterThan(0);
 			expect((await listAllKeys(bucket, doomedPrefix)).length).toBeGreaterThan(0);
 			await sessions.advanceVersionPruneCutoff(projectId, doomed.id, createVersionId());
+			const doomedJob = createJobId();
+			const siblingJob = createJobId();
+			const doomedRun = createRunId();
+			const siblingRun = createRunId();
+			for (const [notebookId, jobId, runId] of [
+				[doomed.id, doomedJob, doomedRun],
+				[sibling.id, siblingJob, siblingRun],
+			] as const) {
+				await bucket.put(
+					paths.jobRunMarker(projectId, runId),
+					JSON.stringify({
+						run_id: runId,
+						continuation_run_id: createRunId(),
+						job_id: jobId,
+						notebook_id: notebookId,
+						project_id: projectId,
+						created_at: new Date().toISOString(),
+					}),
+				);
+				await bucket.put(paths.jobOperationClaim(projectId, notebookId, jobId), '{}');
+				await bucket.put(paths.jobDeletionClaim(projectId, notebookId, jobId), '{}');
+			}
 
 			// Soft-delete first (the guard requires status === 'deleted').
 			await notebooks.deleteNotebook(projectId, doomed.id, ACTOR);
@@ -2107,10 +2129,20 @@ describe('NotebookService', () => {
 			// The right things were deleted: the doomed notebook's subtree is empty.
 			expect(await listAllKeys(bucket, doomedPrefix)).toEqual([]);
 			expect(await bucket.get(paths.versionPruneCutoff(projectId, doomed.id))).toBeNull();
+			expect(await bucket.get(paths.jobRunMarker(projectId, doomedRun))).toBeNull();
+			expect(await bucket.get(paths.jobOperationClaim(projectId, doomed.id, doomedJob))).toBeNull();
+			expect(await bucket.get(paths.jobDeletionClaim(projectId, doomed.id, doomedJob))).toBeNull();
 
 			// Live data survived: the sibling notebook is fully intact and resolvable.
 			expect(await listAllKeys(bucket, siblingPrefix)).toEqual(siblingKeysBefore);
 			expect(await notebooks.getNotebookContent(projectId, sibling.id)).toBe('s1');
+			expect(await bucket.get(paths.jobRunMarker(projectId, siblingRun))).not.toBeNull();
+			expect(
+				await bucket.get(paths.jobOperationClaim(projectId, sibling.id, siblingJob)),
+			).not.toBeNull();
+			expect(
+				await bucket.get(paths.jobDeletionClaim(projectId, sibling.id, siblingJob)),
+			).not.toBeNull();
 		});
 
 		it('removes the app claim when the soft-delete cleanup did not', async () => {

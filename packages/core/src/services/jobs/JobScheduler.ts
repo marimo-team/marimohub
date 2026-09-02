@@ -182,13 +182,20 @@ export class JobScheduler {
 		};
 		const now = this.now();
 		const snapshot = await this.deps.catalog.getCurrentSnapshot();
+		const activeBeforeFire = await this.deps.runs.listActive();
+		const activeJobs = new Set(
+			activeBeforeFire.flatMap(({ marker, run }) =>
+				run && !isTerminalRunStatus(run.status) ? [`${marker.project_id}:${marker.job_id}`] : [],
+			),
+		);
 		for (const { projectId, notebookId, entry } of indexedJobs(snapshot)) {
-			if (!entry.enabled || !entry.schedule) continue;
 			try {
-				const fired = await this.fire(projectId, notebookId, entry.id, now);
+				const jobKey = `${projectId}:${entry.id}`;
+				const fired = await this.fire(projectId, notebookId, entry.id, now, activeJobs.has(jobKey));
 				if (fired === 'fired') result.fired++;
 				else if (fired === 'repaired') result.repaired++;
 				else if (fired === 'skipped') result.skipped++;
+				if (fired === 'fired' || fired === 'repaired') activeJobs.add(jobKey);
 			} catch (err) {
 				result.errors++;
 				logOperationalError(
@@ -257,6 +264,7 @@ export class JobScheduler {
 		notebookId: JobRun['notebook_id'],
 		jobId: JobRun['job_id'],
 		now: number,
+		hasActive: boolean,
 	): Promise<'fired' | 'repaired' | 'skipped' | 'none'> {
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
@@ -287,14 +295,6 @@ export class JobScheduler {
 			);
 			if (occurrence === null) return 'none';
 			const scheduledFor = new Date(occurrence).toISOString();
-			const active = await this.deps.runs.listActive();
-			const hasActive = active.some(
-				({ marker, run }) =>
-					marker.project_id === projectId &&
-					marker.job_id === jobId &&
-					!!run &&
-					!isTerminalRunStatus(run.status),
-			);
 			const outcome = job.concurrency_policy === 'forbid' && hasActive ? 'skip' : 'run';
 			const runId = createRunId();
 			const claim = await this.deps.runs.claimOccurrence(
@@ -569,8 +569,8 @@ export class JobScheduler {
 	}
 
 	/**
-	 * Retention, folded into the slow maintenance cycle: prune every indexed job's
-	 * terminal runs and occurrence claims past `retentionMs`, plus stale markers.
+	 * Retention, folded into the slow maintenance cycle: prune terminal runs,
+	 * occurrence claims outside the catch-up window, and stale markers.
 	 */
 	async prune(retentionMs: number): Promise<{ runsPruned: number; markersPruned: number }> {
 		const now = this.now();
@@ -582,6 +582,7 @@ export class JobScheduler {
 					{ project_id: projectId, notebook_id: notebookId, id: entry.id },
 					retentionMs,
 					now,
+					Math.max(retentionMs, Number(this.deps.config.catchupWindowMs)),
 				);
 			} catch (err) {
 				logOperationalError(

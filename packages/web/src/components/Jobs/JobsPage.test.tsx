@@ -69,11 +69,17 @@ function makeFetch(world: World = {}) {
 	const olderRuns = world.olderRuns ?? [];
 	let htmlFailures = world.htmlFailures ?? 0;
 	let logsFailures = world.logsFailures ?? 0;
-	const calls: { url: string; method: string; body?: unknown }[] = [];
+	const calls: { url: string; method: string; body?: unknown; ifMatch?: string }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
-		calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+		const ifMatch = new Headers(init?.headers).get('if-match') ?? undefined;
+		calls.push({
+			url,
+			method,
+			body: init?.body ? JSON.parse(String(init.body)) : undefined,
+			ifMatch,
+		});
 
 		if (url.endsWith('/api/v1/capabilities')) {
 			return jsonOk({
@@ -474,7 +480,11 @@ describe('JobsPage', () => {
 		await user.click(await screen.findByRole('button', { name: /Delete/ }));
 		const dialog = await screen.findByRole('dialog');
 		await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
-		await waitFor(() => expect(world.calls.some((c) => c.method === 'DELETE')).toBe(true));
+		await waitFor(() => {
+			expect(world.calls.find((call) => call.method === 'DELETE')?.ifMatch).toBe(
+				'2026-09-01T10:00:00Z',
+			);
+		});
 		expect(await screen.findByText('No jobs yet')).toBeInTheDocument();
 	});
 

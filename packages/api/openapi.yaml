@@ -12330,7 +12330,7 @@ paths:
         - schema:
             type: string
             example: '"2025-03-05T14:00:00Z"'
-          required: false
+          required: true
           name: if-match
           in: header
       responses:

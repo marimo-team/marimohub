@@ -107,6 +107,12 @@ describe('Job routes', () => {
 			412,
 			'PRECONDITION_FAILED',
 		);
+		const missingPrecondition = await expectError(
+			await request('DELETE', `${base()}/${created.id}`),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(missingPrecondition.message).toContain('if-match');
 
 		await expectOk(
 			await request('DELETE', `${base()}/${created.id}`, undefined, {

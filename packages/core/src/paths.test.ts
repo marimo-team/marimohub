@@ -41,8 +41,20 @@ describe('paths', () => {
 		expect(paths.jobOperationClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
 			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
 		);
+		expect(paths.jobOperationClaimsForProject(pid)).toBe(
+			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/',
+		);
+		expect(paths.jobOperationClaimsForNotebook(pid, nid)).toBe(
+			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/',
+		);
 		expect(paths.jobDeletionClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
 			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
+		);
+		expect(paths.jobDeletionClaimsForProject(pid)).toBe(
+			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/',
+		);
+		expect(paths.jobDeletionClaimsForNotebook(pid, nid)).toBe(
+			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/',
 		);
 	});
 

@@ -11329,8 +11329,8 @@ export interface operations {
 	'jobs.delete': {
 		parameters: {
 			query?: never;
-			header?: {
-				'if-match'?: string;
+			header: {
+				'if-match': string;
 			};
 			path: {
 				pid: string;

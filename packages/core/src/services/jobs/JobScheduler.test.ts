@@ -469,6 +469,34 @@ describe('JobScheduler', () => {
 		expect((await scheduler(fakeRunner(env)).tick()).fired).toBe(0);
 	});
 
+	it('loads the authoritative head when the snapshot scheduling fields are stale', async () => {
+		const job = await createJob();
+		await env.catalog.updateNotebookEntry('test.jobs.stale', ACTOR, pid, nid, (notebook) => ({
+			jobs: (notebook.jobs ?? []).map((entry) =>
+				entry.id === job.id
+					? { id: entry.id, enabled: false, updated_at: entry.updated_at }
+					: entry,
+			),
+		}));
+		const s = scheduler(fakeRunner(env), {
+			config: { ...CONFIG, maxConcurrentRuns: 0 },
+		});
+
+		expect(await s.tick()).toMatchObject({ fired: 1, errors: 0 });
+		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+	});
+
+	it('scans active-run storage a constant number of times per tick', async () => {
+		for (let index = 0; index < 3; index++) await createJob({ name: `job ${index}` });
+		const listActive = vi.spyOn(env.jobRuns, 'listActive');
+		const s = scheduler(fakeRunner(env), {
+			config: { ...CONFIG, maxConcurrentRuns: 0 },
+		});
+
+		expect(await s.tick()).toMatchObject({ fired: 3, errors: 0 });
+		expect(listActive).toHaveBeenCalledTimes(2);
+	});
+
 	it('prunes terminal runs past retention and stale markers', async () => {
 		const job = await createJob({ schedule: undefined });
 		const old = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });

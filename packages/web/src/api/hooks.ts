@@ -1768,13 +1768,19 @@ export function useUpdateJob(projectId: string, notebookId: string) {
 
 export function useDeleteJob(projectId: string, notebookId: string) {
 	return useApiMutation(
-		(jobId: string) =>
+		({ jobId, updatedAt }: { jobId: string; updatedAt: string }) =>
 			apiData(
 				apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}', {
-					params: { path: { pid: projectId, nid: notebookId, jid: jobId } },
+					params: {
+						path: { pid: projectId, nid: notebookId, jid: jobId },
+						header: { 'if-match': updatedAt },
+					},
 				}),
 			),
-		(jobId) => [jobKeys.list(projectId, notebookId), jobKeys.runs(projectId, notebookId, jobId)],
+		({ jobId }) => [
+			jobKeys.list(projectId, notebookId),
+			jobKeys.runs(projectId, notebookId, jobId),
+		],
 	);
 }
 

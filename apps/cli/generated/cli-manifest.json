@@ -1991,7 +1991,7 @@
 					"name": "if-match",
 					"cli_name": "if-match",
 					"in": "header",
-					"required": false,
+					"required": true,
 					"value_type": "string",
 					"repeatable": false
 				},

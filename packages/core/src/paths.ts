@@ -312,8 +312,14 @@ export const paths = {
 	jobRunMarkersForProject: (projectId: ProjectId) => `_system/job-runs/${projectId}/`,
 	jobRunMarker: (projectId: ProjectId, runId: RunId) =>
 		`_system/job-runs/${projectId}/${runId}.json`,
+	jobOperationClaimsForProject: (projectId: ProjectId) => `_system/job-operations/${projectId}/`,
+	jobOperationClaimsForNotebook: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/job-operations/${projectId}/${notebookId}/`,
 	jobOperationClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
 		`_system/job-operations/${projectId}/${notebookId}/${jobId}.json`,
+	jobDeletionClaimsForProject: (projectId: ProjectId) => `_system/job-deletions/${projectId}/`,
+	jobDeletionClaimsForNotebook: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/job-deletions/${projectId}/${notebookId}/`,
 	jobDeletionClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
 		`_system/job-deletions/${projectId}/${notebookId}/${jobId}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */

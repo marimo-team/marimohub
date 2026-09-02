@@ -264,13 +264,18 @@ describe('JobRunService', () => {
 			paths.project(pid).notebook(nid).job(job.id).occurrence('20260902T0600Z'),
 			'{}',
 		);
+		await env.bucket.put(
+			paths.project(pid).notebook(nid).job(job.id).occurrence('20260720T0600Z'),
+			'{}',
+		);
 
-		expect(await runs.pruneJob(job, 30 * 24 * 3_600_000, now)).toBe(1);
+		expect(await runs.pruneJob(job, 30 * 24 * 3_600_000, now, 60 * 24 * 3_600_000)).toBe(1);
 		const remaining = (await runs.listRuns(pid, nid, job.id)).map((r) => r.run_id);
 		expect(remaining).toEqual(expect.arrayContaining([recent.run_id, active.run_id]));
 		expect(remaining).not.toContain(old.run_id);
 		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
 		expect(await env.bucket.head(jobPaths.occurrence('20260601T0600Z'))).toBeNull();
+		expect(await env.bucket.head(jobPaths.occurrence('20260720T0600Z'))).not.toBeNull();
 		expect(await env.bucket.head(jobPaths.occurrence('20260902T0600Z'))).not.toBeNull();
 	});
 
