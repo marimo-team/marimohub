@@ -404,6 +404,40 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/admin/policy-analyzer/metadata': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Describe policy analyzer inputs */
+		get: operations['admin.policyAnalyzer.metadata'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/admin/policy-analyzer/evaluate': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Evaluate a policy test suite */
+		post: operations['admin.policyAnalyzer.evaluate'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/workspace/files': {
 		parameters: {
 			query?: never;
@@ -2005,6 +2039,287 @@ export interface components {
 			default_role: 'manager' | 'editor' | 'viewer' | null;
 			super_admins: string[];
 		};
+		PolicyAnalyzerMetadata: {
+			/** @enum {number} */
+			schema_version: 1;
+			max_cases: number;
+			capabilities: {
+				login_policy: boolean;
+				resource_security: boolean;
+				live_self_context: boolean;
+			};
+			entitlements: (
+				| 'super-admin'
+				| 'project-creator'
+				| 'default-role:viewer'
+				| 'default-role:editor'
+				| 'default-role:manager'
+			)[];
+			classification_order: string[];
+			actions: {
+				/** @enum {string} */
+				action:
+					| 'project.create'
+					| 'admin.access'
+					| 'org-integration.manage'
+					| 'audit.global.read'
+					| 'project.read'
+					| 'project.update'
+					| 'project.delete'
+					| 'project.members.manage'
+					| 'project.events.read'
+					| 'project.alerts.manage'
+					| 'notebook.write'
+					| 'notebook.manage'
+					| 'integration.read'
+					| 'integration.use'
+					| 'integration.manage'
+					| 'change-request.publish'
+					| 'security-labels.raise'
+					| 'security-labels.lower'
+					| 'session.attach'
+					| 'session.stop'
+					| 'session.surface'
+					| 'session.proxy'
+					| 'session.start';
+				/** @enum {string} */
+				scope: 'deployment' | 'project' | 'session' | 'session-start';
+				/** @enum {string|null} */
+				minimum_role: 'viewer' | 'editor' | 'manager' | 'admin' | null;
+				/** @enum {string|null} */
+				denied_as: 'not-found' | 'forbidden' | null;
+				requires_super_admin: boolean;
+			}[];
+		};
+		PolicySuiteResult: {
+			valid: boolean;
+			summary: components['schemas']['PolicySuiteSummary'];
+			cases: components['schemas']['PolicyCaseResult'][];
+		};
+		PolicySuiteSummary: {
+			case_count: number;
+			passed: number;
+			failed: number;
+		};
+		PolicyCaseResult: {
+			id: string;
+			name: string;
+			valid: boolean;
+			login: components['schemas']['PolicyLoginResult'];
+			authorization: components['schemas']['PolicyAuthorizationResult'];
+			errors: {
+				/** @enum {string} */
+				stage: 'login' | 'authorization';
+				code: string;
+			}[];
+		};
+		PolicyLoginResult: {
+			/** @enum {string} */
+			outcome: 'allow' | 'deny' | 'timeout' | 'error' | 'invalid' | 'unavailable';
+			duration_ms: number;
+			entitlements: (
+				| 'super-admin'
+				| 'project-creator'
+				| 'default-role:viewer'
+				| 'default-role:editor'
+				| 'default-role:manager'
+			)[];
+			reason?: string;
+			problem?: string;
+			assertion: components['schemas']['PolicyAssertionResult'];
+		} | null;
+		PolicyAssertionResult: {
+			passed: boolean;
+			expected: {
+				[key: string]: unknown;
+			};
+		};
+		PolicyAuthorizationResult: {
+			decision: components['schemas']['PolicyAuthorizationDecision'];
+			/** @enum {string} */
+			presentation: 'allowed' | 'forbidden' | 'not-found';
+			trace: components['schemas']['PolicyAuthorizationTraceStep'][];
+			assertion: components['schemas']['PolicyAssertionResult'];
+		} | null;
+		PolicyAuthorizationDecision: {
+			allowed: boolean;
+			/** @enum {string|null} */
+			role: 'viewer' | 'editor' | 'manager' | 'admin' | null;
+			/** @enum {string} */
+			category?: 'lifecycle' | 'visibility' | 'role' | 'session' | 'standing' | 'constraint';
+			/** @enum {string} */
+			constraint_reason?: 'missing-context' | 'constraint' | 'unavailable';
+		};
+		PolicyAuthorizationTraceStep: {
+			/** @enum {string} */
+			stage: 'action' | 'lifecycle' | 'role' | 'standing' | 'session' | 'constraint' | 'final';
+			/** @enum {string} */
+			status: 'passed' | 'failed' | 'skipped';
+			code: string;
+			details?: {
+				[key: string]: unknown;
+			};
+		};
+		PolicySuiteV1: {
+			/** @enum {number} */
+			schema_version: 1;
+			name?: string;
+			cases: components['schemas']['PolicyCaseV1'][];
+		};
+		PolicyCaseV1:
+			| {
+					id: string;
+					name: string;
+					login: components['schemas']['PolicyLoginStageV1'];
+					authorization?: components['schemas']['PolicyAuthorizationStageV1'];
+			  }
+			| {
+					id: string;
+					name: string;
+					login?: components['schemas']['PolicyLoginStageV1'];
+					authorization: components['schemas']['PolicyAuthorizationStageV1'];
+			  };
+		PolicyLoginStageV1: {
+			identity: {
+				id: string;
+				email: string;
+			};
+			id_token_claims: {
+				[key: string]: unknown;
+			};
+			user_info_claims?: {
+				[key: string]: unknown;
+			};
+			expected: components['schemas']['PolicyLoginExpectationV1'];
+		};
+		PolicyLoginExpectationV1:
+			| {
+					/** @enum {string} */
+					outcome: 'allow';
+					entitlements?: (
+						| 'super-admin'
+						| 'project-creator'
+						| 'default-role:viewer'
+						| 'default-role:editor'
+						| 'default-role:manager'
+					)[];
+			  }
+			| {
+					/** @enum {string} */
+					outcome: 'deny';
+			  };
+		PolicyAuthorizationStageV1: {
+			subject: {
+				id: string;
+				email: string;
+				/** @enum {string} */
+				entitlement_source: 'explicit' | 'login';
+				entitlements?: (
+					| 'super-admin'
+					| 'project-creator'
+					| 'default-role:viewer'
+					| 'default-role:editor'
+					| 'default-role:manager'
+				)[];
+			};
+			/** @enum {string} */
+			action:
+				| 'project.create'
+				| 'admin.access'
+				| 'org-integration.manage'
+				| 'audit.global.read'
+				| 'project.read'
+				| 'project.update'
+				| 'project.delete'
+				| 'project.members.manage'
+				| 'project.events.read'
+				| 'project.alerts.manage'
+				| 'notebook.write'
+				| 'notebook.manage'
+				| 'integration.read'
+				| 'integration.use'
+				| 'integration.manage'
+				| 'change-request.publish'
+				| 'security-labels.raise'
+				| 'security-labels.lower'
+				| 'session.attach'
+				| 'session.stop'
+				| 'session.surface'
+				| 'session.proxy'
+				| 'session.start';
+			resource: components['schemas']['PolicyAuthorizationResourceV1'];
+			context: components['schemas']['PolicyAuthorizationContextV1'];
+			expected: {
+				allowed: boolean;
+				/** @enum {string} */
+				denial_category?:
+					| 'lifecycle'
+					| 'visibility'
+					| 'role'
+					| 'session'
+					| 'standing'
+					| 'constraint';
+			};
+		};
+		PolicyAuthorizationResourceV1: {
+			/** @enum {string} */
+			source: 'stored' | 'synthetic';
+			/** @enum {string} */
+			kind: 'deployment' | 'project' | 'session' | 'session-start';
+			project_id?: string;
+			notebook_id?: string;
+			session_id?: string;
+			project?: {
+				owner: string;
+				members: {
+					user_id?: string;
+					email?: string;
+					/** @enum {string} */
+					role: 'viewer' | 'editor' | 'manager' | 'admin';
+				}[];
+				/**
+				 * @default active
+				 * @enum {string}
+				 */
+				status: 'active' | 'deleted';
+				security_labels?: {
+					classification: string;
+					compartments: string[];
+				};
+			};
+			notebook_labels?: {
+				classification: string;
+				compartments: string[];
+			};
+			session?: {
+				/** @enum {string} */
+				mode?: 'edit' | 'app';
+				ephemeral?: boolean;
+				user_id: string;
+				/** @enum {string} */
+				editor_sandbox_sharing?: 'shared' | 'exclusive';
+			};
+			/** @enum {string} */
+			mode?: 'edit' | 'app';
+		};
+		PolicyAuthorizationContextV1:
+			| {
+					/** @enum {string} */
+					mode: 'live-self';
+			  }
+			| {
+					/** @enum {string} */
+					mode: 'synthetic';
+					value: {
+						/** @enum {number} */
+						schemaVersion: 1;
+						classification: string;
+						compartments: string[];
+						policyVersion: string;
+						/** Format: date-time */
+						expiresAt: string;
+					} | null;
+			  };
 		WorkspaceItem: {
 			path: string;
 			name: string;
@@ -5551,6 +5866,170 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: components['schemas']['DeploymentConfig'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.policyAnalyzer.metadata': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Policy analyzer metadata */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PolicyAnalyzerMetadata'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.policyAnalyzer.evaluate': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['PolicySuiteV1'];
+			};
+		};
+		responses: {
+			/** @description Policy analysis results */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PolicySuiteResult'];
 					};
 				};
 			};

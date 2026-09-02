@@ -188,6 +188,16 @@ function parseSeconds(env: Env, key: string, fallback: number, min: number, max:
 	return value;
 }
 
+export function oidcLoginPolicyTimeoutSeconds(env: Env): number {
+	return parseSeconds(
+		env,
+		'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS',
+		DEFAULT_LOGIN_POLICY_TIMEOUT_SECONDS,
+		1,
+		30,
+	);
+}
+
 function parseScopes(raw: string | undefined): string {
 	const scopes = [...new Set((raw?.trim() || 'openid email profile').split(/\s+/).filter(Boolean))];
 	if (!scopes.includes('openid') || !scopes.includes('email')) {
@@ -309,13 +319,7 @@ function parseLoginPolicy(
 	}
 	return {
 		policy,
-		timeoutSeconds: parseSeconds(
-			env,
-			'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS',
-			DEFAULT_LOGIN_POLICY_TIMEOUT_SECONDS,
-			1,
-			30,
-		),
+		timeoutSeconds: oidcLoginPolicyTimeoutSeconds(env),
 	};
 }
 

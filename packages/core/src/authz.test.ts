@@ -6,6 +6,7 @@ import {
 	effectiveRole,
 	isSuperAdmin,
 	requireRole,
+	resolveEffectiveRole,
 	roleAtLeast,
 } from './authz';
 import type { AuthSubject } from './authz';
@@ -47,6 +48,46 @@ describe('authz', () => {
 	});
 
 	describe('effectiveRole', () => {
+		it('reports every effective-role source', () => {
+			expect(resolveEffectiveRole(project, STRANGER, { superAdmins: [STRANGER.id] })).toEqual({
+				role: 'admin',
+				source: 'static-super-admin',
+			});
+			expect(resolveEffectiveRole(project, { ...STRANGER, entitlements: ['super-admin'] })).toEqual(
+				{ role: 'admin', source: 'entitlement-super-admin' },
+			);
+			expect(resolveEffectiveRole(project, OWNER)).toEqual({ role: 'admin', source: 'owner' });
+			expect(resolveEffectiveRole(project, MANAGER)).toEqual({
+				role: 'manager',
+				source: 'member-id',
+			});
+			expect(resolveEffectiveRole(project, INVITEE)).toEqual({
+				role: 'editor',
+				source: 'member-email',
+			});
+			expect(
+				resolveEffectiveRole(project, {
+					...STRANGER,
+					entitlements: ['default-role:manager'],
+				}),
+			).toEqual({ role: 'manager', source: 'entitlement-default' });
+			expect(resolveEffectiveRole(project, STRANGER, { defaultRole: 'viewer' })).toEqual({
+				role: 'viewer',
+				source: 'deployment-default',
+			});
+			expect(resolveEffectiveRole(project, STRANGER)).toEqual({ role: null, source: 'none' });
+		});
+
+		it('reports the deployment default when it ties an entitlement', () => {
+			expect(
+				resolveEffectiveRole(
+					project,
+					{ ...STRANGER, entitlements: ['default-role:editor'] },
+					{ defaultRole: 'editor' },
+				),
+			).toEqual({ role: 'editor', source: 'deployment-default' });
+		});
+
 		it('treats the owner as admin even if not listed as a member', () => {
 			const p = makeProject({ owner: OWNER.id, members: [] });
 			expect(effectiveRole(p, OWNER)).toBe('admin');

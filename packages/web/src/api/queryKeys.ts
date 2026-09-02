@@ -134,6 +134,7 @@ export const adminKeys = {
 	all: ['admin'] as const,
 	users: () => [...adminKeys.all, 'users'] as const,
 	config: () => [...adminKeys.all, 'config'] as const,
+	policyAnalyzer: () => [...adminKeys.all, 'policy-analyzer'] as const,
 };
 
 export const sessionKeys = {

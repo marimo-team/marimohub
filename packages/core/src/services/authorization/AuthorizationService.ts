@@ -23,8 +23,8 @@
 import {
 	canCreateProject,
 	canSeeProjectEntry,
-	effectiveRole,
 	isSuperAdmin,
+	resolveEffectiveRole,
 	roleAtLeast,
 	subjectDefaultRole,
 } from '../../authz';
@@ -35,7 +35,10 @@ import type { AuthenticatedPrincipal } from '../../ports/auth';
 import type {
 	ConstraintDecision,
 	ConstraintDenialReason,
+	ConstraintEvidence,
 	ResourceConstraintPolicy,
+	SatisfiedConstraintEvidence,
+	UnsatisfiedConstraintEvidence,
 } from '../../ports/resourceConstraints';
 import { validateSubjectSecurityContext } from '../../ports/subjectContext';
 import type {
@@ -43,6 +46,7 @@ import type {
 	SubjectSecurityContextProvider,
 } from '../../ports/subjectContext';
 import type { ResourceSecurityLabels } from '../../securityLabels';
+import { MAX_SECURITY_COMPARTMENTS, SECURITY_LABEL_TOKEN } from '../../securityLabels';
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
 import type { UserId } from '../../ids';
 import type { Project, Session } from '../../schema';
@@ -139,6 +143,23 @@ export type AuthorizationDecision =
 			constraintReason?: ConstraintDenialReason;
 	  };
 
+export interface AuthorizationTraceStep {
+	stage: 'action' | 'lifecycle' | 'role' | 'standing' | 'session' | 'constraint' | 'final';
+	status: 'passed' | 'failed' | 'skipped';
+	code: string;
+	details?: Readonly<Record<string, unknown>>;
+}
+
+export interface AuthorizationAnalysis {
+	decision: AuthorizationDecision;
+	presentation: 'allowed' | 'forbidden' | 'not-found';
+	trace: readonly AuthorizationTraceStep[];
+}
+
+export type AuthorizationAnalysisContext =
+	| { mode: 'live' }
+	| { mode: 'synthetic'; value: SubjectSecurityContext | null };
+
 const SESSION_ACTION_FOR: Record<SessionScopedAction, SessionAction> = {
 	'session.attach': 'attach',
 	'session.stop': 'stop',
@@ -179,23 +200,89 @@ const CONSTRAINT_DENIAL_REASONS: ReadonlySet<string> = new Set([
 	'unavailable',
 ]);
 
+interface ParsedConstraintDecision {
+	decision: ConstraintDecision;
+	invalidEvidence: boolean;
+}
+
+interface IndexedConstraintEvidence extends ConstraintEvidence {
+	labelSetIndex: number;
+}
+
 /**
- * Shape-validate an adapter's decision — external output, not a trusted type.
- * A truthy-but-not-`true` `satisfied` or an unknown denial reason yields
- * `null`, which the caller treats as an `unavailable` denial.
+ * Evidence is diagnostic only: drop malformed evidence, but preserve a valid
+ * adapter verdict. A malformed verdict still fails closed.
  */
-function parseConstraintDecision(value: unknown): ConstraintDecision | null {
+function parseConstraintDecision(value: unknown): ParsedConstraintDecision | null {
 	if (typeof value !== 'object' || value === null) return null;
-	const decision = value as { satisfied?: unknown; reason?: unknown };
-	if (decision.satisfied === true) return { satisfied: true };
+	const decision = value as { satisfied?: unknown; reason?: unknown; evidence?: unknown };
+	if (decision.satisfied === true) {
+		const evidence = parseConstraintEvidence(decision.evidence);
+		const validEvidence =
+			evidence?.classificationSatisfied === true && evidence.missingCompartments.length === 0
+				? (evidence as SatisfiedConstraintEvidence)
+				: null;
+		return {
+			decision: { satisfied: true, ...(validEvidence ? { evidence: validEvidence } : {}) },
+			invalidEvidence: decision.evidence !== undefined && validEvidence === null,
+		};
+	}
 	if (
 		decision.satisfied === false &&
 		typeof decision.reason === 'string' &&
 		CONSTRAINT_DENIAL_REASONS.has(decision.reason)
 	) {
-		return { satisfied: false, reason: decision.reason as ConstraintDenialReason };
+		const reason = decision.reason as ConstraintDenialReason;
+		const evidence = parseConstraintEvidence(decision.evidence);
+		const validEvidence =
+			reason === 'constraint' &&
+			evidence !== null &&
+			(!evidence.classificationSatisfied || evidence.missingCompartments.length > 0)
+				? (evidence as UnsatisfiedConstraintEvidence)
+				: null;
+		return {
+			decision:
+				reason === 'constraint'
+					? { satisfied: false, reason, ...(validEvidence ? { evidence: validEvidence } : {}) }
+					: { satisfied: false, reason },
+			invalidEvidence: decision.evidence !== undefined && validEvidence === null,
+		};
 	}
 	return null;
+}
+
+function parseConstraintEvidence(value: unknown): ConstraintEvidence | null {
+	if (value === undefined) return null;
+	if (typeof value !== 'object' || value === null) return null;
+	const evidence = value as Record<string, unknown>;
+	const keys = new Set([
+		'heldClassification',
+		'requiredClassification',
+		'classificationSatisfied',
+		'missingCompartments',
+	]);
+	if (
+		Object.keys(evidence).some((key) => !keys.has(key)) ||
+		(evidence.heldClassification !== null &&
+			(typeof evidence.heldClassification !== 'string' ||
+				!SECURITY_LABEL_TOKEN.test(evidence.heldClassification))) ||
+		typeof evidence.requiredClassification !== 'string' ||
+		!SECURITY_LABEL_TOKEN.test(evidence.requiredClassification) ||
+		typeof evidence.classificationSatisfied !== 'boolean' ||
+		!Array.isArray(evidence.missingCompartments) ||
+		evidence.missingCompartments.length > MAX_SECURITY_COMPARTMENTS ||
+		evidence.missingCompartments.some(
+			(item) => typeof item !== 'string' || !SECURITY_LABEL_TOKEN.test(item),
+		)
+	) {
+		return null;
+	}
+	return {
+		heldClassification: evidence.heldClassification,
+		requiredClassification: evidence.requiredClassification,
+		classificationSatisfied: evidence.classificationSatisfied,
+		missingCompartments: evidence.missingCompartments as string[],
+	};
 }
 
 /** A catalog snapshot entry as list visibility reads it (denormalized members). */
@@ -232,6 +319,68 @@ export class AuthorizationService {
 			};
 		}
 		return { ...decision, subjectContextExpiresAt: constraint.contextExpiresAt };
+	}
+
+	async analyze(
+		subject: AuthorizationSubject,
+		action: AuthorizationAction,
+		resource: AuthorizationResource,
+		context: AuthorizationAnalysisContext = { mode: 'live' },
+	): Promise<AuthorizationAnalysis> {
+		const trace: AuthorizationTraceStep[] = [];
+		const { decision: baseline, labelSets } = this.decideBaseline(subject, action, resource, trace);
+		let decision = baseline;
+		if (baseline.allowed && labelSets.length > 0) {
+			const constraint = await this.evaluateLabelSets(
+				action,
+				labelSets,
+				context.mode === 'synthetic' ? async () => context.value : this.contextResolver(subject),
+			);
+			trace.push({
+				stage: 'constraint',
+				status: constraint.satisfied ? 'passed' : 'failed',
+				code: constraint.satisfied
+					? 'resource_constraints_satisfied'
+					: `resource_constraints_${constraint.reason}`,
+				details: {
+					contextMode: context.mode,
+					labelSetCount: labelSets.length,
+					...(constraint.evidence ? { evidence: constraint.evidence } : {}),
+				},
+			});
+			decision = constraint.satisfied
+				? { ...baseline, subjectContextExpiresAt: constraint.contextExpiresAt }
+				: {
+						allowed: false,
+						category: 'constraint',
+						role: baseline.role,
+						constraintReason: constraint.reason,
+					};
+		} else if (baseline.allowed) {
+			trace.push({ stage: 'constraint', status: 'skipped', code: 'resource_unlabeled' });
+		} else {
+			trace.push({
+				stage: 'constraint',
+				status: 'skipped',
+				code: 'baseline_denied',
+			});
+		}
+		const presentation = decision.allowed
+			? 'allowed'
+			: decision.category === 'lifecycle' ||
+				  decision.category === 'visibility' ||
+				  decision.category === 'constraint'
+				? 'not-found'
+				: 'forbidden';
+		trace.push({
+			stage: 'final',
+			status: decision.allowed ? 'passed' : 'failed',
+			code: decision.allowed
+				? 'authorization_allowed'
+				: `authorization_denied_${decision.category}`,
+			details: { presentation },
+		});
+		return { decision, presentation, trace };
 	}
 
 	/**
@@ -296,29 +445,74 @@ export class AuthorizationService {
 		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
+		trace?: AuthorizationTraceStep[],
 	): { decision: AuthorizationDecision; labelSets: readonly ResourceSecurityLabels[] } {
 		const rule = ACTION_RULES[action];
 		if (resource.kind !== rule.scope) {
 			throw new Error(`Action ${action} requires a ${rule.scope} resource, got ${resource.kind}`);
 		}
+		trace?.push({
+			stage: 'action',
+			status: 'passed',
+			code: 'action_rule_loaded',
+			details: {
+				action,
+				scope: rule.scope,
+				...('min' in rule
+					? {
+							minimumRole: rule.min,
+							deniedAs: rule.deniedAs,
+							requiresSuperAdmin: rule.requiresSuperAdmin === true,
+						}
+					: {}),
+			},
+		});
 		if (resource.kind === 'deployment') {
+			const decision = this.decideDeployment(subject, action as DeploymentAction);
+			trace?.push({
+				stage: 'standing',
+				status: decision.allowed ? 'passed' : 'failed',
+				code: decision.allowed ? 'deployment_standing_satisfied' : 'deployment_standing_missing',
+				details: { entitlements: [...(subject.entitlements ?? [])] },
+			});
 			return {
-				decision: this.decideDeployment(subject, action as DeploymentAction),
+				decision,
 				labelSets: [],
 			};
 		}
 		// Lifecycle precedes every project-scoped rule on purpose: a soft-deleted
 		// project is unreachable for everyone, super admins included.
 		if (resource.project.status === 'deleted') {
+			trace?.push({ stage: 'lifecycle', status: 'failed', code: 'project_deleted' });
 			return { decision: { allowed: false, category: 'lifecycle', role: null }, labelSets: [] };
 		}
-		const role = effectiveRole(resource.project, subject, this.policy);
+		trace?.push({ stage: 'lifecycle', status: 'passed', code: 'project_active' });
+		const roleResolution = resolveEffectiveRole(resource.project, subject, this.policy);
+		const role = roleResolution.role;
+		trace?.push({
+			stage: 'role',
+			status: role === null ? 'failed' : 'passed',
+			code: `effective_role_${roleResolution.source}`,
+			details: { role, entitlements: [...(subject.entitlements ?? [])] },
+		});
 		const decision = ((): AuthorizationDecision => {
 			switch (resource.kind) {
 				case 'project': {
 					const projectRule = ACTION_RULES[action as ProjectAction];
 					if (projectRule.requiresSuperAdmin && !isSuperAdmin(subject, this.policy?.superAdmins)) {
+						trace?.push({
+							stage: 'standing',
+							status: 'failed',
+							code: 'super_admin_standing_missing',
+						});
 						return { allowed: false, category: 'standing', role };
+					}
+					if (projectRule.requiresSuperAdmin) {
+						trace?.push({
+							stage: 'standing',
+							status: 'passed',
+							code: 'super_admin_standing_satisfied',
+						});
 					}
 					if (roleAtLeast(role, projectRule.min)) return { allowed: true, role };
 					return {
@@ -329,14 +523,32 @@ export class AuthorizationService {
 				}
 				case 'session': {
 					const sessionAction = SESSION_ACTION_FOR[action as SessionScopedAction];
-					return sessionCan(sessionAction, this.sessionActor(subject, role), resource.session)
-						? { allowed: true, role }
-						: { allowed: false, category: 'session', role };
+					const allowed = sessionCan(
+						sessionAction,
+						this.sessionActor(subject, role),
+						resource.session,
+					);
+					trace?.push({
+						stage: 'session',
+						status: allowed ? 'passed' : 'failed',
+						code: allowed ? 'session_rule_satisfied' : 'session_rule_denied',
+						details: { sessionAction, mode: resource.session.mode ?? 'edit' },
+					});
+					return allowed ? { allowed: true, role } : { allowed: false, category: 'session', role };
 				}
-				case 'session-start':
-					return canStartSessionMode({ role, viewerMode: this.policy?.viewerMode }, resource.mode)
-						? { allowed: true, role }
-						: { allowed: false, category: 'session', role };
+				case 'session-start': {
+					const allowed = canStartSessionMode(
+						{ role, viewerMode: this.policy?.viewerMode },
+						resource.mode,
+					);
+					trace?.push({
+						stage: 'session',
+						status: allowed ? 'passed' : 'failed',
+						code: allowed ? 'session_start_satisfied' : 'session_start_denied',
+						details: { mode: resource.mode, viewerMode: this.policy?.viewerMode ?? 'static' },
+					});
+					return allowed ? { allowed: true, role } : { allowed: false, category: 'session', role };
+				}
 			}
 		})();
 		const labelSets = [
@@ -348,7 +560,7 @@ export class AuthorizationService {
 
 	/** The baseline role for display (`your_role`) and derived projections. */
 	role(subject: AuthSubject, project: Project): Role | null {
-		return effectiveRole(project, subject, this.policy);
+		return resolveEffectiveRole(project, subject, this.policy).role;
 	}
 
 	isSuperAdmin(subject: AuthSubject): boolean {
@@ -443,10 +655,16 @@ export class AuthorizationService {
 				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, 'project.read');
 				return labelStates.map((labels) => labels === null);
 			}
-			return decisions.map(
-				(decision, index) =>
-					labelStates[index] === null || parseConstraintDecision(decision)?.satisfied === true,
-			);
+			let invalidEvidence = false;
+			const allowed = decisions.map((decision, index) => {
+				const parsed = parseConstraintDecision(decision);
+				if (parsed?.invalidEvidence) invalidEvidence = true;
+				return labelStates[index] === null || parsed?.decision.satisfied === true;
+			});
+			if (invalidEvidence) {
+				this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, 'project.read');
+			}
+			return allowed;
 		} catch (error) {
 			this.emitConstraintFailure(error, 'project.read');
 			return labelStates.map((labels) => labels === null);
@@ -503,14 +721,35 @@ export class AuthorizationService {
 		labelSets: readonly ResourceSecurityLabels[],
 		getContext: () => Promise<SubjectSecurityContext | null>,
 	): Promise<
-		| { satisfied: true; contextExpiresAt: string }
-		| { satisfied: false; reason: ConstraintDenialReason }
+		| {
+				satisfied: true;
+				contextExpiresAt: string;
+				evidence?: readonly IndexedConstraintEvidence[];
+		  }
+		| {
+				satisfied: false;
+				reason: ConstraintDenialReason;
+				evidence?: readonly IndexedConstraintEvidence[];
+		  }
 	> {
 		const batch = await this.constraintBatch(action, labelSets, getContext);
 		if (!batch.ok) return { satisfied: false, reason: batch.reason };
+		const evidence = batch.decisions.flatMap((decision, labelSetIndex) =>
+			'evidence' in decision && decision.evidence ? [{ labelSetIndex, ...decision.evidence }] : [],
+		);
 		const denied = batch.decisions.find((decision) => !decision.satisfied);
-		if (denied?.satisfied === false) return denied;
-		return { satisfied: true, contextExpiresAt: batch.contextExpiresAt };
+		if (denied?.satisfied === false) {
+			return {
+				satisfied: false,
+				reason: denied.reason,
+				...(evidence.length > 0 ? { evidence } : {}),
+			};
+		}
+		return {
+			satisfied: true,
+			contextExpiresAt: batch.contextExpiresAt,
+			...(evidence.length > 0 ? { evidence } : {}),
+		};
 	}
 
 	/**
@@ -563,8 +802,8 @@ export class AuthorizationService {
 			let invalid = false;
 			const decisions = raw.map((decision) => {
 				const parsed = parseConstraintDecision(decision);
-				if (parsed === null) invalid = true;
-				return parsed ?? { satisfied: false as const, reason: 'unavailable' as const };
+				if (parsed === null || parsed.invalidEvidence) invalid = true;
+				return parsed?.decision ?? { satisfied: false as const, reason: 'unavailable' as const };
 			});
 			if (invalid) this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, action);
 			return { ok: true, decisions, contextExpiresAt: context.expiresAt };

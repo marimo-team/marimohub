@@ -120,6 +120,10 @@ export type AdminUser = ClientAdminUser;
 /** Redacted deployment configuration for the super-admin settings page. */
 export type DeploymentConfig = ClientDeploymentConfig;
 export type SandboxStartupReport = ClientSandboxStartupReport;
+export type PolicyAnalyzerMetadata = components['schemas']['PolicyAnalyzerMetadata'];
+export type PolicySuiteResult = components['schemas']['PolicySuiteResult'];
+export type PolicySuiteV1 =
+	paths['/api/v1/admin/policy-analyzer/evaluate']['post']['requestBody']['content']['application/json'];
 export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
 export type User = ClientUser;

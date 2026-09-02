@@ -172,6 +172,38 @@ Known limits:
 - Deployment-wide sandbox storage credentials can cross label boundaries below
   the API. Use scoped credentials (WIF) or non-persistent workspaces.
 
+### Policy analyzer
+
+Super admins use **Admin → Policy** to examine policy decisions.
+The endpoints require a super-admin session and reject personal access tokens.
+The analyzer calls the production policy functions and returns a deterministic trace without generated reasoning.
+
+A version-1 suite contains 1 to 25 cases.
+Each case evaluates the configured OIDC login policy, the authorization engine, or both.
+Authorization covers entitlements, roles, action rules, session rules, and resource constraints.
+The analyzer compares each decision with the expected decision.
+A login denial skips authorization that depends on login entitlements.
+A case is valid when every stage finishes and every assertion matches.
+An expected denial is valid.
+Timeouts, module errors, malformed results, invalid contexts, and inaccessible stored resources invalidate a case.
+
+The analyzer grants no additional resource access.
+It loads only readable stored resources, and resource security labels still apply.
+Use hypothetical resources for inaccessible or counterfactual cases.
+Live subject context is available only for the signed-in admin.
+
+Suites remain in the browser unless the admin downloads them.
+The server does not store suites, and the page imports or exports the exact version-1 JSON format.
+
+CAUTION: Treat exported suites as sensitive data. They can contain sample claims and subject context.
+
+Each evaluation request records one `policy.analysis.run` event.
+The event contains bounded request and assertion metadata.
+It excludes claims, entitlements, labels, subject context, policy reasons, and module errors.
+
+Classification names come from `MARIMOHUB_AUTHZ_CLASSIFICATION_ORDER`.
+Examples use the notional names `LEVEL_1`, `LEVEL_2`, and `LEVEL_3`.
+
 ### Example: Google
 
 In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials)

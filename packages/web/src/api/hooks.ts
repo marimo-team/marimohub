@@ -35,6 +35,8 @@ import type {
 	ProjectListFilters,
 	NotebookListFilters,
 	SandboxStartupReport,
+	PolicySuiteV1,
+	PolicySuiteResult,
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -255,6 +257,22 @@ export function useRunSandboxStartupTest(startupTimeoutSeconds = 120) {
 			),
 		meta: { suppressErrorToast: true },
 	});
+}
+
+export function usePolicyAnalyzerMetadataQuery() {
+	return useSuspenseQuery({
+		queryKey: adminKeys.policyAnalyzer(),
+		queryFn: () => apiData(apiClient.GET('/api/v1/admin/policy-analyzer/metadata')),
+	});
+}
+
+export function useEvaluatePolicySuite() {
+	return useApiMutation(
+		(body: PolicySuiteV1): Promise<PolicySuiteResult> =>
+			apiData(apiClient.POST('/api/v1/admin/policy-analyzer/evaluate', { body })),
+		() => [auditKeys.all],
+		{ suppressErrorToast: true },
+	);
 }
 
 // Projects

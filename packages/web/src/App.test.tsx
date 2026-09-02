@@ -11,39 +11,42 @@ afterEach(() => {
 });
 
 describe('App routes', () => {
-	it.each(['/admin/audit-logs', '/admin/users', '/admin/settings', '/admin/debug'])(
-		'redirects a non-super-admin away from %s',
-		async (path) => {
-			installMatchMedia(false);
-			const requests: string[] = [];
-			vi.stubGlobal(
-				'fetch',
-				vi.fn(async (input: RequestInfo | URL) => {
-					const url = String(input);
-					requests.push(url);
-					if (url === '/api/v1/me') {
-						return jsonOk({
-							id: 'user-one',
-							email: 'user@example.com',
-							logout_url: null,
-							is_super_admin: false,
-						});
-					}
-					if (url === '/api/v1/projects') return jsonOk({ items: [], next_cursor: null });
-					if (url === '/api/v1/version') return jsonOk({ version: 'test' });
-					throw new Error(`unexpected fetch: ${url}`);
-				}),
-			);
-			window.history.replaceState({}, '', path);
+	it.each([
+		'/admin/audit-logs',
+		'/admin/users',
+		'/admin/settings',
+		'/admin/policy-analyzer',
+		'/admin/debug',
+	])('redirects a non-super-admin away from %s', async (path) => {
+		installMatchMedia(false);
+		const requests: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				requests.push(url);
+				if (url === '/api/v1/me') {
+					return jsonOk({
+						id: 'user-one',
+						email: 'user@example.com',
+						logout_url: null,
+						is_super_admin: false,
+					});
+				}
+				if (url === '/api/v1/projects') return jsonOk({ items: [], next_cursor: null });
+				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		window.history.replaceState({}, '', path);
 
-			renderWithClient(<App />, { toaster: false });
+		renderWithClient(<App />, { toaster: false });
 
-			expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
-			expect(window.location.pathname).toBe('/');
-			expect(requests.some((url) => url.startsWith('/api/v1/events?'))).toBe(false);
-			expect(requests.some((url) => url.startsWith('/api/v1/admin/'))).toBe(false);
-		},
-	);
+		expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
+		expect(window.location.pathname).toBe('/');
+		expect(requests.some((url) => url.startsWith('/api/v1/events?'))).toBe(false);
+		expect(requests.some((url) => url.startsWith('/api/v1/admin/'))).toBe(false);
+	});
 
 	it('redirects /admin to /admin/users for a super admin', async () => {
 		installMatchMedia(false);
@@ -140,6 +143,10 @@ describe('App routes', () => {
 		expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument();
 		expect(screen.getByRole('navigation', { name: 'Admin' })).toBeInTheDocument();
 		expect(screen.getByRole('link', { name: 'Debug' })).toHaveAttribute('href', '/admin/debug');
+		expect(screen.getByRole('link', { name: 'Policy' })).toHaveAttribute(
+			'href',
+			'/admin/policy-analyzer',
+		);
 		expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
 		expect(window.location.pathname).toBe('/admin/users');
 	});
