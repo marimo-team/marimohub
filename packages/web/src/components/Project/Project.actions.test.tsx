@@ -31,6 +31,7 @@ describe('Project — Notebook Actions: configuration', () => {
 			'Browse files',
 			'View static outputs',
 			'Version history',
+			'Jobs & schedules',
 			'Download notebook file',
 			'Download outputs (HTML)',
 			'Download workspace',
@@ -235,6 +236,20 @@ describe('Project — Notebook Actions: configuration', () => {
 				true,
 			),
 		);
+	});
+
+	it('hides "Jobs & schedules" when the deployment has jobs off', async () => {
+		const user = userEvent.setup();
+		makeFetch({ capabilities: { federation: { available: false }, jobs: { available: false } } });
+		await renderProject();
+
+		await user.click(await screen.findByRole('button', { name: /Notebook actions for/ }));
+		const menu = await screen.findByRole('menu');
+		const labels = within(menu)
+			.getAllByRole('menuitem')
+			.map((item) => item.textContent);
+		expect(labels).toContain('Version history');
+		expect(labels).not.toContain('Jobs & schedules');
 	});
 
 	it('offers "Change base image" only when the deployment lists multiple images', async () => {

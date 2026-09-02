@@ -5,11 +5,14 @@ export type {
 	ApiDeps,
 	ConfigSummary,
 	HonoEnv,
+	JobsConfig,
 	SandboxConfig,
 	SandboxUserHomeResolver,
 	Services,
 	SessionLifetimeConfig,
 } from './context';
+export { DEFAULT_JOBS_CONFIG } from './context';
+export { resolveJobSandboxEnv } from './sandboxEnv';
 export { createApp, assertProjectRole } from './shared';
 export { scheduleProjectAlert } from './notifications';
 export {

@@ -113,9 +113,26 @@ app.openapi(capabilitiesRoute, (c) => {
 			destination_types: deps.projectAlerts
 				? (['slack', 'webhook'] satisfies ('slack' | 'webhook')[])
 				: [],
-			selectable_kinds: deps.projectAlerts ? [...PROJECT_ALERT_KINDS] : [],
+			selectable_kinds: deps.projectAlerts
+				? PROJECT_ALERT_KINDS.filter((kind) => deps.jobs || !kind.startsWith('job.'))
+				: [],
 			max_destinations: deps.projectAlerts?.maxDestinations ?? 10,
 		},
+		jobs: deps.jobs
+			? {
+					available: true,
+					max_per_notebook: deps.jobs.maxPerNotebook ?? null,
+					default_timeout_seconds: Millis.toSeconds(deps.jobs.defaultTimeoutMs),
+					max_timeout_seconds: Millis.toSeconds(deps.jobs.maxTimeoutMs),
+					run_retention_days: deps.jobs.runRetentionMs / Millis.days(1),
+				}
+			: {
+					available: false,
+					max_per_notebook: null,
+					default_timeout_seconds: null,
+					max_timeout_seconds: null,
+					run_retention_days: null,
+				},
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,

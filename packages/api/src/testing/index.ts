@@ -9,6 +9,7 @@ import type {
 	UserId,
 } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket, noopCompute } from '@marimo-hub/core/testing';
+import { DEFAULT_JOBS_CONFIG } from '../context';
 import type { ApiDeps } from '../context';
 import { createApi } from '../createApi';
 
@@ -32,6 +33,8 @@ export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> =
 			persistWorkspace: 'source',
 		},
 		policy: {},
+		// On in tests; pass `jobs: undefined` for the off-deployment paths.
+		jobs: DEFAULT_JOBS_CONFIG,
 		...overrides,
 	};
 }

@@ -60,7 +60,10 @@ export function makeFetch(
 ) {
 	const notebooks = options.notebooks ?? [notebook()];
 	const sessions = options.sessions ?? [];
-	const capabilities = options.capabilities ?? { federation: { available: false } };
+	const capabilities = options.capabilities ?? {
+		federation: { available: false },
+		jobs: { available: true },
+	};
 	const proj = { ...project(), ...(options.role ? { your_role: options.role } : {}) };
 	const calls: { url: string; method: string; body: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

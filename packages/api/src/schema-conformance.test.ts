@@ -107,7 +107,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	it('SnapshotNotebookEntry omits exactly the internal fields from the core entry', () => {
 		const coreKeys = shapeKeys(CoreSnapshotNotebookEntrySchema);
 		const apiKeys = shapeKeys(SnapshotNotebookEntrySchema);
-		const internal = ['key_prefix', 'security_labels', 'security_labels_pending'];
+		// `jobs` is the scheduler's index; clients read definitions from the jobs routes.
+		const internal = ['key_prefix', 'security_labels', 'security_labels_pending', 'jobs'];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});

@@ -124,6 +124,8 @@ describe('OpenAPI spec', () => {
 			'app.start_failed',
 			'app.unavailable',
 			'sync.failed',
+			'job.run.failed',
+			'job.run.succeeded',
 			'unknown',
 		];
 		const typedEnums: [SchemaNode, string[]][] = [

@@ -14,6 +14,8 @@ import { NotebookService } from './content/NotebookService';
 import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
+import { JobsService } from './jobs/JobsService';
+import { JobRunService } from './jobs/JobRunService';
 import { TokenService } from './tokens/TokenService';
 import { CliAuthorizationService } from './tokens/CliAuthorizationService';
 
@@ -199,7 +201,41 @@ export {
 	wandb,
 } from './integrations/kinds';
 export { ReconciliationService } from './runtime/ReconciliationService';
-export type { ReconcileResult } from './runtime/ReconciliationService';
+export type { ActiveSandboxSource, ReconcileResult } from './runtime/ReconciliationService';
+export { indexedJobs, JobsService, validateJobSchedule } from './jobs/JobsService';
+export type { CreateJobInput, IndexedJob, JobLimits, UpdateJobInput } from './jobs/JobsService';
+export { DANGLING_MARKER_GRACE_MS, JobRunService } from './jobs/JobRunService';
+export type { ActiveRun, EnqueueRunInput, RunOutputs } from './jobs/JobRunService';
+export {
+	JOB_OUTPUT_FILE,
+	JOB_PROVISION_ALLOWANCE_MS,
+	JobRunner,
+	jobShellCommand,
+	MAX_RUN_LOG_BYTES,
+	parseExitCode,
+	toRunError,
+} from './jobs/JobRunner';
+export type { JobRunContext, JobRunnerDeps, JobRunnerSandboxConfig } from './jobs/JobRunner';
+export { JobScheduler } from './jobs/JobScheduler';
+export type { JobSchedulerConfig, JobSchedulerDeps, TickResult } from './jobs/JobScheduler';
+export {
+	isValidCron,
+	isValidTimeZone,
+	nextOccurrence,
+	occurrenceKey,
+	occurrenceKeyToInstant,
+	parseCron,
+	previousOccurrence,
+} from './jobs/cron';
+export type { CronSchedule } from './jobs/cron';
+export {
+	ACTIVE_RUN_STATUSES,
+	isActiveRunStatus,
+	isTerminalRunStatus,
+	nextRunStatus,
+	TERMINAL_RUN_STATUSES,
+} from './jobs/runState';
+export type { RunEvent } from './jobs/runState';
 export { SandboxDiagnosticLease } from './runtime/SandboxDiagnosticLease';
 export { kernelActiveConnections, SessionLifecycleService } from './runtime/sessionLifecycle';
 export type {
@@ -217,11 +253,12 @@ export {
 } from './tokens/TokenService';
 export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
-export { listAllKeys } from './catalog/storage';
+export { listAllKeys, readStoredObjects } from './catalog/storage';
 export {
 	acquireSingletonClaim,
 	mutateObject,
 	mutateObjectWithOutcome,
+	putIfAbsent,
 	releaseSingletonClaim,
 	withCasRetry,
 	type CasRetryOptions,
@@ -235,6 +272,7 @@ export {
 } from './runtime/SandboxProvisioner';
 export type {
 	BucketConfig,
+	PreparedSandbox,
 	ProvisionOptions,
 	ProvisionResult,
 	SessionEnv,
@@ -293,10 +331,12 @@ export type {
 } from './authorization/actions';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
+export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolveComputeProfile';
+export type { ComputeProfileConfig, ResolvedComputeProfile } from './runtime/resolveComputeProfile';
 export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';
 export type { ResolvedLaunchStrategy } from './runtime/launchStrategy';
 export { buildMarimoLaunch } from './runtime/marimoLaunch';
-export type { MarimoLaunchStrategyName } from './runtime/marimoLaunch';
+export type { MarimoLaunchMode, MarimoLaunchStrategyName } from './runtime/marimoLaunch';
 export { probeKernelLiveness } from './runtime/kernelProbe';
 export type { KernelLiveness, KernelProbe, KernelProbeOptions } from './runtime/kernelProbe';
 export { runPreflight } from './runtime/preflight';
@@ -482,6 +522,17 @@ export function createServices(
 		'CliAuthorizationService',
 		new CliAuthorizationService(bucket, tokens),
 	);
+	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
+		listJobs: notebook,
+		createJob: notebook,
+		getJob: notebook,
+		updateJob: notebook,
+		deleteJob: notebook,
+	});
+	const jobRuns = wrap('JobRunService', new JobRunService(bucket, metrics), {
+		getRun: notebook,
+		listRuns: notebook,
+	});
 	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
 	const idempotency = wrap('IdempotencyService', new IdempotencyService(bucket), {
 		lookup: scope,
@@ -494,6 +545,8 @@ export function createServices(
 		notebooks,
 		proposals,
 		sessions,
+		jobs,
+		jobRuns,
 		identities,
 		tokens,
 		cliAuthorizations,

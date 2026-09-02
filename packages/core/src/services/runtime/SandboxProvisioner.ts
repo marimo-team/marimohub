@@ -4,7 +4,6 @@ import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
-import type { SessionMode } from '../../constants';
 import { Millis } from '../../duration';
 import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
@@ -22,11 +21,12 @@ import type {
 	SandboxProcess,
 	SandboxProvider,
 } from '../../ports/sandbox';
+import { utf8Tail } from '../../text';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
-import type { MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
+import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
 import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
@@ -102,14 +102,6 @@ function parseSetupDiagnostics(stderr: string): SetupDiagnostics {
 
 function setupDiagnostics(stdout: string, stderr: string): SetupDiagnostics {
 	return parseSetupDiagnostics(stderr.includes(SETUP_MARKER) ? stderr : stdout);
-}
-
-function utf8Tail(value: string, maxBytes: number): string {
-	const encoded = new TextEncoder().encode(value);
-	if (encoded.byteLength <= maxBytes) return value;
-	let start = encoded.byteLength - maxBytes;
-	while ((encoded[start] & 0xc0) === 0x80) start++;
-	return new TextDecoder().decode(encoded.slice(start));
 }
 
 function logSlowSetup(
@@ -245,11 +237,11 @@ export interface ProvisionOptions {
 	 */
 	startupTimeoutMs?: Millis;
 	/**
-	 * Session mode driving the marimo subcommand (see `LAUNCH_MODES`). `app`
-	 * sandboxes must also pass `workspaceLoadMode: 'copy-only'` — a mounted
-	 * workspace would let app code write through to the bucket.
+	 * Launch mode driving the marimo subcommand (see `LAUNCH_MODES`). `app` and
+	 * `job` sandboxes must also pass `workspaceLoadMode: 'copy-only'` — a mounted
+	 * workspace would let notebook code write through to the bucket.
 	 */
-	launchMode?: SessionMode;
+	launchMode?: MarimoLaunchMode;
 	/** How to load the cached workspace into the sandbox. Defaults to mount-or-copy. */
 	workspaceLoadMode?: WorkspaceLoadMode;
 	/**
@@ -262,6 +254,21 @@ export interface ProvisionOptions {
 	gitPrefix?: string;
 	/** Optional packed copy of a synced workspace and its Git metadata. */
 	workspaceArchive?: string;
+}
+
+/**
+ * A sandbox after the prepare phases (reachable → workspace → inject → setup)
+ * and before any kernel starts: what a headless job needs, since it runs the
+ * launch plan's command itself and exposes no port.
+ */
+export interface PreparedSandbox {
+	sandbox: SandboxInstance;
+	/** The resolved launch plan; `launch.start` is the command to run in `workdir`. */
+	launch: MarimoLaunchPlan;
+	workdir: string;
+	usedFallback: boolean;
+	timings: Timings;
+	counters: Record<string, number>;
 }
 
 export interface ProvisionResult {
@@ -531,6 +538,21 @@ export function createWorkspaceLoadStrategies(): WorkspaceLoadStrategies {
 	return { copyOnly, mountOrCopy: new MountOrCopyWorkspaceLoadStrategy(copyOnly) };
 }
 
+function loadCounters(load: WorkspaceLoadResult): Record<string, number> {
+	const counters: Record<string, number> = {};
+	if (load.stats) {
+		counters.files_objects = load.stats.objectCount;
+		counters.files_bytes = load.stats.bytes;
+	}
+	if (load.archiveStatus) {
+		counters.files_archive_used = load.archiveStatus === 'used' ? 1 : 0;
+		counters.files_archive_missing = load.archiveStatus === 'missing' ? 1 : 0;
+		counters.files_archive_failed = load.archiveStatus === 'failed' ? 1 : 0;
+		if (load.archiveBytes !== undefined) counters.files_archive_bytes = load.archiveBytes;
+	}
+	return counters;
+}
+
 export class SandboxProvisioner {
 	constructor(
 		private provider: SandboxProvider,
@@ -572,10 +594,71 @@ export class SandboxProvisioner {
 		}
 	}
 
+	/**
+	 * Create a sandbox and run the prepare phases only — no kernel start, no
+	 * exposed port. The session path (`provision`) is the same phases plus start +
+	 * expose; a failure here self-destroys the partial sandbox exactly like it.
+	 */
+	async prepare(options: ProvisionOptions): Promise<PreparedSandbox> {
+		const prepareStart = Date.now();
+		const createStart = Date.now();
+		const sandbox = createOrRestoreSandbox(
+			this.provider,
+			options.sandboxId,
+			options.restoreFilesystemSnapshotId,
+			options.image,
+			options.resources,
+			options.userHome,
+		);
+		const createMs = Date.now() - createStart;
+		try {
+			const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options);
+			const counters = loadCounters(load);
+			Object.assign(counters, sandbox.drainCounters?.() ?? {});
+			sw.timings.handle = createMs;
+			sw.timings.total = Date.now() - prepareStart;
+			return {
+				sandbox,
+				launch: startup.plan,
+				workdir: mountPath,
+				usedFallback: load.usedFallback,
+				timings: sw.timings,
+				counters,
+			};
+		} catch (err) {
+			try {
+				await sandbox.destroy();
+			} catch {
+				// Best-effort: the sandbox may not have been created.
+			}
+			throw err;
+		}
+	}
+
 	private async provisionInto(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 	): Promise<ProvisionResult> {
+		const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options);
+		await this.launchKernel(sandbox, mountPath, sw, startup);
+		const expose = await this.exposeKernel(sandbox, options, sw);
+
+		const counters = loadCounters(load);
+		// Last: the adapter's command count is only final once every phase has run.
+		Object.assign(counters, sandbox.drainCounters?.() ?? {});
+
+		return { sandbox, url: expose, usedFallback: load.usedFallback, timings: sw.timings, counters };
+	}
+
+	private async prepareInto(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+	): Promise<{
+		load: WorkspaceLoadResult;
+		startup: MarimoStartup;
+		sw: Stopwatch;
+		mountPath: string;
+	}> {
 		const nb = paths.project(options.projectId).notebook(options.notebookId);
 		const workdir = options.workdir ?? DEFAULT_WORKDIR;
 		const mountPath = workdir;
@@ -602,13 +685,10 @@ export class SandboxProvisioner {
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
 		const setupEnvironment = () => this.setupEnvironment(sandbox, options, mountPath, sw);
-		const launchKernel = (startup: MarimoStartup) =>
-			this.launchKernel(sandbox, mountPath, sw, startup);
-		const exposeKernel = () => this.exposeKernel(sandbox, options, sw);
 
 		// Setup reads only the loaded workspace, so credential resolution and injection
-		// can overlap it. The kernel still waits for both to finish.
-		const { load, expose } = await all({
+		// can overlap it. The kernel (or a job's command) still waits for both.
+		const { load, setup } = await all({
 			async reachable() {
 				await ensureReachable();
 			},
@@ -624,32 +704,8 @@ export class SandboxProvisioner {
 				await this.$.load;
 				return setupEnvironment();
 			},
-			async start() {
-				const startup = await this.$.setup;
-				await this.$.inject;
-				await launchKernel(startup);
-			},
-			async expose() {
-				await this.$.start;
-				return exposeKernel();
-			},
 		});
-
-		const counters: Record<string, number> = {};
-		if (load.stats) {
-			counters.files_objects = load.stats.objectCount;
-			counters.files_bytes = load.stats.bytes;
-		}
-		if (load.archiveStatus) {
-			counters.files_archive_used = load.archiveStatus === 'used' ? 1 : 0;
-			counters.files_archive_missing = load.archiveStatus === 'missing' ? 1 : 0;
-			counters.files_archive_failed = load.archiveStatus === 'failed' ? 1 : 0;
-			if (load.archiveBytes !== undefined) counters.files_archive_bytes = load.archiveBytes;
-		}
-		// Last: the adapter's command count is only final once every phase has run.
-		Object.assign(counters, sandbox.drainCounters?.() ?? {});
-
-		return { sandbox, url: expose, usedFallback: load.usedFallback, timings: sw.timings, counters };
+		return { load, startup: setup, sw, mountPath };
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {

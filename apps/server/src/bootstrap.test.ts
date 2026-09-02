@@ -5,12 +5,13 @@ import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { ConfigError } from '@marimo-hub/config';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
-import { startMaintenance, startSessionLifecycle } from './cron';
+import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';
 import type { OtelHandle } from './otel';
 
 vi.mock('./cron', () => ({
 	startMaintenance: vi.fn(() => vi.fn()),
 	startSessionLifecycle: vi.fn(() => vi.fn()),
+	startJobScheduler: vi.fn(() => ({ stop: vi.fn(), drain: vi.fn(async () => {}) })),
 }));
 
 type Signal = 'SIGTERM' | 'SIGINT';
@@ -359,6 +360,21 @@ describe('bootstrap', () => {
 
 		expect(startMaintenance).toHaveBeenCalledTimes(calls);
 		expect(startSessionLifecycle).toHaveBeenCalledTimes(calls);
+	});
+
+	it('starts the job scheduler with maintenance only when jobs are on', async () => {
+		await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			makeHarness(deps).overrides,
+		);
+		expect(startJobScheduler).toHaveBeenCalledOnce();
+
+		vi.mocked(startJobScheduler).mockClear();
+		await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			makeHarness({ ...deps, jobs: undefined }).overrides,
+		);
+		expect(startJobScheduler).not.toHaveBeenCalled();
 	});
 
 	it('cancels maintenance loops before draining connections', async () => {

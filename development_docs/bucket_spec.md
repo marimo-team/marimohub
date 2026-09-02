@@ -97,6 +97,9 @@ s3-bucket/
 │   ├── reconcile/
 │   │   └── orphans/
 │   │       └── {sandbox-id}.json            ← first-seen marker for an undated orphan
+│   ├── job-runs/
+│   │   └── {project-id}/
+│   │       └── {run-id}.json                ← active-run marker (create-once, deleted when terminal)
 │   ├── identities/
 │   │   └── {user-id}.json                  ← user display identity (mutable, CAS-managed)
 │   ├── tokens/
@@ -120,7 +123,8 @@ s3-bucket/
 │   ├── sandbox-diagnostics/
 │   │   └── {user-id}.json                  ← per-admin sandbox diagnostic lease (CAS)
 │   ├── _maintenance.lock                   ← advisory maintenance lease
-│   └── _session_lifecycle.lock             ← advisory session-lifecycle lease
+│   ├── _session_lifecycle.lock             ← advisory session-lifecycle lease
+│   └── _jobs.lock                          ← advisory job-scheduler lease
 │
 └── projects/
     └── {project-id}/
@@ -150,6 +154,17 @@ s3-bucket/
                 │       ├── changes/
                 │       │   └── {index}      ← temporary changed-file bytes
                 │       └── publication.json ← CAS-managed publication state
+                ├── jobs/                    ← headless runs (§4.13)
+                │   └── {job-id}/
+                │       ├── job.json         ← definition head (CAS, JobsService)
+                │       ├── occurrences/
+                │       │   └── {YYYYMMDDTHHmmZ}.json ← scheduled-fire claim (create-if-absent, immutable)
+                │       └── runs/
+                │           └── {run-id}/
+                │               ├── run.json     ← run record (CAS, JobRunService)
+                │               ├── output.html  ← write-once rendered output
+                │               ├── session.json ← write-once, optional
+                │               └── logs.txt     ← write-once stdout+stderr (capped)
                 └── versions/
                     └── {version-id}/
                         ├── version.json
@@ -756,6 +771,91 @@ only within one tier, so both tiers can contain an integration named
 `warehouse`.
 
 ---
+
+### 4.13 `projects/{pid}/notebooks/{nid}/jobs/{jid}/…` and `_system/job-runs/`
+
+A **job** is a per-notebook headless-run definition (schedule + policy); a
+**run** is the immutable record of one execution beside it. See
+[docs/jobs.md](../docs/jobs.md) for the user-facing behavior.
+
+```json
+// projects/proj-x/notebooks/nb-y/jobs/job-z/job.json   (head — CAS-managed)
+{
+	"schema_version": 1,
+	"id": "job-7h2k9qm4xz7rp3w8",
+	"notebook_id": "nb-3w8h2k9qm4xz7rp3",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"name": "Nightly refresh",
+	"enabled": true,
+	"schedule": { "cron": "0 6 * * *", "timezone": "Europe/Berlin" },
+	"parameters": { "region": "eu-west-1" },
+	"retry": { "max_retries": 1, "backoff_seconds": 60 },
+	"timeout_seconds": 1800,
+	"concurrency_policy": "forbid",
+	"notifications": { "on": ["failure"] },
+	"created_by": "user_abc123",
+	"created_at": "2026-09-01T10:00:00Z",
+	"updated_at": "2026-09-01T10:00:00Z"
+}
+
+// …/jobs/job-z/occurrences/20260902T0400Z.json   (immutable, create-if-absent)
+{ "run_id": "run_01JX…", "fired_at": "2026-09-02T04:00:12Z" }
+
+// …/jobs/job-z/runs/run_01JX…/run.json   (CAS-managed until terminal)
+{
+	"schema_version": 1,
+	"run_id": "run_01JX…",
+	"job_id": "job-7h2k9qm4xz7rp3w8",
+	"notebook_id": "nb-3w8h2k9qm4xz7rp3",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"status": "succeeded",
+	"trigger": "schedule",
+	"scheduled_for": "2026-09-02T04:00:00Z",
+	"source_version_id": "ver_01JX…",
+	"parameters": { "region": "eu-west-1" },
+	"attempt": 1,
+	"sandbox_id": "sb-…",
+	"timeout_seconds": 1800,
+	"queued_at": "2026-09-02T04:00:12Z",
+	"started_at": "2026-09-02T04:00:40Z",
+	"finished_at": "2026-09-02T04:03:05Z",
+	"deadline_at": "2026-09-02T04:40:40Z",
+	"exit_code": 0,
+	"output": { "html_bytes": 48211, "logs_bytes": 912 }
+}
+
+// _system/job-runs/proj-x/run_01JX….json   (create-once; deleted when the run is terminal)
+{ "run_id": "run_01JX…", "job_id": "job-…", "notebook_id": "nb-…", "project_id": "proj-…", "created_at": "…" }
+```
+
+**Ownership and mutability.**
+
+- `job.json` — mutable, ETag CAS through `mutateObject`, **written only by
+  `JobsService`**, the same discipline as an integration head (§4.12).
+  `JobsService` also maintains the snapshot's per-notebook `jobs` index
+  (`{ id, enabled, schedule }`) through `CatalogService.mutateSnapshot`, so the
+  scheduler enumerates scheduled jobs from two GETs instead of scanning
+  `projects/**`. `job.json` stays authoritative for the full definition.
+- `run.json` — an operational record like a session (§4.8): every status
+  change is a CAS transition through the run state machine, **written only by
+  `JobRunService`**. Terminal runs are never rewritten; retention deletes whole
+  `runs/{rid}/` prefixes.
+- `occurrences/{key}.json` — create-if-absent, immutable. The key is the UTC
+  minute of the occurrence, so replicas with skewed clocks compute the same key
+  and collide on the conditional PUT: the fire-exactly-once anchor. A crash
+  between the claim and the run record leaves a claim naming a run that does
+  not exist; the next tick re-writes that record idempotently (the claim is the
+  commit point, the record write is retryable).
+- `_system/job-runs/{pid}/{rid}.json` — the active-run index: written
+  create-if-absent **before** the run record and deleted on the terminal CAS,
+  so the scheduler's dispatch/watchdog and the reconciler enumerate live runs
+  (and the sandboxes they hold) from one prefix. A marker without a record past
+  a grace window, or with a terminal record, is pruned by maintenance.
+- Outputs — write-once under a fresh run prefix; no CAS needed. They are **not
+  notebook versions** and never advance `source.json`.
+
+Deleting a job deletes its whole prefix (after cancelling active runs);
+deleting a notebook or project reclaims the subtree with everything else.
 
 ## 5. ID Scheme
 

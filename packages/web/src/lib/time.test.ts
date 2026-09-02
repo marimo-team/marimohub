@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatRelative } from './time';
+import { formatAbsolute, formatDuration, formatElapsed, formatRelative } from './time';
 
 const NOW = Date.parse('2026-06-24T12:00:00Z');
 const ago = (secs: number) => new Date(NOW - secs * 1000).toISOString();
@@ -35,5 +35,25 @@ describe('formatDuration', () => {
 
 	it('returns an empty string for an unparseable input', () => {
 		expect(formatDuration('nope', NOW)).toBe('');
+	});
+});
+
+describe('formatElapsed', () => {
+	it('formats a millisecond span with the same units as formatDuration', () => {
+		expect(formatElapsed(0)).toBe('0s');
+		expect(formatElapsed(59_999)).toBe('59s');
+		expect(formatElapsed(90_000)).toBe('1m');
+		expect(formatElapsed(3_600_000 + 5 * 60_000)).toBe('1h 5m');
+		expect(formatElapsed(-5_000)).toBe('0s');
+	});
+});
+
+describe('formatAbsolute', () => {
+	it('renders a locale timestamp and an em dash for anything unusable', () => {
+		expect(formatAbsolute(undefined)).toBe('—');
+		expect(formatAbsolute('not a date')).toBe('—');
+		expect(formatAbsolute('2026-09-02T10:00:00Z')).toBe(
+			new Date('2026-09-02T10:00:00Z').toLocaleString(),
+		);
 	});
 });

@@ -111,6 +111,18 @@ export const notebookKeys = {
 		[...notebookKeys.all, 'html', { projectId, notebookId, versionId: versionId ?? null }] as const,
 };
 
+export const jobKeys = {
+	all: ['jobs'] as const,
+	list: (projectId: string, notebookId: string) =>
+		[...jobKeys.all, 'list', { projectId, notebookId }] as const,
+	runs: (projectId: string, notebookId: string, jobId: string) =>
+		[...jobKeys.all, 'runs', { projectId, notebookId, jobId }] as const,
+	runHtml: (projectId: string, notebookId: string, jobId: string, runId: string) =>
+		[...jobKeys.all, 'run-html', { projectId, notebookId, jobId, runId }] as const,
+	runLogs: (projectId: string, notebookId: string, jobId: string, runId: string) =>
+		[...jobKeys.all, 'run-logs', { projectId, notebookId, jobId, runId }] as const,
+};
+
 export const systemKeys = {
 	all: ['system'] as const,
 	version: () => [...systemKeys.all, 'version'] as const,

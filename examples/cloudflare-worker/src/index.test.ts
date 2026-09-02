@@ -81,6 +81,17 @@ describe('Cloudflare Worker configuration', () => {
 		).toBe('exclusive');
 	});
 
+	it('keeps notebook jobs off unless MARIMOHUB_JOBS=on, and rejects other values', () => {
+		const at = (env: Record<string, unknown>) =>
+			buildDeps(new Request('https://hub.example.com'), env as unknown as Env).jobs;
+		expect(at(baseEnv)).toBeUndefined();
+		expect(at({ ...baseEnv, MARIMOHUB_JOBS: 'off' })).toBeUndefined();
+		expect(at({ ...baseEnv, MARIMOHUB_JOBS: ' ON ' })).toBeDefined();
+		expect(() => at({ ...baseEnv, MARIMOHUB_JOBS: 'yes' })).toThrow(
+			'Unknown MARIMOHUB_JOBS: yes (supported: on, off).',
+		);
+	});
+
 	it('rejects an invalid editor sandbox sharing value', () => {
 		expect(() =>
 			buildDeps(new Request('https://hub.example.com'), {

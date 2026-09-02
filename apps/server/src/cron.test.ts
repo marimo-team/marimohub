@@ -13,8 +13,8 @@ import {
 	SessionLifecycleService,
 } from '@marimo-hub/core';
 import type { SweepResult } from '@marimo-hub/core';
-import { makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
-import { startMaintenance, startSessionLifecycle } from './cron';
+import { ACTOR, makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
+import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';
 import { WideEventMetrics } from './metrics';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
@@ -70,6 +70,46 @@ describe('startMaintenance', () => {
 			projects_swept: 0,
 			notebooks_swept: 0,
 			'counter.sessions_created': 1,
+		});
+	});
+
+	it('prunes job history in the maintenance cycle and reports the counts', async () => {
+		const project = await deps.services.projects.createProject(
+			{ name: 'p', description: '' },
+			ACTOR,
+		);
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'nb', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const job = await deps.services.jobs.createJob(project.id, notebook.id, { name: 'j' }, ACTOR);
+		const old = await deps.services.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+		await deps.services.jobRuns.transition(old, 'fail', () => ({
+			finished_at: new Date(Date.now() - 60 * 24 * 3_600_000).toISOString(),
+		}));
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({
+			event: 'maintenance_cycle',
+			job_runs_pruned: 1,
+			job_run_markers_pruned: 0,
+		});
+		expect(await deps.services.jobRuns.listRuns(project.id, notebook.id, job.id)).toEqual([]);
+	});
+
+	it('skips job pruning when jobs are off', async () => {
+		const prune = vi.spyOn(deps.services.jobRuns, 'pruneJob');
+		stop = startMaintenance({ ...deps, jobs: undefined }, metrics);
+		await flushRun();
+
+		expect(prune).not.toHaveBeenCalled();
+		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({
+			event: 'maintenance_cycle',
+			job_runs_pruned: 0,
+			job_run_markers_pruned: 0,
 		});
 	});
 
@@ -441,5 +481,93 @@ describe('startSessionLifecycle', () => {
 		expect(events).toEqual([
 			expect.objectContaining({ event: 'session_lifecycle_sweep', reapedExpired: 1 }),
 		]);
+	});
+});
+
+describe('startJobScheduler', () => {
+	let bucket: MemoryBucket;
+	let deps: ApiDeps;
+	let metrics: WideEventMetrics;
+	let handle: ReturnType<typeof startJobScheduler> | undefined;
+	let logSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		bucket = await createInitializedBucket();
+		deps = makeTestDeps(bucket);
+		metrics = new WideEventMetrics();
+		logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		handle?.stop();
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it('refuses to start when jobs are off', () => {
+		expect(() => startJobScheduler({ ...deps, jobs: undefined }, metrics)).toThrow(
+			/notebook jobs are off/,
+		);
+	});
+
+	it('runs a tick under its own lease and stays quiet when nothing happened', async () => {
+		handle = startJobScheduler(deps, metrics);
+		await flushRun();
+		expect(parseLoggedEvents(logSpy)).toEqual([]);
+		// The lease is released after the tick, on the scheduler's own key.
+		expect(await bucket.head(paths.jobSchedulerLock)).toBeNull();
+	});
+
+	it('fires a due schedule and logs one tick event', async () => {
+		const project = await deps.services.projects.createProject(
+			{ name: 'p', description: '' },
+			ACTOR,
+		);
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'nb', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const job = await deps.services.jobs.createJob(
+			project.id,
+			notebook.id,
+			{ name: 'every minute', schedule: { cron: '* * * * *', timezone: 'UTC' } },
+			ACTOR,
+		);
+		handle = startJobScheduler(deps, metrics);
+		await flushRun();
+		await handle.drain();
+
+		const tick = parseLoggedEvents(logSpy).find((e) => e.event === 'job_scheduler_tick');
+		expect(tick).toMatchObject({ fired: 1, dispatched: 1 });
+		const runs = await deps.services.jobRuns.listRuns(project.id, notebook.id, job.id);
+		expect(runs).toHaveLength(1);
+		// `noopCompute` cannot provision, so the runner lands the run failed — the
+		// point here is the loop wiring, not the execution.
+		expect(runs[0].status).toBe('failed');
+	});
+
+	it('skips the tick when this replica is not the lease holder', async () => {
+		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
+		const tickSpy = vi.spyOn(deps.services.jobRuns, 'listActive');
+		handle = startJobScheduler(deps, metrics);
+		await flushRun();
+		expect(tickSpy).not.toHaveBeenCalled();
+	});
+
+	it('logs a failed tick and keeps the interval alive', async () => {
+		vi.spyOn(deps.services.catalog, 'getCurrentSnapshot').mockRejectedValueOnce(
+			new Error('bucket down'),
+		);
+		handle = startJobScheduler(deps, metrics);
+		await flushRun();
+		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({
+			event: 'job_scheduler_failed',
+			error: 'bucket down',
+		});
+		logSpy.mockClear();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(parseLoggedEvents(logSpy)).toEqual([]);
 	});
 });

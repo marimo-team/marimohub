@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import type {
 	IntegrationId,
+	JobId,
 	NotebookId,
 	ProjectId,
 	ProposalId,
+	RunId,
 	SessionId,
 	SnapshotId,
 	TokenId,
@@ -22,6 +24,10 @@ import {
 	IdentitySchema,
 	IntegrationRecordSchema,
 	IntegrationVersionRecordSchema,
+	JobDefinitionSchema,
+	JobOccurrenceSchema,
+	JobRunMarkerSchema,
+	JobRunSchema,
 	NotebookMetaSchema,
 	NotebookProposalSchema,
 	ProposalPayloadMarkerSchema,
@@ -47,6 +53,8 @@ const IID = '{iid}' as IntegrationId;
 const TID = '{tid}' as TokenId;
 const UID = '{uid}' as UserId;
 const SNAPSHOT_ID = '{snapshot_id}' as SnapshotId;
+const JOB_ID = '{job_id}' as JobId;
+const RUN_ID = '{run_id}' as RunId;
 
 // Some path builders encodeURIComponent their segment, which mangles the
 // placeholder braces; restore them.
@@ -79,6 +87,8 @@ interface BucketArtifact {
 const project = paths.project(PID);
 const notebook = project.notebook(NID);
 const proposal = notebook.proposal(PROPOSAL_ID);
+const job = notebook.job(JOB_ID);
+const jobRun = job.run(RUN_ID);
 const projectIntegration = project.integration(IID);
 const orgIntegration = paths.orgIntegration(IID);
 
@@ -191,6 +201,42 @@ const OBJECTS: BucketObject[] = [
 		tag: 'notebook',
 	},
 	{
+		name: 'JobDefinition',
+		key: job.head,
+		schema: JobDefinitionSchema,
+		summary: 'Notebook job definition head: schedule, parameters, retry and timeout policy.',
+		mutability: 'cas',
+		owner: 'JobsService',
+		tag: 'job',
+	},
+	{
+		name: 'JobOccurrence',
+		key: job.occurrence('{occurrence_key}'),
+		schema: JobOccurrenceSchema,
+		summary: 'Immutable scheduled-fire claim (create-if-absent) naming the run it produced.',
+		mutability: 'immutable',
+		owner: 'JobRunService',
+		tag: 'job',
+	},
+	{
+		name: 'JobRun',
+		key: jobRun.record,
+		schema: JobRunSchema,
+		summary: 'Job run record: CAS-managed status transitions; terminal runs are never rewritten.',
+		mutability: 'cas',
+		owner: 'JobRunService',
+		tag: 'job',
+	},
+	{
+		name: 'JobRunMarker',
+		key: paths.jobRunMarker(PID, RUN_ID),
+		schema: JobRunMarkerSchema,
+		summary: 'Active-run marker: exists only while a run is non-terminal.',
+		mutability: 'immutable',
+		owner: 'JobRunService',
+		tag: 'job',
+	},
+	{
 		name: 'IntegrationRecord',
 		key: projectIntegration.head,
 		schema: IntegrationRecordSchema,
@@ -298,6 +344,20 @@ const OBJECTS: BucketObject[] = [
 ];
 
 const ARTIFACTS: BucketArtifact[] = [
+	{
+		name: 'JobRunOutputHtml',
+		key: jobRun.html,
+		summary: 'Write-once rendered notebook output captured by a job run.',
+		mutability: 'immutable',
+		tag: 'job',
+	},
+	{
+		name: 'JobRunLogs',
+		key: jobRun.logs,
+		summary: 'Write-once stdout+stderr tail of a job run (editor-only via the API).',
+		mutability: 'immutable',
+		tag: 'job',
+	},
 	{
 		name: 'GitDirectoryFile',
 		key: notebook.version(VID).gitFile('{relative_path}'),
@@ -422,8 +482,9 @@ export function buildBucketSpec(): Record<string, unknown> {
 				'reconcile orphan markers, sandbox diagnostic leases, advisory locks, and',
 				'version/workspace file',
 				'artifacts (notebook.py, pyproject.toml, notebook.html, session.json,',
-				'README.md, workspace files). Pull-source Git metadata is included because',
-				'its immutable version-scoped location is part of the sync contract.',
+				'README.md, workspace files). Pull-source Git metadata and job run outputs',
+				'are included because their immutable, scoped locations are part of a',
+				'contract (the sync contract and the run-history API respectively).',
 			].join('\n'),
 		},
 		tags: [
@@ -432,6 +493,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 			{ name: 'notebook', description: 'Per-notebook records' },
 			{ name: 'integration', description: 'Project- and org-scoped integration records' },
 			{ name: 'session', description: 'Session records and sandbox claims' },
+			{ name: 'job', description: 'Notebook job definitions, runs, and active-run markers' },
 			{ name: 'auth', description: 'Identities and personal access tokens' },
 			{ name: 'ops', description: 'Operational records' },
 		],

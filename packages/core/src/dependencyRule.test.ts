@@ -19,6 +19,9 @@ const ALLOWED_DEPENDENCIES = new Set([
 	'@opentelemetry/api',
 	'@opentelemetry/api-logs',
 	'better-all',
+	// Cron evaluation for notebook jobs: pure date math over `Intl`, zero deps,
+	// and never scheduled (a `Cron` built without a callback starts no timer).
+	'croner',
 	// Pure in-memory (de)compression for workspace archive parsing — no I/O.
 	'fflate',
 	'smol-toml',

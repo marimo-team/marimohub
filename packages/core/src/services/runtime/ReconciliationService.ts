@@ -25,6 +25,11 @@ const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
 
 const OrphanMarkerSchema = z.object({ first_seen: z.number() });
 
+/** A second accounting source: sandboxes held by active job runs (see JobRunService). */
+export interface ActiveSandboxSource {
+	activeSandboxIds(): Promise<string[]>;
+}
+
 export interface ReconcileResult {
 	/** True when the provider can't enumerate (no `listActive`) — nothing reconciled. */
 	skipped: boolean;
@@ -66,6 +71,11 @@ export class ReconciliationService {
 		private persistWorkspace: 'source' | 'workspace',
 		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
+		/**
+		 * Sandboxes owned by active job runs. A job sandbox has no session record,
+		 * so without this Rule 3 would reap every run longer than the grace window.
+		 */
+		private jobRuns?: ActiveSandboxSource,
 	) {
 		this.diagnosticLeases = new SandboxDiagnosticLease(bucket);
 		this.retirer = new SessionRetirer({
@@ -106,6 +116,23 @@ export class ReconciliationService {
 		const ownedSandboxIds = new Set<string>(diagnosticSandboxIds);
 		for (const s of sessions) {
 			if (s.sandbox_id) ownedSandboxIds.add(s.sandbox_id);
+		}
+		// Read AFTER the provider snapshot for the same reason as sessions: a run
+		// that went `provisioning` mid-sweep already has its sandbox id recorded.
+		// An unreadable index fails safe: without it Rule 3 cannot tell a job
+		// sandbox from an orphan, so orphan reaping is skipped for this sweep.
+		let reapOrphans = true;
+		if (this.jobRuns) {
+			try {
+				for (const id of await this.jobRuns.activeSandboxIds()) ownedSandboxIds.add(id);
+			} catch (err) {
+				reapOrphans = false;
+				logOperationalError(
+					'job_run_index_unavailable',
+					{ operation: 'reconciliation.job_runs.list' },
+					err,
+				);
+			}
 		}
 
 		// Notebooks that currently have a live PERSISTING session. An older
@@ -197,6 +224,7 @@ export class ReconciliationService {
 		const pendingUndated = new Set<string>();
 
 		for (const sandbox of active) {
+			if (!reapOrphans) break;
 			if (ownedSandboxIds.has(sandbox.id)) continue;
 
 			// Rule 3 — a live sandbox with no record at all is an invisible orphan that

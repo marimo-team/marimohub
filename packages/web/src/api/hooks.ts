@@ -22,12 +22,16 @@ import {
 	browseKeys,
 	auditKeys,
 	adminKeys,
+	jobKeys,
 } from './queryKeys';
+import { isTerminalRun } from '../lib/jobs';
 import type { AuditLogFilters } from './queryKeys';
 import type {
 	AssignableProjectRole,
 	AdminUser,
 	IntegrationEntry,
+	JobCreateBody,
+	JobUpdateBody,
 	NotebookDetail,
 	ResolvedUser,
 	ProjectFederation,
@@ -42,6 +46,8 @@ import type {
 
 /** How often the notebook table re-polls runtime status, in ms. */
 const SESSIONS_POLL_INTERVAL_MS = 30_000;
+/** How often a job's run history re-polls while a run is still in progress, in ms. */
+const RUNS_POLL_INTERVAL_MS = 5_000;
 
 /**
  * Deployment-scoped facts (identity, version, capabilities): fixed for the life
@@ -1707,6 +1713,163 @@ export function useRestoreVersion(projectId: string, notebookId: string) {
 			notebookKeys.list(projectId),
 		],
 	);
+}
+
+// Jobs
+
+export function useJobsQuery(projectId: string, notebookId: string, enabled = true) {
+	return useQuery({
+		queryKey: jobKeys.list(projectId, notebookId),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs', {
+						params: { path: { pid: projectId, nid: notebookId } },
+					}),
+				)
+			).items,
+		enabled,
+	});
+}
+
+export function useCreateJob(projectId: string, notebookId: string) {
+	return useApiMutation(
+		(body: JobCreateBody) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/jobs', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body,
+				}),
+			),
+		() => [jobKeys.list(projectId, notebookId)],
+	);
+}
+
+export function useUpdateJob(projectId: string, notebookId: string) {
+	return useApiMutation(
+		({ jobId, updatedAt, ...body }: JobUpdateBody & { jobId: string; updatedAt: string }) =>
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}', {
+					params: {
+						path: { pid: projectId, nid: notebookId, jid: jobId },
+						header: { 'if-match': updatedAt },
+					},
+					body,
+				}),
+			),
+		() => [jobKeys.list(projectId, notebookId)],
+	);
+}
+
+export function useDeleteJob(projectId: string, notebookId: string) {
+	return useApiMutation(
+		(jobId: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}', {
+					params: { path: { pid: projectId, nid: notebookId, jid: jobId } },
+				}),
+			),
+		(jobId) => [jobKeys.list(projectId, notebookId), jobKeys.runs(projectId, notebookId, jobId)],
+	);
+}
+
+/** Enqueue a run now; the scheduler picks it up within one tick. */
+export function useTriggerJobRun(projectId: string, notebookId: string) {
+	return useApiMutation(
+		({ jobId, parameters }: { jobId: string; parameters?: Record<string, string> }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', {
+					params: { path: { pid: projectId, nid: notebookId, jid: jobId } },
+					...(parameters ? { body: { parameters } } : {}),
+				}),
+			),
+		({ jobId }) => [jobKeys.runs(projectId, notebookId, jobId)],
+	);
+}
+
+/**
+ * A job's runs, newest first, polling while any run is still in progress so the
+ * history table follows a queued → running → terminal run without a reload.
+ */
+export function useJobRunsQuery(projectId: string, notebookId: string, jobId: string | null) {
+	return useQuery({
+		queryKey: jobKeys.runs(projectId, notebookId, jobId ?? ''),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', {
+						params: { path: { pid: projectId, nid: notebookId, jid: jobId ?? '' } },
+					}),
+				)
+			).items,
+		enabled: !!jobId,
+		refetchInterval: (query) =>
+			query.state.data?.some((run) => !isTerminalRun(run)) ? RUNS_POLL_INTERVAL_MS : false,
+	});
+}
+
+export function useCancelJobRun(projectId: string, notebookId: string) {
+	return useApiMutation(
+		({ jobId, runId }: { jobId: string; runId: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/cancel', {
+					params: { path: { pid: projectId, nid: notebookId, jid: jobId, rid: runId } },
+				}),
+			),
+		({ jobId }) => [jobKeys.runs(projectId, notebookId, jobId)],
+	);
+}
+
+async function fetchRunArtifact(
+	projectId: string,
+	notebookId: string,
+	jobId: string,
+	runId: string,
+	artifact: 'html' | 'logs',
+): Promise<string | null> {
+	const res = await fetch(
+		`${notebookPath(projectId, notebookId)}/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}/${artifact}`,
+	);
+	if (res.status === 404) {
+		const error = await apiErrorFromResponse(res, 'Run not found');
+		if (isApiErrorCode(error, 'NO_RUN_OUTPUT')) return null;
+		throw error;
+	}
+	if (!res.ok)
+		throw await apiErrorFromResponse(res, `Failed to load run ${artifact} (HTTP ${res.status})`);
+	return res.text();
+}
+
+/** A finished run's rendered output (null while none is captured). Write-once, so cached forever. */
+export function useJobRunHtmlQuery(
+	projectId: string,
+	notebookId: string,
+	jobId: string,
+	runId: string | null,
+	enabled = true,
+) {
+	return useQuery({
+		queryKey: jobKeys.runHtml(projectId, notebookId, jobId, runId ?? ''),
+		queryFn: () => fetchRunArtifact(projectId, notebookId, jobId, runId ?? '', 'html'),
+		enabled: enabled && !!runId,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
+/** A finished run's captured logs (editor-only on the server). */
+export function useJobRunLogsQuery(
+	projectId: string,
+	notebookId: string,
+	jobId: string,
+	runId: string | null,
+	enabled = true,
+) {
+	return useQuery({
+		queryKey: jobKeys.runLogs(projectId, notebookId, jobId, runId ?? ''),
+		queryFn: () => fetchRunArtifact(projectId, notebookId, jobId, runId ?? '', 'logs'),
+		enabled: enabled && !!runId,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
 }
 
 // Sessions

@@ -7,6 +7,7 @@ import {
 	AppWindow,
 	ArrowLeft,
 	Bell,
+	CalendarClock,
 	Camera,
 	ChevronDown,
 	Container,
@@ -126,10 +127,15 @@ const NOTEBOOK_STATUS_FILTERS = [
 	{ value: 'deleted', label: 'Deleted' },
 ] as const;
 
-const NOTEBOOK_HISTORY_ACTIONS: DropdownMenuOption[] = [
-	{ id: 'view-snapshot', label: 'View static outputs', icon: <Camera className="size-4" /> },
-	{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
-];
+function notebookHistoryActions(jobsAvailable: boolean): DropdownMenuOption[] {
+	return [
+		{ id: 'view-snapshot', label: 'View static outputs', icon: <Camera className="size-4" /> },
+		{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
+		...(jobsAvailable
+			? [{ id: 'jobs', label: 'Jobs & schedules', icon: <CalendarClock className="size-4" /> }]
+			: []),
+	];
+}
 
 const NOTEBOOK_EXPORT_ACTIONS: DropdownMenuOption[] = [
 	{
@@ -159,19 +165,21 @@ function groupedMenuOptions(groups: DropdownMenuOption[][]): DropdownMenuOption[
 	return options;
 }
 
-const DELETED_NOTEBOOK_ACTIONS = groupedMenuOptions([
-	NOTEBOOK_HISTORY_ACTIONS,
-	NOTEBOOK_EXPORT_ACTIONS,
-]);
-
 interface DeletedNotebookRowProps {
 	notebook: NotebookEntry;
 	user: ResolvedUser | undefined;
 	usersLoading: boolean;
+	jobsAvailable: boolean;
 	onAction: (key: string) => void;
 }
 
-function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedNotebookRowProps) {
+function DeletedNotebookRow({
+	notebook,
+	user,
+	usersLoading,
+	jobsAvailable,
+	onAction,
+}: DeletedNotebookRowProps) {
 	return (
 		<div
 			data-testid="notebook-row"
@@ -218,7 +226,10 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 				<DropdownMenu
 					label={`Historical actions for ${notebook.title}`}
 					icon={<MoreHorizontal className="size-4" />}
-					options={DELETED_NOTEBOOK_ACTIONS}
+					options={groupedMenuOptions([
+						notebookHistoryActions(jobsAvailable),
+						NOTEBOOK_EXPORT_ACTIONS,
+					])}
 					onAction={onAction}
 				/>
 			</div>
@@ -312,6 +323,7 @@ function useProjectContent() {
 	const dataBrowserAvailable =
 		(capabilities?.data_browser?.available ?? false) && project.your_role !== 'viewer';
 	const projectAlertsAvailable = (capabilities?.project_alerts?.available ?? false) && canManage;
+	const jobsAvailable = capabilities?.jobs?.available ?? false;
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
 	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
 	const dataIntegrations = useMemo(() => {
@@ -566,6 +578,8 @@ function useProjectContent() {
 		else if (key === 'change-image') baseImageModal.open(nb);
 		else if (key === 'change-compute') computeProfileModal.open(nb);
 		else if (key === 'history') historyModal.open(nb);
+		else if (key === 'jobs')
+			void navigate(`/projects/${pid}/notebooks/${nb.id}/jobs`, { state: { title: nb.title } });
 		else if (key === 'browse-files') workspaceBrowser.open(nb);
 		else if (key === 'sync-settings') syncSettings.open({ notebookId: nb.id, title: nb.title });
 		else if (key === 'download-file') handleDownloadFile(nb);
@@ -646,7 +660,7 @@ function useProjectContent() {
 							},
 						]
 					: []),
-				...NOTEBOOK_HISTORY_ACTIONS,
+				...notebookHistoryActions(jobsAvailable),
 			],
 			NOTEBOOK_EXPORT_ACTIONS,
 			[{ id: 'delete', label: 'Delete', icon: <Trash2 className="size-4" />, danger: true }],
@@ -787,6 +801,7 @@ function useProjectContent() {
 								notebook={nb}
 								user={users?.[nb.author]}
 								usersLoading={usersLoading}
+								jobsAvailable={jobsAvailable}
 								onAction={(key) => handleNotebookAction(nb, key)}
 							/>
 						);

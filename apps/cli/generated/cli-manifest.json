@@ -8,7 +8,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/alert-destinations",
 			"summary": "Create a project alert destination",
-			"description": "New destinations subscribe to all 10 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
+			"description": "New destinations subscribe to all 12 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -1874,6 +1874,629 @@
 			"response_kind": "json",
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.create",
+			"command": ["jobs", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs",
+			"summary": "Create a job",
+			"description": "A job runs the notebook headlessly with `marimo export html` — on a cron schedule, or on demand via `jobs.runs.trigger`. Runs execute with the project’s resolved integration secrets and federated credentials, so this requires the editor role like starting a session.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "concurrency_policy",
+						"cli_name": "concurrency-policy",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "enabled",
+						"cli_name": "enabled",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "notifications",
+						"cli_name": "notifications",
+						"required": false,
+						"description": "Deliver `job.run.failed` / `job.run.succeeded` project alerts for this job. Failures notify once retries are exhausted.",
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "parameters",
+						"cli_name": "parameters",
+						"required": false,
+						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.",
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "retry",
+						"cli_name": "retry",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "schedule",
+						"cli_name": "schedule",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "timeout_seconds",
+						"cli_name": "timeout-seconds",
+						"required": false,
+						"description": "Run deadline in seconds; capped by MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS.",
+						"value_type": "integer",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "jobs.delete",
+			"command": ["jobs", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}",
+			"summary": "Delete a job and its run history",
+			"description": "Active runs are cancelled and their sandboxes destroyed first.",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.get",
+			"command": ["jobs", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}",
+			"summary": "Get a job",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.list",
+			"command": ["jobs", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs",
+			"summary": "List a notebook’s jobs",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.runs.cancel",
+			"command": ["jobs", "runs", "cancel"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/cancel",
+			"summary": "Cancel a run",
+			"description": "Marks the run cancelled and destroys its sandbox when one exists. Runs are history and are never deleted individually.",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "rid",
+					"cli_name": "rid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.runs.get",
+			"command": ["jobs", "runs", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}",
+			"summary": "Get a run",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "rid",
+					"cli_name": "rid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.runs.html",
+			"command": ["jobs", "runs", "html"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/html",
+			"summary": "Rendered notebook output of a run",
+			"description": "Serves the HTML the run exported, raw. 404 with code `NO_RUN_OUTPUT` when the run captured none (still running, cancelled, or failed before exporting).",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "rid",
+					"cli_name": "rid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.runs.list",
+			"command": ["jobs", "runs", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs",
+			"summary": "List a job’s runs",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.runs.logs",
+			"command": ["jobs", "runs", "logs"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/logs",
+			"summary": "stdout/stderr of a run",
+			"description": "Raw text, editor-only: logs can echo environment values and tracebacks the viewer role cannot otherwise read. 404 with code `NO_RUN_OUTPUT` when none were captured.",
+			"parameters": [
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "rid",
+					"cli_name": "rid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "jobs.runs.trigger",
+			"command": ["jobs", "runs", "trigger"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs",
+			"summary": "Run a job now",
+			"description": "Enqueues a run; the scheduler on the maintenance replica dispatches it within one tick. Returns the queued run — poll `jobs.runs.get` for progress.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": false,
+				"properties": [
+					{
+						"name": "parameters",
+						"cli_name": "parameters",
+						"required": false,
+						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.",
+						"value_type": "object",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "jobs.update",
+			"command": ["jobs", "update"],
+			"method": "PATCH",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}",
+			"summary": "Update a job",
+			"description": "Partial update. `null` clears an optional field (schedule, parameters, retry, timeout, notifications).",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "jid",
+					"cli_name": "jid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "concurrency_policy",
+						"cli_name": "concurrency-policy",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "enabled",
+						"cli_name": "enabled",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "notifications",
+						"cli_name": "notifications",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "parameters",
+						"cli_name": "parameters",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "retry",
+						"cli_name": "retry",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "schedule",
+						"cli_name": "schedule",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "timeout_seconds",
+						"cli_name": "timeout-seconds",
+						"required": false,
+						"description": "Run deadline in seconds; capped by MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS.",
+						"value_type": "integer",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "jobs.get"
 		},
 		{
 			"id": "me",

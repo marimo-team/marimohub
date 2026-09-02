@@ -5,13 +5,21 @@
 import type { SessionMode } from '../../constants';
 import { shellQuote } from './shell';
 
+/**
+ * `edit`/`app` serve a browser; `job` runs the notebook to completion with
+ * `marimo export html` and exits (see services/jobs/JobRunner.ts).
+ */
+export type MarimoLaunchMode = SessionMode | 'job';
+
 export interface MarimoLaunchParams {
 	notebookFile: string;
 	port: number;
 	/** Bind 0.0.0.0 so the external ingress can reach the kernel. */
 	host: string;
-	/** Session mode; picks the launch strategy in `LAUNCH_MODES`. Default `edit`. */
-	mode?: SessionMode;
+	/** Launch mode; picks the subcommand in `LAUNCH_MODES`. Default `edit`. */
+	mode?: MarimoLaunchMode;
+	/** Job mode: workdir-relative path the rendered HTML is written to. */
+	outputFile?: string;
 	/** Optional CDN base for the frontend, passed as --asset-url. */
 	assetUrl?: string;
 	/**
@@ -45,10 +53,13 @@ const commonFlags = ({ host, port, assetUrl, baseUrl }: MarimoLaunchParams) => {
 };
 
 interface ModeLaunch {
-	/** The marimo subcommand implementing this session mode. */
-	subcommand: 'edit' | 'run';
+	/** The marimo subcommand implementing this launch mode. */
+	subcommand: 'edit' | 'run' | 'export html';
 	flags: (p: MarimoLaunchParams) => string;
 }
+
+/** Job mode's default export target when the caller passes none. */
+const DEFAULT_JOB_OUTPUT_FILE = '__marimo__/job_output.html';
 
 /**
  * Per-mode launch strategy. `app` maps to `marimo run`, which accepts every
@@ -58,7 +69,7 @@ interface ModeLaunch {
  * `--session-ttl` stay at marimo's defaults; the default TTL (120s) is what
  * garbage-collects a disconnected viewer's kernel.
  */
-const LAUNCH_MODES: Record<SessionMode, ModeLaunch> = {
+const LAUNCH_MODES: Record<MarimoLaunchMode, ModeLaunch> = {
 	edit: {
 		subcommand: 'edit',
 		// --convert opens a non-marimo .py file (e.g. a plain script); no-op on real
@@ -70,6 +81,14 @@ const LAUNCH_MODES: Record<SessionMode, ModeLaunch> = {
 	app: {
 		subcommand: 'run',
 		flags: commonFlags,
+	},
+	// `marimo export html` executes the notebook and writes the rendered outputs
+	// (verified against marimo 0.24 `cli.py`: exit 0 on success, exit 1 with the
+	// HTML still written when a cell raises). Notebook parameters are appended by
+	// the runner after `--`, never here.
+	job: {
+		subcommand: 'export html',
+		flags: (p) => `-o ${shellQuote(p.outputFile ?? DEFAULT_JOB_OUTPUT_FILE)}`,
 	},
 };
 

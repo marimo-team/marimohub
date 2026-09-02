@@ -64,7 +64,10 @@ classes behave differently on purpose:
   destroys sandboxes left behind by expired sessions. Tune it with the
   `MARIMOHUB_SESSION_*` variables (see [configuration](./configuration.md));
   provider lifetime caps default to 2× the session lifetime as a last-resort
-  backstop.
+  backstop. With `MARIMOHUB_JOBS=on` it also runs the **job scheduler**: every
+  `MARIMOHUB_JOBS_TICK_SECONDS` it fires due [notebook jobs](./jobs.md),
+  dispatches queued runs under the concurrency caps, and reclaims runs past
+  their deadline. Jobs are accepted but never run without this replica.
 
 ## Backups & restore
 
@@ -173,8 +176,10 @@ straight to its trace.
 The server records RED metrics per request — the `http.server.request.duration`
 histogram (labelled by route, method, and status code) and the
 `http.server.active_requests` gauge — plus domain signals: catalog CAS
-contention (`catalog.cas.*`), session and reaper activity (`sessions.*`), and
-snapshot growth (`snapshots.*`, `maintenance.*`). Object browsing adds operation
+contention (`catalog.cas.*`), session and reaper activity (`sessions.*`),
+snapshot growth (`snapshots.*`, `maintenance.*`), and notebook job activity
+(`jobs.*`: fires, dispatches, transitions, CAS conflicts, watchdog timeouts,
+retries, and the active-run gauge). Object browsing adds operation
 counts and latency (`object_browser.s3.*`), bytes read, keys scanned, metadata
 cache outcomes, and active/rejected download signals (`object_browser.download.*`).
 Runtime-backed data previews emit

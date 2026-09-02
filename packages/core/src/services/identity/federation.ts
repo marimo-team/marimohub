@@ -4,7 +4,7 @@
  * federated bucket — no long-lived key. Keeps the subject convention and the
  * mint → exchange → env-map pipeline in one place.
  */
-import type { ProjectId, SessionId } from '../../ids';
+import type { ProjectId, RunId, SessionId } from '../../ids';
 import type { FederationTarget, TempS3Creds } from '../../ports/credentialBroker';
 import { s3CredsToEnv } from './s3CredsEnv';
 import type { WorkloadIdentityIssuer } from './WorkloadIdentityIssuer';
@@ -30,7 +30,7 @@ export async function exchangeFederatedStorageEnv(
 	issuerUrl: string,
 	target: FederationTarget,
 	projectId: ProjectId,
-	sessionId: SessionId,
+	sessionId: SessionId | RunId,
 ): Promise<Record<string, string>> {
 	const creds = await exchangeFederatedStorageCredentials(
 		issuer,
@@ -47,7 +47,7 @@ export async function exchangeFederatedStorageCredentials(
 	issuerUrl: string,
 	target: FederationTarget,
 	projectId: ProjectId,
-	sessionId: SessionId,
+	sessionId: SessionId | RunId,
 ): Promise<TempS3Creds> {
 	const jwt = await issuer.mint({
 		iss: issuerUrl,

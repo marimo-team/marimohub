@@ -21,7 +21,6 @@ import {
 	ConflictError,
 	createSandboxId,
 	DomainError,
-	exchangeFederatedStorageEnv,
 	marimoAiContributor,
 	marimoConfigToSessionEnv,
 	marimoNotebookDefaults,
@@ -32,6 +31,7 @@ import {
 	paths,
 	roleAtLeast,
 	resolveBaseImage,
+	resolveComputeProfile,
 	resolveLaunchStrategyForSession,
 	resolveRestoreSnapshot,
 	recipientFromIdentity,
@@ -52,7 +52,6 @@ import {
 	TakeoverRetirementError,
 	kernelActiveConnections,
 	joinUrlPath,
-	ValidationError,
 	SECONDARY_SURFACE_IDS,
 	SurfaceForbiddenError,
 	workspaceSourcePolicy,
@@ -65,6 +64,7 @@ import {
 	scheduleProjectAlert,
 } from '../notifications';
 import type { ApiDeps, SandboxConfig } from '../context';
+import { mergeSessionEnv, resolveFederatedVars, resolveIntegrationRender } from '../sandboxEnv';
 import {
 	assertProjectRole,
 	assertSessionAccess,
@@ -98,14 +98,6 @@ import {
 	surfaceConfig,
 	surfaceStopManager,
 } from './sessionSurfaces';
-
-function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
-	return {
-		files: [...(base?.files ?? []), ...(add.files ?? [])],
-		vars: { ...base?.vars, ...add.vars },
-		defaults: { ...base?.defaults, ...add.defaults },
-	};
-}
 
 function effectiveEditorSharing(
 	claim: EditorClaim | undefined,
@@ -594,25 +586,6 @@ function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
 		throw new ForbiddenError('Group authorization has expired; sign in again');
 	}
 	return new Date(deadline).toISOString();
-}
-
-function resolveComputeProfile(
-	sandbox: SandboxConfig,
-	storedName: string | undefined,
-	allowOverride: boolean,
-	onFallback: (message: string) => void,
-): { name: string | undefined; resources: NonNullable<SandboxConfig['resources']> } {
-	const fallback = sandbox.computeProfiles?.[0] ?? {
-		name: sandbox.computeProfile,
-		resources: sandbox.resources ?? {},
-	};
-	if (!allowOverride || !storedName) return fallback;
-	const selected = sandbox.computeProfiles?.find((profile) => profile.name === storedName);
-	if (selected) return selected;
-	onFallback(
-		`Compute profile "${storedName}" is no longer configured; using default "${fallback.name ?? 'adapter default'}"`,
-	);
-	return fallback;
 }
 
 const CAP_REACHED = {
@@ -1462,30 +1435,21 @@ app.openapi(createSession, async (c) => {
 						sandboxId,
 						appBaseUrl,
 					};
-					// WIF: best-effort project-scoped federated S3 creds; never for a
-					// viewer sandbox. A federation/policy gap yields no creds,
-					// never a failed kernel. jwt/creds are never logged.
-					const resolveWifVars = async () => {
-						if (!(deps.wif && project.federation?.enabled && !restrictedViewerCredentials)) {
-							return;
-						}
-						try {
-							return await exchangeFederatedStorageEnv(
-								deps.wif.issuer,
-								deps.wif.issuerUrl,
-								deps.wif.target,
-								pid,
-								session!.session_id,
-							);
-						} catch (err) {
-							observer.tag('wif_exchange_failed', true);
-							observer.tag(
-								'wif_exchange_error',
-								err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-							);
-							return;
-						}
-					};
+					// WIF + integrations share `sandboxEnv.ts` with the job runner, so the
+					// two injection paths cannot drift. Never for a viewer sandbox.
+					const resolveWifVars = () =>
+						resolveFederatedVars(deps, {
+							project,
+							subjectId: session!.session_id,
+							restricted: restrictedViewerCredentials,
+							onError: (err) => {
+								observer.tag('wif_exchange_failed', true);
+								observer.tag(
+									'wif_exchange_error',
+									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+								);
+							},
+						});
 
 					const resolveMarimoConfigEnv = async () => {
 						if (!MODE_POLICY[mode].injectEditorConfig) return;
@@ -1526,38 +1490,29 @@ app.openapi(createSession, async (c) => {
 						return marimoConfigToSessionEnv(contributors);
 					};
 
-					// Integrations FAIL CLOSED — a configured data source is
-					// load-bearing, so a render failure aborts provisioning rather than
-					// starting a sandbox with partial config. Viewer sandboxes are restricted;
-					// temporary editor sandboxes retain editor credentials.
-					const resolveIntegrationEnv = async () => {
-						if (!(deps.integrations && !restrictedViewerCredentials)) return;
-						try {
-							const render = await deps.integrations.resolveForSession(pid, {
-								sessionId: session!.session_id,
-								principal: { userId: user.id, email: user.email },
-							});
-							if (render) {
+					// Viewer sandboxes are restricted; temporary editor sandboxes retain
+					// editor credentials.
+					const resolveIntegrationEnv = () =>
+						resolveIntegrationRender(deps, {
+							projectId: pid,
+							sessionId: session!.session_id,
+							principal: { userId: user.id, email: user.email },
+							restricted: restrictedViewerCredentials,
+							onRendered: (render) => {
 								observer.tag('integrations_rendered_count', render.attachments.length);
 								if (render.warnings.length > 0) {
 									observer.tag('integration_warnings', render.warnings);
 									observer.tag('integration_warning_count', render.warnings.length);
 								}
 								integrationAttachments = render.attachments;
-							}
-							return render;
-						} catch (err) {
-							observer.tag('integration_render_failed', true);
-							for (const [key, value] of Object.entries(errorMetadata(err))) {
-								observer.tag(`integrations_${key}`, value);
-							}
-							// Only curated validation errors are safe to return to the caller.
-							if (err instanceof ValidationError) throw err;
-							throw new UnavailableError(
-								'integration_render_failed: could not render this project’s integrations',
-							);
-						}
-					};
+							},
+							onError: (err) => {
+								observer.tag('integration_render_failed', true);
+								for (const [key, value] of Object.entries(errorMetadata(err))) {
+									observer.tag(`integrations_${key}`, value);
+								}
+							},
+						});
 
 					// Resolve independent sources together. Integrations have lower precedence
 					// than system, WIF, and marimo configuration.

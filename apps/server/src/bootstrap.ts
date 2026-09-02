@@ -6,7 +6,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
-import { startMaintenance, startSessionLifecycle } from './cron';
+import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';
 import { validateServerEnv } from './env';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
@@ -141,10 +141,16 @@ export async function bootstrap(
 	// marimohub-maintenance Deployment). The bucket-CAS leases inside are
 	// defense-in-depth guards.
 	const stops: (() => void)[] = [];
+	let drainJobRuns: () => Promise<void> = () => Promise.resolve();
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {
 		stops.push(startMaintenance(deps, wideEvents));
 		const stopLifecycle = startSessionLifecycle(deps);
 		if (stopLifecycle) stops.push(stopLifecycle);
+		if (deps.jobs) {
+			const jobScheduler = startJobScheduler(deps, wideEvents);
+			stops.push(jobScheduler.stop);
+			drainJobRuns = jobScheduler.drain;
+		}
 	}
 
 	const port = Number(validatedEnv.PORT ?? 3000);
@@ -191,6 +197,9 @@ export async function bootstrap(
 				closed,
 				...(deps.dataBrowser?.close ? [closed.then(closeDataBrowser)] : []),
 				closed.then(waitForBackgroundTasks).then(closeNotifier),
+				// In-flight job runs finish (or hit the drain deadline); the watchdog
+				// reclaims whatever a forced termination leaves behind.
+				drainJobRuns(),
 			];
 			if (disposeCompute) {
 				shutdowns.push(Promise.resolve().then(() => disposeCompute.call(deps.compute)));

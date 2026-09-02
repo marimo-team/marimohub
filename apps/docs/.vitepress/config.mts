@@ -101,7 +101,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|storage|compute|editor-sessions|surfaces|sandbox-image|apps|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
+					'^/(auth|storage|compute|editor-sessions|surfaces|sandbox-image|apps|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -110,6 +110,7 @@ export default defineConfig({
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
+					{ text: 'Notebook jobs', link: '/jobs' },
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
 					{ text: 'Integrations', link: '/integrations' },
@@ -165,6 +166,7 @@ export default defineConfig({
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
+					{ text: 'Notebook jobs', link: '/jobs' },
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
 					{ text: 'Integrations', link: '/integrations' },

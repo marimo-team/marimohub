@@ -1,4 +1,4 @@
-import type { IntegrationId, SessionId, UserId } from '../ids';
+import type { IntegrationId, RunId, SessionId, UserId } from '../ids';
 import type { BrowseSurface, ObjectBrowseCapability } from './objectBrowser';
 
 export type QueryDialect = 'duckdb' | 'postgresql';
@@ -306,7 +306,8 @@ export interface CopyIntegrationOptions {
 }
 
 export interface SessionRenderContext {
-	sessionId: SessionId;
+	/** The session — or headless job run — the render is attributed to. */
+	sessionId: SessionId | RunId;
 	principal: { userId: UserId; email: string };
 }
 

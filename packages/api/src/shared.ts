@@ -19,6 +19,7 @@ import {
 	ProjectId,
 	projectActionMinRole,
 	ROLES,
+	SandboxId,
 	SESSION_MODES,
 	SESSION_STATUSES,
 	SessionId,
@@ -47,6 +48,7 @@ import type {
 	SessionScopedAction,
 	Session,
 	TokenGrant,
+	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
@@ -506,6 +508,57 @@ export async function retireLiveApps(
 }
 
 /**
+ * Cancel a project's (or one notebook's) active job runs after its content was
+ * deleted and destroy their sandboxes — the job counterpart of
+ * {@link retireLiveApps}: an unattended run would otherwise finish computing
+ * deleted content. Best-effort and logged; the reconciler reaps whatever slips.
+ */
+export async function cancelJobRuns(
+	deps: ApiDeps,
+	pid: ProjectId,
+	actor: UserId,
+	nid?: NotebookId,
+): Promise<void> {
+	let sandboxIds: string[];
+	try {
+		sandboxIds = nid
+			? await deps.services.jobRuns.cancelRunsOfNotebook(pid, nid, actor)
+			: await deps.services.jobRuns.cancelRunsOfProject(pid, actor);
+	} catch (err) {
+		logEvent({
+			level: 'error',
+			event: 'job_runs_cancel_failed',
+			project_id: pid,
+			notebook_id: nid ?? null,
+			error: describeError(err),
+		});
+		return;
+	}
+	await destroySandboxes(deps, sandboxIds, { project_id: pid, notebook_id: nid ?? null });
+}
+
+/** Destroy sandboxes best-effort, one failure never stranding the rest; the reconciler backstops. */
+export async function destroySandboxes(
+	deps: Pick<ApiDeps, 'compute'>,
+	sandboxIds: readonly string[],
+	fields: Record<string, unknown>,
+): Promise<void> {
+	for (const id of sandboxIds) {
+		try {
+			await deps.compute.create(SandboxId.parse(id)).destroy();
+		} catch (err) {
+			logEvent({
+				level: 'error',
+				event: 'job_sandbox_destroy_failed',
+				...fields,
+				sandbox_id: id,
+				error: describeError(err),
+			});
+		}
+	}
+}
+
+/**
  * Load `project.json` and require the caller can *see* it (at least `viewer`),
  * throwing **404 NotFound** (not 403) when they can't — so a hidden project
  * (`MARIMOHUB_DEFAULT_ROLE=none`, non-member) is indistinguishable from a
@@ -739,6 +792,7 @@ export const ERROR_CODES = [
 	'GONE',
 	'PAYLOAD_TOO_LARGE',
 	'NO_HTML_SNAPSHOT',
+	'NO_RUN_OUTPUT',
 	'INTERNAL_ERROR',
 ] as const;
 
@@ -1313,6 +1367,15 @@ export const CapabilitiesResponseSchema = z
 				extensibleResponseEnum(PROJECT_ALERT_KINDS, PROJECT_ALERT_KINDS[0]),
 			),
 			max_destinations: z.number().int().positive(),
+		}),
+		/** Notebook jobs: the limits a client validates definitions against. */
+		/** Notebook jobs (`MARIMOHUB_JOBS`); the limits are null while off. */
+		jobs: z.object({
+			available: z.boolean(),
+			max_per_notebook: z.number().int().nullable(),
+			default_timeout_seconds: z.number().int().nullable(),
+			max_timeout_seconds: z.number().int().nullable(),
+			run_retention_days: z.number().nullable(),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({

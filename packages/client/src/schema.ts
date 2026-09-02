@@ -250,7 +250,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a project alert destination
-		 * @description New destinations subscribe to all 10 project alert kinds when kinds is omitted. They remain disabled until a successful test.
+		 * @description New destinations subscribe to all 12 project alert kinds when kinds is omitted. They remain disabled until a successful test.
 		 */
 		post: operations['alerts.destinations.create'];
 		delete?: never;
@@ -1004,6 +1004,150 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List a notebook’s jobs */
+		get: operations['jobs.list'];
+		put?: never;
+		/**
+		 * Create a job
+		 * @description A job runs the notebook headlessly with `marimo export html` — on a cron schedule, or on demand via `jobs.runs.trigger`. Runs execute with the project’s resolved integration secrets and federated credentials, so this requires the editor role like starting a session.
+		 */
+		post: operations['jobs.create'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get a job */
+		get: operations['jobs.get'];
+		put?: never;
+		post?: never;
+		/**
+		 * Delete a job and its run history
+		 * @description Active runs are cancelled and their sandboxes destroyed first.
+		 */
+		delete: operations['jobs.delete'];
+		options?: never;
+		head?: never;
+		/**
+		 * Update a job
+		 * @description Partial update. `null` clears an optional field (schedule, parameters, retry, timeout, notifications).
+		 */
+		patch: operations['jobs.update'];
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List a job’s runs */
+		get: operations['jobs.runs.list'];
+		put?: never;
+		/**
+		 * Run a job now
+		 * @description Enqueues a run; the scheduler on the maintenance replica dispatches it within one tick. Returns the queued run — poll `jobs.runs.get` for progress.
+		 */
+		post: operations['jobs.runs.trigger'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get a run */
+		get: operations['jobs.runs.get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/cancel': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Cancel a run
+		 * @description Marks the run cancelled and destroys its sandbox when one exists. Runs are history and are never deleted individually.
+		 */
+		post: operations['jobs.runs.cancel'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/html': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Rendered notebook output of a run
+		 * @description Serves the HTML the run exported, raw. 404 with code `NO_RUN_OUTPUT` when the run captured none (still running, cancelled, or failed before exporting).
+		 */
+		get: operations['jobs.runs.html'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/logs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * stdout/stderr of a run
+		 * @description Raw text, editor-only: logs can echo environment values and tracebacks the viewer role cannot otherwise read. 404 with code `NO_RUN_OUTPUT` when none were captured.
+		 */
+		get: operations['jobs.runs.logs'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/integrations/kinds': {
 		parameters: {
 			query?: never;
@@ -1712,6 +1856,7 @@ export interface components {
 					| 'GONE'
 					| 'PAYLOAD_TOO_LARGE'
 					| 'NO_HTML_SNAPSHOT'
+					| 'NO_RUN_OUTPUT'
 					| 'INTERNAL_ERROR';
 				message: string;
 				/** @description Field-level validation failures. */
@@ -1779,9 +1924,18 @@ export interface components {
 					| 'app.start_failed'
 					| 'app.unavailable'
 					| 'sync.failed'
+					| 'job.run.failed'
+					| 'job.run.succeeded'
 					| 'unknown'
 				)[];
 				max_destinations: number;
+			};
+			jobs: {
+				available: boolean;
+				max_per_notebook: number | null;
+				default_timeout_seconds: number | null;
+				max_timeout_seconds: number | null;
+				run_retention_days: number | null;
 			};
 			data_browser: {
 				available: boolean;
@@ -1937,6 +2091,8 @@ export interface components {
 						| 'app.start_failed'
 						| 'app.unavailable'
 						| 'sync.failed'
+						| 'job.run.failed'
+						| 'job.run.succeeded'
 						| 'unknown'
 					)[];
 					enabled: boolean;
@@ -1967,6 +2123,8 @@ export interface components {
 						| 'app.start_failed'
 						| 'app.unavailable'
 						| 'sync.failed'
+						| 'job.run.failed'
+						| 'job.run.succeeded'
 						| 'unknown'
 					)[];
 					enabled: boolean;
@@ -2872,6 +3030,181 @@ export interface components {
 		SurfaceStartBody: {
 			/** @description Workspace-relative file to open. Supported only by the VS Code surface. */
 			open?: string;
+		};
+		JobPage: {
+			items: components['schemas']['Job'][];
+			next_cursor: string | null;
+		};
+		Job: {
+			id: string;
+			notebook_id: string;
+			project_id: string;
+			name: string;
+			enabled: boolean;
+			schedule?: components['schemas']['JobSchedule'];
+			parameters?: components['schemas']['JobParameters'];
+			retry?: components['schemas']['JobRetryPolicy'];
+			timeout_seconds?: number;
+			/**
+			 * @description Known values: forbid, allow. Unrecognized values normalize to unknown.
+			 * @example forbid
+			 * @enum {string}
+			 */
+			concurrency_policy: 'forbid' | 'allow' | 'unknown';
+			notifications?: components['schemas']['JobNotifications'];
+			created_by: string;
+			/** Format: date-time */
+			created_at: string;
+			/** Format: date-time */
+			updated_at: string;
+			/** Format: date-time */
+			next_run_at: string | null;
+		};
+		JobSchedule: {
+			/**
+			 * @description Five-field cron expression (minute hour day-of-month month day-of-week).
+			 * @example 0 6 * * 1-5
+			 */
+			cron: string;
+			/**
+			 * @description IANA time zone the cron fields are evaluated in.
+			 * @example Europe/Berlin
+			 */
+			timezone: string;
+		};
+		/**
+		 * @description String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`.
+		 * @example {
+		 *       "region": "eu-west-1"
+		 *     }
+		 */
+		JobParameters: {
+			[key: string]: string;
+		};
+		JobRetryPolicy: {
+			max_retries: number;
+			/** @default 60 */
+			backoff_seconds: number;
+		};
+		/** @description Deliver `job.run.failed` / `job.run.succeeded` project alerts for this job. Failures notify once retries are exhausted. */
+		JobNotifications: {
+			on: ('failure' | 'success')[];
+		};
+		JobCreateBody: {
+			/** @example Nightly refresh */
+			name: string;
+			enabled?: boolean;
+			schedule?: components['schemas']['JobSchedule'];
+			parameters?: components['schemas']['JobParameters'];
+			retry?: components['schemas']['JobRetryPolicy'];
+			/**
+			 * @description Run deadline in seconds; capped by MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS.
+			 * @example 1800
+			 */
+			timeout_seconds?: number;
+			/** @enum {string} */
+			concurrency_policy?: 'forbid' | 'allow';
+			notifications?: components['schemas']['JobNotifications'];
+		};
+		JobUpdateBody: {
+			name?: string;
+			enabled?: boolean;
+			schedule?: {
+				/**
+				 * @description Five-field cron expression (minute hour day-of-month month day-of-week).
+				 * @example 0 6 * * 1-5
+				 */
+				cron: string;
+				/**
+				 * @description IANA time zone the cron fields are evaluated in.
+				 * @example Europe/Berlin
+				 */
+				timezone: string;
+			} | null;
+			parameters?: {
+				[key: string]: string;
+			} | null;
+			retry?: {
+				max_retries: number;
+				/** @default 60 */
+				backoff_seconds: number;
+			} | null;
+			/**
+			 * @description Run deadline in seconds; capped by MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS.
+			 * @example 1800
+			 */
+			timeout_seconds?: number | null;
+			/** @enum {string} */
+			concurrency_policy?: 'forbid' | 'allow';
+			notifications?: {
+				on: ('failure' | 'success')[];
+			} | null;
+		};
+		JobRun: {
+			run_id: string;
+			job_id: string;
+			notebook_id: string;
+			project_id: string;
+			/**
+			 * @description Known values: queued, provisioning, running, succeeded, failed, timed_out, cancelled, skipped. Unrecognized values normalize to unknown.
+			 * @example queued
+			 * @enum {string}
+			 */
+			status:
+				| 'queued'
+				| 'provisioning'
+				| 'running'
+				| 'succeeded'
+				| 'failed'
+				| 'timed_out'
+				| 'cancelled'
+				| 'skipped'
+				| 'unknown';
+			/**
+			 * @description Known values: schedule, manual. Unrecognized values normalize to unknown.
+			 * @example manual
+			 * @enum {string}
+			 */
+			trigger: 'schedule' | 'manual' | 'unknown';
+			triggered_by?: string;
+			/** Format: date-time */
+			scheduled_for?: string;
+			source_version_id?: string;
+			parameters?: components['schemas']['JobParameters'];
+			attempt: number;
+			retry_of?: string;
+			image?: string;
+			compute_profile?: string;
+			compute_resources?: components['schemas']['ComputeResources'];
+			timeout_seconds: number;
+			/** Format: date-time */
+			queued_at: string;
+			/** Format: date-time */
+			eligible_at?: string;
+			/** Format: date-time */
+			started_at?: string;
+			/** Format: date-time */
+			finished_at?: string;
+			/** Format: date-time */
+			deadline_at?: string;
+			exit_code?: number;
+			error?: {
+				code: string;
+				message: string;
+			};
+			output?: {
+				html_bytes: number;
+				session_bytes?: number;
+				logs_bytes?: number;
+			};
+			cancelled_by?: string;
+		};
+		JobRunTriggerBody: {
+			parameters?: components['schemas']['JobParameters'];
+		};
+		JobRunPage: {
+			items: components['schemas']['JobRun'][];
+			next_cursor: string | null;
 		};
 		IntegrationKind: {
 			/** @example postgres */
@@ -5081,6 +5414,8 @@ export interface operations {
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
+								| 'job.run.failed'
+								| 'job.run.succeeded'
 							)[];
 							/** @enum {string} */
 							type: 'slack';
@@ -5100,6 +5435,8 @@ export interface operations {
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
+								| 'job.run.failed'
+								| 'job.run.succeeded'
 							)[];
 							/** @enum {string} */
 							type: 'webhook';
@@ -5348,6 +5685,8 @@ export interface operations {
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
+								| 'job.run.failed'
+								| 'job.run.succeeded'
 							)[];
 							enabled?: boolean;
 							/** @enum {string} */
@@ -5368,6 +5707,8 @@ export interface operations {
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
+								| 'job.run.failed'
+								| 'job.run.succeeded'
 							)[];
 							enabled?: boolean;
 							/** @enum {string} */
@@ -10621,6 +10962,1088 @@ export interface operations {
 			};
 			/** @description Conflict */
 			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Job definitions, oldest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['JobPage'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.create': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['JobCreateBody'];
+			};
+		};
+		responses: {
+			/** @description Job created */
+			201: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Job'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Job */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Job'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.delete': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Job deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.update': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['JobUpdateBody'];
+			};
+		};
+		responses: {
+			/** @description Job updated */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Job'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Runs, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['JobRunPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.trigger': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: {
+			content: {
+				'application/json': components['schemas']['JobRunTriggerBody'];
+			};
+		};
+		responses: {
+			/** @description Run queued */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['JobRun'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+				rid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Run */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['JobRun'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.cancel': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+				rid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Run cancelled (or already terminal) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['JobRun'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.html': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+				rid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The rendered output, served sandboxed (CSP forces an opaque origin) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'text/html': string;
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.logs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+				rid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Captured logs */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'text/plain': string;
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

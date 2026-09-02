@@ -1,16 +1,28 @@
 import { z } from 'zod';
 import { ROLES } from './constants';
-import type { AlertDestinationId, NotebookId, ProjectId, SessionId, UserId } from './ids';
+import type {
+	AlertDestinationId,
+	JobId,
+	NotebookId,
+	ProjectId,
+	RunId,
+	SessionId,
+	UserId,
+} from './ids';
 import type { AuthUser } from './ports/auth';
 import {
 	AlertDestinationIdSchema,
 	EmailAddressSchema,
+	JobIdSchema,
 	NotebookIdSchema,
 	ProjectIdSchema,
+	RUN_STATUSES,
+	RUN_TRIGGERS,
+	RunIdSchema,
 	SessionIdSchema,
 	UserIdSchema,
 } from './schema';
-import type { Identity, Project, ProjectMember } from './schema';
+import type { Identity, JobDefinition, JobRun, Project, ProjectMember } from './schema';
 import { joinUrlPath } from './url';
 
 export const NotificationRecipientSchema = z.object({
@@ -84,6 +96,17 @@ const AppFailureDataSchema = NotebookAlertDataSchema.extend({
 const SyncFailedDataSchema = NotebookAlertDataSchema.extend({
 	commit: z.string().min(1),
 	error_code: z.string().min(1),
+});
+
+const JobRunDataSchema = NotebookAlertDataSchema.extend({
+	job_id: JobIdSchema,
+	job_name: z.string().min(1),
+	run_id: RunIdSchema,
+	status: z.enum(RUN_STATUSES),
+	trigger: z.enum(RUN_TRIGGERS),
+	attempt: z.number().int().min(1),
+	error_code: z.string().min(1).nullable(),
+	duration_seconds: z.number().int().nonnegative().nullable(),
 });
 
 const AlertTestDataSchema = ProjectAlertDataSchema.extend({
@@ -183,6 +206,18 @@ export interface SyncFailedNotificationInput {
 	baseUrl?: string;
 }
 
+export interface JobRunNotificationInput {
+	project: Project;
+	notebookId: NotebookId;
+	notebookTitle: string;
+	job: Pick<JobDefinition, 'id' | 'name'>;
+	run: Pick<
+		JobRun,
+		'run_id' | 'status' | 'trigger' | 'attempt' | 'error' | 'started_at' | 'finished_at'
+	>;
+	baseUrl?: string;
+}
+
 export interface AlertTestNotificationInput {
 	project: Project;
 	destinationId: AlertDestinationId;
@@ -238,6 +273,63 @@ function notebookData(input: { project: Project; notebookId: NotebookId; noteboo
 		...projectData(input.project),
 		notebook_id: input.notebookId,
 		notebook_title: input.notebookTitle,
+	};
+}
+
+function jobRunLink(
+	projectId: ProjectId,
+	notebookId: NotebookId,
+	jobId: string,
+	runId: string,
+	baseUrl: string | undefined,
+) {
+	// The path joiner encodes `?`, so the query rides on the joined path.
+	const page = hubLink(
+		baseUrl,
+		`/projects/${encodeURIComponent(projectId)}/notebooks/${encodeURIComponent(notebookId)}/jobs`,
+	);
+	return page
+		? `${page}?job=${encodeURIComponent(jobId)}&run=${encodeURIComponent(runId)}`
+		: undefined;
+}
+
+function runDurationSeconds(run: JobRunNotificationInput['run']): number | null {
+	if (!run.started_at || !run.finished_at) return null;
+	const ms = Date.parse(run.finished_at) - Date.parse(run.started_at);
+	return Number.isFinite(ms) && ms >= 0 ? Math.round(ms / 1000) : null;
+}
+
+function jobRunContent(
+	input: JobRunNotificationInput,
+	kind: 'job.run.failed' | 'job.run.succeeded',
+	title: string,
+	body: string,
+): NotificationContent<z.infer<typeof JobRunDataSchema>> {
+	return {
+		title,
+		body,
+		...optionalLink(
+			jobRunLink(input.project.id, input.notebookId, input.job.id, input.run.run_id, input.baseUrl),
+		),
+		recipients: [],
+		context: {
+			pid: input.project.id,
+			nid: input.notebookId,
+			job_id: input.job.id,
+			run_id: input.run.run_id,
+		},
+		data: {
+			...notebookData(input),
+			job_id: input.job.id as JobId,
+			job_name: input.job.name,
+			run_id: input.run.run_id as RunId,
+			status: input.run.status,
+			trigger: input.run.trigger,
+			attempt: input.run.attempt,
+			error_code: input.run.error?.code ?? null,
+			duration_seconds: runDurationSeconds(input.run),
+		},
+		dedupeKey: `${kind}:${input.run.run_id}:broadcast`,
 	};
 }
 
@@ -511,6 +603,32 @@ export const NOTIFICATION_KIND_REGISTRY = {
 			}),
 		},
 	},
+	'job.run.failed': {
+		severity: 'error',
+		dataSchema: JobRunDataSchema,
+		render: {
+			broadcast: (input: JobRunNotificationInput) =>
+				jobRunContent(
+					input,
+					'job.run.failed',
+					`Job failed in ${input.project.name}`,
+					`${input.job.name} (${input.notebookTitle}) ${input.run.status === 'timed_out' ? 'timed out' : 'failed'}${input.run.error ? ` (${input.run.error.code})` : ''}.`,
+				),
+		},
+	},
+	'job.run.succeeded': {
+		severity: 'info',
+		dataSchema: JobRunDataSchema,
+		render: {
+			broadcast: (input: JobRunNotificationInput) =>
+				jobRunContent(
+					input,
+					'job.run.succeeded',
+					`Job succeeded in ${input.project.name}`,
+					`${input.job.name} (${input.notebookTitle}) completed successfully.`,
+				),
+		},
+	},
 	'alert.test': {
 		severity: 'info',
 		dataSchema: AlertTestDataSchema,
@@ -550,6 +668,8 @@ export const PROJECT_ALERT_KINDS = Object.freeze([
 	'app.start_failed',
 	'app.unavailable',
 	'sync.failed',
+	'job.run.failed',
+	'job.run.succeeded',
 ] as const satisfies readonly NotificationKind[]);
 export type ProjectAlertKind = (typeof PROJECT_ALERT_KINDS)[number];
 export const ProjectAlertKindSchema = z.enum(PROJECT_ALERT_KINDS);

@@ -95,7 +95,7 @@ describe('project alert destination routes', () => {
 			endpoint_host: 'hooks.slack.com',
 			webhook_url_set: true,
 		});
-		expect(destination.kinds).toHaveLength(10);
+		expect(destination.kinds).toHaveLength(12);
 		expect(destination).not.toHaveProperty('webhook_url');
 		expect(
 			await expectOk<{ items: any[]; next_cursor: string | null }>(

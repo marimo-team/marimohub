@@ -401,6 +401,24 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_VERSION` | Build/deploy version (usually the short git SHA or release tag) shown in the UI footer and returned by `GET /api/v1/version`. Baked into the image at build time. | — | `dev` | `a1b2c3d` |
 | `MARIMOHUB_IMAGE` | Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in the UI footer. Baked into the image at build time. | — | — | `ghcr.io/marimo-team/marimohub:a1b2c3d` |
 
+## Jobs
+
+Headless notebook runs on a cron schedule or on demand, with a durable run history. Off unless `MARIMOHUB_JOBS=on`. Jobs are dispatched by the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`); without one, runs stay queued. See [Notebook jobs](./jobs.md).
+
+### Scheduler
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_JOBS` | Enable notebook jobs: the job API and UI, the scheduler loop on the maintenance replica, and the `job.*` project-alert kinds. Accepted values are `on` and `off`. The other `MARIMOHUB_JOBS_*` variables apply only when on. | — | `off` | `on` |
+| `MARIMOHUB_JOBS_TICK_SECONDS` | How often the maintenance replica evaluates schedules, dispatches queued runs, and enforces run deadlines. Also bounds the start latency of a manual trigger. | — | `60` | — |
+| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS` | Deployment-wide cap on runs holding a sandbox (provisioning or running). Further runs wait in the queue. | — | `5` | — |
+| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT` | Per-project slice of the deployment-wide run cap. | — | `2` | — |
+| `MARIMOHUB_JOBS_MAX_PER_NOTEBOOK` | Job definitions per notebook (`0` = unlimited). | — | `5` | — |
+| `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS` | Run deadline when a job sets no `timeout_seconds`. The sandbox is destroyed and the run lands `timed_out` past it. | — | `1800` | — |
+| `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS` | Ceiling on a job’s own `timeout_seconds`; larger values are rejected. | — | `14400` | — |
+| `MARIMOHUB_JOBS_RUN_RETENTION_DAYS` | Run records and captured outputs older than this are pruned by the maintenance cycle. | — | `30` | — |
+| `MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS` | How stale a missed occurrence may be and still fire, once. After a longer outage only the latest missed occurrence runs — the gap is never backfilled. | — | `600` | `900` |
+
 ## Source control publishing
 
 Connect Git-synced notebooks to GitHub through the server. Editors can create pull sources without a CI workflow. They can also compare and sync either source mode with **Sync now**. Managers can publish session edits as draft pull requests.

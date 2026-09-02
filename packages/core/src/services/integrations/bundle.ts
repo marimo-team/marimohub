@@ -1,7 +1,7 @@
 // Rendered config stays outside the workspace mount so credentials cannot be
 // captured into a notebook version.
 import { ValidationError } from '../../errors';
-import type { SessionId } from '../../ids';
+import type { RunId, SessionId } from '../../ids';
 import { isRecord } from '../../internal/validation';
 import type { IntegrationVersionPin, SessionRender } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
@@ -56,7 +56,7 @@ export interface RenderedIntegration extends IntegrationVersionPin {
 
 export function bundleIntegrations(
 	rendered: RenderedIntegration[],
-	sessionId: SessionId,
+	sessionId: SessionId | RunId,
 ): SessionRender {
 	const files: SessionRender['files'] = [];
 	const yamlFiles = new Map<string, MergedYaml>();

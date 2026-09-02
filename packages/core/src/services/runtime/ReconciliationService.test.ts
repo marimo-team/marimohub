@@ -78,6 +78,54 @@ describe('ReconciliationService', () => {
 		return session;
 	}
 
+	it('Rule 3: leaves a recordless sandbox alone when an active job run owns it', async () => {
+		const jobSandboxId = createSandboxId();
+		compute.active = [
+			{ id: jobSandboxId, createdAt: iso(-60 * 60 * 1000) },
+			{ id: orphanId, createdAt: iso(-60 * 60 * 1000) },
+		];
+		const aware = new ReconciliationService(
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			'source',
+			undefined,
+			{
+				activeSandboxIds: async () => [jobSandboxId],
+			},
+		);
+
+		const result = await aware.reconcile();
+
+		expect(result.orphansReaped).toBe(1);
+		expect(compute.destroyed).toEqual([orphanId]);
+	});
+
+	it('Rule 3: skips orphan reaping for the sweep when the job-run index is unreadable', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		compute.active = [{ id: orphanId, createdAt: iso(-60 * 60 * 1000) }];
+		const aware = new ReconciliationService(
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			'source',
+			undefined,
+			{
+				activeSandboxIds: async () => {
+					throw new Error('bucket down');
+				},
+			},
+		);
+
+		const result = await aware.reconcile();
+
+		expect(result.orphansReaped).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+		expect(result.skipped).toBe(false);
+	});
+
 	it('skips cleanly when the provider cannot enumerate', async () => {
 		const noList: SandboxProvider = {
 			create: () => ({}) as unknown as SandboxInstance,

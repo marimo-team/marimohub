@@ -29,6 +29,7 @@ import changeRequestsApp from './routes/changeRequests';
 import projectsApp from './routes/projects';
 import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
+import jobsApp from './routes/jobs';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import tokensApp from './routes/tokens';
@@ -62,6 +63,7 @@ const OPENAPI_DOC = {
 		{ name: 'Alerts', description: 'Project alert destinations' },
 		{ name: 'Notebooks', description: 'Notebook CRUD and versioning' },
 		{ name: 'Sessions', description: 'Notebook session lifecycle' },
+		{ name: 'Jobs', description: 'Scheduled and on-demand headless notebook runs' },
 		{ name: 'Integrations', description: 'Project and organization integrations' },
 		{ name: 'Secrets', description: 'Project secret management' },
 		{ name: 'Users', description: 'User identity resolution' },
@@ -505,6 +507,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, notebooksApp);
 	app.route(API_PREFIX, changeRequestsApp);
 	app.route(API_PREFIX, sessionsApp);
+	app.route(API_PREFIX, jobsApp);
 	app.route(API_PREFIX, integrationsApp);
 	app.route(API_PREFIX, usersApp);
 	app.route(API_PREFIX, tokensApp);

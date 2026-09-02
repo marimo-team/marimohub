@@ -1,9 +1,11 @@
 import type {
 	CliAuthorizationId,
 	IntegrationId,
+	JobId,
 	NotebookId,
 	ProposalId,
 	ProjectId,
+	RunId,
 	SandboxId,
 	SessionId,
 	SnapshotId,
@@ -57,6 +59,38 @@ export interface NotebookPaths {
 	deps: string;
 	version: (vid: VersionId) => VersionPaths;
 	proposal: (proposalId: ProposalId) => ProposalPaths;
+	/** Prefix of the notebook's job definitions: `projects/{pid}/notebooks/{nid}/jobs/`. */
+	jobsPrefix: string;
+	job: (jobId: JobId) => JobPaths;
+}
+
+export interface JobRunPaths {
+	/** Prefix of everything under this run (record + captured outputs), for delete. */
+	base: string;
+	/** The run record (`run.json`): CAS-managed, written only by `JobRunService`. */
+	record: string;
+	/** Write-once captured HTML output of a finished run. */
+	html: string;
+	/** Write-once marimo session snapshot, when the export produced one. */
+	session: string;
+	/** Write-once stdout+stderr of the export command (capped). */
+	logs: string;
+}
+
+export interface JobPaths {
+	/** Prefix of everything under this job (definition, occurrences, runs), for delete. */
+	base: string;
+	/** The job definition head (`job.json`): CAS-managed, written only by `JobsService`. */
+	head: string;
+	/**
+	 * Scheduled-fire claims, one immutable create-if-absent object per occurrence,
+	 * keyed by the occurrence's UTC minute (`20260902T0600Z.json`). The claim is
+	 * the fire-exactly-once anchor across replicas and ticks.
+	 */
+	occurrencesPrefix: string;
+	occurrence: (occurrenceKey: string) => string;
+	runsPrefix: string;
+	run: (runId: RunId) => JobRunPaths;
 }
 
 export interface ProposalPaths {
@@ -114,6 +148,27 @@ function versionPaths(base: string, vid: VersionId): VersionPaths {
 	};
 }
 
+function jobPaths(notebookBase: string, jobId: JobId): JobPaths {
+	const base = `${notebookBase}/jobs/${jobId}`;
+	return {
+		base: `${base}/`,
+		head: `${base}/job.json`,
+		occurrencesPrefix: `${base}/occurrences/`,
+		occurrence: (occurrenceKey: string) => `${base}/occurrences/${occurrenceKey}.json`,
+		runsPrefix: `${base}/runs/`,
+		run: (runId: RunId) => {
+			const runBase = `${base}/runs/${runId}`;
+			return {
+				base: `${runBase}/`,
+				record: `${runBase}/run.json`,
+				html: `${runBase}/output.html`,
+				session: `${runBase}/session.json`,
+				logs: `${runBase}/logs.txt`,
+			};
+		},
+	};
+}
+
 function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 	const base = `${projectBase}/notebooks/${nid}`;
 	const workspace = `${base}/workspace`;
@@ -133,6 +188,8 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		code: `${workspace}/notebook.py`,
 		deps: `${workspace}/pyproject.toml`,
 		version: (vid: VersionId) => versionPaths(base, vid),
+		jobsPrefix: `${base}/jobs/`,
+		job: (jobId: JobId) => jobPaths(base, jobId),
 		proposal: (proposalId: ProposalId) => {
 			const proposalBase = `${base}/proposals/${proposalId}`;
 			return {
@@ -229,11 +286,24 @@ export const paths = {
 	sandboxDiagnosticLeasesPrefix: '_system/sandbox-diagnostics/',
 	sandboxDiagnosticLease: (userId: UserId) =>
 		`_system/sandbox-diagnostics/${encodeURIComponent(userId)}.json`,
+	/**
+	 * Active-run markers: one immutable create-if-absent object per non-terminal
+	 * job run, deleted when the run reaches a terminal status. The scheduler's
+	 * dispatch/watchdog and the reconciler enumerate live runs from this prefix
+	 * instead of scanning every notebook's run history. Written only by
+	 * `JobRunService`.
+	 */
+	jobRunMarkersPrefix: '_system/job-runs/',
+	jobRunMarkersForProject: (projectId: ProjectId) => `_system/job-runs/${projectId}/`,
+	jobRunMarker: (projectId: ProjectId, runId: RunId) =>
+		`_system/job-runs/${projectId}/${runId}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops
 	 * (which share a replica and holder id) can never release each other's lease. */
 	sessionLifecycleLock: '_system/_session_lifecycle.lock',
+	/** Advisory lease for the job scheduler tick — its own key for the same reason. */
+	jobSchedulerLock: '_system/_jobs.lock',
 	/**
 	 * Org-scoped integration instance, inherited by every project:
 	 * `_system/integrations/{iid}/…`. Same layout and mutability classes as the

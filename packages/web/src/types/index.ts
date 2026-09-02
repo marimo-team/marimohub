@@ -81,6 +81,14 @@ export type GitNotebookCreateResult = ClientGitNotebookCreateResult;
 /** A sync URL + write-once token, returned on synced-notebook creation and token rotation. */
 export type SyncToken = ClientSyncToken;
 export type Session = ClientSession;
+/** A notebook job definition from `GET .../jobs`. */
+export type Job = components['schemas']['Job'];
+export type JobSchedule = components['schemas']['JobSchedule'];
+export type JobCreateBody = components['schemas']['JobCreateBody'];
+export type JobUpdateBody = components['schemas']['JobUpdateBody'];
+/** One execution of a job, from `GET .../jobs/{jid}/runs`. */
+export type JobRun = components['schemas']['JobRun'];
+export type JobRunStatus = JobRun['status'];
 export type SecondarySurfaceId = NonNullable<
 	components['schemas']['SessionCreateBody']['surfaces']
 >[number];
