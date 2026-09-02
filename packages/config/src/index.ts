@@ -46,8 +46,9 @@ import type {
 	ViewerMode,
 } from '@marimo-hub/core';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
+import { evaluateLoginPolicy } from '@marimo-hub/auth-oidc';
 import { makeAi } from './ai';
-import { authBackend, makeAuth, projectCreationRestricted } from './auth';
+import { authBackend, makeAuth, oidcLoginPolicySelected, projectCreationRestricted } from './auth';
 import { buildConfigSummary } from './configSummary';
 import { computeBackend, makeCompute, resolveSandboxImages } from './compute';
 import {
@@ -63,7 +64,7 @@ import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { createGuardedHostResolver } from './integrationProbe';
 import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
-import { makeResourceSecurity } from './resourceSecurity';
+import { makeResourceSecurity, validateResourceSecurityEnv } from './resourceSecurity';
 import { makeSourceControl } from './sourceControl';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { loadAdapterLibraries } from './library';
@@ -518,6 +519,10 @@ export function createFromEnv(
 	// its own explicit acknowledgement above.
 	if (exposure.mode === 'subdomain') assertSandboxHostIsolated(env);
 	const { authenticator, authRoutes } = makeAuth(env, options?.libraries);
+	const configuredLoginPolicy =
+		authBackend(env) === 'oidc' && oidcLoginPolicySelected(env)
+			? options?.libraries?.oidcLoginPolicy
+			: undefined;
 	const sessionLifetime = parseSessionLifetime(env);
 	const sandboxImages = resolveSandboxImages(env);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
@@ -634,6 +639,20 @@ export function createFromEnv(
 			const resourceSecurity = makeResourceSecurity(env, options?.libraries);
 			return resourceSecurity ? { resourceSecurity } : {};
 		})(),
+		policyAnalyzer: {
+			classificationOrder: validateResourceSecurityEnv(env).order ?? [],
+			...(configuredLoginPolicy
+				? {
+						loginPolicy: {
+							evaluate: (input) =>
+								evaluateLoginPolicy(configuredLoginPolicy, input, {
+									timeoutMs:
+										Number(env.MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_TIMEOUT_SECONDS ?? '5') * 1000,
+								}),
+						},
+					}
+				: {}),
+		},
 		// Read-only configuration for the super-admin settings page (secrets
 		// redacted at assembly).
 		configSummary: buildConfigSummary(env),

@@ -278,6 +278,29 @@ describe('AuthorizationService: list visibility', () => {
 });
 
 describe('AuthorizationService: contract', () => {
+	it('uses the enforcement decision as the analysis verdict', async () => {
+		for (const [who, action, resource] of [
+			[OWNER, 'project.read', onProject()],
+			[STRANGER, 'project.read', onProject()],
+			[VIEWER, 'notebook.write', onProject()],
+			[OWNER, 'session.start', { kind: 'session-start', project, mode: 'edit' }],
+		] as const) {
+			const authz = service();
+			const decision = await authz.authorize(who, action, resource);
+			const analysis = await authz.analyze(who, action, resource);
+			expect(analysis.decision).toEqual(decision);
+			expect(analysis.trace.at(-1)).toMatchObject({ stage: 'final' });
+		}
+	});
+
+	it('reports the role source and transport presentation', async () => {
+		const analysis = await service().analyze(STRANGER, 'project.read', onProject());
+		expect(analysis.presentation).toBe('not-found');
+		expect(analysis.trace).toContainEqual(
+			expect.objectContaining({ stage: 'role', code: 'effective_role_none' }),
+		);
+	});
+
 	it('rejects a resource whose kind does not match the action scope', async () => {
 		await expect(
 			service().authorize(OWNER, 'project.read', { kind: 'deployment' }),

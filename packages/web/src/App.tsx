@@ -21,6 +21,7 @@ const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserP
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
 const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
 const AdminDebugPage = lazy(() => import('@/components/Admin/AdminDebugPage'));
+const AdminPolicyAnalyzerPage = lazy(() => import('@/components/Admin/AdminPolicyAnalyzerPage'));
 const CliLoginPage = lazy(() =>
 	import('@/components/Account/CliLoginPage').then((module) => ({ default: module.CliLoginPage })),
 );
@@ -134,6 +135,7 @@ function StandardLayout() {
 								<Route path="users" element={<AdminUsersPage />} />
 								<Route path="settings" element={<AdminSettingsPage />} />
 								<Route path="audit-logs" element={<AuditLogPage />} />
+								<Route path="policy-analyzer" element={<AdminPolicyAnalyzerPage />} />
 								<Route path="debug" element={<AdminDebugPage />} />
 							</Route>
 							<Route path="*" element={<NotFoundPage />} />

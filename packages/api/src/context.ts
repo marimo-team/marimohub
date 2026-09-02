@@ -1,8 +1,10 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
 	ResourceSecurityPolicy,
+	AuthenticatedPrincipal,
 	Authenticator,
 	AssignableRole,
+	AuthEntitlement,
 	AuthUser,
 	Bucket,
 	BucketConfig,
@@ -26,6 +28,7 @@ import type {
 	SourceControlRegistry,
 	ViewerMode,
 	WorkloadIdentityIssuer,
+	UserId,
 } from '@marimo-hub/core';
 
 /** The service bundle produced by `createServices(bucket)` in @marimo-hub/core. */
@@ -285,6 +288,25 @@ export interface ConfigSummary {
 	}[];
 }
 
+export type LoginPolicyAnalysisResult = { durationMs: number } & (
+	| { outcome: 'allow'; entitlements: readonly AuthEntitlement[] }
+	| { outcome: 'deny'; reason?: string }
+	| { outcome: 'timeout' }
+	| { outcome: 'error' }
+	| { outcome: 'invalid'; problem: string }
+);
+
+export interface PolicyAnalyzerCapability {
+	loginPolicy?: {
+		evaluate(input: {
+			identity: { id: UserId; email: string };
+			idTokenClaims: Record<string, unknown>;
+			userInfoClaims?: Record<string, unknown>;
+		}): Promise<LoginPolicyAnalysisResult>;
+	};
+	classificationOrder: readonly string[];
+}
+
 export interface BackgroundTaskScheduler {
 	defer(task: Promise<unknown>): void;
 }
@@ -343,6 +365,8 @@ export interface ApiDeps {
 	 * projects and notebooks fail closed without them.
 	 */
 	resourceSecurity?: ResourceSecurityPolicy;
+	/** Optional policy-analysis adapters and safe configuration metadata. */
+	policyAnalyzer?: PolicyAnalyzerCapability;
 	/**
 	 * Probe downstream deps (storage/auth/compute/WIF). Built by `@marimo-hub/config`;
 	 * logged once (non-fatal) at boot and served by `GET /api/health?deep=true`.
@@ -422,7 +446,7 @@ export interface ApiDeps {
 export type HonoEnv = {
 	Variables: {
 		deps: ApiDeps;
-		user: AuthUser;
+		user: AuthenticatedPrincipal;
 		/**
 		 * How the request authenticated, decided once in the authN middleware:
 		 * `pat` (a personal access token) or `session` (cookie/SSO). Routes that

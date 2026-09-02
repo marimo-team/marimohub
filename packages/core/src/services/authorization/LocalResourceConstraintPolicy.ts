@@ -38,13 +38,21 @@ export class LocalResourceConstraintPolicy implements ResourceConstraintPolicy {
 		if (context === null) return { satisfied: false, reason: 'missing-context' };
 		const required = this.rank.get(resource.labels.classification);
 		const held = this.rank.get(context.classification);
-		if (required === undefined || held === undefined || held < required) {
-			return { satisfied: false, reason: 'constraint' };
-		}
 		const compartments = new Set(context.compartments);
-		return resource.labels.compartments.every((compartment) => compartments.has(compartment))
-			? { satisfied: true }
-			: { satisfied: false, reason: 'constraint' };
+		const missingCompartments = resource.labels.compartments.filter(
+			(compartment) => !compartments.has(compartment),
+		);
+		const classificationSatisfied =
+			required !== undefined && held !== undefined && held >= required;
+		const evidence = {
+			heldClassification: context.classification,
+			requiredClassification: resource.labels.classification,
+			classificationSatisfied,
+			missingCompartments,
+		};
+		return classificationSatisfied && missingCompartments.length === 0
+			? { satisfied: true, evidence }
+			: { satisfied: false, reason: 'constraint', evidence };
 	}
 
 	async evaluateMany(

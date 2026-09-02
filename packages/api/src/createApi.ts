@@ -20,6 +20,7 @@ import {
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, errorMetadata, logEvent } from './log';
 import adminApp from './routes/admin';
+import policyAnalyzerApp from './routes/policyAnalyzer';
 import { createAiProxy } from './routes/ai';
 import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
@@ -494,6 +495,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, projectAlertsApp);
 	app.route(API_PREFIX, eventsApp);
 	app.route(API_PREFIX, adminApp);
+	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
 	app.route(API_PREFIX, changeRequestsApp);
 	app.route(API_PREFIX, sessionsApp);

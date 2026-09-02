@@ -23,8 +23,8 @@
 import {
 	canCreateProject,
 	canSeeProjectEntry,
-	effectiveRole,
 	isSuperAdmin,
+	resolveEffectiveRole,
 	roleAtLeast,
 	subjectDefaultRole,
 } from '../../authz';
@@ -35,6 +35,7 @@ import type { AuthenticatedPrincipal } from '../../ports/auth';
 import type {
 	ConstraintDecision,
 	ConstraintDenialReason,
+	ConstraintEvidence,
 	ResourceConstraintPolicy,
 } from '../../ports/resourceConstraints';
 import { validateSubjectSecurityContext } from '../../ports/subjectContext';
@@ -43,6 +44,7 @@ import type {
 	SubjectSecurityContextProvider,
 } from '../../ports/subjectContext';
 import type { ResourceSecurityLabels } from '../../securityLabels';
+import { MAX_SECURITY_COMPARTMENTS, SECURITY_LABEL_TOKEN } from '../../securityLabels';
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
 import type { UserId } from '../../ids';
 import type { Project, Session } from '../../schema';
@@ -139,6 +141,23 @@ export type AuthorizationDecision =
 			constraintReason?: ConstraintDenialReason;
 	  };
 
+export interface AuthorizationTraceStep {
+	stage: 'action' | 'lifecycle' | 'role' | 'standing' | 'session' | 'constraint' | 'final';
+	status: 'passed' | 'failed' | 'skipped';
+	code: string;
+	details?: Readonly<Record<string, unknown>>;
+}
+
+export interface AuthorizationAnalysis {
+	decision: AuthorizationDecision;
+	presentation: 'allowed' | 'forbidden' | 'not-found';
+	trace: readonly AuthorizationTraceStep[];
+}
+
+export type AuthorizationAnalysisContext =
+	| { mode: 'live' }
+	| { mode: 'synthetic'; value: SubjectSecurityContext | null };
+
 const SESSION_ACTION_FOR: Record<SessionScopedAction, SessionAction> = {
 	'session.attach': 'attach',
 	'session.stop': 'stop',
@@ -186,16 +205,51 @@ const CONSTRAINT_DENIAL_REASONS: ReadonlySet<string> = new Set([
  */
 function parseConstraintDecision(value: unknown): ConstraintDecision | null {
 	if (typeof value !== 'object' || value === null) return null;
-	const decision = value as { satisfied?: unknown; reason?: unknown };
-	if (decision.satisfied === true) return { satisfied: true };
+	const decision = value as { satisfied?: unknown; reason?: unknown; evidence?: unknown };
+	const evidence = parseConstraintEvidence(decision.evidence);
+	if (decision.evidence !== undefined && evidence === null) return null;
+	if (decision.satisfied === true) {
+		return { satisfied: true, ...(evidence ? { evidence } : {}) };
+	}
 	if (
 		decision.satisfied === false &&
 		typeof decision.reason === 'string' &&
 		CONSTRAINT_DENIAL_REASONS.has(decision.reason)
 	) {
-		return { satisfied: false, reason: decision.reason as ConstraintDenialReason };
+		return {
+			satisfied: false,
+			reason: decision.reason as ConstraintDenialReason,
+			...(evidence ? { evidence } : {}),
+		};
 	}
 	return null;
+}
+
+function parseConstraintEvidence(value: unknown): ConstraintEvidence | null {
+	if (value === undefined) return null;
+	if (typeof value !== 'object' || value === null) return null;
+	const evidence = value as Record<string, unknown>;
+	if (
+		(evidence.heldClassification !== null &&
+			(typeof evidence.heldClassification !== 'string' ||
+				!SECURITY_LABEL_TOKEN.test(evidence.heldClassification))) ||
+		typeof evidence.requiredClassification !== 'string' ||
+		!SECURITY_LABEL_TOKEN.test(evidence.requiredClassification) ||
+		typeof evidence.classificationSatisfied !== 'boolean' ||
+		!Array.isArray(evidence.missingCompartments) ||
+		evidence.missingCompartments.length > MAX_SECURITY_COMPARTMENTS ||
+		evidence.missingCompartments.some(
+			(item) => typeof item !== 'string' || !SECURITY_LABEL_TOKEN.test(item),
+		)
+	) {
+		return null;
+	}
+	return {
+		heldClassification: evidence.heldClassification,
+		requiredClassification: evidence.requiredClassification,
+		classificationSatisfied: evidence.classificationSatisfied,
+		missingCompartments: evidence.missingCompartments as string[],
+	};
 }
 
 /** A catalog snapshot entry as list visibility reads it (denormalized members). */
@@ -232,6 +286,68 @@ export class AuthorizationService {
 			};
 		}
 		return { ...decision, subjectContextExpiresAt: constraint.contextExpiresAt };
+	}
+
+	async analyze(
+		subject: AuthorizationSubject,
+		action: AuthorizationAction,
+		resource: AuthorizationResource,
+		context: AuthorizationAnalysisContext = { mode: 'live' },
+	): Promise<AuthorizationAnalysis> {
+		const trace: AuthorizationTraceStep[] = [];
+		const { decision: baseline, labelSets } = this.decideBaseline(subject, action, resource, trace);
+		let decision = baseline;
+		if (baseline.allowed && labelSets.length > 0) {
+			const constraint = await this.evaluateLabelSets(
+				action,
+				labelSets,
+				context.mode === 'synthetic' ? async () => context.value : this.contextResolver(subject),
+			);
+			trace.push({
+				stage: 'constraint',
+				status: constraint.satisfied ? 'passed' : 'failed',
+				code: constraint.satisfied
+					? 'resource_constraints_satisfied'
+					: `resource_constraints_${constraint.reason}`,
+				details: {
+					contextMode: context.mode,
+					labelSetCount: labelSets.length,
+					...(constraint.evidence ? { evidence: constraint.evidence } : {}),
+				},
+			});
+			decision = constraint.satisfied
+				? { ...baseline, subjectContextExpiresAt: constraint.contextExpiresAt }
+				: {
+						allowed: false,
+						category: 'constraint',
+						role: baseline.role,
+						constraintReason: constraint.reason,
+					};
+		} else if (baseline.allowed) {
+			trace.push({ stage: 'constraint', status: 'skipped', code: 'resource_unlabeled' });
+		} else {
+			trace.push({
+				stage: 'constraint',
+				status: 'skipped',
+				code: 'baseline_denied',
+			});
+		}
+		const presentation = decision.allowed
+			? 'allowed'
+			: decision.category === 'lifecycle' ||
+				  decision.category === 'visibility' ||
+				  decision.category === 'constraint'
+				? 'not-found'
+				: 'forbidden';
+		trace.push({
+			stage: 'final',
+			status: decision.allowed ? 'passed' : 'failed',
+			code: decision.allowed
+				? 'authorization_allowed'
+				: `authorization_denied_${decision.category}`,
+			details: { presentation },
+		});
+		return { decision, presentation, trace };
 	}
 
 	/**
@@ -296,29 +412,74 @@ export class AuthorizationService {
 		subject: AuthorizationSubject,
 		action: AuthorizationAction,
 		resource: AuthorizationResource,
+		trace?: AuthorizationTraceStep[],
 	): { decision: AuthorizationDecision; labelSets: readonly ResourceSecurityLabels[] } {
 		const rule = ACTION_RULES[action];
 		if (resource.kind !== rule.scope) {
 			throw new Error(`Action ${action} requires a ${rule.scope} resource, got ${resource.kind}`);
 		}
+		trace?.push({
+			stage: 'action',
+			status: 'passed',
+			code: 'action_rule_loaded',
+			details: {
+				action,
+				scope: rule.scope,
+				...('min' in rule
+					? {
+							minimumRole: rule.min,
+							deniedAs: rule.deniedAs,
+							requiresSuperAdmin: rule.requiresSuperAdmin === true,
+						}
+					: {}),
+			},
+		});
 		if (resource.kind === 'deployment') {
+			const decision = this.decideDeployment(subject, action as DeploymentAction);
+			trace?.push({
+				stage: 'standing',
+				status: decision.allowed ? 'passed' : 'failed',
+				code: decision.allowed ? 'deployment_standing_satisfied' : 'deployment_standing_missing',
+				details: { entitlements: [...(subject.entitlements ?? [])] },
+			});
 			return {
-				decision: this.decideDeployment(subject, action as DeploymentAction),
+				decision,
 				labelSets: [],
 			};
 		}
 		// Lifecycle precedes every project-scoped rule on purpose: a soft-deleted
 		// project is unreachable for everyone, super admins included.
 		if (resource.project.status === 'deleted') {
+			trace?.push({ stage: 'lifecycle', status: 'failed', code: 'project_deleted' });
 			return { decision: { allowed: false, category: 'lifecycle', role: null }, labelSets: [] };
 		}
-		const role = effectiveRole(resource.project, subject, this.policy);
+		trace?.push({ stage: 'lifecycle', status: 'passed', code: 'project_active' });
+		const roleResolution = resolveEffectiveRole(resource.project, subject, this.policy);
+		const role = roleResolution.role;
+		trace?.push({
+			stage: 'role',
+			status: role === null ? 'failed' : 'passed',
+			code: `effective_role_${roleResolution.source}`,
+			details: { role, entitlements: [...(subject.entitlements ?? [])] },
+		});
 		const decision = ((): AuthorizationDecision => {
 			switch (resource.kind) {
 				case 'project': {
 					const projectRule = ACTION_RULES[action as ProjectAction];
 					if (projectRule.requiresSuperAdmin && !isSuperAdmin(subject, this.policy?.superAdmins)) {
+						trace?.push({
+							stage: 'standing',
+							status: 'failed',
+							code: 'super_admin_standing_missing',
+						});
 						return { allowed: false, category: 'standing', role };
+					}
+					if (projectRule.requiresSuperAdmin) {
+						trace?.push({
+							stage: 'standing',
+							status: 'passed',
+							code: 'super_admin_standing_satisfied',
+						});
 					}
 					if (roleAtLeast(role, projectRule.min)) return { allowed: true, role };
 					return {
@@ -329,14 +490,32 @@ export class AuthorizationService {
 				}
 				case 'session': {
 					const sessionAction = SESSION_ACTION_FOR[action as SessionScopedAction];
-					return sessionCan(sessionAction, this.sessionActor(subject, role), resource.session)
-						? { allowed: true, role }
-						: { allowed: false, category: 'session', role };
+					const allowed = sessionCan(
+						sessionAction,
+						this.sessionActor(subject, role),
+						resource.session,
+					);
+					trace?.push({
+						stage: 'session',
+						status: allowed ? 'passed' : 'failed',
+						code: allowed ? 'session_rule_satisfied' : 'session_rule_denied',
+						details: { sessionAction, mode: resource.session.mode ?? 'edit' },
+					});
+					return allowed ? { allowed: true, role } : { allowed: false, category: 'session', role };
 				}
-				case 'session-start':
-					return canStartSessionMode({ role, viewerMode: this.policy?.viewerMode }, resource.mode)
-						? { allowed: true, role }
-						: { allowed: false, category: 'session', role };
+				case 'session-start': {
+					const allowed = canStartSessionMode(
+						{ role, viewerMode: this.policy?.viewerMode },
+						resource.mode,
+					);
+					trace?.push({
+						stage: 'session',
+						status: allowed ? 'passed' : 'failed',
+						code: allowed ? 'session_start_satisfied' : 'session_start_denied',
+						details: { mode: resource.mode, viewerMode: this.policy?.viewerMode ?? 'static' },
+					});
+					return allowed ? { allowed: true, role } : { allowed: false, category: 'session', role };
+				}
 			}
 		})();
 		const labelSets = [
@@ -348,7 +527,7 @@ export class AuthorizationService {
 
 	/** The baseline role for display (`your_role`) and derived projections. */
 	role(subject: AuthSubject, project: Project): Role | null {
-		return effectiveRole(project, subject, this.policy);
+		return resolveEffectiveRole(project, subject, this.policy).role;
 	}
 
 	isSuperAdmin(subject: AuthSubject): boolean {
@@ -503,14 +682,35 @@ export class AuthorizationService {
 		labelSets: readonly ResourceSecurityLabels[],
 		getContext: () => Promise<SubjectSecurityContext | null>,
 	): Promise<
-		| { satisfied: true; contextExpiresAt: string }
-		| { satisfied: false; reason: ConstraintDenialReason }
+		| {
+				satisfied: true;
+				contextExpiresAt: string;
+				evidence?: readonly ConstraintEvidence[];
+		  }
+		| {
+				satisfied: false;
+				reason: ConstraintDenialReason;
+				evidence?: readonly ConstraintEvidence[];
+		  }
 	> {
 		const batch = await this.constraintBatch(action, labelSets, getContext);
 		if (!batch.ok) return { satisfied: false, reason: batch.reason };
+		const evidence = batch.decisions.flatMap((decision) =>
+			decision.evidence ? [decision.evidence] : [],
+		);
 		const denied = batch.decisions.find((decision) => !decision.satisfied);
-		if (denied?.satisfied === false) return denied;
-		return { satisfied: true, contextExpiresAt: batch.contextExpiresAt };
+		if (denied?.satisfied === false) {
+			return {
+				satisfied: false,
+				reason: denied.reason,
+				...(evidence.length > 0 ? { evidence } : {}),
+			};
+		}
+		return {
+			satisfied: true,
+			contextExpiresAt: batch.contextExpiresAt,
+			...(evidence.length > 0 ? { evidence } : {}),
+		};
 	}
 
 	/**

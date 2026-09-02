@@ -28,10 +28,18 @@ export interface ConstraintResource {
  */
 export type ConstraintDenialReason = 'missing-context' | 'constraint' | 'unavailable';
 
+/** Optional bounded evidence for an operator-facing policy analysis. */
+export interface ConstraintEvidence {
+	heldClassification: string | null;
+	requiredClassification: string;
+	classificationSatisfied: boolean;
+	missingCompartments: readonly string[];
+}
+
 /** Whether the resource's extra restrictions are satisfied. */
 export type ConstraintDecision =
-	| { satisfied: true }
-	| { satisfied: false; reason: ConstraintDenialReason };
+	| { satisfied: true; evidence?: ConstraintEvidence }
+	| { satisfied: false; reason: ConstraintDenialReason; evidence?: ConstraintEvidence };
 
 export interface ResourceConstraintPolicy {
 	evaluate(

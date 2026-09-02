@@ -78,16 +78,26 @@ describe('LocalResourceConstraintPolicy', () => {
 		const labels = { classification: 'SECRET', compartments: ['element-a', 'element-b'] };
 		await expect(local().evaluate(context(), 'project.read', { labels })).resolves.toEqual({
 			satisfied: true,
+			evidence: {
+				heldClassification: 'SECRET',
+				requiredClassification: 'SECRET',
+				classificationSatisfied: true,
+				missingCompartments: [],
+			},
 		});
 		await expect(
 			local().evaluate(context({ classification: 'TOP_SECRET' }), 'project.read', { labels }),
-		).resolves.toEqual({ satisfied: true });
+		).resolves.toMatchObject({ satisfied: true });
 		await expect(
 			local().evaluate(context({ classification: 'CUI' }), 'project.read', { labels }),
-		).resolves.toEqual({ satisfied: false, reason: 'constraint' });
+		).resolves.toMatchObject({ satisfied: false, reason: 'constraint' });
 		await expect(
 			local().evaluate(context({ compartments: ['element-a'] }), 'project.read', { labels }),
-		).resolves.toEqual({ satisfied: false, reason: 'constraint' });
+		).resolves.toMatchObject({
+			satisfied: false,
+			reason: 'constraint',
+			evidence: { missingCompartments: ['element-b'] },
+		});
 		await expect(local().evaluate(null, 'project.read', { labels })).resolves.toEqual({
 			satisfied: false,
 			reason: 'missing-context',
@@ -99,12 +109,12 @@ describe('LocalResourceConstraintPolicy', () => {
 			local().evaluate(context(), 'project.read', {
 				labels: { classification: 'COSMIC', compartments: [] },
 			}),
-		).resolves.toEqual({ satisfied: false, reason: 'constraint' });
+		).resolves.toMatchObject({ satisfied: false, reason: 'constraint' });
 		await expect(
 			local().evaluate(context({ classification: 'COSMIC' }), 'project.read', {
 				labels: { classification: 'CUI', compartments: [] },
 			}),
-		).resolves.toEqual({ satisfied: false, reason: 'constraint' });
+		).resolves.toMatchObject({ satisfied: false, reason: 'constraint' });
 	});
 });
 

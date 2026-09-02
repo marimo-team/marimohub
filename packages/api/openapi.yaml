@@ -1098,6 +1098,678 @@ components:
       required:
         - default_role
         - super_admins
+    PolicyAnalyzerMetadata:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          enum:
+            - 1
+        max_cases:
+          type: integer
+          exclusiveMinimum: 0
+        capabilities:
+          type: object
+          properties:
+            login_policy:
+              type: boolean
+            resource_security:
+              type: boolean
+            live_self_context:
+              type: boolean
+          required:
+            - login_policy
+            - resource_security
+            - live_self_context
+          additionalProperties: false
+        entitlements:
+          type: array
+          items:
+            type: string
+            enum:
+              - super-admin
+              - project-creator
+              - default-role:viewer
+              - default-role:editor
+              - default-role:manager
+        classification_order:
+          type: array
+          items:
+            type: string
+        actions:
+          type: array
+          items:
+            type: object
+            properties:
+              action:
+                type: string
+                enum:
+                  - project.create
+                  - admin.access
+                  - org-integration.manage
+                  - audit.global.read
+                  - project.read
+                  - project.update
+                  - project.delete
+                  - project.members.manage
+                  - project.events.read
+                  - project.alerts.manage
+                  - notebook.write
+                  - notebook.manage
+                  - integration.read
+                  - integration.use
+                  - integration.manage
+                  - change-request.publish
+                  - security-labels.raise
+                  - security-labels.lower
+                  - session.attach
+                  - session.stop
+                  - session.surface
+                  - session.proxy
+                  - session.start
+              scope:
+                type: string
+                enum:
+                  - deployment
+                  - project
+                  - session
+                  - session-start
+              minimum_role:
+                type:
+                  - string
+                  - 'null'
+                enum:
+                  - viewer
+                  - editor
+                  - manager
+                  - admin
+                  - null
+              denied_as:
+                type:
+                  - string
+                  - 'null'
+                enum:
+                  - not-found
+                  - forbidden
+                  - null
+              requires_super_admin:
+                type: boolean
+            required:
+              - action
+              - scope
+              - minimum_role
+              - denied_as
+              - requires_super_admin
+            additionalProperties: false
+      required:
+        - schema_version
+        - max_cases
+        - capabilities
+        - entitlements
+        - classification_order
+        - actions
+      additionalProperties: false
+    PolicySuiteResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        summary:
+          $ref: '#/components/schemas/PolicySuiteSummary'
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyCaseResult'
+      required:
+        - valid
+        - summary
+        - cases
+      additionalProperties: false
+    PolicySuiteSummary:
+      type: object
+      properties:
+        case_count:
+          type: integer
+          minimum: 0
+        passed:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+      required:
+        - case_count
+        - passed
+        - failed
+      additionalProperties: false
+    PolicyCaseResult:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        valid:
+          type: boolean
+        login:
+          $ref: '#/components/schemas/PolicyLoginResult'
+        authorization:
+          $ref: '#/components/schemas/PolicyAuthorizationResult'
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              stage:
+                type: string
+                enum:
+                  - login
+                  - authorization
+              code:
+                type: string
+            required:
+              - stage
+              - code
+            additionalProperties: false
+      required:
+        - id
+        - name
+        - valid
+        - login
+        - authorization
+        - errors
+      additionalProperties: false
+    PolicyLoginResult:
+      type:
+        - object
+        - 'null'
+      properties:
+        outcome:
+          type: string
+          enum:
+            - allow
+            - deny
+            - timeout
+            - error
+            - invalid
+            - unavailable
+        duration_ms:
+          type: number
+          minimum: 0
+        entitlements:
+          type: array
+          items:
+            type: string
+            enum:
+              - super-admin
+              - project-creator
+              - default-role:viewer
+              - default-role:editor
+              - default-role:manager
+        reason:
+          type: string
+        problem:
+          type: string
+        assertion:
+          $ref: '#/components/schemas/PolicyAssertionResult'
+      required:
+        - outcome
+        - duration_ms
+        - entitlements
+        - assertion
+      additionalProperties: false
+    PolicyAssertionResult:
+      type: object
+      properties:
+        passed:
+          type: boolean
+        expected:
+          type: object
+          additionalProperties: {}
+      required:
+        - passed
+        - expected
+      additionalProperties: false
+    PolicyAuthorizationResult:
+      type:
+        - object
+        - 'null'
+      properties:
+        decision:
+          $ref: '#/components/schemas/PolicyAuthorizationDecision'
+        presentation:
+          type: string
+          enum:
+            - allowed
+            - forbidden
+            - not-found
+        trace:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyAuthorizationTraceStep'
+        assertion:
+          $ref: '#/components/schemas/PolicyAssertionResult'
+      required:
+        - decision
+        - presentation
+        - trace
+        - assertion
+      additionalProperties: false
+    PolicyAuthorizationDecision:
+      type: object
+      properties:
+        allowed:
+          type: boolean
+        role:
+          type:
+            - string
+            - 'null'
+          enum:
+            - viewer
+            - editor
+            - manager
+            - admin
+            - null
+        category:
+          type: string
+          enum:
+            - lifecycle
+            - visibility
+            - role
+            - session
+            - standing
+            - constraint
+        constraint_reason:
+          type: string
+          enum:
+            - missing-context
+            - constraint
+            - unavailable
+      required:
+        - allowed
+        - role
+      additionalProperties: false
+    PolicyAuthorizationTraceStep:
+      type: object
+      properties:
+        stage:
+          type: string
+          enum:
+            - action
+            - lifecycle
+            - role
+            - standing
+            - session
+            - constraint
+            - final
+        status:
+          type: string
+          enum:
+            - passed
+            - failed
+            - skipped
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties: {}
+      required:
+        - stage
+        - status
+        - code
+      additionalProperties: false
+    PolicySuiteV1:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          enum:
+            - 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyCaseV1'
+          minItems: 1
+          maxItems: 25
+      required:
+        - schema_version
+        - cases
+      additionalProperties: false
+    PolicyCaseV1:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        login:
+          $ref: '#/components/schemas/PolicyLoginStageV1'
+        authorization:
+          $ref: '#/components/schemas/PolicyAuthorizationStageV1'
+      required:
+        - id
+        - name
+      additionalProperties: false
+    PolicyLoginStageV1:
+      type: object
+      properties:
+        identity:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            email:
+              type: string
+              minLength: 3
+              maxLength: 320
+          required:
+            - id
+            - email
+          additionalProperties: false
+        id_token_claims:
+          type: object
+          additionalProperties: {}
+        user_info_claims:
+          type: object
+          additionalProperties: {}
+        expected:
+          $ref: '#/components/schemas/PolicyLoginExpectationV1'
+      required:
+        - identity
+        - id_token_claims
+        - expected
+      additionalProperties: false
+    PolicyLoginExpectationV1:
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum:
+            - allow
+            - deny
+        entitlements:
+          type: array
+          items:
+            type: string
+            enum:
+              - super-admin
+              - project-creator
+              - default-role:viewer
+              - default-role:editor
+              - default-role:manager
+      required:
+        - outcome
+      additionalProperties: false
+    PolicyAuthorizationStageV1:
+      type: object
+      properties:
+        subject:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            email:
+              type: string
+              minLength: 3
+              maxLength: 320
+            entitlement_source:
+              type: string
+              enum:
+                - explicit
+                - login
+            entitlements:
+              type: array
+              items:
+                type: string
+                enum:
+                  - super-admin
+                  - project-creator
+                  - default-role:viewer
+                  - default-role:editor
+                  - default-role:manager
+          required:
+            - id
+            - email
+            - entitlement_source
+          additionalProperties: false
+        action:
+          type: string
+          enum:
+            - project.create
+            - admin.access
+            - org-integration.manage
+            - audit.global.read
+            - project.read
+            - project.update
+            - project.delete
+            - project.members.manage
+            - project.events.read
+            - project.alerts.manage
+            - notebook.write
+            - notebook.manage
+            - integration.read
+            - integration.use
+            - integration.manage
+            - change-request.publish
+            - security-labels.raise
+            - security-labels.lower
+            - session.attach
+            - session.stop
+            - session.surface
+            - session.proxy
+            - session.start
+        resource:
+          $ref: '#/components/schemas/PolicyAuthorizationResourceV1'
+        context:
+          $ref: '#/components/schemas/PolicyAuthorizationContextV1'
+        expected:
+          type: object
+          properties:
+            allowed:
+              type: boolean
+            denial_category:
+              type: string
+              enum:
+                - lifecycle
+                - visibility
+                - role
+                - session
+                - standing
+                - constraint
+          required:
+            - allowed
+          additionalProperties: false
+      required:
+        - subject
+        - action
+        - resource
+        - context
+        - expected
+      additionalProperties: false
+    PolicyAuthorizationResourceV1:
+      type: object
+      properties:
+        source:
+          type: string
+          enum:
+            - stored
+            - synthetic
+        kind:
+          type: string
+          enum:
+            - deployment
+            - project
+            - session
+            - session-start
+        project_id:
+          type: string
+        notebook_id:
+          type: string
+        session_id:
+          type: string
+        project:
+          type: object
+          properties:
+            owner:
+              type: string
+              minLength: 1
+            members:
+              type: array
+              items:
+                type: object
+                properties:
+                  user_id:
+                    type: string
+                    minLength: 1
+                  email:
+                    type: string
+                    minLength: 3
+                    maxLength: 320
+                  role:
+                    type: string
+                    enum:
+                      - viewer
+                      - editor
+                      - manager
+                      - admin
+                required:
+                  - role
+                additionalProperties: false
+              maxItems: 500
+            status:
+              type: string
+              enum:
+                - active
+                - deleted
+              default: active
+            security_labels:
+              type: object
+              properties:
+                classification:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                compartments:
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                  maxItems: 64
+              required:
+                - classification
+                - compartments
+              additionalProperties: false
+          required:
+            - owner
+            - members
+          additionalProperties: false
+        notebook_labels:
+          type: object
+          properties:
+            classification:
+              type: string
+              pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+            compartments:
+              type: array
+              items:
+                type: string
+                pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+              maxItems: 64
+          required:
+            - classification
+            - compartments
+          additionalProperties: false
+        session:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum:
+                - edit
+                - app
+            ephemeral:
+              type: boolean
+            user_id:
+              type: string
+              minLength: 1
+            editor_sandbox_sharing:
+              type: string
+              enum:
+                - shared
+                - exclusive
+          required:
+            - user_id
+          additionalProperties: false
+        mode:
+          type: string
+          enum:
+            - edit
+            - app
+      required:
+        - source
+        - kind
+      additionalProperties: false
+    PolicyAuthorizationContextV1:
+      oneOf:
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum:
+                - live-self
+          required:
+            - mode
+          additionalProperties: false
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum:
+                - synthetic
+            value:
+              type:
+                - object
+                - 'null'
+              properties:
+                schemaVersion:
+                  type: number
+                  enum:
+                    - 1
+                classification:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                compartments:
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                  maxItems: 64
+                policyVersion:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                expiresAt:
+                  type: string
+                  format: date-time
+              required:
+                - schemaVersion
+                - classification
+                - compartments
+                - policyVersion
+                - expiresAt
+              additionalProperties: false
+          required:
+            - mode
+            - value
+          additionalProperties: false
     WorkspaceItem:
       type: object
       properties:
@@ -5790,6 +6462,149 @@ paths:
                       - true
                   data:
                     $ref: '#/components/schemas/DeploymentConfig'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/policy-analyzer/metadata:
+    get:
+      operationId: admin.policyAnalyzer.metadata
+      tags:
+        - Admin
+      summary: Describe policy analyzer inputs
+      security: *a2
+      responses:
+        '200':
+          description: Policy analyzer metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PolicyAnalyzerMetadata'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/policy-analyzer/evaluate:
+    post:
+      operationId: admin.policyAnalyzer.evaluate
+      x-cli-hidden: true
+      tags:
+        - Admin
+      summary: Evaluate a policy test suite
+      security: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicySuiteV1'
+      responses:
+        '200':
+          description: Policy analysis results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PolicySuiteResult'
                 required:
                   - success
                   - data

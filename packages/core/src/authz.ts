@@ -67,6 +67,21 @@ export interface AuthzPolicy {
 	projectCreationRestricted?: boolean;
 }
 
+export type EffectiveRoleSource =
+	| 'static-super-admin'
+	| 'entitlement-super-admin'
+	| 'owner'
+	| 'member-id'
+	| 'member-email'
+	| 'entitlement-default'
+	| 'deployment-default'
+	| 'none';
+
+export interface EffectiveRoleResolution {
+	role: Role | null;
+	source: EffectiveRoleSource;
+}
+
 /**
  * Whether the caller is a deployment super admin, either from static config or
  * a mapped OIDC session entitlement. Super admins hold implicit `admin` on
@@ -108,15 +123,57 @@ export function effectiveRole(
 	subject: AuthSubject,
 	policy?: AuthzPolicy,
 ): Role | null {
-	if (isSuperAdmin(subject, policy?.superAdmins)) return 'admin';
-	if (project.owner === subject.id) return 'admin';
+	return resolveEffectiveRole(project, subject, policy).role;
+}
+
+export function resolveEffectiveRole(
+	project: Project,
+	subject: AuthSubject,
+	policy?: AuthzPolicy,
+): EffectiveRoleResolution {
+	if (subject.entitlements?.includes('super-admin') === true) {
+		return { role: 'admin', source: 'entitlement-super-admin' };
+	}
+	if (anyRefMatchesSubject(policy?.superAdmins, subject)) {
+		return { role: 'admin', source: 'static-super-admin' };
+	}
+	if (project.owner === subject.id) return { role: 'admin', source: 'owner' };
 	let best: Role | null = null;
+	let source: 'member-id' | 'member-email' | undefined;
 	for (const member of project.members) {
 		if (!memberRefMatchesSubject(member, subject)) continue;
-		if (best === null || RANK[member.role] > RANK[best]) best = member.role;
+		if (
+			best === null ||
+			RANK[member.role] > RANK[best] ||
+			(RANK[member.role] === RANK[best] &&
+				member.user_id !== undefined &&
+				source === 'member-email')
+		) {
+			best = member.role;
+			source = member.user_id !== undefined ? 'member-id' : 'member-email';
+		}
 		if (best === 'admin') break;
 	}
-	return best ?? subjectDefaultRole(subject, policy);
+	if (best !== null) return { role: best, source: source ?? 'member-id' };
+
+	let entitlementRole: AssignableRole | null = null;
+	for (const entitlement of subject.entitlements ?? []) {
+		const candidate = ENTITLEMENT_ROLE[entitlement];
+		if (candidate && (entitlementRole === null || RANK[candidate] > RANK[entitlementRole])) {
+			entitlementRole = candidate;
+		}
+	}
+	if (entitlementRole !== null) {
+		const deploymentRole = policy?.defaultRole ?? null;
+		if (deploymentRole !== null && RANK[deploymentRole] >= RANK[entitlementRole]) {
+			return { role: deploymentRole, source: 'deployment-default' };
+		}
+		return { role: entitlementRole, source: 'entitlement-default' };
+	}
+	if (policy?.defaultRole !== undefined && policy.defaultRole !== null) {
+		return { role: policy.defaultRole, source: 'deployment-default' };
+	}
+	return { role: null, source: 'none' };
 }
 
 /** True if the caller's role on the project is at least `min`. */
