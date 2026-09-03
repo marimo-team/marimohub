@@ -21,10 +21,14 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@hono/mcp": "catalog:",
 		"@hono/zod-openapi": "catalog:",
 		"@marimo-hub/core": "workspace:*",
+		"@modelcontextprotocol/sdk": "catalog:",
 		"fflate": "^0.8.2",
-		"hono": "catalog:"
+		"hono": "catalog:",
+		"hono-rate-limiter": "catalog:",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

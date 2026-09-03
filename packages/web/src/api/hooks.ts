@@ -191,6 +191,47 @@ export function useApproveScopedCliDeviceAuthorization() {
 	);
 }
 
+export function useOAuthAuthorizationPreview(id: string | null) {
+	return useQuery({
+		queryKey: ['oauth-authorization', id],
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/me/oauth-authorizations/{id}', {
+					params: { path: { id: id as string } },
+				}),
+			),
+		enabled: id !== null,
+		retry: false,
+	});
+}
+
+export function useApproveOAuthAuthorization() {
+	return useApiMutation(
+		(input: { id: string; grant: TokenGrant; token_name?: string; expires_in_days: number }) =>
+			apiData(
+				apiClient.POST('/api/v1/me/oauth-authorizations/{id}/approve', {
+					params: { path: { id: input.id } },
+					body: {
+						grant: input.grant,
+						...(input.token_name ? { token_name: input.token_name } : {}),
+						expires_in_days: input.expires_in_days,
+					},
+				}),
+			),
+		() => [userKeys.tokens()],
+	);
+}
+
+export function useDenyOAuthAuthorization() {
+	return useApiMutation((id: string) =>
+		apiData(
+			apiClient.POST('/api/v1/me/oauth-authorizations/{id}/deny', {
+				params: { path: { id } },
+			}),
+		),
+	);
+}
+
 // System
 
 /** Deployment metadata for the footer info popover. */

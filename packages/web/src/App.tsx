@@ -31,6 +31,11 @@ const CliDeviceLoginPage = lazy(() =>
 		default: module.CliDeviceLoginPage,
 	})),
 );
+const OAuthConsentPage = lazy(() =>
+	import('@/components/Account/OAuthConsentPage').then((module) => ({
+		default: module.OAuthConsentPage,
+	})),
+);
 
 function AppErrorBoundary({ children }: { children: React.ReactNode }) {
 	return (
@@ -157,6 +162,7 @@ function AppContent() {
 					<Routes>
 						<Route path="/cli/login" element={<CliLoginPage />} />
 						<Route path="/cli/device" element={<CliDeviceLoginPage />} />
+						<Route path="/oauth/consent" element={<OAuthConsentPage />} />
 						<Route path="/projects/:pid/notebooks/:nid" element={<NotebookPage />} />
 						{/* The shared app, full-screen like the editor (outside StandardLayout). */}
 						<Route

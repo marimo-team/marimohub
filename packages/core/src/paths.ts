@@ -1,5 +1,7 @@
 import type {
 	CliAuthorizationId,
+	OAuthAuthorizationId,
+	OAuthClientId,
 	IntegrationId,
 	JobId,
 	NotebookId,
@@ -281,6 +283,10 @@ export const paths = {
 	cliAuthorizationsPrefix: '_system/cli-authorizations/',
 	cliDeviceUserCode: (code: string) => `_system/cli-device-user-codes/${code}.json`,
 	cliDeviceUserCodesPrefix: '_system/cli-device-user-codes/',
+	oauthClient: (id: OAuthClientId) => `_system/oauth-clients/${id}.json`,
+	oauthClientsPrefix: '_system/oauth-clients/',
+	oauthAuthorization: (id: OAuthAuthorizationId) => `_system/oauth-authorizations/${id}.json`,
+	oauthAuthorizationsPrefix: '_system/oauth-authorizations/',
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,

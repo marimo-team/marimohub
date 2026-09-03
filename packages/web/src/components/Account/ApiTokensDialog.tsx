@@ -10,7 +10,12 @@ import {
 	TextField,
 	WriteOnceWarning,
 } from '@/components/ui';
-import { useApiTokensQuery, useCreateScopedApiToken, useRevokeApiToken } from '@/api/hooks';
+import {
+	useApiTokensQuery,
+	useCapabilitiesQuery,
+	useCreateScopedApiToken,
+	useRevokeApiToken,
+} from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { formatDuration, formatRelative } from '@/lib/time';
 import type { ApiToken, ApiTokenCreated } from '@/types';
@@ -18,6 +23,7 @@ import { TokenGrantEditor } from './TokenGrantEditor';
 import { tokenGrantFromDraft } from './tokenGrantDraft';
 import type { TokenGrantDraft } from './tokenGrantDraft';
 import { TOKEN_GRANT_PRESETS } from '@marimo-hub/core/token-grants';
+import { DOCS_MCP_URL } from '@/lib/links';
 
 export interface ApiTokensDialogProps {
 	isOpen: boolean;
@@ -66,6 +72,7 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 	const { data: tokens } = useApiTokensQuery(isOpen);
 	const createToken = useCreateScopedApiToken();
 	const revokeToken = useRevokeApiToken();
+	const { data: capabilities } = useCapabilitiesQuery(isOpen);
 
 	const [name, setName] = useState('');
 	const [expiresInDays, setExpiresInDays] = useState('');
@@ -131,6 +138,20 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 					<code className="text-xs">Authorization: Bearer …</code>. Tokens cannot manage other
 					tokens.
 				</p>
+				{capabilities?.mcp.available && capabilities.mcp.url ? (
+					<div className="flex flex-col gap-2 rounded-md border p-3">
+						<span className="text-xs font-semibold">MCP server URL</span>
+						<CopyField label="MCP server URL" value={capabilities.mcp.url} hideLabel />
+						<a
+							href={DOCS_MCP_URL}
+							target="_blank"
+							rel="noreferrer"
+							className="text-xs text-primary underline-offset-2 hover:underline"
+						>
+							How to connect an MCP client
+						</a>
+					</div>
+				) : null}
 
 				{created && (
 					<div className="flex flex-col gap-2 rounded-md border p-3">

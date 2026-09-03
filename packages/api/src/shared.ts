@@ -1440,6 +1440,10 @@ export const CapabilitiesResponseSchema = z
 			max_timeout_seconds: z.number().int().nullable(),
 			run_retention_days: z.number().nullable(),
 		}),
+		mcp: z.object({
+			available: z.boolean(),
+			url: z.string().nullable(),
+		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({
 			available: z.boolean(),

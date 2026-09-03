@@ -1381,6 +1381,26 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'MCP',
+		description:
+			'Expose marimohub notebooks to MCP clients through a built-in OAuth 2.1 authorization server. Off unless `MARIMOHUB_MCP=on`. A fixed public base URL is required so clients receive stable absolute OAuth metadata. See [MCP server](./mcp.md).',
+		backends: [
+			{
+				name: 'Server',
+				vars: [
+					{
+						id: 'MARIMOHUB_MCP',
+						name: 'MCP server',
+						description:
+							'Enable the MCP endpoint and OAuth server. Requires `MARIMOHUB_APP_BASE_URL`. Accepted values are `on` and `off`.',
+						default: 'off',
+						example: 'on',
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Jobs',
 		description:
 			'Headless notebook runs on a cron schedule or on demand, with a durable run history. Off unless `MARIMOHUB_JOBS=on`. Node deployments dispatch jobs on the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`) and honor the tuning variables below. Cloudflare Workers dispatch from the platform `scheduled()` handler and use the fixed defaults: 5 concurrent runs, 2 per project, 5 jobs per notebook, 1800-second default and 14400-second maximum timeouts, 30-day retention, and a 600-second catch-up window. See [Notebook jobs](./jobs.md).',

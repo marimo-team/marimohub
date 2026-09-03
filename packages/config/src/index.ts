@@ -16,6 +16,7 @@ import {
 	composeAuthenticators,
 	createServices,
 	Millis,
+	normalizeBaseUrl,
 	MAX_TIMER_DELAY_MS,
 	ProxyExposure,
 	ASSIGNABLE_ROLES,
@@ -45,7 +46,7 @@ import type {
 	SandboxProvider,
 	ViewerMode,
 } from '@marimo-hub/core';
-import type { ApiDeps, JobsConfig, SessionLifetimeConfig } from '@marimo-hub/api';
+import type { ApiDeps, JobsConfig, McpConfig, SessionLifetimeConfig } from '@marimo-hub/api';
 import { evaluateLoginPolicy } from '@marimo-hub/auth-oidc';
 import { makeAi } from './ai';
 import {
@@ -396,6 +397,28 @@ function parseJobsConfig(env: Env): JobsConfig | undefined {
 	};
 }
 
+function parseMcpConfig(env: Env): McpConfig | undefined {
+	if (!parseOnOff(env, 'MARIMOHUB_MCP', { fallback: false, docs: 'docs/mcp.md' })) {
+		return undefined;
+	}
+	const baseUrl = env.MARIMOHUB_APP_BASE_URL;
+	if (!baseUrl) {
+		throw new ConfigError('MARIMOHUB_APP_BASE_URL is required when MARIMOHUB_MCP=on', {
+			variable: 'MARIMOHUB_MCP',
+			remediation: 'Set MARIMOHUB_APP_BASE_URL to the public marimohub URL.',
+			docs: 'docs/mcp.md',
+		});
+	}
+	try {
+		return { publicBaseUrl: normalizeBaseUrl(baseUrl) };
+	} catch {
+		throw new ConfigError('MARIMOHUB_APP_BASE_URL must be an absolute URL when MARIMOHUB_MCP=on', {
+			variable: 'MARIMOHUB_APP_BASE_URL',
+			docs: 'docs/mcp.md',
+		});
+	}
+}
+
 /** Session-lifecycle defaults (seconds). See docs/configuration.md#server--api. */
 const DEFAULT_SESSION_SNAPSHOT_INTERVAL_S = 120; // 2m periodic-save floor
 const DEFAULT_SESSION_LIFETIME_EXTENSION_S = 1800; // 30m slide while editors connected
@@ -687,6 +710,7 @@ export function createFromEnv(
 			surfaces,
 		},
 		jobs: parseJobsConfig(env),
+		mcp: parseMcpConfig(env),
 		policy: {
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),

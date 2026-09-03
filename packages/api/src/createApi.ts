@@ -34,8 +34,10 @@ import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import tokensApp from './routes/tokens';
 import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
+import oauthAuthorizationsApp from './routes/oauthAuthorizations';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
+import { createMcpApp } from './mcp/createMcpApp';
 import { sandboxProxyMiddleware } from './sandboxProxy';
 import {
 	authMethodFor,
@@ -378,6 +380,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// cloud fetches these anonymously to validate hub-issued JWTs, so they mount
 	// before the authN guard (and 404 when WIF is unconfigured).
 	app.route('/', createOidcDiscovery(deps));
+	app.route('/', createMcpApp(deps));
 
 	// Managed-AI proxy. Notebook kernels call it server-to-server with a minted
 	// session token (no app cookie), so it mounts OUTSIDE the `/api/v1/*` cookie-auth
@@ -512,6 +515,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, usersApp);
 	app.route(API_PREFIX, tokensApp);
 	app.route(API_PREFIX, cliAuthorizationsApp);
+	app.route(API_PREFIX, oauthAuthorizationsApp);
 
 	// Declare the cookie-session auth scheme the global `security` requirement
 	// (OPENAPI_DOC) points at, so generated clients know the API is authenticated.

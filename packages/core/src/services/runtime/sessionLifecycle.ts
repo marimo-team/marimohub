@@ -75,7 +75,7 @@ export type ConnectionProbe = (
  * `/proxy/<token>` under proxy exposure (where the URL's path IS marimo's
  * `--base-url`), empty under subdomain exposure (kernel at root).
  */
-function kernelBasePath(s: Session): string {
+export function kernelBasePath(s: Session): string {
 	if (!s.sandbox_url) return '';
 	try {
 		return new URL(s.sandbox_url).pathname.replace(/\/$/, '');

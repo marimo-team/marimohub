@@ -108,6 +108,10 @@ s3-bucket/
 │   │   └── {authorization-id}.json         ← short-lived PKCE login grant (CAS-claimed)
 │   ├── cli-device-user-codes/
 │   │   └── {user-code}.json                ← immutable lookup claim for a device grant
+│   ├── oauth-clients/
+│   │   └── {client-id}.json                ← immutable dynamic client registration
+│   ├── oauth-authorizations/
+│   │   └── {authorization-id}.json         ← short-lived MCP OAuth grant (CAS-claimed)
 │   ├── integrations/                       ← organization-wide integrations (§4.12)
 │   │   ├── _names/
 │   │   │   └── {name}.json                 ← name claim (CAS, app-claim pattern)
@@ -215,6 +219,8 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `_system/tokens/{token-id}.json`                                          | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
 | `_system/cli-authorizations/{authorization-id}.json`                      | JSON     | Ten-minute browser-to-CLI PKCE grant. Stores hashes/challenges, never a PAT or plaintext authorization secret. `CliAuthorizationService` CAS-claims it before minting one token, then deletes it. See §4.11.1.                                                                                                                                                                                                                                                                                         |
 | `_system/cli-device-user-codes/{user-code}.json`                          | JSON     | Create-if-absent lookup claim from an eight-letter device user code to its short-lived CLI authorization. `CliAuthorizationService` owns the claim. It deletes the claim after exchange and prunes it after ten minutes. See §4.11.1.                                                                                                                                                                                                                                                                  |
+| `_system/oauth-clients/{client-id}.json`                                  | JSON     | Immutable dynamic OAuth client registration owned by `OAuthClientStore`. Public clients expire after 90 days. See §4.11.2.                                                                                                                                                                                                                                                                                                                                                                             |
+| `_system/oauth-authorizations/{authorization-id}.json`                    | JSON     | Ten-minute MCP OAuth authorization owned by `OAuthAuthorizationService`. Approval CAS-writes a hashed one-time code; exchange CAS-claims it before minting a scoped PAT and deleting the record. See §4.11.2.                                                                                                                                                                                                                                                                                          |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                             | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/events/{YYYY-MM-DD}/_idempotency/{key}.json`                     | JSON     | Create-if-absent mapping from a stable operation key to one event ID and serialized event body. A retry repairs a missing event object from this marker without changing its append position or payload.                                                                                                                                                                                                                                                                                               |
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
@@ -690,6 +696,22 @@ Old replicas reject the v2 states. During a mixed rollout, they can reject a
 scoped authorization or token. They cannot mint or authenticate it as a legacy
 full-access token.
 
+### 4.11.2 MCP OAuth records
+
+`OAuthClientStore` creates immutable dynamic client registrations under
+`_system/oauth-clients/`. Every client is public
+(`token_endpoint_auth_method: "none"`), has one or more validated redirect URIs,
+and expires after 90 days. Registration prunes at most 100 expired records.
+
+`OAuthAuthorizationService` owns ten-minute authorization records under
+`_system/oauth-authorizations/`. `begin` creates a pending record with the
+client, redirect, PKCE challenge, state, scopes, and resource. Browser approval
+uses ETag CAS to bind the user, scoped token grant, PAT lifetime, and the hash of
+a one-time `mhub_oac_…` code. Exchange verifies every binding, CAS-claims the
+record, creates one scoped PAT, and deletes the authorization in a `finally`
+cleanup. Denial deletes the pending record and redirects with
+`error=access_denied`.
+
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 
 A project integration instance — a named, versioned configuration of a code-registered _kind_ (`postgres`, `iceberg_rest`, …) rendered into every session's sandbox as env vars + files. Two records:
@@ -1154,7 +1176,7 @@ Schema migrations are a first-class concern because there is no database to run 
 | `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions.                                                                                                                              |
 | `catalog.json`                               | Migrated in place during the first write after a deployment that changes the catalog version. Its strict `version` value is not forward-tolerant.                                                                                                                                 |
 
-> **No `schema_version` by design:** mutable operational records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), CLI authorizations (`_system/cli-authorizations/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
+> **No `schema_version` by design:** mutable operational records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), CLI and OAuth authorizations (`_system/cli-authorizations/**`, `_system/oauth-authorizations/**`), OAuth clients (`_system/oauth-clients/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
 
 ### Migration job pseudocode
 

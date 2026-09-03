@@ -22,8 +22,14 @@ export default defineConfig({
 		dts: false,
 		noExternal: [
 			/^@marimo-hub\//,
+			/^@modelcontextprotocol\//,
 			/^hono/,
+			/^hono-rate-limiter$/,
 			/^@hono\//,
+			/^pkce-challenge$/,
+			/^zod-to-json-schema$/,
+			/^ajv(-formats)?$/,
+			/^json-schema-typed$/,
 			/^jose$/,
 			/^oauth4webapi$/,
 			// ofetch + its (pure-JS) deps must be bundled — the runtime image ships
