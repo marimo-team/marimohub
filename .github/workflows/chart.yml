@@ -73,20 +73,66 @@ jobs:
         run: |
           render=$(helm template test charts/marimohub \
             -f charts/marimohub/ci/kubernetes-secrets-values.yaml)
-          grep -Fq 'resourceNames:' <<< "$render"
-          grep -Fq -- '- provider-a' <<< "$render"
-          grep -Fq 'verbs: ["get"]' <<< "$render"
-          if grep -Eq 'verbs:.*(list|watch)' <<< "$render"; then
-            exit 1
-          fi
+          ruby -ryaml -e '
+            documents = YAML.load_stream(STDIN.read).compact
+            roles = documents.select { |document| document["kind"] == "Role" }
+            bindings = documents.select { |document| document["kind"] == "RoleBinding" }
+            expected = {
+              "connections-a" => ["provider-a", "provider-b"],
+              "connections-b" => ["provider-c"],
+            }
+            abort "unexpected Secret Role count" unless roles.length == expected.length
+            abort "unexpected Secret RoleBinding count" unless bindings.length == expected.length
+            role_namespaces = roles.map { |role| role.dig("metadata", "namespace") }.sort
+            binding_namespaces = bindings.map { |binding| binding.dig("metadata", "namespace") }.sort
+            abort "unexpected Secret Role namespaces" unless role_namespaces == expected.keys.sort
+            abort "unexpected Secret RoleBinding namespaces" unless binding_namespaces == expected.keys.sort
+            roles.each do |role|
+              namespace = role.dig("metadata", "namespace")
+              names = expected.fetch(namespace) { abort "unexpected Secret Role namespace" }
+              rule = {
+                "apiGroups" => [""],
+                "resources" => ["secrets"],
+                "resourceNames" => names,
+                "verbs" => ["get"],
+              }
+              abort "unexpected Secret Role rules" unless role["rules"] == [rule]
+              role_name = role.dig("metadata", "name")
+              binding = bindings.find { |item| item.dig("metadata", "namespace") == namespace }
+              abort "missing Secret RoleBinding" unless binding
+              abort "unexpected Secret RoleBinding name" unless binding.dig("metadata", "name") == role_name
+              expected_role_ref = {
+                "apiGroup" => "rbac.authorization.k8s.io",
+                "kind" => "Role",
+                "name" => role_name,
+              }
+              abort "unexpected Secret RoleBinding roleRef" unless binding["roleRef"] == expected_role_ref
+              expected_subjects = [{
+                "kind" => "ServiceAccount",
+                "name" => "test-marimohub",
+                "namespace" => "default",
+              }]
+              abort "unexpected Secret RoleBinding subjects" unless binding["subjects"] == expected_subjects
+            end
+          ' <<< "$render"
           grep -Fq 'name: MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS' <<< "$render"
           grep -Fq '\"name\":\"provider-a\"' <<< "$render"
+          grep -Fq '\"name\":\"provider-b\"' <<< "$render"
+          grep -Fq '\"name\":\"provider-c\"' <<< "$render"
           grep -Fq '\"projects\":\"*\"' <<< "$render"
 
           if helm template test charts/marimohub \
             --set secretResolvers.kubernetes.enabled=true; then
             exit 1
           fi
+
+          if token_mount_error=$(helm template test charts/marimohub \
+            -f charts/marimohub/ci/kubernetes-secrets-values.yaml \
+            --set serviceAccount.automountServiceAccountToken=false 2>&1); then
+            exit 1
+          fi
+          grep -Fq 'serviceAccount.automountServiceAccountToken must be true' \
+            <<< "$token_mount_error"
 
           assert_invalid_policy() {
             if helm template test charts/marimohub \

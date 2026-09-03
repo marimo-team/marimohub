@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAwsSecretsManagerResolver } from '@marimo-hub/secrets-aws';
 import { createKubernetesSecretResolver } from '@marimo-hub/secrets-kubernetes';
 import type * as KubernetesSecretsModule from '@marimo-hub/secrets-kubernetes';
-import { makeSecretSources } from './secrets';
+import { makeManagedSecretCodec, makeSecretSources } from './secrets';
 import { ConfigError } from './errors';
 
 vi.mock('@marimo-hub/secrets-aws', () => ({
@@ -28,6 +28,7 @@ vi.mock('@marimo-hub/secrets-kubernetes', async (importOriginal) => ({
 }));
 
 const PROJECT = 'proj-0000000000000000';
+const KEK = '00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100';
 const ALLOWED_SECRETS = JSON.stringify([
 	{ namespace: 'connections-a', name: 'provider-a', projects: '*' },
 	{ namespace: 'connections-b', name: 'provider-b', projects: [PROJECT] },
@@ -74,11 +75,12 @@ describe('makeSecretSources', () => {
 	});
 
 	it('registers Kubernetes and AWS resolvers together', () => {
-		const sources = makeSecretSources({
+		const env = {
 			MARIMOHUB_SECRETS_AWS_REGION: 'us-east-1',
 			MARIMOHUB_SECRETS_KUBERNETES: 'true',
 			MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS: ALLOWED_SECRETS,
-		});
+		};
+		const sources = makeSecretSources(env);
 		expect(sources.resolvers.map(({ backend }) => backend)).toEqual(['aws-sm', 'k8s']);
 		expect(createKubernetesSecretResolver).toHaveBeenCalledWith({
 			allowedSecrets: [
@@ -86,7 +88,19 @@ describe('makeSecretSources', () => {
 				{ namespace: 'connections-b', name: 'provider-b', projects: [PROJECT] },
 			],
 			cacheTtlMs: 0,
+			env,
 		});
+		expect(vi.mocked(createKubernetesSecretResolver).mock.calls[0]?.[0].env).toBe(env);
+	});
+
+	it('constructs the managed codec without parsing or loading resolvers', () => {
+		const codec = makeManagedSecretCodec({
+			MARIMOHUB_SECRETS_KEK: KEK,
+			MARIMOHUB_SECRETS_KUBERNETES: 'true',
+			MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS: 'not-json',
+		});
+		expect(codec).toBeDefined();
+		expect(createKubernetesSecretResolver).not.toHaveBeenCalled();
 	});
 
 	it('requires a policy when Kubernetes is enabled', () => {

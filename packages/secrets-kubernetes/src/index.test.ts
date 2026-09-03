@@ -248,6 +248,48 @@ describe('KubernetesSecretResolver caching', () => {
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		['a missing key', undefined],
+		['invalid base64', 'not-base64'],
+		['invalid UTF-8', '/w=='],
+	] as const)('keeps the operation snapshot after %s fails', async (_name, badValue) => {
+		let generation = 0;
+		const fetch = vi.fn(async () => {
+			generation++;
+			return secret({
+				...(badValue === undefined ? {} : { bad: badValue }),
+				good: encoded(`good-${generation}`),
+			});
+		});
+		const r = resolver(fetch);
+		const context = projectContext();
+		const locator = 'connections/provider#bad';
+		const error = await r.resolve(ref(locator), context).catch((caught: unknown) => caught);
+		expect(error).toMatchObject({ reason: 'invalid_value' });
+		expect(String(error)).not.toContain(locator);
+		expect(String(error)).not.toContain('connections');
+		expect(String(error)).not.toContain('provider');
+		expect(String(error)).not.toContain(badValue ?? 'bad');
+		await expect(r.resolve(ref('connections/provider#good'), context)).resolves.toBe('good-1');
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps a valid TTL snapshot after a key-level failure', async () => {
+		let generation = 0;
+		const fetch = vi.fn(async () => {
+			generation++;
+			return secret({ good: encoded(`good-${generation}`) });
+		});
+		const r = resolver(fetch, 1000);
+		await expect(
+			r.resolve(ref('connections/provider#missing'), projectContext()),
+		).rejects.toMatchObject({ reason: 'invalid_value' });
+		await expect(r.resolve(ref('connections/provider#good'), projectContext())).resolves.toBe(
+			'good-1',
+		);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
 	it('reads afresh across operations when the TTL is zero', async () => {
 		const fetch = vi.fn(async () => secret());
 		const r = resolver(fetch);
@@ -316,6 +358,10 @@ describe('KubernetesSecretResolver API errors', () => {
 		[{ code: 404 }, 'not_found'],
 		[{ statusCode: 401 }, 'forbidden'],
 		[{ body: { code: 403 } }, 'forbidden'],
+		[{ response: { statusCode: 404 } }, 'not_found'],
+		[{ response: { statusCode: 401 } }, 'forbidden'],
+		[{ response: { status: 403 } }, 'forbidden'],
+		[{ response: { status: 503 } }, 'unavailable'],
 		[{ code: 429 }, 'unavailable'],
 		[{ statusCode: 503 }, 'unavailable'],
 		[new Error('provider sensitive-key'), 'unavailable'],

@@ -113,8 +113,10 @@ serviceAccount:
 ```
 
 Set `automountServiceAccountToken: false` when marimohub does not need a projected
-Kubernetes token. Keep it enabled for Kubernetes compute and workload identity
-providers that use that token. This account belongs to the marimohub control plane;
+Kubernetes token. Keep it enabled for Kubernetes compute, Kubernetes Secret
+resolution, and workload identity providers that use that token.
+
+This account belongs to the marimohub control plane.
 `config.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` separately selects the
 ServiceAccount assigned to notebook kernel pods.
 

@@ -97,22 +97,22 @@ export class KubernetesSecretResolver implements SecretResolver {
 		assertOwnerAuthorized(policy, context);
 
 		const cacheKey = secretCacheKey(locator.namespace, locator.name);
+		const secret = await this.fetchForOperation(context, locator.namespace, locator.name);
 		try {
-			const secret = await this.fetchForOperation(context, locator.namespace, locator.name);
 			assertOptedIn(secret);
-			const encoded = secret.data?.[locator.key];
-			if (encoded === undefined) {
-				throw new SecretResolutionError(
-					'invalid_value',
-					'Kubernetes Secret does not contain the requested data key.',
-				);
-			}
-			return decodeSecretValue(encoded);
 		} catch (error) {
 			this.cache.delete(cacheKey);
 			this.operationCache.get(context)?.delete(cacheKey);
 			throw error;
 		}
+		const encoded = secret.data?.[locator.key];
+		if (encoded === undefined) {
+			throw new SecretResolutionError(
+				'invalid_value',
+				'Kubernetes Secret does not contain the requested data key.',
+			);
+		}
+		return decodeSecretValue(encoded);
 	}
 
 	private fetchForOperation(
@@ -171,13 +171,14 @@ export class KubernetesSecretResolver implements SecretResolver {
 export interface CreateKubernetesSecretResolverOptions {
 	allowedSecrets: readonly KubernetesSecretPolicy[];
 	cacheTtlMs?: number;
+	env?: NodeJS.ProcessEnv;
 }
 
 export function createKubernetesSecretResolver(
 	options: CreateKubernetesSecretResolverOptions,
 ): KubernetesSecretResolver {
 	const config = new KubeConfig();
-	loadKubernetesConfiguration(config);
+	loadKubernetesConfiguration(config, options.env);
 	const client = config.makeApiClient(CoreV1Api);
 	return new KubernetesSecretResolver({
 		allowedSecrets: options.allowedSecrets,
@@ -285,8 +286,15 @@ function kubernetesStatus(error: unknown): number | undefined {
 		code?: unknown;
 		statusCode?: unknown;
 		body?: { code?: unknown };
+		response?: { statusCode?: unknown; status?: unknown };
 	};
-	for (const value of [candidate.code, candidate.statusCode, candidate.body?.code]) {
+	for (const value of [
+		candidate.response?.statusCode,
+		candidate.response?.status,
+		candidate.code,
+		candidate.statusCode,
+		candidate.body?.code,
+	]) {
 		if (typeof value === 'number') return value;
 	}
 	return undefined;

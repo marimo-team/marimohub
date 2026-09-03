@@ -29,7 +29,7 @@ import type { Env } from './env';
 import { readFolded } from './env';
 import { createGuardedProbe } from './integrationProbe';
 import { sendNotificationRequest } from './notificationTransport';
-import { makeSecretSources } from './secrets';
+import { makeManagedSecretCodec } from './secrets';
 
 const DOCS = 'docs/project-alerts.md';
 const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
@@ -55,7 +55,7 @@ export function makeProjectAlerts(
 	metrics: Metrics = noopMetrics,
 ): ProjectAlertsConfig | undefined {
 	if (!projectAlertsEnabled(env)) return undefined;
-	const codec = makeSecretSources(env).codec;
+	const codec = makeManagedSecretCodec(env);
 	if (!codec) {
 		throw new ConfigError(
 			'MARIMOHUB_PROJECT_ALERTS requires MARIMOHUB_SECRETS_KEK for encrypted destination storage',

@@ -22,7 +22,7 @@ export function makeSecretSources(env: Env): IntegrationSecretSources {
 	if (aws) resolvers.push(aws);
 	const kubernetes = makeKubernetesResolver(env);
 	if (kubernetes) resolvers.push(kubernetes);
-	return { codec: makeManagedCodec(env), resolvers };
+	return { codec: makeManagedSecretCodec(env), resolvers };
 }
 
 function makeKubernetesResolver(env: Env): SecretResolver | undefined {
@@ -71,6 +71,7 @@ function makeKubernetesResolver(env: Env): SecretResolver | undefined {
 		return createKubernetesSecretResolver({
 			allowedSecrets,
 			cacheTtlMs,
+			env,
 		});
 	} catch (error) {
 		throw new ConfigError(
@@ -80,7 +81,7 @@ function makeKubernetesResolver(env: Env): SecretResolver | undefined {
 	}
 }
 
-function makeManagedCodec(env: Env): ManagedSecretCodec | undefined {
+export function makeManagedSecretCodec(env: Env): ManagedSecretCodec | undefined {
 	const kek = env.MARIMOHUB_SECRETS_KEK?.trim();
 	if (!kek) return undefined;
 	try {
