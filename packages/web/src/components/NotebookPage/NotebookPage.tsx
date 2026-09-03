@@ -53,6 +53,7 @@ import type { Theme } from '@/context/ThemeContext';
 import { canManageProject } from '@/lib/roles';
 import { SurfaceMenu } from './SurfaceMenu';
 import type { SecondarySurfaceFrame } from './SurfaceMenu';
+import { ShareMenu } from './ShareMenu';
 
 const SURFACE_TAB_ICONS = {
 	vscode: Code2,
@@ -444,12 +445,14 @@ function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }
 		!!sourceProvider &&
 		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
 		canManageProject(project.your_role);
+	const canRunApp = !isViewer || (capabilities?.viewer_session_modes ?? []).includes('app');
 	return {
 		appStale,
 		applicationTabs,
 		author,
 		backToProject,
 		canOpenChangeRequest,
+		canRunApp,
 		canRetryWithDefault,
 		capabilities,
 		closeSecondaryFrame,
@@ -519,6 +522,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		author,
 		backToProject,
 		canOpenChangeRequest,
+		canRunApp,
 		canRetryWithDefault,
 		capabilities,
 		closeSecondaryFrame,
@@ -636,6 +640,9 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
+					{!isApp && (
+						<ShareMenu projectId={pid!} notebookId={nid!} title={title} canRunApp={canRunApp} />
+					)}
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}
