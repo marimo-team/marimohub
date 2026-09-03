@@ -142,14 +142,12 @@ secretResolvers:
           - proj-0000000000000000
 ```
 
-Each rule contains one namespace, one Secret name, and one project policy. Set
-`projects` to `"*"` or a non-empty list of project IDs. Organization integrations
-require `"*"` because all projects can inherit them.
+Each rule allows one exact Secret. Set `projects` to `"*"` or a non-empty list
+of project IDs. Organization integrations require `"*"`.
 
-The chart creates one Role and RoleBinding in each listed namespace. Each Role
-grants only `get` on the listed Secret names. It never grants `list` or `watch`.
-The API and maintenance pods use the configured ServiceAccount.
+The chart creates a Role and RoleBinding in each namespace. Each Role grants
+`get` only for the named Secrets. The chart does not create these Secrets.
 
-Create credential Secrets separately. Each one must have the label
-`marimohub.io/integration-secret: "true"`. See the
-[integration secret guide](../../docs/integration-secrets.md#kubernetes-secrets).
+Label each Secret with `marimohub.io/integration-secret: "true"`. The
+[integration secret guide](../../docs/integration-secrets.md#kubernetes-secrets)
+explains locators, access rules, caching, and rotation.

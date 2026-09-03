@@ -122,28 +122,16 @@ MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS='[{"namespace":"connections","name"
 MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS=0
 ```
 
-The policy is a JSON array. Each rule contains an exact namespace, Secret name,
-and project policy. Set `projects` to `"*"` or a non-empty array of project IDs.
-An organization integration requires `"*"` because all projects can inherit it.
-
-The resolver first uses the in-cluster ServiceAccount. Outside a cluster, it
-falls back to the default kubeconfig. It only reads Secrets and does not need
-`list` or `watch` access.
+`MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS` is an array of
+`{ namespace, name, projects }` rules. Each rule allows one Secret. Set
+`projects` to `"*"` or a non-empty array of project IDs. Organization
+integrations require `"*"` because all projects can inherit them.
 
 A locator uses `namespace/secret-name#data-key`. The namespace and Secret name
-must match one policy rule. For example:
+must match one policy rule. For example, use
+`connections/provider-a#access-key-id` with `backend: k8s`.
 
-```json
-{
-	"$secret": {
-		"kind": "reference",
-		"backend": "k8s",
-		"locator": "connections/provider-a#access-key-id"
-	}
-}
-```
-
-Every referenced Secret must explicitly opt in with this label:
+Each referenced Secret must opt in with this label:
 
 ```yaml
 apiVersion: v1
@@ -159,23 +147,25 @@ stringData:
   secret-access-key: example
 ```
 
-The resolver denies access if the label is missing or has another value. The
-deployment policy controls project access. Thus, project authorization has one
-source instead of duplicate configuration on each Secret.
+The resolver denies a Secret with a missing or different label. Project access
+exists only in the deployment policy, not in Secret metadata.
 
-The default cache TTL is zero. A Secret is then fetched once for each integration
-operation, so a newly started session sees the latest version. A running session
-keeps the credentials that were resolved when it started. Set a positive cache
-TTL only when bounded staleness is acceptable.
+In Kubernetes, the resolver uses the pod ServiceAccount. Outside Kubernetes, it
+uses the default kubeconfig. It needs only `get` access to allowed Secrets.
 
-Put fields that rotate together in the same Kubernetes Secret and select them
-with separate `#data-key` locators. One integration operation uses a single
-snapshot of that Secret. Kubernetes cannot provide an atomic read across separate
-Secret objects.
+The default cache TTL is zero. The resolver then reads each Secret once per
+integration operation. New sessions see the latest value. Running sessions keep
+the value that they received at startup.
 
-The Helm chart uses `secretResolvers.kubernetes.allowedSecrets` for the runtime
-policy and RBAC. It creates get-only Roles for the exact Secret names. The chart
-does not create credential Secrets.
+Set a positive cache TTL only if stale values are acceptable.
+
+Put fields that rotate together in one Secret. Select each field with a separate
+`#data-key` locator. One operation uses one snapshot of that Secret. Reads across
+different Secrets are not atomic.
+
+The Helm chart converts `secretResolvers.kubernetes.allowedSecrets` into the
+runtime policy and exact-name, get-only Roles. It does not create credential
+Secrets.
 
 ## Environment variable bundles
 
