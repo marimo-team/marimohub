@@ -1,4 +1,5 @@
 export {
+	authorizeSessionStart,
 	resolveSandboxHostname,
 	SessionCreateBodySchema,
 	SessionCreateResponseSchema,

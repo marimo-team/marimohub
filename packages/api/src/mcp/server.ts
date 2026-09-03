@@ -21,12 +21,17 @@ import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core'
 import type { ApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
 import {
+	assertProjectActionOn,
 	assertSessionAccess,
 	assertSessionNotebookVisible,
 	loadVisibleProject,
 	sessionGrantsFor,
 } from '../shared';
-import { startNotebookSession, toSessionResponse } from '../routes/sessionStart';
+import {
+	authorizeSessionStart,
+	startNotebookSession,
+	toSessionResponse,
+} from '../routes/sessionStart';
 
 export interface StartRequestContext {
 	requestId?: string;
@@ -150,6 +155,51 @@ function newestFirst(left: Session, right: Session): number {
 	return Date.parse(right.last_heartbeat) - Date.parse(left.last_heartbeat);
 }
 
+async function launchMcpNotebook(input: {
+	deps: ApiDeps;
+	principal: AuthenticatedPrincipal;
+	request: StartRequestContext;
+	project: Project;
+	notebookId: ReturnType<typeof NotebookId.parse>;
+	mode: 'edit' | 'app';
+	waitSeconds: number;
+}): Promise<Record<string, unknown>> {
+	const { deps, principal, request, project, notebookId, mode, waitSeconds } = input;
+	const started = await startNotebookSession({
+		deps,
+		user: principal,
+		pid: project.id,
+		nid: notebookId,
+		body: { mode },
+		request,
+	});
+	let session = await deps.services.sessions.getSession(
+		project.id,
+		SessionId.parse(started.session_id),
+	);
+	const deadline = Date.now() + waitSeconds * 1000;
+	while (session.status === 'starting' && Date.now() < deadline) {
+		await sleep(Math.min(2_000, Math.max(0, deadline - Date.now())));
+		session = await deps.services.sessions.getSession(project.id, session.session_id);
+	}
+	const labels = await assertSessionNotebookVisible(deps, project, session, principal);
+	const projected = toSessionResponse(
+		session,
+		await sessionGrantsFor(project, principal, session, deps, labels),
+	);
+	return {
+		project_id: project.id,
+		notebook_id: notebookId,
+		session_id: session.session_id,
+		status: session.status,
+		reused: started.reused,
+		mode: sessionMode(session),
+		notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebookId}`,
+		...(projected.sandbox_url ? { sandbox_url: projected.sandbox_url } : {}),
+		...(session.error ? { error: session.error } : {}),
+	};
+}
+
 export function createMcpServer(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
@@ -226,6 +276,55 @@ export function createMcpServer(
 	);
 
 	server.registerTool(
+		'create_notebook',
+		{
+			description: 'Create a local marimohub notebook and optionally launch an edit session.',
+			inputSchema: z.object({
+				project: z.string(),
+				title: z.string().min(1),
+				description: z.string().default(''),
+				code: z.string(),
+				tags: z.array(z.string()).optional(),
+				readme: z.string().optional(),
+				deps: z.string().optional(),
+				launch: z.boolean().default(false),
+			}),
+		},
+		async ({ project: projectRef, launch, ...notebookInput }) => {
+			try {
+				const project = await resolveProject(deps, principal, projectRef);
+				await assertProjectActionOn(project, principal, 'notebook.write', deps);
+				if (launch) await authorizeSessionStart(project, principal, 'edit', deps);
+				const notebook = await deps.services.notebooks.createNotebook(
+					project.id,
+					notebookInput,
+					principal.id,
+				);
+				const notebookData = {
+					project_id: project.id,
+					notebook_id: notebook.id,
+					title: notebook.title,
+					status: notebook.status,
+					notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebook.id}`,
+				};
+				if (!launch) return result({ ...notebookData, launched: false });
+				const session = await launchMcpNotebook({
+					deps,
+					principal,
+					request,
+					project,
+					notebookId: notebook.id,
+					mode: 'edit',
+					waitSeconds: 60,
+				});
+				return result({ ...notebookData, launched: true, session });
+			} catch (error) {
+				return errorResult('create_notebook', error);
+			}
+		},
+	);
+
+	server.registerTool(
 		'launch_notebook',
 		{
 			description:
@@ -241,39 +340,17 @@ export function createMcpServer(
 			try {
 				const project = await resolveProject(deps, principal, projectRef);
 				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-				const started = await startNotebookSession({
-					deps,
-					user: principal,
-					pid: project.id,
-					nid: notebook.id,
-					body: { mode },
-					request,
-				});
-				let session = await deps.services.sessions.getSession(
-					project.id,
-					SessionId.parse(started.session_id),
+				return result(
+					await launchMcpNotebook({
+						deps,
+						principal,
+						request,
+						project,
+						notebookId: notebook.id,
+						mode,
+						waitSeconds: wait_seconds,
+					}),
 				);
-				const deadline = Date.now() + wait_seconds * 1000;
-				while (session.status === 'starting' && Date.now() < deadline) {
-					await sleep(Math.min(2_000, Math.max(0, deadline - Date.now())));
-					session = await deps.services.sessions.getSession(project.id, session.session_id);
-				}
-				const labels = await assertSessionNotebookVisible(deps, project, session, principal);
-				const projected = toSessionResponse(
-					session,
-					await sessionGrantsFor(project, principal, session, deps, labels),
-				);
-				return result({
-					project_id: project.id,
-					notebook_id: notebook.id,
-					session_id: session.session_id,
-					status: session.status,
-					reused: started.reused,
-					mode: sessionMode(session),
-					notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebook.id}`,
-					...(projected.sandbox_url ? { sandbox_url: projected.sandbox_url } : {}),
-					...(session.error ? { error: session.error } : {}),
-				});
 			} catch (error) {
 				return errorResult('launch_notebook', error);
 			}

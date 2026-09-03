@@ -227,6 +227,7 @@ describe('MCP OAuth app', () => {
 		const toolList = (await mcpJson(tools)) as { result: { tools: { name: string }[] } };
 		expect(toolList.result.tools.map((tool) => tool.name)).toEqual([
 			'list_catalog',
+			'create_notebook',
 			'launch_notebook',
 			'execute_code',
 		]);

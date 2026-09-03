@@ -521,7 +521,7 @@ class EditorClaimLostError extends Error {
  * `edit`, the shared singleton for `app` (identical to an editor-started one,
  * with WIF credentials and integration secrets).
  */
-async function authorizeSessionStart(
+export async function authorizeSessionStart(
 	project: Project,
 	user: AuthUser,
 	mode: SessionMode,

@@ -53,6 +53,11 @@ refresh tokens. Expiry or revocation requires a new authorization.
 Lists accessible projects and notebooks. Filters by project, notebook status,
 tag, or text. Includes active sessions by default.
 
+### `create_notebook`
+
+Creates a local notebook from Python source. Set `launch` to `true` to start an
+edit session and return its session details.
+
 ### `launch_notebook`
 
 Starts or reuses an edit or app session. The first launch can take about two
