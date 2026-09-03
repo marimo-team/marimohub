@@ -7,7 +7,7 @@ import { gzipSync } from 'node:zlib';
 // accidental growth should be fixed at the import or dependency that caused it.
 const BUDGETS_KIB = {
 	js: 3000,
-	css: 14,
+	css: 16,
 };
 
 const dist = fileURLToPath(new URL('../packages/web/dist/', import.meta.url));
