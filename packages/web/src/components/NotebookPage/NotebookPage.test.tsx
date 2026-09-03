@@ -508,6 +508,28 @@ describe('NotebookPage viewer modes', () => {
 		expect(screen.queryByText(/won't be saved/)).toBeNull();
 	});
 
+	it.each([
+		{ variant: 'edit' as const, message: 'Starting sandbox...' },
+		{ variant: 'app' as const, message: 'Starting app...' },
+	])(
+		'keeps $variant startup feedback visible after receiving a starting session',
+		async (testCase) => {
+			makeFetch({
+				role: 'editor',
+				session: runningSession({
+					mode: testCase.variant === 'app' ? 'app' : undefined,
+					status: 'starting',
+					sandbox_url: undefined,
+				}),
+			});
+			const { container } = renderPage(testCase.variant);
+
+			expect(await screen.findByRole('button', { name: 'Stop' })).toBeEnabled();
+			expect(screen.getByText(testCase.message)).toBeInTheDocument();
+			expect(container.querySelector('iframe')).toBeNull();
+		},
+	);
+
 	it('stops a viewer ephemeral session without a shared-sandbox warning', async () => {
 		const user = userEvent.setup();
 		const fetch = makeFetch({

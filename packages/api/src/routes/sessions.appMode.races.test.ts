@@ -59,6 +59,27 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 		return { compute: fakeComputeFrom(instance), calls: fake.calls, entered, release };
 	}
 
+	it.each(['app', 'edit'] as const)(
+		'coalesces a second %s create while the first kernel is still starting',
+		async (mode) => {
+			const { compute, calls, entered, release } = pausableCompute();
+			const api = createTestApi({ bucket, userId: ACTOR, compute }).request;
+
+			const firstPending = api('POST', sessionsPath(), { mode });
+			await entered;
+			const second = await expectOk<any>(await api('POST', sessionsPath(), { mode }));
+
+			expect(second).toMatchObject({ status: 'starting', reused: true });
+			expect(second.sandbox_url).toBeUndefined();
+
+			release();
+			const first = await expectOk<any>(await firstPending);
+			expect(second.session_id).toBe(first.session_id);
+			expect(calls.startProcess).toHaveLength(1);
+			expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
+		},
+	);
+
 	it('deleting the notebook during app provisioning cannot resurrect the app or its claim', async () => {
 		const { compute, calls, entered, release } = pausableCompute();
 		const api = createTestApi({ bucket, userId: ACTOR, compute });
