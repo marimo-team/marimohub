@@ -469,6 +469,7 @@ function AnalyzerCapabilities({ metadata }: { metadata: PolicyAnalyzerMetadata }
 interface SubjectStepProps {
 	metadata: PolicyAnalyzerMetadata;
 	users: readonly AdminUser[];
+	selectedUserId: string;
 	subjectId: string;
 	subjectEmail: string;
 	caseName: string;
@@ -491,6 +492,7 @@ interface SubjectStepProps {
 function SubjectStep({
 	metadata,
 	users,
+	selectedUserId,
 	subjectId,
 	subjectEmail,
 	caseName,
@@ -510,7 +512,7 @@ function SubjectStep({
 	onUserInfoClaimsChange,
 }: SubjectStepProps) {
 	const selectedEntitlements = useMemo(() => new Set(entitlements), [entitlements]);
-	const knownUser = users.some((entry) => entry.id === subjectId);
+	const knownUser = users.some((entry) => entry.id === selectedUserId);
 	return (
 		<StepCard
 			number={1}
@@ -524,7 +526,7 @@ function SubjectStep({
 						name="known-user"
 						autoComplete="off"
 						className={inputClass}
-						value={knownUser ? subjectId : ''}
+						value={knownUser ? selectedUserId : ''}
 						onChange={(event) => onSelectUser(event.target.value)}
 					>
 						<option value="">Test identity</option>
@@ -1423,8 +1425,9 @@ export default function AdminPolicyAnalyzerPage() {
 	const errorRef = useRef<HTMLDivElement>(null);
 	const firstUser = user ?? users[0];
 	const [caseName, setCaseName] = useState('Policy check');
-	const [subjectId, setSubjectId] = useState(firstUser?.id ?? 'test-user');
-	const [subjectEmail, setSubjectEmail] = useState(firstUser?.email ?? 'test@example.com');
+	const [selectedUserId, setSelectedUserId] = useState(firstUser?.id ?? '');
+	const [testSubjectId, setTestSubjectId] = useState('test-user');
+	const [testSubjectEmail, setTestSubjectEmail] = useState('test@example.com');
 	const [action, setAction] = useState<Action>('project.read');
 	const [source, setSource] = useState<'stored' | 'synthetic'>('synthetic');
 	const [projectId, setProjectId] = useState('');
@@ -1450,6 +1453,9 @@ export default function AdminPolicyAnalyzerPage() {
 	const [suiteNotice, setSuiteNotice] = useState<string | null>(null);
 	const [suiteText, setSuiteText] = useState(() => INITIAL_SUITE);
 	const deferredSuiteText = useDeferredValue(suiteText);
+	const selectedUser = users.find((entry) => entry.id === selectedUserId);
+	const subjectId = selectedUser?.id ?? testSubjectId;
+	const subjectEmail = selectedUser?.email ?? testSubjectEmail;
 
 	const actionRule = useMemo(
 		() => metadata.actions.find((entry) => entry.action === action),
@@ -1471,14 +1477,7 @@ export default function AdminPolicyAnalyzerPage() {
 	}, [deferredSuiteText, metadata.max_cases]);
 
 	function selectUser(id: string) {
-		if (!id) {
-			setSubjectId('test-user');
-			setSubjectEmail('test@example.com');
-			return;
-		}
-		const selected = users.find((entry) => entry.id === id);
-		setSubjectId(id);
-		if (selected) setSubjectEmail(selected.email);
+		setSelectedUserId(id);
 	}
 
 	function reportError(error: unknown, fallback: string) {
@@ -1571,6 +1570,7 @@ export default function AdminPolicyAnalyzerPage() {
 					<SubjectStep
 						metadata={metadata}
 						users={users}
+						selectedUserId={selectedUserId}
 						subjectId={subjectId}
 						subjectEmail={subjectEmail}
 						caseName={caseName}
@@ -1580,8 +1580,8 @@ export default function AdminPolicyAnalyzerPage() {
 						idClaims={idClaims}
 						userInfoClaims={userInfoClaims}
 						onSelectUser={selectUser}
-						onSubjectIdChange={setSubjectId}
-						onSubjectEmailChange={setSubjectEmail}
+						onSubjectIdChange={setTestSubjectId}
+						onSubjectEmailChange={setTestSubjectEmail}
 						onCaseNameChange={setCaseName}
 						setEntitlements={setEntitlements}
 						onLoginEnabledChange={setLoginEnabled}

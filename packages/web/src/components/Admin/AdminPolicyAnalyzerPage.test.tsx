@@ -130,9 +130,21 @@ describe('AdminPolicyAnalyzerPage', () => {
 		expect(screen.queryByText('Read-Only')).not.toBeInTheDocument();
 		expect(screen.queryByText('Versioned')).not.toBeInTheDocument();
 		expect(screen.queryByRole('textbox', { name: 'Subject ID' })).not.toBeInTheDocument();
-		await user.selectOptions(screen.getByRole('combobox', { name: 'User' }), '');
+		const userSelect = screen.getByRole('combobox', { name: 'User' });
+		await user.selectOptions(userSelect, '');
 		expect(screen.getByRole('textbox', { name: 'Subject ID' })).toHaveValue('test-user');
 		expect(screen.getByRole('textbox', { name: 'Subject Email' })).toHaveValue('test@example.com');
+		await user.clear(screen.getByRole('textbox', { name: 'Subject ID' }));
+		await user.type(screen.getByRole('textbox', { name: 'Subject ID' }), 'custom-user');
+		await user.clear(screen.getByRole('textbox', { name: 'Subject Email' }));
+		await user.type(screen.getByRole('textbox', { name: 'Subject Email' }), 'custom@example.com');
+		await user.selectOptions(userSelect, 'admin');
+		expect(screen.queryByRole('textbox', { name: 'Subject ID' })).not.toBeInTheDocument();
+		await user.selectOptions(userSelect, '');
+		expect(screen.getByRole('textbox', { name: 'Subject ID' })).toHaveValue('custom-user');
+		expect(screen.getByRole('textbox', { name: 'Subject Email' })).toHaveValue(
+			'custom@example.com',
+		);
 		const entitlementsSummary = screen.getByText('Subject Options');
 		const entitlementsSection = entitlementsSummary.closest('details');
 		expect(entitlementsSection).not.toHaveAttribute('open');
