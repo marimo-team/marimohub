@@ -66,7 +66,7 @@ describe('OAuthConsentPage', () => {
 		expect(await screen.findByText(/authorize Cursor/i)).toBeInTheDocument();
 		expect(screen.getByText(CALLBACK)).toBeInTheDocument();
 		expect(screen.getByRole('radio', { name: /^Edit notebooks/ })).toBeChecked();
-		expect(screen.getByLabelText('Token lifetime (days)')).toHaveValue('30');
+		expect(screen.getByLabelText('Token lifetime (days)')).toHaveValue('7');
 	});
 
 	it('approves with the selected grant and returns to the client', async () => {
@@ -81,7 +81,7 @@ describe('OAuthConsentPage', () => {
 			url: `/api/v1/me/oauth-authorizations/${ID}/approve`,
 			body: {
 				grant: { actions: ['project.read', 'integration.read'], projects: '*' },
-				expires_in_days: 30,
+				expires_in_days: 7,
 			},
 		});
 	});
@@ -94,7 +94,7 @@ describe('OAuthConsentPage', () => {
 		expect(navigate).toHaveBeenCalledWith(`${CALLBACK}?error=access_denied`);
 	});
 
-	it.each(['0', '3651', '1.5', 'not-a-number'])(
+	it.each(['0', '91', '1.5', 'not-a-number'])(
 		'does not submit an invalid token lifetime: %s',
 		async (lifetime) => {
 			const user = userEvent.setup();

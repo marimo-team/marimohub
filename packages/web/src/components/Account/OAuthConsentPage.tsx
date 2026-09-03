@@ -15,6 +15,7 @@ import { tokenGrantFromDraft } from './tokenGrantDraft';
 import type { TokenGrantDraft } from './tokenGrantDraft';
 
 const TOKEN_LIFETIME_PRESETS = ['7', '30', '90'] as const;
+const MAX_TOKEN_LIFETIME_DAYS = 90;
 
 export interface OAuthConsentPageProps {
 	navigate?: (url: string) => void;
@@ -28,7 +29,7 @@ export function OAuthConsentPage({
 	const preview = useOAuthAuthorizationPreview(id);
 	const approve = useApproveOAuthAuthorization();
 	const deny = useDenyOAuthAuthorization();
-	const [expiresInDays, setExpiresInDays] = useState('30');
+	const [expiresInDays, setExpiresInDays] = useState('7');
 	const [grantDraft, setGrantDraft] = useState<TokenGrantDraft>({
 		actions: [...TOKEN_GRANT_PRESETS.edit],
 		projects: '*',
@@ -39,8 +40,8 @@ export function OAuthConsentPage({
 	const approveConnection = async () => {
 		if (!id || !preview.data || !grant) return;
 		const days = Number(expiresInDays);
-		if (!/^\d+$/.test(expiresInDays) || days < 1 || days > 3650) {
-			toast.error('Choose a token lifetime between 1 and 3650 days.');
+		if (!/^\d+$/.test(expiresInDays) || days < 1 || days > MAX_TOKEN_LIFETIME_DAYS) {
+			toast.error(`Choose a token lifetime between 1 and ${MAX_TOKEN_LIFETIME_DAYS} days.`);
 			return;
 		}
 		try {

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fakeComputeFrom, makeFakeSandbox, MemoryBucket } from '@marimo-hub/core/testing';
-import { bearerToken, expandTokenGrantPreset, paths, UserId } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal } from '@marimo-hub/core';
+import {
+	bearerToken,
+	expandTokenGrantPreset,
+	OAuthAuthorizationId,
+	paths,
+	UserId,
+} from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
 import { createApi } from '../createApi';
 import { makeTestDeps } from '../testing';
+import { createOAuthProvider } from './oauthProvider';
 
 const USER: AuthenticatedPrincipal = {
 	id: UserId.parse('oauth-user'),
@@ -91,6 +98,7 @@ describe('MCP OAuth app', () => {
 
 		const unauthorized = await app.request('/mcp', { method: 'POST' });
 		expect(unauthorized.status).toBe(401);
+		expect(unauthorized.headers.get('www-authenticate')).toContain('Bearer realm="mcp"');
 		expect(unauthorized.headers.get('www-authenticate')).toContain(
 			'resource_metadata="https://hub.example.com/.well-known/oauth-protected-resource/mcp"',
 		);
@@ -100,6 +108,7 @@ describe('MCP OAuth app', () => {
 		expect(await resource.json()).toMatchObject({
 			resource: 'https://hub.example.com/mcp',
 			authorization_servers: ['https://hub.example.com'],
+			scopes_supported: ['mcp:tools'],
 		});
 		expect((await app.request('/.well-known/oauth-protected-resource')).status).toBe(200);
 		const authorizationServer = await app.request('/.well-known/oauth-authorization-server');
@@ -109,6 +118,7 @@ describe('MCP OAuth app', () => {
 			token_endpoint_auth_methods_supported: ['none'],
 			grant_types_supported: ['authorization_code'],
 			code_challenge_methods_supported: ['S256'],
+			scopes_supported: ['mcp:tools'],
 		});
 
 		const registered = await app.request('/register', {
@@ -121,7 +131,8 @@ describe('MCP OAuth app', () => {
 			}),
 		});
 		expect(registered.status).toBe(201);
-		const client = (await registered.json()) as { client_id: string };
+		const client = (await registered.json()) as { client_id: string; scope: string };
+		expect(client.scope).toBe('mcp:tools');
 
 		const verifier = 'v'.repeat(43);
 		const authorizeUrl = new URL('https://hub.example.com/authorize');
@@ -133,6 +144,7 @@ describe('MCP OAuth app', () => {
 			code_challenge_method: 'S256',
 			state: 'test-state',
 			resource: 'https://hub.example.com/mcp',
+			scope: 'mcp:tools',
 		}).toString();
 		const authorization = await app.request(authorizeUrl, { redirect: 'manual' });
 		expect(authorization.status).toBe(302);
@@ -169,9 +181,14 @@ describe('MCP OAuth app', () => {
 			}),
 		});
 		expect(exchanged.status).toBe(200);
-		const tokens = (await exchanged.json()) as { access_token: string; token_type: string };
+		const tokens = (await exchanged.json()) as {
+			access_token: string;
+			token_type: string;
+			scope: string;
+		};
 		expect(tokens.access_token).toMatch(/^mhub_pat_/);
 		expect(tokens.token_type).toBe('bearer');
+		expect(tokens.scope).toBe('mcp:tools');
 		expect(await deps.services.tokens.verify(tokens.access_token)).toMatchObject({ id: USER.id });
 		expect(await deps.services.tokens.list(USER.id)).toContainEqual(
 			expect.objectContaining({ name: `MCP · ${'T'.repeat(94)}` }),
@@ -286,6 +303,26 @@ describe('MCP OAuth app', () => {
 			},
 		});
 
+		const otherClientId = await registerClient(app, 'https://other.example/callback');
+		const unrelatedRevocation = await app.request('/revoke', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams({
+				client_id: otherClientId,
+				token: tokens.access_token,
+			}),
+		});
+		expect(unrelatedRevocation.status).toBe(200);
+		expect(
+			(
+				await app.request('/mcp', {
+					method: 'POST',
+					headers: mcpHeaders,
+					body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/list', params: {} }),
+				})
+			).status,
+		).toBe(200);
+
 		const revoked = await app.request('/revoke', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -356,6 +393,11 @@ describe('MCP OAuth app', () => {
 				redirect_uris: ['https://client.example/callback', 'http://client.example/callback'],
 				token_endpoint_auth_method: 'none',
 			},
+			{
+				redirect_uris: ['https://client.example/callback'],
+				token_endpoint_auth_method: 'none',
+				scope: 'deployment:admin',
+			},
 		]) {
 			const response = await app.request('/register', {
 				method: 'POST',
@@ -377,7 +419,43 @@ describe('MCP OAuth app', () => {
 		expect(normalized.status).toBe(201);
 		const normalizedBody = await normalized.json();
 		expect(normalizedBody).toMatchObject({ token_endpoint_auth_method: 'none' });
+		expect(normalizedBody).toMatchObject({ scope: 'mcp:tools' });
 		expect(normalizedBody).not.toHaveProperty('client_secret');
+	});
+
+	it('logs successful dynamic registrations without client-supplied metadata', async () => {
+		const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const app = createApi(
+				makeTestDeps(new MemoryBucket(), {
+					mcp: { publicBaseUrl: 'https://hub.example.com' },
+				}),
+			);
+			const response = await app.request('/register', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					client_name: 'sensitive-client-name',
+					redirect_uris: ['https://secret-client.example/callback'],
+					token_endpoint_auth_method: 'none',
+				}),
+			});
+			expect(response.status).toBe(201);
+
+			const registration = logged.mock.calls
+				.map(([line]) => String(line))
+				.find((line) => line.includes('"event":"oauth_client_registered"'));
+			expect(registration).toBeDefined();
+			expect(JSON.parse(registration!)).toMatchObject({
+				event: 'oauth_client_registered',
+				client_id: expect.any(String),
+				redirect_uri_count: 1,
+			});
+			expect(registration).not.toContain('sensitive-client-name');
+			expect(registration).not.toContain('secret-client.example');
+		} finally {
+			logged.mockRestore();
+		}
 	});
 
 	it('preserves an explicitly empty state through approval', async () => {
@@ -434,6 +512,7 @@ describe('MCP OAuth app', () => {
 			{ ...valid, redirect_uri: 'https://attacker.example/callback' },
 			{ ...valid, code_challenge: undefined },
 			{ ...valid, code_challenge_method: 'plain' },
+			{ ...valid, resource: undefined },
 			{ ...valid, resource: 'https://hub.example.com/other' },
 		];
 
@@ -455,6 +534,122 @@ describe('MCP OAuth app', () => {
 		expect((await bucket.list({ prefix: '_system/oauth-authorizations/' })).objects).toHaveLength(
 			0,
 		);
+	});
+
+	it('caps OAuth consent tokens at 90 days', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			mcp: { publicBaseUrl: 'https://hub.example.com' },
+		});
+		deps.authenticator = { authenticate: async () => USER };
+		const app = createApi(deps);
+		const clientId = await registerClient(app);
+		const authorize = new URL('https://hub.example.com/authorize');
+		authorize.search = new URLSearchParams({
+			client_id: clientId,
+			response_type: 'code',
+			redirect_uri: 'https://client.example/callback',
+			code_challenge: await challenge('v'.repeat(43)),
+			code_challenge_method: 'S256',
+			resource: 'https://hub.example.com/mcp',
+		}).toString();
+		const authorization = await app.request(authorize, { redirect: 'manual' });
+		const id = new URL(authorization.headers.get('location')!).searchParams.get('id')!;
+
+		const response = await app.request(`/api/v1/me/oauth-authorizations/${id}/approve`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				grant: { actions: ['project.read'], projects: '*' },
+				expires_in_days: 91,
+			}),
+		});
+
+		expect(response.status).toBe(422);
+		expect(
+			await deps.services.oauthAuthorizations.preview(OAuthAuthorizationId.parse(id)),
+		).toBeTruthy();
+	});
+
+	it('accepts only OAuth tokens bound to this MCP resource and scope', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			mcp: { publicBaseUrl: 'https://hub.example.com' },
+		});
+		await deps.services.identities.upsert(USER);
+		deps.authenticator = {
+			authenticate: async (request) => {
+				const token = bearerToken(request);
+				return token ? deps.services.tokens.verify(token) : null;
+			},
+		};
+		const app = createApi(deps);
+		const grant: TokenGrant = { actions: ['project.read'], projects: '*' };
+		const plain = await deps.services.tokens.create({ name: 'plain', grant }, USER.id);
+		const wrongResource = await deps.services.tokens.create(
+			{
+				name: 'wrong-resource',
+				grant,
+				oauth: {
+					clientId: 'client-one',
+					resource: 'https://other.example/mcp',
+					scopes: ['mcp:tools'],
+				},
+			},
+			USER.id,
+		);
+		const wrongScope = await deps.services.tokens.create(
+			{
+				name: 'wrong-scope',
+				grant,
+				oauth: {
+					clientId: 'client-one',
+					resource: 'https://hub.example.com/mcp',
+					scopes: ['other'],
+				},
+			},
+			USER.id,
+		);
+		const valid = await deps.services.tokens.create(
+			{
+				name: 'valid',
+				grant,
+				oauth: {
+					clientId: 'client-one',
+					resource: 'https://hub.example.com/mcp',
+					scopes: ['mcp:tools'],
+				},
+			},
+			USER.id,
+		);
+		const request = (token: string) =>
+			app.request('/mcp', {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${token}`,
+					'Content-Type': 'application/json',
+					Accept: 'application/json, text/event-stream',
+				},
+				body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+			});
+
+		for (const token of [plain.token, wrongResource.token, wrongScope.token]) {
+			expect((await request(token)).status).toBe(401);
+		}
+		expect((await request(valid.token)).status).toBe(200);
+
+		const provider = createOAuthProvider(deps);
+		await expect(provider.verifyAccessToken(plain.token)).rejects.toThrow(/invalid or expired/);
+		await expect(provider.verifyAccessToken(wrongResource.token)).rejects.toThrow(
+			/invalid or expired/,
+		);
+		await expect(provider.verifyAccessToken(wrongScope.token)).rejects.toThrow(
+			/invalid or expired/,
+		);
+		const verified = await provider.verifyAccessToken(valid.token);
+		expect(verified).toMatchObject({
+			clientId: 'client-one',
+			scopes: ['mcp:tools'],
+		});
+		expect(verified.resource?.href).toBe('https://hub.example.com/mcp');
 	});
 
 	it('does not consume a code on verifier or redirect mismatch, but rejects replay', async () => {
@@ -514,6 +709,7 @@ describe('MCP OAuth app', () => {
 
 		expect((await exchange({ code_verifier: 'x'.repeat(43) })).status).toBe(400);
 		expect((await exchange({ redirect_uri: undefined })).status).toBe(400);
+		expect((await exchange({ resource: undefined })).status).toBe(400);
 		expect((await exchange()).status).toBe(200);
 		expect((await exchange()).status).toBe(400);
 	});

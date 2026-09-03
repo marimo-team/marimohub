@@ -5,6 +5,7 @@ import type { ApiDeps, HonoEnv } from '../context';
 import { authenticateMcpRequest } from './auth';
 import { createOAuthProvider } from './oauthProvider';
 import { createMcpServer } from './server';
+import { MCP_SCOPES } from './constants';
 
 function rateLimited(c: { json(body: unknown, status: 429): Response }): Response {
 	return c.json({ error: 'too_many_requests', error_description: 'Try again later' }, 429);
@@ -22,6 +23,7 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 		authorization_servers: [publicBaseUrl],
 		bearer_methods_supported: ['header'],
 		resource_name: 'marimohub',
+		scopes_supported: MCP_SCOPES,
 	};
 
 	app.use('/register', async (c, next) => {
@@ -54,7 +56,7 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 			token_endpoint_auth_methods_supported: ['none'],
 			grant_types_supported: ['authorization_code'],
 			revocation_endpoint_auth_methods_supported: ['none'],
-			scopes_supported: [],
+			scopes_supported: MCP_SCOPES,
 		}),
 	);
 	app.post('/revoke', async (c) => {
@@ -86,7 +88,7 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 			baseUrl,
 			resourceServerUrl: new URL(resource),
 			resourceName: 'marimohub',
-			scopesSupported: [],
+			scopesSupported: MCP_SCOPES,
 			clientRegistrationOptions: { clientIdGeneration: false, rateLimit: false },
 			authorizationOptions: { rateLimit: false },
 			tokenOptions: { rateLimit: false },

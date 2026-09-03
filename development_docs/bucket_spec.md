@@ -647,6 +647,11 @@ A scoped token has this version 2 shape:
 		"actions": ["project.read", "integration.read", "integration.use", "session.start"],
 		"projects": ["proj-7h2k9qm4xz7rp3w8"]
 	},
+	"oauth": {
+		"client_id": "01HXY0S6GWMBASVAG3PZ7Y2K5V",
+		"resource": "https://hub.example.com/mcp",
+		"scopes": ["mcp:tools"]
+	},
 	"created_at": "2026-07-24T14:30:00Z",
 	"expires_at": "2026-10-22T14:30:00Z"
 }
@@ -654,8 +659,9 @@ A scoped token has this version 2 shape:
 
 `actions` is `"*"` or a unique canonical action list. `projects` is `"*"` or
 1 to 100 unique project IDs. Parsing fails for a missing, inconsistent, or
-unknown credential version. Other fields remain loose so the daily
-`last_used_at` rewrite preserves fields from later releases.
+unknown credential version. The optional `oauth` object binds an OAuth token to
+one client, one MCP resource, and its OAuth scopes. Other fields remain loose so
+the daily `last_used_at` rewrite preserves fields from later releases.
 
 **Why keyed by token id.** The presented bearer is
 `mhub_pat_<tokenId>_<secret>`. The embedded ULID enables one-GET verification
@@ -711,13 +717,21 @@ after 90 days. A registration request prunes at most 100 expired records.
 challenge, state, scopes, and resource. Approval uses ETag compare-and-swap
 (CAS) to bind the user, token grant, PAT lifetime, and one-time code hash.
 Exchange verifies the bindings, claims the record with CAS, and mints one scoped
-PAT. A `finally` block deletes the authorization. Denial deletes the pending
-record and redirects with `error=access_denied`.
+PAT. The PAT stores the client ID, exact MCP resource, and `mcp:tools` scope.
+The MCP endpoint rejects other PATs. A `finally` block deletes the authorization.
+Denial deletes the pending record and redirects with `error=access_denied`.
+
+OAuth PATs expire after 90 days or less. The consent page defaults to 7 days.
+The authorization server does not issue refresh tokens.
 
 `OAuthRateLimitService` owns one bounded CAS record per public OAuth endpoint
 under `_system/oauth-rate-limits/`. All replicas share these sliding windows.
 CAS contention fails closed as a rate-limit rejection; storage failures remain
 server errors.
+
+Dynamic registration is anonymous. Successful registrations emit a structured
+`oauth_client_registered` event with the generated client ID and redirect count.
+The event omits client-supplied names and URIs.
 
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 

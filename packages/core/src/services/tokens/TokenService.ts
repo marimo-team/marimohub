@@ -1,12 +1,17 @@
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { NotFoundError, PreconditionFailedError, ResourceExhaustedError } from '../../errors';
+import {
+	BadRequestError,
+	NotFoundError,
+	PreconditionFailedError,
+	ResourceExhaustedError,
+} from '../../errors';
 import { createTokenId, TokenId } from '../../ids';
 import type { UserId } from '../../ids';
 import { timingSafeEqual } from '../../internal/hmac';
 import { toHex } from '../../internal/hex';
-import type { AuthenticatedPrincipal, AuthUser } from '../../ports/auth';
+import type { AuthenticatedPrincipal, AuthUser, OAuthCredentialBinding } from '../../ports/auth';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { readStored, TokenSchema, toPublicToken } from '../../schema';
@@ -100,6 +105,7 @@ export interface CreateTokenInput {
 	expiresInDays?: number;
 	/** An explicit grant creates a v2 credential. Omission preserves legacy v1 behavior. */
 	grant?: TokenGrant;
+	oauth?: OAuthCredentialBinding;
 }
 
 export interface CreatedToken {
@@ -135,6 +141,9 @@ export class TokenService {
 	) {}
 
 	async create(input: CreateTokenInput, userId: UserId): Promise<CreatedToken> {
+		if (input.oauth !== undefined && input.grant === undefined) {
+			throw new BadRequestError('OAuth tokens require an explicit grant');
+		}
 		const nowMs = Date.now();
 		// The cap counts only LIVE tokens — an expired record still lists (as
 		// metadata) but must not block minting a replacement. Best-effort: concurrent
@@ -171,6 +180,15 @@ export class TokenService {
 						hash: await hashScopedPatSecret(id, secret),
 						credential_version: 2,
 						grant: input.grant,
+						...(input.oauth
+							? {
+									oauth: {
+										client_id: input.oauth.clientId,
+										resource: input.oauth.resource,
+										scopes: [...input.oauth.scopes],
+									},
+								}
+							: {}),
 					};
 		await this.bucket.put(paths.token(id), JSON.stringify(record));
 		return { token: `${PAT_PREFIX}${id}_${secret}`, record: toPublicToken(record) };
@@ -258,6 +276,15 @@ export class TokenService {
 				id: tokenId,
 				...(record.expires_at !== undefined ? { expiresAt: record.expires_at } : {}),
 				...(record.grant !== undefined ? { grant: record.grant } : {}),
+				...(record.oauth !== undefined
+					? {
+							oauth: {
+								clientId: record.oauth.client_id,
+								resource: record.oauth.resource,
+								scopes: record.oauth.scopes,
+							},
+						}
+					: {}),
 			},
 		};
 	}

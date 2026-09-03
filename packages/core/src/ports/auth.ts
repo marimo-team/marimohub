@@ -47,6 +47,12 @@ export const CREDENTIAL_KINDS = [
 
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 
+export interface OAuthCredentialBinding {
+	readonly clientId: string;
+	readonly resource: string;
+	readonly scopes: readonly string[];
+}
+
 /**
  * Bounded provenance of the credential that authenticated a request. Owned by
  * the authenticator result — consumers must never re-derive it from request
@@ -60,6 +66,7 @@ export interface AuthCredential {
 	readonly expiresAt?: string;
 	/** Immutable authorization boundary attached to a scoped personal access token. */
 	readonly grant?: TokenGrant;
+	readonly oauth?: OAuthCredentialBinding;
 	/**
 	 * Opaque reference a `SubjectSecurityContextProvider` can resolve into a
 	 * bounded runtime security context. Never raw claims or attributes.

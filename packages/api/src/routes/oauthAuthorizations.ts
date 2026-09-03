@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
 	createSlidingWindowBudget,
 	NotFoundError,
+	OAUTH_TOKEN_LIFETIME_DAYS_MAX,
 	OAuthAuthorizationId,
 	ResourceExhaustedError,
 	TokenGrantSchema,
@@ -27,7 +28,7 @@ const PreviewSchema = z.object({
 const ApproveBodySchema = z.strictObject({
 	grant: TokenGrantSchema,
 	token_name: z.string().trim().min(1).max(100).optional(),
-	expires_in_days: z.number().int().min(1).max(3650),
+	expires_in_days: z.number().int().min(1).max(OAUTH_TOKEN_LIFETIME_DAYS_MAX),
 });
 const RedirectSchema = z.object({ redirect_uri: z.string() });
 const authorizationBudget = createSlidingWindowBudget<string>({ limit: 30, windowMs: 60_000 });

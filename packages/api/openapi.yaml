@@ -18403,7 +18403,7 @@ paths:
                 expires_in_days:
                   type: integer
                   minimum: 1
-                  maximum: 3650
+                  maximum: 90
               required:
                 - grant
                 - expires_in_days

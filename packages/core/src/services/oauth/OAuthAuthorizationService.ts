@@ -18,6 +18,7 @@ import {
 
 const AUTHORIZATION_PREFIX = 'mhub_oac_';
 const AUTHORIZATION_RE = /^mhub_oac_([0-9A-Z]{26})_([0-9a-z]{32})$/;
+export const OAUTH_TOKEN_LIFETIME_DAYS_MAX = 90;
 
 const AuthorizationCommonSchema = {
 	id: z.string().refine(OAuthAuthorizationId.is),
@@ -45,7 +46,7 @@ const ApprovedAuthorizationSchema = z.looseObject({
 	code_hash: z.string().regex(/^[0-9a-f]{64}$/),
 	grant: TokenGrantSchema,
 	token_name: z.string().min(1).max(100),
-	expires_in_days: z.number().int().min(1).max(3650),
+	expires_in_days: z.number().int().min(1).max(OAUTH_TOKEN_LIFETIME_DAYS_MAX),
 });
 
 const OAuthAuthorizationSchema = z.discriminatedUnion('status', [
@@ -147,6 +148,15 @@ export class OAuthAuthorizationService {
 		input: { grant: TokenGrant; tokenName: string; expiresInDays: number },
 		userId: UserId,
 	): Promise<{ redirectUri: string }> {
+		if (
+			!Number.isInteger(input.expiresInDays) ||
+			input.expiresInDays < 1 ||
+			input.expiresInDays > OAUTH_TOKEN_LIFETIME_DAYS_MAX
+		) {
+			throw new BadRequestError(
+				`OAuth token lifetime must be between 1 and ${OAUTH_TOKEN_LIFETIME_DAYS_MAX} days`,
+			);
+		}
 		const { key, object, record } = await this.readPending(id);
 		const created = await createAuthorizationCode(
 			() => id,
@@ -220,6 +230,15 @@ export class OAuthAuthorizationService {
 					name: record.token_name,
 					expiresInDays: record.expires_in_days,
 					grant: record.grant,
+					...(record.resource
+						? {
+								oauth: {
+									clientId: record.client_id,
+									resource: record.resource,
+									scopes: record.scopes,
+								},
+							}
+						: {}),
 				},
 				record.user_id,
 			);

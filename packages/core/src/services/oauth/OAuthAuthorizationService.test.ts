@@ -31,7 +31,7 @@ describe('OAuthAuthorizationService', () => {
 			clientUri: 'https://claude.ai',
 			redirectUri: 'cursor://oauth/callback',
 			codeChallenge: 'A'.repeat(43),
-			scopes: [],
+			scopes: ['mcp:tools'],
 			state: 'state',
 			resource,
 		});
@@ -63,7 +63,16 @@ describe('OAuthAuthorizationService', () => {
 			}),
 		).resolves.toMatchObject({ token: 'mhub_pat_test' });
 		expect(createToken).toHaveBeenCalledWith(
-			{ name: 'MCP · Claude', expiresInDays: 30, grant: GRANT },
+			{
+				name: 'MCP · Claude',
+				expiresInDays: 30,
+				grant: GRANT,
+				oauth: {
+					clientId: 'client',
+					resource: 'https://hub.example/mcp',
+					scopes: ['mcp:tools'],
+				},
+			},
 			ACTOR,
 		);
 		await expect(service.exchange({ code, clientId: 'client' })).rejects.toThrow(/invalid/);
@@ -110,6 +119,20 @@ describe('OAuthAuthorizationService', () => {
 
 		expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
 		expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+	});
+
+	it.each([0, 91, 1.5])('rejects an unsafe OAuth token lifetime: %s days', async (days) => {
+		const { id } = await service.begin({
+			clientId: 'client',
+			redirectUri: 'cursor://oauth/callback',
+			codeChallenge: 'A'.repeat(43),
+			scopes: [],
+		});
+
+		await expect(
+			service.approve(id, { grant: GRANT, tokenName: 'MCP', expiresInDays: days }, ACTOR),
+		).rejects.toThrow(/between 1 and 90 days/);
+		expect(await service.preview(id)).toBeTruthy();
 	});
 
 	it('allows only one concurrent exchange', async () => {

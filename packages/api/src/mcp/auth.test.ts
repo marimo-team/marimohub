@@ -88,4 +88,54 @@ describe('authenticateBearer', () => {
 			),
 		).resolves.toBe(PRINCIPAL);
 	});
+
+	it.each([
+		{ resource: 'https://other.example/mcp', scopes: ['mcp:tools'] },
+		{ resource: 'https://hub.example/mcp', scopes: ['other'] },
+	])('rejects an OAuth credential outside the required boundary: %j', async (oauth) => {
+		const deps = makeTestDeps(new MemoryBucket());
+		deps.authenticator = {
+			authenticate: vi
+				.fn()
+				.mockResolvedValue({ ...PRINCIPAL, credential: { ...PRINCIPAL.credential, oauth } }),
+		};
+		vi.spyOn(deps.services.identities, 'isSuspended').mockResolvedValue(false);
+
+		await expect(
+			authenticateBearer(
+				deps,
+				new Request('https://hub.example/mcp', {
+					headers: { Authorization: 'Bearer valid' },
+				}),
+				{ resource: 'https://hub.example/mcp', scope: 'mcp:tools' },
+			),
+		).resolves.toBeNull();
+	});
+
+	it('accepts an OAuth credential with the required resource and scope', async () => {
+		const oauthPrincipal: AuthenticatedPrincipal = {
+			...PRINCIPAL,
+			credential: {
+				...PRINCIPAL.credential,
+				oauth: {
+					clientId: 'client-one',
+					resource: 'https://hub.example/mcp',
+					scopes: ['mcp:tools'],
+				},
+			},
+		};
+		const deps = makeTestDeps(new MemoryBucket());
+		deps.authenticator = { authenticate: vi.fn().mockResolvedValue(oauthPrincipal) };
+		vi.spyOn(deps.services.identities, 'isSuspended').mockResolvedValue(false);
+
+		await expect(
+			authenticateBearer(
+				deps,
+				new Request('https://hub.example/mcp', {
+					headers: { Authorization: 'Bearer valid' },
+				}),
+				{ resource: 'https://hub.example/mcp', scope: 'mcp:tools' },
+			),
+		).resolves.toBe(oauthPrincipal);
+	});
 });

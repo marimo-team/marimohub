@@ -37,7 +37,10 @@ export type {
 	CliDevicePollResult,
 	RequestedCliDeviceAuthorization,
 } from './tokens/CliAuthorizationService';
-export { OAuthAuthorizationService } from './oauth/OAuthAuthorizationService';
+export {
+	OAUTH_TOKEN_LIFETIME_DAYS_MAX,
+	OAuthAuthorizationService,
+} from './oauth/OAuthAuthorizationService';
 export type { BeginOAuthAuthorizationInput } from './oauth/OAuthAuthorizationService';
 export { OAuthClientStore } from './oauth/OAuthClientStore';
 export type { OAuthClientRecord, RegisterOAuthClientInput } from './oauth/OAuthClientStore';

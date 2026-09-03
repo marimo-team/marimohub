@@ -1333,15 +1333,27 @@ export const TokenSchema = z
 		...TokenBaseSchema,
 		credential_version: z.literal(2).optional(),
 		grant: TokenGrantSchema.optional(),
+		oauth: z
+			.object({
+				client_id: z.string().min(1),
+				resource: z.url(),
+				scopes: z.array(z.string().min(1)).min(1),
+			})
+			.optional(),
 	})
 	.refine(
 		(token) => (token.credential_version === 2) === (token.grant !== undefined),
 		'A version 2 token must have a grant, and a grant requires version 2',
 	)
+	.refine(
+		(token) => token.oauth === undefined || token.credential_version === 2,
+		'An OAuth token must be a version 2 token',
+	)
 	.meta({
 		dependentRequired: {
 			credential_version: ['grant'],
 			grant: ['credential_version'],
+			oauth: ['credential_version', 'grant'],
 		},
 	});
 

@@ -42,8 +42,9 @@ registers itself, and opens the marimohub consent page.
 
 Before approval, verify the client name and redirect URL. The default grant
 permits notebook editing and execution. You can restrict its actions, projects,
-and lifetime. Revoke the token from the API tokens dialog. Marimohub issues no
-refresh token, so expiry or revocation requires new authorization.
+and lifetime. The default lifetime is 7 days, and the maximum is 90 days.
+Revoke the token from the API tokens dialog. Marimohub issues no refresh token.
+After expiry or revocation, the client must request authorization again.
 
 ## Tools
 
@@ -77,7 +78,13 @@ help(cm)
 Dynamic registration creates public clients that use authorization code with
 PKCE S256. Redirect URIs require HTTPS, loopback HTTP, or a private-use
 application scheme. Each code expires after ten minutes and permits one claim.
-The OAuth resource must exactly match the configured MCP URL.
+The OAuth resource must exactly match the configured MCP URL. Each issued token
+stores this resource and the registered client ID. Another marimohub PAT cannot
+access `/mcp`, even if that PAT is otherwise valid.
+
+OAuth uses the `mcp:tools` scope for MCP protocol access. The consent grant sets
+the permitted Hub actions and projects. This grant is the fine-grained
+authorization boundary for each tool call.
 
 Within the configured app base path, MCP reserves these paths:
 
@@ -90,7 +97,11 @@ Within the configured app base path, MCP reserves these paths:
 - `/.well-known/oauth-protected-resource`
 - `/.well-known/oauth-protected-resource/mcp`
 
-Action scopes restrict Hub API calls, but not kernel code or injected
+The consent grant restricts Hub API calls, but not kernel code or injected
 credentials. Select the smallest useful grant and a short token lifetime.
 
-OAuth rate limits apply to the deployment, not to each client IP.
+Dynamic registration is anonymous. Marimohub verifies client metadata, applies
+deployment-wide rate limits, and expires registrations after 90 days. Each
+successful registration emits an `oauth_client_registered` event without the
+client name or redirect URI. Deployments that require client vetting must add a
+trusted registration control before they enable MCP.
