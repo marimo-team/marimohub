@@ -68,7 +68,8 @@ minutes. Later calls reuse an eligible session.
 Runs code in the scratchpad of a live edit session. Open the notebook URL in a
 browser before you call this tool. The kernel remains available while a tab is
 connected and during marimo's short grace period. If no tab is connected, the
-tool returns the URL to open.
+tool returns the URL to open. Pass the project and session ID returned by
+`launch_notebook`; the tool automatically uses the first connected kernel.
 
 The scratchpad shares the notebook's live variables. For durable cell changes,
 first inspect marimo code mode:

@@ -51,6 +51,18 @@ async function connect(
 }
 
 describe('create_notebook MCP tool', () => {
+	it('does not advertise dependency metadata as an input', async () => {
+		const { deps } = await setup();
+		const { client, server } = await connect(deps);
+
+		const tools = await client.listTools();
+		await client.close();
+		await server.close();
+
+		const createNotebook = tools.tools.find((tool) => tool.name === 'create_notebook');
+		expect(createNotebook?.inputSchema.properties).not.toHaveProperty('deps');
+	});
+
 	it('creates a notebook without a session when launch is omitted', async () => {
 		const { deps, project } = await setup();
 		const { client, server } = await connect(deps);

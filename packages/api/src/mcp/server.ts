@@ -18,7 +18,7 @@ import {
 	withAbortSignal,
 	withDeadline,
 } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Project } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
 import {
@@ -49,6 +49,11 @@ type ToolResult = {
 };
 
 export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
+
+const PROJECT_REFERENCE_DESCRIPTION =
+	'Project ID or exact project name (case-insensitive). Use an ID if names are duplicated.';
+const NOTEBOOK_REFERENCE_DESCRIPTION =
+	'Notebook ID or exact notebook title in the project (case-insensitive). Use an ID if titles are duplicated.';
 
 class KernelDiscoveryTimeoutError extends Error {
 	constructor() {
@@ -152,10 +157,6 @@ function kernelDiscoveryTimeout(seconds: number): ToolResult {
 	};
 }
 
-function newestFirst(left: Session, right: Session): number {
-	return Date.parse(right.last_heartbeat) - Date.parse(left.last_heartbeat);
-}
-
 async function launchMcpNotebook(input: {
 	deps: ApiDeps;
 	principal: AuthenticatedPrincipal;
@@ -215,7 +216,7 @@ export function createMcpServer(
 		{
 			description: 'List the projects and notebooks visible to the current marimohub user.',
 			inputSchema: z.object({
-				project: z.string().optional(),
+				project: z.string().optional().describe(PROJECT_REFERENCE_DESCRIPTION),
 				status: z.enum(NOTEBOOK_STATUSES).optional(),
 				tag: z.string().optional(),
 				q: z.string().optional(),
@@ -283,13 +284,12 @@ export function createMcpServer(
 		{
 			description: 'Create a local marimohub notebook and optionally launch an edit session.',
 			inputSchema: z.object({
-				project: z.string(),
+				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
 				title: z.string().min(1),
 				description: z.string().default(''),
 				code: z.string(),
 				tags: z.array(z.string()).optional(),
 				readme: z.string().optional(),
-				deps: z.string().optional(),
 				launch: z.boolean().default(false),
 			}),
 		},
@@ -331,10 +331,10 @@ export function createMcpServer(
 		'launch_notebook',
 		{
 			description:
-				'Create or reuse a marimohub notebook session. A first launch can take about two minutes; calling again attaches to the same session.',
+				'Create or reuse a marimohub notebook session. Use a project ID or exact project name. Use a notebook ID or exact notebook title. Name matching is case-insensitive. A first launch can take about two minutes. Later calls attach to the same session.',
 			inputSchema: z.object({
-				project: z.string(),
-				notebook: z.string(),
+				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
+				notebook: z.string().describe(NOTEBOOK_REFERENCE_DESCRIPTION),
 				mode: z.enum(['edit', 'app']).default('edit'),
 				wait_seconds: z.number().int().min(0).max(120).default(60),
 			}),
@@ -365,57 +365,25 @@ export function createMcpServer(
 		{
 			description:
 				"Run code in an edit notebook's live scratchpad. Variables stay live. For durable cell edits, run `import marimo._code_mode as cm; help(cm)` first. A browser tab must be connected to the notebook.",
-			inputSchema: z
-				.object({
-					project: z.string(),
-					session_id: z.string().optional(),
-					notebook: z.string().optional(),
-					code: z
-						.string()
-						.refine(
-							(code) => new TextEncoder().encode(code).byteLength <= MAX_EXECUTE_CODE_BYTES,
-							`Code exceeds the ${MAX_EXECUTE_CODE_BYTES}-byte limit`,
-						),
-					timeout_seconds: z.number().int().min(1).max(300).default(60),
-					kernel_session_id: z.string().optional(),
-				})
-				.refine((input) => Boolean(input.session_id) !== Boolean(input.notebook), {
-					message: 'Provide exactly one of session_id or notebook',
-				}),
+			inputSchema: z.object({
+				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
+				session_id: z.string(),
+				code: z
+					.string()
+					.refine(
+						(code) => new TextEncoder().encode(code).byteLength <= MAX_EXECUTE_CODE_BYTES,
+						`Code exceeds the ${MAX_EXECUTE_CODE_BYTES}-byte limit`,
+					),
+				timeout_seconds: z.number().int().min(1).max(300).default(60),
+			}),
 		},
 		async (input) => {
 			const startedAt = Date.now();
 			const deadlineAt = startedAt + input.timeout_seconds * 1000;
 			try {
 				const project = await resolveProject(deps, principal, input.project);
-				let session: Session;
-				if (input.session_id) {
-					if (!SessionId.is(input.session_id)) throw new NotFoundError('Session not found');
-					session = await deps.services.sessions.getSession(project.id, input.session_id);
-				} else {
-					const notebook = await resolveNotebook(deps, principal, project, input.notebook!);
-					const { editorClaim, active } = await all({
-						editorClaim: async () => deps.services.sessions.getEditorClaim(project.id, notebook.id),
-						active: async () => deps.services.sessions.listActiveByProject(project.id),
-					});
-					const candidates = active
-						.filter(
-							(candidate) =>
-								candidate.notebook_id === notebook.id &&
-								candidate.status === 'running' &&
-								sessionMode(candidate) === 'edit',
-						)
-						.sort((left, right) => {
-							const own =
-								Number(right.user_id === principal.id) - Number(left.user_id === principal.id);
-							const claimed =
-								Number(right.session_id === editorClaim?.session_id) -
-								Number(left.session_id === editorClaim?.session_id);
-							return own || claimed || newestFirst(left, right);
-						});
-					if (!candidates[0]) throw new NotFoundError('No running edit session was found');
-					session = candidates[0];
-				}
+				if (!SessionId.is(input.session_id)) throw new NotFoundError('Session not found');
+				const session = await deps.services.sessions.getSession(project.id, input.session_id);
 				if (session.status !== 'running') throw new BadRequestError('Session is not running');
 				if (sessionMode(session) !== 'edit') {
 					throw new BadRequestError('Code execution requires an edit session');
@@ -456,10 +424,7 @@ export function createMcpServer(
 						isError: true,
 					};
 				}
-				const kernelSession = input.kernel_session_id
-					? (kernelSessions.find((candidate) => candidate.id === input.kernel_session_id) ??
-						kernelSessions[0])
-					: kernelSessions[0];
+				const kernelSession = kernelSessions[0];
 				const executionTimeoutMs = deadlineAt - Date.now();
 				if (executionTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
 				const executed = await executeInKernel(

@@ -290,7 +290,6 @@ describe('MCP OAuth app', () => {
 					arguments: {
 						project: 'My Projects',
 						session_id: launchResult.result.structuredContent.session_id,
-						kernel_session_id: 'stale-kernel',
 						code: '1+1',
 					},
 				},

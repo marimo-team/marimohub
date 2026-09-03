@@ -33,6 +33,52 @@ afterEach(() => {
 });
 
 describe('MCP tool boundaries', () => {
+	it('publishes a project-scoped session selector for execute_code', async () => {
+		const { client, server } = await connect(makeTestDeps(new MemoryBucket()));
+
+		const tools = await client.listTools();
+		await client.close();
+		await server.close();
+
+		const executeCode = tools.tools.find((tool) => tool.name === 'execute_code');
+		expect(executeCode?.inputSchema).toMatchObject({
+			required: ['project', 'session_id', 'code'],
+			properties: {
+				project: { type: 'string' },
+				session_id: { type: 'string' },
+				code: { type: 'string' },
+			},
+		});
+		expect(executeCode?.inputSchema.properties).not.toHaveProperty('notebook');
+		expect(executeCode?.inputSchema.properties).not.toHaveProperty('kernel_session_id');
+	});
+
+	it('describes name and ID resolution in each tool schema', async () => {
+		const { client, server } = await connect(makeTestDeps(new MemoryBucket()));
+
+		const tools = await client.listTools();
+		await client.close();
+		await server.close();
+
+		const properties = Object.fromEntries(
+			tools.tools.map((tool) => [
+				tool.name,
+				tool.inputSchema.properties as Record<string, { description?: string }>,
+			]),
+		);
+		const projectDescription =
+			'Project ID or exact project name (case-insensitive). Use an ID if names are duplicated.';
+		for (const tool of ['list_catalog', 'create_notebook', 'launch_notebook', 'execute_code']) {
+			expect(properties[tool]?.project?.description).toBe(projectDescription);
+		}
+		expect(properties.launch_notebook?.notebook?.description).toBe(
+			'Notebook ID or exact notebook title in the project (case-insensitive). Use an ID if titles are duplicated.',
+		);
+		expect(tools.tools.find((tool) => tool.name === 'launch_notebook')?.description).toContain(
+			'Use a project ID or exact project name. Use a notebook ID or exact notebook title.',
+		);
+	});
+
 	it('loads each project catalog and its active sessions concurrently', async () => {
 		const bucket = new MemoryBucket();
 		await new CatalogService(bucket).initialize(PRINCIPAL.id);
@@ -57,47 +103,6 @@ describe('MCP tool boundaries', () => {
 		await vi.waitFor(() => expect(listNotebooks).toHaveBeenCalledOnce());
 		expect(listActive).toHaveBeenCalledOnce();
 		releaseNotebooks();
-		await loading;
-		await client.close();
-		await server.close();
-	});
-
-	it('loads the editor claim and active sessions concurrently', async () => {
-		const bucket = new MemoryBucket();
-		await new CatalogService(bucket).initialize(PRINCIPAL.id);
-		const deps = makeTestDeps(bucket);
-		const project = await deps.services.projects.createProject(
-			{ name: 'Project', description: '' },
-			PRINCIPAL.id,
-		);
-		const notebook = await deps.services.notebooks.createNotebook(
-			project.id,
-			{ title: 'Notebook', description: '', code: 'import marimo as mo' },
-			PRINCIPAL.id,
-		);
-		let releaseClaim!: () => void;
-		const claimPending = new Promise<void>((resolve) => {
-			releaseClaim = resolve;
-		});
-		const loadEditorClaim = deps.services.sessions.getEditorClaim.bind(deps.services.sessions);
-		const getEditorClaim = vi
-			.spyOn(deps.services.sessions, 'getEditorClaim')
-			.mockImplementation(async (...args) => {
-				await claimPending;
-				return loadEditorClaim(...args);
-			});
-		const listActive = vi
-			.spyOn(deps.services.sessions, 'listActiveByProject')
-			.mockResolvedValue([]);
-		const { client, server } = await connect(deps);
-
-		const loading = client.callTool({
-			name: 'execute_code',
-			arguments: { project: project.id, notebook: notebook.id, code: '1 + 1' },
-		});
-		await vi.waitFor(() => expect(getEditorClaim).toHaveBeenCalledOnce());
-		expect(listActive).toHaveBeenCalledOnce();
-		releaseClaim();
 		await loading;
 		await client.close();
 		await server.close();
