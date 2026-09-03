@@ -54,7 +54,12 @@ import type {
 	TestResult,
 	UpdateIntegrationInput,
 } from '../../ports/integrations';
-import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/secrets';
+import type {
+	ManagedSecretCodec,
+	SecretRef,
+	SecretResolutionContext,
+	SecretResolver,
+} from '../../ports/secrets';
 import type {
 	DatabaseBrowser,
 	DatabaseBrowserRegistry,
@@ -810,9 +815,10 @@ class ScopedIntegrationsStore {
 				resolved = await this.open(scope, head.id, def, stored);
 			} else {
 				// New drafts use an in-memory codec so testing does not require persistence.
+				const resolutionContext = this.secretResolutionContext(scope);
 				const transient = transientSealer(
 					(ref) => this.storeReference(ref),
-					(ref, at) => this.resolveReference(ref, at),
+					(ref, at) => this.resolveReference(ref, at, resolutionContext),
 				);
 				const stored = await sealConfig({
 					schema: def.configSchema,
@@ -1776,6 +1782,7 @@ class ScopedIntegrationsStore {
 	): Promise<Record<string, unknown>> {
 		const codec = this.codec;
 		const contextFor = this.secretContext(scope, id);
+		const resolutionContext = this.secretResolutionContext(scope, id);
 		return openConfig({
 			stored,
 			paths: this.registry.secretPathsOf(def.kind),
@@ -1789,7 +1796,7 @@ class ScopedIntegrationsStore {
 					}
 					return codec.decrypt(envelope, { path: contextFor(at) });
 				},
-				resolve: (ref, at) => this.resolveReference(ref, at),
+				resolve: (ref, at) => this.resolveReference(ref, at, resolutionContext),
 			},
 		});
 	}
@@ -1805,7 +1812,11 @@ class ScopedIntegrationsStore {
 		});
 	}
 
-	private async resolveReference(ref: SecretRef, at: string): Promise<string> {
+	private async resolveReference(
+		ref: SecretRef,
+		at: string,
+		context: SecretResolutionContext,
+	): Promise<string> {
 		const resolver = this.resolvers.get(ref.backend);
 		if (!resolver) {
 			throw new ValidationError(
@@ -1813,7 +1824,7 @@ class ScopedIntegrationsStore {
 			);
 		}
 		try {
-			return await resolver.resolve(ref);
+			return await resolver.resolve(ref, context);
 		} catch (err) {
 			if (err instanceof SecretResolutionError && err.reason === 'forbidden') {
 				// Persistent permission gap, not an outage: 422 so nobody retries it,
@@ -1824,7 +1835,7 @@ class ScopedIntegrationsStore {
 					err,
 				);
 				throw new ValidationError(
-					`Secret backend "${ref.backend}" denied access to the secret for field "${at}". Check the deployment's secret-manager permissions.`,
+					`Secret backend "${ref.backend}" denied access to the secret for field "${at}". Check the deployment permissions and secret policy.`,
 				);
 			}
 			if (err instanceof SecretResolutionError && err.reason !== 'unavailable') {
@@ -1839,6 +1850,16 @@ class ScopedIntegrationsStore {
 			);
 			throw new UnavailableError(`Secret backend "${ref.backend}" is temporarily unavailable.`);
 		}
+	}
+
+	private secretResolutionContext(
+		scope: IntegrationScope,
+		integrationId?: IntegrationId,
+	): SecretResolutionContext {
+		const integration = integrationId === undefined ? {} : { integrationId };
+		return scope.projectId === undefined
+			? { scope: 'org', ...integration }
+			: { scope: 'project', projectId: scope.projectId, ...integration };
 	}
 
 	/**

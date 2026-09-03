@@ -30,6 +30,18 @@ serviceAccount:
 sandboxIngress:
   namespace: ''
 
+# Resolve integration credentials from explicitly named Kubernetes Secrets.
+# The chart grants get-only RBAC and passes the same project policy to the app.
+# It does not create the credential Secrets.
+secretResolvers:
+  kubernetes:
+    enabled: false
+    cacheTtlSeconds: 0
+    allowedSecrets: []
+    # - namespace: connections
+    #   name: provider-a
+    #   projects: '*'
+
 # The API tier is stateless, so it scales freely.
 replicaCount: 2
 

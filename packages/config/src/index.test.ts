@@ -1421,6 +1421,19 @@ describe('createFromEnv data-browser lockdown', () => {
 		).toBeUndefined();
 	});
 
+	it('does not load integration resolvers for project alerts when integrations are off', () => {
+		expect(() =>
+			createFromEnv({
+				...env,
+				MARIMOHUB_INTEGRATIONS: 'off',
+				MARIMOHUB_PROJECT_ALERTS: 'on',
+				MARIMOHUB_SECRETS_KEK: '00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100',
+				MARIMOHUB_SECRETS_KUBERNETES: 'true',
+				MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS: 'not-json',
+			}),
+		).not.toThrow();
+	});
+
 	it('refuses explicit full mode without a probe', () => {
 		expect(() =>
 			createFromEnv({

@@ -1,3 +1,5 @@
+import type { IntegrationId, ProjectId } from '../ids';
+
 /** A pointer to a value held in an external secret manager. */
 export interface SecretRef {
 	/** Selects a registered SecretResolver, e.g. `aws-sm`. */
@@ -5,6 +7,11 @@ export interface SecretRef {
 	/** Manager-specific, e.g. `prod/ai#OPENAI_API_KEY` or an ARN[#key]. */
 	locator: string;
 }
+
+/** Stable for every secret field opened as part of one integration operation. */
+export type SecretResolutionContext =
+	| { scope: 'project'; projectId: ProjectId; integrationId?: IntegrationId }
+	| { scope: 'org'; integrationId?: IntegrationId };
 
 export class SecretResolutionError extends Error {
 	constructor(
@@ -31,7 +38,7 @@ export interface SecretResolver {
 	readonly locatorHelp: string;
 	readonly docsUrl?: string;
 	/** → plaintext. MUST throw a safe error without echoing the ref on failure. */
-	resolve(ref: SecretRef): Promise<string>;
+	resolve(ref: SecretRef, context: SecretResolutionContext): Promise<string>;
 }
 
 /** Envelope for a hub-held (managed) value — ciphertext only, no plaintext at rest. */

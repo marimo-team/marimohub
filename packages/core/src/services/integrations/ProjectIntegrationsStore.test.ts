@@ -15,7 +15,7 @@ import type { Bucket, BucketListOptions } from '../../ports/bucket';
 import { ObjectBrowseError } from '../../ports/objectBrowser';
 import type { ObjectBrowseContext, ObjectBrowser } from '../../ports/objectBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
-import type { SecretResolver } from '../../ports/secrets';
+import type { SecretResolutionContext, SecretResolver } from '../../ports/secrets';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
@@ -747,7 +747,80 @@ describe('ProjectIntegrationsStore', () => {
 			ok: true,
 			details: 'greeting=stored',
 		});
-		expect(resolve).toHaveBeenCalledWith({ backend: 'vault', locator: 'hidden/path' });
+		expect(resolve).toHaveBeenCalledWith(
+			{ backend: 'vault', locator: 'hidden/path' },
+			{ scope: 'project', projectId: pid, integrationId: created.id },
+		);
+	});
+
+	it('shares one resolution context across every reference in one config open', async () => {
+		const contexts: SecretResolutionContext[] = [];
+		const resolver: SecretResolver = {
+			...vaultResolver,
+			resolve: async ({ locator }, context) => {
+				contexts.push(context);
+				return locator;
+			},
+		};
+		const registry = new IntegrationRegistry();
+		registry.register(
+			defineIntegration({
+				kind: 'pair',
+				title: 'Pair',
+				description: 'credential pair',
+				category: 'other',
+				brand: { color: '#000000' },
+				schemaVersion: 1,
+				configSchema: z.object({ first: zSecret(), second: zSecret() }),
+				render: ({ config }) => ({ env: { FIRST: config.first, SECOND: config.second } }),
+			}),
+		);
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			resolvers: [resolver],
+			probe: stubProbe,
+		});
+		const created = await store.create(
+			pid,
+			{
+				kind: 'pair',
+				name: 'pair',
+				config: {
+					first: { $secret: { kind: 'reference', backend: 'vault', locator: 'first' } },
+					second: { $secret: { kind: 'reference', backend: 'vault', locator: 'second' } },
+				},
+			},
+			ACTOR,
+		);
+
+		await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(contexts).toHaveLength(2);
+		expect(contexts[0]).toBe(contexts[1]);
+		expect(contexts[0]).toEqual({
+			scope: 'project',
+			projectId: pid,
+			integrationId: created.id,
+		});
+	});
+
+	it('passes project ownership without an integration id for a new draft', async () => {
+		const resolve = vi.fn(async () => 'valid');
+		const store = makeStore(bucket, true, [{ ...vaultResolver, resolve }]);
+		await expect(
+			store.test(pid, {
+				source: 'draft',
+				kind: 'echo',
+				config: {
+					token: { $secret: { kind: 'reference', backend: 'vault', locator: 'draft' } },
+				},
+			}),
+		).resolves.toMatchObject({ ok: true });
+		expect(resolve).toHaveBeenCalledWith(
+			{ backend: 'vault', locator: 'draft' },
+			{ scope: 'project', projectId: pid },
+		);
 	});
 
 	it('test() runs the probe on unsaved config without persisting anything', async () => {
@@ -2210,6 +2283,63 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		expect(JSON.parse(manifest?.content ?? '')).toMatchObject({
 			integrations: [{ name: 'db' }, { name: 'warehouse' }],
 		});
+	});
+
+	it('authorizes inherited references as organization-owned', async () => {
+		const contexts: SecretResolutionContext[] = [];
+		const resolver: SecretResolver = {
+			...vaultResolver,
+			resolve: async (_ref, context) => {
+				contexts.push(context);
+				return 'valid';
+			},
+		};
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const options = { bucket, registry, codec, probe: stubProbe, resolvers: [resolver] };
+		const scopedOrg = new OrgIntegrationsStore(options);
+		const scopedProject = new ProjectIntegrationsStore(options);
+		const created = await scopedOrg.create(
+			{
+				kind: 'echo',
+				name: 'shared',
+				config: {
+					token: { $secret: { kind: 'reference', backend: 'vault', locator: 'shared' } },
+				},
+			},
+			ACTOR,
+		);
+
+		await expect(scopedOrg.test({ source: 'stored', id: created.id })).resolves.toMatchObject({
+			ok: true,
+		});
+		expect(contexts).toEqual([{ scope: 'org', integrationId: created.id }]);
+		contexts.length = 0;
+		await scopedProject.resolveForSession(pid, renderContext(createSessionId()));
+		expect(contexts).toEqual([{ scope: 'org', integrationId: created.id }]);
+	});
+
+	it('passes organization ownership without an integration id for a new draft', async () => {
+		const resolve = vi.fn(async () => 'valid');
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const scopedOrg = new OrgIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			probe: stubProbe,
+			resolvers: [{ ...vaultResolver, resolve }],
+		});
+		await expect(
+			scopedOrg.test({
+				source: 'draft',
+				kind: 'echo',
+				config: {
+					token: { $secret: { kind: 'reference', backend: 'vault', locator: 'draft' } },
+				},
+			}),
+		).resolves.toMatchObject({ ok: true });
+		expect(resolve).toHaveBeenCalledWith({ backend: 'vault', locator: 'draft' }, { scope: 'org' });
 	});
 
 	it('a same-name project instance shadows the org one — enabled overrides, disabled opts out', async () => {

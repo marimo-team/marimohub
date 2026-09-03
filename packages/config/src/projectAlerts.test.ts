@@ -42,6 +42,19 @@ describe('project alert configuration', () => {
 		expect(alerts?.dispatcher).toBeDefined();
 	});
 
+	it('does not initialize integration secret resolvers', () => {
+		const alerts = makeProjectAlerts(
+			{
+				MARIMOHUB_PROJECT_ALERTS: 'on',
+				MARIMOHUB_SECRETS_KEK: KEK,
+				MARIMOHUB_SECRETS_KUBERNETES: 'true',
+				MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS: 'not-json',
+			},
+			new MemoryBucket(),
+		);
+		expect(alerts).toBeDefined();
+	});
+
 	it('fails startup with an invalid managed-secret KEK', () => {
 		expect(() =>
 			makeProjectAlerts(

@@ -45,6 +45,7 @@
 		"@marimo-hub/object-browser-s3": "workspace:*",
 		"@marimo-hub/postgres-runtime": "workspace:*",
 		"@marimo-hub/secrets-aws": "workspace:*",
+		"@marimo-hub/secrets-kubernetes": "workspace:*",
 		"@marimo-hub/source-control-github": "workspace:*",
 		"@marimo-hub/storage-azure": "workspace:*",
 		"@marimo-hub/storage-fs": "workspace:*",

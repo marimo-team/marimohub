@@ -112,6 +112,61 @@ string from a JSON secret. Omit it to resolve the complete JSON object.
 
 The hub needs `secretsmanager:GetSecretValue`. It does not write to AWS Secrets Manager.
 
+### Kubernetes Secrets
+
+Enable the `k8s` backend and list each allowed Secret:
+
+```bash
+MARIMOHUB_SECRETS_KUBERNETES=true
+MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS='[{"namespace":"connections","name":"provider-a","projects":"*"}]'
+MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS=0
+```
+
+`MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS` is an array of
+`{ namespace, name, projects }` rules. Each rule allows one Secret. Set
+`projects` to `"*"` or a non-empty array of project IDs. Organization
+integrations require `"*"` because all projects can inherit them.
+
+A locator uses `namespace/secret-name#data-key`. The namespace and Secret name
+must match one policy rule. For example, use
+`connections/provider-a#access-key-id` with `backend: k8s`.
+
+Each referenced Secret must opt in with this label:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: provider-a
+  namespace: connections
+  labels:
+    marimohub.io/integration-secret: 'true'
+type: Opaque
+stringData:
+  access-key-id: example
+  secret-access-key: example
+```
+
+The resolver denies a Secret with a missing or different label. Project access
+exists only in the deployment policy, not in Secret metadata.
+
+In Kubernetes, the resolver uses the pod ServiceAccount. Outside Kubernetes, it
+uses the default kubeconfig. It needs only `get` access to allowed Secrets.
+
+The default cache TTL is zero. The resolver then reads each Secret once per
+integration operation. New sessions see the latest value. Running sessions keep
+the value that they received at startup.
+
+Set a positive cache TTL only if stale values are acceptable.
+
+Put fields that rotate together in one Secret. Select each field with a separate
+`#data-key` locator. One operation uses one snapshot of that Secret. Reads across
+different Secrets are not atomic.
+
+The Helm chart converts `secretResolvers.kubernetes.allowedSecrets` into the
+runtime policy and exact-name, get-only Roles. It does not create credential
+Secrets.
+
 ## Environment variable bundles
 
 The **Environment variables** integration supports three inputs:

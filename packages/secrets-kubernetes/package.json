@@ -1,5 +1,5 @@
 {
-	"name": "@marimo-hub/compute-kubernetes",
+	"name": "@marimo-hub/secrets-kubernetes",
 	"version": "0.0.0",
 	"private": true,
 	"license": "Apache-2.0",
@@ -13,16 +13,15 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"check": "vp check",
 		"test": "vp test",
+		"check": "vp check",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@marimo-hub/compute-commons": "workspace:*",
+		"@kubernetes/client-node": "catalog:",
 		"@marimo-hub/core": "workspace:*"
 	},
 	"devDependencies": {
-		"@kubernetes/client-node": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",

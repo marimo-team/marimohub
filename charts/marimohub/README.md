@@ -80,6 +80,9 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `metrics.serviceMonitor.*` | disabled, `30s`, `{}` labels | Prometheus Operator ServiceMonitor |
 | `resources` | 100m/256Mi → 500m/512Mi | API container |
 | `nodeSelector` / `tolerations` / `affinity` | empty | Set per cluster |
+| `secretResolvers.kubernetes.enabled` | `false` | Resolve integration fields from Kubernetes Secrets |
+| `secretResolvers.kubernetes.cacheTtlSeconds` | `0` | Cross-operation Secret cache TTL |
+| `secretResolvers.kubernetes.allowedSecrets` | `[]` | Exact Secret and project access rules |
 
 Pods run hardened by default: non-root (uid 1000), read-only root filesystem, all
 capabilities dropped, `RuntimeDefault` seccomp. No cluster-specific scheduling is
@@ -110,8 +113,10 @@ serviceAccount:
 ```
 
 Set `automountServiceAccountToken: false` when marimohub does not need a projected
-Kubernetes token. Keep it enabled for Kubernetes compute and workload identity
-providers that use that token. This account belongs to the marimohub control plane;
+Kubernetes token. Keep it enabled for Kubernetes compute, Kubernetes Secret
+resolution, and workload identity providers that use that token.
+
+This account belongs to the marimohub control plane.
 `config.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` separately selects the
 ServiceAccount assigned to notebook kernel pods.
 
@@ -119,3 +124,32 @@ The chart does not grant the control-plane account any RBAC permissions. Bind it
 to cluster-specific Roles separately, as shown in
 [`examples/kubernetes/rbac.yaml`](../../examples/kubernetes/rbac.yaml) for the
 native Kubernetes compute backend.
+
+### Kubernetes integration secrets
+
+Enable the resolver and list every Secret that marimohub may read:
+
+```yaml
+secretResolvers:
+  kubernetes:
+    enabled: true
+    cacheTtlSeconds: 0
+    allowedSecrets:
+      - namespace: connections
+        name: provider-a
+        projects: '*'
+      - namespace: connections
+        name: provider-b
+        projects:
+          - proj-0000000000000000
+```
+
+Each rule allows one exact Secret. Set `projects` to `"*"` or a non-empty list
+of project IDs. Organization integrations require `"*"`.
+
+The chart creates a Role and RoleBinding in each namespace. Each Role grants
+`get` only for the named Secrets. The chart does not create these Secrets.
+
+Label each Secret with `marimohub.io/integration-secret: "true"`. The
+[integration secret guide](../../docs/integration-secrets.md#kubernetes-secrets)
+explains locators, access rules, caching, and rotation.
