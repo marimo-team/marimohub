@@ -39,6 +39,11 @@ const PendingAuthorizationSchema = z.looseObject({
 	status: z.literal('pending'),
 });
 
+const DeniedAuthorizationSchema = z.looseObject({
+	...AuthorizationCommonSchema,
+	status: z.literal('denied'),
+});
+
 const ApprovedAuthorizationSchema = z.looseObject({
 	...AuthorizationCommonSchema,
 	status: z.enum(['approved', 'claimed']),
@@ -51,6 +56,7 @@ const ApprovedAuthorizationSchema = z.looseObject({
 
 const OAuthAuthorizationSchema = z.discriminatedUnion('status', [
 	PendingAuthorizationSchema,
+	DeniedAuthorizationSchema,
 	ApprovedAuthorizationSchema,
 ]);
 
@@ -186,7 +192,15 @@ export class OAuthAuthorizationService {
 	}
 
 	async deny(id: OAuthAuthorizationId): Promise<{ redirectUri: string }> {
-		const { key, record } = await this.readPending(id);
+		const { key, object, record } = await this.readPending(id);
+		try {
+			await this.bucket.put(key, JSON.stringify({ ...record, status: 'denied' }), {
+				onlyIfEtagMatches: object.etag,
+			});
+		} catch (error) {
+			if (error instanceof PreconditionFailedError) throw invalidAuthorization();
+			throw error;
+		}
 		await this.bucket.delete(key);
 		return {
 			redirectUri: redirectWith(record.redirect_uri, {

@@ -31,22 +31,10 @@ export interface RegisterOAuthClientInput {
 	response_types?: string[];
 }
 
-const STANDARD_NON_REDIRECT_SCHEMES = new Set([
-	'about:',
-	'blob:',
-	'data:',
-	'file:',
-	'ftp:',
-	'ftps:',
-	'git:',
-	'mailto:',
-	'sms:',
-	'ssh:',
-	'tel:',
-	'urn:',
-	'ws:',
-	'wss:',
-]);
+// Cursor predates the reverse-domain convention recommended by RFC 8252 section 7.1.
+const SUPPORTED_PRIVATE_USE_REDIRECT_SCHEMES = new Set(['cursor:']);
+const REVERSE_DOMAIN_PRIVATE_USE_SCHEME =
+	/^[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+:$/;
 
 function validRedirectUri(value: string): boolean {
 	let url: URL;
@@ -60,11 +48,13 @@ function validRedirectUri(value: string): boolean {
 	if (url.protocol === 'http:') {
 		return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
 	}
+	if (SUPPORTED_PRIVATE_USE_REDIRECT_SCHEMES.has(url.protocol)) {
+		return url.host.length > 0 || url.pathname.startsWith('/');
+	}
 	return (
-		/^[a-z][a-z0-9+.-]*:$/.test(url.protocol) &&
-		!STANDARD_NON_REDIRECT_SCHEMES.has(url.protocol) &&
-		!url.protocol.startsWith('javascript') &&
-		(url.host.length > 0 || url.pathname.startsWith('/'))
+		REVERSE_DOMAIN_PRIVATE_USE_SCHEME.test(url.protocol) &&
+		url.host.length === 0 &&
+		url.pathname.startsWith('/')
 	);
 }
 
@@ -96,7 +86,7 @@ export class OAuthClientStore {
 			input.redirect_uris.some((uri) => !validRedirectUri(uri))
 		) {
 			throw new BadRequestError(
-				'OAuth redirect_uris must use HTTPS, a loopback HTTP URL, or a private-use scheme',
+				'OAuth redirect_uris must use HTTPS, a loopback HTTP URL, or a supported private-use scheme',
 			);
 		}
 		await this.pruneExpired();

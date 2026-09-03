@@ -14,6 +14,8 @@ import {
 	SessionId,
 	sessionMode,
 	sleep,
+	withAbortSignal,
+	withDeadline,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core';
@@ -42,6 +44,13 @@ type ToolResult = {
 };
 
 export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
+
+class KernelDiscoveryTimeoutError extends Error {
+	constructor() {
+		super('Kernel session discovery timed out');
+		this.name = 'KernelDiscoveryTimeoutError';
+	}
+}
 
 function result(data: Record<string, unknown>, text = JSON.stringify(data, null, 2)): ToolResult {
 	return { content: [{ type: 'text', text }], structuredContent: data };
@@ -122,7 +131,19 @@ async function resolveNotebook(
 function kernelFetch(deps: ApiDeps): typeof fetch {
 	return async (input, init) => {
 		const request = new Request(input, init);
-		return (await deps.compute.proxy(request)) ?? globalThis.fetch(request);
+		const response = await withAbortSignal(deps.compute.proxy(request), request.signal);
+		return response ?? globalThis.fetch(request);
+	};
+}
+
+function kernelDiscoveryTimeout(seconds: number): ToolResult {
+	return {
+		...result({
+			code: 'KERNEL_DISCOVERY_TIMEOUT',
+			message: `Kernel session discovery exceeded ${seconds} seconds`,
+			timedOut: true,
+		}),
+		isError: true,
 	};
 }
 
@@ -285,6 +306,7 @@ export function createMcpServer(
 		},
 		async (input) => {
 			const startedAt = Date.now();
+			const deadlineAt = startedAt + input.timeout_seconds * 1000;
 			try {
 				const project = await resolveProject(deps, principal, input.project);
 				let session: Session;
@@ -325,7 +347,23 @@ export function createMcpServer(
 				const labels = await assertSessionNotebookVisible(deps, project, session, principal);
 				await assertSessionAccess(project, session, principal, deps, labels);
 				const baseUrl = kernelBaseUrl(session);
-				const kernelSessions = await listKernelSessions(baseUrl, { fetchImpl: kernelFetch(deps) });
+				const discoveryTimeoutMs = deadlineAt - Date.now();
+				if (discoveryTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
+				let kernelSessions;
+				try {
+					kernelSessions = await withDeadline(
+						(signal) => listKernelSessions(baseUrl, { fetchImpl: kernelFetch(deps), signal }),
+						{
+							timeoutMs: discoveryTimeoutMs,
+							timeoutError: () => new KernelDiscoveryTimeoutError(),
+						},
+					);
+				} catch (error) {
+					if (error instanceof KernelDiscoveryTimeoutError) {
+						return kernelDiscoveryTimeout(input.timeout_seconds);
+					}
+					throw error;
+				}
 				if (kernelSessions.length === 0) {
 					const notebookUrl = `${request.appBaseUrl}/projects/${project.id}/notebooks/${session.notebook_id}`;
 					return {
@@ -343,6 +381,8 @@ export function createMcpServer(
 					: (kernelSessions.find((candidate) => candidate.path?.split('/').at(-1) === entryName) ??
 						kernelSessions[0]);
 				if (!kernelSession) throw new NotFoundError('Kernel session not found');
+				const executionTimeoutMs = deadlineAt - Date.now();
+				if (executionTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
 				const executed = await executeInKernel(
 					baseUrl,
 					{
@@ -352,7 +392,7 @@ export function createMcpServer(
 						maxStderrBytes: 256 * 1024,
 						maxOutputBytes: 1024 * 1024,
 					},
-					{ fetchImpl: kernelFetch(deps), timeoutMs: input.timeout_seconds * 1000 },
+					{ fetchImpl: kernelFetch(deps), timeoutMs: executionTimeoutMs },
 				);
 				const data = {
 					project_id: project.id,

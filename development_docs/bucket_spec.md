@@ -719,8 +719,8 @@ challenge, state, scopes, and resource. Approval uses ETag compare-and-swap
 The service verifies the bindings, claims the record with CAS, and mints one
 scoped PAT. This PAT stores the client ID, exact MCP resource, and `mcp:tools`
 scope. The MCP endpoint rejects other PATs. A `finally` block deletes the
-authorization. Denial deletes the pending record and redirects with
-`error=access_denied`.
+authorization. Denial uses CAS to mark the pending record as denied before
+deletion. It then redirects with `error=access_denied`.
 
 OAuth PATs expire within 90 days. The consent page defaults to 7 days. The
 authorization server does not issue refresh tokens.

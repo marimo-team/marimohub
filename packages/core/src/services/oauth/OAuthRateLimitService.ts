@@ -50,7 +50,7 @@ export class OAuthRateLimitService {
 						? await readStored(OAuthRateLimitRecordSchema, object, key)
 						: { timestamps: [] };
 					const timestamps = stored.timestamps.filter(
-						(previous) => timestamp - previous < windowMs,
+						(previous) => previous <= timestamp && timestamp - previous < windowMs,
 					);
 					if (timestamps.length >= limit) return false;
 					timestamps.push(timestamp);

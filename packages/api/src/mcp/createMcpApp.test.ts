@@ -759,6 +759,28 @@ describe('MCP OAuth app', () => {
 		},
 	);
 
+	it.each(['register', 'authorize', 'token', 'revoke'] as const)(
+		'does not charge %s preflights against its shared deployment budget',
+		async (endpoint) => {
+			const deps = makeTestDeps(new MemoryBucket(), {
+				mcp: { publicBaseUrl: 'https://hub.example.com' },
+			});
+			const consume = vi.spyOn(deps.services.oauthRateLimits, 'consume').mockResolvedValue(false);
+			const app = createApi(deps);
+
+			const response = await app.request(`/${endpoint}`, {
+				method: 'OPTIONS',
+				headers: {
+					Origin: 'https://client.example',
+					'Access-Control-Request-Method': 'POST',
+				},
+			});
+
+			expect(response.status).toBe(204);
+			expect(consume).not.toHaveBeenCalled();
+		},
+	);
+
 	it('rate limits authorization requests before they create unbounded records', async () => {
 		const bucket = new MemoryBucket();
 		const deps = makeTestDeps(bucket, {

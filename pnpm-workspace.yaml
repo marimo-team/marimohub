@@ -27,8 +27,8 @@ catalog:
   # Exact-pinned prerelease: the only published channel is beta (see minimumReleaseAgeExclude).
   '@coreweave/cwsandbox': 0.4.0-beta.0
   '@duckdb/duckdb-wasm': 1.32.0
-  '@hono/node-server': ^2.0.10
   '@hono/mcp': ^0.3.2
+  '@hono/node-server': ^2.0.10
   '@hono/otel': ^1.1.2
   '@hono/zod-openapi': ^1.2.2
   '@kubernetes/client-node': ^1.4.0

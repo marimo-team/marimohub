@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { UserId } from '@marimo-hub/core';
+import { CatalogService, UserId } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing';
 import { makeTestDeps } from '../testing';
@@ -83,5 +83,66 @@ describe('MCP tool boundaries', () => {
 			`Code exceeds the ${MAX_EXECUTE_CODE_BYTES}-byte limit`,
 		);
 		expect(listProjects).not.toHaveBeenCalled();
+	});
+
+	it('bounds kernel discovery and does not execute code after it times out', async () => {
+		const bucket = new MemoryBucket();
+		await new CatalogService(bucket).initialize(PRINCIPAL.id);
+		let discoverySignal: AbortSignal | undefined;
+		const proxy = vi.fn(async (request: Request) => {
+			discoverySignal = request.signal;
+			return new Promise<Response | null>(() => {});
+		});
+		const deps = makeTestDeps(bucket, {
+			compute: {
+				create: () => {
+					throw new Error('not used');
+				},
+				proxy,
+			},
+		});
+		const project = await deps.services.projects.createProject(
+			{ name: 'Project', description: '' },
+			PRINCIPAL.id,
+		);
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: 'import marimo as mo' },
+			PRINCIPAL.id,
+		);
+		const created = await deps.services.sessions.createSession({
+			project_id: project.id,
+			notebook_id: notebook.id,
+			user_id: PRINCIPAL.id,
+		});
+		const session = await deps.services.sessions.setRunning(
+			project.id,
+			created.session_id,
+			'https://kernel.example',
+		);
+		const { client, server } = await connect(deps);
+
+		const response = await client.callTool({
+			name: 'execute_code',
+			arguments: {
+				project: project.id,
+				session_id: session.session_id,
+				code: '1 + 1',
+				timeout_seconds: 1,
+			},
+		});
+		await client.close();
+		await server.close();
+
+		expect(response).toMatchObject({
+			isError: true,
+			structuredContent: {
+				code: 'KERNEL_DISCOVERY_TIMEOUT',
+				timedOut: true,
+			},
+		});
+		expect(proxy).toHaveBeenCalledOnce();
+		expect(new URL(proxy.mock.calls[0][0].url).pathname).toBe('/api/sessions');
+		expect(discoverySignal?.aborted).toBe(true);
 	});
 });

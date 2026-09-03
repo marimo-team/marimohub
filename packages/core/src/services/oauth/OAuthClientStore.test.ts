@@ -50,10 +50,16 @@ describe('OAuthClientStore', () => {
 		'mailto:oauth@example.com',
 		'ws://localhost/callback',
 		'custom:opaque-callback',
+		'custom:///callback',
 		'file:///tmp/callback',
 		'https://example.com/callback#fragment',
 		'cursor://oauth/callback#fragment',
 		'javascript:alert(1)',
+		'vbscript:///x',
+		'chrome://settings/callback',
+		'com.example.app://oauth/callback',
+		'com.-example.app:/oauth/callback',
+		'com.example-.app:/oauth/callback',
 		'not a URL',
 	])('rejects unsafe redirect URI %s', async (redirectUri) => {
 		await expect(store.register({ redirect_uris: [redirectUri] })).rejects.toThrow(

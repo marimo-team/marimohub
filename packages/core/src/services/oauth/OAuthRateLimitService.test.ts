@@ -49,6 +49,23 @@ describe('OAuthRateLimitService', () => {
 		).toEqual({ timestamps: [now] });
 	});
 
+	it('discards future timestamps after a clock rollback', async () => {
+		const bucket = new MemoryBucket();
+		const now = 1_000;
+		await bucket.put(
+			paths.oauthRateLimit('authorize'),
+			JSON.stringify({
+				timestamps: Array.from({ length: OAUTH_RATE_LIMITS.authorize.limit }, () => now + 1),
+			}),
+		);
+		const limiter = new OAuthRateLimitService(bucket, { now: () => now });
+
+		expect(await limiter.consume('authorize')).toBe(true);
+		expect(
+			await bucket.get(paths.oauthRateLimit('authorize')).then((object) => object?.json()),
+		).toEqual({ timestamps: [now] });
+	});
+
 	it('fails closed when every conditional write loses its race', async () => {
 		const bucket = new MemoryBucket();
 		vi.spyOn(bucket, 'put').mockRejectedValue(new PreconditionFailedError('lost race'));

@@ -27,19 +27,27 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 	};
 
 	app.use('/register', async (c, next) => {
-		if (!(await deps.services.oauthRateLimits.consume('register'))) return rateLimited(c);
+		if (c.req.method !== 'OPTIONS' && !(await deps.services.oauthRateLimits.consume('register'))) {
+			return rateLimited(c);
+		}
 		await next();
 	});
 	app.use('/authorize', async (c, next) => {
-		if (!(await deps.services.oauthRateLimits.consume('authorize'))) return rateLimited(c);
+		if (c.req.method !== 'OPTIONS' && !(await deps.services.oauthRateLimits.consume('authorize'))) {
+			return rateLimited(c);
+		}
 		await next();
 	});
 	app.use('/token', async (c, next) => {
-		if (!(await deps.services.oauthRateLimits.consume('token'))) return rateLimited(c);
+		if (c.req.method !== 'OPTIONS' && !(await deps.services.oauthRateLimits.consume('token'))) {
+			return rateLimited(c);
+		}
 		await next();
 	});
 	app.use('/revoke', async (c, next) => {
-		if (!(await deps.services.oauthRateLimits.consume('revoke'))) return rateLimited(c);
+		if (c.req.method !== 'OPTIONS' && !(await deps.services.oauthRateLimits.consume('revoke'))) {
+			return rateLimited(c);
+		}
 		await next();
 	});
 	app.get('/.well-known/oauth-protected-resource', (c) => c.json(protectedResourceMetadata));

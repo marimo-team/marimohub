@@ -77,10 +77,11 @@ help(cm)
 
 Dynamic registration creates public clients that use authorization code and
 PKCE S256. Redirect URIs must use HTTPS, loopback HTTP, or a private-use
-application scheme. Authorization codes expire after ten minutes and can be used
-once. Authorization requests, token exchanges, and issued tokens must target
-the configured MCP URL. Each token also stores the registered client ID. Other
-marimohub PATs cannot access `/mcp`.
+application scheme. Marimohub supports `cursor:` and reverse-domain,
+single-slash application schemes. Authorization codes expire after ten minutes
+and can be used once. Authorization requests, token exchanges, and issued tokens
+must target the configured MCP URL. Each token also stores the registered client
+ID. Other marimohub PATs cannot access `/mcp`.
 
 The `mcp:tools` OAuth scope permits MCP access. The consent grant restricts Hub
 actions and projects for each tool call.
@@ -89,6 +90,7 @@ Within the configured app base path, MCP reserves these paths:
 
 - `/mcp`
 - `/authorize`
+- `/oauth/consent`
 - `/token`
 - `/register`
 - `/revoke`

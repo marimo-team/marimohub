@@ -228,6 +228,47 @@ describe('OAuthAuthorizationService', () => {
 		await expect(service.preview(id)).rejects.toThrow(/invalid/);
 	});
 
+	it('does not delete an authorization that wins a concurrent approval race', async () => {
+		const { id } = await service.begin({
+			clientId: 'client',
+			redirectUri: 'https://client.example/callback',
+			codeChallenge: 'A'.repeat(43),
+			scopes: [],
+		});
+		const get = bucket.get.bind(bucket);
+		let firstRead = true;
+		let releaseRead!: () => void;
+		let markReadStarted!: () => void;
+		const readStarted = new Promise<void>((resolve) => {
+			markReadStarted = resolve;
+		});
+		const readReleased = new Promise<void>((resolve) => {
+			releaseRead = resolve;
+		});
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			const object = await get(key);
+			if (firstRead) {
+				firstRead = false;
+				markReadStarted();
+				await readReleased;
+			}
+			return object;
+		});
+
+		const denied = expect(service.deny(id)).rejects.toThrow(/invalid/);
+		await readStarted;
+		const approved = await service.approve(
+			id,
+			{ grant: GRANT, tokenName: 'MCP', expiresInDays: 30 },
+			ACTOR,
+		);
+		releaseRead();
+
+		await denied;
+		const code = new URL(approved.redirectUri).searchParams.get('code')!;
+		await expect(service.challengeFor(code, 'client')).resolves.toBe('A'.repeat(43));
+	});
+
 	it('rejects expired pending requests', async () => {
 		const { id } = await service.begin({
 			clientId: 'client',
