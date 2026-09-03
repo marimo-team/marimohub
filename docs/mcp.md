@@ -41,10 +41,10 @@ add a remote HTTP MCP server. The client discovers the authorization server,
 registers itself, and opens the marimohub consent page.
 
 Before approval, verify the client name and redirect URL. The default grant
-permits notebook editing and execution. You can restrict its actions, projects,
-and lifetime. The default lifetime is 7 days, and the maximum is 90 days.
-Revoke the token from the API tokens dialog. Marimohub issues no refresh token.
-After expiry or revocation, the client must request authorization again.
+permits notebook editing and execution. Use the smallest practical set of
+actions and projects. The token lifetime defaults to 7 days and cannot exceed
+90 days. Revoke a token from the API tokens dialog. Marimohub does not issue
+refresh tokens. Expiry or revocation requires a new authorization.
 
 ## Tools
 
@@ -75,16 +75,15 @@ help(cm)
 
 ## OAuth and security
 
-Dynamic registration creates public clients that use authorization code with
-PKCE S256. Redirect URIs require HTTPS, loopback HTTP, or a private-use
-application scheme. Each code expires after ten minutes and permits one claim.
-The OAuth resource must exactly match the configured MCP URL. Each issued token
-stores this resource and the registered client ID. Another marimohub PAT cannot
-access `/mcp`, even if that PAT is otherwise valid.
+Dynamic registration creates public clients that use authorization code and
+PKCE S256. Redirect URIs must use HTTPS, loopback HTTP, or a private-use
+application scheme. Authorization codes expire after ten minutes and can be used
+once. Authorization requests, token exchanges, and issued tokens must target
+the configured MCP URL. Each token also stores the registered client ID. Other
+marimohub PATs cannot access `/mcp`.
 
-OAuth uses the `mcp:tools` scope for MCP protocol access. The consent grant sets
-the permitted Hub actions and projects. This grant is the fine-grained
-authorization boundary for each tool call.
+The `mcp:tools` OAuth scope permits MCP access. The consent grant restricts Hub
+actions and projects for each tool call.
 
 Within the configured app base path, MCP reserves these paths:
 
@@ -97,11 +96,11 @@ Within the configured app base path, MCP reserves these paths:
 - `/.well-known/oauth-protected-resource`
 - `/.well-known/oauth-protected-resource/mcp`
 
-The consent grant restricts Hub API calls, but not kernel code or injected
-credentials. Select the smallest useful grant and a short token lifetime.
+The grant does not restrict kernel code or injected credentials. Use a short
+token lifetime.
 
-Dynamic registration is anonymous. Marimohub verifies client metadata, applies
+Dynamic registration is anonymous. Marimohub verifies client metadata, enforces
 deployment-wide rate limits, and expires registrations after 90 days. Each
-successful registration emits an `oauth_client_registered` event without the
-client name or redirect URI. Deployments that require client vetting must add a
-trusted registration control before they enable MCP.
+successful registration emits an `oauth_client_registered` event without
+client-supplied names or URIs. Deployments that require client vetting must add
+trusted registration controls before enabling MCP.
