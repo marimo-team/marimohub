@@ -573,6 +573,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
         version: 1.30.0(zod@4.4.3)
+      better-all:
+        specifier: 'catalog:'
+        version: 0.0.7
       fflate:
         specifier: ^0.8.2
         version: 0.8.3

@@ -1,5 +1,6 @@
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
+import { all } from 'better-all';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	ASSIGNABLE_ROLES,
@@ -322,15 +323,15 @@ export async function sessionGrantsFor(
 ): Promise<{ attach: boolean; stop: boolean; surface: boolean }> {
 	const resource = { kind: 'session' as const, project, session, notebookLabels };
 	const authz = authorizationService(deps);
-	const decisions = await Promise.all([
-		authz.authorize(subject, 'session.attach', resource),
-		authz.authorize(subject, 'session.stop', resource),
-		authz.authorize(subject, 'session.surface', resource),
-	]);
+	const decisions = await all({
+		attach: async () => authz.authorize(subject, 'session.attach', resource),
+		stop: async () => authz.authorize(subject, 'session.stop', resource),
+		surface: async () => authz.authorize(subject, 'session.surface', resource),
+	});
 	return {
-		attach: decisions[0].allowed,
-		stop: decisions[1].allowed,
-		surface: decisions[2].allowed,
+		attach: decisions.attach.allowed,
+		stop: decisions.stop.allowed,
+		surface: decisions.surface.allowed,
 	};
 }
 

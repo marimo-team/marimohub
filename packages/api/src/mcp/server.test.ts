@@ -33,6 +33,76 @@ afterEach(() => {
 });
 
 describe('MCP tool boundaries', () => {
+	it('loads each project catalog and its active sessions concurrently', async () => {
+		const bucket = new MemoryBucket();
+		await new CatalogService(bucket).initialize(PRINCIPAL.id);
+		const deps = makeTestDeps(bucket);
+		await deps.services.projects.createProject({ name: 'Project', description: '' }, PRINCIPAL.id);
+		let releaseNotebooks!: () => void;
+		const notebooksPending = new Promise<void>((resolve) => {
+			releaseNotebooks = resolve;
+		});
+		const listNotebooks = vi
+			.spyOn(deps.services.notebooks, 'listNotebooks')
+			.mockImplementation(async () => {
+				await notebooksPending;
+				return [];
+			});
+		const listActive = vi
+			.spyOn(deps.services.sessions, 'listActiveByProject')
+			.mockResolvedValue([]);
+		const { client, server } = await connect(deps);
+
+		const loading = client.callTool({ name: 'list_catalog', arguments: {} });
+		await vi.waitFor(() => expect(listNotebooks).toHaveBeenCalledOnce());
+		expect(listActive).toHaveBeenCalledOnce();
+		releaseNotebooks();
+		await loading;
+		await client.close();
+		await server.close();
+	});
+
+	it('loads the editor claim and active sessions concurrently', async () => {
+		const bucket = new MemoryBucket();
+		await new CatalogService(bucket).initialize(PRINCIPAL.id);
+		const deps = makeTestDeps(bucket);
+		const project = await deps.services.projects.createProject(
+			{ name: 'Project', description: '' },
+			PRINCIPAL.id,
+		);
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: 'import marimo as mo' },
+			PRINCIPAL.id,
+		);
+		let releaseClaim!: () => void;
+		const claimPending = new Promise<void>((resolve) => {
+			releaseClaim = resolve;
+		});
+		const loadEditorClaim = deps.services.sessions.getEditorClaim.bind(deps.services.sessions);
+		const getEditorClaim = vi
+			.spyOn(deps.services.sessions, 'getEditorClaim')
+			.mockImplementation(async (...args) => {
+				await claimPending;
+				return loadEditorClaim(...args);
+			});
+		const listActive = vi
+			.spyOn(deps.services.sessions, 'listActiveByProject')
+			.mockResolvedValue([]);
+		const { client, server } = await connect(deps);
+
+		const loading = client.callTool({
+			name: 'execute_code',
+			arguments: { project: project.id, notebook: notebook.id, code: '1 + 1' },
+		});
+		await vi.waitFor(() => expect(getEditorClaim).toHaveBeenCalledOnce());
+		expect(listActive).toHaveBeenCalledOnce();
+		releaseClaim();
+		await loading;
+		await client.close();
+		await server.close();
+	});
+
 	it('sanitizes unexpected tool errors and logs safe diagnostic metadata', async () => {
 		const deps = makeTestDeps(new MemoryBucket());
 		vi.spyOn(deps.services.projects, 'listProjects').mockRejectedValue(

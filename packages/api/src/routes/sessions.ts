@@ -1,4 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
+import { all } from 'better-all';
 import type {
 	SecondarySurfaceId,
 	ResourceSecurityLabels,
@@ -1528,87 +1529,80 @@ export async function startNotebookSession(input: {
 							},
 						});
 
-					// Resolve independent sources together. Integrations have lower precedence
-					// than system, WIF, and marimo configuration.
-					const resolveSessionEnv = async (): Promise<SessionEnv | undefined> => {
-						const [wifVars, marimoEnv, integrationEnv] = await Promise.all([
-							resolveWifVars(),
-							resolveMarimoConfigEnv(),
-							resolveIntegrationEnv(),
-						]);
-						let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-						if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-						// The lower-precedence layers merge as the BASE, with everything
-						// resolved so far as the winning overlay.
-						if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
-						return env;
-					};
-
-					// Unawaited on purpose: provision awaits it at the inject phase, so this
-					// resolution overlaps the sandbox create (the dominant cost). The no-op
-					// catch only marks the rejection handled — a fail-closed integration error
-					// would otherwise land as an unhandledRejection during the create.
-					const sessionEnv = resolveSessionEnv();
-					void sessionEnv.catch(() => {});
-
-					// Inside this step on purpose: only a create that survived the reuse
-					// fast path and cap_recheck pays the synced-entry GET. Never rejects
-					// (a failed read falls back to the default strategy).
-					const launchStrategyPromise = resolveLaunchStrategyForSession({
-						entryNotebook: workspacePolicy.entryNotebook,
-						workspacePrefix,
-						bucket: bucketHandle,
+					const { provision } = await all({
+						wifVars: resolveWifVars,
+						marimoEnv: resolveMarimoConfigEnv,
+						integrationEnv: resolveIntegrationEnv,
+						async sessionEnv(): Promise<SessionEnv | undefined> {
+							const wifVars = await this.$.wifVars;
+							const marimoEnv = await this.$.marimoEnv;
+							const integrationEnv = await this.$.integrationEnv;
+							let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
+							if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
+							// Integration values are defaults; WIF and marimo configuration win collisions.
+							if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
+							return env;
+						},
+						exposure: async () => sandboxExposure.prepare(exposureCtx),
+						launchStrategy: async () => {
+							const resolved = await resolveLaunchStrategyForSession({
+								entryNotebook: workspacePolicy.entryNotebook,
+								workspacePrefix,
+								bucket: bucketHandle,
+							});
+							observer.tag('launch_strategy', resolved.strategy);
+							observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
+							return resolved;
+						},
+						async provision() {
+							const { baseUrl } = await this.$.exposure;
+							const launchStrategy = await this.$.launchStrategy;
+							return provisioner.provision({
+								sandboxId,
+								projectId: pid,
+								notebookId: nid,
+								hostname,
+								bucket: sandbox.bucket,
+								bucketHandle,
+								workdir: sandbox.workdir,
+								assetUrl: sandbox.assetUrl,
+								startupTimeoutMs: sandbox.startupTimeoutMs,
+								baseUrl,
+								// A second editor writes the notebook file, so marimo must reload it.
+								marimoWatch:
+									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
+								restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+								image,
+								resources: requestedComputeProfile.resources,
+								userHome,
+								sessionIdleTimeoutMs: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+								sessionEnv: this.$.sessionEnv,
+								entryNotebook: workspacePolicy.entryNotebook,
+								launchStrategy: launchStrategy.strategy,
+								launchMode: mode,
+								// Ephemeral and app sandboxes never mount the live workspace: a mount
+								// writes straight through to the bucket (bypassing every persistEdits
+								// guard), puts the deployment's bucket credentials inside a viewer's
+								// sandbox, and — for apps — would race the edit kernel's autosaves on
+								// the same objects. Copy-only loads the files server-side.
+								workspaceLoadMode:
+									ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+										? 'copy-only'
+										: workspacePolicy.loadMode,
+								workspacePrefix,
+								gitPrefix,
+								workspaceArchive,
+							});
+						},
 					});
-
-					const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
-					const resolvedLaunchStrategy = await launchStrategyPromise;
-					observer.tag('launch_strategy', resolvedLaunchStrategy.strategy);
-					observer.tag('launch_strategy_detection_failed', resolvedLaunchStrategy.detectionFailed);
-
-					const provisionResult = await provisioner.provision({
-						sandboxId,
-						projectId: pid,
-						notebookId: nid,
-						hostname,
-						bucket: sandbox.bucket,
-						bucketHandle,
-						workdir: sandbox.workdir,
-						assetUrl: sandbox.assetUrl,
-						startupTimeoutMs: sandbox.startupTimeoutMs,
-						baseUrl,
-						// A second editor writes the notebook file, so marimo must reload it.
-						marimoWatch:
-							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
-						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
-						image,
-						resources: requestedComputeProfile.resources,
-						userHome,
-						sessionIdleTimeoutMs: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-						sessionEnv,
-						entryNotebook: workspacePolicy.entryNotebook,
-						launchStrategy: resolvedLaunchStrategy.strategy,
-						launchMode: mode,
-						// Ephemeral and app sandboxes never mount the live workspace: a mount
-						// writes straight through to the bucket (bypassing every persistEdits
-						// guard), puts the deployment's bucket credentials inside a viewer's
-						// sandbox, and — for apps — would race the edit kernel's autosaves on
-						// the same objects. Copy-only loads the files server-side.
-						workspaceLoadMode:
-							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
-								? 'copy-only'
-								: workspacePolicy.loadMode,
-						workspacePrefix,
-						gitPrefix,
-						workspaceArchive,
-					});
-					({ url, usedFallback } = provisionResult);
+					({ url, usedFallback } = provision);
 					// Per-phase durations onto the session_provision event.
-					for (const [phase, ms] of Object.entries(provisionResult.timings)) {
+					for (const [phase, ms] of Object.entries(provision.timings)) {
 						observer.tag(`provision_${phase}_ms`, ms);
 					}
 					// Counts, not durations: workspace objects/bytes copied, and the
 					// command round-trips the provision spent.
-					for (const [name, value] of Object.entries(provisionResult.counters)) {
+					for (const [name, value] of Object.entries(provision.counters)) {
 						observer.tag(`provision_${name}`, value);
 					}
 					// Whether the files phase mounted the bucket (false) or copied it in

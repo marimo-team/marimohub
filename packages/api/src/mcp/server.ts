@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { all } from 'better-all';
 import { z } from 'zod';
 import {
 	BadRequestError,
@@ -232,17 +233,19 @@ export function createMcpServer(
 						});
 				const entries = await Promise.all(
 					projects.map(async (projectEntry) => {
-						const notebooks = await deps.services.notebooks.listNotebooks(projectEntry.id, {
-							...(status ? { status } : {}),
-							...(tag ? { tag } : {}),
-							...(q ? { q } : {}),
-							subject: principal,
-							policy: deps.policy,
-							resourceSecurity: deps.resourceSecurity,
+						const { notebooks, active } = await all({
+							notebooks: async () =>
+								deps.services.notebooks.listNotebooks(projectEntry.id, {
+									...(status ? { status } : {}),
+									...(tag ? { tag } : {}),
+									...(q ? { q } : {}),
+									subject: principal,
+									policy: deps.policy,
+									resourceSecurity: deps.resourceSecurity,
+								}),
+							active: async () =>
+								include_sessions ? deps.services.sessions.listActiveByProject(projectEntry.id) : [],
 						});
-						const active = include_sessions
-							? await deps.services.sessions.listActiveByProject(projectEntry.id)
-							: [];
 						return {
 							id: projectEntry.id,
 							name: projectEntry.name,
@@ -391,8 +394,11 @@ export function createMcpServer(
 					session = await deps.services.sessions.getSession(project.id, input.session_id);
 				} else {
 					const notebook = await resolveNotebook(deps, principal, project, input.notebook!);
-					const editorClaim = await deps.services.sessions.getEditorClaim(project.id, notebook.id);
-					const candidates = (await deps.services.sessions.listActiveByProject(project.id))
+					const { editorClaim, active } = await all({
+						editorClaim: async () => deps.services.sessions.getEditorClaim(project.id, notebook.id),
+						active: async () => deps.services.sessions.listActiveByProject(project.id),
+					});
+					const candidates = active
 						.filter(
 							(candidate) =>
 								candidate.notebook_id === notebook.id &&
