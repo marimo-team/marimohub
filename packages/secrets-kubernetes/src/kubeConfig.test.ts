@@ -40,7 +40,7 @@ describe('loadKubernetesConfiguration', () => {
 		expect(config.loadFromDefault).not.toHaveBeenCalled();
 	});
 
-	it('uses the Kubernetes service DNS name when only a mounted token identifies the cluster', () => {
+	it('uses service DNS when service links are disabled and a ServiceAccount token is mounted', () => {
 		const config = loader();
 		loadKubernetesConfiguration(config, {}, () => true);
 		expect(config.loadFromClusterAndUser).toHaveBeenCalledWith(

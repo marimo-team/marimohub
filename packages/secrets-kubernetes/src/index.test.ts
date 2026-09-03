@@ -360,6 +360,8 @@ describe('KubernetesSecretResolver API errors', () => {
 		[{ body: { code: 403 } }, 'forbidden'],
 		[{ response: { statusCode: 404 } }, 'not_found'],
 		[{ response: { statusCode: 401 } }, 'forbidden'],
+		[{ response: { statusCode: 403 } }, 'forbidden'],
+		[{ response: { status: 404 } }, 'not_found'],
 		[{ response: { status: 403 } }, 'forbidden'],
 		[{ response: { status: 503 } }, 'unavailable'],
 		[{ code: 429 }, 'unavailable'],
