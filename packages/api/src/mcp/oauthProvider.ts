@@ -53,7 +53,7 @@ export function createOAuthProvider(deps: ApiDeps): OAuthServerProvider {
 				redirectUri: params.redirectUri,
 				codeChallenge: params.codeChallenge,
 				scopes: params.scopes ?? [],
-				...(params.state ? { state: params.state } : {}),
+				...(params.state !== undefined ? { state: params.state } : {}),
 				...(params.resource ? { resource: params.resource.href } : {}),
 			});
 			const c = honoContext(response);

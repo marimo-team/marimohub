@@ -9,7 +9,7 @@ const PRINCIPAL: AuthenticatedPrincipal = {
 	id: UserId.parse('oauth-user'),
 	email: 'oauth@example.com',
 	name: 'OAuth User',
-	credential: { kind: 'development' },
+	credential: { kind: 'personal-access-token', id: 'tok-oauth' },
 };
 
 describe('authenticateBearer', () => {
@@ -40,6 +40,27 @@ describe('authenticateBearer', () => {
 
 		await expect(authenticateBearer(deps, request)).resolves.toBeNull();
 		expect(authenticate).toHaveBeenCalledWith(request);
+	});
+
+	it('rejects a bearer request that falls through to an SSO principal', async () => {
+		const deps = makeTestDeps(new MemoryBucket());
+		deps.authenticator = {
+			authenticate: vi.fn().mockResolvedValue({
+				...PRINCIPAL,
+				credential: { kind: 'sso' },
+			}),
+		};
+		const suspended = vi.spyOn(deps.services.identities, 'isSuspended');
+
+		await expect(
+			authenticateBearer(
+				deps,
+				new Request('https://hub.example/mcp', {
+					headers: { Authorization: 'Bearer opaque-sso-token' },
+				}),
+			),
+		).resolves.toBeNull();
+		expect(suspended).not.toHaveBeenCalled();
 	});
 
 	it('rejects a valid credential when its identity is suspended', async () => {

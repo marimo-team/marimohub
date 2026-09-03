@@ -83,6 +83,17 @@ describe('OAuthClientStore', () => {
 		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
 	});
 
+	it('rejects oversized client metadata without writing an unreadable record', async () => {
+		await expect(
+			store.register({
+				client_name: 'x'.repeat(201),
+				redirect_uris: ['https://client.example/callback'],
+			}),
+		).rejects.toThrow(/client metadata is invalid/);
+
+		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
+	});
+
 	it('returns null for malformed ids and stored records', async () => {
 		expect(await store.get('not-a-client-id')).toBeNull();
 		const client = await store.register({ redirect_uris: ['https://client.example/callback'] });

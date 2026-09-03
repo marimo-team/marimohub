@@ -162,6 +162,24 @@ describe('OAuthAuthorizationService', () => {
 		expect(redirect.searchParams.get('code')).toMatch(/^mhub_oac_/);
 	});
 
+	it.each(['approve', 'deny'] as const)('preserves empty state when users %s', async (decision) => {
+		const { id } = await service.begin({
+			clientId: 'client',
+			redirectUri: 'https://client.example/callback',
+			codeChallenge: 'A'.repeat(43),
+			scopes: [],
+			state: '',
+		});
+		const result =
+			decision === 'approve'
+				? await service.approve(id, { grant: GRANT, tokenName: 'MCP', expiresInDays: 30 }, ACTOR)
+				: await service.deny(id);
+		const redirect = new URL(result.redirectUri);
+
+		expect(redirect.searchParams.has('state')).toBe(true);
+		expect(redirect.searchParams.get('state')).toBe('');
+	});
+
 	it('treats malformed stored records as invalid', async () => {
 		const { id } = await service.begin({
 			clientId: 'client',

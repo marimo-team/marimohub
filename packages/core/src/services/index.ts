@@ -20,6 +20,7 @@ import { TokenService } from './tokens/TokenService';
 import { CliAuthorizationService } from './tokens/CliAuthorizationService';
 import { OAuthAuthorizationService } from './oauth/OAuthAuthorizationService';
 import { OAuthClientStore } from './oauth/OAuthClientStore';
+import { OAuthRateLimitService } from './oauth/OAuthRateLimitService';
 
 export { CatalogService } from './catalog/CatalogService';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
@@ -40,6 +41,11 @@ export { OAuthAuthorizationService } from './oauth/OAuthAuthorizationService';
 export type { BeginOAuthAuthorizationInput } from './oauth/OAuthAuthorizationService';
 export { OAuthClientStore } from './oauth/OAuthClientStore';
 export type { OAuthClientRecord, RegisterOAuthClientInput } from './oauth/OAuthClientStore';
+export { OAUTH_RATE_LIMITS, OAuthRateLimitService } from './oauth/OAuthRateLimitService';
+export type {
+	OAuthRateLimitEndpoint,
+	OAuthRateLimitServiceOptions,
+} from './oauth/OAuthRateLimitService';
 export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
@@ -521,6 +527,7 @@ export function createServices(
 		'OAuthAuthorizationService',
 		new OAuthAuthorizationService(bucket, tokens),
 	);
+	const oauthRateLimits = wrap('OAuthRateLimitService', new OAuthRateLimitService(bucket));
 	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
 		listJobs: notebook,
 		listJobsPage: notebook,
@@ -555,6 +562,7 @@ export function createServices(
 		cliAuthorizations,
 		oauthClients,
 		oauthAuthorizations,
+		oauthRateLimits,
 		maintenance,
 		idempotency,
 	};

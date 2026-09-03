@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { makeFakeCompute, MemoryBucket } from '@marimo-hub/core/testing';
-import { bearerToken, expandTokenGrantPreset, UserId } from '@marimo-hub/core';
+import { describe, expect, it, vi } from 'vitest';
+import { fakeComputeFrom, makeFakeSandbox, MemoryBucket } from '@marimo-hub/core/testing';
+import { bearerToken, expandTokenGrantPreset, paths, UserId } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { createApi } from '../createApi';
 import { makeTestDeps } from '../testing';
@@ -44,7 +44,8 @@ async function registerClient(
 
 describe('MCP OAuth app', () => {
 	it('discovers OAuth and exchanges browser consent for a PAT', async () => {
-		const compute = makeFakeCompute();
+		const { instance, calls } = makeFakeSandbox();
+		const compute = fakeComputeFrom(instance);
 		compute.proxy = async (request) => {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith('/api/sessions')) {
@@ -65,6 +66,7 @@ describe('MCP OAuth app', () => {
 			mcp: { publicBaseUrl: 'https://hub.example.com' },
 			compute,
 		});
+		deps.sandbox = { ...deps.sandbox, hostname: 'sandboxes.example.com' };
 		deps.authenticator = {
 			authenticate: async (request) => {
 				const token = bearerToken(request);
@@ -250,6 +252,10 @@ describe('MCP OAuth app', () => {
 			result: { structuredContent: { session_id: string; status: string } };
 		};
 		expect(launchResult.result.structuredContent.status).toBe('running');
+		expect(calls.exposePort).toContainEqual({
+			port: 2718,
+			options: expect.objectContaining({ hostname: 'sandboxes.example.com' }),
+		});
 
 		const executed = await app.request('/mcp', {
 			method: 'POST',
@@ -323,6 +329,11 @@ describe('MCP OAuth app', () => {
 				authorization_servers: ['https://hub.example.com/marimohub'],
 			});
 		}
+		const sdkResource = await app.request('/.well-known/oauth-protected-resource/marimohub/mcp');
+		expect(sdkResource.status).toBe(200);
+		expect(await sdkResource.json()).toMatchObject({
+			resource: 'https://hub.example.com/marimohub/mcp',
+		});
 		const unauthorized = await app.request('/mcp', { method: 'POST' });
 		expect(unauthorized.headers.get('www-authenticate')).toContain(
 			'resource_metadata="https://hub.example.com/marimohub/.well-known/oauth-protected-resource/mcp"',
@@ -336,6 +347,11 @@ describe('MCP OAuth app', () => {
 		);
 		for (const body of [
 			{ redirect_uris: [], token_endpoint_auth_method: 'none' },
+			{
+				client_name: 'x'.repeat(201),
+				redirect_uris: ['https://client.example/callback'],
+				token_endpoint_auth_method: 'none',
+			},
 			{
 				redirect_uris: ['https://client.example/callback', 'http://client.example/callback'],
 				token_endpoint_auth_method: 'none',
@@ -362,6 +378,41 @@ describe('MCP OAuth app', () => {
 		const normalizedBody = await normalized.json();
 		expect(normalizedBody).toMatchObject({ token_endpoint_auth_method: 'none' });
 		expect(normalizedBody).not.toHaveProperty('client_secret');
+	});
+
+	it('preserves an explicitly empty state through approval', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			mcp: { publicBaseUrl: 'https://hub.example.com' },
+		});
+		deps.authenticator = { authenticate: async () => USER };
+		const app = createApi(deps);
+		const clientId = await registerClient(app);
+		const authorize = new URL('https://hub.example.com/authorize');
+		authorize.search = new URLSearchParams({
+			client_id: clientId,
+			response_type: 'code',
+			redirect_uri: 'https://client.example/callback',
+			code_challenge: await challenge('v'.repeat(43)),
+			code_challenge_method: 'S256',
+			state: '',
+			resource: 'https://hub.example.com/mcp',
+		}).toString();
+		const authorization = await app.request(authorize, { redirect: 'manual' });
+		const id = new URL(authorization.headers.get('location')!).searchParams.get('id')!;
+		const approved = await app.request(`/api/v1/me/oauth-authorizations/${id}/approve`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				grant: { actions: ['project.read'], projects: '*' },
+				expires_in_days: 7,
+			}),
+		});
+		const redirect = new URL(
+			((await approved.json()) as { data: { redirect_uri: string } }).data.redirect_uri,
+		);
+
+		expect(redirect.searchParams.has('state')).toBe(true);
+		expect(redirect.searchParams.get('state')).toBe('');
 	});
 
 	it('rejects invalid authorization requests before storing consent records', async () => {
@@ -493,9 +544,10 @@ describe('MCP OAuth app', () => {
 
 	it('rate limits authorization requests before they create unbounded records', async () => {
 		const bucket = new MemoryBucket();
-		const app = createApi(
-			makeTestDeps(bucket, { mcp: { publicBaseUrl: 'https://limited.example.com' } }),
-		);
+		const deps = makeTestDeps(bucket, {
+			mcp: { publicBaseUrl: 'https://limited.example.com' },
+		});
+		const app = createApi(deps);
 		const registered = await app.request('/register', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -522,6 +574,36 @@ describe('MCP OAuth app', () => {
 		expect(statuses).toContain(429);
 		const authorizations = await bucket.list({ prefix: '_system/oauth-authorizations/' });
 		expect(authorizations.objects.length).toBeLessThanOrEqual(100);
+
+		const replica = createApi(
+			makeTestDeps(bucket, { mcp: { publicBaseUrl: 'https://limited.example.com' } }),
+		);
+		expect((await replica.request(authorizeUrl, { redirect: 'manual' })).status).toBe(429);
+	});
+
+	it('fails closed when the shared authorization budget is unavailable', async () => {
+		const bucket = new MemoryBucket();
+		const app = createApi(
+			makeTestDeps(bucket, { mcp: { publicBaseUrl: 'https://hub.example.com' } }),
+		);
+		const clientId = await registerClient(app);
+		const originalGet = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementation((key) =>
+			key === paths.oauthRateLimit('authorize')
+				? Promise.reject(new Error('bucket unavailable'))
+				: originalGet(key),
+		);
+		const authorizeUrl = new URL('https://hub.example.com/authorize');
+		authorizeUrl.search = new URLSearchParams({
+			client_id: clientId,
+			response_type: 'code',
+			redirect_uri: 'https://client.example/callback',
+			code_challenge: await challenge('r'.repeat(43)),
+			code_challenge_method: 'S256',
+			resource: 'https://hub.example.com/mcp',
+		}).toString();
+
+		expect((await app.request(authorizeUrl, { redirect: 'manual' })).status).toBe(500);
 	});
 
 	it('returns 404s while MCP is disabled', async () => {

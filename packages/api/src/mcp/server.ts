@@ -18,6 +18,7 @@ import {
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { errorMetadataChain, logEvent } from '../log';
 import {
 	assertSessionAccess,
 	assertSessionNotebookVisible,
@@ -40,18 +41,32 @@ type ToolResult = {
 	isError?: boolean;
 };
 
+export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
+
 function result(data: Record<string, unknown>, text = JSON.stringify(data, null, 2)): ToolResult {
 	return { content: [{ type: 'text', text }], structuredContent: data };
 }
 
-function toolError(error: unknown): ToolResult {
+function toolError(
+	error: unknown,
+	context: StartRequestContext & { userId: string; tool: string },
+): ToolResult {
+	if (!(error instanceof DomainError)) {
+		logEvent({
+			level: 'error',
+			event: 'mcp_tool_error',
+			request_id: context.requestId ?? null,
+			method: context.method,
+			path: context.path,
+			user: context.userId,
+			tool: context.tool,
+			error: errorMetadataChain(error),
+		});
+	}
 	const data =
 		error instanceof DomainError
 			? { code: error.code, message: error.message }
-			: {
-					code: 'INTERNAL_ERROR',
-					message: error instanceof Error ? error.message : 'Unknown error',
-				};
+			: { code: 'INTERNAL_ERROR', message: 'Internal error' };
 	return { ...result(data), isError: true };
 }
 
@@ -121,6 +136,8 @@ export function createMcpServer(
 	request: StartRequestContext,
 ): McpServer {
 	const server = new McpServer({ name: 'marimohub', version: deps.version?.version ?? 'dev' });
+	const errorResult = (tool: string, error: unknown) =>
+		toolError(error, { ...request, userId: principal.id, tool });
 
 	server.registerTool(
 		'list_catalog',
@@ -183,7 +200,7 @@ export function createMcpServer(
 				);
 				return result({ projects: entries });
 			} catch (error) {
-				return toolError(error);
+				return errorResult('list_catalog', error);
 			}
 		},
 	);
@@ -238,7 +255,7 @@ export function createMcpServer(
 					...(session.error ? { error: session.error } : {}),
 				});
 			} catch (error) {
-				return toolError(error);
+				return errorResult('launch_notebook', error);
 			}
 		},
 	);
@@ -253,7 +270,12 @@ export function createMcpServer(
 					project: z.string(),
 					session_id: z.string().optional(),
 					notebook: z.string().optional(),
-					code: z.string(),
+					code: z
+						.string()
+						.refine(
+							(code) => new TextEncoder().encode(code).byteLength <= MAX_EXECUTE_CODE_BYTES,
+							`Code exceeds the ${MAX_EXECUTE_CODE_BYTES}-byte limit`,
+						),
 					timeout_seconds: z.number().int().min(1).max(300).default(60),
 					kernel_session_id: z.string().optional(),
 				})
@@ -355,7 +377,7 @@ export function createMcpServer(
 					...(!executed.completed || !executed.success ? { isError: true } : {}),
 				};
 			} catch (error) {
-				return toolError(error);
+				return errorResult('execute_code', error);
 			}
 		},
 	);

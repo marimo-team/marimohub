@@ -1,25 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { mcpAuthRouter, StreamableHTTPTransport } from '@hono/mcp';
-import { createSlidingWindowBudget } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from '../context';
 import { authenticateMcpRequest } from './auth';
 import { createOAuthProvider } from './oauthProvider';
 import { createMcpServer } from './server';
-
-const registrationBudget = createSlidingWindowBudget<'deployment'>({
-	limit: 100,
-	windowMs: 60 * 60_000,
-});
-const authorizationBudget = createSlidingWindowBudget<'deployment'>({
-	limit: 100,
-	windowMs: 15 * 60_000,
-});
-const tokenBudget = createSlidingWindowBudget<'deployment'>({ limit: 600, windowMs: 60_000 });
-const revocationBudget = createSlidingWindowBudget<'deployment'>({
-	limit: 100,
-	windowMs: 15 * 60_000,
-});
 
 function rateLimited(c: { json(body: unknown, status: 429): Response }): Response {
 	return c.json({ error: 'too_many_requests', error_description: 'Try again later' }, 429);
@@ -40,19 +25,19 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 	};
 
 	app.use('/register', async (c, next) => {
-		if (!registrationBudget.consume('deployment')) return rateLimited(c);
+		if (!(await deps.services.oauthRateLimits.consume('register'))) return rateLimited(c);
 		await next();
 	});
 	app.use('/authorize', async (c, next) => {
-		if (!authorizationBudget.consume('deployment')) return rateLimited(c);
+		if (!(await deps.services.oauthRateLimits.consume('authorize'))) return rateLimited(c);
 		await next();
 	});
 	app.use('/token', async (c, next) => {
-		if (!tokenBudget.consume('deployment')) return rateLimited(c);
+		if (!(await deps.services.oauthRateLimits.consume('token'))) return rateLimited(c);
 		await next();
 	});
 	app.use('/revoke', async (c, next) => {
-		if (!revocationBudget.consume('deployment')) return rateLimited(c);
+		if (!(await deps.services.oauthRateLimits.consume('revoke'))) return rateLimited(c);
 		await next();
 	});
 	app.get('/.well-known/oauth-protected-resource', (c) => c.json(protectedResourceMetadata));
@@ -99,7 +84,7 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 			provider,
 			issuerUrl: publicBaseUrl,
 			baseUrl,
-			resourceServerUrl: new URL('/mcp', baseUrl),
+			resourceServerUrl: new URL(resource),
 			resourceName: 'marimohub',
 			scopesSupported: [],
 			clientRegistrationOptions: { clientIdGeneration: false, rateLimit: false },

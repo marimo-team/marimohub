@@ -122,7 +122,7 @@ export class OAuthAuthorizationService {
 			status: 'pending',
 			...(input.clientName ? { client_name: input.clientName } : {}),
 			...(input.clientUri ? { client_uri: input.clientUri } : {}),
-			...(input.state ? { state: input.state } : {}),
+			...(input.state !== undefined ? { state: input.state } : {}),
 			...(input.resource ? { resource: input.resource } : {}),
 		};
 		await this.bucket.put(paths.oauthAuthorization(id), JSON.stringify(record), {
@@ -278,7 +278,11 @@ export class OAuthAuthorizationService {
 		const now = Date.now();
 		const expired = page.objects
 			.filter((entry) => {
-				const createdAt = authorizationCreatedAt(entry.key, paths.oauthAuthorizationsPrefix);
+				const createdAt = authorizationCreatedAt(
+					entry.key,
+					paths.oauthAuthorizationsPrefix,
+					OAuthAuthorizationId.is,
+				);
 				return (
 					createdAt === null || createdAt + OAuthAuthorizationService.AUTHORIZATION_TTL_MS <= now
 				);

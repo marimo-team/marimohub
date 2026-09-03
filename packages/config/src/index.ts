@@ -17,6 +17,7 @@ import {
 	createServices,
 	Millis,
 	normalizeBaseUrl,
+	parseHttpUrl,
 	MAX_TIMER_DELAY_MS,
 	ProxyExposure,
 	ASSIGNABLE_ROLES,
@@ -409,14 +410,14 @@ function parseMcpConfig(env: Env): McpConfig | undefined {
 			docs: 'docs/mcp.md',
 		});
 	}
-	try {
-		return { publicBaseUrl: normalizeBaseUrl(baseUrl) };
-	} catch {
-		throw new ConfigError('MARIMOHUB_APP_BASE_URL must be an absolute URL when MARIMOHUB_MCP=on', {
+	const parsed = parseHttpUrl(baseUrl);
+	if (!parsed.ok) {
+		throw new ConfigError('MARIMOHUB_APP_BASE_URL must be a credential-free HTTP(S) URL', {
 			variable: 'MARIMOHUB_APP_BASE_URL',
 			docs: 'docs/mcp.md',
 		});
 	}
+	return { publicBaseUrl: normalizeBaseUrl(parsed.url) };
 }
 
 /** Session-lifecycle defaults (seconds). See docs/configuration.md#server--api. */

@@ -40,9 +40,14 @@ export async function createAuthorizationCode<T extends string>(createId: () => 
 	};
 }
 
-export function authorizationCreatedAt(key: string, prefix: string): number | null {
+export function authorizationCreatedAt(
+	key: string,
+	prefix: string,
+	isAuthorizationId: (value: unknown) => boolean,
+): number | null {
 	if (!key.startsWith(prefix) || !key.endsWith('.json')) return null;
 	const encodedId = key.slice(prefix.length, -'.json'.length);
+	if (!isAuthorizationId(encodedId)) return null;
 	try {
 		return decodeTime(encodedId);
 	} catch {

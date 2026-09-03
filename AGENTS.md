@@ -121,6 +121,8 @@ These CAS-managed records also have one writer each:
   `_system/oauth-clients/{client-id}.json`.
 - `OAuthAuthorizationService` owns each short-lived MCP OAuth grant at
   `_system/oauth-authorizations/{authorization-id}.json`.
+- `OAuthRateLimitService` owns each shared MCP OAuth request window at
+  `_system/oauth-rate-limits/{endpoint}.json`.
 - `ProjectAlertStore` owns each project alert configuration at
   `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at

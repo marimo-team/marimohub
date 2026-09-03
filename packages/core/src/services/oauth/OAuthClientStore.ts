@@ -114,8 +114,12 @@ export class OAuthClientStore {
 			...(input.grant_types ? { grant_types: input.grant_types } : {}),
 			...(input.response_types ? { response_types: input.response_types } : {}),
 		};
-		await this.bucket.put(paths.oauthClient(id), JSON.stringify(record), { onlyIfNotExists: true });
-		return record;
+		const validated = OAuthClientRecordSchema.safeParse(record);
+		if (!validated.success) throw new BadRequestError('OAuth client metadata is invalid');
+		await this.bucket.put(paths.oauthClient(id), JSON.stringify(validated.data), {
+			onlyIfNotExists: true,
+		});
+		return validated.data;
 	}
 
 	async get(clientId: string): Promise<OAuthClientRecord | null> {
@@ -136,7 +140,11 @@ export class OAuthClientStore {
 		const now = Date.now();
 		const expired = page.objects
 			.filter((entry) => {
-				const createdAt = authorizationCreatedAt(entry.key, paths.oauthClientsPrefix);
+				const createdAt = authorizationCreatedAt(
+					entry.key,
+					paths.oauthClientsPrefix,
+					OAuthClientId.is,
+				);
 				return createdAt === null || createdAt + OAuthClientStore.CLIENT_TTL_MS <= now;
 			})
 			.map((entry) => entry.key);

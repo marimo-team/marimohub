@@ -112,6 +112,8 @@ s3-bucket/
 │   │   └── {client-id}.json                ← immutable dynamic client registration
 │   ├── oauth-authorizations/
 │   │   └── {authorization-id}.json         ← short-lived MCP OAuth grant (CAS-claimed)
+│   ├── oauth-rate-limits/
+│   │   └── {endpoint}.json                 ← shared MCP OAuth request window (CAS)
 │   ├── integrations/                       ← organization-wide integrations (§4.12)
 │   │   ├── _names/
 │   │   │   └── {name}.json                 ← name claim (CAS, app-claim pattern)
@@ -221,6 +223,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `_system/cli-device-user-codes/{user-code}.json`                          | JSON     | Create-if-absent lookup claim from an eight-letter device user code to its short-lived CLI authorization. `CliAuthorizationService` owns the claim. It deletes the claim after exchange and prunes it after ten minutes. See §4.11.1.                                                                                                                                                                                                                                                                  |
 | `_system/oauth-clients/{client-id}.json`                                  | JSON     | Immutable OAuth client registration. `OAuthClientStore` owns each record. Public clients expire after 90 days. See §4.11.2.                                                                                                                                                                                                                                                                                                                                                                            |
 | `_system/oauth-authorizations/{authorization-id}.json`                    | JSON     | Ten-minute MCP OAuth authorization owned by `OAuthAuthorizationService`. Approval stores a one-time code hash with CAS. Exchange claims the record with CAS before it mints one scoped PAT and deletes the record. See §4.11.2.                                                                                                                                                                                                                                                                        |
+| `_system/oauth-rate-limits/{endpoint}.json`                               | JSON     | Bounded sliding-window timestamps for an MCP OAuth endpoint. `OAuthRateLimitService` uses ETag CAS so all serving replicas enforce one deployment quota. Expired timestamps are removed on the next admitted request. See §4.11.2.                                                                                                                                                                                                                                                                     |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                             | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/events/{YYYY-MM-DD}/_idempotency/{key}.json`                     | JSON     | Create-if-absent mapping from a stable operation key to one event ID and serialized event body. A retry repairs a missing event object from this marker without changing its append position or payload.                                                                                                                                                                                                                                                                                               |
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
@@ -711,6 +714,11 @@ Exchange verifies the bindings, claims the record with CAS, and mints one scoped
 PAT. A `finally` block deletes the authorization. Denial deletes the pending
 record and redirects with `error=access_denied`.
 
+`OAuthRateLimitService` owns one bounded CAS record per public OAuth endpoint
+under `_system/oauth-rate-limits/`. All replicas share these sliding windows.
+CAS contention fails closed as a rate-limit rejection; storage failures remain
+server errors.
+
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 
 A project integration instance — a named, versioned configuration of a code-registered _kind_ (`postgres`, `iceberg_rest`, …) rendered into every session's sandbox as env vars + files. Two records:
@@ -1175,7 +1183,9 @@ Schema migrations are a first-class concern because there is no database to run 
 | `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions.                                                                                                                              |
 | `catalog.json`                               | Migrated in place during the first write after a deployment that changes the catalog version. Its strict `version` value is not forward-tolerant.                                                                                                                                 |
 
-> **No `schema_version` by design:** Operational records have no `schema_version`. This group includes sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), CLI and OAuth authorizations (`_system/cli-authorizations/**`, `_system/oauth-authorizations/**`), OAuth clients (`_system/oauth-clients/**`), and `fs_snapshot.json`. Writers replace mutable records. Cleanup removes short-lived records. Readers accept compatible changes through optional fields and defaults. API response objects are also unversioned. The route path (`/api/v1`) versions the API contract.
+> **No `schema_version` by design:** Operational records have no `schema_version`. This group includes sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), CLI and OAuth authorizations (`_system/cli-authorizations/**`, `_system/oauth-authorizations/**`), and `fs_snapshot.json`. Writers replace mutable records. Cleanup removes short-lived records. Readers accept compatible changes through optional fields and defaults.
+>
+> OAuth clients (`_system/oauth-clients/**`) also omit `schema_version`, but they are immutable and retained for 90 days. Readers must remain backward-compatible with records written during that window. API response objects are also unversioned. The route path (`/api/v1`) versions the API contract.
 
 ### Migration job pseudocode
 

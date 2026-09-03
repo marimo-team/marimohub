@@ -1230,7 +1230,8 @@ export async function startNotebookSession(input: {
 
 	const { compute, bucket: bucketHandle, sandbox } = deps;
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
-	const { hostname, appBaseUrl } = request;
+	const hostname = sandbox.hostname || request.hostname;
+	const { appBaseUrl } = request;
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
 		logStoredConfigFallback('base_image'),
 	);

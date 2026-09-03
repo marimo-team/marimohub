@@ -524,6 +524,15 @@ describe('CliAuthorizationService', () => {
 		expect((await bucket.list({ prefix: paths.cliAuthorizationsPrefix })).objects).toHaveLength(2);
 	});
 
+	it('prunes malformed authorization keys with valid timestamp prefixes', async () => {
+		const malformedKey = `${paths.cliAuthorizationsPrefix}${encodeTime(Date.now(), 10)}${'a'.repeat(16)}.json`;
+		await bucket.put(malformedKey, 'malformed');
+
+		await approve(authorizations, { tokenName: 'new' });
+
+		expect(await bucket.get(malformedKey)).toBeNull();
+	});
+
 	it('rejects invalid and expired device user codes', async () => {
 		const requested = await authorizations.requestDevice(await challenge());
 		await expect(

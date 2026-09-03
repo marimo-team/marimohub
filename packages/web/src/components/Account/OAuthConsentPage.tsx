@@ -65,12 +65,7 @@ export function OAuthConsentPage({
 		}
 	};
 
-	let redirectHost = '';
-	try {
-		redirectHost = preview.data ? new URL(preview.data.redirect_uri).host : '';
-	} catch {
-		redirectHost = preview.data?.redirect_uri ?? '';
-	}
+	const redirectUri = preview.data?.redirect_uri ?? '';
 
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-muted/30 p-6">
@@ -107,7 +102,8 @@ export function OAuthConsentPage({
 								<span className="font-medium">Verify the client and redirect</span>
 								<p className="text-muted-foreground">
 									Approve only if you started this connection. The credential will return to{' '}
-									<strong>{redirectHost}</strong> and lets the client act with the grant below.
+									<strong className="break-all">{redirectUri}</strong> and lets the client act with
+									the grant below.
 								</p>
 							</div>
 						</div>

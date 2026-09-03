@@ -287,6 +287,7 @@ export const paths = {
 	oauthClientsPrefix: '_system/oauth-clients/',
 	oauthAuthorization: (id: OAuthAuthorizationId) => `_system/oauth-authorizations/${id}.json`,
 	oauthAuthorizationsPrefix: '_system/oauth-authorizations/',
+	oauthRateLimit: (endpoint: string) => `_system/oauth-rate-limits/${endpoint}.json`,
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,

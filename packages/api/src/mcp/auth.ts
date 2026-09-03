@@ -9,7 +9,7 @@ export async function authenticateBearer(
 ): Promise<AuthenticatedPrincipal | null> {
 	if (!bearerToken(request)) return null;
 	const principal = await deps.authenticator.authenticate(request);
-	if (!principal) return null;
+	if (principal?.credential.kind !== 'personal-access-token') return null;
 	if (await deps.services.identities.isSuspended(principal.id)) return null;
 	return principal;
 }

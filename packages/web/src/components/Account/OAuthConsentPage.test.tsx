@@ -61,10 +61,10 @@ afterEach(() => {
 });
 
 describe('OAuthConsentPage', () => {
-	it('shows the client, redirect host, and edit grant by default', async () => {
+	it('shows the client, complete redirect URI, and edit grant by default', async () => {
 		setup();
 		expect(await screen.findByText(/authorize Cursor/i)).toBeInTheDocument();
-		expect(screen.getByText('oauth')).toBeInTheDocument();
+		expect(screen.getByText(CALLBACK)).toBeInTheDocument();
 		expect(screen.getByRole('radio', { name: /^Edit notebooks/ })).toBeChecked();
 		expect(screen.getByLabelText('Token lifetime (days)')).toHaveValue('30');
 	});

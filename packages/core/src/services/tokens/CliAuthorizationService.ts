@@ -509,7 +509,11 @@ export class CliAuthorizationService {
 
 	private async pruneExpired(): Promise<void> {
 		await this.prune(paths.cliAuthorizationsPrefix, (entry, now) => {
-			const createdAt = authorizationCreatedAt(entry.key, paths.cliAuthorizationsPrefix);
+			const createdAt = authorizationCreatedAt(
+				entry.key,
+				paths.cliAuthorizationsPrefix,
+				CliAuthorizationId.is,
+			);
 			return createdAt === null || createdAt + CliAuthorizationService.AUTHORIZATION_TTL_MS <= now;
 		});
 	}

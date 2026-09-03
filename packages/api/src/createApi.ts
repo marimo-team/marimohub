@@ -301,6 +301,11 @@ export function createApi(rawDeps: ApiDeps) {
 			/\/projects\/[^/]+\/notebooks\/[^/]+\/workspace\/files$/.test(c.req.path);
 		return (isWorkspaceFilePut ? workspaceFileBodyLimit : standardBodyLimit)(c, next);
 	});
+	if (deps.mcp) {
+		for (const path of ['/register', '/token', '/revoke', '/mcp']) {
+			app.use(path, standardBodyLimit);
+		}
+	}
 	app.use(
 		'/api/sync/*',
 		bodyLimit({

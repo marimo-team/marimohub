@@ -1575,4 +1575,20 @@ describe('createFromEnv MCP config', () => {
 			}).mcp,
 		).toEqual({ publicBaseUrl: 'https://hub.example.com/base' });
 	});
+
+	it.each([
+		'not a URL',
+		'ftp://hub.example.com',
+		'javascript:alert(1)',
+		'https://user@hub.example.com',
+		'https://user:secret@hub.example.com',
+	])('rejects an unsafe public app URL: %s', (baseUrl) => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_MCP: 'on',
+				MARIMOHUB_APP_BASE_URL: baseUrl,
+			}),
+		).toThrow(/credential-free HTTP\(S\) URL/);
+	});
 });
