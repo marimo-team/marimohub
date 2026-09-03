@@ -13,6 +13,7 @@ MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=…          # secret
 MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT=notebooks   # optional named environment
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS=1800     # save and stop after 30 idle minutes
+# MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS=7200  # optional app override
 ```
 
 ::: tip No infrastructure to run
@@ -23,9 +24,9 @@ running kernels. The easiest path if you don't already run a cluster.
 The adapter uses the supported Modal JavaScript SDK to create and reconnect to
 sandboxes. When `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT` is set, apps and sandboxes
 are isolated in that Modal environment. It passes compute profiles through the
-SDK's `cpu`, `memoryMiB`, and `gpu` options. The provider idle timeout is 1.5
-times `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. This interval gives the hub time
-to save and stop the session first.
+SDK's `cpu`, `memoryMiB`, and `gpu` options. Modal sets its idle timeout to 1.5
+times the effective timeout for each session mode. This fallback gives the hub
+time to save an edit session and stop its sandbox first.
 
 ::: warning Cold starts & shared workspaces
 A freshly-started kernel can take a few seconds to boot; a warm sandbox image

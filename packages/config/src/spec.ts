@@ -1221,8 +1221,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
 						name: 'Session idle timeout (seconds)',
 						description:
-							'Reap a session (with a save) when it has no active editor connections AND its heartbeat has been stale this long. Modal receives a provider-side fallback at 1.5x this value.',
+							'Reap a session when its heartbeat is stale for this period and it has no active connections. Apps inherit this value unless MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS is set. Modal uses 1.5x the effective timeout as a provider fallback.',
 						default: '1800',
+					},
+					{
+						id: 'MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS',
+						name: 'App session idle timeout (seconds)',
+						description:
+							'Idle-timeout override for Run as app sessions. The general timeout applies when this value is unset. The session maximum lifetime can stop an app before its idle timeout.',
 					},
 					{
 						id: 'MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS',

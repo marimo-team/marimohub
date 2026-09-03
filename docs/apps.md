@@ -26,16 +26,17 @@ App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
   Restarting replaces the sandbox with one serving the current saved state and
   disconnects everyone currently using the app — in-progress input state is
   lost, so the hub asks for confirmation and never restarts automatically.
-- **Apps stay up while in use.** Open app tabs keep the session alive; once
-  everyone leaves, the idle timeout reaps it
-  (`MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`). While anyone stays connected the
-  session deadline keeps extending — a permanently open tab (a wall dashboard)
-  keeps the app, and the credentials inside it, running indefinitely, so stop
-  apps you no longer need. Idle reaping and the "~N connected" count are done
-  by the [maintenance worker](./operations.md) (`MARIMOHUB_RUN_MAINTENANCE`);
-  without one, apps stay up until explicitly stopped. If the app stops
-  underneath an open tab — stopped by an editor, expired, or crashed — the
-  page shows a terminal "App stopped" state with the reason.
+- **Apps stay up while in use.** Open app tabs keep the session alive. After
+  everyone leaves, `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` controls idle
+  reaping. This value inherits `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` when unset.
+  Active connections extend the session deadline. Thus, an open dashboard can
+  keep the app and its credentials active indefinitely.
+
+  The [maintenance worker](./operations.md) handles idle reaping and the "~N
+  connected" count. Without this worker, apps stay up until someone stops them.
+  If an app stops under an open tab, the page shows the reason. The session
+  maximum lifetime can stop an app before its idle timeout.
+
 - **Resource model.** `marimo run` starts one kernel per connected browser
   inside the single app sandbox, so memory scales with concurrent users of that
   app. Size the sandbox for the audience you expect.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
+import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult, expectLaunchResult } from '@marimo-hub/core/testing';
@@ -228,6 +229,15 @@ describe('ModalCompute', () => {
 		const world = makeWorld();
 		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
 		expect(world.created[0].options.command).toEqual(['sleep', 'infinity']);
+	});
+
+	it('derives a per-sandbox idle fallback from the session deadline', async () => {
+		const world = makeWorld();
+		await makeCompute(world)
+			.create(SANDBOX_ID, { reuse: false, sessionIdleTimeoutMs: Millis.hours(2) })
+			.exec('true');
+
+		expect(world.created[0].options.idleTimeoutMs).toBe(3 * 60 * 60_000);
 	});
 
 	it('keeps unset resources as an exact create-options no-op', async () => {

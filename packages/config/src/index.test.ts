@@ -1221,7 +1221,10 @@ describe('createFromEnv session lifetime', () => {
 		const deps = createFromEnv({ ...baseEnv });
 		expect(deps.sandbox.sessionLifetime).toEqual({
 			maxLifetimeMs: 14400 * 1000,
-			idleTimeoutMs: 1800 * 1000,
+			idleTimeoutMsByMode: {
+				edit: 1800 * 1000,
+				app: 1800 * 1000,
+			},
 			snapshotIntervalMs: 120 * 1000,
 			extensionMs: 1800 * 1000,
 			connectionAware: true,
@@ -1243,6 +1246,27 @@ describe('createFromEnv session lifetime', () => {
 		});
 	});
 
+	it('lets app sessions override the inherited idle timeout', () => {
+		const inherited = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS: '600',
+		});
+		expect(inherited.sandbox.sessionLifetime?.idleTimeoutMsByMode).toEqual({
+			edit: 600 * 1000,
+			app: 600 * 1000,
+		});
+
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS: '600',
+			MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS: '7200',
+		});
+		expect(deps.sandbox.sessionLifetime?.idleTimeoutMsByMode).toEqual({
+			edit: 600 * 1000,
+			app: 7200 * 1000,
+		});
+	});
+
 	it('rejects a non-positive lifetime', () => {
 		expect(() =>
 			createFromEnv({ ...baseEnv, MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS: '0' }),
@@ -1251,6 +1275,7 @@ describe('createFromEnv session lifetime', () => {
 
 	it.each([
 		'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
+		'MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS',
 		'MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS',
 		'MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS',
 	])('rejects a zero %s (only the snapshot interval may be 0)', (key) => {
@@ -1259,6 +1284,7 @@ describe('createFromEnv session lifetime', () => {
 
 	it.each([
 		'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
+		'MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS',
 		'MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS',
 		'MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS',
 	])('rejects a negative %s', (key) => {

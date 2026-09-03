@@ -274,9 +274,10 @@ beside (not inside) the 5-minute maintenance cycle. Three mechanisms compose:
 
 - **marimohub owns the lifetime.** `expires_at` is stamped on the session record
   when the kernel goes `running` (now + `MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`,
-  default 4h). At the deadline — or when a session is idle
-  (`MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`, 30m stale heartbeat AND no editors)
-  — the sweep saves and tears down gracefully via `SandboxProvisioner.teardown`.
+  default 4h). The sweep also detects a stale heartbeat with no active connections.
+  `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` sets this idle period. Apps can override
+  it with `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS`. At either deadline, the
+  sweep saves and tears down via `SandboxProvisioner.teardown`.
   The provider-side cap (CoreWeave/E2B `*_MAX_LIFETIME_SECONDS`) is demoted to an
   **orphan backstop**: unset it and it defaults to 2× the session lifetime;
   setting it below the session lifetime fails boot.

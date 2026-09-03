@@ -410,15 +410,19 @@ const DEFAULT_SESSION_SWEEP_INTERVAL_S = 60;
 function parseSessionLifetime(env: Env): SessionLifetimeConfig {
 	const seconds = (key: string, dflt: number, opts?: { allowZero?: boolean }) =>
 		parseSecondsEnv(env, key, { dflt, ...opts });
+	const idleTimeoutMs = seconds(
+		'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
+		DEFAULT_SESSION_IDLE_TIMEOUT_S,
+	);
 	return {
 		maxLifetimeMs: seconds(
 			'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
 			DEFAULT_SESSION_MAX_LIFETIME_S,
 		),
-		idleTimeoutMs: seconds(
-			'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
-			DEFAULT_SESSION_IDLE_TIMEOUT_S,
-		),
+		idleTimeoutMsByMode: {
+			edit: idleTimeoutMs,
+			app: seconds('MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS', Millis.toSeconds(idleTimeoutMs)),
+		},
 		snapshotIntervalMs: seconds(
 			'MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS',
 			DEFAULT_SESSION_SNAPSHOT_INTERVAL_S,
@@ -615,7 +619,7 @@ export function createFromEnv(
 	const surfaces = surfacesFromEnv(env);
 	const compute = makeCompute(env, {
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
-		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
+		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMsByMode.edit,
 		sandboxExposureMode: exposure.mode,
 		surfaces,
 		libraries: options?.libraries,

@@ -1,4 +1,5 @@
 import type { SandboxId } from '../ids';
+import type { Millis } from '../duration';
 import type { Timings } from '../timing';
 
 export type ExecResult =
@@ -276,6 +277,11 @@ export interface CreateSandboxOptions {
 	resources?: ComputeResources;
 	/** Optional personal directory for an owner-isolated editor sandbox. */
 	userHome?: SandboxUserHome;
+	/**
+	 * Control-plane idle deadline for this session. Providers may use it to set a
+	 * later provider-side backstop; it is not the graceful lifecycle enforcement.
+	 */
+	sessionIdleTimeoutMs?: Millis;
 }
 
 export interface SandboxProvider {

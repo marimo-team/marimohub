@@ -217,6 +217,8 @@ export interface ProvisionOptions {
 	resources?: ComputeResources;
 	/** Personal directory selected for an owner-isolated editor sandbox. */
 	userHome?: SandboxUserHome;
+	/** Control-plane idle deadline used by providers to derive an orphan backstop. */
+	sessionIdleTimeoutMs?: Millis;
 	/**
 	 * Environment + files to inject into the sandbox BEFORE the kernel starts — the
 	 * assembled output of the workload-identity broker (federated S3 creds) and/or
@@ -570,9 +572,12 @@ export class SandboxProvisioner {
 			this.provider,
 			options.sandboxId,
 			options.restoreFilesystemSnapshotId,
-			options.image,
-			options.resources,
-			options.userHome,
+			{
+				image: options.image,
+				resources: options.resources,
+				userHome: options.userHome,
+				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+			},
 		);
 		const createMs = Date.now() - createStart;
 		try {
@@ -608,9 +613,12 @@ export class SandboxProvisioner {
 			this.provider,
 			options.sandboxId,
 			options.restoreFilesystemSnapshotId,
-			options.image,
-			options.resources,
-			options.userHome,
+			{
+				image: options.image,
+				resources: options.resources,
+				userHome: options.userHome,
+				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+			},
 		);
 		const createMs = Date.now() - createStart;
 		try {

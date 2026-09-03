@@ -1300,10 +1300,11 @@ describe('Session routes', () => {
 	});
 
 	it('POST /sessions stamps expires_at from the session lifetime when configured', async () => {
+		const compute = makeFakeCompute();
 		const withLifetime = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: makeFakeCompute(),
+			compute,
 			deps: {
 				sandbox: {
 					bucket: { name: 'test', endpoint: '' },
@@ -1312,7 +1313,7 @@ describe('Session routes', () => {
 					persistWorkspace: 'source',
 					sessionLifetime: {
 						maxLifetimeMs: Millis.hours(4),
-						idleTimeoutMs: Millis.minutes(30),
+						idleTimeoutMsByMode: { edit: Millis.minutes(30), app: Millis.hours(2) },
 						snapshotIntervalMs: Millis.minutes(2),
 						extensionMs: Millis.minutes(30),
 						connectionAware: true,
@@ -1330,6 +1331,10 @@ describe('Session routes', () => {
 		const expiresAt = Date.parse(stored.expires_at!);
 		expect(expiresAt).toBeGreaterThanOrEqual(before + 4 * 60 * 60 * 1000);
 		expect(expiresAt).toBeLessThan(before + 5 * 60 * 60 * 1000);
+		expect(compute.lastCreateOptions?.sessionIdleTimeoutMs).toBe(Millis.minutes(30));
+
+		await expectOk<ApiSession>(await withLifetime('POST', sessionsPath(), { mode: 'app' }));
+		expect(compute.lastCreateOptions?.sessionIdleTimeoutMs).toBe(Millis.hours(2));
 	});
 
 	it('POST /sessions leaves expires_at unset without a session lifetime (library wiring)', async () => {
@@ -1357,7 +1362,7 @@ describe('Session routes', () => {
 				sandbox: sandboxConfig({
 					sessionLifetime: {
 						maxLifetimeMs: Millis.hours(4),
-						idleTimeoutMs: Millis.minutes(30),
+						idleTimeoutMsByMode: { edit: Millis.minutes(30), app: Millis.hours(2) },
 						snapshotIntervalMs: Millis.minutes(2),
 						extensionMs: Millis.minutes(30),
 						connectionAware: true,

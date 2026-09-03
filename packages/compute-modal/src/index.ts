@@ -639,7 +639,13 @@ export class ModalCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		const config = options?.image ? { ...this.config, image: options.image } : this.config;
+		const config = {
+			...this.config,
+			...(options?.image ? { image: options.image } : {}),
+			...(options?.sessionIdleTimeoutMs !== undefined
+				? { idleFallbackMs: Math.ceil(options.sessionIdleTimeoutMs * 1.5) }
+				: {}),
+		};
 		return new ModalSandboxInstance(
 			id,
 			config,

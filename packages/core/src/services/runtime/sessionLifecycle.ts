@@ -1,5 +1,6 @@
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
+import type { SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import type { NotebookId, SessionId } from '../../ids';
@@ -9,7 +10,7 @@ import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { SessionRetirer } from './SessionRetirer';
-import { isTerminal, sessionModePolicy, sessionPersistsEdits } from './sessionState';
+import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import type { SessionService } from './SessionService';
 
 const SESSION_SWEEP_CONCURRENCY = 8;
@@ -84,8 +85,8 @@ function kernelBasePath(s: Session): string {
 }
 
 export interface SessionLifecycleConfig {
-	/** Reap (with save) when there are no active connections AND the heartbeat is this stale. */
-	idleTimeoutMs: number;
+	/** Reap after a stale heartbeat and no connections. */
+	idleTimeoutMsByMode: Record<SessionMode, number>;
 	/** Periodic save cadence for live sessions; 0 disables snapshots. */
 	snapshotIntervalMs: number;
 	/** How far `expires_at` slides when editors are still connected at the deadline. */
@@ -186,7 +187,8 @@ export class SessionLifecycleService {
 		await mapWithConcurrency(candidates, SESSION_SWEEP_CONCURRENCY, async (s) => {
 			const sandbox = this.compute.create(s.sandbox_id!);
 
-			const heartbeatStale = now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMs;
+			const heartbeatStale =
+				now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMsByMode[sessionMode(s)];
 			const pastDeadline = !!s.expires_at && now >= Date.parse(s.expires_at);
 			const pastAuthorizationDeadline =
 				!!s.authorization_expires_at && now >= Date.parse(s.authorization_expires_at);

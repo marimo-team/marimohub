@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { Millis } from '../../duration';
 import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import { ACTOR, makeFakeSandbox, setupTestEnv, uid } from '../../testing';
 import {
@@ -97,8 +98,10 @@ describe('filesystemSnapshots', () => {
 				},
 				proxy: async () => null,
 			};
-			createOrRestoreSandbox(provider, sandboxId);
-			expect(createOpts).toEqual([{ reuse: false }]);
+			createOrRestoreSandbox(provider, sandboxId, undefined, {
+				sessionIdleTimeoutMs: Millis.hours(2),
+			});
+			expect(createOpts).toEqual([{ reuse: false, sessionIdleTimeoutMs: 7_200_000 }]);
 		});
 	});
 

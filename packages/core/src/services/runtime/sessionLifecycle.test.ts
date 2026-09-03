@@ -24,7 +24,7 @@ const SNAPSHOT_INTERVAL_MS = 2 * 60 * 1000;
 const EXTENSION_MS = 30 * 60 * 1000;
 
 const CFG: SessionLifecycleConfig = {
-	idleTimeoutMs: IDLE_TIMEOUT_MS,
+	idleTimeoutMsByMode: { edit: IDLE_TIMEOUT_MS, app: IDLE_TIMEOUT_MS },
 	snapshotIntervalMs: SNAPSHOT_INTERVAL_MS,
 	extensionMs: EXTENSION_MS,
 	connectionAware: true,

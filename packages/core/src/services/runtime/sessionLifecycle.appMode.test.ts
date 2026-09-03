@@ -19,7 +19,7 @@ import type { SessionLifecycleConfig } from './sessionLifecycle';
 import { SessionService } from './SessionService';
 
 const CFG: SessionLifecycleConfig = {
-	idleTimeoutMs: 30 * 60 * 1000,
+	idleTimeoutMsByMode: { edit: 30 * 60 * 1000, app: 2 * 60 * 60 * 1000 },
 	snapshotIntervalMs: 2 * 60 * 1000,
 	extensionMs: 30 * 60 * 1000,
 	connectionAware: true,
@@ -86,7 +86,7 @@ describe('SessionLifecycleService (app sessions)', () => {
 	const getStored = (s: Session) => sessions.getSession(s.project_id, s.session_id);
 
 	it('reaps an idle app with persistence skipped and releases the claim', async () => {
-		const s = await putSession({ last_heartbeat: iso(-CFG.idleTimeoutMs - 1000) });
+		const s = await putSession({ last_heartbeat: iso(-CFG.idleTimeoutMsByMode.app - 1000) });
 		await bucket.put(
 			paths.appClaim(projectId, notebookId),
 			JSON.stringify({ session_id: s.session_id, claimed_at: iso(0) }),
@@ -99,6 +99,18 @@ describe('SessionLifecycleService (app sessions)', () => {
 		expect(notebooks.commitSession).not.toHaveBeenCalled();
 		expect((await getStored(s)).status).toBe('terminated');
 		expect(await appClaimHolder(bucket, projectId, notebookId)).toBeNull();
+	});
+
+	it('keeps an app whose heartbeat is stale by the editor timeout only', async () => {
+		const s = await putSession({
+			last_heartbeat: iso(-CFG.idleTimeoutMsByMode.edit - 1000),
+		});
+
+		const result = await makeService().sweep(now);
+
+		expect(result.reapedIdle).toBe(0);
+		expect(sandboxCalls.destroy).toBe(0);
+		expect((await getStored(s)).status).toBe('running');
 	});
 
 	it('never snapshots an app session (and never stamps last_snapshot_at)', async () => {

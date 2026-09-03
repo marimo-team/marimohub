@@ -24,6 +24,7 @@ import type {
 	SandboxExposure,
 	SandboxProvider,
 	SandboxUserHome,
+	SessionMode,
 	Seconds,
 	SourceControlRegistry,
 	ViewerMode,
@@ -56,8 +57,8 @@ export interface WifConfig {
 export interface SessionLifetimeConfig {
 	/** Hard session lifetime → graceful save + teardown by the lifecycle sweep. */
 	maxLifetimeMs: Millis;
-	/** Reap (with save) when no editors are connected AND the heartbeat is this stale. */
-	idleTimeoutMs: Millis;
+	/** Reap after a stale heartbeat and no connections; apps may override the general deadline. */
+	idleTimeoutMsByMode: Record<SessionMode, Millis>;
 	/** Periodic save cadence for live sessions; 0 disables periodic snapshots. */
 	snapshotIntervalMs: Millis;
 	/** How far `expires_at` slides when editors are still connected at the deadline. */
