@@ -77,6 +77,50 @@ describe('bucket schema contracts', () => {
 	});
 });
 
+describe('bucket job contracts', () => {
+	const doc = buildBucketSpec() as {
+		paths: Record<string, Record<string, unknown>>;
+		components: {
+			schemas: Record<
+				string,
+				{
+					properties: Record<
+						string,
+						{
+							maxProperties?: number;
+							properties?: Record<string, { uniqueItems?: boolean }>;
+						}
+					>;
+				}
+			>;
+		};
+	};
+
+	it('publishes job parameter and notification limits', () => {
+		for (const schema of [doc.components.schemas.JobDefinition, doc.components.schemas.JobRun]) {
+			expect(schema.properties.parameters.maxProperties).toBe(32);
+		}
+		expect(
+			doc.components.schemas.JobDefinition.properties.notifications.properties?.on.uniqueItems,
+		).toBe(true);
+	});
+
+	it('documents load-bearing job indexes without exposing an unused session artifact', () => {
+		expect(
+			doc.paths['/projects/{pid}/notebooks/{nid}/job-index/{created_at}_{job_id}.json'],
+		).toMatchObject({
+			'x-mutability': 'immutable',
+			'x-owner': 'JobsService',
+		});
+		expect(
+			doc.paths['/projects/{pid}/notebooks/{nid}/jobs/{job_id}/run-index/{reverse_ulid}.json'],
+		).toMatchObject({ 'x-mutability': 'immutable', 'x-owner': 'JobRunService' });
+		expect(
+			doc.paths['/projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/session.json'],
+		).toBeUndefined();
+	});
+});
+
 describe('integration schema contracts', () => {
 	const doc = buildIntegrationsSpec() as {
 		paths: Record<string, Record<string, unknown>>;

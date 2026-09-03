@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { ValidationError } from '../../../errors';
 import { createIntegrationId, createProjectId, createSessionId, UserId } from '../../../ids';
+import type { SessionId } from '../../../ids';
 import type {
 	IntegrationProbe,
 	ProbeConnectRequest,
 	ProbeRequestInit,
 } from '../../../ports/integrations';
-import { bundleIntegrations, INTEGRATIONS_DIR } from '../bundle';
+import { bundleIntegrations as bundleWorkloadIntegrations, INTEGRATIONS_DIR } from '../bundle';
 import { SECRET_MARK } from '../secretFields';
 import type { IntegrationDefinition, RenderInput } from '../sdk';
 import { athena } from './awsQueryEngines';
@@ -36,6 +37,13 @@ import { snowflake } from './snowflake';
 import { sqlserver } from './sqlserver';
 import { trino } from './trino';
 
+function bundleIntegrations(
+	rendered: Parameters<typeof bundleWorkloadIntegrations>[0],
+	sessionId: SessionId,
+) {
+	return bundleWorkloadIntegrations(rendered, { kind: 'session', id: sessionId });
+}
+
 /** Fixed session context for deterministic render comparisons. */
 function input<C>(config: unknown, def: { configSchema: { parse(v: unknown): C } }, name = 'prod') {
 	return {
@@ -43,7 +51,7 @@ function input<C>(config: unknown, def: { configSchema: { parse(v: unknown): C }
 		instanceName: name,
 		projectId: createProjectId(),
 		principal: { userId: UserId.parse('user-1'), email: 'ada@example.com' },
-		session: { sessionId: createSessionId() },
+		workload: { kind: 'session', id: createSessionId() },
 	} satisfies RenderInput<C>;
 }
 

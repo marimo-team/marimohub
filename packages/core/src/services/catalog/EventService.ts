@@ -7,9 +7,10 @@ import { createEventId } from '../../ids';
 import type { UserId } from '../../ids';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
-import { EventSchema, readStored } from '../../schema';
+import { EventIdempotencyMarkerSchema, EventSchema, readStored } from '../../schema';
 import type { Event } from '../../schema';
 import { parseUtcDate } from '../../utcDate';
+import { putIfAbsent } from './cas';
 
 export const MAX_EVENT_RANGE_DAYS = 30;
 const DAY_MS = Millis.days(1);
@@ -32,6 +33,20 @@ export interface EventPage {
 interface EventCursor {
 	date: string;
 	id: string;
+}
+
+function parseEventIdempotencyMarker(value: string, key: string) {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch (err) {
+		throw new Error(`Invalid event idempotency marker at ${key}`, { cause: err });
+	}
+	const result = EventIdempotencyMarkerSchema.safeParse(parsed);
+	if (!result.success) {
+		throw new Error(`Invalid event idempotency marker at ${key}`, { cause: result.error });
+	}
+	return result.data;
 }
 
 function encodeCursor(cursor: EventCursor): string {
@@ -84,13 +99,16 @@ function matches(event: Event, options: EventListOptions): boolean {
 export class EventService {
 	constructor(private bucket: Bucket) {}
 
-	async append(event: { event: string; actor: UserId } & Record<string, unknown>): Promise<void> {
-		const now = new Date();
+	async append(
+		event: { event: string; actor: UserId } & Record<string, unknown>,
+		options: { id?: string; timestamp?: string; onlyIfAbsent?: boolean } = {},
+	): Promise<void> {
+		const now = options.timestamp ? new Date(options.timestamp) : new Date();
 		const date = now.toISOString().slice(0, 10);
-		const id = createEventId();
+		const eventId = createEventId();
 
 		const fullEvent = {
-			id,
+			id: eventId,
 			...event,
 			schema_version: 1 as const,
 			ts: now.toISOString(),
@@ -99,11 +117,28 @@ export class EventService {
 		// One immutable object per event. Object stores have no atomic append, so a
 		// shared per-day file would lose events under concurrent writers (a
 		// read-modify-write race). Per-event objects are write-safe with no locking.
-		await this.bucket.put(paths.event(date, id), JSON.stringify(fullEvent));
+		const body = JSON.stringify(fullEvent);
+		if (!options.onlyIfAbsent) {
+			await this.bucket.put(paths.event(date, eventId), body);
+			return;
+		}
+
+		const idempotencyId = options.id ?? eventId;
+		const markerKey = paths.eventIdempotency(date, idempotencyId);
+		const candidate = JSON.stringify({ event_id: eventId, body });
+		const created = await putIfAbsent(this.bucket, markerKey, candidate);
+		const storedMarker = created ? null : await this.bucket.get(markerKey);
+		if (!created && !storedMarker) {
+			throw new Error(`Event idempotency marker disappeared at ${markerKey}`);
+		}
+		const storedBody = storedMarker ? await storedMarker.text() : candidate;
+		const marker = parseEventIdempotencyMarker(storedBody, markerKey);
+		await putIfAbsent(this.bucket, paths.event(date, marker.event_id), marker.body);
 	}
 
 	async getEvents(date: string): Promise<Event[]> {
 		const prefix = paths.eventsForDate(date);
+		const idempotencyPrefix = paths.eventIdempotencyForDate(date);
 		const events: Event[] = [];
 		let cursor: string | undefined;
 
@@ -113,7 +148,7 @@ export class EventService {
 		do {
 			const result = await this.bucket.list({ prefix, cursor });
 			const page = await mapWithConcurrency(
-				result.objects,
+				result.objects.filter((obj) => !obj.key.startsWith(idempotencyPrefix)),
 				BUCKET_SCAN_CONCURRENCY,
 				async (obj) => {
 					const body = await this.bucket.get(obj.key);

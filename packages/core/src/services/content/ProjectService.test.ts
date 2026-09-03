@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
-import { createVersionId, UserId } from '../../ids';
+import { createJobId, createRunId, createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
@@ -901,6 +901,18 @@ describe('ProjectService', () => {
 				paths.project(survivor.id).integration(integrationId).head,
 				JSON.stringify({ marker: 'survivor integration' }),
 			);
+			const doomedJob = createJobId();
+			const survivorJob = createJobId();
+			const doomedRun = createRunId();
+			const survivorRun = createRunId();
+			for (const [projectId, notebookId, jobId, runId] of [
+				[doomed.id, doomedNotebook.id, doomedJob, doomedRun],
+				[survivor.id, survivorNotebook.id, survivorJob, survivorRun],
+			] as const) {
+				await bucket.put(paths.jobRunMarker(projectId, runId), '{}');
+				await bucket.put(paths.jobOperationClaim(projectId, notebookId, jobId), '{}');
+				await bucket.put(paths.jobDeletionClaim(projectId, notebookId, jobId), '{}');
+			}
 
 			await projects.deleteProject(doomed.id, ACTOR);
 			await projects.hardDeleteProject(doomed.id);
@@ -908,11 +920,21 @@ describe('ProjectService', () => {
 			expect(await listAllKeys(bucket, `projects/${doomed.id}/`)).toEqual([]);
 			expect(await bucket.get(`projects/${doomed.id}/project.json`)).toBeNull();
 			expect(await listAllKeys(bucket, paths.versionPruneCutoffsForProject(doomed.id))).toEqual([]);
+			expect(await listAllKeys(bucket, paths.jobRunMarkersForProject(doomed.id))).toEqual([]);
+			expect(await listAllKeys(bucket, paths.jobOperationClaimsForProject(doomed.id))).toEqual([]);
+			expect(await listAllKeys(bucket, paths.jobDeletionClaimsForProject(doomed.id))).toEqual([]);
 			expect(
 				await bucket.get(paths.versionPruneCutoff(survivor.id, survivorNotebook.id)),
 			).not.toBeNull();
 			expect(
 				await bucket.get(paths.project(survivor.id).integration(integrationId).head),
+			).not.toBeNull();
+			expect(await bucket.get(paths.jobRunMarker(survivor.id, survivorRun))).not.toBeNull();
+			expect(
+				await bucket.get(paths.jobOperationClaim(survivor.id, survivorNotebook.id, survivorJob)),
+			).not.toBeNull();
+			expect(
+				await bucket.get(paths.jobDeletionClaim(survivor.id, survivorNotebook.id, survivorJob)),
 			).not.toBeNull();
 		});
 

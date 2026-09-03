@@ -21,6 +21,8 @@ import {
 	TokenId,
 	IntegrationId,
 	AlertDestinationId,
+	JobId,
+	RunId,
 	UserId,
 } from './ids';
 
@@ -141,6 +143,8 @@ export const SandboxIdSchema = z.string().refine(SandboxId.is);
 export const TokenIdSchema = z.string().refine(TokenId.is);
 export const IntegrationIdSchema = z.string().refine(IntegrationId.is);
 export const AlertDestinationIdSchema = z.string().refine(AlertDestinationId.is);
+export const JobIdSchema = z.string().refine(JobId.is);
+export const RunIdSchema = z.string().refine(RunId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.
@@ -159,6 +163,30 @@ export const CatalogSchema = z.object({
 export type Catalog = z.infer<typeof CatalogSchema>;
 
 // --- Snapshot ---
+
+export const JobScheduleSchema = z.looseObject({
+	/** Five-field cron expression, validated at write time (see services/jobs/cron.ts). */
+	cron: z.string().min(1).max(100),
+	/** IANA time zone the cron fields are evaluated in. */
+	timezone: z.string().min(1).max(64),
+});
+
+export type JobSchedule = z.infer<typeof JobScheduleSchema>;
+
+/**
+ * The snapshot's per-notebook job index: just enough for the scheduler to find
+ * every scheduled job without scanning `projects/**`. `job.json` stays
+ * authoritative for the full definition. Maintained by `JobsService` through
+ * `CatalogService.mutateSnapshot`, so the catalog invariant is untouched.
+ */
+export const SnapshotJobEntrySchema = z.looseObject({
+	id: JobIdSchema,
+	enabled: z.boolean(),
+	schedule: JobScheduleSchema.optional(),
+	updated_at: z.iso.datetime().optional(),
+});
+
+export type SnapshotJobEntry = z.infer<typeof SnapshotJobEntrySchema>;
 
 export const SnapshotNotebookEntrySchema = z.looseObject({
 	id: NotebookIdSchema,
@@ -185,6 +213,8 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	 * finalization clears it (see `catalogProjection.ts`).
 	 */
 	security_labels_pending: z.literal(true).optional(),
+	/** Job index (see `SnapshotJobEntrySchema`); absent = no jobs defined. */
+	jobs: z.array(SnapshotJobEntrySchema).optional(),
 	key_prefix: z.string(),
 });
 
@@ -647,7 +677,7 @@ export type ProposalPublication = z.infer<typeof ProposalPublicationSchema>;
 // ULID). No `provider` field: the capability gate (`asFilesystemSnapshots`)
 // already ensures only a snapshot-capable backend reads or writes this pointer,
 // so a backend switch ignores it.
-export const ComputeResourceRecordSchema = z.object({
+export const ComputeResourceRecordSchema = z.looseObject({
 	cpu: z.number().optional(),
 	memory_bytes: z.number().optional(),
 	gpu: z.string().optional(),
@@ -914,6 +944,347 @@ export const WorkspaceMutationClaimSchema = z.union([
 
 export type WorkspaceMutationClaim = z.infer<typeof WorkspaceMutationClaimSchema>;
 
+// --- Jobs ---
+//
+// A job is a per-notebook headless-run definition (schedule + policy) at
+// `projects/{pid}/notebooks/{nid}/jobs/{job-id}/job.json`; a run is the record
+// of one execution beside it. Both are CAS-managed mutable records with exactly
+// one writer each (`JobsService`, `JobRunService`), `looseObject` for the same
+// rolling-deploy reason as Session. Terminal runs are never rewritten; retention
+// deletes whole `runs/{rid}/` prefixes.
+
+export const RUN_STATUSES = [
+	'queued',
+	'provisioning',
+	'running',
+	'succeeded',
+	'failed',
+	'timed_out',
+	'cancelled',
+	'skipped',
+] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+export const RUN_TRIGGERS = ['schedule', 'manual'] as const;
+export type RunTrigger = (typeof RUN_TRIGGERS)[number];
+
+/** `forbid` skips a scheduled fire while a run of the same job is still active. */
+export const JOB_CONCURRENCY_POLICIES = ['forbid', 'allow'] as const;
+export type JobConcurrencyPolicy = (typeof JOB_CONCURRENCY_POLICIES)[number];
+
+export const JOB_NOTIFICATION_EVENTS = ['failure', 'success'] as const;
+export type JobNotificationEvent = (typeof JOB_NOTIFICATION_EVENTS)[number];
+
+export const MAX_JOB_NAME_LENGTH = 120;
+export const MAX_JOB_PARAMETERS = 32;
+export const MAX_JOB_PARAMETER_VALUE_LENGTH = 4096;
+export const MAX_JOB_RETRIES = 5;
+export const MAX_JOB_RETRY_BACKOFF_SECONDS = 3600;
+export const MAX_QUEUED_RUNS_PER_JOB = 20;
+export const MIN_JOB_TIMEOUT_SECONDS = 60;
+
+export const CURRENT_JOB_DEFINITION_VERSION = 1;
+export const CURRENT_JOB_RUN_VERSION = 1;
+
+/** Keys become `--key value` argv for `mo.cli_args()`, so they must be flag-safe. */
+export const JOB_PARAMETER_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+export const JOB_PARAMETERS_JSON_SCHEMA = {
+	maxProperties: MAX_JOB_PARAMETERS,
+	propertyNames: { type: 'string', pattern: JOB_PARAMETER_KEY_PATTERN.source },
+} as const;
+
+export const JobParametersSchema = z
+	.record(
+		z.string().regex(JOB_PARAMETER_KEY_PATTERN),
+		z.string().max(MAX_JOB_PARAMETER_VALUE_LENGTH),
+	)
+	.refine((parameters) => Object.keys(parameters).length <= MAX_JOB_PARAMETERS, {
+		message: `At most ${MAX_JOB_PARAMETERS} parameters are allowed`,
+	})
+	.meta(JOB_PARAMETERS_JSON_SCHEMA);
+
+export type JobParameters = z.infer<typeof JobParametersSchema>;
+
+export const JobRetryPolicySchema = z.looseObject({
+	max_retries: z.number().int().min(0).max(MAX_JOB_RETRIES),
+	backoff_seconds: z.number().int().min(0).max(MAX_JOB_RETRY_BACKOFF_SECONDS).default(60),
+});
+
+export type JobRetryPolicy = z.infer<typeof JobRetryPolicySchema>;
+
+export const JobNotificationsSchema = z.looseObject({
+	on: z
+		.array(z.enum(JOB_NOTIFICATION_EVENTS))
+		.min(1)
+		.refine((events) => new Set(events).size === events.length, {
+			message: 'Notification events must be unique',
+		})
+		.meta({ uniqueItems: true }),
+});
+
+export type JobNotifications = z.infer<typeof JobNotificationsSchema>;
+
+export const JobDefinitionSchema = z.looseObject({
+	schema_version: z.literal(CURRENT_JOB_DEFINITION_VERSION),
+	id: JobIdSchema,
+	notebook_id: NotebookIdSchema,
+	project_id: ProjectIdSchema,
+	name: z.string().min(1).max(MAX_JOB_NAME_LENGTH),
+	enabled: z.boolean(),
+	/** Absent = manual-trigger only. */
+	schedule: JobScheduleSchema.optional(),
+	/** Passed to the notebook as `mo.cli_args()`. */
+	parameters: JobParametersSchema.optional(),
+	retry: JobRetryPolicySchema.optional(),
+	/** Absent = the deployment default; capped by MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS. */
+	timeout_seconds: z.number().int().min(MIN_JOB_TIMEOUT_SECONDS).optional(),
+	concurrency_policy: z.enum(JOB_CONCURRENCY_POLICIES).default('forbid'),
+	/** Delivered through the project's alert destinations (`job.run.*` kinds). */
+	notifications: JobNotificationsSchema.optional(),
+	created_by: UserIdSchema,
+	created_at: z.iso.datetime(),
+	updated_at: z.iso.datetime(),
+});
+
+export type JobDefinition = z.infer<typeof JobDefinitionSchema>;
+
+export const RunErrorSchema = z.looseObject({ code: z.string(), message: z.string() });
+
+export type RunError = z.infer<typeof RunErrorSchema>;
+
+export const JobRunSchema = z.looseObject({
+	schema_version: z.literal(CURRENT_JOB_RUN_VERSION),
+	run_id: RunIdSchema,
+	job_id: JobIdSchema,
+	notebook_id: NotebookIdSchema,
+	project_id: ProjectIdSchema,
+	status: z.enum(RUN_STATUSES),
+	trigger: z.enum(RUN_TRIGGERS),
+	/** Manual runs only; scheduled runs attribute to the job. */
+	triggered_by: UserIdSchema.optional(),
+	/** The occurrence this scheduled run fired for. */
+	scheduled_for: z.iso.datetime().optional(),
+	/** The notebook head at enqueue time — the same provenance app sessions carry. */
+	source_version_id: VersionIdSchema.optional(),
+	/** As-executed parameters, persisted for audit. */
+	parameters: JobParametersSchema.optional(),
+	attempt: z.number().int().min(1).default(1),
+	retry_of: RunIdSchema.optional(),
+	/** Stamped when the run goes `provisioning`; the reconciler reads it. */
+	sandbox_id: SandboxIdSchema.optional(),
+	/** The sandbox image and compute the run provisioned with — the same provenance a session carries. */
+	image: z.string().optional(),
+	compute_profile: z.string().optional(),
+	compute_resources: ComputeResourceRecordSchema.optional(),
+	timeout_seconds: z.number().int().min(1),
+	queued_at: z.iso.datetime(),
+	/** A retry's backoff: not dispatched before this instant. */
+	eligible_at: z.iso.datetime().optional(),
+	started_at: z.iso.datetime().optional(),
+	finished_at: z.iso.datetime().optional(),
+	/** Watchdog anchor: a run still active past this instant is timed out. */
+	deadline_at: z.iso.datetime().optional(),
+	exit_code: z.number().int().optional(),
+	/** Sanitized like a session's `error`; never carries secret material. */
+	error: RunErrorSchema.optional(),
+	output: z
+		.looseObject({
+			html_bytes: z.number().int().nonnegative(),
+			logs_bytes: z.number().int().nonnegative().optional(),
+		})
+		.optional(),
+	cancelled_by: UserIdSchema.optional(),
+});
+
+export type JobRun = z.infer<typeof JobRunSchema>;
+
+const StoredJobVersionSchema = z.looseObject({ schema_version: SchemaVersionSchema });
+
+export function parseStoredJobDefinition(value: unknown, what: string): JobDefinition {
+	const { schema_version } = parseStored(StoredJobVersionSchema, value, what);
+	switch (schema_version) {
+		case 1:
+			return parseStored(JobDefinitionSchema, value, what);
+		default:
+			throw new StoredObjectError(what, 'schema_mismatch', {
+				issues: [{ path: 'schema_version', code: 'unsupported_version' }],
+			});
+	}
+}
+
+export async function readStoredJobDefinition(
+	body: { json(): Promise<unknown> },
+	what: string,
+): Promise<JobDefinition> {
+	return parseStoredJobDefinition(await readStoredJson(body, what), what);
+}
+
+export function parseStoredJobRun(value: unknown, what: string): JobRun {
+	const { schema_version } = parseStored(StoredJobVersionSchema, value, what);
+	switch (schema_version) {
+		case 1:
+			return parseStored(JobRunSchema, value, what);
+		default:
+			throw new StoredObjectError(what, 'schema_mismatch', {
+				issues: [{ path: 'schema_version', code: 'unsupported_version' }],
+			});
+	}
+}
+
+export async function readStoredJobRun(
+	body: { json(): Promise<unknown> },
+	what: string,
+): Promise<JobRun> {
+	return parseStoredJobRun(await readStoredJson(body, what), what);
+}
+
+/** Scheduled-fire claim: create-if-absent, immutable (see `paths.job().occurrence`). */
+export const JobOccurrenceSchema = z.object({
+	run_id: RunIdSchema,
+	fired_at: z.iso.datetime(),
+	outcome: z.enum(['run', 'skip']).optional(),
+});
+
+export type JobOccurrence = z.infer<typeof JobOccurrenceSchema>;
+
+/** Execution/finalization marker under `_system/job-runs/` (see `paths.jobRunMarker`). */
+export const JobRunMarkerSchema = z.object({
+	run_id: RunIdSchema,
+	continuation_run_id: RunIdSchema,
+	job_id: JobIdSchema,
+	notebook_id: NotebookIdSchema,
+	project_id: ProjectIdSchema,
+	created_at: z.iso.datetime(),
+});
+
+export type JobRunMarker = z.infer<typeof JobRunMarkerSchema>;
+
+// Explicit picks (not rest-spreads): both schemas are loose, so preserved unknown
+// keys must never leak into a response.
+export type PublicJobDefinition = Pick<
+	JobDefinition,
+	| 'id'
+	| 'notebook_id'
+	| 'project_id'
+	| 'name'
+	| 'enabled'
+	| 'schedule'
+	| 'parameters'
+	| 'retry'
+	| 'timeout_seconds'
+	| 'concurrency_policy'
+	| 'notifications'
+	| 'created_by'
+	| 'created_at'
+	| 'updated_at'
+>;
+
+export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
+	return {
+		id: job.id,
+		notebook_id: job.notebook_id,
+		project_id: job.project_id,
+		name: job.name,
+		enabled: job.enabled,
+		...(job.schedule !== undefined
+			? { schedule: { cron: job.schedule.cron, timezone: job.schedule.timezone } }
+			: {}),
+		...(job.parameters !== undefined ? { parameters: job.parameters } : {}),
+		...(job.retry !== undefined
+			? {
+					retry: {
+						max_retries: job.retry.max_retries,
+						backoff_seconds: job.retry.backoff_seconds,
+					},
+				}
+			: {}),
+		...(job.timeout_seconds !== undefined ? { timeout_seconds: job.timeout_seconds } : {}),
+		concurrency_policy: job.concurrency_policy,
+		...(job.notifications !== undefined ? { notifications: { on: job.notifications.on } } : {}),
+		created_by: job.created_by,
+		created_at: job.created_at,
+		updated_at: job.updated_at,
+	};
+}
+
+export type PublicJobRun = Pick<
+	JobRun,
+	| 'run_id'
+	| 'job_id'
+	| 'notebook_id'
+	| 'project_id'
+	| 'status'
+	| 'trigger'
+	| 'triggered_by'
+	| 'scheduled_for'
+	| 'source_version_id'
+	| 'parameters'
+	| 'attempt'
+	| 'retry_of'
+	| 'image'
+	| 'compute_profile'
+	| 'compute_resources'
+	| 'timeout_seconds'
+	| 'queued_at'
+	| 'eligible_at'
+	| 'started_at'
+	| 'finished_at'
+	| 'deadline_at'
+	| 'exit_code'
+	| 'error'
+	| 'output'
+	| 'cancelled_by'
+>;
+
+export function toPublicJobRun(run: JobRun): PublicJobRun {
+	return {
+		run_id: run.run_id,
+		job_id: run.job_id,
+		notebook_id: run.notebook_id,
+		project_id: run.project_id,
+		status: run.status,
+		trigger: run.trigger,
+		...(run.triggered_by !== undefined ? { triggered_by: run.triggered_by } : {}),
+		...(run.scheduled_for !== undefined ? { scheduled_for: run.scheduled_for } : {}),
+		...(run.source_version_id !== undefined ? { source_version_id: run.source_version_id } : {}),
+		...(run.parameters !== undefined ? { parameters: run.parameters } : {}),
+		attempt: run.attempt,
+		...(run.retry_of !== undefined ? { retry_of: run.retry_of } : {}),
+		...(run.image !== undefined ? { image: run.image } : {}),
+		...(run.compute_profile !== undefined ? { compute_profile: run.compute_profile } : {}),
+		...(run.compute_resources !== undefined
+			? {
+					compute_resources: {
+						...(run.compute_resources.cpu !== undefined ? { cpu: run.compute_resources.cpu } : {}),
+						...(run.compute_resources.memory_bytes !== undefined
+							? { memory_bytes: run.compute_resources.memory_bytes }
+							: {}),
+						...(run.compute_resources.gpu !== undefined ? { gpu: run.compute_resources.gpu } : {}),
+					},
+				}
+			: {}),
+		timeout_seconds: run.timeout_seconds,
+		queued_at: run.queued_at,
+		...(run.eligible_at !== undefined ? { eligible_at: run.eligible_at } : {}),
+		...(run.started_at !== undefined ? { started_at: run.started_at } : {}),
+		...(run.finished_at !== undefined ? { finished_at: run.finished_at } : {}),
+		...(run.deadline_at !== undefined ? { deadline_at: run.deadline_at } : {}),
+		...(run.exit_code !== undefined ? { exit_code: run.exit_code } : {}),
+		...(run.error !== undefined
+			? { error: { code: run.error.code, message: run.error.message } }
+			: {}),
+		...(run.output !== undefined
+			? {
+					output: {
+						html_bytes: run.output.html_bytes,
+						...(run.output.logs_bytes !== undefined ? { logs_bytes: run.output.logs_bytes } : {}),
+					},
+				}
+			: {}),
+		...(run.cancelled_by !== undefined ? { cancelled_by: run.cancelled_by } : {}),
+	};
+}
+
 // --- Identity ---
 //
 // A directory record mapping a stable user id (the auth `sub`) to its current
@@ -1007,3 +1378,8 @@ export const EventSchema = z.looseObject({
 });
 
 export type Event = z.infer<typeof EventSchema>;
+
+export const EventIdempotencyMarkerSchema = z.object({
+	event_id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/),
+	body: z.string(),
+});

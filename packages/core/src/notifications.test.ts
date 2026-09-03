@@ -11,6 +11,8 @@ import {
 	reduceNotificationDeliveryResults,
 	resolveMemberRecipient,
 } from '.';
+import { JobId, RunId } from './ids';
+import type { NotebookId } from './ids';
 import { ids, makeProject, uid } from './testing/fixtures';
 
 const project = makeProject({
@@ -196,6 +198,65 @@ describe('NotificationRouter', () => {
 		expect(rendered?.dedupe_key).toBe('member.added:event-2:personal');
 	});
 
+	it('renders job run outcomes with a deep link to the run', () => {
+		const project = makeProject();
+		const [failed] = notificationRouter.render({
+			kind: 'job.run.failed',
+			project,
+			notebookId: 'nb-0123456789abcdef' as NotebookId,
+			notebookTitle: 'Forecast',
+			job: { id: JobId.parse('job-0123456789abcdef'), name: 'Nightly' },
+			run: {
+				run_id: RunId.parse('run_01HXYZ33333RSTQVWXYZABCDEF'),
+				status: 'timed_out',
+				trigger: 'schedule',
+				attempt: 2,
+				error: { code: 'RUN_TIMED_OUT', message: 'x' },
+				started_at: '2026-09-02T04:00:00.000Z',
+				finished_at: '2026-09-02T04:30:00.000Z',
+			},
+			baseUrl: 'https://hub.example',
+		});
+		expect(failed).toMatchObject({
+			kind: 'job.run.failed',
+			severity: 'error',
+			audience: 'broadcast',
+			title: `Job failed in ${project.name}`,
+			body: 'Nightly (Forecast) timed out (RUN_TIMED_OUT).',
+			link: `https://hub.example/projects/${project.id}/notebooks/nb-0123456789abcdef/jobs?job=job-0123456789abcdef&run=run_01HXYZ33333RSTQVWXYZABCDEF`,
+			data: {
+				job_id: 'job-0123456789abcdef',
+				job_name: 'Nightly',
+				run_id: 'run_01HXYZ33333RSTQVWXYZABCDEF',
+				status: 'timed_out',
+				trigger: 'schedule',
+				attempt: 2,
+				error_code: 'RUN_TIMED_OUT',
+				duration_seconds: 1800,
+			},
+			dedupe_key: 'job.run.failed:run_01HXYZ33333RSTQVWXYZABCDEF:broadcast',
+		});
+		const [succeeded] = notificationRouter.render({
+			kind: 'job.run.succeeded',
+			project,
+			notebookId: 'nb-0123456789abcdef' as NotebookId,
+			notebookTitle: 'Forecast',
+			job: { id: JobId.parse('job-0123456789abcdef'), name: 'Nightly' },
+			run: {
+				run_id: RunId.parse('run_01HXYZ33333RSTQVWXYZABCDEF'),
+				status: 'succeeded',
+				trigger: 'manual',
+				attempt: 1,
+			},
+		});
+		expect(succeeded).toMatchObject({
+			severity: 'info',
+			body: 'Nightly (Forecast) completed successfully.',
+			data: { error_code: null, duration_seconds: null },
+		});
+		expect(succeeded.link).toBeUndefined();
+	});
+
 	it('uses the registry as the notification-kind allowlist', () => {
 		expect(NOTIFICATION_KINDS).toEqual(['member.invited', 'member.added', 'session.takeover']);
 		expect(PROJECT_ALERT_KINDS).toEqual([
@@ -209,6 +270,8 @@ describe('NotificationRouter', () => {
 			'app.start_failed',
 			'app.unavailable',
 			'sync.failed',
+			'job.run.failed',
+			'job.run.succeeded',
 		]);
 		expect(Object.isFrozen(NOTIFICATION_KINDS)).toBe(true);
 		expect(Object.isFrozen(PROJECT_ALERT_KINDS)).toBe(true);

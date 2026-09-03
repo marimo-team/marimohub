@@ -33,9 +33,11 @@ POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2`
 ```
 
 GET /api/v1/projects/{pid}/alert-destinations the `data` response's property `type` changed from `array<any>` to `object` for status `200`
+GET /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data/items/items/` response property `oneOf` list for the response status `200`
 POST /api/v1/projects/{pid}/alert-destinations removed `subschema #1, subschema #2` from the request body `oneOf` list
 POST /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `201`
 PATCH /api/v1/projects/{pid}/alert-destinations/{aid} the request body was restructured into a oneOf, so a payload that was previously valid may no longer be accepted
+PATCH /api/v1/projects/{pid}/alert-destinations/{aid} removed `subschema #1, subschema #2` from the request body `oneOf` list
 PATCH /api/v1/projects/{pid}/alert-destinations/{aid} added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `200`
 POST /api/v1/projects/{pid}/alert-destinations/{aid}/test added the new required `header` request parameter `idempotency-key`
 POST /api/v1/projects/{pid}/alert-destinations/{aid}/test added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `200`

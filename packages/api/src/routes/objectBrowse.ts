@@ -132,7 +132,7 @@ async function cachedFederatedCredentials(
 				wif.issuerUrl,
 				wif.target,
 				projectId,
-				createSessionId(),
+				{ kind: 'session', id: createSessionId() },
 			);
 			const expiresAt = value.expiration ? Date.parse(value.expiration) : Number.NaN;
 			return { credentials: value, expiresAt };

@@ -27,7 +27,7 @@ export interface WifClaims {
 	/** Token lifetime in seconds (default 3600). */
 	ttlSeconds?: Seconds;
 	/**
-	 * Extra non-standard claims to embed (e.g. `project_id`, `session_id`). They
+	 * Extra non-standard claims to embed (e.g. `project_id`, `workload_kind`). They
 	 * cannot override the standard `iss`/`sub`/`aud`/`iat`/`nbf`/`exp` claims.
 	 */
 	extraClaims?: Record<string, unknown>;

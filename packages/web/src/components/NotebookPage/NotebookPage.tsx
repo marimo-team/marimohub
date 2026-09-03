@@ -5,6 +5,7 @@ import {
 	AppWindow,
 	ArrowLeft,
 	Bot,
+	CalendarClock,
 	Code2,
 	Eye,
 	FileCode2,
@@ -603,6 +604,16 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					>
 						<Pencil className="size-3.5" />
 					</IconButton>
+				)}
+				{!isApp && capabilities?.jobs?.available && (
+					<IconLink
+						to={`/projects/${pid}/notebooks/${nid}/jobs`}
+						label="Jobs & schedules"
+						tooltip="Jobs & schedules"
+						size="sm"
+					>
+						<CalendarClock className="size-3.5" />
+					</IconLink>
 				)}
 				{!isApp && notebook?.source.type === 'git' && (
 					<GitSourcePopover

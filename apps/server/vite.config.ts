@@ -33,6 +33,7 @@ export default defineConfig({
 			/^destr$/,
 			/^ufo$/,
 			/^ulidx$/,
+			/^croner$/,
 			// Match subpath imports too (zod/v3, zod/v4) — the ai SDK imports them.
 			/^zod(\/|$)/,
 			/^nodemailer$/,

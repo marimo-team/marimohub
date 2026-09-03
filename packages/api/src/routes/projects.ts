@@ -39,6 +39,7 @@ import {
 	ProjectMemberResponseSchema,
 	ProjectResponseSchema,
 	retireLiveApps,
+	cancelJobRuns,
 	SecurityLabelsBodySchema,
 	SESSION_ONLY_SECURITY,
 	SnapshotProjectEntrySchema,
@@ -476,6 +477,7 @@ app.openapi(deleteProject, async (c) => {
 		);
 	}
 	await retireLiveApps(deps, pid);
+	await cancelJobRuns(deps, pid, user.id);
 	return c.json({ success: true }, 200);
 });
 

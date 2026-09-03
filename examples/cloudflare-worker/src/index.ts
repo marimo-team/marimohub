@@ -5,7 +5,7 @@
  * and Access auth. This is also the one context where the Cloudflare compute
  * adapter works, since it needs the Workers runtime + DO binding.
  */
-import { createApi } from '@marimo-hub/api';
+import { createApi, DEFAULT_JOBS_CONFIG, resolveJobSandboxEnv } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
 	AesGcmSecretCodec,
@@ -17,9 +17,11 @@ import {
 	foldCase,
 	MaintenanceLock,
 	OrgIntegrationsStore,
+	paths,
 	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
+import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import type { AssignableRole, EditorSandboxSharing } from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
@@ -53,6 +55,13 @@ function secretCodec(kek: string | undefined): AesGcmSecretCodec | undefined {
 			`Invalid SECRETS_KEK secret: ${err instanceof Error ? err.message : String(err)}`,
 		);
 	}
+}
+
+function parseJobsToggle(raw: string | undefined): boolean {
+	const value = raw?.trim().toLowerCase();
+	if (value === undefined || value === '' || value === 'off') return false;
+	if (value === 'on') return true;
+	throw new Error(`Unknown MARIMOHUB_JOBS: ${raw} (supported: on, off).`);
 }
 
 function parseEditorSandboxSharing(raw: string | undefined): EditorSandboxSharing {
@@ -187,6 +196,8 @@ export function buildDeps(
 			// data) into the notebook workspace on teardown and restores them next time.
 			persistWorkspace: env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
 		},
+		// Documented on/off toggle; the Node tuning knobs keep their defaults here.
+		jobs: parseJobsToggle(env.MARIMOHUB_JOBS) ? DEFAULT_JOBS_CONFIG : undefined,
 		policy: {
 			editorSandboxSharing: parseEditorSandboxSharing(env.MARIMOHUB_EDITOR_SANDBOX_SHARING),
 			// Fallback role for logged-in non-members; defaults to `editor` so any
@@ -227,35 +238,74 @@ export default {
 		}
 		return api.fetch(request, env, ctx);
 	},
-	async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+	async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
 		const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
-		const { sessions, maintenance, projects, notebooks, proposals, idempotency } =
+		const { sessions, maintenance, projects, notebooks, proposals, idempotency, jobRuns } =
 			createServices(bucket);
 		const compute = new CloudflareSandboxProvider(env.SANDBOX);
 
 		// The Workers scheduled trigger is already a platform singleton; the lease
 		// is belt-and-suspenders, matching the Node deployment's contract.
 		const lock = new MaintenanceLock(bucket);
-		if (!(await lock.acquire('cloudflare-scheduled'))) return;
+		if (await lock.acquire('cloudflare-scheduled')) {
+			try {
+				await sessions.expireStale();
+				// Reconcile records against the provider. The Cloudflare adapter omits
+				// listActive(), so this cleanly no-ops until that backend can enumerate.
+				await new ReconciliationService(
+					sessions,
+					notebooks,
+					compute,
+					bucket,
+					env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
+					undefined,
+					jobRuns,
+				).reconcile();
+				await sessions.reapTerminated();
+				await maintenance.expireSnapshots();
+				await maintenance.pruneEvents();
+				await idempotency.prune();
+				await proposals.pruneExpiredPayloads();
+				await projects.claimPendingInvites();
+			} finally {
+				await lock.release('cloudflare-scheduled');
+			}
+		}
+
+		// Job scheduler tick, under its own lease. Granularity is the platform cron
+		// (5 minutes), so sub-5-minute schedules are Node-only; runs execute inside
+		// this invocation via waitUntil, bounded by the Workers wall-clock limit —
+		// the watchdog reclaims anything that outlives it.
+		if (!parseJobsToggle(env.MARIMOHUB_JOBS)) return;
+		const jobsLock = new MaintenanceLock(bucket, paths.jobSchedulerLock);
+		if (!(await jobsLock.acquire('cloudflare-scheduled'))) return;
 		try {
-			await sessions.expireStale();
-			// Reconcile records against the provider. The Cloudflare adapter omits
-			// listActive(), so this cleanly no-ops until that backend can enumerate.
-			await new ReconciliationService(
-				sessions,
-				notebooks,
+			const deps = buildDeps(new Request('https://scheduled.invalid/'), env, ctx);
+			const scheduler = new JobScheduler({
+				catalog: deps.services.catalog,
+				jobs: deps.services.jobs,
+				runs: deps.services.jobRuns,
+				runner: new JobRunner({
+					bucket,
+					compute,
+					notebooks: deps.services.notebooks,
+					projects: deps.services.projects,
+					jobs: deps.services.jobs,
+					runs: deps.services.jobRuns,
+					sandbox: { bucket: deps.sandbox.bucket, workdir: deps.sandbox.workdir },
+					resolveSessionEnv: (context) => resolveJobSandboxEnv(deps, context),
+				}),
 				compute,
-				bucket,
-				env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
-			).reconcile();
-			await sessions.reapTerminated();
-			await maintenance.expireSnapshots();
-			await maintenance.pruneEvents();
-			await idempotency.prune();
-			await proposals.pruneExpiredPayloads();
-			await projects.claimPendingInvites();
+				notebooks: deps.services.notebooks,
+				projects: deps.services.projects,
+				events: deps.services.events,
+				config: DEFAULT_JOBS_CONFIG,
+			});
+			await scheduler.tick();
+			ctx.waitUntil(scheduler.drain());
+			await scheduler.prune(DEFAULT_JOBS_CONFIG.runRetentionMs);
 		} finally {
-			await lock.release('cloudflare-scheduled');
+			await jobsLock.release('cloudflare-scheduled');
 		}
 	},
 };

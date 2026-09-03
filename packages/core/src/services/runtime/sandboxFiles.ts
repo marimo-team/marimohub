@@ -383,12 +383,28 @@ export async function readSessionArtifacts(
 	sandbox: SandboxInstance,
 	mountPath: string,
 ): Promise<CommitSessionInput> {
-	// Stat once so an oversized artifact (notably marimo's rendered HTML) is
-	// omitted *before* `readFile` buffers it into a string. Sizes are keyed by
-	// absolute path; an artifact absent from the listing falls through to readFile
-	// (size undefined), preserving the omit-when-unreadable contract. Stat is
-	// best-effort — a listing failure must never block teardown's save-on-reap
-	// commit, so we fall back to reading without the cap.
+	const sizes = await listFileSizes(sandbox, mountPath);
+	const read = (path: string) => readCappedFile(sandbox, path, sizes);
+	const [code, deps, html, session] = await Promise.all([
+		read(`${mountPath}/notebook.py`),
+		read(`${mountPath}/pyproject.toml`),
+		read(`${mountPath}/__marimo__/notebook.html`),
+		read(`${mountPath}/__marimo__/session/notebook.py.json`),
+	]);
+
+	return { code, deps, html, session };
+}
+
+/**
+ * Sizes of every file under `mountPath`, keyed by absolute path, so an
+ * oversized artifact can be refused BEFORE `readFile` buffers it. Best-effort:
+ * a listing failure yields an empty map and the reads below run uncapped —
+ * a teardown's save-on-reap commit must never be blocked by a stat.
+ */
+export async function listFileSizes(
+	sandbox: SandboxInstance,
+	mountPath: string,
+): Promise<ReadonlyMap<string, number>> {
 	const sizes = new Map<string, number>();
 	try {
 		const listing = await sandbox.listFiles(mountPath, { recursive: true, includeHidden: true });
@@ -398,30 +414,30 @@ export async function readSessionArtifacts(
 			}
 		}
 	} catch {
-		// Listing unsupported/failed: proceed without size info; the per-file read
-		// below still runs (the cap simply isn't applied for this teardown).
+		// Listing unsupported/failed: the caller reads without the cap.
 	}
+	return sizes;
+}
 
-	const read = async (path: string): Promise<string | undefined> => {
-		const size = sizes.get(path);
-		if (size !== undefined && size > MAX_ARTIFACT_BYTES) {
-			console.warn(
-				`readSessionArtifacts: per-file cap (${MAX_ARTIFACT_BYTES}) exceeded; omitting ${path} (${size} bytes)`,
-			);
-			return undefined;
-		}
-		const result = await sandbox.readFile(path);
-		return result.success ? result.content : undefined;
-	};
-
-	const [code, deps, html, session] = await Promise.all([
-		read(`${mountPath}/notebook.py`),
-		read(`${mountPath}/pyproject.toml`),
-		read(`${mountPath}/__marimo__/notebook.html`),
-		read(`${mountPath}/__marimo__/session/notebook.py.json`),
-	]);
-
-	return { code, deps, html, session };
+/**
+ * Read one sandbox file as text, or `undefined` when it is absent, unreadable,
+ * or listed above `MAX_ARTIFACT_BYTES` (an artifact absent from `sizes` falls
+ * through to the read, preserving the omit-when-unreadable contract).
+ */
+export async function readCappedFile(
+	sandbox: SandboxInstance,
+	absolutePath: string,
+	sizes: ReadonlyMap<string, number>,
+): Promise<string | undefined> {
+	const size = sizes.get(absolutePath);
+	if (size !== undefined && size > MAX_ARTIFACT_BYTES) {
+		console.warn(
+			`readCappedFile: per-file cap (${MAX_ARTIFACT_BYTES}) exceeded; omitting ${absolutePath} (${size} bytes)`,
+		);
+		return undefined;
+	}
+	const result = await sandbox.readFile(absolutePath);
+	return result.success ? result.content : undefined;
 }
 
 /** Decode a base64 string to raw bytes without depending on Node's `Buffer`. */

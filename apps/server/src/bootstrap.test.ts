@@ -5,12 +5,13 @@ import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { ConfigError } from '@marimo-hub/config';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
-import { startMaintenance, startSessionLifecycle } from './cron';
+import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';
 import type { OtelHandle } from './otel';
 
 vi.mock('./cron', () => ({
 	startMaintenance: vi.fn(() => vi.fn()),
 	startSessionLifecycle: vi.fn(() => vi.fn()),
+	startJobScheduler: vi.fn(() => ({ stop: vi.fn(), drain: vi.fn(async () => {}) })),
 }));
 
 type Signal = 'SIGTERM' | 'SIGINT';
@@ -293,6 +294,41 @@ describe('bootstrap', () => {
 		expect(dispose).toHaveBeenCalledOnce();
 	});
 
+	it('disposes compute only after the job scheduler is drained', async () => {
+		let finishSchedulerDrain!: () => void;
+		const schedulerDrain = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					finishSchedulerDrain = resolve;
+				}),
+		);
+		const stopScheduler = vi.fn();
+		vi.mocked(startJobScheduler).mockReturnValueOnce({
+			stop: stopScheduler,
+			drain: schedulerDrain,
+		});
+		const dispose = vi.fn().mockResolvedValue(undefined);
+		const compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
+		const harness = makeHarness({ ...deps, compute });
+		const handle = await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			harness.overrides,
+		);
+
+		const draining = handle?.drain();
+		await Promise.resolve();
+		expect(stopScheduler).toHaveBeenCalledOnce();
+		expect(schedulerDrain).toHaveBeenCalledOnce();
+		expect(stopScheduler.mock.invocationCallOrder[0]).toBeLessThan(
+			schedulerDrain.mock.invocationCallOrder[0],
+		);
+		expect(dispose).not.toHaveBeenCalled();
+
+		finishSchedulerDrain();
+		await draining;
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+
 	it('tracks background deliveries and disposes their notifier after they settle', async () => {
 		let finishDelivery: (() => void) | undefined;
 		const delivery = new Promise<void>((resolve) => {
@@ -359,6 +395,24 @@ describe('bootstrap', () => {
 
 		expect(startMaintenance).toHaveBeenCalledTimes(calls);
 		expect(startSessionLifecycle).toHaveBeenCalledTimes(calls);
+	});
+
+	it('starts the job scheduler with maintenance only when jobs are on', async () => {
+		await bootstrap(BASE_ENV, makeHarness(deps).overrides);
+		expect(startJobScheduler).not.toHaveBeenCalled();
+
+		await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			makeHarness(deps).overrides,
+		);
+		expect(startJobScheduler).toHaveBeenCalledOnce();
+
+		vi.mocked(startJobScheduler).mockClear();
+		await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			makeHarness({ ...deps, jobs: undefined }).overrides,
+		);
+		expect(startJobScheduler).not.toHaveBeenCalled();
 	});
 
 	it('cancels maintenance loops before draining connections', async () => {

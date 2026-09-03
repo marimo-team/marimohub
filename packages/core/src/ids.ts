@@ -17,6 +17,8 @@ export type TokenId = string & { __brand: 'TokenId' };
 export type CliAuthorizationId = string & { __brand: 'CliAuthorizationId' };
 export type IntegrationId = string & { __brand: 'IntegrationId' };
 export type AlertDestinationId = string & { __brand: 'AlertDestinationId' };
+export type JobId = string & { __brand: 'JobId' };
+export type RunId = string & { __brand: 'RunId' };
 
 // A user id is the opaque auth `sub` (OIDC / Cloudflare Access / dev). We do not
 // mint or format it, so unlike the ids above it is a *nominal* brand only — it
@@ -64,6 +66,10 @@ const nextVersionUlid = monotonicFactory();
 const nextTokenUlid = monotonicFactory();
 
 const nextCliAuthorizationUlid = monotonicFactory();
+
+// Run ids are uppercase ULIDs like versions: newest-first listing and retention
+// both rely on lexicographic key order being chronological.
+const nextRunUlid = monotonicFactory();
 
 // --- Id namespaces (guard / assert / parse / create) ---
 //
@@ -159,6 +165,12 @@ export const AlertDestinationId = defineId<AlertDestinationId>(
 	/^alert-[0-9a-z]{16}$/,
 	() => `alert-${randomBody()}`,
 );
+export const JobId = defineId<JobId>('JobId', /^job-[0-9a-z]{16}$/, () => `job-${randomBody()}`);
+export const RunId = defineId<RunId>(
+	'RunId',
+	/^run_[0-9A-HJKMNP-TV-Z]{26}$/,
+	() => `run_${nextRunUlid()}`,
+);
 
 // A brand with no format/generator — `is` only checks "non-empty string". Used
 // for opaque provider ids (see UserId). `parse` brands a trusted value (e.g. an
@@ -207,6 +219,8 @@ export const createTokenId = TokenId.create;
 export const createCliAuthorizationId = CliAuthorizationId.create;
 export const createIntegrationId = IntegrationId.create;
 export const createAlertDestinationId = AlertDestinationId.create;
+export const createJobId = JobId.create;
+export const createRunId = RunId.create;
 
 /** Derive a stable proposal id from an already-scoped idempotency seed. */
 export async function deriveProposalId(seed: string): Promise<ProposalId> {

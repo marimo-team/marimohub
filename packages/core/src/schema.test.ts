@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+	createJobId,
 	createNotebookId,
 	createProjectId,
+	createRunId,
 	createSessionId,
 	createSnapshotId,
 	createVersionId,
@@ -9,11 +11,17 @@ import {
 import { z } from 'zod';
 import {
 	CatalogSchema,
+	CURRENT_JOB_DEFINITION_VERSION,
+	CURRENT_JOB_RUN_VERSION,
 	EmailAddressSchema,
 	EventSchema,
 	IdentitySchema,
+	JobDefinitionSchema,
+	JobRunSchema,
 	NotebookIdSchema,
 	parseStored,
+	parseStoredJobDefinition,
+	parseStoredJobRun,
 	readStored,
 	ProjectIdSchema,
 	ProjectMemberSchema,
@@ -26,6 +34,8 @@ import {
 	SurfaceStateSchema,
 	VersionIdSchema,
 	toPublicNotebookEntry,
+	toPublicJobDefinition,
+	toPublicJobRun,
 	toPublicProjectEntry,
 } from './schema';
 import {
@@ -238,6 +248,64 @@ describe('SnapshotSchema (looseObject rolling-deploy invariant)', () => {
 		const bad = validSnapshot();
 		delete (bad as Record<string, unknown>).actor;
 		expect(SnapshotSchema.safeParse(bad).success).toBe(false);
+	});
+});
+
+describe('job schema evolution', () => {
+	it('versions definitions and runs independently and rejects unknown versions at the upgrade seam', () => {
+		expect(CURRENT_JOB_DEFINITION_VERSION).toBe(1);
+		expect(CURRENT_JOB_RUN_VERSION).toBe(1);
+		expect(() => parseStoredJobDefinition({ schema_version: 2 }, 'job.json')).toThrow();
+		expect(() => parseStoredJobRun({ schema_version: 2 }, 'run.json')).toThrow();
+	});
+
+	it('preserves unknown fields in nested job-definition structures', () => {
+		const parsed = JobDefinitionSchema.parse({
+			schema_version: 1,
+			id: createJobId(),
+			notebook_id: createNotebookId(),
+			project_id: createProjectId(),
+			name: 'nightly',
+			enabled: true,
+			schedule: { cron: '0 6 * * *', timezone: 'UTC', future_schedule: true },
+			retry: { max_retries: 1, future_retry: true },
+			notifications: { on: ['failure'], future_notifications: true },
+			created_by: ACTOR,
+			created_at: NOW,
+			updated_at: NOW,
+		});
+
+		expect(parsed.schedule).toMatchObject({ future_schedule: true });
+		expect(parsed.retry).toMatchObject({ future_retry: true });
+		expect(parsed.notifications).toMatchObject({ future_notifications: true });
+		expect(toPublicJobDefinition(parsed).schedule).not.toHaveProperty('future_schedule');
+		expect(toPublicJobDefinition(parsed).retry).not.toHaveProperty('future_retry');
+		expect(toPublicJobDefinition(parsed).notifications).not.toHaveProperty('future_notifications');
+	});
+
+	it('preserves unknown fields in nested run structures', () => {
+		const parsed = JobRunSchema.parse({
+			schema_version: 1,
+			run_id: createRunId(),
+			job_id: createJobId(),
+			notebook_id: createNotebookId(),
+			project_id: createProjectId(),
+			status: 'failed',
+			trigger: 'manual',
+			attempt: 1,
+			timeout_seconds: 60,
+			queued_at: NOW,
+			error: { code: 'FAILED', message: 'failed', future_error: true },
+			output: { html_bytes: 1, future_output: true },
+			compute_resources: { cpu: 1, future_resource: true },
+		});
+
+		expect(parsed.error).toMatchObject({ future_error: true });
+		expect(parsed.output).toMatchObject({ future_output: true });
+		expect(parsed.compute_resources).toMatchObject({ future_resource: true });
+		expect(toPublicJobRun(parsed).error).not.toHaveProperty('future_error');
+		expect(toPublicJobRun(parsed).output).not.toHaveProperty('future_output');
+		expect(toPublicJobRun(parsed).compute_resources).not.toHaveProperty('future_resource');
 	});
 });
 

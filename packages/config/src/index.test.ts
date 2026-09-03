@@ -1429,3 +1429,84 @@ describe('createFromEnv data-browser lockdown', () => {
 		]);
 	});
 });
+
+describe('createFromEnv jobs config', () => {
+	const offEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+	const baseEnv = { ...offEnv, MARIMOHUB_JOBS: 'on' };
+
+	it('is off by default, and an explicit off ignores the tuning variables', () => {
+		expect(createFromEnv({ ...offEnv }).jobs).toBeUndefined();
+		expect(
+			createFromEnv({ ...offEnv, MARIMOHUB_JOBS: 'off', MARIMOHUB_JOBS_TICK_SECONDS: 'soon' }).jobs,
+		).toBeUndefined();
+	});
+
+	it('rejects a toggle value other than on or off', () => {
+		expect(() => createFromEnv({ ...offEnv, MARIMOHUB_JOBS: 'yes' })).toThrow(
+			/Unknown MARIMOHUB_JOBS: yes/,
+		);
+	});
+
+	it('applies the documented defaults once on', () => {
+		expect(createFromEnv({ ...baseEnv }).jobs).toEqual({
+			tickMs: 60_000,
+			maxConcurrentRuns: 5,
+			maxConcurrentRunsPerProject: 2,
+			maxPerNotebook: 5,
+			defaultTimeoutMs: 1_800_000,
+			maxTimeoutMs: 14_400_000,
+			runRetentionMs: 30 * 24 * 3_600_000,
+			catchupWindowMs: 600_000,
+		});
+	});
+
+	it('parses overrides and treats a zero definition cap as unlimited', () => {
+		const cfg = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_JOBS_TICK_SECONDS: '30',
+			MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS: '8',
+			MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT: '3',
+			MARIMOHUB_JOBS_MAX_PER_NOTEBOOK: '0',
+			MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS: '600',
+			MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS: '900',
+			MARIMOHUB_JOBS_RUN_RETENTION_DAYS: '7',
+			MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS: '120',
+		}).jobs;
+		expect(cfg).toEqual({
+			tickMs: 30_000,
+			maxConcurrentRuns: 8,
+			maxConcurrentRunsPerProject: 3,
+			maxPerNotebook: undefined,
+			defaultTimeoutMs: 600_000,
+			maxTimeoutMs: 900_000,
+			runRetentionMs: 7 * 24 * 3_600_000,
+			catchupWindowMs: 120_000,
+		});
+	});
+
+	it('rejects a default timeout above the ceiling', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS: '7200',
+				MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS: '3600',
+			}),
+		).toThrow(/MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS must not exceed/);
+	});
+
+	it.each([
+		['MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS', '0'],
+		['MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT', '-1'],
+		['MARIMOHUB_JOBS_RUN_RETENTION_DAYS', '1.5'],
+		['MARIMOHUB_JOBS_TICK_SECONDS', 'soon'],
+		['MARIMOHUB_JOBS_MAX_PER_NOTEBOOK', 'many'],
+		['MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS', '0'],
+	])('rejects an invalid %s=%s', (key, value) => {
+		expect(() => createFromEnv({ ...baseEnv, [key]: value })).toThrow(new RegExp(key));
+	});
+});

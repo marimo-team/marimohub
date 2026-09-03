@@ -55,6 +55,7 @@ import {
 	RuntimeResponseSchema,
 	NotebookVersionResponseSchema,
 	retireLiveApps,
+	cancelJobRuns,
 	SnapshotNotebookEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
@@ -1372,6 +1373,7 @@ app.openapi(deleteNotebook, async (c) => {
 	}
 
 	await retireLiveApps(deps, pid, (s) => s.notebook_id === nid);
+	await cancelJobRuns(deps, pid, user.id, nid);
 
 	return c.json({ success: true }, 200);
 });

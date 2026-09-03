@@ -34,8 +34,12 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
 export function formatDuration(iso: string, now: number = Date.now()): string {
 	const then = new Date(iso).getTime();
 	if (Number.isNaN(then)) return '';
+	return formatElapsed(now - then);
+}
 
-	let secs = Math.max(0, Math.floor((now - then) / 1000));
+/** Format a millisecond span the same way (`"45s"`, `"12m"`, `"2h 14m"`); negatives read as zero. */
+export function formatElapsed(ms: number): string {
+	let secs = Math.max(0, Math.floor(ms / 1000));
 	if (secs < MINUTE) return `${secs}s`;
 
 	const days = Math.floor(secs / DAY);
@@ -47,4 +51,11 @@ export function formatDuration(iso: string, now: number = Date.now()): string {
 	if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
 	if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 	return `${mins}m`;
+}
+
+/** A locale date-time for tooltips and run timestamps; an em dash when absent or unparseable. */
+export function formatAbsolute(iso: string | undefined): string {
+	if (!iso) return '—';
+	const date = new Date(iso);
+	return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
 }

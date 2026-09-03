@@ -29,7 +29,11 @@ describe('WorkloadIdentityIssuer', () => {
 		iss: 'https://hub.example.com',
 		sub: 'proj-abc123',
 		aud: 'coreweave-object-storage',
-		extraClaims: { project_id: 'proj-abc123', session_id: 's_def456' },
+		extraClaims: {
+			project_id: 'proj-abc123',
+			workload_kind: 'session',
+			workload_id: 's_def456',
+		},
 	};
 
 	it('mints a verifiable RS256 JWT with the expected header and claims', async () => {
@@ -50,7 +54,8 @@ describe('WorkloadIdentityIssuer', () => {
 			sub: 'proj-abc123',
 			aud: 'coreweave-object-storage',
 			project_id: 'proj-abc123',
-			session_id: 's_def456',
+			workload_kind: 'session',
+			workload_id: 's_def456',
 			iat,
 			nbf: iat - 60,
 			exp: iat + 3600,

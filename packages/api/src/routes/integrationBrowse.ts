@@ -1387,7 +1387,11 @@ app.openapi(browseTablePreview, async (c) => {
 		table,
 		{ limit, query_user: user.email, signal: c.req.raw.signal },
 		wif && project.federation?.enabled
-			? () => exchangeFederatedStorageEnv(wif.issuer, wif.issuerUrl, wif.target, pid, sessionId)
+			? () =>
+					exchangeFederatedStorageEnv(wif.issuer, wif.issuerUrl, wif.target, pid, {
+						kind: 'session',
+						id: sessionId,
+					})
 			: undefined,
 	);
 	await appendAudit(

@@ -28,6 +28,7 @@ Use these as the done-criteria for any change.
 - **`packages/core`** holds the domain model, services, and the port interfaces.
   It imports **no vendor SDK** — nothing that speaks to a specific provider or
   performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`,
+  `croner` (cron evaluation for notebook jobs; no timers are ever started),
   `zod`, `better-all`, `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
   tracing/logs facades unless an entrypoint registers a provider), the format
   serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
@@ -134,6 +135,20 @@ These CAS-managed records also have one writer each:
   `_system/sandbox-diagnostics/{user-id}.json`.
 - `NotebookWorkspaceService` owns each short-lived workspace mutation claim at
   `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`.
+- `JobsService` owns each job definition head at
+  `projects/{pid}/notebooks/{nid}/jobs/{jid}/job.json`, each immutable
+  `job-index/{created-at}_{jid}.json` pagination entry, and the snapshot's
+  per-notebook `jobs` index (written through `mutateSnapshot`).
+- `JobRunService` owns each run record at
+  `projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/run.json`, each
+  immutable occurrence claim at `…/jobs/{jid}/occurrences/{key}.json`
+  (create-if-absent), each immutable newest-first history entry at
+  `…/jobs/{jid}/run-index/{reverse-ulid}.json`, and each execution/finalization
+  marker at `_system/job-runs/{pid}/{rid}.json` (create-once, deleted after
+  terminal side effects finish). `JobRunService` also owns the per-job operation claim at
+  `_system/job-operations/{pid}/{nid}/{jid}.json` and deletion fence at
+  `_system/job-deletions/{pid}/{nid}/{jid}.json`. Run outputs under `runs/{rid}/`
+  are write-once.
 
 Each integration store also owns its immutable `versions/{n}.json` history and
 its `integrations/_names/{name}.json` uniqueness claim. Version writes use

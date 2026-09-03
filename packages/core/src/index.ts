@@ -16,6 +16,7 @@ export * from './tokenGrants';
 export * from './concurrency';
 export * from './cache';
 export * from './async';
+export * from './text';
 
 // Port interfaces (also available at the '@marimo-hub/core/ports' subpath)
 export * from './ports';

@@ -1,6 +1,6 @@
 import os from 'node:os';
-import { scheduleProjectAlert } from '@marimo-hub/api';
-import type { ApiDeps } from '@marimo-hub/api';
+import { resolveJobSandboxEnv, scheduleProjectAlert } from '@marimo-hub/api';
+import type { ApiDeps, JobsConfig } from '@marimo-hub/api';
 import {
 	MaintenanceLock,
 	Millis,
@@ -12,6 +12,7 @@ import {
 	sessionModePolicy,
 	SessionLifecycleService,
 } from '@marimo-hub/core';
+import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import { logEvent } from './log';
 import type { WideEventMetrics } from './metrics';
 
@@ -107,7 +108,10 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 		deps.bucket,
 		deps.sandbox.persistWorkspace,
 		deps.sandbox.workdir,
+		// Job sandboxes have no session record; without this Rule 3 would reap them.
+		deps.services.jobRuns,
 	);
+	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
 	const lock = new MaintenanceLock(deps.bucket);
 	const holder = `${os.hostname()}:${process.pid}`;
 
@@ -150,6 +154,9 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 				// its soft-deleted notebooks are reclaimed without per-notebook work.
 				const projectsSwept = await projects.sweepDeletedProjects();
 				const notebooksSwept = await notebooks.sweepDeletedNotebooks();
+				const jobsPruned = jobs
+					? await jobs.prune(deps.jobs!.runRetentionMs)
+					: { runsPruned: 0, markersPruned: 0 };
 
 				// The purged notebooks' snapshot ids live in CoreWeave, not the bucket, so
 				// the subtree wipe above can't free them — reclaim them here.
@@ -171,6 +178,8 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 					invite_rows_claimed: inviteRowsClaimed,
 					projects_swept: projectsSwept,
 					notebooks_swept: notebooksSwept.purged,
+					job_runs_pruned: jobsPruned.runsPruned,
+					job_run_markers_pruned: jobsPruned.markersPruned,
 					snapshots_reaped: snapshotsReaped,
 					orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
 					...metrics.collect(),
@@ -248,4 +257,122 @@ export function startSessionLifecycle(deps: ApiDeps): (() => void) | undefined {
 	void run();
 	const handle = setInterval(() => void run(), lifetime.sweepIntervalMs);
 	return () => clearInterval(handle);
+}
+
+function createJobScheduler(
+	deps: ApiDeps,
+	metrics: WideEventMetrics,
+	config: JobsConfig,
+): JobScheduler {
+	const runner = new JobRunner({
+		bucket: deps.bucket,
+		compute: deps.compute,
+		notebooks: deps.services.notebooks,
+		projects: deps.services.projects,
+		jobs: deps.services.jobs,
+		runs: deps.services.jobRuns,
+		sandbox: {
+			bucket: deps.sandbox.bucket,
+			workdir: deps.sandbox.workdir,
+			startupTimeoutMs: deps.sandbox.startupTimeoutMs,
+			images: deps.sandbox.images,
+			resources: deps.sandbox.resources,
+			computeProfile: deps.sandbox.computeProfile,
+			computeProfiles: deps.sandbox.computeProfiles,
+			computeProfileOverride: deps.sandbox.computeProfileOverride,
+		},
+		resolveSessionEnv: (context) => resolveJobSandboxEnv(deps, context),
+		metrics,
+	});
+	return new JobScheduler({
+		catalog: deps.services.catalog,
+		jobs: deps.services.jobs,
+		runs: deps.services.jobRuns,
+		runner,
+		compute: deps.compute,
+		notebooks: deps.services.notebooks,
+		projects: deps.services.projects,
+		events: deps.services.events,
+		projectAlerts: deps.projectAlerts?.dispatcher,
+		appBaseUrl: deps.sandbox.appBaseUrl,
+		config: {
+			catchupWindowMs: config.catchupWindowMs,
+			maxConcurrentRuns: config.maxConcurrentRuns,
+			maxConcurrentRunsPerProject: config.maxConcurrentRunsPerProject,
+			defaultTimeoutMs: config.defaultTimeoutMs,
+			maxTimeoutMs: config.maxTimeoutMs,
+		},
+		metrics,
+	});
+}
+
+export interface JobSchedulerHandle {
+	/** Cancel future ticks. */
+	stop(): void;
+	/** Await the current tick, then every run this process started. */
+	drain(): Promise<void>;
+}
+
+/**
+ * Job scheduler tick — a third loop beside `startMaintenance` and
+ * `startSessionLifecycle` (same replica, same gate), on its own interval
+ * (MARIMOHUB_JOBS_TICK_SECONDS) and its own lease key. Each tick fires due
+ * occurrences, dispatches queued runs under the concurrency caps, and reclaims
+ * runs past their deadline; the executions themselves run in this process
+ * between ticks. Without a maintenance replica jobs are accepted but never
+ * dispatched — see docs/jobs.md.
+ */
+export function startJobScheduler(deps: ApiDeps, metrics: WideEventMetrics): JobSchedulerHandle {
+	if (!deps.jobs) throw new Error('startJobScheduler: notebook jobs are off (MARIMOHUB_JOBS)');
+	const scheduler = createJobScheduler(deps, metrics, deps.jobs);
+	const tickMs = deps.jobs.tickMs;
+	const lock = new MaintenanceLock(deps.bucket, paths.jobSchedulerLock);
+	const holder = `${os.hostname()}:${process.pid}`;
+
+	// In-flight guard, as for the sibling loops: a slow tick must not overlap the
+	// next one under the same lease.
+	let running = false;
+	let currentTick = Promise.resolve();
+	const run = (): Promise<void> => {
+		if (running) return currentTick;
+		running = true;
+		currentTick = (async () => {
+			try {
+				if (!(await lock.acquire(holder).catch(() => false))) return; // not leader
+				try {
+					const r = await scheduler.tick();
+					if (Object.values(r).some((n) => n > 0) || scheduler.inFlightCount > 0) {
+						logEvent({
+							level: 'info',
+							event: 'job_scheduler_tick',
+							holder,
+							...r,
+							in_flight: scheduler.inFlightCount,
+						});
+					}
+				} catch (err) {
+					logEvent({
+						level: 'error',
+						event: 'job_scheduler_failed',
+						error: err instanceof Error ? err.message : String(err),
+						name: err instanceof Error ? err.name : undefined,
+					});
+				} finally {
+					await lock.release(holder).catch(() => {});
+				}
+			} finally {
+				running = false;
+			}
+		})();
+		return currentTick;
+	};
+	void run();
+	const handle = setInterval(() => void run(), tickMs);
+	return {
+		stop: () => clearInterval(handle),
+		drain: async () => {
+			await currentTick;
+			await scheduler.drain();
+		},
+	};
 }

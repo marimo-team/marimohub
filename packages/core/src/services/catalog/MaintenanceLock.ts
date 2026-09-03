@@ -5,6 +5,7 @@ import { PreconditionFailedError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import { parseStored, StoredObjectError } from '../../schema';
+import { putIfAbsent } from './cas';
 
 /**
  * Advisory lease for the single-writer maintenance sweep, built on the same
@@ -89,14 +90,8 @@ export class MaintenanceLock {
 		});
 	}
 
-	private async tryCreate(body: string): Promise<boolean> {
-		try {
-			await this.bucket.put(this.key, body, { onlyIfNotExists: true });
-			return true;
-		} catch (err) {
-			if (err instanceof PreconditionFailedError) return false;
-			throw err;
-		}
+	private tryCreate(body: string): Promise<boolean> {
+		return putIfAbsent(this.bucket, this.key, body);
 	}
 
 	private parse(text: string, operation: string): LockRecord | null {

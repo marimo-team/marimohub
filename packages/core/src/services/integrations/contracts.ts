@@ -1,4 +1,4 @@
-import type { IntegrationId, ProjectId, UserId } from '../../ids';
+import type { IntegrationId, ProjectId, SessionId, UserId } from '../../ids';
 import type {
 	BrowseCapabilityResult,
 	BrowseNamespacesRequest,
@@ -113,7 +113,7 @@ export interface ProjectIntegrationsService {
 		projectId: ProjectId,
 		id: IntegrationId,
 		principal: { userId: UserId; email: string },
-		sessionId: SessionRenderContext['sessionId'],
+		sessionId: SessionId,
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
@@ -123,7 +123,7 @@ export interface ProjectIntegrationsService {
 		projectId: ProjectId,
 		id: IntegrationId,
 		principal: { userId: UserId; email: string },
-		sessionId: SessionRenderContext['sessionId'],
+		sessionId: SessionId,
 		sql: string,
 		signal?: AbortSignal,
 	): Promise<DataQueryResult>;

@@ -6,8 +6,9 @@ import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { readStored } from '../../schema';
-import type { Session } from '../../schema';
+import type { RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
+import { isTerminalRunStatus } from '../jobs/runState';
 import { SessionRetirer } from './SessionRetirer';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
@@ -24,6 +25,16 @@ import type { SessionService } from './SessionService';
 const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
 
 const OrphanMarkerSchema = z.object({ first_seen: z.number() });
+
+/** A second accounting source: sandboxes held by active job runs (see JobRunService). */
+export interface ActiveSandboxSource {
+	activeSandboxIds(): Promise<string[]>;
+	listActive?(): Promise<readonly { run: { sandbox_id?: string; status: RunStatus } | null }[]>;
+	listActiveSnapshot?(): Promise<{
+		entries: readonly { run: { sandbox_id?: string; status: RunStatus } | null }[];
+		complete: boolean;
+	}>;
+}
 
 export interface ReconcileResult {
 	/** True when the provider can't enumerate (no `listActive`) — nothing reconciled. */
@@ -66,6 +77,11 @@ export class ReconciliationService {
 		private persistWorkspace: 'source' | 'workspace',
 		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
+		/**
+		 * Sandboxes owned by active job runs. A job sandbox has no session record,
+		 * so without this Rule 3 would reap every run longer than the grace window.
+		 */
+		private jobRuns?: ActiveSandboxSource,
 	) {
 		this.diagnosticLeases = new SandboxDiagnosticLease(bucket);
 		this.retirer = new SessionRetirer({
@@ -106,6 +122,46 @@ export class ReconciliationService {
 		const ownedSandboxIds = new Set<string>(diagnosticSandboxIds);
 		for (const s of sessions) {
 			if (s.sandbox_id) ownedSandboxIds.add(s.sandbox_id);
+		}
+		// Read AFTER the provider snapshot for the same reason as sessions: a run
+		// that went `provisioning` mid-sweep already has its sandbox id recorded.
+		// An unreadable index fails safe: without it Rule 3 cannot tell a job
+		// sandbox from an orphan, so orphan reaping is skipped for this sweep.
+		let reapOrphans = true;
+		if (this.jobRuns) {
+			try {
+				if (this.jobRuns.listActiveSnapshot) {
+					const snapshot = await this.jobRuns.listActiveSnapshot();
+					if (!snapshot.complete) throw new Error('Active job-run ownership is incomplete');
+					if (snapshot.entries.some(({ run }) => run === null)) {
+						throw new Error('Active job-run ownership is incomplete');
+					}
+					for (const { run } of snapshot.entries) {
+						if (run?.sandbox_id && !isTerminalRunStatus(run.status)) {
+							ownedSandboxIds.add(run.sandbox_id);
+						}
+					}
+				} else if (this.jobRuns.listActive) {
+					const activeRuns = await this.jobRuns.listActive();
+					if (activeRuns.some(({ run }) => run === null)) {
+						throw new Error('Active job-run ownership is incomplete');
+					}
+					for (const { run } of activeRuns) {
+						if (run?.sandbox_id && !isTerminalRunStatus(run.status)) {
+							ownedSandboxIds.add(run.sandbox_id);
+						}
+					}
+				} else {
+					for (const id of await this.jobRuns.activeSandboxIds()) ownedSandboxIds.add(id);
+				}
+			} catch (err) {
+				reapOrphans = false;
+				logOperationalError(
+					'job_run_index_unavailable',
+					{ operation: 'reconciliation.job_runs.list' },
+					err,
+				);
+			}
 		}
 
 		// Notebooks that currently have a live PERSISTING session. An older
@@ -197,6 +253,7 @@ export class ReconciliationService {
 		const pendingUndated = new Set<string>();
 
 		for (const sandbox of active) {
+			if (!reapOrphans) break;
 			if (ownedSandboxIds.has(sandbox.id)) continue;
 
 			// Rule 3 — a live sandbox with no record at all is an invisible orphan that
@@ -227,7 +284,7 @@ export class ReconciliationService {
 			}
 		}
 
-		await this.pruneOrphanMarkers(pendingUndated);
+		if (reapOrphans) await this.pruneOrphanMarkers(pendingUndated);
 
 		return {
 			skipped: false,

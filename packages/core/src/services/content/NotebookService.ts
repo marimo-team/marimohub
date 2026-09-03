@@ -22,6 +22,7 @@ import { logOperationalError } from '../../operationalLog';
 import { compensableWrite, metricsObserver, saga } from '../../saga';
 import {
 	FsSnapshotSchema,
+	JobRunMarkerSchema,
 	NotebookMetaSchema,
 	parseStored,
 	readStored,
@@ -1210,15 +1211,36 @@ export class NotebookService {
 			);
 		}
 
+		const markerKeys = await listAllKeys(this.bucket, paths.jobRunMarkersForProject(projectId));
+		const notebookMarkerKeys = await mapWithConcurrency(
+			markerKeys,
+			BUCKET_SCAN_CONCURRENCY,
+			async (key) => {
+				const obj = await this.bucket.get(key);
+				if (!obj) return null;
+				try {
+					const marker = await readStored(JobRunMarkerSchema, obj, key);
+					return marker.notebook_id === notebookId ? key : null;
+				} catch (err) {
+					logOperationalError(
+						'stored_object_skipped',
+						{ operation: 'notebook.hard-delete.job-marker', object: key },
+						err,
+					);
+					return null;
+				}
+			},
+		);
+		const matchingMarkers = notebookMarkerKeys.filter((key): key is string => key !== null);
+		if (matchingMarkers.length > 0) await this.bucket.delete(matchingMarkers);
+		await this.bucket.delete(paths.appClaim(projectId, notebookId));
+		await this.bucket.delete(paths.editorClaim(projectId, notebookId));
+		await this.bucket.delete(paths.versionPruneCutoff(projectId, notebookId));
+		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForNotebook(projectId, notebookId));
+		await deleteByPrefix(this.bucket, paths.jobDeletionClaimsForNotebook(projectId, notebookId));
+
 		const nb = paths.project(projectId).notebook(notebookId);
-		// Notebook base is `projects/{pid}/notebooks/{nid}`; the subtree prefix is
-		// that with a trailing slash so every file under it is captured.
 		await deleteByPrefix(this.bucket, `${nb.base}/`);
-		// Belt-and-braces with deleteNotebook: the app claim lives under `_system/`,
-		// outside the notebook subtree.
-		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
-		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
-		await this.bucket.delete(paths.versionPruneCutoff(projectId, notebookId)).catch(() => {});
 	}
 
 	/**

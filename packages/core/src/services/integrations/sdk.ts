@@ -16,9 +16,10 @@ import type {
 	TestResult,
 	UiHints,
 	QueryDialect,
+	WorkloadRef,
 } from '../../ports/integrations';
 import type { DatabaseSource } from '../../ports/databaseBrowser';
-import type { ProjectId, SessionId, UserId } from '../../ids';
+import type { ProjectId, UserId } from '../../ids';
 import type { ObjectStoreProvider, ObjectStoreSourceFor } from '../../ports/objectBrowser';
 import type {
 	PreviewProgramAvailability,
@@ -36,7 +37,7 @@ export interface RenderInput<C> {
 	instanceName: string;
 	projectId: ProjectId;
 	principal: { userId: UserId; email: string };
-	session: { sessionId: SessionId };
+	workload: WorkloadRef;
 }
 
 export interface RenderOutput {

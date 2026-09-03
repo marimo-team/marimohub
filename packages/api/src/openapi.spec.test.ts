@@ -2,6 +2,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { parse, stringify } from 'yaml';
+import {
+	JOB_PARAMETER_KEY_PATTERN,
+	MAX_JOB_PARAMETERS,
+	MAX_QUEUED_RUNS_PER_JOB,
+} from '@marimo-hub/core';
 import { generateOpenApiDocument } from './createApi';
 
 /**
@@ -21,6 +26,12 @@ interface SchemaNode {
 	oneOf?: SchemaNode[];
 	enum?: unknown[];
 	description?: string;
+	default?: unknown;
+	maxProperties?: number;
+	propertyNames?: SchemaNode;
+	minimum?: number;
+	exclusiveMinimum?: number;
+	pattern?: string;
 }
 
 function property(schema: SchemaNode, name: string): SchemaNode {
@@ -101,6 +112,37 @@ describe('OpenAPI spec', () => {
 		});
 	});
 
+	it('keeps job limits and defaults aligned with the core contract', () => {
+		const schemas = (doc as { components: { schemas: Record<string, SchemaNode> } }).components
+			.schemas;
+		const parameters = schemas.JobParameters;
+		const create = schemas.JobCreateBody;
+		const runOutput = property(property(schemas.JobRun, 'output'), 'html_bytes');
+		const jobsCapability = property(schemas.Capabilities, 'jobs');
+
+		expect(parameters.maxProperties).toBe(MAX_JOB_PARAMETERS);
+		expect(parameters.propertyNames?.pattern).toBe(JOB_PARAMETER_KEY_PATTERN.source);
+		expect(property(create, 'enabled').default).toBe(true);
+		expect(property(create, 'concurrency_policy').default).toBe('forbid');
+		expect(runOutput.minimum).toBe(0);
+		expect(property(jobsCapability, 'max_queued_runs_per_job').exclusiveMinimum).toBe(0);
+		expect(MAX_QUEUED_RUNS_PER_JOB).toBe(20);
+	});
+
+	it('documents If-Match on job mutations but not reads', () => {
+		const paths = (
+			doc as {
+				paths: Record<string, Record<string, { parameters?: { name: string; in: string }[] }>>;
+			}
+		).paths;
+		const job = paths['/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}'];
+		const parameterNames = (method: 'get' | 'delete') =>
+			(job?.[method].parameters ?? []).map(({ name, in: location }) => `${location}:${name}`);
+
+		expect(parameterNames('get')).not.toContain('header:if-match');
+		expect(parameterNames('delete')).toContain('header:if-match');
+	});
+
 	it('publishes typed response vocabularies with an unknown fallback', () => {
 		const schemas = (doc as { components: { schemas: Record<string, SchemaNode> } }).components
 			.schemas;
@@ -124,6 +166,8 @@ describe('OpenAPI spec', () => {
 			'app.start_failed',
 			'app.unavailable',
 			'sync.failed',
+			'job.run.failed',
+			'job.run.succeeded',
 			'unknown',
 		];
 		const typedEnums: [SchemaNode, string[]][] = [

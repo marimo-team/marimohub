@@ -28,19 +28,16 @@ describe('exchangeFederatedStorageEnv', () => {
 			storage: { endpoint: 'https://store.example', region: 'r1' },
 		};
 
-		const env = await exchangeFederatedStorageEnv(
-			issuer,
-			'https://hub.example.com',
-			target,
-			pid,
-			sid,
-		);
+		const env = await exchangeFederatedStorageEnv(issuer, 'https://hub.example.com', target, pid, {
+			kind: 'session',
+			id: sid,
+		});
 
 		expect(mint).toHaveBeenCalledWith({
 			iss: 'https://hub.example.com',
 			sub: 'proj-abc',
 			aud: 'aud-123',
-			extraClaims: { project_id: pid, session_id: sid },
+			extraClaims: { project_id: pid, workload_kind: 'session', workload_id: sid },
 		});
 		expect(exchange).toHaveBeenCalledWith('jwt.value');
 		expect(env).toEqual({
@@ -64,7 +61,10 @@ describe('exchangeFederatedStorageEnv', () => {
 			storage: { endpoint: 'https://store.example' },
 		};
 		await expect(
-			exchangeFederatedStorageEnv(issuer, 'https://hub', target, pid, sid),
+			exchangeFederatedStorageEnv(issuer, 'https://hub', target, pid, {
+				kind: 'session',
+				id: sid,
+			}),
 		).rejects.toThrow('denied');
 	});
 });

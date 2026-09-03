@@ -1,4 +1,9 @@
+import type { z } from 'zod';
 import type { Bucket, BucketObject } from '../../ports/bucket';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { mapWithConcurrency } from '../../concurrency';
+import { logOperationalError } from '../../operationalLog';
+import { readStored } from '../../schema';
 
 /**
  * List every object under a prefix, paginating on the bucket cursor until the
@@ -53,6 +58,30 @@ export async function listAllPrefixes(
 		cursor = result.truncated ? result.cursor : undefined;
 	} while (cursor);
 	return [...prefixes].sort();
+}
+
+/**
+ * Read and parse a set of JSON records in bounded parallel, dropping any that
+ * vanished or fail to parse (logged as `stored_object_skipped`) so one corrupt
+ * or legacy object never makes a whole listing unreadable. Preserves order.
+ */
+export async function readStoredObjects<T>(
+	bucket: Bucket,
+	keys: readonly string[],
+	schema: z.ZodType<T>,
+	operation: string,
+): Promise<T[]> {
+	const parsed = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
+		const obj = await bucket.get(key);
+		if (!obj) return;
+		try {
+			return await readStored(schema, obj, key);
+		} catch (err) {
+			logOperationalError('stored_object_skipped', { operation, object: key }, err);
+			return;
+		}
+	});
+	return parsed.filter((value): value is Awaited<T> => value !== undefined);
 }
 
 /**

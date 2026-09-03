@@ -19,6 +19,7 @@ import {
 	ProjectId,
 	projectActionMinRole,
 	ROLES,
+	SandboxId,
 	SESSION_MODES,
 	SESSION_STATUSES,
 	SessionId,
@@ -30,6 +31,7 @@ import {
 	VIEWER_MODES,
 	SurfaceForbiddenError,
 } from '@marimo-hub/core';
+import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type {
 	AuthorizationPolicy,
 	AuthorizationSubject,
@@ -47,6 +49,8 @@ import type {
 	SessionScopedAction,
 	Session,
 	TokenGrant,
+	JobRun,
+	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
@@ -506,6 +510,113 @@ export async function retireLiveApps(
 }
 
 /**
+ * Cancel a project's (or one notebook's) active job runs after its content was
+ * deleted and destroy their sandboxes — the job counterpart of
+ * {@link retireLiveApps}: an unattended run would otherwise finish computing
+ * deleted content. Best-effort and logged; the reconciler reaps whatever slips.
+ */
+export async function cancelJobRuns(
+	deps: ApiDeps,
+	pid: ProjectId,
+	actor: UserId,
+	nid?: NotebookId,
+): Promise<void> {
+	let cancelled: { runs: JobRun[]; sandboxIds: string[] };
+	try {
+		cancelled = nid
+			? await deps.services.jobRuns.cancelRunsOfNotebook(pid, nid, actor)
+			: await deps.services.jobRuns.cancelRunsOfProject(pid, actor);
+	} catch (err) {
+		logEvent({
+			level: 'error',
+			event: 'job_runs_cancel_failed',
+			project_id: pid,
+			notebook_id: nid ?? null,
+			error: describeError(err),
+		});
+		const recovered = new Map<string, JobRun>();
+		try {
+			for (const { marker, run } of await deps.services.jobRuns.listActive()) {
+				if (
+					marker.project_id !== pid ||
+					(nid !== undefined && marker.notebook_id !== nid) ||
+					!run
+				) {
+					continue;
+				}
+				try {
+					const candidate = isTerminalRunStatus(run.status)
+						? run
+						: (await deps.services.jobRuns.cancel(run, actor)).run;
+					if (isTerminalRunStatus(candidate.status)) recovered.set(candidate.run_id, candidate);
+				} catch (recoveryError) {
+					logEvent({
+						level: 'error',
+						event: 'job_run_cancel_recovery_failed',
+						project_id: marker.project_id,
+						notebook_id: marker.notebook_id,
+						run_id: marker.run_id,
+						error: describeError(recoveryError),
+					});
+				}
+			}
+		} catch (recoveryError) {
+			logEvent({
+				level: 'error',
+				event: 'job_runs_cancel_recovery_list_failed',
+				project_id: pid,
+				notebook_id: nid ?? null,
+				error: describeError(recoveryError),
+			});
+			return;
+		}
+		cancelled = {
+			runs: [...recovered.values()],
+			sandboxIds: [...new Set([...recovered.values()].flatMap((run) => run.sandbox_id ?? []))],
+		};
+	}
+	for (const run of cancelled.runs) {
+		try {
+			await appendJobRunFinishEvent(deps.services.events, run);
+		} catch (err) {
+			logEvent({
+				level: 'error',
+				event: 'job_run_finish_audit_failed',
+				project_id: run.project_id,
+				notebook_id: run.notebook_id,
+				run_id: run.run_id,
+				error: describeError(err),
+			});
+		}
+	}
+	await destroySandboxes(deps, cancelled.sandboxIds, {
+		project_id: pid,
+		notebook_id: nid ?? null,
+	});
+}
+
+/** Destroy sandboxes best-effort, one failure never stranding the rest; the reconciler backstops. */
+export async function destroySandboxes(
+	deps: Pick<ApiDeps, 'compute'>,
+	sandboxIds: readonly string[],
+	fields: Record<string, unknown>,
+): Promise<void> {
+	for (const id of sandboxIds) {
+		try {
+			await deps.compute.create(SandboxId.parse(id)).destroy();
+		} catch (err) {
+			logEvent({
+				level: 'error',
+				event: 'job_sandbox_destroy_failed',
+				...fields,
+				sandbox_id: id,
+				error: describeError(err),
+			});
+		}
+	}
+}
+
+/**
  * Load `project.json` and require the caller can *see* it (at least `viewer`),
  * throwing **404 NotFound** (not 403) when they can't — so a hidden project
  * (`MARIMOHUB_DEFAULT_ROLE=none`, non-member) is indistinguishable from a
@@ -645,12 +756,17 @@ export const EtagResponseHeader = z.object({
 	}),
 });
 
-/** OpenAPI request schema for the optional `If-Match` precondition header. */
+const IfMatchValueSchema = z.string().openapi({
+	param: { name: 'if-match', in: 'header' },
+	example: '"2025-03-05T14:00:00Z"',
+});
+
 export const IfMatchHeader = z.object({
-	'if-match': z
-		.string()
-		.optional()
-		.openapi({ param: { name: 'if-match', in: 'header' }, example: '"2025-03-05T14:00:00Z"' }),
+	'if-match': IfMatchValueSchema.optional(),
+});
+
+export const RequiredIfMatchHeader = z.object({
+	'if-match': IfMatchValueSchema,
 });
 
 /** A retry key shared by the optional and required idempotency header schemas. */
@@ -739,6 +855,7 @@ export const ERROR_CODES = [
 	'GONE',
 	'PAYLOAD_TOO_LARGE',
 	'NO_HTML_SNAPSHOT',
+	'NO_RUN_OUTPUT',
 	'INTERNAL_ERROR',
 ] as const;
 
@@ -1313,6 +1430,15 @@ export const CapabilitiesResponseSchema = z
 				extensibleResponseEnum(PROJECT_ALERT_KINDS, PROJECT_ALERT_KINDS[0]),
 			),
 			max_destinations: z.number().int().positive(),
+		}),
+		/** Notebook jobs (`MARIMOHUB_JOBS`); the limits are null while off. */
+		jobs: z.object({
+			available: z.boolean(),
+			max_per_notebook: z.number().int().nullable(),
+			max_queued_runs_per_job: z.number().int().positive().nullable(),
+			default_timeout_seconds: z.number().int().nullable(),
+			max_timeout_seconds: z.number().int().nullable(),
+			run_retention_days: z.number().nullable(),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({

@@ -67,6 +67,29 @@ describe('buildMarimoLaunch', () => {
 		expect(uvPrefix(run.start)).toBe(uvPrefix(edit.start));
 	});
 
+	it('job creates its output directory before exporting', () => {
+		const { setup, start } = buildMarimoLaunch({ ...BASE, mode: 'job' });
+
+		expect(setup.at(-1)).toEqual({
+			name: 'job_output_dir',
+			command: "mkdir -p '__marimo__'",
+		});
+		expect(start).toContain('marimo export html');
+	});
+
+	it('job does not establish a session-artifact contract for custom entries', () => {
+		const { setup, start } = buildMarimoLaunch({
+			...BASE,
+			mode: 'job',
+			notebookFile: 'apps/main.py',
+		});
+
+		expect(start).toContain("'apps/main.py'");
+		expect(start).not.toContain('__marimo__/session');
+		expect(start).not.toContain('cp ');
+		expect(setup.at(-1)?.command).toBe("mkdir -p '__marimo__'");
+	});
+
 	// Every strategy must honor the mode — a new strategy hardcoding `marimo
 	// edit` would silently break app sessions.
 	for (const [name, strategy] of Object.entries(MARIMO_LAUNCH_STRATEGIES)) {

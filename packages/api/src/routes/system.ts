@@ -3,6 +3,7 @@ import {
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	isSuperAdmin,
 	MAX_REQUEST_BYTES,
+	MAX_QUEUED_RUNS_PER_JOB,
 	MAX_VERSIONS,
 	Millis,
 	PROJECT_ALERT_KINDS,
@@ -113,9 +114,28 @@ app.openapi(capabilitiesRoute, (c) => {
 			destination_types: deps.projectAlerts
 				? (['slack', 'webhook'] satisfies ('slack' | 'webhook')[])
 				: [],
-			selectable_kinds: deps.projectAlerts ? [...PROJECT_ALERT_KINDS] : [],
+			selectable_kinds: deps.projectAlerts
+				? PROJECT_ALERT_KINDS.filter((kind) => deps.jobs || !kind.startsWith('job.'))
+				: [],
 			max_destinations: deps.projectAlerts?.maxDestinations ?? 10,
 		},
+		jobs: deps.jobs
+			? {
+					available: true,
+					max_per_notebook: deps.jobs.maxPerNotebook ?? null,
+					max_queued_runs_per_job: MAX_QUEUED_RUNS_PER_JOB,
+					default_timeout_seconds: Millis.toSeconds(deps.jobs.defaultTimeoutMs),
+					max_timeout_seconds: Millis.toSeconds(deps.jobs.maxTimeoutMs),
+					run_retention_days: deps.jobs.runRetentionMs / Millis.days(1),
+				}
+			: {
+					available: false,
+					max_per_notebook: null,
+					max_queued_runs_per_job: null,
+					default_timeout_seconds: null,
+					max_timeout_seconds: null,
+					run_retention_days: null,
+				},
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
-import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
+import { browseKeys, jobKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
@@ -12,6 +12,8 @@ import {
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
 	useEditorSessionQuery,
+	useJobRunQuery,
+	useJobsQuery,
 	useNotebookHtmlQuery,
 	useNotebookQuery,
 	useRestartApp,
@@ -288,6 +290,74 @@ describe('useNotebookHtmlQuery', () => {
 
 		await waitFor(() => expect(result.current.data).toBeTruthy());
 		expect(result.current.data?.capturedAt).toBeNull();
+	});
+});
+
+describe('useJobRunQuery', () => {
+	it('polls a directly loaded active run until it reaches a terminal status', async () => {
+		vi.useFakeTimers();
+		try {
+			let status: 'running' | 'succeeded' = 'running';
+			const fetchMock = stubFetch(async () =>
+				jsonOk({
+					run_id: 'run-1',
+					job_id: 'job-1',
+					notebook_id: NID,
+					project_id: PID,
+					status,
+					trigger: 'manual',
+					attempt: 1,
+					timeout_seconds: 600,
+					queued_at: '2026-09-02T10:00:00Z',
+					started_at: '2026-09-02T10:00:01Z',
+					...(status === 'succeeded' ? { finished_at: '2026-09-02T10:00:02Z', exit_code: 0 } : {}),
+				}),
+			);
+
+			const { result, client, unmount } = renderHookWithClient(
+				() => useJobRunQuery(PID, NID, 'job-1', 'run-1', true),
+				{ toaster: false },
+			);
+			await vi.waitFor(() => expect(result.current.data?.status).toBe('running'));
+
+			status = 'succeeded';
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await vi.waitFor(() => expect(result.current.data?.status).toBe('succeeded'));
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(15_000);
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(client.getQueryData(jobKeys.run(PID, NID, 'job-1', 'run-1'))).toMatchObject({
+				status: 'succeeded',
+			});
+			unmount();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe('useJobsQuery', () => {
+	it('loads every cursor page of jobs', async () => {
+		const fetchMock = stubFetch(async (url) => {
+			const cursor = new URL(String(url), 'http://test.local').searchParams.get('cursor');
+			return cursor
+				? jsonOk({ items: [{ id: 'job-2', name: 'Second' }], next_cursor: null })
+				: jsonOk({ items: [{ id: 'job-1', name: 'First' }], next_cursor: 'page-2' });
+		});
+
+		const { result } = renderHookWithClient(() => useJobsQuery(PID, NID), { toaster: false });
+
+		await waitFor(() =>
+			expect(result.current.data?.map((job) => job.id)).toEqual(['job-1', 'job-2']),
+		);
+		expect(urlsOf(fetchMock)).toHaveLength(2);
+		expect(new URL(urlsOf(fetchMock)[1], 'http://test.local').searchParams.get('cursor')).toBe(
+			'page-2',
+		);
 	});
 });
 

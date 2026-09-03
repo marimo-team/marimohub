@@ -1,9 +1,11 @@
 import type {
 	CliAuthorizationId,
 	IntegrationId,
+	JobId,
 	NotebookId,
 	ProposalId,
 	ProjectId,
+	RunId,
 	SandboxId,
 	SessionId,
 	SnapshotId,
@@ -57,6 +59,50 @@ export interface NotebookPaths {
 	deps: string;
 	version: (vid: VersionId) => VersionPaths;
 	proposal: (proposalId: ProposalId) => ProposalPaths;
+	/** Prefix of the notebook's job definitions: `projects/{pid}/notebooks/{nid}/jobs/`. */
+	jobsPrefix: string;
+	jobIndexPrefix: string;
+	jobIndex: (createdAt: string, jobId: JobId) => string;
+	job: (jobId: JobId) => JobPaths;
+}
+
+export interface JobRunPaths {
+	/** Prefix of everything under this run (record + captured outputs), for delete. */
+	base: string;
+	/** The run record (`run.json`): CAS-managed, written only by `JobRunService`. */
+	record: string;
+	/** Write-once captured HTML output of a finished run. */
+	html: string;
+	/** Write-once stdout+stderr of the export command (capped). */
+	logs: string;
+}
+
+export interface JobPaths {
+	/** Prefix of everything under this job (definition, occurrences, runs), for delete. */
+	base: string;
+	/** The job definition head (`job.json`): CAS-managed, written only by `JobsService`. */
+	head: string;
+	/**
+	 * Scheduled-fire claims, one immutable create-if-absent object per occurrence,
+	 * keyed by the occurrence's UTC minute (`20260902T0600Z.json`). The claim is
+	 * the fire-exactly-once anchor across replicas and ticks.
+	 */
+	occurrencesPrefix: string;
+	occurrence: (occurrenceKey: string) => string;
+	/** Immutable newest-first index entries for paginating run history. */
+	runIndexPrefix: string;
+	runIndex: (runId: RunId) => string;
+	runsPrefix: string;
+	run: (runId: RunId) => JobRunPaths;
+}
+
+const CROCKFORD_BASE32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function reverseRunId(runId: RunId): string {
+	return Array.from(
+		runId.slice(4),
+		(char) => CROCKFORD_BASE32[31 - CROCKFORD_BASE32.indexOf(char)],
+	).join('');
 }
 
 export interface ProposalPaths {
@@ -114,6 +160,28 @@ function versionPaths(base: string, vid: VersionId): VersionPaths {
 	};
 }
 
+function jobPaths(notebookBase: string, jobId: JobId): JobPaths {
+	const base = `${notebookBase}/jobs/${jobId}`;
+	return {
+		base: `${base}/`,
+		head: `${base}/job.json`,
+		occurrencesPrefix: `${base}/occurrences/`,
+		occurrence: (occurrenceKey: string) => `${base}/occurrences/${occurrenceKey}.json`,
+		runIndexPrefix: `${base}/run-index/`,
+		runIndex: (runId: RunId) => `${base}/run-index/${reverseRunId(runId)}.json`,
+		runsPrefix: `${base}/runs/`,
+		run: (runId: RunId) => {
+			const runBase = `${base}/runs/${runId}`;
+			return {
+				base: `${runBase}/`,
+				record: `${runBase}/run.json`,
+				html: `${runBase}/output.html`,
+				logs: `${runBase}/logs.txt`,
+			};
+		},
+	};
+}
+
 function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 	const base = `${projectBase}/notebooks/${nid}`;
 	const workspace = `${base}/workspace`;
@@ -133,6 +201,10 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		code: `${workspace}/notebook.py`,
 		deps: `${workspace}/pyproject.toml`,
 		version: (vid: VersionId) => versionPaths(base, vid),
+		jobsPrefix: `${base}/jobs/`,
+		jobIndexPrefix: `${base}/job-index/`,
+		jobIndex: (createdAt: string, jobId: JobId) => `${base}/job-index/${createdAt}_${jobId}.json`,
+		job: (jobId: JobId) => jobPaths(base, jobId),
 		proposal: (proposalId: ProposalId) => {
 			const proposalBase = `${base}/proposals/${proposalId}`;
 			return {
@@ -212,6 +284,9 @@ export const paths = {
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,
+	eventIdempotencyForDate: (date: string) => `_system/events/${date}/_idempotency/`,
+	eventIdempotency: (date: string, id: string) =>
+		`_system/events/${date}/_idempotency/${encodeURIComponent(id)}.json`,
 	idempotencyPrefix: '_system/idempotency/',
 	idempotencyKey: (digest: string) => `_system/idempotency/${digest}.json`,
 	proposalPayloadMarkersPrefix: '_system/proposal-payloads/',
@@ -229,11 +304,31 @@ export const paths = {
 	sandboxDiagnosticLeasesPrefix: '_system/sandbox-diagnostics/',
 	sandboxDiagnosticLease: (userId: UserId) =>
 		`_system/sandbox-diagnostics/${encodeURIComponent(userId)}.json`,
+	/**
+	 * One immutable marker per run. Terminal markers remain until the scheduler
+	 * completes the run's durable finalization work.
+	 */
+	jobRunMarkersPrefix: '_system/job-runs/',
+	jobRunMarkersForProject: (projectId: ProjectId) => `_system/job-runs/${projectId}/`,
+	jobRunMarker: (projectId: ProjectId, runId: RunId) =>
+		`_system/job-runs/${projectId}/${runId}.json`,
+	jobOperationClaimsForProject: (projectId: ProjectId) => `_system/job-operations/${projectId}/`,
+	jobOperationClaimsForNotebook: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/job-operations/${projectId}/${notebookId}/`,
+	jobOperationClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
+		`_system/job-operations/${projectId}/${notebookId}/${jobId}.json`,
+	jobDeletionClaimsForProject: (projectId: ProjectId) => `_system/job-deletions/${projectId}/`,
+	jobDeletionClaimsForNotebook: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/job-deletions/${projectId}/${notebookId}/`,
+	jobDeletionClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
+		`_system/job-deletions/${projectId}/${notebookId}/${jobId}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops
 	 * (which share a replica and holder id) can never release each other's lease. */
 	sessionLifecycleLock: '_system/_session_lifecycle.lock',
+	/** Advisory lease for the job scheduler tick — its own key for the same reason. */
+	jobSchedulerLock: '_system/_jobs.lock',
 	/**
 	 * Org-scoped integration instance, inherited by every project:
 	 * `_system/integrations/{iid}/…`. Same layout and mutability classes as the

@@ -190,6 +190,27 @@ export async function releaseSingletonClaim(
 	}
 }
 
+/**
+ * Create-if-absent as a boolean: true when this writer created the object,
+ * false when it already existed (the conditional PUT lost). Every other failure
+ * propagates. The building block of occurrence claims, run markers, and the
+ * advisory leases.
+ */
+export async function putIfAbsent(
+	bucket: Bucket,
+	key: string,
+	value: string | Uint8Array,
+	options?: Omit<BucketPutOptions, 'onlyIfEtagMatches' | 'onlyIfNotExists'>,
+): Promise<boolean> {
+	try {
+		await bucket.put(key, value, { ...options, onlyIfNotExists: true });
+		return true;
+	} catch (err) {
+		if (err instanceof PreconditionFailedError) return false;
+		throw err;
+	}
+}
+
 export interface ObjectMutationOutcome<T> {
 	value: T;
 	written: boolean;

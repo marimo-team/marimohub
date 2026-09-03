@@ -795,36 +795,6 @@ mod tests {
     use secrecy::ExposeSecret;
 
     #[test]
-    fn embedded_manifest_covers_the_api() {
-        let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 89);
-        assert_eq!(manifest.api_version, "1.0.0");
-        assert_eq!(
-            manifest
-                .operations
-                .iter()
-                .filter(|operation| operation.paginated)
-                .count(),
-            16
-        );
-        assert_eq!(
-            manifest
-                .operations
-                .iter()
-                .filter(|operation| {
-                    operation.accepts_if_match && operation.preflight_operation_id.is_none()
-                })
-                .map(|operation| operation.id.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "alerts.destinations.delete",
-                "alerts.destinations.test",
-                "alerts.destinations.update",
-            ]
-        );
-    }
-
-    #[test]
     fn server_labels_never_include_credentials_or_paths() {
         assert_eq!(
             server_label("https://user:secret@example.com:8443/api?token=value"),

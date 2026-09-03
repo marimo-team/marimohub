@@ -1,7 +1,7 @@
 import type { Bucket } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
-import type { NotebookId, ProjectId, ProposalId, SessionId, UserId } from '../ids';
+import type { JobId, NotebookId, ProjectId, ProposalId, RunId, SessionId, UserId } from '../ids';
 import { paths } from '../paths';
 import { traced } from '../tracing';
 import type { AttrExtractors } from '../tracing';
@@ -14,6 +14,8 @@ import { NotebookService } from './content/NotebookService';
 import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
+import { JobsService } from './jobs/JobsService';
+import { JobRunService } from './jobs/JobRunService';
 import { TokenService } from './tokens/TokenService';
 import { CliAuthorizationService } from './tokens/CliAuthorizationService';
 
@@ -199,7 +201,7 @@ export {
 	wandb,
 } from './integrations/kinds';
 export { ReconciliationService } from './runtime/ReconciliationService';
-export type { ReconcileResult } from './runtime/ReconciliationService';
+export type { ActiveSandboxSource, ReconcileResult } from './runtime/ReconciliationService';
 export { SandboxDiagnosticLease } from './runtime/SandboxDiagnosticLease';
 export { kernelActiveConnections, SessionLifecycleService } from './runtime/sessionLifecycle';
 export type {
@@ -217,11 +219,12 @@ export {
 } from './tokens/TokenService';
 export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
-export { listAllKeys } from './catalog/storage';
+export { listAllKeys, readStoredObjects } from './catalog/storage';
 export {
 	acquireSingletonClaim,
 	mutateObject,
 	mutateObjectWithOutcome,
+	putIfAbsent,
 	releaseSingletonClaim,
 	withCasRetry,
 	type CasRetryOptions,
@@ -235,6 +238,7 @@ export {
 } from './runtime/SandboxProvisioner';
 export type {
 	BucketConfig,
+	PreparedSandbox,
 	ProvisionOptions,
 	ProvisionResult,
 	SessionEnv,
@@ -293,10 +297,12 @@ export type {
 } from './authorization/actions';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
+export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolveComputeProfile';
+export type { ComputeProfileConfig, ResolvedComputeProfile } from './runtime/resolveComputeProfile';
 export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';
 export type { ResolvedLaunchStrategy } from './runtime/launchStrategy';
 export { buildMarimoLaunch } from './runtime/marimoLaunch';
-export type { MarimoLaunchStrategyName } from './runtime/marimoLaunch';
+export type { MarimoLaunchMode, MarimoLaunchStrategyName } from './runtime/marimoLaunch';
 export { probeKernelLiveness } from './runtime/kernelProbe';
 export type { KernelLiveness, KernelProbe, KernelProbeOptions } from './runtime/kernelProbe';
 export { runPreflight } from './runtime/preflight';
@@ -351,6 +357,14 @@ const user = (id: UserId) => ({ 'marimohub.user_id': id });
 const notebook = (projectId: ProjectId, notebookId: NotebookId) => ({
 	...project(projectId),
 	'marimohub.notebook_id': notebookId,
+});
+const job = (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) => ({
+	...notebook(projectId, notebookId),
+	'marimohub.job_id': jobId,
+});
+const run = (projectId: ProjectId, notebookId: NotebookId, jobId: JobId, runId: RunId) => ({
+	...job(projectId, notebookId, jobId),
+	'marimohub.run_id': runId,
 });
 const proposal = (projectId: ProjectId, notebookId: NotebookId, proposalId: ProposalId) => ({
 	...notebook(projectId, notebookId),
@@ -482,6 +496,21 @@ export function createServices(
 		'CliAuthorizationService',
 		new CliAuthorizationService(bucket, tokens),
 	);
+	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
+		listJobs: notebook,
+		listJobsPage: notebook,
+		createJob: notebook,
+		getJob: job,
+		updateJob: job,
+		beginDelete: job,
+		finishDelete: job,
+	});
+	const jobRuns = wrap('JobRunService', new JobRunService(bucket, metrics), {
+		getRun: run,
+		runExists: run,
+		listRuns: job,
+		listRunsPage: job,
+	});
 	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
 	const idempotency = wrap('IdempotencyService', new IdempotencyService(bucket), {
 		lookup: scope,
@@ -494,6 +523,8 @@ export function createServices(
 		notebooks,
 		proposals,
 		sessions,
+		jobs,
+		jobRuns,
 		identities,
 		tokens,
 		cliAuthorizations,

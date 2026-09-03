@@ -23,6 +23,9 @@ Every deployment picks storage, compute, and auth.
 - [Auth](./auth.md) - who can sign in and what they can do.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.
+- [Notebook apps](./apps.md) - serve a notebook as a read-only application.
+- [Notebook jobs](./jobs.md) - run notebooks headlessly on a schedule or on
+  demand, with run history.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.
 - [Environment & cloud access](./environment-and-access.md) - choose integration configuration or federated cloud access.
 - [Integrations](./integrations.md) - databases, warehouses, query engines,

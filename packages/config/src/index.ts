@@ -45,7 +45,7 @@ import type {
 	SandboxProvider,
 	ViewerMode,
 } from '@marimo-hub/core';
-import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
+import type { ApiDeps, JobsConfig, SessionLifetimeConfig } from '@marimo-hub/api';
 import { evaluateLoginPolicy } from '@marimo-hub/auth-oidc';
 import { makeAi } from './ai';
 import {
@@ -78,7 +78,7 @@ import type { LoadedAdapterLibraries } from './library';
 import { DEFAULT_SESSION_IDLE_TIMEOUT_S, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
-import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseSecondsEnv } from './env';
+import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseOnOff, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { checkSandboxHostIsolation } from './hostIsolation';
@@ -334,6 +334,66 @@ function parsePositiveIntEnv(env: Env, key: string, fallback: number): number {
 		});
 	}
 	return value;
+}
+
+/** Job scheduler defaults; `undefined` when `MARIMOHUB_JOBS` is off. See docs/jobs.md. */
+const DEFAULT_JOBS_TICK_S = 60;
+const DEFAULT_JOBS_MAX_CONCURRENT_RUNS = 5;
+const DEFAULT_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT = 2;
+const DEFAULT_JOBS_MAX_PER_NOTEBOOK = 5;
+const DEFAULT_JOBS_DEFAULT_TIMEOUT_S = 1800;
+const DEFAULT_JOBS_MAX_TIMEOUT_S = 14_400;
+const DEFAULT_JOBS_RUN_RETENTION_DAYS = 30;
+const DEFAULT_JOBS_CATCHUP_WINDOW_S = 600;
+
+function parseJobsConfig(env: Env): JobsConfig | undefined {
+	if (!parseOnOff(env, 'MARIMOHUB_JOBS', { fallback: false, docs: 'docs/jobs.md' })) {
+		return undefined;
+	}
+	const tickMs = parseSecondsEnv(env, 'MARIMOHUB_JOBS_TICK_SECONDS', {
+		dflt: DEFAULT_JOBS_TICK_S,
+		max: MAX_NODE_TIMER_SECONDS,
+	});
+	const defaultTimeoutMs = parseSecondsEnv(env, 'MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS', {
+		dflt: DEFAULT_JOBS_DEFAULT_TIMEOUT_S,
+		max: MAX_NODE_TIMER_SECONDS,
+	});
+	const maxTimeoutMs = parseSecondsEnv(env, 'MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS', {
+		dflt: DEFAULT_JOBS_MAX_TIMEOUT_S,
+		max: MAX_NODE_TIMER_SECONDS,
+	});
+	if (defaultTimeoutMs > maxTimeoutMs) {
+		throw new ConfigError(
+			'MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS must not exceed MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS',
+			{ variable: 'MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS', docs: 'docs/jobs.md' },
+		);
+	}
+	const retentionDays = parsePositiveIntEnv(
+		env,
+		'MARIMOHUB_JOBS_RUN_RETENTION_DAYS',
+		DEFAULT_JOBS_RUN_RETENTION_DAYS,
+	);
+	return {
+		tickMs,
+		maxConcurrentRuns: parsePositiveIntEnv(
+			env,
+			'MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS',
+			DEFAULT_JOBS_MAX_CONCURRENT_RUNS,
+		),
+		maxConcurrentRunsPerProject: parsePositiveIntEnv(
+			env,
+			'MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT',
+			DEFAULT_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT,
+		),
+		maxPerNotebook: parseCap(env, 'MARIMOHUB_JOBS_MAX_PER_NOTEBOOK', DEFAULT_JOBS_MAX_PER_NOTEBOOK),
+		defaultTimeoutMs,
+		maxTimeoutMs,
+		runRetentionMs: Millis.days(retentionDays),
+		catchupWindowMs: parseSecondsEnv(env, 'MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS', {
+			dflt: DEFAULT_JOBS_CATCHUP_WINDOW_S,
+			max: MAX_NODE_TIMER_SECONDS,
+		}),
+	};
 }
 
 /** Session-lifecycle defaults (seconds). See docs/configuration.md#server--api. */
@@ -622,6 +682,7 @@ export function createFromEnv(
 			userHome,
 			surfaces,
 		},
+		jobs: parseJobsConfig(env),
 		policy: {
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),

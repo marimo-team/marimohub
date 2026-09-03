@@ -24,6 +24,8 @@ const LABELS: Record<ProjectAlertKind, string> = {
 	'app.start_failed': 'App start failed',
 	'app.unavailable': 'App unavailable',
 	'sync.failed': 'Git sync failed',
+	'job.run.failed': 'Job run failed',
+	'job.run.succeeded': 'Job run succeeded',
 };
 
 function knownKinds(values: readonly string[]): ProjectAlertKind[] {
@@ -43,6 +45,7 @@ const GROUPS: { label: string; kinds: ProjectAlertKind[] }[] = [
 	},
 	{ label: 'Content', kinds: ['session.takeover', 'notebook.deleted', 'project.deleted'] },
 	{ label: 'Runtime', kinds: ['app.start_failed', 'app.unavailable', 'sync.failed'] },
+	{ label: 'Jobs', kinds: ['job.run.failed', 'job.run.succeeded'] },
 ];
 
 interface Props {

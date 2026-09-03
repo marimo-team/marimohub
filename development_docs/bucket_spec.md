@@ -97,6 +97,9 @@ s3-bucket/
 │   ├── reconcile/
 │   │   └── orphans/
 │   │       └── {sandbox-id}.json            ← first-seen marker for an undated orphan
+│   ├── job-runs/
+│   │   └── {project-id}/
+│   │       └── {run-id}.json                ← execution/finalization marker (deleted after finalization)
 │   ├── identities/
 │   │   └── {user-id}.json                  ← user display identity (mutable, CAS-managed)
 │   ├── tokens/
@@ -116,11 +119,14 @@ s3-bucket/
 │   │   └── {digest}.json                   ← replay record with a 24h TTL
 │   ├── events/
 │   │   └── {YYYY-MM-DD}/
-│   │       └── {event-id}.json             ← one immutable object per event
+│   │       ├── {event-id}.json             ← one immutable object per event
+│   │       └── _idempotency/
+│   │           └── {key}.json              ← stable key mapped to one event
 │   ├── sandbox-diagnostics/
 │   │   └── {user-id}.json                  ← per-admin sandbox diagnostic lease (CAS)
 │   ├── _maintenance.lock                   ← advisory maintenance lease
-│   └── _session_lifecycle.lock             ← advisory session-lifecycle lease
+│   ├── _session_lifecycle.lock             ← advisory session-lifecycle lease
+│   └── _jobs.lock                          ← advisory job-scheduler lease
 │
 └── projects/
     └── {project-id}/
@@ -150,6 +156,18 @@ s3-bucket/
                 │       ├── changes/
                 │       │   └── {index}      ← temporary changed-file bytes
                 │       └── publication.json ← CAS-managed publication state
+                ├── jobs/                    ← headless runs (§4.13)
+                │   └── {job-id}/
+                │       ├── job.json         ← definition head (CAS, JobsService)
+                │       ├── occurrences/
+                │       │   └── {YYYYMMDDTHHmmZ}.json ← scheduled-fire claim (create-if-absent, immutable)
+                │       ├── run-index/
+                │       │   └── {reverse-ulid}.json ← empty, immutable newest-first history index
+                │       └── runs/
+                │           └── {run-id}/
+                │               ├── run.json     ← run record (CAS, JobRunService)
+                │               ├── output.html  ← write-once rendered output
+                │               └── logs.txt     ← write-once stdout+stderr (capped)
                 └── versions/
                     └── {version-id}/
                         ├── version.json
@@ -198,6 +216,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `_system/cli-authorizations/{authorization-id}.json`                      | JSON     | Ten-minute browser-to-CLI PKCE grant. Stores hashes/challenges, never a PAT or plaintext authorization secret. `CliAuthorizationService` CAS-claims it before minting one token, then deletes it. See §4.11.1.                                                                                                                                                                                                                                                                                         |
 | `_system/cli-device-user-codes/{user-code}.json`                          | JSON     | Create-if-absent lookup claim from an eight-letter device user code to its short-lived CLI authorization. `CliAuthorizationService` owns the claim. It deletes the claim after exchange and prunes it after ten minutes. See §4.11.1.                                                                                                                                                                                                                                                                  |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                             | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
+| `_system/events/{YYYY-MM-DD}/_idempotency/{key}.json`                     | JSON     | Create-if-absent mapping from a stable operation key to one event ID and serialized event body. A retry repairs a missing event object from this marker without changing its append position or payload.                                                                                                                                                                                                                                                                                               |
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
 | `_system/reconcile/orphans/{sandbox-id}.json`                             | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
 | `_system/sandbox-diagnostics/{user-id}.json`                              | JSON     | Per-admin CAS lease for a sandbox startup diagnostic (`{ sandbox_id, expires_at }`). It prevents overlapping tests across serving replicas and makes the active sandbox visible to reconciliation. `SandboxDiagnosticLease` owns all writes; release CAS-writes a null free marker, and expiry recovers leases left by a crashed request.                                                                                                                                                              |
@@ -538,7 +557,7 @@ The create route completes the transfer after the replacement reaches
 
 The event log is the primary audit trail. Object stores provide no atomic append, and a single shared per-day file would lose events under concurrent writers (a read-modify-write race). So **each event is written as its own immutable object**, keyed by a monotonic ULID under a per-day prefix. This is write-safe with no locking, and because ULIDs sort lexicographically by time, listing a day's prefix returns events in append order.
 
-Every event carries a `schema_version` field so the log stays parseable as the event shape evolves. Reading a day = list `_system/events/{date}/` and parse each object. A scheduled job may optionally compact a finished day into a single archive file for export/analytics.
+Every event carries a `schema_version` field so the log stays parseable as the event shape evolves. Reading a day lists `_system/events/{date}/`, excludes `_idempotency/`, and parses each event object. Operations that need retry-safe appends first create an immutable `_idempotency/{key}.json` marker that records the event ID and body. A scheduled job may optionally compact a finished day into a single archive file for export/analytics.
 
 ```json
 // _system/events/2025-03-05/01HXYZ9ABCDEFGHJKMNPQRSTVW.json
@@ -757,24 +776,137 @@ only within one tier, so both tiers can contain an integration named
 
 ---
 
+### 4.13 `projects/{pid}/notebooks/{nid}/jobs/{jid}/…` and `_system/job-runs/`
+
+A **job** is a per-notebook headless-run definition (schedule + policy); a
+**run** is the CAS-managed record of one execution until it reaches a terminal
+status. See
+[docs/jobs.md](../docs/jobs.md) for the user-facing behavior.
+
+```json
+// projects/proj-x/notebooks/nb-y/jobs/job-z/job.json   (head — CAS-managed)
+{
+	"schema_version": 1,
+	"id": "job-7h2k9qm4xz7rp3w8",
+	"notebook_id": "nb-3w8h2k9qm4xz7rp3",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"name": "Nightly refresh",
+	"enabled": true,
+	"schedule": { "cron": "0 6 * * *", "timezone": "Europe/Berlin" },
+	"parameters": { "region": "eu-west-1" },
+	"retry": { "max_retries": 1, "backoff_seconds": 60 },
+	"timeout_seconds": 1800,
+	"concurrency_policy": "forbid",
+	"notifications": { "on": ["failure"] },
+	"created_by": "user_abc123",
+	"created_at": "2026-09-01T10:00:00Z",
+	"updated_at": "2026-09-01T10:00:00Z"
+}
+
+// …/jobs/job-z/occurrences/20260902T0400Z.json   (immutable, create-if-absent)
+{ "run_id": "run_01JX…", "fired_at": "2026-09-02T04:00:12Z", "outcome": "run" }
+
+// …/notebooks/nb-y/job-index/{created_at}_{job-id}.json   (empty, immutable)
+
+// …/jobs/job-z/run-index/{reverse-ulid}.json   (empty, immutable, create-if-absent)
+
+// …/jobs/job-z/runs/run_01JX…/run.json   (CAS-managed until terminal)
+{
+	"schema_version": 1,
+	"run_id": "run_01JX…",
+	"job_id": "job-7h2k9qm4xz7rp3w8",
+	"notebook_id": "nb-3w8h2k9qm4xz7rp3",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"status": "succeeded",
+	"trigger": "schedule",
+	"scheduled_for": "2026-09-02T04:00:00Z",
+	"source_version_id": "ver_01JX…",
+	"parameters": { "region": "eu-west-1" },
+	"attempt": 1,
+	"sandbox_id": "sb-…",
+	"timeout_seconds": 1800,
+	"queued_at": "2026-09-02T04:00:12Z",
+	"started_at": "2026-09-02T04:00:40Z",
+	"finished_at": "2026-09-02T04:03:05Z",
+	"deadline_at": "2026-09-02T04:40:40Z",
+	"exit_code": 0,
+	"output": { "html_bytes": 48211, "logs_bytes": 912 }
+}
+
+// _system/job-runs/proj-x/run_01JX….json   (create-once; deleted after finalization)
+{ "run_id": "run_01JX…", "continuation_run_id": "run_01JY…", "job_id": "job-…", "notebook_id": "nb-…", "project_id": "proj-…", "created_at": "…" }
+```
+
+**Ownership and mutability.**
+
+- `job.json` — mutable, ETag CAS through `mutateObject`, **written only by
+  `JobsService`**, the same discipline as an integration head (§4.12).
+  `JobsService` also maintains the snapshot's per-notebook `jobs` index
+  (`{ id, enabled, schedule, updated_at }`) through `CatalogService.mutateSnapshot`, so the
+  scheduler enumerates scheduled jobs from two GETs instead of scanning
+  `projects/**`. The timestamp prevents delayed updates from replacing newer
+  index entries. `job.json` stays authoritative for the full definition.
+- `job-index/{created_at}_{job-id}.json` — empty, create-if-absent entries for
+  oldest-first API pagination without materializing every definition.
+- `run.json` — an operational record like a session (§4.8): every status
+  change is a CAS transition through the run state machine, **written only by
+  `JobRunService`**. Terminal runs are never rewritten; retention deletes whole
+  `runs/{rid}/` prefixes.
+- `occurrences/{key}.json` — create-if-absent, immutable. The key is the UTC
+  minute of the occurrence, so replicas with skewed clocks compute the same key
+  and collide on the conditional PUT: the fire-exactly-once anchor. A crash
+  between the claim and the run record leaves a claim naming a run that does
+  not exist; the next tick re-writes that record idempotently with the claimed
+  `run` or `skip` outcome (the claim is the commit point, the record write is
+  retryable).
+- `run-index/{reverse-ulid}.json` — empty, create-if-absent history entries.
+  Complementing each Crockford Base32 digit makes ascending object-key order
+  equal newest-first run order, so a cursor page reads only that page's run
+  records. Retention deletes the entry with its `runs/{rid}/` prefix.
+- `_system/job-runs/{pid}/{rid}.json` — the execution/finalization index: written
+  create-if-absent **before** the run record and retained after the terminal CAS
+  until the scheduler finishes idempotent auditing and retry creation. A marker
+  without a record past the grace window is pruned by maintenance.
+- `_system/job-operations/{pid}/{nid}/{jid}.json` — an expiring singleton claim
+  that serializes scheduling, manual triggers, updates, and
+  deletion for one job. `_system/job-deletions/{pid}/{nid}/{jid}.json` is the
+  durable deletion fence owned by `JobsService` and checked before enqueueing or
+  updating. Deletion writes the fence and removes both discovery indexes before
+  cancelling runs; it deletes `job.json` last so interrupted cleanup can retry.
+- Outputs — write-once under a fresh run prefix; no CAS needed. They are **not
+  notebook versions** and never advance `source.json`.
+
+Job definitions and job runs have independent `schema_version` constants and
+read-upgrade functions. Deploy readers for a new version before enabling its
+writers. Older replicas reject unknown job or run versions instead of rewriting
+them. Additive fields within a version are preserved by the loose stored
+schemas; enum changes require a version bump. Project alert destination kinds
+are open strings in storage, so an older replica preserves a kind introduced by
+a newer one, while API inputs accept only the kinds that replica knows.
+
+Deleting a job deletes its whole prefix (after cancelling active runs);
+deleting a notebook or project reclaims the subtree with everything else.
+
 ## 5. ID Scheme
 
-Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Only **version** IDs (`ver_`) remain uppercase ULIDs, because their lexicographic order is load-bearing for version pruning (keep the most recent N). The examples below are illustrative; the regex in `schema.ts` is authoritative.
+Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.
 
 > **Do not infer recency from snapshot key order.** Because snapshot IDs are random, listing `_system/snapshots/` does **not** return entries in creation order. The current snapshot is always the one named by `catalog.json` — never the "last" key. Where chronological order is needed (retention, recovery), use each object's storage timestamp (`uploaded` / `LastModified`) or the snapshot's `created_at` field, not the ID.
 
 > **The current snapshot is always the one named by `catalog.json`.** An interrupted write can momentarily create a snapshot it never commits (the writer deletes it on conflict — see §7.3 / §11). `catalog.json` is the single source of truth for "current."
 
-| ID Format     | Usage                                                              |
-| ------------- | ------------------------------------------------------------------ |
-| `proj-{rand}` | Project — random 16-char body, for example `proj-7h2k9qm4xz7rp3w8` |
-| `nb-{rand}`   | Notebook — for example `nb-5g43rv2s9pfw8w4d`                       |
-| `snap-{rand}` | Snapshot — random, **not** time-sortable, for example `snap-…`     |
-| `ver_{ulid}`  | Notebook version — uppercase ULID, time-sortable on purpose        |
-| `sess-{rand}` | Session — for example `sess-…`                                     |
-| opaque string | User/actor — the authentication provider supplies this value       |
-| `intg-{rand}` | Integration — random 16-character body                             |
-| `sb-{rand}`   | Sandbox — random 16-character body                                 |
+| ID Format     | Usage                                                                  |
+| ------------- | ---------------------------------------------------------------------- |
+| `proj-{rand}` | Project — random 16-char body, for example `proj-7h2k9qm4xz7rp3w8`     |
+| `nb-{rand}`   | Notebook — for example `nb-5g43rv2s9pfw8w4d`                           |
+| `snap-{rand}` | Snapshot — random, **not** time-sortable, for example `snap-…`         |
+| `job-{rand}`  | Notebook job — random 16-char body, for example `job-7h2k9qm4xz7rp3w8` |
+| `ver_{ulid}`  | Notebook version — uppercase ULID, time-sortable on purpose            |
+| `run_{ulid}`  | Job run — uppercase ULID, time-sortable for newest-first history       |
+| `sess-{rand}` | Session — for example `sess-…`                                         |
+| opaque string | User/actor — the authentication provider supplies this value           |
+| `intg-{rand}` | Integration — random 16-character body                                 |
+| `sb-{rand}`   | Sandbox — random 16-character body                                     |
 
 ---
 

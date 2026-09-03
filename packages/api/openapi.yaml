@@ -14,6 +14,8 @@ tags:
     description: Notebook CRUD and versioning
   - name: Sessions
     description: Notebook session lifecycle
+  - name: Jobs
+    description: Scheduled and on-demand headless notebook runs
   - name: Integrations
     description: Project and organization integrations
   - name: Secrets
@@ -81,6 +83,7 @@ components:
                 - GONE
                 - PAYLOAD_TOO_LARGE
                 - NO_HTML_SNAPSHOT
+                - NO_RUN_OUTPUT
                 - INTERNAL_ERROR
             message:
               type: string
@@ -221,11 +224,14 @@ components:
                   - app.start_failed
                   - app.unavailable
                   - sync.failed
+                  - job.run.failed
+                  - job.run.succeeded
                   - unknown
                 description: 'Known values: member.invited, member.added, member.role_changed,
                   member.removed, session.takeover, notebook.deleted,
                   project.deleted, app.start_failed, app.unavailable,
-                  sync.failed. Unrecognized values normalize to unknown.'
+                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
+                  values normalize to unknown.'
                 example: member.invited
             max_destinations:
               type: integer
@@ -235,6 +241,39 @@ components:
             - destination_types
             - selectable_kinds
             - max_destinations
+        jobs:
+          type: object
+          properties:
+            available:
+              type: boolean
+            max_per_notebook:
+              type:
+                - integer
+                - 'null'
+            max_queued_runs_per_job:
+              type:
+                - integer
+                - 'null'
+              exclusiveMinimum: 0
+            default_timeout_seconds:
+              type:
+                - integer
+                - 'null'
+            max_timeout_seconds:
+              type:
+                - integer
+                - 'null'
+            run_retention_days:
+              type:
+                - number
+                - 'null'
+          required:
+            - available
+            - max_per_notebook
+            - max_queued_runs_per_job
+            - default_timeout_seconds
+            - max_timeout_seconds
+            - run_retention_days
         data_browser:
           type: object
           properties:
@@ -384,6 +423,7 @@ components:
         - integrations
         - source_control
         - project_alerts
+        - jobs
         - data_browser
         - viewer_mode
         - viewer_session_modes
@@ -627,11 +667,14 @@ components:
                   - app.start_failed
                   - app.unavailable
                   - sync.failed
+                  - job.run.failed
+                  - job.run.succeeded
                   - unknown
                 description: 'Known values: member.invited, member.added, member.role_changed,
                   member.removed, session.takeover, notebook.deleted,
                   project.deleted, app.start_failed, app.unavailable,
-                  sync.failed. Unrecognized values normalize to unknown.'
+                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
+                  values normalize to unknown.'
                 example: member.invited
             enabled:
               type: boolean
@@ -685,7 +728,8 @@ components:
                 description: 'Known values: member.invited, member.added, member.role_changed,
                   member.removed, session.takeover, notebook.deleted,
                   project.deleted, app.start_failed, app.unavailable,
-                  sync.failed. Unrecognized values normalize to unknown.'
+                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
+                  values normalize to unknown.'
                 example: member.invited
             enabled:
               type: boolean
@@ -2724,6 +2768,391 @@ components:
           maxLength: 4096
           description: Workspace-relative file to open. Supported only by the VS Code
             surface.
+    JobPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: ^job-[0-9a-z]{16}$
+        notebook_id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        schedule:
+          $ref: '#/components/schemas/JobSchedule'
+        parameters:
+          $ref: '#/components/schemas/JobParameters'
+        retry:
+          $ref: '#/components/schemas/JobRetryPolicy'
+        timeout_seconds:
+          type: integer
+        concurrency_policy:
+          type: string
+          enum:
+            - forbid
+            - allow
+            - unknown
+          description: 'Known values: forbid, allow. Unrecognized values normalize to
+            unknown.'
+          example: forbid
+        notifications:
+          $ref: '#/components/schemas/JobNotifications'
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - notebook_id
+        - project_id
+        - name
+        - enabled
+        - concurrency_policy
+        - created_by
+        - created_at
+        - updated_at
+    JobSchedule:
+      type: object
+      properties:
+        cron:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Five-field cron expression (minute hour day-of-month month
+            day-of-week).
+          example: 0 6 * * 1-5
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: IANA time zone the cron fields are evaluated in.
+          example: Europe/Berlin
+      required:
+        - cron
+        - timezone
+    JobParameters:
+      type: object
+      additionalProperties:
+        type: string
+        maxLength: 4096
+      maxProperties: 32
+      propertyNames: &a2
+        type: string
+        pattern: ^[A-Za-z][A-Za-z0-9_-]{0,63}$
+      description: String parameters passed to the notebook as `--key value` after
+        `--`, readable via `mo.cli_args()`. Parameters are visible to every
+        project member who can read the job or its run history; do not store
+        secrets here.
+      example:
+        region: eu-west-1
+    JobRetryPolicy:
+      type: object
+      properties:
+        max_retries:
+          type: integer
+          minimum: 0
+          maximum: 5
+        backoff_seconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          default: 60
+      required:
+        - max_retries
+    JobNotifications:
+      type: object
+      properties:
+        on:
+          type: array
+          items:
+            type: string
+            enum:
+              - failure
+              - success
+          minItems: 1
+      required:
+        - on
+      description: Deliver `job.run.failed` / `job.run.succeeded` project alerts for
+        this job. Failures notify once retries are exhausted.
+    JobCreateBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          example: Nightly refresh
+        enabled:
+          type: boolean
+          default: true
+        schedule:
+          $ref: '#/components/schemas/JobSchedule'
+        parameters:
+          $ref: '#/components/schemas/JobParameters'
+        retry:
+          $ref: '#/components/schemas/JobRetryPolicy'
+        timeout_seconds:
+          type: integer
+          minimum: 60
+          description: Run deadline in seconds; capped by
+            MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS.
+          example: 1800
+        concurrency_policy:
+          type: string
+          enum:
+            - forbid
+            - allow
+          default: forbid
+        notifications:
+          $ref: '#/components/schemas/JobNotifications'
+      required:
+        - name
+      additionalProperties: false
+    JobUpdateBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        enabled:
+          type: boolean
+        schedule:
+          type:
+            - object
+            - 'null'
+          properties:
+            cron:
+              type: string
+              minLength: 1
+              maxLength: 100
+              description: Five-field cron expression (minute hour day-of-month month
+                day-of-week).
+              example: 0 6 * * 1-5
+            timezone:
+              type: string
+              minLength: 1
+              maxLength: 64
+              description: IANA time zone the cron fields are evaluated in.
+              example: Europe/Berlin
+          required:
+            - cron
+            - timezone
+        parameters:
+          type:
+            - object
+            - 'null'
+          additionalProperties:
+            type: string
+            maxLength: 4096
+          maxProperties: 32
+          propertyNames: *a2
+        retry:
+          type:
+            - object
+            - 'null'
+          properties:
+            max_retries:
+              type: integer
+              minimum: 0
+              maximum: 5
+            backoff_seconds:
+              type: integer
+              minimum: 0
+              maximum: 3600
+              default: 60
+          required:
+            - max_retries
+        timeout_seconds:
+          type:
+            - integer
+            - 'null'
+          minimum: 60
+          description: Run deadline in seconds; capped by
+            MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS.
+          example: 1800
+        concurrency_policy:
+          type: string
+          enum:
+            - forbid
+            - allow
+        notifications:
+          type:
+            - object
+            - 'null'
+          properties:
+            on:
+              type: array
+              items:
+                type: string
+                enum:
+                  - failure
+                  - success
+              minItems: 1
+          required:
+            - on
+      additionalProperties: false
+    JobRun:
+      type: object
+      properties:
+        run_id:
+          type: string
+          pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
+        job_id:
+          type: string
+        notebook_id:
+          type: string
+        project_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - queued
+            - provisioning
+            - running
+            - succeeded
+            - failed
+            - timed_out
+            - cancelled
+            - skipped
+            - unknown
+          description: queued/provisioning/running are active.
+            succeeded/failed/timed_out/cancelled/skipped are terminal; terminal
+            records are never rewritten.
+          example: queued
+        trigger:
+          type: string
+          enum:
+            - schedule
+            - manual
+            - unknown
+          description: 'Known values: schedule, manual. Unrecognized values normalize to
+            unknown.'
+          example: manual
+        triggered_by:
+          type: string
+        scheduled_for:
+          type: string
+          format: date-time
+        source_version_id:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/JobParameters'
+        attempt:
+          type: integer
+          exclusiveMinimum: 0
+          description: One-based attempt number. A failed or timed-out attempt can create
+            a new run with attempt + 1 and retry_of set, subject to the job
+            retry policy.
+        retry_of:
+          type: string
+        image:
+          type: string
+        compute_profile:
+          type: string
+        compute_resources:
+          $ref: '#/components/schemas/ComputeResources'
+        timeout_seconds:
+          type: integer
+        queued_at:
+          type: string
+          format: date-time
+        eligible_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          description: Present after the run enters running.
+        finished_at:
+          type: string
+          format: date-time
+          description: Present on terminal runs.
+        deadline_at:
+          type: string
+          format: date-time
+          description: Present after provisioning establishes the watchdog deadline.
+        exit_code:
+          type: integer
+          description: Process exit code when the export command reported one.
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+            - code
+            - message
+          description: Sanitized failure detail, present on failed, timed-out, or skipped
+            runs.
+        output:
+          type: object
+          properties:
+            html_bytes:
+              type: integer
+              minimum: 0
+            logs_bytes:
+              type: integer
+              minimum: 0
+          required:
+            - html_bytes
+          description: Captured write-once artifacts, present after execution.
+        cancelled_by:
+          type: string
+      required:
+        - run_id
+        - job_id
+        - notebook_id
+        - project_id
+        - status
+        - trigger
+        - attempt
+        - timeout_seconds
+        - queued_at
+    JobRunTriggerBody:
+      type: object
+      properties:
+        parameters:
+          $ref: '#/components/schemas/JobParameters'
+      additionalProperties: false
+    JobRunPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobRun'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
     IntegrationKind:
       type: object
       properties:
@@ -4868,7 +5297,7 @@ paths:
         super-admin standing — no project role grants label authority — and the
         deployment must have resource security configured. Labels only add
         restrictions on top of role checks.
-      security: &a2
+      security: &a3
         - cookieAuth: []
       parameters:
         - schema:
@@ -4978,7 +5407,7 @@ paths:
       tags:
         - Projects
       summary: Remove project security labels
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -5589,7 +6018,7 @@ paths:
       tags:
         - Alerts
       summary: Create a project alert destination
-      description: New destinations subscribe to all 10 project alert kinds when kinds
+      description: New destinations subscribe to all 12 project alert kinds when kinds
         is omitted. They remain disabled until a successful test.
       parameters:
         - schema:
@@ -5626,6 +6055,8 @@ paths:
                           - app.start_failed
                           - app.unavailable
                           - sync.failed
+                          - job.run.failed
+                          - job.run.succeeded
                       minItems: 1
                     type:
                       type: string
@@ -5660,6 +6091,8 @@ paths:
                           - app.start_failed
                           - app.unavailable
                           - sync.failed
+                          - job.run.failed
+                          - job.run.succeeded
                       minItems: 1
                     type:
                       type: string
@@ -5828,6 +6261,8 @@ paths:
                           - app.start_failed
                           - app.unavailable
                           - sync.failed
+                          - job.run.failed
+                          - job.run.succeeded
                       minItems: 1
                     enabled:
                       type: boolean
@@ -5862,6 +6297,8 @@ paths:
                           - app.start_failed
                           - app.unavailable
                           - sync.failed
+                          - job.run.failed
+                          - job.run.succeeded
                       minItems: 1
                     enabled:
                       type: boolean
@@ -6443,7 +6880,7 @@ paths:
       description: 'Every user who has signed in at least once, name-sorted. Currently
         a single page (`next_cursor` is always null). Super-admin only, and
         session-only: a PAT — even a super admin’s — is rejected with 403.'
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: The user directory, name-sorted
@@ -6516,7 +6953,7 @@ paths:
       description: Blocks the user at authentication time, including personal access
         tokens. Super-admin only and session-only. A super admin cannot suspend
         their own account.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -6601,7 +7038,7 @@ paths:
       summary: Reactivate a suspended user
       description: Restores authentication for a known user. Super-admin only and
         session-only.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -6691,7 +7128,7 @@ paths:
         CPU limits, files.pythonhosted.org throughput, uv phase timings, and CPU
         throttling counters. The sandbox is always destroyed. Runtime failures
         are returned as a partial report. Super-admin only and session-only.
-      security: *a2
+      security: *a3
       requestBody:
         required: false
         description: Optional; omit to use the deployment defaults.
@@ -6790,7 +7227,7 @@ paths:
         auth, …) as resolved from the serving replica's environment at boot;
         secret values are never included, only whether they are set. Super-admin
         only, session-only.
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: The deployment configuration, secrets redacted
@@ -6858,7 +7295,7 @@ paths:
       tags:
         - Admin
       summary: Describe policy analyzer inputs
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: Policy analyzer metadata
@@ -6927,7 +7364,7 @@ paths:
       tags:
         - Admin
       summary: Evaluate a policy test suite
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -9372,7 +9809,7 @@ paths:
       description: Sets an override enforced IN ADDITION to the project labels, so it
         can only add restrictions. Requires super-admin standing — no project
         role grants label authority.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -9488,7 +9925,7 @@ paths:
       tags:
         - Notebooks
       summary: Remove a notebook security-label override
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -11363,6 +11800,1205 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs:
+    get:
+      operationId: jobs.list
+      tags:
+        - Jobs
+      summary: List a notebook’s jobs
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+      responses:
+        '200':
+          description: Job definitions, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/JobPage'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: jobs.create
+      tags:
+        - Jobs
+      summary: Create a job
+      description: A job runs the notebook headlessly with `marimo export html` — on a
+        cron schedule, or on demand via `jobs.runs.trigger`. Runs execute with
+        the project’s resolved integration secrets and federated credentials, so
+        this requires the editor role like starting a session.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: false
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCreateBody'
+      responses:
+        '201':
+          description: Job created
+          headers:
+            ETag:
+              schema:
+                type: string
+                description: Strong validator (the resource version). Echo as `If-Match` to
+                  guard a write.
+                example: '"2025-03-05T14:00:00Z"'
+              required: true
+              description: Strong validator (the resource version). Echo as `If-Match` to
+                guard a write.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/Job'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}:
+    get:
+      operationId: jobs.get
+      tags:
+        - Jobs
+      summary: Get a job
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+      responses:
+        '200':
+          description: Job
+          headers:
+            ETag:
+              schema:
+                type: string
+                description: Strong validator (the resource version). Echo as `If-Match` to
+                  guard a write.
+                example: '"2025-03-05T14:00:00Z"'
+              required: true
+              description: Strong validator (the resource version). Echo as `If-Match` to
+                guard a write.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/Job'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      operationId: jobs.update
+      tags:
+        - Jobs
+      summary: Update a job
+      description: Partial update. `null` clears an optional field (schedule,
+        parameters, retry, timeout, notifications).
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobUpdateBody'
+      responses:
+        '200':
+          description: Job updated
+          headers:
+            ETag:
+              schema:
+                type: string
+                description: Strong validator (the resource version). Echo as `If-Match` to
+                  guard a write.
+                example: '"2025-03-05T14:00:00Z"'
+              required: true
+              description: Strong validator (the resource version). Echo as `If-Match` to
+                guard a write.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/Job'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: jobs.delete
+      x-cli-destructive: true
+      tags:
+        - Jobs
+      summary: Delete a job and its run history
+      description: Active runs are cancelled and their sandboxes destroyed first.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: true
+          name: if-match
+          in: header
+      responses:
+        '200':
+          description: Job deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs:
+    post:
+      operationId: jobs.runs.trigger
+      tags:
+        - Jobs
+      summary: Run a job now
+      description: Enqueues a run; the scheduler on the maintenance replica dispatches
+        it within one tick. Returns the queued run — poll `jobs.runs.get` for
+        progress.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: false
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
+          in: header
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRunTriggerBody'
+      responses:
+        '201':
+          description: Run queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/JobRun'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      operationId: jobs.runs.list
+      tags:
+        - Jobs
+      summary: List a job’s runs
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+      responses:
+        '200':
+          description: Runs, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/JobRunPage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}:
+    get:
+      operationId: jobs.runs.get
+      tags:
+        - Jobs
+      summary: Get a run
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
+            example: run_01HXYZ33333RSTUVWXYZABCDEF
+          required: true
+          name: rid
+          in: path
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/JobRun'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/cancel:
+    post:
+      operationId: jobs.runs.cancel
+      x-cli-destructive: true
+      tags:
+        - Jobs
+      summary: Cancel a run
+      description: Marks the run cancelled and destroys its sandbox when one exists.
+        Runs are history and are never deleted individually.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
+            example: run_01HXYZ33333RSTUVWXYZABCDEF
+          required: true
+          name: rid
+          in: path
+      responses:
+        '200':
+          description: Run cancelled (or already terminal)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/JobRun'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/html:
+    get:
+      operationId: jobs.runs.html
+      tags:
+        - Jobs
+      summary: Rendered notebook output of a run
+      description: Serves the HTML the run exported, raw. 404 with code
+        `NO_RUN_OUTPUT` when the run captured none (still running, cancelled, or
+        failed before exporting).
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
+            example: run_01HXYZ33333RSTUVWXYZABCDEF
+          required: true
+          name: rid
+          in: path
+      responses:
+        '200':
+          description: The rendered output, served sandboxed (CSP forces an opaque origin)
+          content:
+            text/html:
+              schema:
+                type: string
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/logs:
+    get:
+      operationId: jobs.runs.logs
+      tags:
+        - Jobs
+      summary: stdout/stderr of a run
+      description: 'Raw text, editor-only: logs can echo environment values and
+        tracebacks the viewer role cannot otherwise read. 404 with code
+        `NO_RUN_OUTPUT` when none were captured.'
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
+            example: run_01HXYZ33333RSTUVWXYZABCDEF
+          required: true
+          name: rid
+          in: path
+      responses:
+        '200':
+          description: Captured logs
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
           content:
             application/json:
               schema:
@@ -15300,7 +16936,7 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -15403,7 +17039,7 @@ paths:
         - Auth
       summary: List the caller's personal access tokens
       description: Metadata only — the secret is never retrievable after creation.
-      security: *a2
+      security: *a3
       responses:
         '200':
           description: Tokens, newest first
@@ -15476,7 +17112,7 @@ paths:
       description: Mint a v2 personal access token with an immutable action and
         project grant. Selected projects must be visible to the caller when the
         token is created.
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -15642,7 +17278,7 @@ paths:
       description: Deletes the token; API requests using it fail within the
         verification-cache TTL (~30 seconds) on other replicas, immediately on
         this one.
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -15717,7 +17353,7 @@ paths:
       summary: Approve a CLI login
       description: Creates a one-time code that is bound to the CLI PKCE challenge.
         Requires a browser session. Exchange creates the personal access token.
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -15855,7 +17491,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI login
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -16109,7 +17745,7 @@ paths:
       summary: Approve a CLI device login
       description: Approves a short-lived device code for the signed-in user. Requires
         a browser session. Personal access tokens cannot approve device logins.
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -16230,7 +17866,7 @@ paths:
       tags:
         - Auth
       summary: Preview a CLI device login
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -16411,7 +18047,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI device login
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:

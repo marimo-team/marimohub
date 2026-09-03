@@ -3,6 +3,8 @@ import type { Sandbox } from '@cloudflare/sandbox';
 declare global {
 	interface Env {
 		MARIMOHUB_EDITOR_SANDBOX_SHARING?: 'shared' | 'exclusive';
+		// Notebook jobs are off unless `on` (see docs/jobs.md).
+		MARIMOHUB_JOBS?: 'on' | 'off';
 		NOTEBOOKS_BUCKET: R2Bucket;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		SANDBOX: DurableObjectNamespace<Sandbox<any>>;

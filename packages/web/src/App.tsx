@@ -9,6 +9,7 @@ import { ProjectList } from '@/components/ProjectList/ProjectList';
 import { Project } from '@/components/Project/Project';
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
+import { JobsPage } from '@/components/Jobs/JobsPage';
 import { SignIn } from '@/components/SignIn/SignIn';
 import { ErrorBoundary, Button } from '@/components/ui';
 import { Toaster } from '@/components/ui/sonner';
@@ -164,6 +165,8 @@ function AppContent() {
 						/>
 						{/* The last HTML snapshot, sandbox-free (no session is ever started). */}
 						<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<SnapshotPage />} />
+						{/* Scheduled + on-demand headless runs and their history (no session). */}
+						<Route path="/projects/:pid/notebooks/:nid/jobs" element={<JobsPage />} />
 						<Route path="*" element={<StandardLayout />} />
 					</Routes>
 				</Suspense>

@@ -52,6 +52,53 @@ describe('EventService', () => {
 			expect(listed.objects).toHaveLength(2);
 		});
 
+		it('does not duplicate an idempotent append', async () => {
+			const actor = uid('x');
+			await events.append(
+				{ event: 'job.run.finish', actor, status: 'failed' },
+				{ id: 'stable-run', onlyIfAbsent: true },
+			);
+			await events.append(
+				{ event: 'job.run.finish', actor, status: 'succeeded' },
+				{ id: 'stable-run', onlyIfAbsent: true },
+			);
+			const stored = await events.getEvents('2025-03-05');
+			expect(stored).toHaveLength(1);
+			expect(stored[0].status).toBe('failed');
+		});
+
+		it('orders idempotent events by append time rather than their stable key', async () => {
+			await events.append({ event: 'first', actor: uid('a') }, { id: 'zzzz', onlyIfAbsent: true });
+			await events.append({ event: 'second', actor: uid('b') }, { id: 'aaaa', onlyIfAbsent: true });
+
+			expect((await events.getEvents('2025-03-05')).map((event) => event.event)).toEqual([
+				'first',
+				'second',
+			]);
+		});
+
+		it('repairs an idempotent event whose payload write failed', async () => {
+			const originalPut = bucket.put.bind(bucket);
+			let failPayload = true;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (failPayload && !key.includes('/_idempotency/')) {
+					failPayload = false;
+					throw new Error('payload write failed');
+				}
+				return originalPut(key, value, options);
+			});
+			const event = { event: 'job.run.finish', actor: uid('x'), status: 'failed' };
+
+			await expect(events.append(event, { id: 'stable-run', onlyIfAbsent: true })).rejects.toThrow(
+				'payload write failed',
+			);
+			await events.append(event, { id: 'stable-run', onlyIfAbsent: true });
+
+			expect(await events.getEvents('2025-03-05')).toMatchObject([
+				{ event: 'job.run.finish', status: 'failed' },
+			]);
+		});
+
 		it('returns events in append order', async () => {
 			await events.append({ event: 'first', actor: uid('a') });
 			await events.append({ event: 'second', actor: uid('b') });

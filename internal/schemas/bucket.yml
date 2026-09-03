@@ -16,9 +16,10 @@ info:
     other non-JSON artifacts): idempotency records, integration name claims,
     reconcile orphan markers, sandbox diagnostic leases, advisory locks, and
     version/workspace file
-    artifacts (notebook.py, pyproject.toml, notebook.html, session.json,
-    README.md, workspace files). Pull-source Git metadata is included because
-    its immutable version-scoped location is part of the sync contract.
+    artifacts (notebook.py, pyproject.toml, notebook.html, version session.json,
+    README.md, workspace files). Pull-source Git metadata and job run outputs
+    are included because their immutable, scoped locations are part of a
+    contract (the sync contract and the run-history API respectively).
 tags:
   - name: catalog
     description: Catalog pointer and snapshots (`_system/`)
@@ -30,6 +31,8 @@ tags:
     description: Project- and org-scoped integration records
   - name: session
     description: Session records and sandbox claims
+  - name: job
+    description: Notebook job definitions, runs, and active-run markers
   - name: auth
     description: Identities and personal access tokens
   - name: ops
@@ -517,6 +520,198 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/job.json:
+    summary: 'Notebook job definition head: schedule, parameters, retry and timeout
+      policy.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: JobsService
+    get:
+      operationId: read_projects_notebooks_jobs_job_json
+      summary: Read JobDefinition
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDefinition'
+    put:
+      operationId: write_projects_notebooks_jobs_job_json
+      summary: Write JobDefinition
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobDefinition'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/occurrences/{occurrence_key}.json:
+    summary: Immutable scheduled-fire claim (create-if-absent) naming the run it
+      produced.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: occurrence_key
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobRunService
+    get:
+      operationId: read_projects_notebooks_jobs_occurrences_json
+      summary: Read JobOccurrence
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobOccurrence'
+    put:
+      operationId: write_projects_notebooks_jobs_occurrences_json
+      summary: Write JobOccurrence
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobOccurrence'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/run.json:
+    summary: 'Job run record: CAS-managed status transitions; terminal runs are
+      never rewritten.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: JobRunService
+    get:
+      operationId: read_projects_notebooks_jobs_runs_run_json
+      summary: Read JobRun
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobRun'
+    put:
+      operationId: write_projects_notebooks_jobs_runs_run_json
+      summary: Write JobRun
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRun'
+      responses:
+        '204':
+          description: Stored.
+  /_system/job-runs/{pid}/{run_id}.json:
+    summary: 'Active-run marker: exists only while a run is non-terminal.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobRunService
+    get:
+      operationId: read_system_job_runs_json
+      summary: Read JobRunMarker
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobRunMarker'
+    put:
+      operationId: write_system_job_runs_json
+      summary: Write JobRunMarker
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRunMarker'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/integrations/{iid}/integration.json:
     summary: 'Project integration head: kind, name, enabled, current_version pointer.'
     parameters:
@@ -996,6 +1191,259 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/events/{date}/_idempotency/{id}.json:
+    summary: Create-if-absent mapping from a stable idempotency key to one audit event.
+    parameters:
+      - name: date
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: EventService
+    get:
+      operationId: read_system_events_idempotency_json
+      summary: Read EventIdempotencyMarker
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventIdempotencyMarker'
+    put:
+      operationId: write_system_events_idempotency_json
+      summary: Write EventIdempotencyMarker
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventIdempotencyMarker'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/job-index/{created_at}_{job_id}.json:
+    summary: Empty create-if-absent job index entry. Lexicographic key order is
+      oldest-first by created_at, then job_id.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: created_at
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobsService
+    get:
+      operationId: read_projects_notebooks_job_index_json
+      summary: Read JobDefinitionIndex
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_job_index_json
+      summary: Write JobDefinitionIndex
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/run-index/{reverse_ulid}.json:
+    summary: Empty create-if-absent run index entry. The complemented ULID makes
+      lexicographic key order newest-first.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: reverse_ulid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobRunService
+    get:
+      operationId: read_projects_notebooks_jobs_run_index_json
+      summary: Read JobRunIndex
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_jobs_run_index_json
+      summary: Write JobRunIndex
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/output.html:
+    summary: Write-once rendered notebook output captured by a job run.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_projects_notebooks_jobs_runs_output_html
+      summary: Read JobRunOutputHtml
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_jobs_runs_output_html
+      summary: Write JobRunOutputHtml
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/logs.txt:
+    summary: Write-once stdout+stderr tail of a job run (editor-only via the API).
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_projects_notebooks_jobs_runs_logs_txt
+      summary: Read JobRunLogs
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_jobs_runs_logs_txt
+      summary: Write JobRunLogs
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/versions/{vid}/git/{relative_path}:
     summary: Immutable pull-source Git metadata file, addressed relative to `.git`.
     parameters:
@@ -1188,6 +1636,38 @@ components:
                     security_labels_pending:
                       type: boolean
                       const: true
+                    jobs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          enabled:
+                            type: boolean
+                          schedule:
+                            type: object
+                            properties:
+                              cron:
+                                type: string
+                                minLength: 1
+                                maxLength: 100
+                              timezone:
+                                type: string
+                                minLength: 1
+                                maxLength: 64
+                            required:
+                              - cron
+                              - timezone
+                            additionalProperties: {}
+                          updated_at:
+                            type: string
+                            format: date-time
+                            pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                        required:
+                          - id
+                          - enabled
+                        additionalProperties: {}
                     key_prefix:
                       type: string
                   required:
@@ -1366,17 +1846,7 @@ components:
                     type: array
                     items:
                       type: string
-                      enum:
-                        - member.invited
-                        - member.added
-                        - member.role_changed
-                        - member.removed
-                        - session.takeover
-                        - notebook.deleted
-                        - project.deleted
-                        - app.start_failed
-                        - app.unavailable
-                        - sync.failed
+                      minLength: 1
                   enabled:
                     type: boolean
                   verified_at:
@@ -1443,17 +1913,7 @@ components:
                     type: array
                     items:
                       type: string
-                      enum:
-                        - member.invited
-                        - member.added
-                        - member.role_changed
-                        - member.removed
-                        - session.takeover
-                        - notebook.deleted
-                        - project.deleted
-                        - app.start_failed
-                        - app.unavailable
-                        - sync.failed
+                      minLength: 1
                   enabled:
                     type: boolean
                   verified_at:
@@ -1999,6 +2459,7 @@ components:
               type: number
             gpu:
               type: string
+          additionalProperties: {}
         owner_user_id:
           type: string
       required:
@@ -2019,6 +2480,286 @@ components:
       required:
         - schema_version
         - token_sha256
+        - created_at
+    JobDefinition:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        id:
+          type: string
+        notebook_id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        enabled:
+          type: boolean
+        schedule:
+          type: object
+          properties:
+            cron:
+              type: string
+              minLength: 1
+              maxLength: 100
+            timezone:
+              type: string
+              minLength: 1
+              maxLength: 64
+          required:
+            - cron
+            - timezone
+          additionalProperties: {}
+        parameters:
+          type: object
+          propertyNames:
+            type: string
+            pattern: ^[A-Za-z][A-Za-z0-9_-]{0,63}$
+          additionalProperties:
+            type: string
+            maxLength: 4096
+          maxProperties: 32
+        retry:
+          type: object
+          properties:
+            max_retries:
+              type: integer
+              minimum: 0
+              maximum: 5
+            backoff_seconds:
+              default: 60
+              type: integer
+              minimum: 0
+              maximum: 3600
+          required:
+            - max_retries
+          additionalProperties: {}
+        timeout_seconds:
+          type: integer
+          minimum: 60
+          maximum: 9007199254740991
+        concurrency_policy:
+          default: forbid
+          type: string
+          enum:
+            - forbid
+            - allow
+        notifications:
+          type: object
+          properties:
+            on:
+              minItems: 1
+              type: array
+              items:
+                type: string
+                enum:
+                  - failure
+                  - success
+              uniqueItems: true
+          required:
+            - on
+          additionalProperties: {}
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - schema_version
+        - id
+        - notebook_id
+        - project_id
+        - name
+        - enabled
+        - created_by
+        - created_at
+        - updated_at
+      additionalProperties: {}
+    JobOccurrence:
+      type: object
+      properties:
+        run_id:
+          type: string
+        fired_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        outcome:
+          type: string
+          enum:
+            - run
+            - skip
+      required:
+        - run_id
+        - fired_at
+    JobRun:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        run_id:
+          type: string
+        job_id:
+          type: string
+        notebook_id:
+          type: string
+        project_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - queued
+            - provisioning
+            - running
+            - succeeded
+            - failed
+            - timed_out
+            - cancelled
+            - skipped
+        trigger:
+          type: string
+          enum:
+            - schedule
+            - manual
+        triggered_by:
+          type: string
+        scheduled_for:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        source_version_id:
+          type: string
+        parameters:
+          type: object
+          propertyNames:
+            type: string
+            pattern: ^[A-Za-z][A-Za-z0-9_-]{0,63}$
+          additionalProperties:
+            type: string
+            maxLength: 4096
+          maxProperties: 32
+        attempt:
+          default: 1
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        retry_of:
+          type: string
+        sandbox_id:
+          type: string
+        image:
+          type: string
+        compute_profile:
+          type: string
+        compute_resources:
+          type: object
+          properties:
+            cpu:
+              type: number
+            memory_bytes:
+              type: number
+            gpu:
+              type: string
+          additionalProperties: {}
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        queued_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        eligible_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        started_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        finished_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        deadline_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        exit_code:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+            - code
+            - message
+          additionalProperties: {}
+        output:
+          type: object
+          properties:
+            html_bytes:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            logs_bytes:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          required:
+            - html_bytes
+          additionalProperties: {}
+        cancelled_by:
+          type: string
+      required:
+        - schema_version
+        - run_id
+        - job_id
+        - notebook_id
+        - project_id
+        - status
+        - trigger
+        - timeout_seconds
+        - queued_at
+      additionalProperties: {}
+    JobRunMarker:
+      type: object
+      properties:
+        run_id:
+          type: string
+        continuation_run_id:
+          type: string
+        job_id:
+          type: string
+        notebook_id:
+          type: string
+        project_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - run_id
+        - continuation_run_id
+        - job_id
+        - notebook_id
+        - project_id
         - created_at
     IntegrationRecord:
       type: object
@@ -2193,6 +2934,7 @@ components:
               type: number
             gpu:
               type: string
+          additionalProperties: {}
         compute_from_snapshot:
           type: boolean
         sandbox_origin_url:
@@ -2554,3 +3296,14 @@ components:
         - event
         - actor
       additionalProperties: {}
+    EventIdempotencyMarker:
+      type: object
+      properties:
+        event_id:
+          type: string
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+        body:
+          type: string
+      required:
+        - event_id
+        - body

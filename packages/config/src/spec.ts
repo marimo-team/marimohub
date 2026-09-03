@@ -1375,6 +1375,81 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'Jobs',
+		description:
+			'Headless notebook runs on a cron schedule or on demand, with a durable run history. Off unless `MARIMOHUB_JOBS=on`. Node deployments dispatch jobs on the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`) and honor the tuning variables below. Cloudflare Workers dispatch from the platform `scheduled()` handler and use the fixed defaults: 5 concurrent runs, 2 per project, 5 jobs per notebook, 1800-second default and 14400-second maximum timeouts, 30-day retention, and a 600-second catch-up window. See [Notebook jobs](./jobs.md).',
+		backends: [
+			{
+				name: 'Scheduler',
+				vars: [
+					{
+						id: 'MARIMOHUB_JOBS',
+						name: 'Notebook jobs',
+						description:
+							'Enable notebook jobs: the API and UI, plus `job.*` project-alert kinds. Node deployments run the scheduler on the maintenance replica; Cloudflare Workers run it from `scheduled()`. Accepted values are `on` and `off`; the other `MARIMOHUB_JOBS_*` variables apply only to Node deployments.',
+						default: 'off',
+						example: 'on',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_TICK_SECONDS',
+						name: 'Scheduler tick (seconds)',
+						description:
+							'Node only: how often the maintenance replica evaluates schedules, dispatches queued runs, and enforces run deadlines. Also bounds the start latency of a manual trigger.',
+						default: '60',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS',
+						name: 'Max concurrent runs',
+						description:
+							'Node only: deployment-wide cap on runs holding a sandbox (provisioning or running). Further runs wait in the queue.',
+						default: '5',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT',
+						name: 'Max concurrent runs per project',
+						description: 'Node only: per-project slice of the deployment-wide run cap.',
+						default: '2',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_MAX_PER_NOTEBOOK',
+						name: 'Max jobs per notebook',
+						description: 'Node only: job definitions per notebook (`0` = unlimited).',
+						default: '5',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS',
+						name: 'Default run timeout (seconds)',
+						description:
+							'Node only: run deadline when a job sets no `timeout_seconds`. The sandbox is destroyed and the run lands `timed_out` past it.',
+						default: '1800',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS',
+						name: 'Max run timeout (seconds)',
+						description:
+							'Node only: ceiling on a job’s own `timeout_seconds`; larger values are rejected.',
+						default: '14400',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_RUN_RETENTION_DAYS',
+						name: 'Run retention (days)',
+						description:
+							'Node only: run records and captured outputs older than this are pruned by the maintenance cycle.',
+						default: '30',
+					},
+					{
+						id: 'MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS',
+						name: 'Catch-up window (seconds)',
+						description:
+							'Node only: how stale a missed occurrence may be and still fire, once. After a longer outage only the latest missed occurrence runs — the gap is never backfilled.',
+						default: '600',
+						example: '900',
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Source control publishing',
 		description:
 			'Connect Git-synced notebooks to GitHub through the server. Editors can create pull sources without a CI workflow. They can also compare and sync either source mode with **Sync now**. Managers can publish session edits as draft pull requests.\n\nThe server stores credential-free Git metadata for pull sources. Provider credentials never enter a notebook sandbox. GitHub.com is the only supported provider in this release. See [Syncing from external sources](./syncing.md) for source modes and limits.',

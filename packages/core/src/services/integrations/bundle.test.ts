@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSessionId } from '../../ids';
+import { createRunId, createSessionId } from '../../ids';
 import type { IntegrationId } from '../../ids';
 import { bundleIntegrations, INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
 import type { RenderedIntegration } from './bundle';
@@ -13,11 +13,23 @@ const rendered = (name: string, output: RenderOutput): RenderedIntegration => ({
 	output,
 });
 
-const bundle = (items: RenderedIntegration[]) => bundleIntegrations(items, createSessionId());
+const bundle = (items: RenderedIntegration[]) =>
+	bundleIntegrations(items, { kind: 'session', id: createSessionId() });
 
 const file = (path: string, content = 'x') => ({ files: [{ path, content }] });
 const yaml = (path: string, value: Record<string, unknown> = { a: 1 }) => ({
 	yamlFiles: [{ path, value }],
+});
+
+it('identifies a job run without encoding it as a session in the manifest', () => {
+	const runId = createRunId();
+	const result = bundleIntegrations([], { kind: 'job-run', id: runId });
+	const manifest = result.files.find((item) => item.path.endsWith('/manifest.json'));
+	expect(JSON.parse(manifest?.content ?? '')).toMatchObject({
+		workload_kind: 'job-run',
+		workload_id: runId,
+	});
+	expect(manifest?.content).not.toContain('session_id');
 });
 
 describe('rendered path collisions', () => {

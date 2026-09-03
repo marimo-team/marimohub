@@ -110,11 +110,11 @@ export function pageSchema<T extends z.ZodType>(item: T, name: string) {
 		.openapi(name);
 }
 
-function encodeCursor(key: string, tiebreak: string): string {
+export function encodeCursor(key: string, tiebreak: string): string {
 	return btoa(JSON.stringify([key, tiebreak]));
 }
 
-function decodeCursor(cursor: string | undefined): [string, string] | null {
+export function decodeCursor(cursor: string | undefined): [string, string] | null {
 	if (cursor === undefined || cursor === '') return null;
 	let parsed: unknown;
 	try {

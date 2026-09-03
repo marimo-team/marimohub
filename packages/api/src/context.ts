@@ -68,6 +68,41 @@ export interface SessionLifetimeConfig {
 	sweepIntervalMs: Millis;
 }
 
+/**
+ * Notebook jobs (config: `MARIMOHUB_JOBS_*`). The API validates definitions and
+ * enqueues runs against these; the maintenance replica's scheduler dispatches
+ * and enforces them. Entrypoints use `DEFAULT_JOBS_CONFIG` when jobs are enabled.
+ */
+export interface JobsConfig {
+	/** Scheduler/dispatcher interval on the maintenance replica. */
+	tickMs: Millis;
+	/** Deployment-wide cap on runs holding a sandbox. */
+	maxConcurrentRuns: number;
+	/** Per-project slice of the above. */
+	maxConcurrentRunsPerProject: number;
+	/** Definition cap per notebook; undefined = unlimited. */
+	maxPerNotebook?: number;
+	/** Run deadline when the job sets none. */
+	defaultTimeoutMs: Millis;
+	/** Ceiling on a job's own `timeout_seconds`. */
+	maxTimeoutMs: Millis;
+	/** Run records + outputs older than this are pruned by maintenance. */
+	runRetentionMs: Millis;
+	/** How stale an occurrence may be and still fire (once). */
+	catchupWindowMs: Millis;
+}
+
+export const DEFAULT_JOBS_CONFIG: JobsConfig = {
+	tickMs: 60_000 as Millis,
+	maxConcurrentRuns: 5,
+	maxConcurrentRunsPerProject: 2,
+	maxPerNotebook: 5,
+	defaultTimeoutMs: 1_800_000 as Millis,
+	maxTimeoutMs: 14_400_000 as Millis,
+	runRetentionMs: (30 * 24 * 3_600_000) as Millis,
+	catchupWindowMs: 600_000 as Millis,
+};
+
 export interface SandboxComputeProfile {
 	name: string;
 	resources: ComputeResources;
@@ -357,6 +392,8 @@ export interface ApiDeps {
 	sandbox: SandboxConfig;
 	/** Deployment-wide authorization / abuse-guard knobs (pure env-derived data). */
 	policy: PolicyConfig;
+	/** Notebook jobs; absent = the feature is off, routes 404 and no scheduler runs. */
+	jobs?: JobsConfig;
 	/**
 	 * Resource-security collaborators (constraint adapter + subject-context
 	 * provider) — live ports, kept out of the data-only `policy`. Labeled

@@ -9,7 +9,7 @@ export interface DialogModalProps {
 	onClose: () => void;
 	title?: string;
 	children: ReactNode;
-	width?: 'sm' | 'md' | 'lg' | 'xl' | 'screen';
+	width?: 'sm' | 'md' | 'lg' | 'form' | 'xl' | 'screen';
 	contentClassName?: string;
 }
 
@@ -17,6 +17,7 @@ const widthClasses: Record<NonNullable<DialogModalProps['width']>, string> = {
 	sm: 'max-w-sm',
 	md: 'max-w-md',
 	lg: 'max-w-lg',
+	form: 'max-w-2xl',
 	xl: 'max-w-6xl',
 	screen: 'h-[92dvh] max-w-[95vw]',
 };

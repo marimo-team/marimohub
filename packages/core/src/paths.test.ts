@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+	JobId,
 	NotebookId,
 	ProjectId,
 	ProposalId,
@@ -34,6 +35,27 @@ describe('paths', () => {
 		expect(paths.event('2025-03-05', '01HXYZ9ABCDEFGHJKMNPQRSTVW')).toMatchInlineSnapshot(
 			`"_system/events/2025-03-05/01HXYZ9ABCDEFGHJKMNPQRSTVW.json"`,
 		);
+		expect(paths.eventIdempotency('2025-03-05', 'run/a')).toBe(
+			'_system/events/2025-03-05/_idempotency/run%2Fa.json',
+		);
+		expect(paths.jobOperationClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
+			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
+		);
+		expect(paths.jobOperationClaimsForProject(pid)).toBe(
+			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/',
+		);
+		expect(paths.jobOperationClaimsForNotebook(pid, nid)).toBe(
+			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/',
+		);
+		expect(paths.jobDeletionClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
+			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
+		);
+		expect(paths.jobDeletionClaimsForProject(pid)).toBe(
+			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/',
+		);
+		expect(paths.jobDeletionClaimsForNotebook(pid, nid)).toBe(
+			'_system/job-deletions/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/',
+		);
 	});
 
 	it('project paths', () => {
@@ -50,6 +72,10 @@ describe('paths', () => {
 			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/workspace/pyproject.toml",
 			  "fsSnapshot": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/fs_snapshot.json",
 			  "integrationSyncToken": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/integration_sync_token.json",
+			  "job": [Function],
+			  "jobIndex": [Function],
+			  "jobIndexPrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/job-index/",
+			  "jobsPrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/jobs/",
 			  "meta": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/meta.json",
 			  "proposal": [Function],
 			  "readme": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/README.md",

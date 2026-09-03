@@ -1,4 +1,4 @@
-import type { IntegrationId, SessionId, UserId } from '../ids';
+import type { IntegrationId, RunId, SessionId, UserId } from '../ids';
 import type { BrowseSurface, ObjectBrowseCapability } from './objectBrowser';
 
 export type QueryDialect = 'duckdb' | 'postgresql';
@@ -305,8 +305,10 @@ export interface CopyIntegrationOptions {
 	name?: string;
 }
 
+export type WorkloadRef = { kind: 'session'; id: SessionId } | { kind: 'job-run'; id: RunId };
+
 export interface SessionRenderContext {
-	sessionId: SessionId;
+	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 }
 
