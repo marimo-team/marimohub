@@ -30,12 +30,12 @@ App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
   everyone leaves, `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` controls idle
   reaping. This value inherits `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` when unset.
   Active connections extend the session deadline. Thus, an open dashboard can
-  keep the app and its credentials active indefinitely.
+  keep the app and its credentials active, so stop apps that you no longer need.
 
-  The [maintenance worker](./operations.md) handles idle reaping and the "~N
-  connected" count. Without this worker, apps stay up until someone stops them.
-  If an app stops under an open tab, the page shows the reason. The session
-  maximum lifetime can stop an app before its idle timeout.
+  The [maintenance worker](./operations.md) handles hub-managed idle reaping and
+  the "~N connected" count. Without this worker, the hub does not reap idle apps.
+  Provider idle fallbacks and maximum lifetimes can still stop the sandbox. If an
+  app stops under an open tab, the page shows the reason.
 
 - **Resource model.** `marimo run` starts one kernel per connected browser
   inside the single app sandbox, so memory scales with concurrent users of that

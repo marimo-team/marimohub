@@ -1,5 +1,4 @@
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
-import type { Millis } from '../../duration';
 import { asFilesystemSnapshots } from '../../ports/sandbox';
 import type {
 	ComputeResources,
@@ -11,6 +10,11 @@ import type {
 import type { FsSnapshot } from '../../schema';
 import { logOperationalError } from '../../operationalLog';
 import type { NotebookService } from './NotebookService';
+
+type CreateOrRestoreSandboxOptions = Pick<
+	CreateSandboxOptions,
+	'image' | 'resources' | 'userHome' | 'sessionIdleTimeoutMs'
+>;
 
 /**
  * Orchestration for the optional `FilesystemSnapshots` capability — free functions
@@ -33,13 +37,34 @@ export function createOrRestoreSandbox(
 	provider: SandboxProvider,
 	id: SandboxId,
 	restoreSnapshotId?: string,
-	options: {
-		image?: string;
-		resources?: ComputeResources;
-		userHome?: SandboxUserHome;
-		sessionIdleTimeoutMs?: Millis;
-	} = {},
+	image?: string,
+	resources?: ComputeResources,
+	userHome?: SandboxUserHome,
+): SandboxInstance;
+export function createOrRestoreSandbox(
+	provider: SandboxProvider,
+	id: SandboxId,
+	restoreSnapshotId?: string,
+	options?: CreateOrRestoreSandboxOptions,
+): SandboxInstance;
+export function createOrRestoreSandbox(
+	provider: SandboxProvider,
+	id: SandboxId,
+	restoreSnapshotId?: string,
+	optionsOrImage: CreateOrRestoreSandboxOptions | string = {},
+	legacyResources?: ComputeResources,
+	legacyUserHome?: SandboxUserHome,
 ): SandboxInstance {
+	const options: CreateOrRestoreSandboxOptions =
+		typeof optionsOrImage === 'string' ||
+		legacyResources !== undefined ||
+		legacyUserHome !== undefined
+			? {
+					...(typeof optionsOrImage === 'string' ? { image: optionsOrImage } : {}),
+					...(legacyResources ? { resources: legacyResources } : {}),
+					...(legacyUserHome ? { userHome: legacyUserHome } : {}),
+				}
+			: optionsOrImage;
 	const fs = asFilesystemSnapshots(provider);
 	const common: CreateSandboxOptions = {
 		reuse: false,

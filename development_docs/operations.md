@@ -277,7 +277,8 @@ beside (not inside) the 5-minute maintenance cycle. Three mechanisms compose:
   default 4h). The sweep also detects a stale heartbeat with no active connections.
   `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` sets this idle period. Apps can override
   it with `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS`. At either deadline, the
-  sweep saves and tears down via `SandboxProvisioner.teardown`.
+  sweep tears down the session. It saves persistent edit sessions first. App
+  sessions stop without persistence.
   The provider-side cap (CoreWeave/E2B `*_MAX_LIFETIME_SECONDS`) is demoted to an
   **orphan backstop**: unset it and it defaults to 2× the session lifetime;
   setting it below the session lifetime fails boot.
