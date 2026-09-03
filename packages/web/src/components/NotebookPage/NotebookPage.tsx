@@ -102,15 +102,12 @@ function activityWarning(name: string, state: 'active' | 'idle' | 'unknown' | 's
 	return `${name}'s connection could not be checked. They may still be active.`;
 }
 
-/**
- * Point the embedded marimo app at the marimohub theme via its `?theme=` query
- * param (marimo-team/marimo#10196). The origin base lets a relative proxy URL
- * resolve; `theme` is already `'light' | 'dark'`.
- */
-function withThemeParam(url: string, theme: Theme): string {
+function withMarimoParams(url: string, theme: Theme, isApp: boolean): string {
 	try {
+		// The origin base is required for proxy-mode URLs, which are relative.
 		const parsed = new URL(url, window.location.origin);
 		parsed.searchParams.set('theme', theme);
+		if (isApp) parsed.searchParams.set('show-code', 'false');
 		return parsed.toString();
 	} catch {
 		return url;
@@ -215,7 +212,7 @@ function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }
 	const [iframeLocation, setIframeLocation] = useState(() => ({ sandboxUrl, theme }));
 	if (iframeLocation.sandboxUrl !== sandboxUrl) setIframeLocation({ sandboxUrl, theme });
 	const iframeSrc = iframeLocation.sandboxUrl
-		? withThemeParam(iframeLocation.sandboxUrl, iframeLocation.theme)
+		? withMarimoParams(iframeLocation.sandboxUrl, iframeLocation.theme, isApp)
 		: undefined;
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the

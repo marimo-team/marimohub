@@ -12,10 +12,10 @@ describe('NotebookPage app variant', () => {
 		const impl = makeFetch({ role: 'editor', session: appSession() });
 		const { container } = renderPage('app');
 
-		await waitFor(() =>
-			expect(
-				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
-			).not.toBeNull(),
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(container.querySelector('iframe')).toHaveAttribute(
+			'src',
+			'https://sandbox.example/kernel?theme=light&show-code=false',
 		);
 		expect(container.querySelector('iframe')?.getAttribute('sandbox')).toContain(
 			'allow-same-origin',
@@ -110,10 +110,10 @@ describe('NotebookPage app variant', () => {
 		});
 		const { container } = renderPage('app');
 
-		await waitFor(() =>
-			expect(
-				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
-			).not.toBeNull(),
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(container.querySelector('iframe')).toHaveAttribute(
+			'src',
+			'https://sandbox.example/kernel?theme=light&show-code=false',
 		);
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.getByText('App')).toBeInTheDocument();
