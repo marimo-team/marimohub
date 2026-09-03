@@ -17112,7 +17112,7 @@ paths:
       description: Mint a v2 personal access token with an immutable action and
         project grant. Selected projects must be visible to the caller when the
         token is created.
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -17491,7 +17491,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI login
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
@@ -17866,7 +17866,7 @@ paths:
       tags:
         - Auth
       summary: Preview a CLI device login
-      security: *a2
+      security: *a3
       parameters:
         - schema:
             type: string
@@ -18047,7 +18047,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI device login
-      security: *a2
+      security: *a3
       requestBody:
         required: true
         content:
