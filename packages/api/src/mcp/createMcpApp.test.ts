@@ -542,6 +542,27 @@ describe('MCP OAuth app', () => {
 		expect(unknownToken.headers.get('cache-control')).toBe('no-store');
 	});
 
+	it.each(['register', 'authorize', 'token', 'revoke'] as const)(
+		'routes %s through its shared deployment budget',
+		async (endpoint) => {
+			const deps = makeTestDeps(new MemoryBucket(), {
+				mcp: { publicBaseUrl: 'https://hub.example.com' },
+			});
+			const consume = vi.spyOn(deps.services.oauthRateLimits, 'consume').mockResolvedValue(false);
+			const app = createApi(deps);
+
+			const response = await app.request(`/${endpoint}`, { method: 'POST' });
+
+			expect(response.status).toBe(429);
+			expect(await response.json()).toEqual({
+				error: 'too_many_requests',
+				error_description: 'Try again later',
+			});
+			expect(consume).toHaveBeenCalledOnce();
+			expect(consume).toHaveBeenCalledWith(endpoint);
+		},
+	);
+
 	it('rate limits authorization requests before they create unbounded records', async () => {
 		const bucket = new MemoryBucket();
 		const deps = makeTestDeps(bucket, {
@@ -579,6 +600,15 @@ describe('MCP OAuth app', () => {
 			makeTestDeps(bucket, { mcp: { publicBaseUrl: 'https://limited.example.com' } }),
 		);
 		expect((await replica.request(authorizeUrl, { redirect: 'manual' })).status).toBe(429);
+
+		const independent = createApi(
+			makeTestDeps(new MemoryBucket(), {
+				mcp: { publicBaseUrl: 'https://limited.example.com' },
+			}),
+		);
+		const independentClientId = await registerClient(independent);
+		authorizeUrl.searchParams.set('client_id', independentClientId);
+		expect((await independent.request(authorizeUrl, { redirect: 'manual' })).status).toBe(302);
 	});
 
 	it('fails closed when the shared authorization budget is unavailable', async () => {

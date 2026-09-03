@@ -59,6 +59,7 @@ describe('OAuthClientStore', () => {
 		await expect(store.register({ redirect_uris: [redirectUri] })).rejects.toThrow(
 			/OAuth redirect_uris/,
 		);
+		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
 	});
 
 	it.each([
@@ -105,9 +106,12 @@ describe('OAuthClientStore', () => {
 		expect(await store.get(client.client_id)).toBeNull();
 	});
 
-	it('expires a registration at the exact TTL boundary', async () => {
+	it('retains an immutable registration until the exact TTL boundary', async () => {
 		const client = await store.register({ redirect_uris: ['https://client.example/callback'] });
-		vi.advanceTimersByTime(OAuthClientStore.CLIENT_TTL_MS);
+		vi.advanceTimersByTime(OAuthClientStore.CLIENT_TTL_MS - 1);
+
+		expect(await store.get(client.client_id)).toEqual(client);
+		vi.advanceTimersByTime(1);
 
 		expect(await store.get(client.client_id)).toBeNull();
 	});
