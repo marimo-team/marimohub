@@ -97,6 +97,11 @@ describe('AdminPolicyAnalyzerPage', () => {
 								presentation: 'allowed',
 								trace: [
 									{
+										stage: 'constraint',
+										status: 'skipped',
+										code: 'resource_unlabeled',
+									},
+									{
 										stage: 'final',
 										status: 'passed',
 										code: 'authorization_allowed',
@@ -121,15 +126,34 @@ describe('AdminPolicyAnalyzerPage', () => {
 
 		expect(await screen.findByRole('heading', { name: 'Policy Analyzer' })).toBeInTheDocument();
 		expect(screen.getByText('Login Policy: Not Configured')).toBeInTheDocument();
-		const entitlementsSummary = screen.getByText('Entitlements & Standing');
+		expect(screen.queryByText('Deterministic')).not.toBeInTheDocument();
+		expect(screen.queryByText('Read-Only')).not.toBeInTheDocument();
+		expect(screen.queryByText('Versioned')).not.toBeInTheDocument();
+		expect(screen.queryByRole('textbox', { name: 'Subject ID' })).not.toBeInTheDocument();
+		const userSelect = screen.getByRole('combobox', { name: 'User' });
+		await user.selectOptions(userSelect, '');
+		expect(screen.getByRole('textbox', { name: 'Subject ID' })).toHaveValue('test-user');
+		expect(screen.getByRole('textbox', { name: 'Subject Email' })).toHaveValue('test@example.com');
+		await user.clear(screen.getByRole('textbox', { name: 'Subject ID' }));
+		await user.type(screen.getByRole('textbox', { name: 'Subject ID' }), 'custom-user');
+		await user.clear(screen.getByRole('textbox', { name: 'Subject Email' }));
+		await user.type(screen.getByRole('textbox', { name: 'Subject Email' }), 'custom@example.com');
+		await user.selectOptions(userSelect, 'admin');
+		expect(screen.queryByRole('textbox', { name: 'Subject ID' })).not.toBeInTheDocument();
+		await user.selectOptions(userSelect, '');
+		expect(screen.getByRole('textbox', { name: 'Subject ID' })).toHaveValue('custom-user');
+		expect(screen.getByRole('textbox', { name: 'Subject Email' })).toHaveValue(
+			'custom@example.com',
+		);
+		const entitlementsSummary = screen.getByText('Subject Options');
 		const entitlementsSection = entitlementsSummary.closest('details');
 		expect(entitlementsSection).not.toHaveAttribute('open');
-		expect(screen.getByText(/Explicit entitlements affect/)).not.toBeVisible();
+		expect(screen.getByText('Select the entitlements that this identity has.')).not.toBeVisible();
 		await user.click(entitlementsSummary);
 		expect(entitlementsSection).toHaveAttribute('open');
-		expect(screen.getByText(/Explicit entitlements affect/)).toBeVisible();
+		expect(screen.getByText('Select the entitlements that this identity has.')).toBeVisible();
 		expect(screen.getByRole('textbox', { name: 'JSON suite' })).not.toBeVisible();
-		await user.click(screen.getByText('JSON Test Suite'));
+		await user.click(screen.getByText('JSON Suite'));
 		const suiteEditor = screen.getByRole('textbox', { name: 'JSON suite' });
 		expect(suiteEditor).toBeVisible();
 		fireEvent.change(suiteEditor, {
@@ -139,9 +163,16 @@ describe('AdminPolicyAnalyzerPage', () => {
 		expect(screen.getByRole('button', { name: /Run Suite/ })).toBeDisabled();
 		await user.click(screen.getByRole('button', { name: /Run Scenario/ }));
 		expect(await screen.findByRole('heading', { name: 'Scenario Passed' })).toBeInTheDocument();
+		const traceSummary = screen.getByText('Decision Details');
 		expect(
 			screen.getByText('The final authorization decision allows the action.'),
-		).toBeInTheDocument();
+		).not.toBeVisible();
+		await user.click(traceSummary);
+		expect(screen.getByText('The final authorization decision allows the action.')).toBeVisible();
+		const skippedStep = screen
+			.getByText('No resource labels apply to this decision.')
+			.closest('li');
+		expect(skippedStep?.querySelector('svg')).toHaveClass('lucide-circle-dashed');
 	});
 
 	it('sends the API app mode for an app session scenario', async () => {
@@ -164,7 +195,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 					schema_version: 1,
 					max_cases: 25,
 					capabilities: {
-						login_policy: false,
+						login_policy: true,
 						resource_security: true,
 						live_self_context: false,
 					},
@@ -209,6 +240,10 @@ describe('AdminPolicyAnalyzerPage', () => {
 		);
 
 		await screen.findByRole('heading', { name: 'Policy Analyzer' });
+		const loginPolicySummary = screen.getByText('Login Policy');
+		expect(screen.getByRole('checkbox', { name: 'Evaluate the login policy' })).not.toBeVisible();
+		await user.click(loginPolicySummary);
+		expect(screen.getByRole('checkbox', { name: 'Evaluate the login policy' })).toBeVisible();
 		await user.selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'session.start');
 		const mode = screen.getByRole('combobox', { name: 'Session Mode' });
 		expect(mode).toHaveValue('edit');

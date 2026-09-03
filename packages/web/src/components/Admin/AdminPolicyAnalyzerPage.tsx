@@ -2,16 +2,14 @@ import { useDeferredValue, useMemo, useRef, useState } from 'react';
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
 import {
 	AlertTriangle,
-	Braces,
 	CheckCircle2,
 	ChevronDown,
+	CircleDashed,
 	Download,
 	FileJson,
 	Info,
-	LockKeyhole,
 	Play,
 	Plus,
-	ShieldCheck,
 	Upload,
 	XCircle,
 } from 'lucide-react';
@@ -87,14 +85,14 @@ function parseSuite(value: string, options?: { allowEmpty?: boolean }): PolicySu
 	if (candidate.schema_version !== 1) throw new Error('Use suite schema version 1.');
 	if (!Array.isArray(candidate.cases)) throw new Error('The suite must contain a cases array.');
 	if (!options?.allowEmpty && candidate.cases.length === 0) {
-		throw new Error('Add at least 1 case before you run the suite.');
+		throw new Error('Add at least 1 scenario before you run the suite.');
 	}
 	return parsed as PolicySuiteV1;
 }
 
 function assertSuiteLimit(suite: PolicySuiteV1, maximum: number): void {
 	if (suite.cases.length > maximum) {
-		throw new Error(`A suite can contain at most ${maximum} cases.`);
+		throw new Error(`A suite can contain at most ${maximum} scenarios.`);
 	}
 }
 
@@ -118,15 +116,15 @@ function title(value: string): string {
 
 function traceText(code: string): string {
 	const known: Record<string, string> = {
-		action_rule_loaded: 'Loaded the production rule for this action.',
-		project_active: 'The project is active, so evaluation can continue.',
+		action_rule_loaded: 'The analyzer loaded the rule for this action.',
+		project_active: 'The project is active. Evaluation continues.',
 		project_deleted: 'The project is deleted, so authorization stops.',
 		resource_unlabeled: 'No resource labels apply to this decision.',
-		baseline_denied: 'Role or session policy denied access before label evaluation.',
-		resource_constraints_satisfied: 'The subject context satisfies every resource label.',
-		resource_constraints_constraint: 'The subject context does not satisfy the resource labels.',
-		resource_constraints_missing_context: 'A valid subject context is required for this resource.',
-		resource_constraints_unavailable: 'The constraint policy did not return a trusted decision.',
+		baseline_denied: 'The role or session rule denied access before the label check.',
+		resource_constraints_satisfied: 'The subject meets every resource-label requirement.',
+		resource_constraints_constraint: 'The subject does not meet the resource-label requirements.',
+		resource_constraints_missing_context: 'This resource requires a valid security context.',
+		resource_constraints_unavailable: 'The resource-label check did not return a trusted result.',
 		session_rule_satisfied: 'The session rule permits this action.',
 		session_rule_denied: 'The session rule denies this action.',
 		session_start_satisfied: 'The role and viewer mode permit this session mode.',
@@ -150,18 +148,17 @@ function traceText(code: string): string {
 function problemText(code: string): string {
 	const messages: Record<string, string> = {
 		login_policy_unavailable:
-			'No login policy is configured. Disable the login stage and run again.',
+			'No login policy is configured. Remove the login check and run again.',
 		login_policy_timeout:
 			'The login policy timed out. Reduce policy work or increase its configured timeout.',
-		login_policy_error:
-			'The login policy failed. Check the policy module logs for the bounded error.',
+		login_policy_error: 'The login policy failed. Read the policy module logs for error details.',
 		login_policy_invalid_result:
 			'The login policy returned an invalid contract result. Fix the module output.',
-		linked_login_stage_required: 'Login-derived entitlements require a login stage in this case.',
+		linked_login_stage_required: 'Include the login policy for this scenario.',
 		live_context_requires_self:
-			'Live context is limited to the signed-in admin. Use synthetic context for another subject.',
+			'Current security context is available only for the signed-in admin. Use test context for another subject.',
 		stored_resource_inaccessible:
-			'The stored resource is missing or not readable by the signed-in admin. Use a hypothetical resource instead.',
+			'The stored resource does not exist, or the signed-in admin cannot read it. Use a test resource instead.',
 		stored_notebook_session_mismatch:
 			'The selected notebook does not own this session. Clear the notebook or select the matching one.',
 	};
@@ -277,9 +274,11 @@ function ResultCard({ result }: { result: PolicySuiteResult }) {
 						<header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
 							<div className="min-w-0">
 								<h3 className="truncate font-medium">{entry.name}</h3>
-								<code translate="no" className="break-all text-xs text-muted-foreground">
-									{entry.id}
-								</code>
+								{!singleCase ? (
+									<code translate="no" className="break-all text-xs text-muted-foreground">
+										{entry.id}
+									</code>
+								) : null}
 							</div>
 							<Chip className={entry.valid ? 'text-emerald-700' : 'text-destructive'}>
 								{entry.valid ? 'Passed' : 'Failed'}
@@ -348,8 +347,10 @@ function ResultCard({ result }: { result: PolicySuiteResult }) {
 								<section aria-label="Authorization result">
 									<div className="flex flex-wrap items-center gap-2">
 										<h4 className="text-sm font-medium">Authorization</h4>
-										<Chip>{actualAllowed ? 'Allowed' : 'Denied'}</Chip>
-										<Chip>{title(entry.authorization.presentation)}</Chip>
+										<Chip>Decision: {actualAllowed ? 'Allowed' : 'Denied'}</Chip>
+										{!actualAllowed ? (
+											<Chip>Response: {title(entry.authorization.presentation)}</Chip>
+										) : null}
 										{entry.authorization.decision.role ? (
 											<Chip>{title(entry.authorization.decision.role)} Role</Chip>
 										) : null}
@@ -374,46 +375,59 @@ function ResultCard({ result }: { result: PolicySuiteResult }) {
 												: ''}
 										</strong>
 									</div>
-									<ol className="mt-4 flex flex-col gap-2" aria-label="Decision trace">
-										{entry.authorization.trace.map((step) => (
-											<li key={`${step.stage}-${step.code}`} className="flex gap-3 text-sm">
-												{step.status === 'passed' ? (
-													<CheckCircle2
-														aria-hidden="true"
-														className="mt-0.5 size-4 shrink-0 text-emerald-600"
-													/>
-												) : step.status === 'failed' ? (
-													<XCircle
-														aria-hidden="true"
-														className="mt-0.5 size-4 shrink-0 text-destructive"
-													/>
-												) : (
-													<span
-														aria-hidden="true"
-														className="mt-2 size-1.5 shrink-0 rounded-full bg-muted-foreground"
-													/>
-												)}
-												<div className="min-w-0 flex-1">
-													<div className="flex flex-wrap items-baseline gap-x-2">
-														<span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-															{step.stage}
-														</span>
-														<p className="break-words">{traceText(step.code)}</p>
+									<details className="group mt-4 overflow-hidden rounded-lg border">
+										<summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+											<span className="font-medium">Decision Details</span>
+											<span className="flex items-center gap-2 text-xs text-muted-foreground">
+												{entry.authorization.trace.length}{' '}
+												{entry.authorization.trace.length === 1 ? 'step' : 'steps'}
+												<ChevronDown
+													aria-hidden="true"
+													className="size-4 transition-transform group-open:rotate-180 motion-reduce:transition-none"
+												/>
+											</span>
+										</summary>
+										<ol className="flex flex-col gap-2 border-t p-3" aria-label="Decision trace">
+											{entry.authorization.trace.map((step) => (
+												<li key={`${step.stage}-${step.code}`} className="flex gap-3 text-sm">
+													{step.status === 'passed' ? (
+														<CheckCircle2
+															aria-hidden="true"
+															className="mt-0.5 size-4 shrink-0 text-emerald-600"
+														/>
+													) : step.status === 'failed' ? (
+														<XCircle
+															aria-hidden="true"
+															className="mt-0.5 size-4 shrink-0 text-destructive"
+														/>
+													) : (
+														<CircleDashed
+															aria-hidden="true"
+															className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+														/>
+													)}
+													<div className="min-w-0 flex-1">
+														<div className="flex flex-wrap items-baseline gap-x-2">
+															<span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+																{step.stage}
+															</span>
+															<p className="break-words">{traceText(step.code)}</p>
+														</div>
+														{step.details ? (
+															<details className="mt-1">
+																<summary className="cursor-pointer text-xs text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+																	Structured Evidence
+																</summary>
+																<pre className="mt-2 max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-all">
+																	{JSON.stringify(step.details, null, 2)}
+																</pre>
+															</details>
+														) : null}
 													</div>
-													{step.details ? (
-														<details className="mt-1">
-															<summary className="cursor-pointer text-xs text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-																View Structured Evidence
-															</summary>
-															<pre className="mt-2 max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-all">
-																{JSON.stringify(step.details, null, 2)}
-															</pre>
-														</details>
-													) : null}
-												</div>
-											</li>
-										))}
-									</ol>
+												</li>
+											))}
+										</ol>
+									</details>
 								</section>
 							) : entry.login?.outcome === 'deny' ? (
 								<p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
@@ -423,7 +437,7 @@ function ResultCard({ result }: { result: PolicySuiteResult }) {
 
 							{entry.errors.length > 0 ? (
 								<div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-3 text-sm text-destructive">
-									<p className="font-medium">The analyzer could not complete this case.</p>
+									<p className="font-medium">The analyzer could not complete this scenario.</p>
 									<ul className="mt-1 list-disc space-y-1 pl-5">
 										{entry.errors.map((error) => (
 											<li key={`${error.stage}-${error.code}`}>{problemText(error.code)}</li>
@@ -439,49 +453,23 @@ function ResultCard({ result }: { result: PolicySuiteResult }) {
 	);
 }
 
-function AnalyzerOverview({ metadata }: { metadata: PolicyAnalyzerMetadata }) {
+function AnalyzerCapabilities({ metadata }: { metadata: PolicyAnalyzerMetadata }) {
 	return (
-		<>
-			<div className="mb-6 grid gap-3 sm:grid-cols-3">
-				<div className="flex gap-3 rounded-lg border bg-card px-3 py-3">
-					<ShieldCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
-					<div>
-						<p className="text-sm font-medium">Deterministic</p>
-						<p className="text-xs text-muted-foreground">No generated reasoning</p>
-					</div>
-				</div>
-				<div className="flex gap-3 rounded-lg border bg-card px-3 py-3">
-					<LockKeyhole aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
-					<div>
-						<p className="text-sm font-medium">Read-Only</p>
-						<p className="text-xs text-muted-foreground">No policy or access changes</p>
-					</div>
-				</div>
-				<div className="flex gap-3 rounded-lg border bg-card px-3 py-3">
-					<Braces aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
-					<div>
-						<p className="text-sm font-medium">Versioned</p>
-						<p className="text-xs text-muted-foreground">Portable version 1 suites</p>
-					</div>
-				</div>
-			</div>
-			<div className="mb-6 flex flex-wrap gap-2" aria-label="Analyzer capabilities">
-				<Chip>
-					Login Policy: {metadata.capabilities.login_policy ? 'Available' : 'Not Configured'}
-				</Chip>
-				<Chip>
-					Resource Security:{' '}
-					{metadata.capabilities.resource_security ? 'Available' : 'Not Configured'}
-				</Chip>
-				<Chip>{metadata.max_cases} Cases Maximum</Chip>
-			</div>
-		</>
+		<div className="mb-6 flex flex-wrap gap-2" aria-label="Analyzer capabilities">
+			<Chip>
+				Login Policy: {metadata.capabilities.login_policy ? 'Available' : 'Not Configured'}
+			</Chip>
+			<Chip>
+				Resource Labels: {metadata.capabilities.resource_security ? 'Available' : 'Not Configured'}
+			</Chip>
+		</div>
 	);
 }
 
 interface SubjectStepProps {
 	metadata: PolicyAnalyzerMetadata;
 	users: readonly AdminUser[];
+	selectedUserId: string;
 	subjectId: string;
 	subjectEmail: string;
 	caseName: string;
@@ -504,6 +492,7 @@ interface SubjectStepProps {
 function SubjectStep({
 	metadata,
 	users,
+	selectedUserId,
 	subjectId,
 	subjectEmail,
 	caseName,
@@ -523,25 +512,24 @@ function SubjectStep({
 	onUserInfoClaimsChange,
 }: SubjectStepProps) {
 	const selectedEntitlements = useMemo(() => new Set(entitlements), [entitlements]);
+	const knownUser = users.some((entry) => entry.id === selectedUserId);
 	return (
 		<StepCard
 			number={1}
-			title="Choose the Subject"
-			description="Select a known user or enter a hypothetical identity."
+			title="Who Is Requesting Access?"
+			description="Select a user or enter a test identity."
 		>
-			<div className="grid gap-3 sm:grid-cols-2">
+			<div className="grid gap-3">
 				<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
-					Known User
+					User
 					<select
 						name="known-user"
 						autoComplete="off"
 						className={inputClass}
-						value={users.some((entry) => entry.id === subjectId) ? subjectId : ''}
-						onChange={(event) => {
-							if (event.target.value) onSelectUser(event.target.value);
-						}}
+						value={knownUser ? selectedUserId : ''}
+						onChange={(event) => onSelectUser(event.target.value)}
 					>
-						<option value="">Hypothetical user</option>
+						<option value="">Test identity</option>
 						{users.map((entry) => (
 							<option key={entry.id} value={entry.id}>
 								{entry.name} · {entry.email}
@@ -549,109 +537,127 @@ function SubjectStep({
 						))}
 					</select>
 				</label>
-				<TextField label="Subject ID" value={subjectId} onChange={onSubjectIdChange} />
-				<TextField label="Subject Email" value={subjectEmail} onChange={onSubjectEmailChange} />
-				<TextField label="Case Name" value={caseName} onChange={onCaseNameChange} />
-			</div>
-
-			<AdvancedSection title="Entitlements & Standing" summary={`${entitlements.length} selected`}>
-				<p className="mb-3 text-xs text-muted-foreground">
-					{loginEnabled
-						? 'Select the exact normalized entitlements expected from login. An allowed login passes them to authorization.'
-						: 'Explicit entitlements affect deployment standing and default roles.'}
-				</p>
-				<div className="grid gap-2 sm:grid-cols-2">
-					{metadata.entitlements.map((entitlement) => (
-						<label
-							key={entitlement}
-							className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm hover:bg-muted/50"
-						>
-							<input
-								type="checkbox"
-								aria-label={entitlement}
-								checked={selectedEntitlements.has(entitlement)}
-								onChange={(event) =>
-									setEntitlements((current) =>
-										event.target.checked
-											? [...current, entitlement]
-											: current.filter((item) => item !== entitlement),
-									)
-								}
-							/>
-							<code translate="no" className="break-all">
-								{entitlement}
-							</code>
-						</label>
-					))}
-				</div>
-			</AdvancedSection>
-
-			<div className="mt-4 rounded-lg border bg-muted/20 p-3">
-				<label aria-label="Evaluate the login policy" className="flex items-start gap-3 text-sm">
-					<input
-						type="checkbox"
-						aria-label="Evaluate the login policy"
-						className="mt-1"
-						checked={loginEnabled}
-						disabled={!metadata.capabilities.login_policy}
-						onChange={(event) => onLoginEnabledChange(event.target.checked)}
-					/>
-					<span>
-						<span className="font-medium">Evaluate the Login Policy</span>
-						<span className="mt-0.5 block text-xs text-muted-foreground">
-							{metadata.capabilities.login_policy
-								? 'Use sample claims and pass allowed entitlements to authorization.'
-								: 'No login policy is configured for this deployment.'}
-						</span>
-					</span>
-				</label>
-				{loginEnabled ? (
-					<div className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2">
-						<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
-							Expected Login Decision
-							<select
-								name="expected-login-decision"
-								autoComplete="off"
-								className={inputClass}
-								value={expectedLoginOutcome}
-								onChange={(event) =>
-									onExpectedLoginOutcomeChange(event.target.value as LoginOutcome)
-								}
-							>
-								<option value="allow">Allow</option>
-								<option value="deny">Deny</option>
-							</select>
-						</label>
-						<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:col-span-2">
-							ID-Token Claims
-							<textarea
-								aria-label="ID-token claims"
-								name="id-token-claims"
-								autoComplete="off"
-								spellCheck={false}
-								className={textAreaClass}
-								rows={6}
-								value={idClaims}
-								onChange={(event) => onIdClaimsChange(event.target.value)}
-							/>
-						</label>
-						<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:col-span-2">
-							UserInfo Claims <span className="font-normal">(Optional)</span>
-							<textarea
-								aria-label="UserInfo claims"
-								name="userinfo-claims"
-								autoComplete="off"
-								spellCheck={false}
-								className={textAreaClass}
-								rows={4}
-								placeholder={'{\n  "department": "analytics"\n}'}
-								value={userInfoClaims}
-								onChange={(event) => onUserInfoClaimsChange(event.target.value)}
-							/>
-						</label>
+				{!knownUser ? (
+					<div className="grid gap-3 sm:grid-cols-2">
+						<TextField label="Subject ID" value={subjectId} onChange={onSubjectIdChange} />
+						<TextField label="Subject Email" value={subjectEmail} onChange={onSubjectEmailChange} />
 					</div>
 				) : null}
 			</div>
+
+			<AdvancedSection
+				title="Subject Options"
+				summary={`${entitlements.length} ${entitlements.length === 1 ? 'entitlement' : 'entitlements'}`}
+			>
+				<TextField label="Scenario Name" value={caseName} onChange={onCaseNameChange} />
+				<div className="mt-4 border-t pt-4">
+					<p className="text-xs font-medium text-muted-foreground">Entitlements</p>
+					<p className="mt-1 text-xs text-muted-foreground">
+						{loginEnabled
+							? 'Select the entitlements that the login policy must return.'
+							: 'Select the entitlements that this identity has.'}
+					</p>
+					{metadata.entitlements.length > 0 ? (
+						<div className="mt-2 grid gap-2 sm:grid-cols-2">
+							{metadata.entitlements.map((entitlement) => (
+								<label
+									key={entitlement}
+									className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm hover:bg-muted/50"
+								>
+									<input
+										type="checkbox"
+										aria-label={entitlement}
+										checked={selectedEntitlements.has(entitlement)}
+										onChange={(event) =>
+											setEntitlements((current) =>
+												event.target.checked
+													? [...current, entitlement]
+													: current.filter((item) => item !== entitlement),
+											)
+										}
+									/>
+									<code translate="no" className="break-all">
+										{entitlement}
+									</code>
+								</label>
+							))}
+						</div>
+					) : (
+						<p className="mt-2 text-sm text-muted-foreground">No entitlements are configured.</p>
+					)}
+				</div>
+			</AdvancedSection>
+
+			{metadata.capabilities.login_policy ? (
+				<AdvancedSection
+					title="Login Policy"
+					summary={loginEnabled ? `Expected ${title(expectedLoginOutcome)}` : 'Not included'}
+				>
+					<label aria-label="Evaluate the login policy" className="flex items-start gap-3 text-sm">
+						<input
+							type="checkbox"
+							aria-label="Evaluate the login policy"
+							className="mt-1"
+							checked={loginEnabled}
+							onChange={(event) => onLoginEnabledChange(event.target.checked)}
+						/>
+						<span>
+							<span className="font-medium">Include the Login Policy</span>
+							<span className="mt-0.5 block text-xs text-muted-foreground">
+								Provide test claims before the authorization check.
+							</span>
+						</span>
+					</label>
+					{loginEnabled ? (
+						<div className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2">
+							<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+								Expected Decision
+								<select
+									name="expected-login-decision"
+									autoComplete="off"
+									className={inputClass}
+									value={expectedLoginOutcome}
+									onChange={(event) =>
+										onExpectedLoginOutcomeChange(event.target.value as LoginOutcome)
+									}
+								>
+									<option value="allow">Allow</option>
+									<option value="deny">Deny</option>
+								</select>
+							</label>
+							<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:col-span-2">
+								ID-Token Claims
+								<textarea
+									aria-label="ID-token claims"
+									name="id-token-claims"
+									autoComplete="off"
+									spellCheck={false}
+									className={textAreaClass}
+									rows={6}
+									value={idClaims}
+									onChange={(event) => onIdClaimsChange(event.target.value)}
+								/>
+							</label>
+							<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:col-span-2">
+								<span>
+									UserInfo Claims <span className="font-normal">(Optional)</span>
+								</span>
+								<textarea
+									aria-label="UserInfo claims"
+									name="userinfo-claims"
+									autoComplete="off"
+									spellCheck={false}
+									className={textAreaClass}
+									rows={4}
+									placeholder={'{\n  "department": "analytics"\n}'}
+									value={userInfoClaims}
+									onChange={(event) => onUserInfoClaimsChange(event.target.value)}
+								/>
+							</label>
+						</div>
+					) : null}
+				</AdvancedSection>
+			) : null}
 		</StepCard>
 	);
 }
@@ -716,14 +722,15 @@ function ResourceStep({
 	return (
 		<StepCard
 			number={2}
-			title="Choose the Action & Resource"
-			description="The selected action controls which resource fields and rules apply."
+			title="What Are They Trying to Do?"
+			description="Choose an action and the resource that it applies to."
 		>
 			<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
 				Action
 				<select
 					name="authorization-action"
 					autoComplete="off"
+					translate="no"
 					className={inputClass}
 					value={action}
 					onChange={(event) => onActionChange(event.target.value as Action)}
@@ -735,20 +742,17 @@ function ResourceStep({
 					))}
 				</select>
 			</label>
-			<div className="mt-3 flex gap-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-				<Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
-				<p>
-					Scope: <code translate="no">{scope}</code>
-					{actionRule?.minimum_role ? ` · Minimum role: ${actionRule.minimum_role}` : ''}
-					{actionRule?.requires_super_admin ? ' · Requires super admin' : ''}
-					{actionRule?.denied_as ? ` · Denial appears as ${actionRule.denied_as}` : ''}
-				</p>
-			</div>
+			<p className="mt-2 text-xs text-muted-foreground">
+				Rule: {title(scope)} scope
+				{actionRule?.minimum_role ? ` · ${title(actionRule.minimum_role)} role or higher` : ''}
+				{actionRule?.requires_super_admin ? ' · Super admin required' : ''}
+				{actionRule?.denied_as ? ` · Denial: ${title(actionRule.denied_as)}` : ''}
+			</p>
 
 			{scope !== 'deployment' ? (
 				<>
 					<fieldset className="mt-4">
-						<legend className="text-xs font-medium text-muted-foreground">Resource Source</legend>
+						<legend className="text-xs font-medium text-muted-foreground">Resource</legend>
 						<div className="mt-1.5 grid grid-cols-2 gap-2">
 							{(['synthetic', 'stored'] as const).map((value) => (
 								<label
@@ -761,12 +765,12 @@ function ResourceStep({
 								>
 									<input
 										type="radio"
-										aria-label={value === 'synthetic' ? 'Hypothetical' : 'Stored resource'}
+										aria-label={value === 'synthetic' ? 'Test resource' : 'Existing resource'}
 										name="resource-source"
 										checked={source === value}
 										onChange={() => onSourceChange(value)}
 									/>
-									{value === 'synthetic' ? 'Hypothetical' : 'Stored Resource'}
+									{value === 'synthetic' ? 'Test Resource' : 'Existing Resource'}
 								</label>
 							))}
 						</div>
@@ -803,7 +807,7 @@ function ResourceStep({
 					) : (
 						<div className="mt-4 grid gap-3 sm:grid-cols-2">
 							<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
-								Subject Relationship
+								Project Relationship
 								<select
 									name="subject-relationship"
 									autoComplete="off"
@@ -811,8 +815,8 @@ function ResourceStep({
 									value={relationship}
 									onChange={(event) => onRelationshipChange(event.target.value as Relationship)}
 								>
-									<option value="owner">Project Owner</option>
-									<option value="member">Project Member</option>
+									<option value="owner">Owner</option>
+									<option value="member">Member</option>
 									<option value="none">No Relationship</option>
 								</select>
 							</label>
@@ -855,7 +859,7 @@ function ResourceStep({
 
 					{source === 'synthetic' ? (
 						<AdvancedSection
-							title="Resource Lifecycle & Labels"
+							title="Resource Options"
 							summary={requiredClassification || title(projectStatus)}
 						>
 							<div className="grid gap-3 sm:grid-cols-2">
@@ -898,7 +902,7 @@ function ResourceStep({
 				</>
 			) : (
 				<p className="mt-3 text-sm text-muted-foreground">
-					This deployment-scoped action does not require a project or session resource.
+					This action applies to the deployment. It does not require a project or session.
 				</p>
 			)}
 		</StepCard>
@@ -939,12 +943,12 @@ function ExpectedResultStep({
 	return (
 		<StepCard
 			number={3}
-			title="Set the Expected Result"
-			description="A scenario passes only when the actual decision matches this expectation."
+			title="What Result Do You Expect?"
+			description="The scenario passes when the analyzer returns this result."
 		>
 			<div className="grid gap-3 sm:grid-cols-2">
 				<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
-					Expected Authorization Decision
+					Expected Decision
 					<select
 						name="expected-authorization-decision"
 						autoComplete="off"
@@ -958,7 +962,9 @@ function ExpectedResultStep({
 				</label>
 				{!expectedAllowed ? (
 					<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
-						Expected Denial Category <span className="font-normal">(Optional)</span>
+						<span>
+							Expected Denial Category <span className="font-normal">(Optional)</span>
+						</span>
 						<select
 							name="expected-denial-category"
 							autoComplete="off"
@@ -990,9 +996,12 @@ function ExpectedResultStep({
 
 			{metadata.capabilities.resource_security ? (
 				<AdvancedSection
-					title="Subject Security Context"
+					title="Security Context"
 					summary={contextMode === 'live-self' ? 'Live self' : heldClassification || 'None'}
 				>
+					<p className="mb-3 text-xs text-muted-foreground">
+						Set the subject classification and compartments for resource-label checks.
+					</p>
 					<div className="grid gap-3 sm:grid-cols-2">
 						<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
 							Context Source
@@ -1003,22 +1012,22 @@ function ExpectedResultStep({
 								value={contextMode}
 								onChange={(event) => onContextModeChange(event.target.value as ContextMode)}
 							>
-								<option value="synthetic">Synthetic Context</option>
+								<option value="synthetic">Test Context</option>
 								<option value="live-self" disabled={!metadata.capabilities.live_self_context}>
-									Live Context for Signed-In Admin
+									Current Context for Signed-In Admin
 								</option>
 							</select>
 						</label>
 						{contextMode === 'synthetic' ? (
 							<>
 								<TextField
-									label="Held Classification"
+									label="Subject Classification"
 									placeholder={`${metadata.classification_order.at(-1) ?? 'LEVEL_3'}…`}
 									value={heldClassification}
 									onChange={onHeldClassificationChange}
 								/>
 								<TextField
-									label="Held Compartments"
+									label="Subject Compartments"
 									placeholder="team-a, project-b…"
 									value={heldCompartments}
 									onChange={onHeldCompartmentsChange}
@@ -1026,7 +1035,7 @@ function ExpectedResultStep({
 							</>
 						) : (
 							<p className="self-end text-xs text-muted-foreground">
-								Live context is available only for the signed-in admin.
+								The analyzer uses the security context of the signed-in admin.
 							</p>
 						)}
 					</div>
@@ -1063,7 +1072,7 @@ function ScenarioSummary({
 }: ScenarioSummaryProps) {
 	return (
 		<aside className="min-w-0 self-start rounded-xl border bg-card p-4 shadow-xs xl:sticky xl:top-4">
-			<h2 className="font-semibold">Scenario Summary</h2>
+			<h2 className="font-semibold">Scenario</h2>
 			<dl className="mt-4 space-y-3 text-sm">
 				<div>
 					<dt className="text-xs text-muted-foreground">Subject</dt>
@@ -1083,15 +1092,11 @@ function ScenarioSummary({
 					<div>
 						<dt className="text-xs text-muted-foreground">Resource</dt>
 						<dd className="font-medium">
-							{scope === 'deployment'
-								? 'Deployment'
-								: source === 'stored'
-									? 'Stored'
-									: 'Hypothetical'}
+							{scope === 'deployment' ? 'Deployment' : source === 'stored' ? 'Existing' : 'Test'}
 						</dd>
 					</div>
 					<div>
-						<dt className="text-xs text-muted-foreground">Authorization</dt>
+						<dt className="text-xs text-muted-foreground">Expected</dt>
 						<dd className="font-medium">
 							{expectedAllowed ? 'Allow' : 'Deny'}
 							{loginEnabled && expectedLoginOutcome === 'deny' ? ' (Conditional)' : ''}
@@ -1106,49 +1111,15 @@ function ScenarioSummary({
 				) : null}
 			</dl>
 
-			<div className="mt-5 border-t pt-4">
-				<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					Stages to Run
-				</p>
-				<ol className="mt-3 space-y-2 text-sm">
-					<li className="flex items-center gap-2">
-						<span
-							className={`flex size-5 items-center justify-center rounded-full ${loginEnabled ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}
-						>
-							1
-						</span>
-						<span className={loginEnabled ? '' : 'text-muted-foreground'}>
-							Login Policy {loginEnabled ? '' : '(Skipped)'}
-						</span>
-					</li>
-					<li className="flex items-center gap-2">
-						<span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
-							2
-						</span>
-						Authorization
-						{loginEnabled && expectedLoginOutcome === 'deny' ? ' (Skipped on Deny)' : ''}
-					</li>
-					<li className="flex items-center gap-2">
-						<span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
-							3
-						</span>
-						Expectation Check
-					</li>
-				</ol>
-			</div>
-
-			<div className="mt-5 flex flex-col gap-2">
+			<div className="mt-5 flex flex-col gap-2 border-t pt-4">
 				<Button variant="primary" onPress={onRun} isDisabled={isPending} className="w-full">
 					<Play aria-hidden="true" className="size-4" />
 					{isPending ? 'Running…' : 'Run Scenario'}
 				</Button>
 				<Button onPress={onAddToSuite} isDisabled={isPending} className="w-full">
-					<Plus aria-hidden="true" className="size-4" /> Add to JSON Suite
+					<Plus aria-hidden="true" className="size-4" /> Add to Suite
 				</Button>
 			</div>
-			<p className="mt-3 text-center text-xs text-muted-foreground">
-				Each run creates 1 bounded audit event.
-			</p>
 		</aside>
 	);
 }
@@ -1222,10 +1193,10 @@ function SuiteEditor({
 				<div className="flex min-w-0 items-center gap-3">
 					<FileJson aria-hidden="true" className="size-5 shrink-0 text-primary" />
 					<div className="min-w-0">
-						<h2 className="font-semibold">JSON Test Suite</h2>
+						<h2 className="font-semibold">JSON Suite</h2>
 						<p className="text-xs text-muted-foreground">
 							{suiteInfo.valid
-								? `${suiteInfo.count} of ${maximumCases} local cases · Version 1`
+								? `${suiteInfo.count} of ${maximumCases} scenarios · Version 1`
 								: suiteInfo.message}
 						</p>
 					</div>
@@ -1238,7 +1209,7 @@ function SuiteEditor({
 			<div className="border-t p-4">
 				<div className="flex flex-wrap items-center justify-between gap-3">
 					<p className="max-w-2xl text-sm text-muted-foreground">
-						Edit the exact portable suite contract, or import a version 1 file.
+						Import, edit, or export multiple scenarios in the version 1 JSON format.
 					</p>
 					<div className="flex gap-1">
 						<Button variant="ghost" size="sm" onPress={() => fileInput.current?.click()}>
@@ -1282,7 +1253,7 @@ function SuiteEditor({
 				/>
 				<div className="mt-4 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
 					<AlertTriangle aria-hidden="true" className="size-4 shrink-0" />
-					Exported suites can contain sensitive sample claims and subject context. Store them as
+					JSON suites can include sample claims and security context. Treat exported files as
 					sensitive data.
 				</div>
 				<textarea
@@ -1301,13 +1272,13 @@ function SuiteEditor({
 					<p
 						className={`text-xs ${suiteInfo.valid ? 'text-muted-foreground' : 'text-destructive'}`}
 					>
-						{suiteInfo.valid ? `${suiteInfo.count} cases ready locally` : suiteInfo.message}
+						{suiteInfo.valid ? `${suiteInfo.count} scenarios ready` : suiteInfo.message}
 					</p>
 					<Button variant="primary" onPress={onRun} isDisabled={isPending || !suiteInfo.valid}>
 						<FileJson aria-hidden="true" className="size-4" />
 						{isPending
 							? 'Running…'
-							: `Run Suite (${suiteInfo.count} ${suiteInfo.count === 1 ? 'Case' : 'Cases'})`}
+							: `Run Suite (${suiteInfo.count} ${suiteInfo.count === 1 ? 'Scenario' : 'Scenarios'})`}
 					</Button>
 				</div>
 			</div>
@@ -1344,11 +1315,11 @@ interface BuildPolicyCaseInput {
 }
 
 function buildPolicyCase(input: BuildPolicyCaseInput): PolicyCase {
-	if (!input.caseName.trim()) throw new Error('Enter a case name.');
+	if (!input.caseName.trim()) throw new Error('Enter a scenario name.');
 	if (!input.subjectId.trim()) throw new Error('Enter a subject ID.');
 	if (!input.subjectEmail.trim()) throw new Error('Enter a subject email.');
 	if (input.scope !== 'deployment' && input.source === 'stored' && !input.projectId) {
-		throw new Error('Select a stored project, or use a hypothetical resource.');
+		throw new Error('Select an existing project, or use a test resource.');
 	}
 	if (input.scope === 'session' && input.source === 'stored' && !input.sessionId.trim()) {
 		throw new Error('Enter the stored session ID.');
@@ -1454,8 +1425,9 @@ export default function AdminPolicyAnalyzerPage() {
 	const errorRef = useRef<HTMLDivElement>(null);
 	const firstUser = user ?? users[0];
 	const [caseName, setCaseName] = useState('Policy check');
-	const [subjectId, setSubjectId] = useState(firstUser?.id ?? 'test-user');
-	const [subjectEmail, setSubjectEmail] = useState(firstUser?.email ?? 'test@example.com');
+	const [selectedUserId, setSelectedUserId] = useState(firstUser?.id ?? '');
+	const [testSubjectId, setTestSubjectId] = useState('test-user');
+	const [testSubjectEmail, setTestSubjectEmail] = useState('test@example.com');
 	const [action, setAction] = useState<Action>('project.read');
 	const [source, setSource] = useState<'stored' | 'synthetic'>('synthetic');
 	const [projectId, setProjectId] = useState('');
@@ -1481,6 +1453,9 @@ export default function AdminPolicyAnalyzerPage() {
 	const [suiteNotice, setSuiteNotice] = useState<string | null>(null);
 	const [suiteText, setSuiteText] = useState(() => INITIAL_SUITE);
 	const deferredSuiteText = useDeferredValue(suiteText);
+	const selectedUser = users.find((entry) => entry.id === selectedUserId);
+	const subjectId = selectedUser?.id ?? testSubjectId;
+	const subjectEmail = selectedUser?.email ?? testSubjectEmail;
 
 	const actionRule = useMemo(
 		() => metadata.actions.find((entry) => entry.action === action),
@@ -1502,9 +1477,7 @@ export default function AdminPolicyAnalyzerPage() {
 	}, [deferredSuiteText, metadata.max_cases]);
 
 	function selectUser(id: string) {
-		const selected = users.find((entry) => entry.id === id);
-		setSubjectId(id);
-		if (selected) setSubjectEmail(selected.email);
+		setSelectedUserId(id);
 	}
 
 	function reportError(error: unknown, fallback: string) {
@@ -1556,7 +1529,7 @@ export default function AdminPolicyAnalyzerPage() {
 		try {
 			const suite = parseSuite(suiteText, { allowEmpty: true });
 			if (suite.cases.length >= metadata.max_cases) {
-				throw new Error(`A suite can contain at most ${metadata.max_cases} cases.`);
+				throw new Error(`A suite can contain at most ${metadata.max_cases} scenarios.`);
 			}
 			setSuiteText(JSON.stringify({ ...suite, cases: [...suite.cases, buildCase()] }, null, 2));
 			setFormError(null);
@@ -1584,19 +1557,20 @@ export default function AdminPolicyAnalyzerPage() {
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight text-balance">Policy Analyzer</h1>
 					<p className="mt-1 max-w-3xl text-sm text-muted-foreground text-pretty">
-						Test a policy decision without changing access. The analyzer runs the production login
-						and authorization evaluators, then compares the result with your expectation.
+						Build a scenario to see whether the current policy allows or denies an action. The
+						analyzer does not change access.
 					</p>
 				</div>
 			</PageHeader>
 
-			<AnalyzerOverview metadata={metadata} />
+			<AnalyzerCapabilities metadata={metadata} />
 
 			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
 				<main className="flex min-w-0 flex-col gap-5">
 					<SubjectStep
 						metadata={metadata}
 						users={users}
+						selectedUserId={selectedUserId}
 						subjectId={subjectId}
 						subjectEmail={subjectEmail}
 						caseName={caseName}
@@ -1606,8 +1580,8 @@ export default function AdminPolicyAnalyzerPage() {
 						idClaims={idClaims}
 						userInfoClaims={userInfoClaims}
 						onSelectUser={selectUser}
-						onSubjectIdChange={setSubjectId}
-						onSubjectEmailChange={setSubjectEmail}
+						onSubjectIdChange={setTestSubjectId}
+						onSubjectEmailChange={setTestSubjectEmail}
 						onCaseNameChange={setCaseName}
 						setEntitlements={setEntitlements}
 						onLoginEnabledChange={setLoginEnabled}
