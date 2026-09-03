@@ -1,11 +1,23 @@
+import { z } from 'zod';
 import type { Session } from '../../schema';
 import { kernelBasePath } from './sessionLifecycle';
 
 export interface KernelSession {
 	id: string;
-	path?: string;
+	filename?: string | null;
+	path?: string | null;
 	[key: string]: unknown;
 }
+
+const KernelSessionSchema = z.looseObject({
+	id: z.string().min(1).optional(),
+	session_id: z.string().min(1).optional(),
+	filename: z.string().nullable().optional(),
+	path: z.string().nullable().optional(),
+});
+const KernelSessionArraySchema = z.array(z.unknown());
+const KernelSessionEnvelopeSchema = z.object({ sessions: KernelSessionArraySchema });
+const KernelSessionMapSchema = z.record(z.string(), z.unknown());
 
 export interface KernelOutput {
 	mimetype: string;
@@ -76,22 +88,22 @@ export async function listKernelSessions(
 	});
 	await assertKernelResponse(response);
 	const json = await response.json();
-	const sessions = Array.isArray(json)
-		? json
-		: typeof json === 'object' && json !== null
-			? Array.isArray((json as { sessions?: unknown }).sessions)
-				? (json as { sessions: unknown[] }).sessions
-				: Object.entries(json).flatMap(([id, value]) =>
-						typeof value === 'object' && value !== null ? [{ ...value, id }] : [],
-					)
-			: [];
-	return sessions.flatMap((value) => {
-		if (typeof value !== 'object' || value === null) return [];
-		const candidate = value as { id?: unknown; session_id?: unknown; path?: unknown };
-		const id = typeof candidate.id === 'string' ? candidate.id : candidate.session_id;
-		if (typeof id !== 'string') return [];
-		const normalized: KernelSession = { ...value, id };
-		return [normalized];
+	const array = KernelSessionArraySchema.safeParse(json);
+	const envelope = array.success ? undefined : KernelSessionEnvelopeSchema.safeParse(json);
+	const map =
+		array.success || envelope?.success ? undefined : KernelSessionMapSchema.safeParse(json);
+	const entries: [string | undefined, unknown][] = array.success
+		? array.data.map((value) => [undefined, value])
+		: envelope?.success
+			? envelope.data.sessions.map((value) => [undefined, value])
+			: map?.success
+				? Object.entries(map.data)
+				: [];
+	return entries.flatMap(([mapId, value]) => {
+		const parsed = KernelSessionSchema.safeParse(value);
+		if (!parsed.success) return [];
+		const id = mapId || parsed.data.id || parsed.data.session_id;
+		return id ? [{ ...parsed.data, id }] : [];
 	});
 }
 

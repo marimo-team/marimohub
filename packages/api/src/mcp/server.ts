@@ -16,7 +16,6 @@ import {
 	sleep,
 	withAbortSignal,
 	withDeadline,
-	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -374,13 +373,10 @@ export function createMcpServer(
 						isError: true,
 					};
 				}
-				const notebook = await deps.services.notebooks.getNotebook(project.id, session.notebook_id);
-				const entryName = workspaceSourcePolicy(notebook.source).entryNotebook.split('/').at(-1);
 				const kernelSession = input.kernel_session_id
-					? kernelSessions.find((candidate) => candidate.id === input.kernel_session_id)
-					: (kernelSessions.find((candidate) => candidate.path?.split('/').at(-1) === entryName) ??
-						kernelSessions[0]);
-				if (!kernelSession) throw new NotFoundError('Kernel session not found');
+					? (kernelSessions.find((candidate) => candidate.id === input.kernel_session_id) ??
+						kernelSessions[0])
+					: kernelSessions[0];
 				const executionTimeoutMs = deadlineAt - Date.now();
 				if (executionTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
 				const executed = await executeInKernel(

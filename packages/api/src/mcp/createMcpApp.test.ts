@@ -58,7 +58,7 @@ describe('MCP OAuth app', () => {
 			if (path.endsWith('/api/sessions')) {
 				return new Response(
 					JSON.stringify({
-						'kernel-one': { filename: 'notebook.py', path: '/notebook.py' },
+						'kernel-one': { filename: '/workspace/renamed.py', path: '/workspace/renamed.py' },
 					}),
 					{ headers: { 'Content-Type': 'application/json' } },
 				);
@@ -289,6 +289,7 @@ describe('MCP OAuth app', () => {
 					arguments: {
 						project: 'My Projects',
 						session_id: launchResult.result.structuredContent.session_id,
+						kernel_session_id: 'stale-kernel',
 						code: '1+1',
 					},
 				},

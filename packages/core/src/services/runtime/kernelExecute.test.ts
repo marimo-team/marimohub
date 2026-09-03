@@ -54,8 +54,12 @@ describe('kernel execution', () => {
 		const fetchImpl = vi.fn().mockResolvedValue(
 			new Response(
 				JSON.stringify({
-					'kernel-one': { filename: 'notebook.py', path: '/workspace/notebook.py' },
+					'kernel-one': {
+						filename: '/workspace/notebook.py',
+						path: '/workspace/notebook.py',
+					},
 					'kernel-two': { filename: null, path: null },
+					'bad-fields': { filename: 42, path: false },
 					malformed: 'not-a-session',
 				}),
 			),
@@ -64,7 +68,7 @@ describe('kernel execution', () => {
 		await expect(listKernelSessions('https://kernel', { fetchImpl })).resolves.toEqual([
 			{
 				id: 'kernel-one',
-				filename: 'notebook.py',
+				filename: '/workspace/notebook.py',
 				path: '/workspace/notebook.py',
 			},
 			{ id: 'kernel-two', filename: null, path: null },
