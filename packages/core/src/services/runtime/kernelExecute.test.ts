@@ -50,6 +50,27 @@ describe('kernel execution', () => {
 		]);
 	});
 
+	it('normalizes marimo session maps keyed by session id', async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					'kernel-one': { filename: 'notebook.py', path: '/workspace/notebook.py' },
+					'kernel-two': { filename: null, path: null },
+					malformed: 'not-a-session',
+				}),
+			),
+		);
+
+		await expect(listKernelSessions('https://kernel', { fetchImpl })).resolves.toEqual([
+			{
+				id: 'kernel-one',
+				filename: 'notebook.py',
+				path: '/workspace/notebook.py',
+			},
+			{ id: 'kernel-two', filename: null, path: null },
+		]);
+	});
+
 	it('normalizes legacy session ids and drops malformed session entries', async () => {
 		const fetchImpl = vi.fn().mockResolvedValue(
 			new Response(

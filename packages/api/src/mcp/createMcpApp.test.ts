@@ -56,9 +56,12 @@ describe('MCP OAuth app', () => {
 		compute.proxy = async (request) => {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith('/api/sessions')) {
-				return new Response(JSON.stringify([{ id: 'kernel-one', path: '/notebook.py' }]), {
-					headers: { 'Content-Type': 'application/json' },
-				});
+				return new Response(
+					JSON.stringify({
+						'kernel-one': { filename: 'notebook.py', path: '/notebook.py' },
+					}),
+					{ headers: { 'Content-Type': 'application/json' } },
+				);
 			}
 			if (path.endsWith('/api/kernel/execute')) {
 				return new Response(
@@ -295,6 +298,7 @@ describe('MCP OAuth app', () => {
 		expect(await mcpJson(executed)).toMatchObject({
 			result: {
 				structuredContent: {
+					kernel_session_id: 'kernel-one',
 					completed: true,
 					success: true,
 					stdout: '2\n',

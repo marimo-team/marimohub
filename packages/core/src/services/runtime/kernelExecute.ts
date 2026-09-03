@@ -78,10 +78,12 @@ export async function listKernelSessions(
 	const json = await response.json();
 	const sessions = Array.isArray(json)
 		? json
-		: typeof json === 'object' &&
-			  json !== null &&
-			  Array.isArray((json as { sessions?: unknown }).sessions)
-			? (json as { sessions: unknown[] }).sessions
+		: typeof json === 'object' && json !== null
+			? Array.isArray((json as { sessions?: unknown }).sessions)
+				? (json as { sessions: unknown[] }).sessions
+				: Object.entries(json).flatMap(([id, value]) =>
+						typeof value === 'object' && value !== null ? [{ ...value, id }] : [],
+					)
 			: [];
 	return sessions.flatMap((value) => {
 		if (typeof value !== 'object' || value === null) return [];
