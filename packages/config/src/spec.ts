@@ -1383,7 +1383,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'MCP',
 		description:
-			'Expose marimohub notebooks to MCP clients through a built-in OAuth 2.1 authorization server. Off unless `MARIMOHUB_MCP=on`. A fixed public base URL is required so clients receive stable absolute OAuth metadata. See [MCP server](./mcp.md).',
+			'The built-in OAuth 2.1 server exposes notebooks to MCP clients. MCP is off by default and requires a fixed public base URL. See [MCP server](./mcp.md).',
 		backends: [
 			{
 				name: 'Server',
@@ -1392,7 +1392,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_MCP',
 						name: 'MCP server',
 						description:
-							'Enable the MCP endpoint and OAuth server. Requires `MARIMOHUB_APP_BASE_URL`. Accepted values are `on` and `off`.',
+							'Enables the MCP endpoint and OAuth server. Requires `MARIMOHUB_APP_BASE_URL`. Values: `on`, `off`.',
 						default: 'off',
 						example: 'on',
 					},
