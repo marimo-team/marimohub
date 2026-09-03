@@ -1710,6 +1710,36 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					},
 				],
 			},
+			{
+				name: 'Kubernetes Secret references',
+				description:
+					'Resolve references with `backend: k8s` from the current cluster. Locators use `namespace/secret-name#data-key`. Every Secret must be in the deployment policy and carry the marimohub opt-in label.',
+				vars: [
+					{
+						id: 'MARIMOHUB_SECRETS_KUBERNETES',
+						name: 'Enable Kubernetes Secret references',
+						description:
+							'Enable the Kubernetes Secret resolver. The allowed Secret policy is required when enabled.',
+						example: 'true',
+						default: 'false',
+					},
+					{
+						id: 'MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS',
+						name: 'Allowed Kubernetes Secrets',
+						description:
+							'JSON array of exact namespace and Secret name rules. Set `projects` to `"*"` or a non-empty array of project IDs.',
+						example: '[{"namespace":"connections","name":"provider-a","projects":"*"}]',
+					},
+					{
+						id: 'MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS',
+						name: 'Kubernetes Secret cache TTL',
+						description:
+							'In-memory cache duration in seconds. Zero reads a fresh Secret for every integration operation.',
+						example: '0',
+						default: '0',
+					},
+				],
+			},
 		],
 	},
 	{

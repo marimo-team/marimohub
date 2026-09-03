@@ -155,6 +155,14 @@ spec:
         - name: OTEL_EXPORTER_PROMETHEUS_PORT
           value: {{ $v.metrics.port | quote }}
         {{- end }}
+        {{- if $v.secretResolvers.kubernetes.enabled }}
+        - name: MARIMOHUB_SECRETS_KUBERNETES
+          value: "true"
+        - name: MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS
+          value: {{ toJson $v.secretResolvers.kubernetes.allowedSecrets | quote }}
+        - name: MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS
+          value: {{ $v.secretResolvers.kubernetes.cacheTtlSeconds | quote }}
+        {{- end }}
         {{- with $v.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -530,6 +530,16 @@ Resolve references with `backend: aws-sm`. The hub needs `secretsmanager:GetSecr
 | `MARIMOHUB_SECRETS_AWS_SECRET_ACCESS_KEY` 🔒 | Static credential paired with the access key ID. | — | — | — |
 | `MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS` | Cache duration for resolved values. A value of `0` disables caching. | — | `0` | — |
 
+### Kubernetes Secret references
+
+Resolve references with `backend: k8s` from the current cluster. Locators use `namespace/secret-name#data-key`. Every Secret must be in the deployment policy and carry the marimohub opt-in label.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SECRETS_KUBERNETES` | Enable the Kubernetes Secret resolver. The allowed Secret policy is required when enabled. | — | `false` | `true` |
+| `MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS` | JSON array of exact namespace and Secret name rules. Set `projects` to `"*"` or a non-empty array of project IDs. | — | — | `[{"namespace":"connections","name":"provider-a","projects":"*"}]` |
+| `MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS` | In-memory cache duration in seconds. Zero reads a fresh Secret for every integration operation. | — | `0` | `0` |
+
 ## Notifications
 
 Outbound notifications support several backends at the same time. `MARIMOHUB_NOTIFY_BACKENDS` is a comma-separated list. The hub sends notifications after it stores the related change. Delivery failures do not change the API response. See the [notifications guide](./notifications.md) for delivery and security details.

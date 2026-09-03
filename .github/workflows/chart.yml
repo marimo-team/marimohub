@@ -60,7 +60,7 @@ jobs:
       # schema (none of our kinds are CRDs) as an error.
       - name: Render & validate manifests
         run: |
-          for values in "" "-f charts/marimohub/ci/example-values.yaml"; do
+          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml"; do
             echo "::group::helm template ${values:-(defaults)}"
             helm template test charts/marimohub $values \
               | kubeconform -strict -summary -verbose \
@@ -68,3 +68,46 @@ jobs:
                   -schema-location default
             echo "::endgroup::"
           done
+
+      - name: Verify Kubernetes Secret resolver RBAC
+        run: |
+          render=$(helm template test charts/marimohub \
+            -f charts/marimohub/ci/kubernetes-secrets-values.yaml)
+          grep -Fq 'resourceNames:' <<< "$render"
+          grep -Fq -- '- provider-a' <<< "$render"
+          grep -Fq 'verbs: ["get"]' <<< "$render"
+          if grep -Eq 'verbs:.*(list|watch)' <<< "$render"; then
+            exit 1
+          fi
+          grep -Fq 'name: MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS' <<< "$render"
+          grep -Fq '\"name\":\"provider-a\"' <<< "$render"
+          grep -Fq '\"projects\":\"*\"' <<< "$render"
+
+          if helm template test charts/marimohub \
+            --set secretResolvers.kubernetes.enabled=true; then
+            exit 1
+          fi
+
+          assert_invalid_policy() {
+            if helm template test charts/marimohub \
+              --set secretResolvers.kubernetes.enabled=true \
+              --set-json "secretResolvers.kubernetes.allowedSecrets=$1" >/dev/null 2>&1; then
+              echo "expected invalid Kubernetes Secret policy to fail"
+              return 1
+            fi
+          }
+          assert_invalid_policy '[{"namespace":"Connections","name":"provider","projects":"*"}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"Provider","projects":"*"}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"provider","projects":[]}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"provider","projects":["invalid"]}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"provider","projects":["proj-0000000000000000","proj-0000000000000000"]}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"provider"}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"provider","projects":"*","unknown":true}]'
+          assert_invalid_policy '[{"namespace":"connections","name":"provider","projects":"*"},{"namespace":"connections","name":"provider","projects":"*"}]'
+
+          if helm template test charts/marimohub \
+            --set secretResolvers.kubernetes.enabled=true \
+            --set secretResolvers.kubernetes.cacheTtlSeconds=-1 \
+            --set-json 'secretResolvers.kubernetes.allowedSecrets=[{"namespace":"connections","name":"provider","projects":"*"}]'; then
+            exit 1
+          fi

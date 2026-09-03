@@ -48,6 +48,7 @@ export default defineConfig({
 			/^@opentelemetry\//,
 			/^@aws-sdk\//,
 			/^@azure\//,
+			/^@kubernetes\//,
 			// The CoreWeave Sandbox SDK and its (pure-JS) gRPC/protobuf
 			// deps must be bundled too — the runtime image ships no node_modules,
 			// so externalizing them crashes the `coreweave` compute backend at

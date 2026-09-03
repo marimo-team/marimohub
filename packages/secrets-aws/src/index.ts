@@ -10,7 +10,7 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { SecretsManagerClientConfig } from '@aws-sdk/client-secrets-manager';
 import { SecretResolutionError } from '@marimo-hub/core';
-import type { SecretRef, SecretResolver } from '@marimo-hub/core';
+import type { SecretRef, SecretResolutionContext, SecretResolver } from '@marimo-hub/core';
 
 /** The raw `GetSecretValue` result the resolver needs — the seam tests fake. */
 export interface GetSecretValueResult {
@@ -53,7 +53,7 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 		this.now = opts.now ?? (() => Date.now());
 	}
 
-	async resolve(ref: SecretRef): Promise<string> {
+	async resolve(ref: SecretRef, _context?: SecretResolutionContext): Promise<string> {
 		const { secretId, jsonKey } = parseLocator(ref.locator);
 		const result = await this.fetchCached(secretId);
 

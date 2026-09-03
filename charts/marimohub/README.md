@@ -80,6 +80,9 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `metrics.serviceMonitor.*` | disabled, `30s`, `{}` labels | Prometheus Operator ServiceMonitor |
 | `resources` | 100m/256Mi → 500m/512Mi | API container |
 | `nodeSelector` / `tolerations` / `affinity` | empty | Set per cluster |
+| `secretResolvers.kubernetes.enabled` | `false` | Resolve integration fields from Kubernetes Secrets |
+| `secretResolvers.kubernetes.cacheTtlSeconds` | `0` | Cross-operation Secret cache TTL |
+| `secretResolvers.kubernetes.allowedSecrets` | `[]` | Exact Secret and project access rules |
 
 Pods run hardened by default: non-root (uid 1000), read-only root filesystem, all
 capabilities dropped, `RuntimeDefault` seccomp. No cluster-specific scheduling is
@@ -119,3 +122,34 @@ The chart does not grant the control-plane account any RBAC permissions. Bind it
 to cluster-specific Roles separately, as shown in
 [`examples/kubernetes/rbac.yaml`](../../examples/kubernetes/rbac.yaml) for the
 native Kubernetes compute backend.
+
+### Kubernetes integration secrets
+
+Enable the resolver and list every Secret that marimohub may read:
+
+```yaml
+secretResolvers:
+  kubernetes:
+    enabled: true
+    cacheTtlSeconds: 0
+    allowedSecrets:
+      - namespace: connections
+        name: provider-a
+        projects: '*'
+      - namespace: connections
+        name: provider-b
+        projects:
+          - proj-0000000000000000
+```
+
+Each rule contains one namespace, one Secret name, and one project policy. Set
+`projects` to `"*"` or a non-empty list of project IDs. Organization integrations
+require `"*"` because all projects can inherit them.
+
+The chart creates one Role and RoleBinding in each listed namespace. Each Role
+grants only `get` on the listed Secret names. It never grants `list` or `watch`.
+The API and maintenance pods use the configured ServiceAccount.
+
+Create credential Secrets separately. Each one must have the label
+`marimohub.io/integration-secret: "true"`. See the
+[integration secret guide](../../docs/integration-secrets.md#kubernetes-secrets).
