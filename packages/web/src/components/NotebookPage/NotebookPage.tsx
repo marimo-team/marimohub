@@ -791,8 +791,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				</div>
 			)}
 
-			{!session &&
-				(isProvisioning || resolvingMode || (!isApp && !isViewer && !editorDecisionReady)) &&
+			{(isProvisioning ||
+				(!session && (resolvingMode || (!isApp && !isViewer && !editorDecisionReady)))) &&
 				!showEditorStateFailure &&
 				!showIdentityStateFailure &&
 				!showEditorChoice && (
