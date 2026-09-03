@@ -1,8 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
+import { all } from 'better-all';
 import type {
 	SecondarySurfaceId,
 	ResourceSecurityLabels,
 	Role,
+	AuthenticatedPrincipal,
 	AuthUser,
 	EditorClaim,
 	EditorSandboxSharing,
@@ -110,7 +112,7 @@ function effectiveEditorSharing(
 
 // createSession is create-or-reuse; `reused` distinguishes an existing shared,
 // owned, or temporary session from a freshly provisioned one.
-const SessionCreateResponseSchema = SessionResponseSchema.extend({
+export const SessionCreateResponseSchema = SessionResponseSchema.extend({
 	reused: z.boolean(),
 	editor_session: z
 		.object({
@@ -142,7 +144,7 @@ const listSessions = createRoute({
 });
 
 // Optional body: absent (or `{}`) = `edit`, so pre-`mode` clients are untouched.
-const SessionCreateBodySchema = z
+export const SessionCreateBodySchema = z
 	.strictObject({
 		/**
 		 * `edit` (default): a persistent or temporary editor sandbox according to
@@ -394,7 +396,10 @@ const takeoverEditorSession = createRoute({
  * request arrived on. Eager and on-demand surface starts must agree on this so
  * a session's surfaces are exposed under one hostname.
  */
-function resolveSandboxHostname(c: { req: { url: string } }, sandbox: SandboxConfig): string {
+export function resolveSandboxHostname(
+	c: { req: { url: string } },
+	sandbox: SandboxConfig,
+): string {
 	return sandbox.hostname || new URL(c.req.url).hostname;
 }
 
@@ -439,7 +444,10 @@ function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) 
  * already list the project's sessions. Internal infra fields (`sandbox_id`,
  * `used_fallback`) stay private.
  */
-function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean; surface: boolean }) {
+export function toSessionResponse(
+	s: Session,
+	can: { attach: boolean; stop: boolean; surface: boolean },
+) {
 	return {
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
@@ -514,7 +522,7 @@ class EditorClaimLostError extends Error {
  * `edit`, the shared singleton for `app` (identical to an editor-started one,
  * with WIF credentials and integration secrets).
  */
-async function authorizeSessionStart(
+export async function authorizeSessionStart(
 	project: Project,
 	user: AuthUser,
 	mode: SessionMode,
@@ -1065,12 +1073,25 @@ app.openapi(takeoverEditorSession, async (c) => {
 	}
 });
 
-app.openapi(createSession, async (c) => {
-	const deps = c.get('deps');
+export type SessionCreateBody = z.infer<typeof SessionCreateBodySchema>;
+export type SessionCreateResult = z.infer<typeof SessionCreateResponseSchema>;
+
+export async function startNotebookSession(input: {
+	deps: ApiDeps;
+	user: AuthenticatedPrincipal;
+	pid: ProjectId;
+	nid: NotebookId;
+	body: SessionCreateBody | undefined;
+	request: {
+		requestId?: string;
+		method: string;
+		path: string;
+		hostname: string;
+		appBaseUrl: string;
+	};
+}): Promise<SessionCreateResult> {
+	const { deps, user, pid, nid, body, request } = input;
 	const { sessions, projects, notebooks } = deps.services;
-	const user = c.get('user');
-	const { pid, nid } = c.req.valid('param');
-	const body = c.req.valid('json');
 	const mode: SessionMode = body?.mode ?? 'edit';
 
 	// Starting a session runs code — see authorizeSessionStart for the matrix.
@@ -1200,7 +1221,7 @@ app.openapi(createSession, async (c) => {
 		logEvent({
 			level: 'error',
 			event: 'stored_config_fallback',
-			request_id: c.get('requestId') ?? null,
+			request_id: request.requestId ?? null,
 			config,
 			project_id: pid,
 			notebook_id: nid,
@@ -1210,8 +1231,8 @@ app.openapi(createSession, async (c) => {
 
 	const { compute, bucket: bucketHandle, sandbox } = deps;
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
-	const hostname = resolveSandboxHostname(c, sandbox);
-	const appBaseUrl = resolvePublicBaseUrl(c, sandbox.appBaseUrl);
+	const hostname = sandbox.hostname || request.hostname;
+	const { appBaseUrl } = request;
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
 		logStoredConfigFallback('base_image'),
 	);
@@ -1276,28 +1297,22 @@ app.openapi(createSession, async (c) => {
 					appBaseUrl,
 				});
 			}
-			return c.json(
-				{
-					success: true,
-					data: {
-						...toSessionResponse(reusable, reusableGrants),
-						reused: true,
-						...(mode === 'edit'
-							? {
-									editor_session: {
-										sharing,
-										access: ephemeral
-											? ('temporary' as const)
-											: sharing === 'shared'
-												? ('shared' as const)
-												: ('owner' as const),
-									},
-								}
-							: {}),
-					},
-				},
-				200,
-			);
+			return {
+				...toSessionResponse(reusable, reusableGrants),
+				reused: true,
+				...(mode === 'edit'
+					? {
+							editor_session: {
+								sharing,
+								access: ephemeral
+									? ('temporary' as const)
+									: sharing === 'shared'
+										? ('shared' as const)
+										: ('owner' as const),
+							},
+						}
+					: {}),
+			};
 		}
 
 		// Sandbox alive but marimo exited (e.g. shut down from the notebook UI), so a
@@ -1514,87 +1529,80 @@ app.openapi(createSession, async (c) => {
 							},
 						});
 
-					// Resolve independent sources together. Integrations have lower precedence
-					// than system, WIF, and marimo configuration.
-					const resolveSessionEnv = async (): Promise<SessionEnv | undefined> => {
-						const [wifVars, marimoEnv, integrationEnv] = await Promise.all([
-							resolveWifVars(),
-							resolveMarimoConfigEnv(),
-							resolveIntegrationEnv(),
-						]);
-						let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-						if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-						// The lower-precedence layers merge as the BASE, with everything
-						// resolved so far as the winning overlay.
-						if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
-						return env;
-					};
-
-					// Unawaited on purpose: provision awaits it at the inject phase, so this
-					// resolution overlaps the sandbox create (the dominant cost). The no-op
-					// catch only marks the rejection handled — a fail-closed integration error
-					// would otherwise land as an unhandledRejection during the create.
-					const sessionEnv = resolveSessionEnv();
-					void sessionEnv.catch(() => {});
-
-					// Inside this step on purpose: only a create that survived the reuse
-					// fast path and cap_recheck pays the synced-entry GET. Never rejects
-					// (a failed read falls back to the default strategy).
-					const launchStrategyPromise = resolveLaunchStrategyForSession({
-						entryNotebook: workspacePolicy.entryNotebook,
-						workspacePrefix,
-						bucket: bucketHandle,
+					const { provision } = await all({
+						wifVars: resolveWifVars,
+						marimoEnv: resolveMarimoConfigEnv,
+						integrationEnv: resolveIntegrationEnv,
+						async sessionEnv(): Promise<SessionEnv | undefined> {
+							const wifVars = await this.$.wifVars;
+							const marimoEnv = await this.$.marimoEnv;
+							const integrationEnv = await this.$.integrationEnv;
+							let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
+							if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
+							// Integration values are defaults; WIF and marimo configuration win collisions.
+							if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
+							return env;
+						},
+						exposure: async () => sandboxExposure.prepare(exposureCtx),
+						launchStrategy: async () => {
+							const resolved = await resolveLaunchStrategyForSession({
+								entryNotebook: workspacePolicy.entryNotebook,
+								workspacePrefix,
+								bucket: bucketHandle,
+							});
+							observer.tag('launch_strategy', resolved.strategy);
+							observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
+							return resolved;
+						},
+						async provision() {
+							const { baseUrl } = await this.$.exposure;
+							const launchStrategy = await this.$.launchStrategy;
+							return provisioner.provision({
+								sandboxId,
+								projectId: pid,
+								notebookId: nid,
+								hostname,
+								bucket: sandbox.bucket,
+								bucketHandle,
+								workdir: sandbox.workdir,
+								assetUrl: sandbox.assetUrl,
+								startupTimeoutMs: sandbox.startupTimeoutMs,
+								baseUrl,
+								// A second editor writes the notebook file, so marimo must reload it.
+								marimoWatch:
+									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
+								restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+								image,
+								resources: requestedComputeProfile.resources,
+								userHome,
+								sessionIdleTimeoutMs: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+								sessionEnv: this.$.sessionEnv,
+								entryNotebook: workspacePolicy.entryNotebook,
+								launchStrategy: launchStrategy.strategy,
+								launchMode: mode,
+								// Ephemeral and app sandboxes never mount the live workspace: a mount
+								// writes straight through to the bucket (bypassing every persistEdits
+								// guard), puts the deployment's bucket credentials inside a viewer's
+								// sandbox, and — for apps — would race the edit kernel's autosaves on
+								// the same objects. Copy-only loads the files server-side.
+								workspaceLoadMode:
+									ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+										? 'copy-only'
+										: workspacePolicy.loadMode,
+								workspacePrefix,
+								gitPrefix,
+								workspaceArchive,
+							});
+						},
 					});
-
-					const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
-					const resolvedLaunchStrategy = await launchStrategyPromise;
-					observer.tag('launch_strategy', resolvedLaunchStrategy.strategy);
-					observer.tag('launch_strategy_detection_failed', resolvedLaunchStrategy.detectionFailed);
-
-					const provisionResult = await provisioner.provision({
-						sandboxId,
-						projectId: pid,
-						notebookId: nid,
-						hostname,
-						bucket: sandbox.bucket,
-						bucketHandle,
-						workdir: sandbox.workdir,
-						assetUrl: sandbox.assetUrl,
-						startupTimeoutMs: sandbox.startupTimeoutMs,
-						baseUrl,
-						// A second editor writes the notebook file, so marimo must reload it.
-						marimoWatch:
-							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
-						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
-						image,
-						resources: requestedComputeProfile.resources,
-						userHome,
-						sessionIdleTimeoutMs: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-						sessionEnv,
-						entryNotebook: workspacePolicy.entryNotebook,
-						launchStrategy: resolvedLaunchStrategy.strategy,
-						launchMode: mode,
-						// Ephemeral and app sandboxes never mount the live workspace: a mount
-						// writes straight through to the bucket (bypassing every persistEdits
-						// guard), puts the deployment's bucket credentials inside a viewer's
-						// sandbox, and — for apps — would race the edit kernel's autosaves on
-						// the same objects. Copy-only loads the files server-side.
-						workspaceLoadMode:
-							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
-								? 'copy-only'
-								: workspacePolicy.loadMode,
-						workspacePrefix,
-						gitPrefix,
-						workspaceArchive,
-					});
-					({ url, usedFallback } = provisionResult);
+					({ url, usedFallback } = provision);
 					// Per-phase durations onto the session_provision event.
-					for (const [phase, ms] of Object.entries(provisionResult.timings)) {
+					for (const [phase, ms] of Object.entries(provision.timings)) {
 						observer.tag(`provision_${phase}_ms`, ms);
 					}
 					// Counts, not durations: workspace objects/bytes copied, and the
 					// command round-trips the provision spent.
-					for (const [name, value] of Object.entries(provisionResult.counters)) {
+					for (const [name, value] of Object.entries(provision.counters)) {
 						observer.tag(`provision_${name}`, value);
 					}
 					// Whether the files phase mounted the bucket (false) or copied it in
@@ -1692,20 +1700,14 @@ app.openapi(createSession, async (c) => {
 				if (sharing === 'exclusive' && winner.user_id !== user.id) {
 					throw new EditSessionOwnedError(`Editing is currently owned by ${winner.user_id}`);
 				}
-				return c.json(
-					{
-						success: true,
-						data: {
-							...toSessionResponse(winner, await grants(winner)),
-							reused: true,
-							editor_session: {
-								sharing,
-								access: sharing === 'shared' ? ('shared' as const) : ('owner' as const),
-							},
-						},
+				return {
+					...toSessionResponse(winner, await grants(winner)),
+					reused: true,
+					editor_session: {
+						sharing,
+						access: sharing === 'shared' ? ('shared' as const) : ('owner' as const),
 					},
-					200,
-				);
+				};
 			}
 			throw new ConflictError('The editor session changed. Retry shortly.');
 		}
@@ -1727,13 +1729,7 @@ app.openapi(createSession, async (c) => {
 				) {
 					throw new ConflictError('The app session authorization expired. Retry shortly.');
 				}
-				return c.json(
-					{
-						success: true,
-						data: { ...toSessionResponse(winner, await grants(winner)), reused: true },
-					},
-					200,
-				);
+				return { ...toSessionResponse(winner, await grants(winner)), reused: true };
 			}
 			// The winner vanished between claim and read — rare; the client retries.
 			throw new ConflictError('The app is being started by another user. Retry shortly.');
@@ -1801,42 +1797,53 @@ app.openapi(createSession, async (c) => {
 	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
 	if (MODE_POLICY[mode].singleton) {
-		await appendAudit(
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'app.start',
-			() =>
-				deps.services.events.append({
-					event: 'app.start',
-					actor: user.id,
-					project_id: pid,
-					notebook_id: nid,
-					session_id: session!.session_id,
-				}),
+		await appendAudit({ ...request, userId: user.id }, 'app.start', () =>
+			deps.services.events.append({
+				event: 'app.start',
+				actor: user.id,
+				project_id: pid,
+				notebook_id: nid,
+				session_id: session!.session_id,
+			}),
 		);
 	}
 
-	return c.json(
-		{
-			success: true,
-			data: {
-				...toSessionResponse(updated!, await grants(updated!)),
-				reused: false,
-				...(mode === 'edit'
-					? {
-							editor_session: {
-								sharing,
-								access: ephemeral
-									? ('temporary' as const)
-									: sharing === 'shared'
-										? ('shared' as const)
-										: ('owner' as const),
-							},
-						}
-					: {}),
-			},
+	return {
+		...toSessionResponse(updated!, await grants(updated!)),
+		reused: false,
+		...(mode === 'edit'
+			? {
+					editor_session: {
+						sharing,
+						access: ephemeral
+							? ('temporary' as const)
+							: sharing === 'shared'
+								? ('shared' as const)
+								: ('owner' as const),
+					},
+				}
+			: {}),
+	};
+}
+
+app.openapi(createSession, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid } = c.req.valid('param');
+	const data = await startNotebookSession({
+		deps,
+		user: c.get('user'),
+		pid,
+		nid,
+		body: c.req.valid('json'),
+		request: {
+			requestId: c.get('requestId'),
+			method: c.req.method,
+			path: c.req.path,
+			hostname: resolveSandboxHostname(c, deps.sandbox),
+			appBaseUrl: resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
 		},
-		200,
-	);
+	});
+	return c.json({ success: true as const, data }, 200);
 });
 
 app.openapi(deleteSession, async (c) => {

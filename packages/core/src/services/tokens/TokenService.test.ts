@@ -77,6 +77,42 @@ describe('TokenService', () => {
 			expect(record.grant).toEqual(SCOPED_GRANT);
 		});
 
+		it('stores OAuth bindings only on scoped tokens without exposing them in listings', async () => {
+			const oauth = {
+				clientId: 'client-one',
+				resource: 'https://hub.example/mcp',
+				scopes: ['mcp:tools'],
+			};
+			const { record } = await tokens.create({ name: 'oauth', grant: SCOPED_GRANT, oauth }, OWNER);
+			const stored = (await (await bucket.get(paths.token(TokenId.parse(record.id))))!.json()) as {
+				oauth: unknown;
+			};
+
+			expect(stored.oauth).toEqual({
+				client_id: oauth.clientId,
+				resource: oauth.resource,
+				scopes: oauth.scopes,
+			});
+			expect(record).not.toHaveProperty('oauth');
+			expect(await tokens.list(OWNER)).toEqual([record]);
+		});
+
+		it('rejects an OAuth binding without a scoped grant', async () => {
+			await expect(
+				tokens.create(
+					{
+						name: 'invalid-oauth',
+						oauth: {
+							clientId: 'client-one',
+							resource: 'https://hub.example/mcp',
+							scopes: ['mcp:tools'],
+						},
+					},
+					OWNER,
+				),
+			).rejects.toThrow(/explicit grant/);
+		});
+
 		it('stamps expires_at from expiresInDays', async () => {
 			const { record } = await tokens.create({ name: 'short', expiresInDays: 7 }, OWNER);
 			const expected = new Date(record.created_at).getTime() + 7 * 24 * 60 * 60 * 1000;
@@ -182,6 +218,25 @@ describe('TokenService', () => {
 				kind: 'personal-access-token',
 				id: record.id,
 				grant: SCOPED_GRANT,
+			});
+		});
+
+		it('attaches an OAuth binding to credential provenance', async () => {
+			const oauth = {
+				clientId: 'client-one',
+				resource: 'https://hub.example/mcp',
+				scopes: ['mcp:tools'],
+			};
+			const { token, record } = await tokens.create(
+				{ name: 'oauth', grant: SCOPED_GRANT, oauth },
+				OWNER,
+			);
+
+			expect((await tokens.verify(token))?.credential).toEqual({
+				kind: 'personal-access-token',
+				id: record.id,
+				grant: SCOPED_GRANT,
+				oauth,
 			});
 		});
 

@@ -58,6 +58,12 @@ describe('bucket schema contracts', () => {
 				grant: {
 					properties: Record<string, { anyOf: Record<string, unknown>[] }>;
 				};
+				oauth: {
+					properties: {
+						resource: { format: string };
+						scopes: { minItems: number };
+					};
+				};
 			};
 			dependentRequired: Record<string, string[]>;
 		};
@@ -66,7 +72,10 @@ describe('bucket schema contracts', () => {
 		expect(token.dependentRequired).toEqual({
 			credential_version: ['grant'],
 			grant: ['credential_version'],
+			oauth: ['credential_version', 'grant'],
 		});
+		expect(token.properties.oauth.properties.resource.format).toBe('uri');
+		expect(token.properties.oauth.properties.scopes.minItems).toBe(1);
 
 		for (const boundary of ['actions', 'projects']) {
 			const array = token.properties.grant.properties[boundary].anyOf.find(

@@ -136,6 +136,10 @@ app.openapi(capabilitiesRoute, (c) => {
 					max_timeout_seconds: null,
 					run_retention_days: null,
 				},
+		mcp: {
+			available: Boolean(deps.mcp),
+			url: deps.mcp ? `${deps.mcp.publicBaseUrl}/mcp` : null,
+		},
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,

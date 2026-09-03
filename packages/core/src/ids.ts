@@ -15,6 +15,8 @@ export type ProposalId = string & { __brand: 'ProposalId' };
 export type SessionId = string & { __brand: 'SessionId' };
 export type TokenId = string & { __brand: 'TokenId' };
 export type CliAuthorizationId = string & { __brand: 'CliAuthorizationId' };
+export type OAuthClientId = string & { __brand: 'OAuthClientId' };
+export type OAuthAuthorizationId = string & { __brand: 'OAuthAuthorizationId' };
 export type IntegrationId = string & { __brand: 'IntegrationId' };
 export type AlertDestinationId = string & { __brand: 'AlertDestinationId' };
 export type JobId = string & { __brand: 'JobId' };
@@ -66,6 +68,8 @@ const nextVersionUlid = monotonicFactory();
 const nextTokenUlid = monotonicFactory();
 
 const nextCliAuthorizationUlid = monotonicFactory();
+const nextOAuthClientUlid = monotonicFactory();
+const nextOAuthAuthorizationUlid = monotonicFactory();
 
 // Run ids are uppercase ULIDs like versions: newest-first listing and retention
 // both rely on lexicographic key order being chronological.
@@ -155,6 +159,14 @@ export const CliAuthorizationId = defineId<CliAuthorizationId>(
 	/^[0-9A-Z]{26}$/,
 	() => nextCliAuthorizationUlid(),
 );
+export const OAuthClientId = defineId<OAuthClientId>('OAuthClientId', /^[0-9A-Z]{26}$/, () =>
+	nextOAuthClientUlid(),
+);
+export const OAuthAuthorizationId = defineId<OAuthAuthorizationId>(
+	'OAuthAuthorizationId',
+	/^[0-9A-Z]{26}$/,
+	() => nextOAuthAuthorizationUlid(),
+);
 export const IntegrationId = defineId<IntegrationId>(
 	'IntegrationId',
 	/^intg-[0-9a-z]{16}$/,
@@ -217,6 +229,8 @@ export const createProposalId = ProposalId.create;
 export const createSessionId = SessionId.create;
 export const createTokenId = TokenId.create;
 export const createCliAuthorizationId = CliAuthorizationId.create;
+export const createOAuthClientId = OAuthClientId.create;
+export const createOAuthAuthorizationId = OAuthAuthorizationId.create;
 export const createIntegrationId = IntegrationId.create;
 export const createAlertDestinationId = AlertDestinationId.create;
 export const createJobId = JobId.create;

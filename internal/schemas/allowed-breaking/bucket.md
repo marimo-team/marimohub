@@ -17,6 +17,13 @@ PUT /_system/tokens/{tid}.json `the request body dependentRequired was added: wh
 PUT /_system/tokens/{tid}.json `the request body dependentRequired was added: when `grant` is present, `credential_version` are required`
 ```
 
+`oauth` is a new optional token field. Existing records omit it and remain
+valid. OAuth token writers always include the version 2 grant fields.
+
+```text
+PUT /_system/tokens/{tid}.json `the request body dependentRequired was added: when `oauth` is present, `credential_version, grant` are required`
+```
+
 GET /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 PUT /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 

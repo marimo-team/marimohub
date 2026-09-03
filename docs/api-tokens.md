@@ -8,6 +8,9 @@ Personal access tokens (PATs) let CI jobs, scripts, and the CLI call the
 `/api/v1/*` HTTP API without a browser session. A token acts as the user who
 created it. It cannot add authority that the user does not have.
 
+MCP clients receive scoped PATs through browser consent. See
+[MCP server](./mcp.md).
+
 For an interactive CLI, run `mohub login`. For a remote CLI, run
 `mohub login --device-code`. Both commands create a 30-day token by default. You
 can select a different lifetime in the approval page. Use manual tokens for

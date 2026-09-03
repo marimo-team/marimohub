@@ -18,6 +18,9 @@ import { JobsService } from './jobs/JobsService';
 import { JobRunService } from './jobs/JobRunService';
 import { TokenService } from './tokens/TokenService';
 import { CliAuthorizationService } from './tokens/CliAuthorizationService';
+import { OAuthAuthorizationService } from './oauth/OAuthAuthorizationService';
+import { OAuthClientStore } from './oauth/OAuthClientStore';
+import { OAuthRateLimitService } from './oauth/OAuthRateLimitService';
 
 export { CatalogService } from './catalog/CatalogService';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
@@ -34,6 +37,18 @@ export type {
 	CliDevicePollResult,
 	RequestedCliDeviceAuthorization,
 } from './tokens/CliAuthorizationService';
+export {
+	OAUTH_TOKEN_LIFETIME_DAYS_MAX,
+	OAuthAuthorizationService,
+} from './oauth/OAuthAuthorizationService';
+export type { BeginOAuthAuthorizationInput } from './oauth/OAuthAuthorizationService';
+export { OAuthClientStore } from './oauth/OAuthClientStore';
+export type { OAuthClientRecord, RegisterOAuthClientInput } from './oauth/OAuthClientStore';
+export { OAUTH_RATE_LIMITS, OAuthRateLimitService } from './oauth/OAuthRateLimitService';
+export type {
+	OAuthRateLimitEndpoint,
+	OAuthRateLimitServiceOptions,
+} from './oauth/OAuthRateLimitService';
 export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
@@ -305,6 +320,20 @@ export { buildMarimoLaunch } from './runtime/marimoLaunch';
 export type { MarimoLaunchMode, MarimoLaunchStrategyName } from './runtime/marimoLaunch';
 export { probeKernelLiveness } from './runtime/kernelProbe';
 export type { KernelLiveness, KernelProbe, KernelProbeOptions } from './runtime/kernelProbe';
+export {
+	executeInKernel,
+	kernelBaseUrl,
+	KernelHttpError,
+	listKernelSessions,
+	parseSseStream,
+} from './runtime/kernelExecute';
+export type {
+	KernelExecuteResult,
+	KernelOutput,
+	KernelSession,
+	SseEvent,
+} from './runtime/kernelExecute';
+export { kernelBasePath } from './runtime/sessionLifecycle';
 export { runPreflight } from './runtime/preflight';
 export type {
 	CheckOutcome,
@@ -496,6 +525,12 @@ export function createServices(
 		'CliAuthorizationService',
 		new CliAuthorizationService(bucket, tokens),
 	);
+	const oauthClients = wrap('OAuthClientStore', new OAuthClientStore(bucket));
+	const oauthAuthorizations = wrap(
+		'OAuthAuthorizationService',
+		new OAuthAuthorizationService(bucket, tokens),
+	);
+	const oauthRateLimits = wrap('OAuthRateLimitService', new OAuthRateLimitService(bucket));
 	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
 		listJobs: notebook,
 		listJobsPage: notebook,
@@ -528,6 +563,9 @@ export function createServices(
 		identities,
 		tokens,
 		cliAuthorizations,
+		oauthClients,
+		oauthAuthorizations,
+		oauthRateLimits,
 		maintenance,
 		idempotency,
 	};

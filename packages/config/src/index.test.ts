@@ -1549,3 +1549,46 @@ describe('createFromEnv jobs config', () => {
 		expect(() => createFromEnv({ ...baseEnv, [key]: value })).toThrow(new RegExp(key));
 	});
 });
+
+describe('createFromEnv MCP config', () => {
+	const baseEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('is off by default', () => {
+		expect(createFromEnv(baseEnv).mcp).toBeUndefined();
+		expect(createFromEnv({ ...baseEnv, MARIMOHUB_MCP: 'off' }).mcp).toBeUndefined();
+	});
+
+	it('requires and normalizes the public app URL when enabled', () => {
+		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_MCP: 'on' })).toThrow(
+			/MARIMOHUB_APP_BASE_URL is required when MARIMOHUB_MCP=on/,
+		);
+		expect(
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_MCP: 'on',
+				MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/base/',
+			}).mcp,
+		).toEqual({ publicBaseUrl: 'https://hub.example.com/base' });
+	});
+
+	it.each([
+		'not a URL',
+		'ftp://hub.example.com',
+		'javascript:alert(1)',
+		'https://user@hub.example.com',
+		'https://user:secret@hub.example.com',
+	])('rejects an unsafe public app URL: %s', (baseUrl) => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_MCP: 'on',
+				MARIMOHUB_APP_BASE_URL: baseUrl,
+			}),
+		).toThrow(/credential-free HTTP\(S\) URL/);
+	});
+});

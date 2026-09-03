@@ -1,23 +1,25 @@
 import { z } from 'zod';
-import { decodeTime } from 'ulidx';
 import type { Bucket, BucketObject, BucketObjectBody } from '../../ports/bucket';
 import { BadRequestError, PreconditionFailedError, ResourceExhaustedError } from '../../errors';
 import { CliAuthorizationId, createCliAuthorizationId } from '../../ids';
 import type { UserId } from '../../ids';
 import { toBase64Url } from '../../internal/base64url';
 import { timingSafeEqual } from '../../internal/hmac';
-import { toHex } from '../../internal/hex';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { readStored, UserIdSchema } from '../../schema';
 import type { CreatedToken, TokenService } from './TokenService';
 import { TokenGrantSchema, tokenGrantIsSubset } from '../../tokenGrants';
 import type { TokenGrant } from '../../tokenGrants';
+import {
+	authorizationCreatedAt,
+	authorizationSha256,
+	createAuthorizationCode,
+	hashAuthorizationSecret,
+} from './authorizationCodes';
 
 const AUTHORIZATION_PREFIX = 'mhub_cli_';
 const AUTHORIZATION_RE = /^mhub_cli_([0-9A-Z]{26})_([0-9a-z]{32})$/;
-const SECRET_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
-const SECRET_LENGTH = 32;
 const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ';
 const USER_CODE_LENGTH = 8;
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
@@ -121,16 +123,6 @@ export type CliDevicePollResult =
 	| { status: 'pending' }
 	| { status: 'approved'; credential: CreatedToken };
 
-function generateSecret(): string {
-	const bytes = new Uint8Array(SECRET_LENGTH);
-	crypto.getRandomValues(bytes);
-	let secret = '';
-	for (let index = 0; index < SECRET_LENGTH; index += 1) {
-		secret += SECRET_ALPHABET[bytes[index] & 31];
-	}
-	return secret;
-}
-
 function generateUserCode(): string {
 	let code = '';
 	while (code.length < USER_CODE_LENGTH) {
@@ -154,29 +146,16 @@ export function formatCliDeviceUserCode(value: string): string {
 	return `${value.slice(0, 4)}-${value.slice(4)}`;
 }
 
-async function sha256(value: string): Promise<Uint8Array> {
-	return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
-}
-
-async function hash(value: string): Promise<string> {
-	return toHex(await sha256(value));
-}
-
 async function createAuthorization(codeChallenge: string) {
-	const id = createCliAuthorizationId();
-	const secret = generateSecret();
-	const now = new Date();
-	const expiresAt = new Date(now.getTime() + CliAuthorizationService.AUTHORIZATION_TTL_MS);
+	const created = await createAuthorizationCode(
+		createCliAuthorizationId,
+		CliAuthorizationService.AUTHORIZATION_TTL_MS,
+	);
 	return {
-		id,
-		secret,
-		expiresAt,
+		...created,
 		common: {
-			id,
-			code_hash: await hash(secret),
+			...created.common,
 			code_challenge: codeChallenge,
-			created_at: now.toISOString(),
-			expires_at: expiresAt.toISOString(),
 		},
 	};
 }
@@ -199,17 +178,6 @@ async function readAuthorization(
 
 function invalidAuthorization(): BadRequestError {
 	return new BadRequestError('CLI authorization code is invalid or expired');
-}
-
-function authorizationCreatedAt(key: string): number | null {
-	if (!key.endsWith('.json')) return null;
-	const encodedId = key.slice(paths.cliAuthorizationsPrefix.length, -'.json'.length);
-	if (!CliAuthorizationId.is(encodedId)) return null;
-	try {
-		return decodeTime(encodedId);
-	} catch {
-		return null;
-	}
 }
 
 export class CliAuthorizationService {
@@ -468,11 +436,11 @@ export class CliAuthorizationService {
 		}
 
 		const encoder = new TextEncoder();
-		const presentedHash = encoder.encode(await hash(secret));
+		const presentedHash = encoder.encode(await hashAuthorizationSecret(secret));
 		if (!timingSafeEqual(presentedHash, encoder.encode(record.code_hash))) {
 			throw invalidAuthorization();
 		}
-		const challenge = toBase64Url(await sha256(codeVerifier));
+		const challenge = toBase64Url(await authorizationSha256(codeVerifier));
 		if (!timingSafeEqual(encoder.encode(challenge), encoder.encode(record.code_challenge))) {
 			throw invalidAuthorization();
 		}
@@ -541,7 +509,11 @@ export class CliAuthorizationService {
 
 	private async pruneExpired(): Promise<void> {
 		await this.prune(paths.cliAuthorizationsPrefix, (entry, now) => {
-			const createdAt = authorizationCreatedAt(entry.key);
+			const createdAt = authorizationCreatedAt(
+				entry.key,
+				paths.cliAuthorizationsPrefix,
+				CliAuthorizationId.is,
+			);
 			return createdAt === null || createdAt + CliAuthorizationService.AUTHORIZATION_TTL_MS <= now;
 		});
 	}

@@ -402,6 +402,16 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_VERSION` | Build/deploy version (usually the short git SHA or release tag) shown in the UI footer and returned by `GET /api/v1/version`. Baked into the image at build time. | — | `dev` | `a1b2c3d` |
 | `MARIMOHUB_IMAGE` | Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in the UI footer. Baked into the image at build time. | — | — | `ghcr.io/marimo-team/marimohub:a1b2c3d` |
 
+## MCP
+
+The built-in OAuth 2.1 server exposes notebooks to MCP clients. MCP is off by default and requires a fixed public base URL. See [MCP server](./mcp.md).
+
+### Server
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_MCP` | Enables the MCP endpoint and OAuth server. Requires `MARIMOHUB_APP_BASE_URL`. Values: `on`, `off`. | — | `off` | `on` |
+
 ## Jobs
 
 Headless notebook runs on a cron schedule or on demand, with a durable run history. Off unless `MARIMOHUB_JOBS=on`. Node deployments dispatch jobs on the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`) and honor the tuning variables below. Cloudflare Workers dispatch from the platform `scheduled()` handler and use the fixed defaults: 5 concurrent runs, 2 per project, 5 jobs per notebook, 1800-second default and 14400-second maximum timeouts, 30-day retention, and a 600-second catch-up window. See [Notebook jobs](./jobs.md).

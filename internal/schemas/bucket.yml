@@ -3259,6 +3259,25 @@ components:
             - actions
             - projects
           additionalProperties: false
+        oauth:
+          type: object
+          properties:
+            client_id:
+              type: string
+              minLength: 1
+            resource:
+              type: string
+              format: uri
+            scopes:
+              minItems: 1
+              type: array
+              items:
+                type: string
+                minLength: 1
+          required:
+            - client_id
+            - resource
+            - scopes
       required:
         - id
         - user_id
@@ -3271,6 +3290,9 @@ components:
           - grant
         grant:
           - credential_version
+        oauth:
+          - credential_version
+          - grant
     Event:
       type: object
       properties:

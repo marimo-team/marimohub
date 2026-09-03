@@ -345,6 +345,10 @@ export interface BackgroundTaskScheduler {
 	defer(task: Promise<unknown>): void;
 }
 
+export interface McpConfig {
+	publicBaseUrl: string;
+}
+
 /**
  * Everything the API needs, injected at composition time. This replaces the
  * Cloudflare-specific `Bindings: Env` coupling — routes read it from the Hono
@@ -395,6 +399,8 @@ export interface ApiDeps {
 	policy: PolicyConfig;
 	/** Notebook jobs; absent = the feature is off, routes 404 and no scheduler runs. */
 	jobs?: JobsConfig;
+	/** MCP and its OAuth server; absent = all MCP, OAuth, and consent routes return 404. */
+	mcp?: McpConfig;
 	/**
 	 * Resource-security collaborators (constraint adapter + subject-context
 	 * provider) — live ports, kept out of the data-only `policy`. Labeled

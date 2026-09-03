@@ -27,12 +27,14 @@ catalog:
   # Exact-pinned prerelease: the only published channel is beta (see minimumReleaseAgeExclude).
   '@coreweave/cwsandbox': 0.4.0-beta.0
   '@duckdb/duckdb-wasm': 1.32.0
+  '@hono/mcp': ^0.3.2
   '@hono/node-server': ^2.0.10
   '@hono/otel': ^1.1.2
   '@hono/zod-openapi': ^1.2.2
   '@kubernetes/client-node': ^1.4.0
   '@marimo-team/codemirror-sql': ^0.3.0
   '@marimo-team/react-finder': ^0.1.0
+  '@modelcontextprotocol/sdk': ^1.30.0
   '@opentelemetry/api': ^1.9.0
   '@opentelemetry/api-logs': ^0.220.0
   '@opentelemetry/context-async-hooks': ^2.9.0
@@ -70,6 +72,7 @@ catalog:
   csv-parse: ^7.0.1
   google-auth-library: ^11.0.0
   hono: ^4.12.34
+  hono-rate-limiter: ^0.5.3
   hyparquet: ^1.26.2
   isomorphic-git: ^1.40.0
   jose: ^6.1.3
@@ -120,6 +123,7 @@ minimumReleaseAgeExclude:
   - '@coreweave/cwsandbox@0.4.0-beta.0'
   # Security fixes take precedence over the release-age cooldown.
   - brace-expansion
+  - fast-uri@3.1.6
   - nanoid
   - hono@4.12.34
   - ip-address@10.3.1

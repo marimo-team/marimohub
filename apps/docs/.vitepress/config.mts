@@ -133,11 +133,12 @@ export default defineConfig({
 			},
 			{
 				text: 'Reference',
-				activeMatch: '^/(configuration|api|cli|architecture|agent-guide)',
+				activeMatch: '^/(configuration|api|api-tokens|mcp|cli|architecture|agent-guide)',
 				items: [
 					{ text: 'Configuration', link: '/configuration' },
 					{ text: 'API & client', link: '/api' },
 					{ text: 'API tokens', link: '/api-tokens' },
+					{ text: 'MCP server', link: '/mcp' },
 					{ text: 'CLI', link: '/cli' },
 					{ text: 'How it works', link: '/architecture' },
 					{ text: 'Agent guide', link: '/agent-guide' },
@@ -205,6 +206,7 @@ export default defineConfig({
 					{ text: 'Configuration', link: '/configuration' },
 					{ text: 'API & client', link: '/api' },
 					{ text: 'API tokens', link: '/api-tokens' },
+					{ text: 'MCP server', link: '/mcp' },
 					{ text: 'CLI', link: '/cli' },
 					{ text: 'How it works', link: '/architecture' },
 					{ text: 'Agent guide', link: '/agent-guide' },
