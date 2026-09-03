@@ -50,6 +50,31 @@ describe('kernel execution', () => {
 		]);
 	});
 
+	it('normalizes legacy session ids and drops malformed session entries', async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					sessions: [
+						{ session_id: 'legacy', path: '/notebook.py' },
+						{ id: 42 },
+						null,
+						'not-an-object',
+					],
+				}),
+			),
+		);
+
+		await expect(listKernelSessions('https://kernel', { fetchImpl })).resolves.toEqual([
+			{ id: 'legacy', session_id: 'legacy', path: '/notebook.py' },
+		]);
+	});
+
+	it('returns an empty list for an unexpected sessions payload', async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ sessions: null })));
+
+		await expect(listKernelSessions('https://kernel', { fetchImpl })).resolves.toEqual([]);
+	});
+
 	it('collects SSE output and terminal results', async () => {
 		const fetchImpl = vi
 			.fn()
@@ -105,6 +130,36 @@ describe('kernel execution', () => {
 		).resolves.toMatchObject({ completed: false, stdout: 'abc', truncated: true });
 	});
 
+	it('caps stderr and terminal output independently', async () => {
+		const fetchImpl = vi
+			.fn()
+			.mockResolvedValue(
+				sse(
+					'event: stderr\ndata: {"data":"abcdef"}\n\n' +
+						'event: done\ndata: {"success":true,"output":{"mimetype":"text/plain","data":"uvwxyz"}}\n\n',
+				),
+			);
+
+		await expect(
+			executeInKernel(
+				'https://kernel',
+				{
+					sessionId: 'one',
+					code: 'print()',
+					maxStderrBytes: 3,
+					maxOutputBytes: 4,
+				},
+				{ fetchImpl },
+			),
+		).resolves.toMatchObject({
+			completed: true,
+			success: true,
+			stderr: 'abc',
+			output: { mimetype: 'text/plain', data: 'uvwx' },
+			truncated: true,
+		});
+	});
+
 	it('reports a completed kernel failure', async () => {
 		const fetchImpl = vi.fn().mockResolvedValue(sse('event: done\ndata: {"success":false}\n\n'));
 		await expect(
@@ -130,6 +185,28 @@ describe('kernel execution', () => {
 		);
 	});
 
+	it('rejects a successful execution response with the wrong content type', async () => {
+		const fetchImpl = vi
+			.fn()
+			.mockResolvedValue(new Response('{}', { headers: { 'Content-Type': 'application/json' } }));
+
+		await expect(
+			executeInKernel('https://kernel', { sessionId: 'one', code: '1+1' }, { fetchImpl }),
+		).rejects.toEqual(new KernelHttpError(200, 'Expected text/event-stream response'));
+	});
+
+	it('rejects an event-stream response without a body', async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(null, {
+				headers: { 'Content-Type': 'text/event-stream' },
+			}),
+		);
+
+		await expect(
+			executeInKernel('https://kernel', { sessionId: 'one', code: '1+1' }, { fetchImpl }),
+		).rejects.toEqual(new KernelHttpError(200, 'Kernel response had no body'));
+	});
+
 	it('interrupts execution when the timeout elapses', async () => {
 		vi.useFakeTimers();
 		const fetchImpl = vi.fn(
@@ -150,6 +227,30 @@ describe('kernel execution', () => {
 			completed: false,
 			success: false,
 			timedOut: true,
+		});
+	});
+
+	it('reports an external cancellation separately from a timeout', async () => {
+		const controller = new AbortController();
+		const fetchImpl = vi.fn(
+			(_input: RequestInfo | URL, init?: RequestInit) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener('abort', () =>
+						reject(new DOMException('Aborted', 'AbortError')),
+					);
+				}),
+		);
+		const execution = executeInKernel(
+			'https://kernel',
+			{ sessionId: 'one', code: 'while True: pass' },
+			{ fetchImpl, signal: controller.signal },
+		);
+		controller.abort();
+
+		await expect(execution).resolves.toMatchObject({
+			completed: false,
+			success: false,
+			timedOut: false,
 		});
 	});
 });

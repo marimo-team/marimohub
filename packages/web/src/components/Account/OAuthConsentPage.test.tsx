@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
-import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { OAuthConsentPage } from './OAuthConsentPage';
 
 const ID = '01HXY0S6GWMBASVAG3PZ7Y2K5T';
 const CALLBACK = 'cursor://oauth/callback';
 
-function setup() {
+function setup(options: { approveError?: boolean } = {}) {
 	const calls: { url: string; body?: unknown }[] = [];
 	vi.stubGlobal(
 		'fetch',
@@ -29,6 +29,7 @@ function setup() {
 				});
 			}
 			if (url === `/api/v1/me/oauth-authorizations/${ID}/approve`) {
+				if (options.approveError) return jsonError('INVALID_REQUEST', 'Authorization expired', 400);
 				return jsonOk({ redirect_uri: `${CALLBACK}?code=approved` });
 			}
 			if (url === `/api/v1/me/oauth-authorizations/${ID}/deny`) {
@@ -91,5 +92,40 @@ describe('OAuthConsentPage', () => {
 		await screen.findByText(/authorize Cursor/i);
 		await user.click(screen.getByRole('button', { name: 'Deny' }));
 		expect(navigate).toHaveBeenCalledWith(`${CALLBACK}?error=access_denied`);
+	});
+
+	it.each(['0', '3651', '1.5', 'not-a-number'])(
+		'does not submit an invalid token lifetime: %s',
+		async (lifetime) => {
+			const user = userEvent.setup();
+			const { calls, navigate } = setup();
+			await screen.findByText(/authorize Cursor/i);
+			const input = screen.getByLabelText('Token lifetime (days)');
+			await user.clear(input);
+			await user.type(input, lifetime);
+			await user.click(screen.getByRole('button', { name: 'Approve' }));
+
+			expect(calls.some(({ url }) => url.endsWith('/approve'))).toBe(false);
+			expect(navigate).not.toHaveBeenCalled();
+		},
+	);
+
+	it('does not navigate when approval fails', async () => {
+		const user = userEvent.setup();
+		const { navigate } = setup({ approveError: true });
+		await screen.findByText(/authorize Cursor/i);
+		await user.click(screen.getByRole('button', { name: 'Approve' }));
+
+		expect(navigate).not.toHaveBeenCalled();
+	});
+
+	it('shows an invalid request state when the authorization id is missing', async () => {
+		window.history.replaceState({}, '', '/oauth/consent');
+		const { calls } = setup();
+
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'This authorization request is invalid or expired.',
+		);
+		expect(calls.some(({ url }) => url.includes('/oauth-authorizations/'))).toBe(false);
 	});
 });

@@ -75,11 +75,103 @@ describe('OAuthAuthorizationService', () => {
 			redirectUri: 'cursor://oauth/callback',
 			resource: 'https://hub.example/mcp',
 		},
+		{ clientId: 'client', resource: 'https://hub.example/mcp' },
 		{ clientId: 'client', redirectUri: 'cursor://wrong', resource: 'https://hub.example/mcp' },
 		{ clientId: 'client', redirectUri: 'cursor://oauth/callback', resource: 'https://other/mcp' },
+		{ clientId: 'client', redirectUri: 'cursor://oauth/callback' },
 	])('rejects mismatched exchange bindings', async (exchange) => {
 		const { code } = await approved();
 		await expect(service.exchange({ code, ...exchange })).rejects.toThrow(/invalid/);
+	});
+
+	it('rejects malformed, unknown, and tampered codes without creating a token', async () => {
+		const { code } = await approved();
+		const tampered = `${code.slice(0, -1)}${code.endsWith('0') ? '1' : '0'}`;
+		const unknown = `mhub_oac_01ARZ3NDEKTSV4RRFFQ69G5FAV_${'0'.repeat(32)}`;
+
+		for (const candidate of ['not-an-authorization-code', unknown, tampered]) {
+			await expect(service.challengeFor(candidate, 'client')).rejects.toThrow(/invalid/);
+		}
+		expect(createToken).not.toHaveBeenCalled();
+	});
+
+	it('allows only one concurrent approval', async () => {
+		const { id } = await service.begin({
+			clientId: 'client',
+			redirectUri: 'cursor://oauth/callback',
+			codeChallenge: 'A'.repeat(43),
+			scopes: [],
+		});
+		const input = { grant: GRANT, tokenName: 'MCP', expiresInDays: 30 };
+		const attempts = await Promise.allSettled([
+			service.approve(id, input, ACTOR),
+			service.approve(id, input, ACTOR),
+		]);
+
+		expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+		expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+	});
+
+	it('allows only one concurrent exchange', async () => {
+		const { code } = await approved();
+		const input = {
+			code,
+			clientId: 'client',
+			redirectUri: 'cursor://oauth/callback',
+			resource: 'https://hub.example/mcp',
+		};
+		const attempts = await Promise.allSettled([service.exchange(input), service.exchange(input)]);
+
+		expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+		expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+		expect(createToken).toHaveBeenCalledOnce();
+	});
+
+	it('consumes the code when token creation fails', async () => {
+		createToken.mockRejectedValueOnce(new Error('token store unavailable'));
+		const { code } = await approved();
+
+		await expect(
+			service.exchange({
+				code,
+				clientId: 'client',
+				redirectUri: 'cursor://oauth/callback',
+				resource: 'https://hub.example/mcp',
+			}),
+		).rejects.toThrow('token store unavailable');
+		await expect(service.challengeFor(code, 'client')).rejects.toThrow(/invalid/);
+	});
+
+	it('preserves callback parameters when it adds an authorization result', async () => {
+		const { id } = await service.begin({
+			clientId: 'client',
+			redirectUri: 'https://client.example/callback?source=desktop',
+			codeChallenge: 'A'.repeat(43),
+			scopes: [],
+			state: 'request-state',
+		});
+		const approvedResult = await service.approve(
+			id,
+			{ grant: GRANT, tokenName: 'MCP', expiresInDays: 30 },
+			ACTOR,
+		);
+		const redirect = new URL(approvedResult.redirectUri);
+
+		expect(redirect.searchParams.get('source')).toBe('desktop');
+		expect(redirect.searchParams.get('state')).toBe('request-state');
+		expect(redirect.searchParams.get('code')).toMatch(/^mhub_oac_/);
+	});
+
+	it('treats malformed stored records as invalid', async () => {
+		const { id } = await service.begin({
+			clientId: 'client',
+			redirectUri: 'https://client.example/callback',
+			codeChallenge: 'A'.repeat(43),
+			scopes: [],
+		});
+		await bucket.put(paths.oauthAuthorization(id), JSON.stringify({ id, status: 'pending' }));
+
+		await expect(service.preview(id)).rejects.toThrow(/invalid/);
 	});
 
 	it('denies a pending request', async () => {

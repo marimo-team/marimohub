@@ -201,7 +201,7 @@ export class OAuthAuthorizationService {
 		const { key, object, record } = await this.readPresented(input.code);
 		if (
 			record.client_id !== input.clientId ||
-			(input.redirectUri !== undefined && record.redirect_uri !== input.redirectUri) ||
+			record.redirect_uri !== input.redirectUri ||
 			(record.resource ?? undefined) !== (input.resource ?? undefined)
 		) {
 			throw invalidAuthorization();

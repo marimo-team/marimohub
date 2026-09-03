@@ -55,6 +55,7 @@ function validRedirectUri(value: string): boolean {
 	} catch {
 		return false;
 	}
+	if (url.hash) return false;
 	if (url.protocol === 'https:') return true;
 	if (url.protocol === 'http:') {
 		return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';

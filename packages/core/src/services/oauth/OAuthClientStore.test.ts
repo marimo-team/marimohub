@@ -44,8 +44,15 @@ describe('OAuthClientStore', () => {
 
 	it.each([
 		'http://example.com/callback',
+		'http://localhost.example.com/callback',
+		'http://0.0.0.0/callback',
 		'ftp://example.com/callback',
+		'mailto:oauth@example.com',
+		'ws://localhost/callback',
+		'custom:opaque-callback',
 		'file:///tmp/callback',
+		'https://example.com/callback#fragment',
+		'cursor://oauth/callback#fragment',
 		'javascript:alert(1)',
 		'not a URL',
 	])('rejects unsafe redirect URI %s', async (redirectUri) => {
@@ -63,5 +70,34 @@ describe('OAuthClientStore', () => {
 		'com.example.app:/oauth/callback',
 	])('accepts redirect URI %s', async (redirectUri) => {
 		await expect(store.register({ redirect_uris: [redirectUri] })).resolves.toBeDefined();
+	});
+
+	it('rejects empty and partially unsafe redirect URI lists without writing a client', async () => {
+		await expect(store.register({ redirect_uris: [] })).rejects.toThrow(/OAuth redirect_uris/);
+		await expect(
+			store.register({
+				redirect_uris: ['https://client.example/callback', 'http://client.example/callback'],
+			}),
+		).rejects.toThrow(/OAuth redirect_uris/);
+
+		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
+	});
+
+	it('returns null for malformed ids and stored records', async () => {
+		expect(await store.get('not-a-client-id')).toBeNull();
+		const client = await store.register({ redirect_uris: ['https://client.example/callback'] });
+		await bucket.put(
+			paths.oauthClient(client.client_id),
+			JSON.stringify({ client_id: client.client_id }),
+		);
+
+		expect(await store.get(client.client_id)).toBeNull();
+	});
+
+	it('expires a registration at the exact TTL boundary', async () => {
+		const client = await store.register({ redirect_uris: ['https://client.example/callback'] });
+		vi.advanceTimersByTime(OAuthClientStore.CLIENT_TTL_MS);
+
+		expect(await store.get(client.client_id)).toBeNull();
 	});
 });

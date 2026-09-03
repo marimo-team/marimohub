@@ -26,6 +26,22 @@ async function mcpJson(response: Response): Promise<unknown> {
 	return JSON.parse(data);
 }
 
+async function registerClient(
+	app: ReturnType<typeof createApi>,
+	redirectUri = 'https://client.example/callback',
+): Promise<string> {
+	const response = await app.request('/register', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			redirect_uris: [redirectUri],
+			token_endpoint_auth_method: 'none',
+		}),
+	});
+	expect(response.status).toBe(201);
+	return ((await response.json()) as { client_id: string }).client_id;
+}
+
 describe('MCP OAuth app', () => {
 	it('discovers OAuth and exchanges browser consent for a PAT', async () => {
 		const compute = makeFakeCompute();
@@ -311,6 +327,168 @@ describe('MCP OAuth app', () => {
 		expect(unauthorized.headers.get('www-authenticate')).toContain(
 			'resource_metadata="https://hub.example.com/marimohub/.well-known/oauth-protected-resource/mcp"',
 		);
+	});
+
+	it('validates client registration without storing partial records', async () => {
+		const bucket = new MemoryBucket();
+		const app = createApi(
+			makeTestDeps(bucket, { mcp: { publicBaseUrl: 'https://hub.example.com' } }),
+		);
+		for (const body of [
+			{ redirect_uris: [], token_endpoint_auth_method: 'none' },
+			{
+				redirect_uris: ['https://client.example/callback', 'http://client.example/callback'],
+				token_endpoint_auth_method: 'none',
+			},
+		]) {
+			const response = await app.request('/register', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			});
+			expect(response.status).toBe(400);
+		}
+
+		expect((await bucket.list({ prefix: '_system/oauth-clients/' })).objects).toHaveLength(0);
+		const normalized = await app.request('/register', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				redirect_uris: ['https://client.example/callback'],
+				token_endpoint_auth_method: 'client_secret_basic',
+			}),
+		});
+		expect(normalized.status).toBe(201);
+		const normalizedBody = await normalized.json();
+		expect(normalizedBody).toMatchObject({ token_endpoint_auth_method: 'none' });
+		expect(normalizedBody).not.toHaveProperty('client_secret');
+	});
+
+	it('rejects invalid authorization requests before storing consent records', async () => {
+		const bucket = new MemoryBucket();
+		const app = createApi(
+			makeTestDeps(bucket, { mcp: { publicBaseUrl: 'https://hub.example.com' } }),
+		);
+		const clientId = await registerClient(app);
+		const valid = {
+			client_id: clientId,
+			response_type: 'code',
+			redirect_uri: 'https://client.example/callback',
+			code_challenge: await challenge('v'.repeat(43)),
+			code_challenge_method: 'S256',
+			resource: 'https://hub.example.com/mcp',
+		};
+		const invalidRequests = [
+			{ ...valid, client_id: 'unknown-client' },
+			{ ...valid, redirect_uri: 'https://attacker.example/callback' },
+			{ ...valid, code_challenge: undefined },
+			{ ...valid, code_challenge_method: 'plain' },
+			{ ...valid, resource: 'https://hub.example.com/other' },
+		];
+
+		for (const params of invalidRequests) {
+			const search = new URLSearchParams();
+			for (const [key, value] of Object.entries(params)) {
+				if (value !== undefined) search.set(key, value);
+			}
+			const response = await app.request(`/authorize?${search}`, { redirect: 'manual' });
+			expect([302, 400]).toContain(response.status);
+			if (response.status === 302) {
+				const redirect = new URL(response.headers.get('location')!);
+				expect(`${redirect.origin}${redirect.pathname}`).toBe('https://client.example/callback');
+				expect(redirect.searchParams.get('error')).toBeTruthy();
+			} else {
+				expect(await response.json()).toMatchObject({ error: expect.any(String) });
+			}
+		}
+		expect((await bucket.list({ prefix: '_system/oauth-authorizations/' })).objects).toHaveLength(
+			0,
+		);
+	});
+
+	it('does not consume a code on verifier or redirect mismatch, but rejects replay', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			mcp: { publicBaseUrl: 'https://hub.example.com' },
+		});
+		deps.authenticator = {
+			authenticate: async (request) => {
+				const token = bearerToken(request);
+				return token ? deps.services.tokens.verify(token) : USER;
+			},
+		};
+		const app = createApi(deps);
+		const clientId = await registerClient(app);
+		const verifier = 'v'.repeat(43);
+		const authorize = new URL('https://hub.example.com/authorize');
+		authorize.search = new URLSearchParams({
+			client_id: clientId,
+			response_type: 'code',
+			redirect_uri: 'https://client.example/callback',
+			code_challenge: await challenge(verifier),
+			code_challenge_method: 'S256',
+			resource: 'https://hub.example.com/mcp',
+		}).toString();
+		const authorization = await app.request(authorize, { redirect: 'manual' });
+		const id = new URL(authorization.headers.get('location')!).searchParams.get('id')!;
+		const approved = await app.request(`/api/v1/me/oauth-authorizations/${id}/approve`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				grant: { actions: ['project.read'], projects: '*' },
+				expires_in_days: 7,
+			}),
+		});
+		const code = new URL(
+			((await approved.json()) as { data: { redirect_uri: string } }).data.redirect_uri,
+		).searchParams.get('code')!;
+		const tokenRequest = {
+			grant_type: 'authorization_code',
+			client_id: clientId,
+			code,
+			code_verifier: verifier,
+			redirect_uri: 'https://client.example/callback',
+			resource: 'https://hub.example.com/mcp',
+		};
+		const exchange = (overrides: Record<string, string | undefined> = {}) => {
+			const body = new URLSearchParams();
+			for (const [key, value] of Object.entries({ ...tokenRequest, ...overrides })) {
+				if (value !== undefined) body.set(key, value);
+			}
+			return app.request('/token', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body,
+			});
+		};
+
+		expect((await exchange({ code_verifier: 'x'.repeat(43) })).status).toBe(400);
+		expect((await exchange({ redirect_uri: undefined })).status).toBe(400);
+		expect((await exchange()).status).toBe(200);
+		expect((await exchange()).status).toBe(400);
+	});
+
+	it('returns OAuth errors for malformed revocations and ignores unknown tokens', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			mcp: { publicBaseUrl: 'https://hub.example.com' },
+		});
+		const app = createApi(deps);
+		const clientId = await registerClient(app);
+		const revoke = (body: Record<string, string>) =>
+			app.request('/revoke', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams(body),
+			});
+
+		const missingToken = await revoke({ client_id: clientId });
+		expect(missingToken.status).toBe(400);
+		expect(await missingToken.json()).toMatchObject({ error: 'invalid_request' });
+		const unknownClient = await revoke({ client_id: 'unknown', token: 'mhub_pat_unknown' });
+		expect(unknownClient.status).toBe(400);
+		expect(await unknownClient.json()).toMatchObject({ error: 'invalid_client' });
+		const unknownToken = await revoke({ client_id: clientId, token: 'mhub_pat_unknown' });
+		expect(unknownToken.status).toBe(200);
+		expect(unknownToken.headers.get('cache-control')).toBe('no-store');
 	});
 
 	it('rate limits authorization requests before they create unbounded records', async () => {
