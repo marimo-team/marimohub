@@ -48,10 +48,10 @@ selectable per notebook (for `e2b`, `MARIMOHUB_COMPUTE_E2B_TEMPLATE` takes a
 list of template ids the same way). See [Sandbox image](./sandbox-image.md) for
 the contract, a pre-warmed example, and how multiple images behave.
 
-The hub uses `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` for its backend-independent
-session lifecycle. It saves the session before it asks the compute provider to
-stop the sandbox. For Modal, the adapter sets the provider-side idle timeout to
-1.5 times this value as a fallback if the scheduled lifecycle sweep cannot run.
+The hub reaps idle sessions after `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`.
+`MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` can override this value for **Run as
+app** sessions. The hub saves persistent edit sessions before it stops their
+sandboxes. Modal uses 1.5 times the effective timeout as a provider fallback.
 
 `MARIMOHUB_SANDBOX_EXPOSURE` controls how kernels reach the browser:
 

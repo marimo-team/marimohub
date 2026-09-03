@@ -446,9 +446,9 @@ destinations.
 | `MARIMOHUB_COMPUTE_LOCAL_HOST`                  | `local` backend: host for the kernel URL (default `localhost`)                                                |
 | `MARIMOHUB_COMPUTE_LOCAL_ROOT`                  | `local` backend: parent directory for sandboxes (default: OS temporary directory)                             |
 
-Modal derives its provider-side idle limit as 1.5 times
-`MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. The record-driven lifecycle sweep
-saves and stops the session at the earlier deadline; Modal is only the fallback.
+Modal sets its idle limit to 1.5 times each session's effective timeout. App
+sessions can use `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS`. The lifecycle
+sweep uses the earlier deadline. Modal is only the fallback.
 
 > The `coreweave` backend has no `listActive`, so the reconciler skips
 > provider-truth reconciliation for it (the SDK list API does not echo tags, so a

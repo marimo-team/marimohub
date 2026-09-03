@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
-import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import { Millis } from '../../duration';
+import type {
+	ComputeResources,
+	CreateSandboxOptions,
+	FilesystemSnapshots,
+	SandboxInstance,
+	SandboxProvider,
+	SandboxUserHome,
+} from '../../ports/sandbox';
 import { ACTOR, makeFakeSandbox, setupTestEnv, uid } from '../../testing';
 import {
 	captureFilesystemSnapshot,
@@ -89,7 +97,7 @@ describe('filesystemSnapshots', () => {
 
 		it('passes reuse:false on a fresh plain create (skips the reconnect lookup)', () => {
 			const { instance } = makeFakeSandbox();
-			const createOpts: unknown[] = [];
+			const createOpts: (CreateSandboxOptions | undefined)[] = [];
 			const provider: SandboxProvider = {
 				create: (_id, options) => {
 					createOpts.push(options);
@@ -97,8 +105,45 @@ describe('filesystemSnapshots', () => {
 				},
 				proxy: async () => null,
 			};
-			createOrRestoreSandbox(provider, sandboxId);
-			expect(createOpts).toEqual([{ reuse: false }]);
+			createOrRestoreSandbox(provider, sandboxId, undefined, {
+				sessionIdleTimeoutMs: Millis.hours(2),
+			});
+			expect(createOpts).toEqual([{ reuse: false, sessionIdleTimeoutMs: 7_200_000 }]);
+		});
+
+		it('preserves positional image, resources, and user-home arguments', () => {
+			const { instance } = makeFakeSandbox();
+			const createOpts: (CreateSandboxOptions | undefined)[] = [];
+			const resources: ComputeResources = { cpu: 2, memoryBytes: 4_000_000_000 };
+			const userHome: SandboxUserHome = { key: 'user@example.com', path: '/home/user' };
+			const provider: SandboxProvider = {
+				create: (_id, options) => {
+					createOpts.push(options);
+					return instance;
+				},
+				proxy: async () => null,
+			};
+
+			createOrRestoreSandbox(provider, sandboxId, undefined, 'legacy-image', resources, userHome);
+
+			expect(createOpts).toEqual([{ reuse: false, image: 'legacy-image', resources, userHome }]);
+		});
+
+		it('preserves positional resources when the image is omitted', () => {
+			const { instance } = makeFakeSandbox();
+			const createOpts: (CreateSandboxOptions | undefined)[] = [];
+			const resources: ComputeResources = { cpu: 2 };
+			const provider: SandboxProvider = {
+				create: (_id, options) => {
+					createOpts.push(options);
+					return instance;
+				},
+				proxy: async () => null,
+			};
+
+			createOrRestoreSandbox(provider, sandboxId, undefined, undefined, resources);
+
+			expect(createOpts).toEqual([{ reuse: false, resources }]);
 		});
 	});
 

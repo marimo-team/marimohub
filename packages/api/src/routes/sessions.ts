@@ -1569,6 +1569,7 @@ app.openapi(createSession, async (c) => {
 						image,
 						resources: requestedComputeProfile.resources,
 						userHome,
+						sessionIdleTimeoutMs: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
 						launchStrategy: resolvedLaunchStrategy.strategy,

@@ -11,6 +11,11 @@ import type { FsSnapshot } from '../../schema';
 import { logOperationalError } from '../../operationalLog';
 import type { NotebookService } from './NotebookService';
 
+type CreateOrRestoreSandboxOptions = Pick<
+	CreateSandboxOptions,
+	'image' | 'resources' | 'userHome' | 'sessionIdleTimeoutMs'
+>;
+
 /**
  * Orchestration for the optional `FilesystemSnapshots` capability — free functions
  * composed into the sandbox lifecycle, mirroring `sandboxFiles.ts`
@@ -35,12 +40,39 @@ export function createOrRestoreSandbox(
 	image?: string,
 	resources?: ComputeResources,
 	userHome?: SandboxUserHome,
+): SandboxInstance;
+export function createOrRestoreSandbox(
+	provider: SandboxProvider,
+	id: SandboxId,
+	restoreSnapshotId?: string,
+	options?: CreateOrRestoreSandboxOptions,
+): SandboxInstance;
+export function createOrRestoreSandbox(
+	provider: SandboxProvider,
+	id: SandboxId,
+	restoreSnapshotId?: string,
+	optionsOrImage: CreateOrRestoreSandboxOptions | string = {},
+	legacyResources?: ComputeResources,
+	legacyUserHome?: SandboxUserHome,
 ): SandboxInstance {
+	const options: CreateOrRestoreSandboxOptions =
+		typeof optionsOrImage === 'string' ||
+		legacyResources !== undefined ||
+		legacyUserHome !== undefined
+			? {
+					...(typeof optionsOrImage === 'string' ? { image: optionsOrImage } : {}),
+					...(legacyResources ? { resources: legacyResources } : {}),
+					...(legacyUserHome ? { userHome: legacyUserHome } : {}),
+				}
+			: optionsOrImage;
 	const fs = asFilesystemSnapshots(provider);
 	const common: CreateSandboxOptions = {
 		reuse: false,
-		...(resources ? { resources } : {}),
-		...(userHome ? { userHome } : {}),
+		...(options.resources ? { resources: options.resources } : {}),
+		...(options.userHome ? { userHome: options.userHome } : {}),
+		...(options.sessionIdleTimeoutMs !== undefined
+			? { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs }
+			: {}),
 	};
 	// reuse: false — this id is brand new, so the adapter's reconnect lookup can
 	// never match and would just cost a round-trip on the critical path.
@@ -48,7 +80,7 @@ export function createOrRestoreSandbox(
 	// captured on, so a base-image change only applies once no restore pointer exists.
 	return fs && restoreSnapshotId
 		? fs.createFromSnapshot(id, restoreSnapshotId, common)
-		: provider.create(id, { ...common, ...(image ? { image } : {}) });
+		: provider.create(id, { ...common, ...(options.image ? { image: options.image } : {}) });
 }
 
 /**

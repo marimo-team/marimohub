@@ -231,9 +231,10 @@ export is off or the collector is unreachable.
 
 Compute backends differ in cost model — pick per [Compute](/compute):
 
-- `modal` / `e2b` / `coreweave`: pay per running kernel. Set
-  `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` so the hub saves and stops idle sessions.
-  Modal automatically sets its provider idle limit to 1.5 times this value. Use
-  each backend's max-lifetime setting as an orphan backstop.
+- `modal` / `e2b` / `coreweave`: pay per running kernel. The hub uses
+  `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` to stop idle sessions. Apps can use
+  `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` instead. Modal uses 1.5 times the
+  effective value as its provider fallback. Provider maximum lifetimes remain
+  orphan backstops.
 - `kubernetes` / `docker`: you own the nodes; cap per-kernel CPU/memory/GPU.
 - `MARIMOHUB_MAX_SESSIONS_PER_USER` bounds concurrent kernels per user.

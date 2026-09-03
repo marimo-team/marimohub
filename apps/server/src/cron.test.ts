@@ -382,7 +382,7 @@ function makeSessionLifetime(
 ): SessionLifetimeConfig {
 	return {
 		maxLifetimeMs: Millis.hours(4),
-		idleTimeoutMs: Millis.minutes(30),
+		idleTimeoutMsByMode: { edit: Millis.minutes(30), app: Millis.minutes(30) },
 		snapshotIntervalMs: Millis.minutes(2),
 		extensionMs: Millis.minutes(30),
 		connectionAware: false,
