@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Millis } from '../../duration';
-import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
+import {
+	createNotebookId,
+	createProjectId,
+	createSandboxId,
+	createVersionId,
+	UserId,
+} from '../../ids';
 import { paths } from '../../paths';
 import {
 	ACTOR,
@@ -117,6 +123,23 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).not.toContain('--asset-url');
 			// Binds all interfaces so the external ingress can reach the kernel.
 			expect(calls.startProcess[0].cmd).toContain('--host 0.0.0.0');
+		});
+
+		it('names the owner to the provider, project and user', async () => {
+			const { instance } = makeFakeSandbox();
+			const compute = fakeComputeFrom(instance);
+			const userId = UserId.parse('user_owner');
+
+			await new SandboxProvisioner(compute).provision({
+				sandboxId,
+				projectId,
+				userId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+			});
+
+			expect(compute.lastCreateOptions?.owner).toEqual({ projectId, userId });
 		});
 
 		it('runs resolved launch setup before starting the kernel', async () => {
@@ -300,7 +323,11 @@ describe('SandboxProvisioner', () => {
 				image: 'ghcr.io/marimo/custom:1',
 			});
 
-			expect(compute.lastCreateOptions).toEqual({ reuse: false, image: 'ghcr.io/marimo/custom:1' });
+			expect(compute.lastCreateOptions).toEqual({
+				reuse: false,
+				owner: { projectId },
+				image: 'ghcr.io/marimo/custom:1',
+			});
 		});
 
 		it('forwards a user home to sandbox creation', async () => {
@@ -318,7 +345,7 @@ describe('SandboxProvisioner', () => {
 				userHome,
 			});
 
-			expect(compute.lastCreateOptions).toEqual({ reuse: false, userHome });
+			expect(compute.lastCreateOptions).toEqual({ reuse: false, owner: { projectId }, userHome });
 		});
 
 		it('destroys the sandbox when a sessionEnv promise rejects (fail-closed creds)', async () => {

@@ -1,5 +1,6 @@
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
+import { sessionOwner } from './sessionOwner';
 import type { Session } from '../../schema';
 import { Millis } from '../../duration';
 import { ConflictError } from '../../errors';
@@ -197,7 +198,7 @@ export class SessionRetirer {
 		} = { assertLease: async () => {}, advanceLease: async () => {} },
 	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
-		const sandbox = this.deps.compute.create(session.sandbox_id);
+		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
 		await this.stopSecondarySurfaces(sandbox, session);
 		if (!session.takeover_capture_completed_at) {
 			const persisted = await this.provisioner.captureSession(
@@ -259,7 +260,9 @@ export class SessionRetirer {
 			if (!(await this.teardownSandbox(session))) return false;
 		} else if (session.sandbox_id) {
 			try {
-				await this.deps.compute.create(session.sandbox_id).destroy();
+				await this.deps.compute
+					.create(session.sandbox_id, { owner: sessionOwner(session) })
+					.destroy();
 			} catch {
 				return false;
 			}
@@ -278,7 +281,7 @@ export class SessionRetirer {
 	 */
 	private async teardownSandbox(session: Session, captureBeforeDestroy = true): Promise<boolean> {
 		if (!session.sandbox_id) return true;
-		const sandbox = this.deps.compute.create(session.sandbox_id);
+		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
 		await this.stopSecondarySurfaces(sandbox, session);
 		let persisted = false;
 		if (captureBeforeDestroy) {

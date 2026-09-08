@@ -218,6 +218,11 @@ export interface ProvisionOptions {
 	resources?: ComputeResources;
 	/** Personal directory selected for an owner-isolated editor sandbox. */
 	userHome?: SandboxUserHome;
+	/**
+	 * The user the session is for. With `projectId` it names the sandbox's owner
+	 * to adapters that partition compute per tenant.
+	 */
+	userId?: UserId;
 	/** Control-plane idle deadline used by providers to derive an orphan backstop. */
 	sessionIdleTimeoutMs?: Millis;
 	/**
@@ -610,6 +615,10 @@ export class SandboxProvisioner {
 				resources: options.resources,
 				userHome: options.userHome,
 				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+				owner: {
+					projectId: options.projectId,
+					...(options.userId ? { userId: options.userId } : {}),
+				},
 			},
 		);
 		const createMs = Date.now() - createStart;
@@ -651,6 +660,10 @@ export class SandboxProvisioner {
 				resources: options.resources,
 				userHome: options.userHome,
 				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+				owner: {
+					projectId: options.projectId,
+					...(options.userId ? { userId: options.userId } : {}),
+				},
 			},
 		);
 		const createMs = Date.now() - createStart;

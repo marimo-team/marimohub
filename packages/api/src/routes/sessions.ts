@@ -1559,6 +1559,7 @@ export async function startNotebookSession(input: {
 							return provisioner.provision({
 								sandboxId,
 								projectId: pid,
+								userId: user.id,
 								notebookId: nid,
 								hostname,
 								bucket: sandbox.bucket,

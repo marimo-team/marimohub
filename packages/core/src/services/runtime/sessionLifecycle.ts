@@ -5,6 +5,7 @@ import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import type { NotebookId, SessionId } from '../../ids';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import { sessionOwner } from './sessionOwner';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
@@ -177,7 +178,7 @@ export class SessionLifecycleService {
 		};
 
 		await mapWithConcurrency(candidates, SESSION_SWEEP_CONCURRENCY, async (s) => {
-			const sandbox = this.compute.create(s.sandbox_id!);
+			const sandbox = this.compute.create(s.sandbox_id!, { owner: sessionOwner(s) });
 
 			const heartbeatStale =
 				now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMsByMode[sessionMode(s)];

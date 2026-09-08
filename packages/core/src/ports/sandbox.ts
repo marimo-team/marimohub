@@ -1,4 +1,4 @@
-import type { SandboxId } from '../ids';
+import type { ProjectId, SandboxId, UserId } from '../ids';
 import type { Millis } from '../duration';
 import type { Timings } from '../timing';
 
@@ -259,6 +259,15 @@ export interface SandboxUserHome {
 	path: string;
 }
 
+/**
+ * Who a sandbox is for. Adapters that partition compute per tenant (an Armada
+ * queue, a Kubernetes namespace) key on it; the rest ignore it.
+ */
+export interface SandboxOwner {
+	projectId: ProjectId;
+	userId?: UserId;
+}
+
 export interface CreateSandboxOptions {
 	/**
 	 * May the adapter reconnect to an existing sandbox with this id instead of
@@ -282,6 +291,12 @@ export interface CreateSandboxOptions {
 	 * later provider-side backstop; it is not the graceful lifecycle enforcement.
 	 */
 	sessionIdleTimeoutMs?: Millis;
+	/**
+	 * Who the sandbox is for, on every call where the caller holds a session
+	 * record. Absent where it holds only an id (orphan reconciliation), so an
+	 * adapter that keys on it must remember what it learned or look it up.
+	 */
+	owner?: SandboxOwner;
 }
 
 export interface SandboxProvider {
