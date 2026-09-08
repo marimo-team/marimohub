@@ -46,6 +46,48 @@ jobs:
           docker build -f images/marimo-sandbox/Dockerfile -t marimo-sandbox:ci .
           SKIP_BUILD=1 examples/sandbox-image/acceptance-test.sh marimo-sandbox:ci images/marimo-sandbox
 
+      - name: Verify authenticated Fargate agent
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          container="marimohub-fargate-agent-ci"
+          cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker run -d --rm --name "$container" -p 2717:2717 \
+            -e MARIMOHUB_AGENT_TOKEN="$token" -e MARIMOHUB_AGENT_PORT=2717 \
+            marimo-sandbox:ci python3 /usr/local/lib/marimohub/fargate_agent.py >/dev/null
+          for attempt in $(seq 1 30); do
+            health="$(curl --retry 2 --retry-all-errors -fsS \
+              -H "Authorization: Bearer $token" http://127.0.0.1:2717/health 2>/dev/null || true)"
+            if jq -e '.ok == true and .protocolVersion == 1' <<<"$health" >/dev/null 2>&1; then
+              break
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          sleep 1
+          auth=(-H "Authorization: Bearer $token")
+          curl --retry 2 --retry-all-errors -fsS "${auth[@]}" -H 'Content-Type: application/json' \
+            -X POST http://127.0.0.1:2717/exec \
+            -d '{"command":"printf smoke"}' \
+            | jq -e '.success == true and .stdout == "smoke"' >/dev/null
+          curl --retry 2 --retry-all-errors -fsS "${auth[@]}" -H 'Content-Type: application/json' \
+            -X POST http://127.0.0.1:2717/files/write \
+            -d '{"files":[{"path":"/tmp/fargate-agent-smoke.bin","contentBase64":"AP8B"}]}' \
+            | jq -e '.written == 1' >/dev/null
+          curl --retry 2 --retry-all-errors -fsS "${auth[@]}" \
+            'http://127.0.0.1:2717/files/read?path=%2Ftmp%2Ffargate-agent-smoke.bin' \
+            | jq -e '.contentBase64 == "AP8B"' >/dev/null
+          process_id="$(curl --retry 2 --retry-all-errors -fsS "${auth[@]}" -H 'Content-Type: application/json' \
+            -X POST http://127.0.0.1:2717/processes \
+            -d '{"processId":"fargate-agent-smoke","command":"sleep 30"}' | jq -r .id)"
+          test "$process_id" = fargate-agent-smoke
+          curl --retry 2 --retry-all-errors -fsS "${auth[@]}" -X DELETE \
+            "http://127.0.0.1:2717/processes/${process_id}?signal=TERM" >/dev/null
+
       - name: Build VS Code variant
         run: docker build --target vscode -f images/marimo-sandbox/Dockerfile -t marimo-sandbox:vscode-ci .
 

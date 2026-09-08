@@ -53,7 +53,7 @@ describe('createFargateClient', () => {
 			tags: [{ key: 'owner', value: 'deployment-a' }],
 			overrides: {
 				cpu: '1024',
-				memory: '4Gi',
+				memory: '4096',
 				containerOverrides: [
 					{ name: 'marimo', environment: [{ name: 'TOKEN', value: 'derived' }] },
 				],
@@ -71,8 +71,23 @@ describe('createFargateClient', () => {
 				},
 			},
 			tags: [{ key: 'owner', value: 'deployment-a' }],
-			overrides: { cpu: '1024', memory: '4Gi' },
+			overrides: { cpu: '1024', memory: '4096' },
 		});
+	});
+
+	it('uses startedBy as the only ListTasks filter', async () => {
+		const sdk = makeSdk();
+		const client = createFargateClient({ client: sdk as never });
+		await client.listTasks('marimo', 'deployment-a', 'next-page');
+		const command = sdk.send.mock.calls.find(
+			([candidate]) => candidate.constructor.name === 'ListTasksCommand',
+		)?.[0] as { input: Record<string, unknown> };
+		expect(command.input).toEqual({
+			cluster: 'marimo',
+			startedBy: 'deployment-a',
+			nextToken: 'next-page',
+		});
+		expect(command.input).not.toHaveProperty('launchType');
 	});
 
 	it('maps task definitions and validates a cluster', async () => {

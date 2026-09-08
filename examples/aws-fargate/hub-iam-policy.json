@@ -5,7 +5,7 @@
 			"Sid": "RunApprovedKernelTasks",
 			"Effect": "Allow",
 			"Action": "ecs:RunTask",
-			"Resource": "arn:aws:ecs:us-east-1:123456789012:task-definition/marimohub-kernel:*",
+			"Resource": "arn:aws:ecs:us-east-1:123456789012:task-definition/marimohub-kernel:1",
 			"Condition": {
 				"ArnEquals": {
 					"ecs:cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
@@ -15,19 +15,25 @@
 		{
 			"Sid": "InspectAndStopOwnedTasks",
 			"Effect": "Allow",
-			"Action": [
-				"ecs:DescribeClusters",
-				"ecs:DescribeTaskDefinition",
-				"ecs:DescribeTasks",
-				"ecs:ListTasks",
-				"ecs:StopTask"
-			],
+			"Action": ["ecs:DescribeTasks", "ecs:ListTasks", "ecs:StopTask"],
 			"Resource": "*",
 			"Condition": {
 				"ArnEquals": {
 					"ecs:cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
 				}
 			}
+		},
+		{
+			"Sid": "DescribeConfiguredCluster",
+			"Effect": "Allow",
+			"Action": "ecs:DescribeClusters",
+			"Resource": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
+		},
+		{
+			"Sid": "DescribeConfiguredTaskDefinition",
+			"Effect": "Allow",
+			"Action": "ecs:DescribeTaskDefinition",
+			"Resource": "arn:aws:ecs:us-east-1:123456789012:task-definition/marimohub-kernel:1"
 		},
 		{
 			"Sid": "TagRunTaskResources",

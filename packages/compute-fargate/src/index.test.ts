@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
+import {
+	computeContract,
+	CONTRACT_HIDDEN_FILE,
+	CONTRACT_VISIBLE_FILE,
+	isContractNonDirectoryFindCommand,
+	scriptContractLaunch,
+} from '@marimo-hub/core/testing/compute-contract';
 import type {
 	FargateClient,
 	FargateRunTaskInput,
@@ -19,6 +26,8 @@ import {
 	deterministicClientToken,
 } from './index';
 
+let activeContractWorld: ContractWorld | undefined;
+
 const ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
 const TOKEN = 'secret '.repeat(6);
 
@@ -26,6 +35,13 @@ class FakeEcs implements FargateClient {
 	readonly runInputs: FargateRunTaskInput[] = [];
 	readonly stopped: string[] = [];
 	tasks = new Map<string, FargateTask>();
+	listCalls = 0;
+	describeCalls = 0;
+	invisibleDescribes = 0;
+	describeFailures = 0;
+	describeThrows = 0;
+	stopBeforeReady = false;
+	listPageSize = 0;
 	private sequence = 0;
 
 	async runTask(input: FargateRunTaskInput) {
@@ -47,23 +63,48 @@ class FakeEcs implements FargateClient {
 	}
 
 	async describeTasks(_cluster: string, arns: readonly string[]) {
+		this.describeCalls++;
+		if (this.describeThrows > 0) {
+			this.describeThrows--;
+			throw new Error('eventual consistency');
+		}
+		if (this.describeFailures > 0) {
+			this.describeFailures--;
+			return { failures: [{ reason: 'temporary failure' }] };
+		}
+		if (this.invisibleDescribes > 0) {
+			this.invisibleDescribes--;
+			return { tasks: [] };
+		}
 		const tasks = arns.flatMap((arn) => {
 			const task = this.tasks.get(arn);
 			if (!task) return [];
-			if (arn.startsWith('arn:')) task.lastStatus = 'RUNNING';
+			if (this.stopBeforeReady) task.lastStatus = 'STOPPED';
+			else if (arn.startsWith('arn:')) task.lastStatus = 'RUNNING';
 			return [task];
 		});
 		return { tasks };
 	}
 
-	async listTasks() {
-		return { taskArns: [...this.tasks.keys()] };
+	async listTasks(_cluster?: string, _owner?: string, nextToken?: string) {
+		this.listCalls++;
+		const offset = nextToken ? Number(nextToken) : 0;
+		const arns = [...this.tasks.keys()];
+		const pageSize = this.listPageSize || (arns.length > 0 ? arns.length : 1);
+		const taskArns = arns.slice(offset, offset + pageSize);
+		return {
+			taskArns,
+			nextToken: offset + pageSize < arns.length ? String(offset + pageSize) : undefined,
+		};
 	}
 
 	async stopTask(_cluster: string, arn: string) {
 		this.stopped.push(arn);
 		const task = this.tasks.get(arn);
-		if (task) task.lastStatus = 'STOPPED';
+		if (task) {
+			task.lastStatus = 'STOPPED';
+			task.desiredStatus = 'STOPPED';
+		} else throw Object.assign(new Error('task already stopped'), { name: 'ClientException' });
 	}
 
 	async describeTaskDefinition(_taskDefinition: string): Promise<FargateTaskDefinition> {
@@ -93,7 +134,8 @@ function makeCompute(
 beforeEach(() => {
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async (url: string) => {
+		vi.fn(async (url: string, init?: RequestInit) => {
+			if (activeContractWorld) return activeContractWorld.fetch(url, init);
 			if (url.endsWith('/health')) {
 				return Response.json({ ok: true, protocolVersion: FARGATE_PROTOCOL_VERSION });
 			}
@@ -102,27 +144,101 @@ beforeEach(() => {
 	);
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+	activeContractWorld = undefined;
+	vi.unstubAllGlobals();
+});
 
 describe('Fargate profile selection', () => {
 	it('rounds CPU and memory to the smallest valid pair', () => {
 		expect(fargateProfileResources({ cpu: 0.25, memoryBytes: 512 * 1024 ** 2 })).toEqual({
 			cpu: '256',
-			memory: '0.5Gi',
+			memory: '512',
 		});
 		expect(fargateProfileResources({ cpu: 0.6, memoryBytes: 3 * 1024 ** 3 })).toEqual({
 			cpu: '1024',
-			memory: '3Gi',
+			memory: '3072',
 		});
 		expect(fargateProfileResources({ memoryBytes: 4 * 1024 ** 3 })).toEqual({
 			cpu: '512',
-			memory: '4Gi',
+			memory: '4096',
+		});
+		expect(fargateProfileResources({ cpu: 32, memoryBytes: 59 * 1024 ** 3 })).toEqual({
+			cpu: '32768',
+			memory: String(60 * 1024),
+		});
+		expect(fargateProfileResources({ cpu: 32, memoryBytes: 120 * 1024 ** 3 })).toEqual({
+			cpu: '32768',
+			memory: String(120 * 1024),
+		});
+		expect(fargateProfileResources({ cpu: 32, memoryBytes: 244 * 1024 ** 3 })).toEqual({
+			cpu: '32768',
+			memory: String(244 * 1024),
+		});
+		expect(fargateProfileResources({ cpu: 32, memoryBytes: 121 * 1024 ** 3 })).toEqual({
+			cpu: '32768',
+			memory: String(244 * 1024),
 		});
 	});
 
 	it('rejects GPU and requests above the Fargate maximum', () => {
 		expect(() => fargateProfileResources({ gpu: 'A100' })).toThrow(/GPU/);
 		expect(() => fargateProfileResources({ cpu: 64 })).toThrow(/largest supported/);
+		expect(() => fargateProfileResources({ cpu: 32, memoryBytes: 245 * 1024 ** 3 })).toThrow(
+			/largest supported/,
+		);
+		expect(() => fargateProfileResources({ cpu: 33, memoryBytes: 1 })).toThrow(/largest supported/);
+	});
+
+	it('keeps a single file above the preferred batch size within the file limit', async () => {
+		const client = new FakeEcs();
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		const fetchMock = vi.mocked(fetch);
+		await instance.writeFiles([
+			{ path: '/workspace/large.bin', content: new Uint8Array(9 * 1024 * 1024) },
+		]);
+		const write = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/files/write'));
+		expect(write).toBeDefined();
+		await expect(
+			instance.writeFiles([
+				{ path: '/workspace/too-large.bin', content: new Uint8Array(25 * 1024 * 1024 + 1) },
+			]),
+		).rejects.toThrow(/file limit/);
+	});
+
+	it('gives agent operations their requested timeout and preserves zero as unlimited', async () => {
+		const client = new FakeEcs();
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		const timeout = vi.spyOn(AbortSignal, 'timeout');
+		await instance.exec('true', { timeout: 123 });
+		expect(timeout).toHaveBeenLastCalledWith(1123);
+		timeout.mockClear();
+		await instance.exec('true', { timeout: 0 });
+		await instance.exec('true', { timeout: Infinity });
+		expect(timeout).not.toHaveBeenCalled();
+		timeout.mockRestore();
+	});
+
+	it('does not use a process lifetime timeout as the transport deadline', async () => {
+		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/health'))
+				return Response.json({ protocolVersion: FARGATE_PROTOCOL_VERSION });
+			if (url.endsWith('/processes')) return Response.json({ id: 'process-1' }, { status: 201 });
+			return Response.json({ ready: true });
+		});
+		const timeout = vi.spyOn(AbortSignal, 'timeout');
+		const process = await makeCompute(new FakeEcs())
+			.create(ID, { reuse: false })
+			.startProcess('true', {
+				timeout: 1,
+			});
+		expect(timeout).toHaveBeenLastCalledWith(120_000);
+		timeout.mockClear();
+		await process.waitForPort(2718, { timeout: 123 });
+		expect(timeout).toHaveBeenLastCalledWith(1123);
+		timeout.mockRestore();
 	});
 });
 
@@ -143,7 +259,7 @@ describe('FargateCompute', () => {
 				subnets: ['subnet-a'],
 				securityGroups: ['sg-hub'],
 			},
-			overrides: { cpu: '1024', memory: '4Gi' },
+			overrides: { cpu: '1024', memory: '4096' },
 		});
 		expect(input.tags).toEqual(
 			expect.arrayContaining([
@@ -184,6 +300,35 @@ describe('FargateCompute', () => {
 		);
 	});
 
+	it('retries eventually consistent task descriptions before readiness', async () => {
+		const client = new FakeEcs();
+		client.invisibleDescribes = 2;
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		await expect(instance.ready?.()).resolves.toBeUndefined();
+		expect(client.describeCalls).toBeGreaterThan(2);
+	});
+
+	it('retries transient DescribeTasks failures before readiness', async () => {
+		const client = new FakeEcs();
+		client.describeFailures = 2;
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		await expect(instance.ready?.()).resolves.toBeUndefined();
+	});
+
+	it('retries DescribeTasks transport errors before readiness', async () => {
+		const client = new FakeEcs();
+		client.describeThrows = 2;
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		await expect(instance.ready?.()).resolves.toBeUndefined();
+	});
+
+	it('reports a task that stops before agent readiness', async () => {
+		const client = new FakeEcs();
+		client.stopBeforeReady = true;
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		await expect(instance.ready?.()).rejects.toThrow(/stopped before readiness/);
+	});
+
 	it('rejects an unknown logical image key before ECS launch', async () => {
 		const client = new FakeEcs();
 		const instance = makeCompute(client).create(ID, { image: 'not-configured', reuse: false });
@@ -204,6 +349,7 @@ describe('FargateCompute', () => {
 			taskArn: 'owned',
 			lastStatus: 'RUNNING',
 			desiredStatus: 'RUNNING',
+			containers: [{ name: 'marimo' }],
 			tags: [
 				{ key: OWNER_TAG, value: 'deployment-a' },
 				{ key: SANDBOX_ID_TAG, value: ID },
@@ -231,6 +377,136 @@ describe('FargateCompute', () => {
 			expect.objectContaining({ id: ID, taskArn: 'owned' }),
 		]);
 	});
+
+	it('paginates ListTasks and batches DescribeTasks requests', async () => {
+		const client = new FakeEcs();
+		client.listPageSize = 60;
+		for (let index = 0; index < 101; index++) {
+			const id = `sb-${index.toString(16).padStart(16, '0')}`;
+			client.tasks.set(`task-${index}`, {
+				taskArn: `task-${index}`,
+				lastStatus: 'RUNNING',
+				containers: [{ name: 'marimo' }],
+				attachments: [
+					{ type: 'eni', details: [{ name: 'privateIPv4Address', value: '10.0.0.9' }] },
+				],
+				tags: [
+					{ key: OWNER_TAG, value: 'deployment-a' },
+					{ key: SANDBOX_ID_TAG, value: id },
+				],
+			});
+		}
+		expect(await makeCompute(client).listActive()).toHaveLength(101);
+		expect(client.listCalls).toBe(2);
+		expect(client.describeCalls).toBe(2);
+	});
+
+	it('ignores malformed foreign tags while retaining exact ownership', async () => {
+		const client = new FakeEcs();
+		client.tasks.set('malformed', {
+			taskArn: 'malformed',
+			lastStatus: 'RUNNING',
+			containers: [{ name: 'marimo' }],
+			tags: [
+				{ value: 'missing-key' },
+				{ key: 'foreign' },
+				{ key: OWNER_TAG, value: 'deployment-a' },
+				{ key: SANDBOX_ID_TAG, value: ID },
+			],
+		});
+		expect(await makeCompute(client).listActive()).toEqual([
+			expect.objectContaining({ id: ID, taskArn: 'malformed' }),
+		]);
+	});
+
+	it('rejects duplicate live tasks for one sandbox', async () => {
+		const client = new FakeEcs();
+		for (const arn of ['one', 'two']) {
+			client.tasks.set(arn, {
+				taskArn: arn,
+				lastStatus: 'RUNNING',
+				containers: [{ name: 'marimo' }],
+				tags: [
+					{ key: OWNER_TAG, value: 'deployment-a' },
+					{ key: SANDBOX_ID_TAG, value: ID },
+				],
+			});
+		}
+		await expect(makeCompute(client).listActive()).rejects.toThrow(/Multiple live ECS tasks/);
+	});
+
+	it('requires the configured container when reconnecting', async () => {
+		const client = new FakeEcs();
+		client.tasks.set('wrong-container', {
+			taskArn: 'wrong-container',
+			lastStatus: 'RUNNING',
+			containers: [{ name: 'other' }],
+			tags: [
+				{ key: OWNER_TAG, value: 'deployment-a' },
+				{ key: SANDBOX_ID_TAG, value: ID },
+			],
+		});
+		await expect(makeCompute(client).create(ID).ready?.()).rejects.toThrow(
+			/configured container marimo/,
+		);
+	});
+
+	it('hydrates the cache from listActive and avoids rescans until teardown', async () => {
+		const client = new FakeEcs();
+		client.tasks.set('owned', {
+			taskArn: 'owned',
+			lastStatus: 'RUNNING',
+			desiredStatus: 'RUNNING',
+			containers: [{ name: 'marimo' }],
+			attachments: [{ type: 'eni', details: [{ name: 'privateIPv4Address', value: '10.0.0.10' }] }],
+			tags: [
+				{ key: OWNER_TAG, value: 'deployment-a' },
+				{ key: SANDBOX_ID_TAG, value: ID },
+				{ key: IMAGE_KEY_TAG, value: 'default' },
+			],
+		});
+		const compute = makeCompute(client);
+		await compute.listActive();
+		const first = compute.create(ID);
+		await first.destroy();
+		const second = compute.create(ID);
+		await second.ready?.();
+		expect(client.listCalls).toBe(2);
+	});
+
+	it('treats duplicate live ownership tags as an unsafe reconciliation state', async () => {
+		const client = new FakeEcs();
+		client.tasks.set('duplicate', {
+			taskArn: 'duplicate',
+			lastStatus: 'RUNNING',
+			containers: [{ name: 'marimo' }],
+			tags: [
+				{ key: OWNER_TAG, value: 'deployment-a' },
+				{ key: SANDBOX_ID_TAG, value: ID },
+				{ key: SANDBOX_ID_TAG, value: ID },
+			],
+		});
+		await expect(makeCompute(client).listActive()).rejects.toThrow(/duplicate ECS tag/);
+	});
+
+	it('fails reconciliation when ECS omits a listed task ARN', async () => {
+		const client = new FakeEcs();
+		client.tasks.set('listed', {
+			taskArn: 'other',
+			lastStatus: 'RUNNING',
+			tags: [],
+		});
+		await expect(makeCompute(client).listActive()).rejects.toThrow(/did not return requested/);
+	});
+
+	it('accepts an already-stopped task during idempotent teardown', async () => {
+		const client = new FakeEcs();
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		await instance.ready?.();
+		const arn = client.runInputs.length === 1 ? [...client.tasks.keys()][0] : undefined;
+		if (arn) client.tasks.delete(arn);
+		await expect(instance.destroy()).resolves.toBeUndefined();
+	});
 });
 
 describe('agent token derivation', () => {
@@ -239,3 +515,164 @@ describe('agent token derivation', () => {
 		expect(deriveAgentToken(TOKEN, ID)).not.toBe(deriveAgentToken(TOKEN, 'sb-bbbbbbbbbbbbbbbb'));
 	});
 });
+
+class ContractWorld {
+	readonly client = new FakeEcs();
+	private readonly files = new Map<string, Uint8Array>();
+	private readonly environment = new Map<string, string>();
+	private readonly processes = new Map<
+		string,
+		{ stdout: string; stderr: string; portOpen: boolean }
+	>();
+	private processSequence = 0;
+
+	private response(payload: Record<string, unknown>, status = 200): Response {
+		return Response.json(payload, { status });
+	}
+
+	async fetch(url: string, init: RequestInit = {}): Promise<Response> {
+		const request = new URL(url);
+		const method = init.method ?? 'GET';
+		if (method === 'GET' && request.pathname === '/health') {
+			return this.response({ ok: true, protocolVersion: FARGATE_PROTOCOL_VERSION });
+		}
+		if (method === 'POST' && request.pathname === '/files/write') {
+			const payload = JSON.parse(String(init.body)) as { files?: unknown };
+			for (const value of payload.files as { path: string; contentBase64: string }[]) {
+				this.files.set(value.path, Uint8Array.from(Buffer.from(value.contentBase64, 'base64')));
+			}
+			return this.response({ written: (payload.files as unknown[]).length });
+		}
+		if (method === 'GET' && request.pathname === '/files/read') {
+			const path = request.searchParams.get('path') ?? '';
+			const content = this.files.get(path);
+			if (!content) return this.response({ error: 'file not found' }, 404);
+			return this.response({ contentBase64: Buffer.from(content).toString('base64') });
+		}
+		if (method === 'POST' && request.pathname === '/env') {
+			const payload = JSON.parse(String(init.body)) as {
+				forced?: Record<string, string>;
+				defaults?: Record<string, string>;
+			};
+			for (const [key, value] of Object.entries(payload.defaults ?? {})) {
+				if (!this.environment.has(key)) this.environment.set(key, value);
+			}
+			for (const [key, value] of Object.entries(payload.forced ?? {})) {
+				this.environment.set(key, value);
+			}
+			return this.response({ ok: true });
+		}
+		if (method === 'POST' && request.pathname === '/exec') {
+			const payload = JSON.parse(String(init.body)) as {
+				command?: string;
+				env?: Record<string, string>;
+			};
+			const command = payload.command ?? '';
+			if (isContractNonDirectoryFindCommand(command)) {
+				return this.response({
+					success: false,
+					exitCode: 20,
+					stdout: '',
+					stderr: 'MARIMOHUB_NOT_A_DIRECTORY\n',
+				});
+			}
+			if (command.includes('find ')) {
+				const recursive = !command.includes('-maxdepth 1');
+				const output: string[] = [];
+				for (const [path, content] of this.files) {
+					if (!path.startsWith('/workspace/') || path === '/workspace/') continue;
+					const relative = path.slice('/workspace/'.length);
+					if (!recursive && relative.includes('/')) continue;
+					output.push(`f\t${content.byteLength}\t${path}\0`);
+				}
+				return this.response({ success: true, exitCode: 0, stdout: output.join(''), stderr: '' });
+			}
+			if (command.includes('mh-contract-fail') || command.trim() === 'false') {
+				return this.response({ success: false, exitCode: 1, stdout: '', stderr: 'failed' });
+			}
+			const envMatch = command.match(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/);
+			return this.response({
+				success: true,
+				exitCode: 0,
+				stdout: envMatch
+					? (this.environment.get(envMatch[1]) ?? payload.env?.[envMatch[1]] ?? '')
+					: '',
+				stderr: '',
+			});
+		}
+		if (method === 'POST' && request.pathname === '/processes') {
+			const payload = JSON.parse(String(init.body)) as { command?: string };
+			const script = scriptContractLaunch(payload.command);
+			const id = `contract-process-${++this.processSequence}`;
+			this.processes.set(id, {
+				stdout: script?.transcript ?? '',
+				stderr: '',
+				portOpen: script?.portOpen ?? false,
+			});
+			return this.response({ id }, 201);
+		}
+		const processMatch = request.pathname.match(/^\/processes\/([^/]+)(?:\/(.*))?$/);
+		if (processMatch) {
+			const process = this.processes.get(decodeURIComponent(processMatch[1]));
+			if (!process) return this.response({ error: 'process not found' }, 404);
+			const action = processMatch[2];
+			if (method === 'POST' && action === 'wait-port') {
+				return process.portOpen
+					? this.response({ ready: true })
+					: this.response({ error: 'timed out waiting for port' }, 408);
+			}
+			if (method === 'GET' && action === 'logs') {
+				return this.response({ stdout: process.stdout, stderr: process.stderr });
+			}
+			if (method === 'DELETE' && !action) {
+				this.processes.delete(decodeURIComponent(processMatch[1]));
+				return new Response(null, { status: 204 });
+			}
+		}
+		return this.response({ error: 'route not found' }, 404);
+	}
+}
+
+computeContract(
+	'FargateCompute',
+	() => {
+		const world = new ContractWorld();
+		activeContractWorld = world;
+		return new FargateCompute({
+			cluster: 'marimo',
+			taskDefinition: 'family:7',
+			subnets: ['subnet-a'],
+			securityGroups: ['sg-hub'],
+			owner: 'deployment-a',
+			agentSecret: TOKEN,
+			exposureMode: 'proxy',
+			client: world.client,
+			resolver: {
+				async resolve(imageKey) {
+					return {
+						taskDefinition: 'family:7',
+						containerName: 'marimo',
+						imageKey: imageKey ?? 'default',
+					};
+				},
+			},
+		});
+	},
+	{
+		mountFallsBack: true,
+		semantics: {
+			failingCommand: 'mh-contract-fail',
+			absentFile: { path: '/workspace/contract-absent.txt', code: 'NOT_FOUND' },
+			envProbe: (name) => `printf '%s' "$${name}"`,
+			hiddenFiles: {
+				dir: '/workspace',
+				seed: (inst) =>
+					inst.writeFiles([
+						{ path: `/workspace/${CONTRACT_VISIBLE_FILE}`, content: 'v' },
+						{ path: `/workspace/${CONTRACT_HIDDEN_FILE}`, content: 'h' },
+					]),
+			},
+			launch: {},
+		},
+	},
+);

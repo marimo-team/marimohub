@@ -23,6 +23,9 @@ function mapContainer(container: Container): FargateContainer {
 		lastStatus: container.lastStatus,
 		exitCode: container.exitCode,
 		reason: container.reason,
+		networkInterfaces: container.networkInterfaces?.map((network) => ({
+			privateIpv4Address: network.privateIpv4Address,
+		})),
 	};
 }
 
@@ -70,7 +73,6 @@ export interface AwsFargateClientOptions {
 	client?: ECSClient;
 }
 
-/** Production ECS implementation. The adapter itself only depends on FargateClient. */
 export function createFargateClient(options: AwsFargateClientOptions = {}): FargateClient {
 	const ecs = options.client ?? new ECSClient({ region: options.region });
 	return {
@@ -126,9 +128,7 @@ export function createFargateClient(options: AwsFargateClientOptions = {}): Farg
 		},
 
 		async listTasks(cluster, startedBy, nextToken) {
-			const result = await ecs.send(
-				new ListTasksCommand({ cluster, startedBy, nextToken, launchType: 'FARGATE' }),
-			);
+			const result = await ecs.send(new ListTasksCommand({ cluster, startedBy, nextToken }));
 			return { taskArns: result.taskArns, nextToken: result.nextToken };
 		},
 

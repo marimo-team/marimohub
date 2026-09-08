@@ -1,14 +1,27 @@
 import base64
+import importlib.util
 import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from agent.fargate_agent import AgentServer, AgentState
+try:
+    from agent.fargate_agent import AgentServer, AgentState
+except ModuleNotFoundError:
+    _spec = importlib.util.spec_from_file_location(
+        "fargate_agent", os.path.join(os.path.dirname(__file__), "fargate_agent.py")
+    )
+    if _spec is None or _spec.loader is None:
+        raise
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    AgentServer = _module.AgentServer
+    AgentState = _module.AgentState
 
 
 TOKEN = "t" * 64
@@ -70,6 +83,38 @@ class AgentTest(unittest.TestCase):
             _, body = self.request("GET", "/files/read?path=" + urllib.parse.quote(path, safe=""))
             self.assertEqual(base64.b64decode(body["contentBase64"]), content)
 
+    def test_single_large_file_and_preferred_batch_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "large.bin")
+            content = b"a" * (9 * 1024 * 1024)
+            status, _ = self.request(
+                "POST",
+                "/files/write",
+                {"files": [{"path": path, "contentBase64": base64.b64encode(content).decode()}]},
+            )
+            self.assertEqual(status, 200)
+            too_many = b"b" * (5 * 1024 * 1024)
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                self.request(
+                    "POST",
+                    "/files/write",
+                    {
+                        "files": [
+                            {"path": path + "-1", "contentBase64": base64.b64encode(too_many).decode()},
+                            {"path": path + "-2", "contentBase64": base64.b64encode(too_many).decode()},
+                        ]
+                    },
+                )
+            self.assertEqual(failure.exception.code, 413)
+            too_large = b"c" * (25 * 1024 * 1024 + 1)
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                self.request(
+                    "POST",
+                    "/files/write",
+                    {"files": [{"path": path + "-too-large", "contentBase64": base64.b64encode(too_large).decode()}]},
+                )
+            self.assertEqual(failure.exception.code, 413)
+
     def test_env_precedence(self):
         self.request("POST", "/env", {"defaults": {"MH_ENV": "default"}, "forced": {"MH_ENV": "forced"}})
         _, body = self.request("POST", "/exec", {"command": "printf '%s' \"$MH_ENV\"", "cwd": os.getcwd()})
@@ -92,6 +137,40 @@ class AgentTest(unittest.TestCase):
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             self.assertEqual(response.status, 204)
+
+    def test_process_logs_keep_tail_and_duplicate_ids_are_rejected(self):
+        _, process = self.request(
+            "POST",
+            "/processes",
+            {
+                "processId": "duplicate-id",
+                "command": "python3 -c 'import sys; sys.stdout.write(\"x\" * 70000 + \"READY\")'",
+                "cwd": os.getcwd(),
+            },
+        )
+        with self.assertRaises(urllib.error.HTTPError) as failure:
+            self.request(
+                "POST",
+                "/processes",
+                {"processId": "duplicate-id", "command": "sleep 1", "cwd": os.getcwd()},
+            )
+        self.assertEqual(failure.exception.code, 409)
+        time.sleep(0.1)
+        _, logs = self.request("GET", f"/processes/{process['id']}/logs")
+        self.assertIn("READY", logs["stdout"])
+
+    def test_process_timeout_cleans_up_finished_process(self):
+        _, process = self.request(
+            "POST",
+            "/processes",
+            {"processId": "short-lived", "command": "sleep 10", "cwd": os.getcwd(), "timeoutMs": 20},
+        )
+        time.sleep(0.1)
+        _, logs = self.request("GET", f"/processes/{process['id']}/logs")
+        self.assertEqual(logs["stdout"], "")
+        with self.assertRaises(urllib.error.HTTPError) as failure:
+            self.request("GET", f"/processes/{process['id']}/logs")
+        self.assertEqual(failure.exception.code, 404)
 
 
 if __name__ == "__main__":

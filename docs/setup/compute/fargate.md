@@ -49,7 +49,7 @@ independent hub deployment sharing an AWS account.
 
 Do not set `MARIMOHUB_COMPUTE_IMAGE` for this backend. Compute profiles map to
 valid Fargate CPU/memory pairs and round up to the next billable allocation;
-GPU profiles are unsupported and are ignored with the normal profile warning.
+GPU profiles are unsupported and are rejected before launch.
 
 ## Security and operations
 

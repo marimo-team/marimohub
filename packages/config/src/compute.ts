@@ -8,7 +8,7 @@ import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
-import { FargateCompute } from '@marimo-hub/compute-fargate';
+import { FargateCompute, validateFargateTaskDefinition } from '@marimo-hub/compute-fargate';
 import {
 	KubernetesCompute,
 	parseIngressAnnotations,
@@ -547,9 +547,30 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					variable: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET',
 				});
 			}
+			const taskDefinitionValue = computeVar(
+				env,
+				'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION',
+				'fargate',
+			);
+			let taskDefinition: string;
+			try {
+				taskDefinition = validateFargateTaskDefinition(taskDefinitionValue);
+			} catch (cause) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION: ${
+						cause instanceof Error ? cause.message : String(cause)
+					}`,
+					{
+						variable: 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION',
+						remediation:
+							'Use a task-definition family:revision or ARN ending in a numeric revision.',
+						docs: 'docs/setup/compute/fargate.md',
+					},
+				);
+			}
 			return new FargateCompute({
 				cluster: computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_CLUSTER', 'fargate'),
-				taskDefinition: computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION', 'fargate'),
+				taskDefinition,
 				containerName: env.MARIMOHUB_COMPUTE_FARGATE_CONTAINER_NAME?.trim() || 'marimo',
 				subnets: listRequired('MARIMOHUB_COMPUTE_FARGATE_SUBNETS'),
 				securityGroups: listRequired('MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS'),

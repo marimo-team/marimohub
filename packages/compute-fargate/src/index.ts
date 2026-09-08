@@ -36,7 +36,6 @@ import type {
 	FargateActiveSandbox,
 	FargateClient,
 	FargateConfig,
-	FargateContainer,
 	FargateCreateOptions,
 	FargateFailure,
 	FargateRunTaskInput,
@@ -45,6 +44,7 @@ import type {
 	FargateTaskHandle,
 } from './shared';
 import {
+	AGENT_TRANSPORT_GRACE_MS,
 	CREATED_AT_TAG,
 	DEFAULT_AGENT_PORT,
 	DEFAULT_CONTAINER_NAME,
@@ -56,25 +56,35 @@ import {
 	fargateProfileResources,
 	IMAGE_KEY_TAG,
 	isLiveTask,
+	MAX_AGENT_BODY_BYTES,
+	MAX_FILE_BYTES,
 	MAX_WRITE_BATCH_BYTES,
 	OWNER_TAG,
 	privateIpFromTask,
 	SANDBOX_ID_TAG,
+	tagValues,
 	tagMap,
 	taskDiagnostic,
 	validateFargateOwner,
+	validateFargateTaskDefinition,
 } from './shared';
 
 export * from './shared';
 export { createFargateClient } from './client';
 export type { AwsFargateClientOptions } from './client';
 
-const POLL_INTERVAL_MS = 250;
+const POLL_BASE_INTERVAL_MS = 100;
+const POLL_MAX_INTERVAL_MS = 2_000;
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => {
 		setTimeout(resolve, ms);
 	});
+}
+
+function pollDelay(attempt: number): number {
+	const ceiling = Math.min(POLL_MAX_INTERVAL_MS, POLL_BASE_INTERVAL_MS * 2 ** attempt);
+	return Math.max(25, Math.floor(ceiling * (0.75 + Math.random() * 0.5)));
 }
 
 function errorMessage(error: unknown): string {
@@ -85,12 +95,16 @@ function isNotFound(error: unknown): boolean {
 	if (typeof error !== 'object' || error === null) return false;
 	const value = error as {
 		name?: unknown;
+		message?: unknown;
 		statusCode?: unknown;
 		$metadata?: { httpStatusCode?: number };
 	};
 	return (
 		value.name === 'ResourceNotFoundException' ||
 		value.name === 'NotFound' ||
+		(value.name === 'ClientException' &&
+			typeof value.message === 'string' &&
+			/(?:not found|does not exist|already stopped|is stopped)/i.test(value.message)) ||
 		value.statusCode === 404 ||
 		value.$metadata?.httpStatusCode === 404
 	);
@@ -136,11 +150,22 @@ function textValue(value: unknown): string {
 	return typeof value === 'string' ? value : '';
 }
 
+function agentJsonBody(value: unknown): string {
+	const body = JSON.stringify(value);
+	if (body === undefined) throw new Error('Fargate agent request body is not JSON serializable');
+	if (Buffer.byteLength(body, 'utf8') > MAX_AGENT_BODY_BYTES) {
+		throw new Error('Fargate agent request exceeds the body limit');
+	}
+	return body;
+}
+
 interface FargateSandboxOptions {
 	resources?: ComputeResources;
 	reuse: boolean;
 	imageKey?: string;
 }
+
+type FargateTaskCache = Map<string, FargateTaskHandle>;
 
 async function findOwnedTasks(
 	client: FargateClient,
@@ -148,23 +173,39 @@ async function findOwnedTasks(
 	sandboxId?: SandboxId,
 ): Promise<FargateTask[]> {
 	const arns: string[] = [];
+	const seenArns = new Set<string>();
 	let nextToken: string | undefined;
 	do {
 		const page = await client.listTasks(config.cluster, config.owner, nextToken);
-		arns.push(...(page.taskArns ?? []));
+		for (const arn of page.taskArns ?? []) {
+			if (!seenArns.has(arn)) {
+				seenArns.add(arn);
+				arns.push(arn);
+			}
+		}
 		nextToken = page.nextToken;
 	} while (nextToken);
 	const tasks: FargateTask[] = [];
 	for (let offset = 0; offset < arns.length; offset += 100) {
-		const described = await client.describeTasks(
-			config.cluster,
-			arns.slice(offset, offset + 100),
-			true,
-		);
+		const requested = arns.slice(offset, offset + 100);
+		const described = await client.describeTasks(config.cluster, requested, true);
+		if (described.failures && described.failures.length > 0) {
+			throw new Error(
+				`ECS DescribeTasks failed for owned tasks: ${failureMessage(described.failures)}`,
+			);
+		}
+		const returned = new Set((described.tasks ?? []).map((task) => task.taskArn).filter(Boolean));
+		const missing = requested.filter((arn) => !returned.has(arn));
+		if (missing.length > 0) {
+			throw new Error(
+				`ECS DescribeTasks did not return requested task ARN${missing.length === 1 ? '' : 's'} ${missing.join(', ')}`,
+			);
+		}
 		for (const task of described.tasks ?? []) {
 			if (!isLiveTask(task)) continue;
+			const ownerValues = tagValues(task.tags, OWNER_TAG);
+			if (ownerValues.length !== 1 || ownerValues[0] !== config.owner) continue;
 			const tags = tagMap(task.tags);
-			if (tags.get(OWNER_TAG) !== config.owner) continue;
 			if (sandboxId !== undefined && tags.get(SANDBOX_ID_TAG) !== String(sandboxId)) continue;
 			tasks.push(task);
 		}
@@ -188,6 +229,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		private readonly client: FargateClient,
 		private readonly resolver: FargateTaskDefinitionResolver,
 		private readonly options: FargateSandboxOptions,
+		private readonly cache: FargateTaskCache,
 	) {
 		this.agentPort = config.agentPort ?? DEFAULT_AGENT_PORT;
 		this.readyTimeoutMs = config.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
@@ -204,7 +246,22 @@ class FargateSandboxInstance implements SandboxInstance {
 	private async resolveTask(): Promise<void> {
 		const started = Date.now();
 		let task: FargateTask | undefined;
+		let reconnecting = false;
+		let containerName = this.config.containerName ?? DEFAULT_CONTAINER_NAME;
 		let imageKey = this.options.imageKey ?? this.config.imageKey ?? DEFAULT_IMAGE_KEY;
+		if (this.options.reuse) {
+			const cached = this.cache.get(String(this.id));
+			if (cached) {
+				try {
+					await this.checkAgent(cached.privateIp);
+					this.handle = cached;
+					this.timings = { create: Date.now() - started, boot: 0 };
+					return;
+				} catch {
+					this.cache.delete(String(this.id));
+				}
+			}
+		}
 		if (this.options.reuse) {
 			const matches = await this.findOwnedTasks(this.id);
 			if (matches.length > 1) {
@@ -213,10 +270,12 @@ class FargateSandboxInstance implements SandboxInstance {
 				);
 			}
 			task = matches[0];
+			reconnecting = task !== undefined;
 			if (task) imageKey = tagMap(task.tags).get(IMAGE_KEY_TAG) ?? imageKey;
 		}
 		if (!task) {
 			const resolved = await this.resolver.resolve(this.options.imageKey ?? this.config.imageKey);
+			containerName = resolved.containerName;
 			imageKey = resolved.imageKey;
 			const token = deriveAgentToken(this.config.agentSecret, String(this.id));
 			const resources = fargateProfileResources(this.options.resources);
@@ -261,7 +320,7 @@ class FargateSandboxInstance implements SandboxInstance {
 			task = result.tasks[0];
 		}
 		const arn = taskArn(task);
-		const containerName = await this.resolveContainerName(task);
+		if (reconnecting) containerName = this.resolveContainerName(task);
 		const readyTask = await this.waitForTask(arn, containerName);
 		const privateIp = privateIpFromTask(readyTask, containerName);
 		if (!privateIp) throw new Error(`Fargate task ${arn} has no private ENI address`);
@@ -273,16 +332,19 @@ class FargateSandboxInstance implements SandboxInstance {
 			createdAt: readyTask.createdAt ?? tagMap(readyTask.tags).get(CREATED_AT_TAG),
 			imageKey,
 		};
+		this.cache.set(String(this.id), this.handle);
 		this.timings = { create: Date.now() - started, boot: Date.now() - started };
 	}
 
-	private async resolveContainerName(task: FargateTask): Promise<string> {
+	private resolveContainerName(task: FargateTask): string {
 		const configured = this.config.containerName ?? DEFAULT_CONTAINER_NAME;
 		if (task.containers?.some((container) => container.name === configured)) return configured;
-		const first = task.containers?.find(
-			(container): container is FargateContainer & { name: string } => Boolean(container.name),
-		)?.name;
-		return first ?? configured;
+		if (task.containers) {
+			throw new Error(
+				`Fargate task ${task.taskArn ?? 'unknown'} does not contain configured container ${configured}`,
+			);
+		}
+		return configured;
 	}
 
 	private async findOwnedTasks(sandboxId?: SandboxId): Promise<FargateTask[]> {
@@ -292,10 +354,28 @@ class FargateSandboxInstance implements SandboxInstance {
 	private async waitForTask(arn: string, containerName: string): Promise<FargateTask> {
 		const deadline = Date.now() + this.readyTimeoutMs;
 		let last: FargateTask | undefined;
+		let lastFailure: string | undefined;
+		let attempt = 0;
 		while (Date.now() < deadline) {
-			const described = await this.client.describeTasks(this.config.cluster, [arn], true);
-			last = described.tasks?.[0];
-			if (!last) throw new Error(`Fargate task ${arn} disappeared while starting`);
+			let described: Awaited<ReturnType<FargateClient['describeTasks']>>;
+			try {
+				described = await this.client.describeTasks(this.config.cluster, [arn], true);
+			} catch (error) {
+				lastFailure = errorMessage(error);
+				await sleep(Math.min(pollDelay(attempt++), Math.max(1, deadline - Date.now())));
+				continue;
+			}
+			if (described.failures && described.failures.length > 0) {
+				lastFailure = failureMessage(described.failures);
+				await sleep(Math.min(pollDelay(attempt++), Math.max(1, deadline - Date.now())));
+				continue;
+			}
+			last = described.tasks?.find((candidate) => candidate.taskArn === arn);
+			if (!last) {
+				lastFailure = 'task was not returned by ECS';
+				await sleep(Math.min(pollDelay(attempt++), Math.max(1, deadline - Date.now())));
+				continue;
+			}
 			if (last.lastStatus === 'STOPPED') {
 				throw new Error(`Fargate task ${arn} stopped before readiness: ${taskDiagnostic(last)}`);
 			}
@@ -309,10 +389,10 @@ class FargateSandboxInstance implements SandboxInstance {
 						throw error;
 				}
 			}
-			await sleep(POLL_INTERVAL_MS);
+			await sleep(Math.min(pollDelay(attempt++), Math.max(1, deadline - Date.now())));
 		}
 		throw new Error(
-			`Timed out waiting for Fargate task ${arn} and agent after ${this.readyTimeoutMs}ms${last ? ` (${taskDiagnostic(last)})` : ''}`,
+			`Timed out waiting for Fargate task ${arn} and agent after ${this.readyTimeoutMs}ms${last ? ` (${taskDiagnostic(last)})` : ` (${lastFailure ?? 'task was not returned by ECS'})`}`,
 		);
 	}
 
@@ -326,9 +406,20 @@ class FargateSandboxInstance implements SandboxInstance {
 		}
 	}
 
-	private async request<T>(path: string, init: RequestInit = {}, parse = true): Promise<T> {
+	private async request<T>(
+		path: string,
+		init: RequestInit = {},
+		parse = true,
+		requestedTimeoutMs?: number,
+	): Promise<T> {
 		await this.ensure();
-		return this.requestAt(this.handle!.privateIp, path, init, parse) as Promise<T>;
+		return this.requestAt(
+			this.handle!.privateIp,
+			path,
+			init,
+			parse,
+			requestedTimeoutMs,
+		) as Promise<T>;
 	}
 
 	private async requestAt<T>(
@@ -336,17 +427,27 @@ class FargateSandboxInstance implements SandboxInstance {
 		path: string,
 		init: RequestInit = {},
 		parse = true,
+		requestedTimeoutMs?: number,
 	): Promise<T> {
 		const token = deriveAgentToken(this.config.agentSecret, String(this.id));
 		const headers = new Headers(init.headers);
 		headers.set('authorization', `Bearer ${token}`);
 		if (init.body !== undefined && !headers.has('content-type'))
 			headers.set('content-type', 'application/json');
-		const response = await fetch(`http://${privateIp}:${this.agentPort}${path}`, {
+		const transportTimeoutMs =
+			requestedTimeoutMs === undefined
+				? this.readyTimeoutMs
+				: requestedTimeoutMs === 0 || requestedTimeoutMs === Infinity
+					? 0
+					: requestedTimeoutMs + AGENT_TRANSPORT_GRACE_MS;
+		const requestInit: RequestInit = {
 			...init,
 			headers,
-			signal: AbortSignal.timeout(this.readyTimeoutMs),
-		});
+		};
+		if (transportTimeoutMs > 0 && Number.isFinite(transportTimeoutMs)) {
+			requestInit.signal = AbortSignal.timeout(transportTimeoutMs);
+		}
+		const response = await fetch(`http://${privateIp}:${this.agentPort}${path}`, requestInit);
 		if (!response.ok)
 			throw new AgentHttpError(response.status, `Fargate agent returned HTTP ${response.status}`);
 		if (!parse) return undefined as T;
@@ -372,16 +473,22 @@ class FargateSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		try {
+			const requestedTimeout = options?.timeout === Infinity ? 0 : options?.timeout;
 			const body = asJsonRecord(
-				await this.request('/exec', {
-					method: 'POST',
-					body: JSON.stringify({
-						command: cmd,
-						cwd: '/workspace',
-						env: this.commandEnv(),
-						timeoutMs: options?.timeout,
-					}),
-				}),
+				await this.request(
+					'/exec',
+					{
+						method: 'POST',
+						body: agentJsonBody({
+							command: cmd,
+							cwd: '/workspace',
+							env: this.commandEnv(),
+							timeoutMs: requestedTimeout,
+						}),
+					},
+					true,
+					requestedTimeout,
+				),
 			);
 			return execResult(
 				body.success === true || body.exitCode === 0,
@@ -432,8 +539,8 @@ class FargateSandboxInstance implements SandboxInstance {
 		for (const file of files) {
 			const bytes =
 				typeof file.content === 'string' ? new TextEncoder().encode(file.content) : file.content;
-			if (bytes.byteLength > MAX_WRITE_BATCH_BYTES)
-				throw new Error(`file ${file.path} exceeds the Fargate write limit`);
+			if (bytes.byteLength > MAX_FILE_BYTES)
+				throw new Error(`file ${file.path} exceeds the Fargate file limit`);
 			if (batch.length > 0 && size + bytes.byteLength > MAX_WRITE_BATCH_BYTES) {
 				batches.push(batch);
 				batch = [];
@@ -446,7 +553,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		await mapWithConcurrency(batches, WRITE_CONCURRENCY, async (group) => {
 			await this.request('/files/write', {
 				method: 'POST',
-				body: JSON.stringify({
+				body: agentJsonBody({
 					files: group.map((file) => ({
 						path: file.path,
 						contentBase64: Buffer.from(file.content).toString('base64'),
@@ -477,7 +584,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		else Object.assign(this.env, vars);
 		await this.request('/env', {
 			method: 'POST',
-			body: JSON.stringify({ forced: this.env, defaults: this.envDefaults }),
+			body: agentJsonBody({ forced: this.env, defaults: this.envDefaults }),
 		});
 	}
 
@@ -493,12 +600,12 @@ class FargateSandboxInstance implements SandboxInstance {
 		const body = asJsonRecord(
 			await this.request('/processes', {
 				method: 'POST',
-				body: JSON.stringify({
+				body: agentJsonBody({
 					command: cmd,
 					processId: options?.processId,
 					cwd: options?.cwd ?? '/workspace',
 					env: this.commandEnv(options?.env),
-					timeoutMs: options?.timeout,
+					timeoutMs: options?.timeout === Infinity ? 0 : options?.timeout,
 				}),
 			}),
 		);
@@ -519,15 +626,21 @@ class FargateSandboxInstance implements SandboxInstance {
 				}
 			},
 			waitForPort: async (port: number, waitOptions?: WaitForPortOptions) => {
-				await this.request(`${path}/wait-port`, {
-					method: 'POST',
-					body: JSON.stringify({
-						port,
-						mode: waitOptions?.mode ?? 'tcp',
-						path: waitOptions?.path,
-						timeoutMs: waitOptions?.timeout,
-					}),
-				});
+				const requestedTimeout = waitOptions?.timeout === Infinity ? 0 : waitOptions?.timeout;
+				await this.request(
+					`${path}/wait-port`,
+					{
+						method: 'POST',
+						body: agentJsonBody({
+							port,
+							mode: waitOptions?.mode ?? 'tcp',
+							path: waitOptions?.path,
+							timeoutMs: requestedTimeout,
+						}),
+					},
+					true,
+					requestedTimeout,
+				);
 			},
 			getLogs: async () => {
 				const logs = asJsonRecord(await this.request(`${path}/logs`, { method: 'GET' }));
@@ -561,6 +674,9 @@ class FargateSandboxInstance implements SandboxInstance {
 
 	async destroy(): Promise<void> {
 		if (!this.handle) {
+			this.handle = this.cache.get(String(this.id));
+		}
+		if (!this.handle) {
 			const matches = await this.findOwnedTasks(this.id);
 			if (matches.length > 1)
 				throw new Error(
@@ -569,13 +685,15 @@ class FargateSandboxInstance implements SandboxInstance {
 			if (matches[0])
 				this.handle = {
 					taskArn: taskArn(matches[0]),
-					containerName: await this.resolveContainerName(matches[0]),
+					containerName: this.resolveContainerName(matches[0]),
 					privateIp:
 						privateIpFromTask(matches[0], this.config.containerName ?? DEFAULT_CONTAINER_NAME) ??
 						'',
+					taskDefinitionArn: matches[0].taskDefinitionArn,
 					createdAt: matches[0].createdAt,
 					imageKey: tagMap(matches[0].tags).get(IMAGE_KEY_TAG) ?? DEFAULT_IMAGE_KEY,
 				};
+			if (this.handle) this.cache.set(String(this.id), this.handle);
 		}
 		if (!this.handle) return;
 		try {
@@ -588,6 +706,7 @@ class FargateSandboxInstance implements SandboxInstance {
 			if (!isNotFound(error)) throw error;
 		} finally {
 			this.handle = undefined;
+			this.cache.delete(String(this.id));
 		}
 	}
 
@@ -624,6 +743,7 @@ export class FargateCompute implements SandboxProvider {
 	private readonly client: FargateClient;
 	private readonly resolver: FargateTaskDefinitionResolver;
 	private readonly config: FargateConfig;
+	private readonly cache: FargateTaskCache = new Map();
 
 	constructor(options: FargateComputeOptions) {
 		if (options.exposureMode !== undefined && options.exposureMode !== 'proxy') {
@@ -634,6 +754,7 @@ export class FargateCompute implements SandboxProvider {
 		}
 		this.config = {
 			...options,
+			taskDefinition: validateFargateTaskDefinition(options.taskDefinition),
 			owner: validateFargateOwner(options.owner),
 			agentSecret: options.agentSecret,
 		};
@@ -643,11 +764,18 @@ export class FargateCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: FargateCreateOptions): SandboxInstance {
-		return new FargateSandboxInstance(id, this.config, this.client, this.resolver, {
-			reuse: options?.reuse ?? true,
-			resources: options?.resources,
-			imageKey: options?.image,
-		});
+		return new FargateSandboxInstance(
+			id,
+			this.config,
+			this.client,
+			this.resolver,
+			{
+				reuse: options?.reuse ?? true,
+				resources: options?.resources,
+				imageKey: options?.image,
+			},
+			this.cache,
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {
@@ -663,10 +791,28 @@ export class FargateCompute implements SandboxProvider {
 			if (!id || !/^sb-[0-9a-z]{16}$/.test(id)) continue;
 			if (seen.has(id)) throw new Error(`Multiple live ECS tasks found for sandbox ${id}`);
 			seen.add(id);
+			const containerName = this.config.containerName ?? DEFAULT_CONTAINER_NAME;
+			if (!task.containers?.some((container) => container.name === containerName)) {
+				throw new Error(
+					`Fargate task ${task.taskArn ?? 'unknown'} does not contain configured container ${containerName}`,
+				);
+			}
+			const arn = taskArn(task);
+			const privateIp = privateIpFromTask(task, containerName);
+			if (privateIp) {
+				this.cache.set(id, {
+					taskArn: arn,
+					taskDefinitionArn: task.taskDefinitionArn,
+					containerName,
+					privateIp,
+					createdAt: task.createdAt ?? tagMap(task.tags).get(CREATED_AT_TAG),
+					imageKey: tagMap(task.tags).get(IMAGE_KEY_TAG) ?? DEFAULT_IMAGE_KEY,
+				});
+			}
 			active.push({
 				id: id as SandboxId,
 				createdAt: task.createdAt ?? tagMap(task.tags).get(CREATED_AT_TAG),
-				taskArn: task.taskArn,
+				taskArn: arn,
 			});
 		}
 		return active.filter((entry) => entry.taskArn !== undefined);

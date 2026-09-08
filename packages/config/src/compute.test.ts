@@ -242,6 +242,29 @@ describe('makeCompute fail-fast', () => {
 		expect(() => makeCompute(env)).toThrow(/requires MARIMOHUB_SANDBOX_EXPOSURE=proxy/);
 	});
 
+	it('requires a pinned fargate task-definition revision', () => {
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: 'fargate',
+			MARIMOHUB_COMPUTE_FARGATE_CLUSTER: 'marimohub',
+			MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION: 'kernel',
+			MARIMOHUB_COMPUTE_FARGATE_SUBNETS: 'subnet-a',
+			MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS: 'sg-kernel',
+			MARIMOHUB_COMPUTE_FARGATE_OWNER: 'prod-a',
+			MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET: 'a'.repeat(32),
+		};
+		expect(() => makeCompute(env, { sandboxExposureMode: 'proxy' })).toThrow(/numeric revision/);
+		expect(
+			makeCompute(
+				{
+					...env,
+					MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION:
+						'arn:aws:ecs:us-east-1:123456789012:task-definition/kernel:7',
+				},
+				{ sandboxExposureMode: 'proxy' },
+			),
+		).toBeInstanceOf(FargateCompute);
+	});
+
 	it('configures kubernetes proxy mode without public ingress settings', () => {
 		expect(
 			configOf(

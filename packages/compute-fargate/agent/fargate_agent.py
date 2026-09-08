@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -21,11 +22,10 @@ import uuid
 from typing import Any
 
 PROTOCOL_VERSION = 1
-MAX_BODY_BYTES = 32 * 1024 * 1024
+MAX_BODY_BYTES = 40 * 1024 * 1024
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_WRITE_BATCH_BYTES = 8 * 1024 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-MAX_TIMEOUT_MS = 15 * 60 * 1000
 MAX_LOG_BYTES = 64 * 1024
 
 
@@ -38,12 +38,16 @@ class AgentError(Exception):
 def _bounded_timeout(value: Any, default: int = 30_000) -> float:
     if value is None:
         return default / 1000
+    if isinstance(value, bool):
+        raise AgentError(400, "timeoutMs must be an integer")
     try:
         milliseconds = int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise AgentError(400, "timeoutMs must be an integer") from exc
-    if milliseconds < 0 or milliseconds > MAX_TIMEOUT_MS:
-        raise AgentError(400, "timeoutMs is outside the allowed range")
+    if isinstance(value, float) and value != milliseconds:
+        raise AgentError(400, "timeoutMs must be an integer")
+    if milliseconds < 0:
+        raise AgentError(400, "timeoutMs must not be negative")
     return milliseconds / 1000
 
 
@@ -51,6 +55,13 @@ def _read_limited(path: str, limit: int) -> bytes:
     with open(path, "rb") as stream:
         data = stream.read(limit + 1)
     return data[:limit]
+
+
+def _read_tail(path: str, limit: int) -> bytes:
+    with open(path, "rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.seek(max(0, stream.tell() - limit), os.SEEK_SET)
+        return stream.read(limit)
 
 
 def _kill_group(process: subprocess.Popen[Any], sig: int = signal.SIGTERM) -> None:
@@ -77,6 +88,42 @@ class ProcessTable:
         self._items: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
+    def _remove(self, process_id: str, item: dict[str, Any]) -> None:
+        with self._lock:
+            if self._items.get(process_id) is item:
+                del self._items[process_id]
+        shutil.rmtree(item["dir"], ignore_errors=True)
+
+    def _capture_finished(self, item: dict[str, Any]) -> None:
+        with item["capture_lock"]:
+            if item.get("captured"):
+                return
+            try:
+                item["stdout_tail"] = _read_tail(item["stdout"], MAX_LOG_BYTES).decode(
+                    "utf-8", errors="replace"
+                )
+                item["stderr_tail"] = _read_tail(item["stderr"], MAX_LOG_BYTES).decode(
+                    "utf-8", errors="replace"
+                )
+            except FileNotFoundError:
+                item["stdout_tail"] = ""
+                item["stderr_tail"] = ""
+            shutil.rmtree(item["dir"], ignore_errors=True)
+            item["captured"] = True
+
+    def _watch(self, item: dict[str, Any]) -> None:
+        item["process"].wait()
+        self._capture_finished(item)
+
+    def _expire(self, process_id: str, item: dict[str, Any], timeout: float) -> None:
+        process = item["process"]
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(process, signal.SIGKILL)
+            process.wait()
+        self._capture_finished(item)
+
     def start(self, payload: dict[str, Any]) -> str:
         command = payload.get("command")
         if not isinstance(command, str) or not command:
@@ -84,9 +131,16 @@ class ProcessTable:
         process_id = payload.get("processId")
         if not isinstance(process_id, str) or not process_id or len(process_id) > 128:
             process_id = f"fargate-{uuid.uuid4().hex}"
+        with self._lock:
+            existing = self._items.get(process_id)
+        if existing is not None:
+            if existing["process"].poll() is None:
+                raise AgentError(409, "process id already exists")
+            self._remove(process_id, existing)
         cwd = payload.get("cwd", "/workspace")
         if not isinstance(cwd, str):
             raise AgentError(400, "cwd must be a string")
+        timeout = _bounded_timeout(payload.get("timeoutMs"), 0)
         directory = tempfile.mkdtemp(prefix="marimohub-process-")
         stdout_path = os.path.join(directory, "stdout")
         stderr_path = os.path.join(directory, "stderr")
@@ -108,13 +162,39 @@ class ProcessTable:
             raise AgentError(400, f"could not start process: {exc.strerror or 'spawn failed'}") from exc
         stdout.close()
         stderr.close()
+        item = {
+            "process": process,
+            "stdout": stdout_path,
+            "stderr": stderr_path,
+            "dir": directory,
+            "capture_lock": threading.Lock(),
+        }
+        conflicting = False
+        stale_directory: str | None = None
         with self._lock:
-            self._items[process_id] = {
-                "process": process,
-                "stdout": stdout_path,
-                "stderr": stderr_path,
-                "dir": directory,
-            }
+            existing = self._items.get(process_id)
+            if existing is not None and existing["process"].poll() is None:
+                conflicting = True
+            else:
+                if existing is not None:
+                    del self._items[process_id]
+                    stale_directory = existing["dir"]
+                self._items[process_id] = item
+        if stale_directory is not None:
+            shutil.rmtree(stale_directory, ignore_errors=True)
+        if conflicting:
+            _kill_group(process, signal.SIGKILL)
+            process.wait()
+            shutil.rmtree(directory, ignore_errors=True)
+            raise AgentError(409, "process id already exists")
+        if timeout:
+            threading.Thread(
+                target=self._expire,
+                args=(process_id, item, timeout),
+                daemon=True,
+            ).start()
+        else:
+            threading.Thread(target=self._watch, args=(item,), daemon=True).start()
         return process_id
 
     def get(self, process_id: str) -> dict[str, Any]:
@@ -127,13 +207,27 @@ class ProcessTable:
     def kill(self, process_id: str, sig: int = signal.SIGTERM) -> None:
         item = self.get(process_id)
         _kill_group(item["process"], sig)
+        try:
+            item["process"].wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            _kill_group(item["process"], signal.SIGKILL)
+            item["process"].wait()
+        self._remove(process_id, item)
 
     def logs(self, process_id: str) -> dict[str, str]:
         item = self.get(process_id)
-        return {
-            "stdout": _read_limited(item["stdout"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
-            "stderr": _read_limited(item["stderr"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
-        }
+        try:
+            if item["process"].poll() is not None:
+                self._capture_finished(item)
+            if item.get("captured"):
+                return {"stdout": item["stdout_tail"], "stderr": item["stderr_tail"]}
+            return {
+                "stdout": _read_tail(item["stdout"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
+                "stderr": _read_tail(item["stderr"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
+            }
+        finally:
+            if item["process"].poll() is not None:
+                self._remove(process_id, item)
 
 
 class AgentState:
@@ -291,10 +385,12 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     content = base64.b64decode(entry["contentBase64"], validate=True)
                 except (binascii.Error, ValueError) as exc:
                     raise AgentError(400, "invalid base64 file content") from exc
-                if len(content) > MAX_FILE_BYTES or total + len(content) > MAX_WRITE_BATCH_BYTES:
-                    raise AgentError(413, "file batch exceeds the agent limit")
+                if len(content) > MAX_FILE_BYTES:
+                    raise AgentError(413, "file exceeds the agent limit")
                 total += len(content)
                 decoded.append((entry["path"], content))
+            if len(decoded) > 1 and total > MAX_WRITE_BATCH_BYTES:
+                raise AgentError(413, "file batch exceeds the preferred batch limit")
             for requested, content in decoded:
                 parent = os.path.dirname(requested)
                 if parent:
@@ -362,6 +458,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
         deadline = time.monotonic() + timeout if timeout else None
         while deadline is None or time.monotonic() < deadline:
             if item["process"].poll() is not None:
+                self.state.processes._capture_finished(item)
                 raise AgentError(409, "process exited before port became ready")
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.2) as connection:
