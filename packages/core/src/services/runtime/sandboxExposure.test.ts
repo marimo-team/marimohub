@@ -38,6 +38,16 @@ describe('SubdomainExposure', () => {
 			`https://sandbox.example.net/open?provider=one&provider=two&empty=&access_token=${TEST_KERNEL_AUTH_TOKEN}#notebook`,
 		);
 	});
+
+	it.each([
+		'https://sandbox.example.net/?access_token=provider-credential',
+		'https://sandbox.example.net/?access_token=',
+		'https://sandbox.example.net/?%61ccess_token=provider-credential',
+	])('rejects an adapter URL containing the reserved token parameter: %s', async (url) => {
+		await expect(exposure.finalize(url, ctx)).rejects.toThrow(
+			'Sandbox exposure URL contains reserved access_token query parameter',
+		);
+	});
 });
 
 describe('ProxyExposure', () => {

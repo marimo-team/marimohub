@@ -113,8 +113,14 @@ So your image must provide:
    pre-installed base.
 
 No marimo entrypoint or `CMD` is required — marimohub supplies the launch command.
-The repository images use `--token` in their default `CMD`. A bare `docker run`
-prints marimo's generated token. Use that token to open the editor.
+The repository images use a generated token in their quiet default `CMD`. For a
+standalone check, publish the port and read the token from the container:
+
+```sh
+cid=$(docker run -d -p 127.0.0.1:2718:2718 IMAGE)
+token=$(docker exec "$cid" cat /tmp/.marimohub-kernel-token)
+printf 'http://127.0.0.1:2718/?access_token=%s\n' "$token"
+```
 
 > **Don't set `UV_COMPILE_BYTECODE` in your image.** Compile bytecode at build with
 > the `--compile-bytecode` flag (fast imports for the pre-installed base). The

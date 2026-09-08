@@ -34,6 +34,7 @@ import {
 } from '../../schema';
 import type { EditorClaim, Session, SurfaceState } from '../../schema';
 import type { SurfaceId } from './surfaces/types';
+import { assertValidKernelAuthToken } from './kernelAuth';
 import {
 	ACTIVE_STATUSES,
 	isTerminal,
@@ -142,6 +143,9 @@ export class SessionService {
 	}
 
 	async createSession(input: CreateSessionInput): Promise<Session> {
+		if (input.kernel_auth_token !== undefined) {
+			assertValidKernelAuthToken(input.kernel_auth_token);
+		}
 		const sessionId = input.session_id ?? createSessionId();
 		const now = new Date().toISOString();
 

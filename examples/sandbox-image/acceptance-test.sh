@@ -22,6 +22,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="${1:-marimo-sandbox:acceptance}"
 CONTEXT="${2:-$HERE}"
 KERNEL_TOKEN="mhub_kernel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+WRONG_KERNEL_TOKEN="mhub_kernel_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 KERNEL_TOKEN_FILE="/tmp/.marimohub-kernel-token"
 
 # --- tiny test harness -------------------------------------------------------
@@ -51,9 +52,9 @@ run_detached() { # echoes container id; $@ = args after image
 	echo "$cid"
 }
 
-# Poll the kernel's published port until it serves a page (mirrors the
-# provisioner's waitForPort). marimo redirects `/` (303 → /auth/login) so we
-# follow redirects (-L) and require a final 200. Fails after ~90s.
+# Poll the kernel's published port (mirrors the provisioner's waitForPort). With
+# a token, probe the authenticated connection endpoint directly. Without one,
+# follow the root redirect and require a final 200. Fails after ~90s.
 wait_http_200() { # $1 = host port; $2 = optional bearer token
 	local port="$1" token="${2:-}" i code
 	for i in $(seq 1 90); do
@@ -63,6 +64,19 @@ wait_http_200() { # $1 = host port; $2 = optional bearer token
 			code="$(curl -sSL -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null || true)"
 		fi
 		[ "$code" = "200" ] && return 0
+		sleep 1
+	done
+	return 1
+}
+
+read_kernel_token() { # $1 = container id
+	local cid="$1" token i
+	for i in $(seq 1 30); do
+		token="$(docker exec "$cid" sh -lc "cat '$KERNEL_TOKEN_FILE'" 2>/dev/null || true)"
+		if [ -n "$token" ]; then
+			echo "$token"
+			return 0
+		fi
 		sleep 1
 	done
 	return 1
@@ -214,11 +228,13 @@ cid="$(run_detached -p 127.0.0.1:2718:2718 "$IMAGE" sleep infinity)"
 provision_notebook "$cid"
 launch_kernel "$cid"
 wait_http_200 2718 "$KERNEL_TOKEN" || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "kernel did not serve authenticated HTTP 200 on 2718"; }
-unauth_code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:2718/api/status/connections")"
+unauth_code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
 [ "$unauth_code" = "401" ] || fail "kernel accepted an unauthenticated status request (HTTP $unauth_code)"
-auth_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections")"
+wrong_auth_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WRONG_KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
+[ "$wrong_auth_code" = "401" ] || fail "kernel accepted an incorrect bearer token (HTTP $wrong_auth_code)"
+auth_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
 [ "$auth_code" = "200" ] || fail "kernel rejected its configured token (HTTP $auth_code)"
-ok "marimo kernel rejects unauthenticated requests and accepts its configured token"
+ok "marimo kernel rejects missing and incorrect credentials and accepts its configured token"
 docker rm -f "$cid" >/dev/null 2>&1
 
 # --- 4. --convert rescues a non-marimo python file (no pyproject) ------------
@@ -233,8 +249,11 @@ docker rm -f "$cid" >/dev/null 2>&1
 # --- 5. bare `docker run` (default CMD) serves -------------------------------
 echo "==> 5. Default CMD (bare docker run)"
 cid="$(run_detached -p 127.0.0.1:2720:2718 "$IMAGE")"
-wait_http_200 2720 || { docker logs "$cid" 2>&1 | tail -20 || true; fail "default CMD did not serve HTTP 200"; }
-ok "bare 'docker run' starts a kernel (HTTP 200)"
+default_token="$(read_kernel_token "$cid" || true)"
+[ -n "$default_token" ] || fail "default CMD did not create its kernel token file"
+wait_http_200 2720 "$default_token" || { docker logs "$cid" 2>&1 | tail -20 || true; fail "default CMD did not serve authenticated HTTP 200"; }
+! docker logs "$cid" 2>&1 | grep -q 'access_token=' || fail "default CMD exposed its kernel token in container logs"
+ok "bare 'docker run' starts an authenticated kernel without logging its token"
 docker rm -f "$cid" >/dev/null 2>&1
 
 echo

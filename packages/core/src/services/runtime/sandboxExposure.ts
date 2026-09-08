@@ -34,6 +34,9 @@ export class SubdomainExposure implements SandboxExposure {
 
 	async finalize(exposedUrl: string, ctx: ExposureContext): Promise<ExposureResult> {
 		const url = new URL(exposedUrl);
+		if (url.searchParams.has('access_token')) {
+			throw new Error('Sandbox exposure URL contains reserved access_token query parameter');
+		}
 		url.searchParams.set('access_token', ctx.kernelAuthToken);
 		return { clientUrl: url.toString() };
 	}

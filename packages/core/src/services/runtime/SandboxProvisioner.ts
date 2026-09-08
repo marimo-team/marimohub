@@ -11,7 +11,6 @@ import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { logEvent } from '../../logs';
 import { paths } from '../../paths';
-import { KERNEL_AUTH_TOKEN_PATTERN } from '../../schema';
 import { logOperationalError } from '../../operationalLog';
 import type {
 	ComputeResources,
@@ -28,7 +27,7 @@ import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
-import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
+import { assertValidKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
@@ -578,9 +577,7 @@ async function writeSessionFiles(
 	files: NonNullable<SessionEnv['files']>,
 	kernelAuthToken?: string,
 ): Promise<void> {
-	if (kernelAuthToken !== undefined && !KERNEL_AUTH_TOKEN_PATTERN.test(kernelAuthToken)) {
-		throw new Error('Invalid kernel authentication token');
-	}
+	if (kernelAuthToken !== undefined) assertValidKernelAuthToken(kernelAuthToken);
 	if (
 		kernelAuthToken !== undefined &&
 		files.some(({ path }) => normalizeAbsoluteSandboxPath(path) === KERNEL_AUTH_TOKEN_FILE)

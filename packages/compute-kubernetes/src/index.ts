@@ -35,8 +35,8 @@
  * caveat the Modal/CoreWeave adapters carry): the Ingress host scheme and TLS are
  * cluster/ingress-controller specific. The returned URL requires `ingressClassName`,
  * a matching `*.{host}` DNS record, and TLS from either a named wildcard secret or
- * the controller's default certificate. Kernel URLs and bearer tokens require TLS. The in-pod
- * port wait assumes
+ * the controller's default certificate. Token-protected deployments must enable TLS;
+ * `ingressTlsMode: 'disabled'` is suitable only for isolated development. The in-pod port wait assumes
  * `python3` is on the image PATH (see `portWaitCommand`).
  */
 import {

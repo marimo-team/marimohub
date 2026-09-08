@@ -65,7 +65,6 @@ ENV VIRTUAL_ENV=/opt/marimohub/venv \
 USER appuser
 WORKDIR /workspace
 
-# Not used in production (the provisioner supplies the launch command); lets a bare
-# `docker run` start a kernel for a sanity check, straight from the pre-installed
-# env. `--convert` opens a plain Python file too.
-CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--token", "--host", "0.0.0.0", "--port", "2718"]
+# Not used in production; the provisioner supplies its own launch command and token.
+# The standalone command keeps its generated credential in the container filesystem.
+CMD ["sh", "-lc", "umask 077; python3 -c \"import secrets; print('mhub_kernel_' + secrets.token_urlsafe(32))\" > /tmp/.marimohub-kernel-token; exec uv run --no-sync marimo --quiet edit notebook.py --convert --headless --token --token-password-file /tmp/.marimohub-kernel-token --host 0.0.0.0 --port 2718"]

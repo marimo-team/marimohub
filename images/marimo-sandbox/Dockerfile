@@ -75,7 +75,7 @@ RUN echo 'export PATH=$VIRTUAL_ENV/bin:$PATH' > /etc/profile.d/venv-path.sh
 USER appuser
 WORKDIR /workspace
 
-CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--token", "--host", "0.0.0.0", "--port", "2718"]
+CMD ["sh", "-lc", "umask 077; python3 -c \"import secrets; print('mhub_kernel_' + secrets.token_urlsafe(32))\" > /tmp/.marimohub-kernel-token; exec uv run --no-sync marimo --quiet edit notebook.py --convert --headless --token --token-password-file /tmp/.marimohub-kernel-token --host 0.0.0.0 --port 2718"]
 
 FROM base AS vscode
 

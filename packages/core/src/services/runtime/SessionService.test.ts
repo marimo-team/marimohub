@@ -55,6 +55,21 @@ describe('SessionService', () => {
 			);
 		});
 
+		it.each(['', 'not-a-kernel-token'])(
+			'rejects an invalid kernel token before persisting the session: %j',
+			async (kernelAuthToken) => {
+				await expect(
+					sessions.createSession({
+						notebook_id: notebookId,
+						project_id: projectId,
+						user_id: ACTOR,
+						kernel_auth_token: kernelAuthToken,
+					}),
+				).rejects.toThrow('Invalid kernel authentication token');
+				expect(await sessions.listSessions(notebookId)).toEqual([]);
+			},
+		);
+
 		it('rejects a source version at or before the prune cutoff', async () => {
 			const sourceVersion = createVersionId();
 			await sessions.advanceVersionPruneCutoff(projectId, notebookId, sourceVersion);
