@@ -1,0 +1,89 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createFargateClient } from './client';
+
+function makeSdk() {
+	const send = vi.fn(async (command: { input: Record<string, unknown> }) => {
+		const name = command.constructor.name;
+		if (name === 'RunTaskCommand') {
+			return {
+				tasks: [
+					{
+						taskArn: 'task-1',
+						taskDefinitionArn: 'family:7',
+						lastStatus: 'RUNNING',
+						createdAt: new Date('2026-09-08T12:00:00.000Z'),
+						containers: [{ name: 'marimo' }],
+					},
+				],
+			};
+		}
+		if (name === 'DescribeTasksCommand') return { tasks: [] };
+		if (name === 'ListTasksCommand') return { taskArns: [], nextToken: undefined };
+		if (name === 'DescribeTaskDefinitionCommand') {
+			return {
+				taskDefinition: {
+					taskDefinitionArn: 'family:7',
+					family: 'family',
+					revision: 7,
+					containerDefinitions: [{ name: 'marimo' }],
+				},
+			};
+		}
+		return { clusters: [{ clusterName: 'marimo' }] };
+	});
+	return { send };
+}
+
+describe('createFargateClient', () => {
+	it('translates RunTask network, tags, overrides, and launch type', async () => {
+		const sdk = makeSdk();
+		const client = createFargateClient({ client: sdk as never });
+		await client.runTask({
+			cluster: 'marimo',
+			taskDefinition: 'family:7',
+			startedBy: 'deployment-a',
+			clientToken: 'token',
+			platformVersion: 'LATEST',
+			count: 1,
+			networkConfiguration: {
+				subnets: ['subnet-a'],
+				securityGroups: ['sg-a'],
+				assignPublicIp: false,
+			},
+			tags: [{ key: 'owner', value: 'deployment-a' }],
+			overrides: {
+				cpu: '1024',
+				memory: '4Gi',
+				containerOverrides: [
+					{ name: 'marimo', environment: [{ name: 'TOKEN', value: 'derived' }] },
+				],
+			},
+		});
+		const command = sdk.send.mock.calls[0]?.[0] as { input: Record<string, unknown> };
+		expect(command.input).toMatchObject({
+			launchType: 'FARGATE',
+			startedBy: 'deployment-a',
+			networkConfiguration: {
+				awsvpcConfiguration: {
+					subnets: ['subnet-a'],
+					securityGroups: ['sg-a'],
+					assignPublicIp: 'DISABLED',
+				},
+			},
+			tags: [{ key: 'owner', value: 'deployment-a' }],
+			overrides: { cpu: '1024', memory: '4Gi' },
+		});
+	});
+
+	it('maps task definitions and validates a cluster', async () => {
+		const sdk = makeSdk();
+		const client = createFargateClient({ client: sdk as never });
+		expect(await client.describeTaskDefinition('family:7')).toEqual({
+			taskDefinitionArn: 'family:7',
+			family: 'family',
+			revision: 7,
+			containerNames: ['marimo'],
+		});
+		await expect(client.describeCluster('marimo')).resolves.toBeUndefined();
+	});
+});

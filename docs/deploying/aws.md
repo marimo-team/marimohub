@@ -4,8 +4,8 @@ description: Deploy marimohub using AWS compute, S3 storage, identity, and netwo
 
 # Deploying on AWS
 
-Run the `apps/server` image on EKS or ECS/Fargate, backed by native S3 and a
-compute backend (Modal today; no AWS-native compute adapter yet).
+Run the `apps/server` image on EKS or ECS/Fargate, backed by native S3. ECS
+deployments can run kernels with the AWS-native Fargate adapter.
 
 > Outline — not yet a tested recipe. Contributions welcome.
 
@@ -30,8 +30,29 @@ MARIMOHUB_STORAGE_S3_REGION=us-east-1
 ## Compute
 
 ```bash
-MARIMOHUB_COMPUTE_BACKEND=modal   # + Modal token/image (see Compute)
+MARIMOHUB_COMPUTE_BACKEND=fargate
+MARIMOHUB_SANDBOX_EXPOSURE=proxy
+MARIMOHUB_COMPUTE_FARGATE_CLUSTER=marimohub
+MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION=marimohub-kernel:1
+MARIMOHUB_COMPUTE_FARGATE_SUBNETS=subnet-aaa,subnet-bbb
+MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS=sg-kernels
+MARIMOHUB_COMPUTE_FARGATE_OWNER=prod-hub-a
+MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET='<at least 32 random bytes>'
 ```
+
+Register the task definition first; it must run the bundled control agent as a
+non-root process with writable `/workspace` and ports 2717/2718. Keep hub and
+kernel tasks in private subnets and allow those ports only from the hub security
+group. The task execution role needs ECR and CloudWatch Logs access. The hub
+needs scoped ECS RunTask/Describe/List/Stop permissions and PassRole only for
+the two kernel roles. See [the example task definition](../../examples/aws-fargate/kernel-task-definition.json),
+[hub policy](../../examples/aws-fargate/hub-iam-policy.json), and [Fargate setup](../compute.md#aws-ecs-fargate).
+
+Fargate CPU/memory profiles round up to the next official Fargate allocation,
+so billing follows the selected pair. GPU and Spot capacity are not supported.
+There is no public kernel hostname or per-task load balancer. The hub stops
+owned tasks during teardown; periodically review stopped tasks and CloudWatch
+logs when retiring a task-definition revision.
 
 ## Config & secrets
 

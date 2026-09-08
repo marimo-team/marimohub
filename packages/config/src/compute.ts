@@ -8,6 +8,7 @@ import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
+import { FargateCompute } from '@marimo-hub/compute-fargate';
 import {
 	KubernetesCompute,
 	parseIngressAnnotations,
@@ -182,6 +183,8 @@ export function resolveSandboxImages(env: Env): string[] {
 		case 'local':
 		case 'none':
 		case 'noop':
+			return [];
+		case 'fargate':
 			return [];
 		case 'e2b':
 			return (
@@ -491,6 +494,72 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				resources: hasResources ? resources : undefined,
 				podReadyTimeout:
 					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),
+			});
+		}
+		case 'fargate': {
+			if (env.MARIMOHUB_COMPUTE_IMAGE?.trim()) {
+				throw new ConfigError(
+					'MARIMOHUB_COMPUTE_IMAGE is not supported by the fargate backend; the pre-registered ECS task definition owns the image',
+					{
+						variable: 'MARIMOHUB_COMPUTE_IMAGE',
+						remediation:
+							'Unset MARIMOHUB_COMPUTE_IMAGE and change the approved ECS task-definition revision to change the image.',
+						docs: 'docs/setup/compute/fargate.md',
+					},
+				);
+			}
+			if (opts?.sandboxExposureMode !== 'proxy') {
+				throw new ConfigError('The fargate backend requires MARIMOHUB_SANDBOX_EXPOSURE=proxy', {
+					variable: 'MARIMOHUB_SANDBOX_EXPOSURE',
+					remediation: 'Set MARIMOHUB_SANDBOX_EXPOSURE=proxy for private ENI routing.',
+					docs: 'docs/setup/compute/fargate.md',
+				});
+			}
+			const listRequired = (key: string): string[] => {
+				const values = parseList(env[key]);
+				if (!values) {
+					throw new ConfigError(`Missing required env var: ${key}`, {
+						variable: key,
+						remediation: `Set one or more comma-separated values for the fargate backend.`,
+						docs: 'docs/setup/compute/fargate.md',
+					});
+				}
+				return values;
+			};
+			const agentPort = parseIntEnv(env, 'MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT') ?? 2717;
+			if (!Number.isSafeInteger(agentPort) || agentPort < 1 || agentPort > 65_535) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT: ${env.MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT}`,
+					{ variable: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT' },
+				);
+			}
+			const readySeconds =
+				parseIntEnv(env, 'MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS') ?? 120;
+			if (!Number.isSafeInteger(readySeconds) || readySeconds < 1) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS: ${env.MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS}`,
+					{ variable: 'MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS' },
+				);
+			}
+			const secret = computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET', 'fargate');
+			if (Buffer.byteLength(secret, 'utf8') < 32) {
+				throw new ConfigError('MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET must be at least 32 bytes', {
+					variable: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET',
+				});
+			}
+			return new FargateCompute({
+				cluster: computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_CLUSTER', 'fargate'),
+				taskDefinition: computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION', 'fargate'),
+				containerName: env.MARIMOHUB_COMPUTE_FARGATE_CONTAINER_NAME?.trim() || 'marimo',
+				subnets: listRequired('MARIMOHUB_COMPUTE_FARGATE_SUBNETS'),
+				securityGroups: listRequired('MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS'),
+				assignPublicIp: parseBool(env, 'MARIMOHUB_COMPUTE_FARGATE_ASSIGN_PUBLIC_IP'),
+				platformVersion: env.MARIMOHUB_COMPUTE_FARGATE_PLATFORM_VERSION?.trim() || 'LATEST',
+				owner: computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_OWNER', 'fargate'),
+				agentSecret: secret,
+				agentPort,
+				readyTimeoutMs: Millis.seconds(readySeconds),
+				exposureMode: opts.sandboxExposureMode,
 			});
 		}
 		case 'cloudflare':

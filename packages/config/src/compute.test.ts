@@ -5,6 +5,7 @@ import { LocalCompute } from '@marimo-hub/compute-local';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import { FargateCompute } from '@marimo-hub/compute-fargate';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
 import {
 	makeCompute,
@@ -203,6 +204,42 @@ describe('makeCompute fail-fast', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes' })).toBeInstanceOf(
 			KubernetesCompute,
 		);
+	});
+
+	it('selects fargate with strict private-proxy configuration', () => {
+		const provider = makeCompute(
+			{
+				MARIMOHUB_COMPUTE_BACKEND: 'fargate',
+				MARIMOHUB_COMPUTE_FARGATE_CLUSTER: 'marimohub',
+				MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION: 'kernel:1',
+				MARIMOHUB_COMPUTE_FARGATE_SUBNETS: 'subnet-a,subnet-b',
+				MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS: 'sg-kernel',
+				MARIMOHUB_COMPUTE_FARGATE_OWNER: 'prod-a',
+				MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET: 'a'.repeat(32),
+			},
+			{ sandboxExposureMode: 'proxy' },
+		);
+		expect(provider).toBeInstanceOf(FargateCompute);
+		expect(provider.capabilities).toEqual({ multiPort: true });
+	});
+
+	it('rejects an image setting and subdomain exposure for fargate', () => {
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: 'fargate',
+			MARIMOHUB_COMPUTE_FARGATE_CLUSTER: 'marimohub',
+			MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION: 'kernel:1',
+			MARIMOHUB_COMPUTE_FARGATE_SUBNETS: 'subnet-a',
+			MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS: 'sg-kernel',
+			MARIMOHUB_COMPUTE_FARGATE_OWNER: 'prod-a',
+			MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET: 'a'.repeat(32),
+		};
+		expect(() =>
+			makeCompute(
+				{ ...env, MARIMOHUB_COMPUTE_IMAGE: 'arbitrary:image' },
+				{ sandboxExposureMode: 'proxy' },
+			),
+		).toThrow(/MARIMOHUB_COMPUTE_IMAGE/);
+		expect(() => makeCompute(env)).toThrow(/requires MARIMOHUB_SANDBOX_EXPOSURE=proxy/);
 	});
 
 	it('configures kubernetes proxy mode without public ingress settings', () => {
@@ -482,11 +519,17 @@ describe('sandbox image list', () => {
 		expect(resolveSandboxImages({})).toEqual([]);
 	});
 
-	it.each(['local', 'none', 'noop'])('resolveSandboxImages is empty for %s', (backend) => {
-		expect(
-			resolveSandboxImages({ MARIMOHUB_COMPUTE_BACKEND: backend, MARIMOHUB_COMPUTE_IMAGE: 'img' }),
-		).toEqual([]);
-	});
+	it.each(['local', 'none', 'noop', 'fargate'])(
+		'resolveSandboxImages is empty for %s',
+		(backend) => {
+			expect(
+				resolveSandboxImages({
+					MARIMOHUB_COMPUTE_BACKEND: backend,
+					MARIMOHUB_COMPUTE_IMAGE: 'img',
+				}),
+			).toEqual([]);
+		},
+	);
 
 	it('resolveSandboxImages prefers the e2b template list over the image list', () => {
 		expect(

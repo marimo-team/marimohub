@@ -100,7 +100,7 @@ _No environment variables to set here._
 
 ## Compute
 
-Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `kubernetes`, `local`, `library`, `none`.
+Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `fargate`, `kubernetes`, `local`, `library`, `none`.
 
 Where notebook kernels run. The shared variables apply across compute backends.
 
@@ -110,7 +110,7 @@ Read regardless of the selected compute backend.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
+| `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. The `fargate` backend rejects this variable because its pre-registered ECS task definition owns the image. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
 | `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi\|Gi\|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend applies GPU requests. Other backends ignore GPU values and log a startup warning. | — | — | `small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100` |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
@@ -217,6 +217,26 @@ E2B sandboxes (e2b.dev). The `e2b` SDK is an optional, bring-your-own dependency
 | `MARIMOHUB_COMPUTE_E2B_DOMAIN` | Custom E2B domain (self-hosted/enterprise); defaults to `e2b.app`. | — | — | — |
 | `MARIMOHUB_COMPUTE_E2B_OWNER_TAG` | Metadata tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
 | `MARIMOHUB_COMPUTE_E2B_MAX_LIFETIME_SECONDS` | Hard provider-side sandbox lifetime cap (E2B auto-kills past it, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it. | — | `2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | `28800` |
+
+### AWS ECS Fargate
+
+`MARIMOHUB_COMPUTE_BACKEND=fargate`
+
+Runs one pre-registered Linux Fargate task per sandbox. The hub reaches the authenticated agent and kernel through private task ENIs; v1 requires proxy exposure, uses on-demand Fargate, and does not register task definitions or select arbitrary images.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_COMPUTE_FARGATE_CLUSTER` | ECS cluster that owns notebook tasks. | Yes | — | `marimohub-prod` |
+| `MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION` | Existing ECS task-definition family:revision or ARN. It must run the bundled agent as a non-root container and own the pinned image. | Yes | — | `marimohub-kernel:12` |
+| `MARIMOHUB_COMPUTE_FARGATE_CONTAINER_NAME` | Named task-definition container that runs the agent. | — | `marimo` | — |
+| `MARIMOHUB_COMPUTE_FARGATE_SUBNETS` | Comma-separated private subnet ids for task ENIs. | Yes | — | `subnet-0123,subnet-0456` |
+| `MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS` | Comma-separated security groups permitting hub-to-task agent and kernel traffic. | Yes | — | `sg-0123456789abcdef0` |
+| `MARIMOHUB_COMPUTE_FARGATE_ASSIGN_PUBLIC_IP` | Whether ECS assigns a public task ENI. Private networking and false are recommended. | — | `false` | — |
+| `MARIMOHUB_COMPUTE_FARGATE_PLATFORM_VERSION` | ECS Fargate platform version passed to RunTask. | — | `LATEST` | — |
+| `MARIMOHUB_COMPUTE_FARGATE_OWNER` | Unique deployment ownership key used in startedBy and task tags for reconciliation. | Yes | — | `prod-hub-a` |
+| `MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET` 🔒 | Master secret used to derive per-sandbox agent tokens. Store it in Secrets Manager or SSM; minimum 32 bytes. | Yes | — | — |
+| `MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT` | Private task port for the authenticated control agent. | — | `2717` | — |
+| `MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS` | How long to wait for ECS RUNNING, a private ENI, and an agent health response. | — | `120` | — |
 
 ### Kubernetes
 

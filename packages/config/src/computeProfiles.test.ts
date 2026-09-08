@@ -269,7 +269,15 @@ describe('unsupportedBackendNotice', () => {
 
 describe('supportsComputeProfiles', () => {
 	it('only enables profile UX for adapters that apply resource requests', () => {
-		for (const backend of ['coreweave', 'wandb', 'modal', 'docker', 'podman', 'kubernetes']) {
+		for (const backend of [
+			'coreweave',
+			'wandb',
+			'modal',
+			'docker',
+			'podman',
+			'kubernetes',
+			'fargate',
+		]) {
 			expect(supportsComputeProfiles(backend), backend).toBe(true);
 		}
 		for (const backend of ['e2b', 'cloudflare', 'local', 'none', 'noop', 'unknown']) {
@@ -285,6 +293,7 @@ describe('supportsComputeProfiles', () => {
 			'docker',
 			'podman',
 			'kubernetes',
+			'fargate',
 			'e2b',
 			'cloudflare',
 			'local',

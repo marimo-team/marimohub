@@ -29,6 +29,7 @@
 		"@marimo-hub/compute-container": "workspace:*",
 		"@marimo-hub/compute-coreweave": "workspace:*",
 		"@marimo-hub/compute-e2b": "workspace:*",
+		"@marimo-hub/compute-fargate": "workspace:*",
 		"@marimo-hub/compute-kubernetes": "workspace:*",
 		"@marimo-hub/compute-local": "workspace:*",
 		"@marimo-hub/compute-modal": "workspace:*",

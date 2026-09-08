@@ -1,0 +1,35 @@
+{
+	"name": "@marimo-hub/compute-fargate",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"files": [
+		"dist",
+		"agent"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./client": "./src/client.ts",
+		"./shared": "./src/shared.ts",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"check": "vp check",
+		"test": "vp test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@aws-sdk/client-ecs": "catalog:",
+		"@marimo-hub/compute-commons": "workspace:*",
+		"@marimo-hub/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

@@ -24,6 +24,7 @@ Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 | W&B        | `wandb`      | CoreWeave Sandboxes via your W&B account    |
 | Modal      | `modal`      | Production serverless sandboxes             |
 | E2B        | `e2b`        | Managed code sandboxes                      |
+| Fargate    | `fargate`    | Private on-demand tasks in your AWS account |
 | Kubernetes | `kubernetes` | Pods in your own cluster                    |
 | Docker     | `docker`     | Single-host container per kernel            |
 | Podman     | `podman`     | Rootless or remote container per kernel     |
@@ -47,6 +48,10 @@ a comma-separated list of images — the first is the default, and the rest are
 selectable per notebook (for `e2b`, `MARIMOHUB_COMPUTE_E2B_TEMPLATE` takes a
 list of template ids the same way). See [Sandbox image](./sandbox-image.md) for
 the contract, a pre-warmed example, and how multiple images behave.
+
+Fargate is the exception to the shared image setting: its pre-registered ECS
+task definition owns the image and v1 accepts private proxy exposure only. See
+[AWS ECS Fargate](./compute.md#aws-ecs-fargate).
 
 The hub reaps idle sessions after `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`.
 `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` can override this value for **Run as
@@ -97,9 +102,10 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 - A filesystem snapshot restores with the resources it was captured on. The
   session details identify snapshot-backed compute until a fresh sandbox is
   started.
-- Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. E2B,
-  Cloudflare, local, and none ignore them, hide the feature from the UI, and log
-  a startup warning; their existing backend-specific sizing remains unchanged.
+- Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. Fargate
+  applies CPU and memory through valid billed pairs but ignores GPU values with a
+  startup warning. E2B, Cloudflare, local, and none ignore profiles, hide the
+  feature from the UI, and log a startup warning.
 
 Docker and Podman enforce each container's limits but have no admission control.
 Ensure the host can accommodate the expected concurrency; N concurrent
@@ -122,6 +128,10 @@ sandboxes at the largest profile can exceed the host's capacity.
 ### E2B
 
 <!--@include: ./setup/compute/e2b.md-->
+
+### AWS ECS Fargate
+
+<!--@include: ./setup/compute/fargate.md-->
 
 ### Kubernetes
 

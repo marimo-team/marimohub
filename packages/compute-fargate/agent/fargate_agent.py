@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+"""Small authenticated control agent for a private ECS Fargate task."""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hmac
+import http.server
+import json
+import os
+import secrets
+import signal
+import socket
+import subprocess
+import tempfile
+import threading
+import time
+import urllib.parse
+import uuid
+from typing import Any
+
+PROTOCOL_VERSION = 1
+MAX_BODY_BYTES = 32 * 1024 * 1024
+MAX_FILE_BYTES = 25 * 1024 * 1024
+MAX_WRITE_BATCH_BYTES = 8 * 1024 * 1024
+MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_TIMEOUT_MS = 15 * 60 * 1000
+MAX_LOG_BYTES = 64 * 1024
+
+
+class AgentError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def _bounded_timeout(value: Any, default: int = 30_000) -> float:
+    if value is None:
+        return default / 1000
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError) as exc:
+        raise AgentError(400, "timeoutMs must be an integer") from exc
+    if milliseconds < 0 or milliseconds > MAX_TIMEOUT_MS:
+        raise AgentError(400, "timeoutMs is outside the allowed range")
+    return milliseconds / 1000
+
+
+def _read_limited(path: str, limit: int) -> bytes:
+    with open(path, "rb") as stream:
+        data = stream.read(limit + 1)
+    return data[:limit]
+
+
+def _kill_group(process: subprocess.Popen[Any], sig: int = signal.SIGTERM) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return
+
+
+def _wait_process(process: subprocess.Popen[Any], timeout: float) -> int:
+    try:
+        return process.wait(timeout=None if timeout == 0 else timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(process, signal.SIGKILL)
+        process.wait()
+        return 124
+
+
+class ProcessTable:
+    def __init__(self, state: "AgentState"):
+        self._state = state
+        self._items: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def start(self, payload: dict[str, Any]) -> str:
+        command = payload.get("command")
+        if not isinstance(command, str) or not command:
+            raise AgentError(400, "command is required")
+        process_id = payload.get("processId")
+        if not isinstance(process_id, str) or not process_id or len(process_id) > 128:
+            process_id = f"fargate-{uuid.uuid4().hex}"
+        cwd = payload.get("cwd", "/workspace")
+        if not isinstance(cwd, str):
+            raise AgentError(400, "cwd must be a string")
+        directory = tempfile.mkdtemp(prefix="marimohub-process-")
+        stdout_path = os.path.join(directory, "stdout")
+        stderr_path = os.path.join(directory, "stderr")
+        stdout = open(stdout_path, "wb")
+        stderr = open(stderr_path, "wb")
+        try:
+            process = subprocess.Popen(
+                ["sh", "-lc", command],
+                cwd=cwd,
+                env=self._state.environment(payload.get("env")),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            stdout.close()
+            stderr.close()
+            raise AgentError(400, f"could not start process: {exc.strerror or 'spawn failed'}") from exc
+        stdout.close()
+        stderr.close()
+        with self._lock:
+            self._items[process_id] = {
+                "process": process,
+                "stdout": stdout_path,
+                "stderr": stderr_path,
+                "dir": directory,
+            }
+        return process_id
+
+    def get(self, process_id: str) -> dict[str, Any]:
+        with self._lock:
+            item = self._items.get(process_id)
+        if item is None:
+            raise AgentError(404, "process not found")
+        return item
+
+    def kill(self, process_id: str, sig: int = signal.SIGTERM) -> None:
+        item = self.get(process_id)
+        _kill_group(item["process"], sig)
+
+    def logs(self, process_id: str) -> dict[str, str]:
+        item = self.get(process_id)
+        return {
+            "stdout": _read_limited(item["stdout"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
+            "stderr": _read_limited(item["stderr"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
+        }
+
+
+class AgentState:
+    def __init__(self, token: str | None = None):
+        self.token = token or os.environ.get("MARIMOHUB_AGENT_TOKEN", "")
+        if len(self.token.encode("utf-8")) < 32:
+            raise ValueError("MARIMOHUB_AGENT_TOKEN must be at least 32 bytes")
+        self.forced: dict[str, str] = {}
+        self.defaults: dict[str, str] = {}
+        self.processes = ProcessTable(self)
+
+    def authenticate(self, supplied: str | None) -> bool:
+        if not supplied:
+            return False
+        if supplied.lower().startswith("bearer "):
+            supplied = supplied[7:].strip()
+        return hmac.compare_digest(supplied.encode("utf-8"), self.token.encode("utf-8"))
+
+    def environment(self, overrides: Any = None) -> dict[str, str]:
+        values = dict(os.environ)
+        values.pop("MARIMOHUB_AGENT_TOKEN", None)
+        values.pop("MARIMOHUB_AGENT_SECRET", None)
+        for key, value in self.defaults.items():
+            values.setdefault(key, value)
+        values.update(self.forced)
+        if isinstance(overrides, dict):
+            for key, value in overrides.items():
+                if isinstance(key, str) and isinstance(value, str) and key not in {
+                    "MARIMOHUB_AGENT_TOKEN",
+                    "MARIMOHUB_AGENT_SECRET",
+                }:
+                    values[key] = value
+        values.pop("MARIMOHUB_AGENT_TOKEN", None)
+        values.pop("MARIMOHUB_AGENT_SECRET", None)
+        return values
+
+    def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
+        command = payload.get("command")
+        if not isinstance(command, str) or not command:
+            raise AgentError(400, "command is required")
+        cwd = payload.get("cwd", "/workspace")
+        if not isinstance(cwd, str):
+            raise AgentError(400, "cwd must be a string")
+        with tempfile.TemporaryDirectory(prefix="marimohub-exec-") as directory:
+            stdout_path = os.path.join(directory, "stdout")
+            stderr_path = os.path.join(directory, "stderr")
+            with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+                try:
+                    process = subprocess.Popen(
+                        ["sh", "-lc", command],
+                        cwd=cwd,
+                        env=self.environment(payload.get("env")),
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout,
+                        stderr=stderr,
+                        start_new_session=True,
+                    )
+                except OSError as exc:
+                    raise AgentError(400, f"could not execute command: {exc.strerror or 'spawn failed'}") from exc
+                code = _wait_process(process, _bounded_timeout(payload.get("timeoutMs")))
+            output = _read_limited(stdout_path, MAX_OUTPUT_BYTES)
+            error = _read_limited(stderr_path, MAX_OUTPUT_BYTES)
+        return {
+            "success": code == 0,
+            "exitCode": code,
+            "stdout": output.decode("utf-8", errors="replace"),
+            "stderr": error.decode("utf-8", errors="replace"),
+        }
+
+
+class AgentHandler(http.server.BaseHTTPRequestHandler):
+    server_version = "marimohub-fargate-agent/1"
+
+    @property
+    def state(self) -> AgentState:
+        return self.server.state  # type: ignore[attr-defined]
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        # Requests can contain notebook data and credentials; do not log them.
+        return
+
+    def _json(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _empty(self, status: int = 204) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _body(self) -> dict[str, Any]:
+        value = self.headers.get("Content-Length")
+        if value is None:
+            raise AgentError(411, "Content-Length is required")
+        try:
+            length = int(value)
+        except ValueError as exc:
+            raise AgentError(400, "invalid Content-Length") from exc
+        if length < 0 or length > MAX_BODY_BYTES:
+            raise AgentError(413, "request body exceeds the agent limit")
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            raise AgentError(400, "incomplete request body")
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AgentError(400, "request body must be JSON") from exc
+        if not isinstance(parsed, dict):
+            raise AgentError(400, "request body must be an object")
+        return parsed
+
+    def _auth(self) -> None:
+        if not self.state.authenticate(self.headers.get("Authorization")):
+            raise AgentError(401, "unauthorized")
+
+    def _dispatch(self, method: str) -> None:
+        self._auth()
+        path, _, query = self.path.partition("?")
+        if method == "GET" and path == "/health":
+            self._json(200, {"ok": True, "protocolVersion": PROTOCOL_VERSION, "agentVersion": "1"})
+            return
+        if method == "POST" and path in {"/exec", "/exec-stream"}:
+            self._json(200, self.state.execute(self._body()))
+            return
+        if method == "GET" and path == "/files/read":
+            values = urllib.parse.parse_qs(query)
+            requested = values.get("path", [""])[0]
+            if not requested:
+                raise AgentError(400, "path is required")
+            try:
+                data = _read_limited(requested, MAX_FILE_BYTES + 1)
+            except FileNotFoundError as exc:
+                raise AgentError(404, "file not found") from exc
+            except IsADirectoryError as exc:
+                raise AgentError(400, "path is a directory") from exc
+            if len(data) > MAX_FILE_BYTES:
+                raise AgentError(413, "file exceeds the agent limit")
+            self._json(200, {"contentBase64": base64.b64encode(data).decode("ascii")})
+            return
+        if method == "POST" and path == "/files/write":
+            payload = self._body()
+            files = payload.get("files")
+            if not isinstance(files, list) or not files:
+                raise AgentError(400, "files must be a non-empty list")
+            total = 0
+            decoded: list[tuple[str, bytes]] = []
+            for entry in files:
+                if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) or not isinstance(entry.get("contentBase64"), str):
+                    raise AgentError(400, "each file requires path and contentBase64")
+                try:
+                    content = base64.b64decode(entry["contentBase64"], validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise AgentError(400, "invalid base64 file content") from exc
+                if len(content) > MAX_FILE_BYTES or total + len(content) > MAX_WRITE_BATCH_BYTES:
+                    raise AgentError(413, "file batch exceeds the agent limit")
+                total += len(content)
+                decoded.append((entry["path"], content))
+            for requested, content in decoded:
+                parent = os.path.dirname(requested)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                temporary = f"{requested}.marimohub-{secrets.token_hex(6)}.tmp"
+                with open(temporary, "wb") as stream:
+                    stream.write(content)
+                os.replace(temporary, requested)
+            self._json(200, {"written": len(decoded)})
+            return
+        if method == "POST" and path == "/env":
+            payload = self._body()
+            forced = payload.get("forced", {})
+            defaults = payload.get("defaults", {})
+            if not isinstance(forced, dict) or not isinstance(defaults, dict):
+                raise AgentError(400, "forced and defaults must be objects")
+            for key, value in forced.items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise AgentError(400, "environment values must be strings")
+            for key, value in defaults.items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise AgentError(400, "environment values must be strings")
+            self.state.forced = {
+                key: value for key, value in forced.items() if key not in {"MARIMOHUB_AGENT_TOKEN", "MARIMOHUB_AGENT_SECRET"}
+            }
+            self.state.defaults = {
+                key: value for key, value in defaults.items() if key not in {"MARIMOHUB_AGENT_TOKEN", "MARIMOHUB_AGENT_SECRET"}
+            }
+            self._json(200, {"ok": True})
+            return
+        if method == "POST" and path == "/processes":
+            self._json(201, {"id": self.state.processes.start(self._body())})
+            return
+        if path.startswith("/processes/"):
+            rest = path[len("/processes/") :]
+            process_id, _, action = rest.partition("/")
+            process_id = urllib.parse.unquote(process_id)
+            if method == "POST" and action == "wait-port":
+                payload = self._body()
+                self._wait_port(process_id, payload)
+                self._json(200, {"ready": True})
+                return
+            if method == "GET" and action == "logs":
+                self._json(200, self.state.processes.logs(process_id))
+                return
+            if method == "DELETE" and not action:
+                signal_name = urllib.parse.parse_qs(query).get("signal", ["TERM"])[0].upper()
+                signals = {name.removeprefix("SIG"): value for name, value in signal.__dict__.items() if name.startswith("SIG") and isinstance(value, int)}
+                sig = signals.get(signal_name)
+                if sig is None or sig in {signal.SIGKILL, signal.SIGSTOP}:
+                    raise AgentError(400, "unsupported process signal")
+                self.state.processes.kill(process_id, sig)
+                self._empty()
+                return
+        raise AgentError(404, "route not found")
+
+    def _wait_port(self, process_id: str, payload: dict[str, Any]) -> None:
+        item = self.state.processes.get(process_id)
+        port = payload.get("port")
+        if not isinstance(port, int) or port < 1 or port > 65535:
+            raise AgentError(400, "port must be an integer between 1 and 65535")
+        timeout = _bounded_timeout(payload.get("timeoutMs"), 30_000)
+        mode = payload.get("mode", "tcp")
+        path = payload.get("path", "/")
+        deadline = time.monotonic() + timeout if timeout else None
+        while deadline is None or time.monotonic() < deadline:
+            if item["process"].poll() is not None:
+                raise AgentError(409, "process exited before port became ready")
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2) as connection:
+                    if mode == "http":
+                        request = f"GET {path if isinstance(path, str) and path.startswith('/') else '/'} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                        connection.sendall(request.encode("ascii"))
+                        if not connection.recv(64):
+                            raise OSError("empty HTTP response")
+                    return
+            except OSError:
+                time.sleep(0.05)
+        raise AgentError(408, f"timed out waiting for port {port}")
+
+    def do_GET(self) -> None:  # noqa: N802
+        try:
+            self._dispatch("GET")
+        except AgentError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except Exception:
+            self._json(500, {"error": "agent request failed"})
+
+    def do_POST(self) -> None:  # noqa: N802
+        try:
+            self._dispatch("POST")
+        except AgentError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except Exception:
+            self._json(500, {"error": "agent request failed"})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        try:
+            self._dispatch("DELETE")
+        except AgentError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except Exception:
+            self._json(500, {"error": "agent request failed"})
+
+
+class AgentServer(http.server.ThreadingHTTPServer):
+    def __init__(self, address: tuple[str, int], state: AgentState):
+        super().__init__(address, AgentHandler)
+        self.state = state
+        self.daemon_threads = True
+
+
+def run_server(host: str = "0.0.0.0", port: int | None = None) -> None:
+    selected_port = port if port is not None else int(os.environ.get("MARIMOHUB_AGENT_PORT", "2717"))
+    server = AgentServer((host, selected_port), AgentState())
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    run_server()

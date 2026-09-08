@@ -103,9 +103,9 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | 🟡     | Docker                          | `compute-container/docker` | Local end-to-end test passed; not run in a deployment |
 | 🟡     | Podman                          | `compute-container/podman` | Hermetic CLI tests; not yet live-verified             |
 | 🟡     | Kubernetes                      | `compute-kubernetes`       | Pod + Service; optional Ingress; vendor-neutral       |
+| 🟡     | AWS ECS Fargate                 | `compute-fargate`          | Private task ENI + authenticated in-task agent        |
 | ⬜     | Fly.io Machines                 | —                          | VM per sandbox, per-machine public hostname           |
 | ⬜     | Daytona                         | —                          | Sandbox SDK (exec/files/preview URLs)                 |
-| ⬜     | AWS Fargate / ECS RunTask       | —                          | RunTask + ECS Exec + ALB                              |
 | ⬜     | Runpod / Lambda / Beam          | —                          | For GPU kernels                                       |
 
 ## Auth (`Authenticator`)

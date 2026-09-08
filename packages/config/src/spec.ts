@@ -294,7 +294,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_IMAGE',
 						name: 'Sandbox image',
 						description:
-							'Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`.',
+							'Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. The `fargate` backend rejects this variable because its pre-registered ECS task definition owns the image.',
 						example: 'ghcr.io/orgname/marimo-sandbox:latest',
 					},
 					{
@@ -715,6 +715,93 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Hard provider-side sandbox lifetime cap (E2B auto-kills past it, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it.',
 						default: '2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
 						example: '28800',
+					},
+				],
+			},
+			{
+				name: 'AWS ECS Fargate',
+				selectorValue: 'fargate',
+				supportsComputeProfiles: true,
+				description:
+					'Runs one pre-registered Linux Fargate task per sandbox. The hub reaches the authenticated agent and kernel through private task ENIs; v1 requires proxy exposure, uses on-demand Fargate, and does not register task definitions or select arbitrary images.',
+				vars: [
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_CLUSTER',
+						name: 'Fargate cluster',
+						description: 'ECS cluster that owns notebook tasks.',
+						example: 'marimohub-prod',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION',
+						name: 'Fargate task definition',
+						description:
+							'Existing ECS task-definition family:revision or ARN. It must run the bundled agent as a non-root container and own the pinned image.',
+						example: 'marimohub-kernel:12',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_CONTAINER_NAME',
+						name: 'Fargate container name',
+						description: 'Named task-definition container that runs the agent.',
+						default: 'marimo',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_SUBNETS',
+						name: 'Fargate subnets',
+						description: 'Comma-separated private subnet ids for task ENIs.',
+						example: 'subnet-0123,subnet-0456',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS',
+						name: 'Fargate security groups',
+						description:
+							'Comma-separated security groups permitting hub-to-task agent and kernel traffic.',
+						example: 'sg-0123456789abcdef0',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_ASSIGN_PUBLIC_IP',
+						name: 'Assign public IP',
+						description:
+							'Whether ECS assigns a public task ENI. Private networking and false are recommended.',
+						default: 'false',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_PLATFORM_VERSION',
+						name: 'Fargate platform version',
+						description: 'ECS Fargate platform version passed to RunTask.',
+						default: 'LATEST',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_OWNER',
+						name: 'Fargate deployment owner',
+						description:
+							'Unique deployment ownership key used in startedBy and task tags for reconciliation.',
+						example: 'prod-hub-a',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET',
+						name: 'Fargate agent master secret',
+						description:
+							'Master secret used to derive per-sandbox agent tokens. Store it in Secrets Manager or SSM; minimum 32 bytes.',
+						required: true,
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT',
+						name: 'Fargate agent port',
+						description: 'Private task port for the authenticated control agent.',
+						default: '2717',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS',
+						name: 'Fargate ready timeout (seconds)',
+						description:
+							'How long to wait for ECS RUNNING, a private ENI, and an agent health response.',
+						default: '120',
 					},
 				],
 			},

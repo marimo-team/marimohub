@@ -268,9 +268,11 @@ export interface CreateSandboxOptions {
 	 */
 	reuse?: boolean;
 	/**
-	 * Override the adapter's configured default image for THIS sandbox — a
-	 * container image (modal/coreweave/docker/kubernetes) or an E2B template id.
-	 * Omitted → the adapter's constructor default. Ignored by `local`.
+	 * Provider-owned image or template selection key for THIS sandbox. Modal,
+	 * CoreWeave, Docker, and Kubernetes accept container images; E2B accepts a
+	 * template id; Fargate accepts an approved logical task-definition key. The
+	 * provider owns the mapping and may reject unknown keys. Omitted → the
+	 * adapter's constructor default. Ignored by `local`.
 	 */
 	image?: string;
 	/** Resources resolved by the control plane for this sandbox. */
