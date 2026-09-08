@@ -45,6 +45,7 @@ import type {
 } from './shared';
 import {
 	AGENT_TRANSPORT_GRACE_MS,
+	AGENT_HEALTH_TIMEOUT_MS,
 	CREATED_AT_TAG,
 	DEFAULT_AGENT_PORT,
 	DEFAULT_CONTAINER_NAME,
@@ -253,7 +254,10 @@ class FargateSandboxInstance implements SandboxInstance {
 			const cached = this.cache.get(String(this.id));
 			if (cached) {
 				try {
-					await this.checkAgent(cached.privateIp);
+					await this.checkAgent(
+						cached.privateIp,
+						Math.max(1, Math.min(AGENT_HEALTH_TIMEOUT_MS, this.readyTimeoutMs / 2)),
+					);
 					this.handle = cached;
 					this.timings = { create: Date.now() - started, boot: 0 };
 					return;
@@ -382,7 +386,8 @@ class FargateSandboxInstance implements SandboxInstance {
 			const ip = privateIpFromTask(last, containerName);
 			if (last.lastStatus === 'RUNNING' && ip) {
 				try {
-					await this.checkAgent(ip);
+					const remaining = Math.max(1, deadline - Date.now());
+					await this.checkAgent(ip, Math.min(AGENT_HEALTH_TIMEOUT_MS, remaining));
 					return last;
 				} catch (error) {
 					if (error instanceof AgentHttpError && error.status >= 400 && error.status < 500)
@@ -396,8 +401,10 @@ class FargateSandboxInstance implements SandboxInstance {
 		);
 	}
 
-	private async checkAgent(privateIp: string): Promise<void> {
-		const body = asJsonRecord(await this.requestAt(privateIp, '/health', { method: 'GET' }));
+	private async checkAgent(privateIp: string, timeoutMs: number): Promise<void> {
+		const body = asJsonRecord(
+			await this.requestAt(privateIp, '/health', { method: 'GET' }, true, timeoutMs, 0),
+		);
 		const protocol = body.protocolVersion ?? body.version;
 		if (protocol !== FARGATE_PROTOCOL_VERSION && protocol !== `v${FARGATE_PROTOCOL_VERSION}`) {
 			throw new Error(
@@ -428,6 +435,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		init: RequestInit = {},
 		parse = true,
 		requestedTimeoutMs?: number,
+		transportGraceMs = AGENT_TRANSPORT_GRACE_MS,
 	): Promise<T> {
 		const token = deriveAgentToken(this.config.agentSecret, String(this.id));
 		const headers = new Headers(init.headers);
@@ -439,7 +447,7 @@ class FargateSandboxInstance implements SandboxInstance {
 				? this.readyTimeoutMs
 				: requestedTimeoutMs === 0 || requestedTimeoutMs === Infinity
 					? 0
-					: requestedTimeoutMs + AGENT_TRANSPORT_GRACE_MS;
+					: requestedTimeoutMs + transportGraceMs;
 		const requestInit: RequestInit = {
 			...init,
 			headers,

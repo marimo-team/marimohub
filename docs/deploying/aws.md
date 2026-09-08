@@ -54,6 +54,18 @@ There is no public kernel hostname or per-task load balancer. The hub stops
 owned tasks during teardown; periodically review stopped tasks and CloudWatch
 logs when retiring a task-definition revision.
 
+The ECS adapter uses the standard AWS SDK region and credential chain. Set
+`AWS_REGION` explicitly outside an AWS-managed runtime. It accepts standard
+environment credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+optional `AWS_SESSION_TOKEN`), shared config/credentials files with
+`AWS_PROFILE`, or the runtime's task-role/workload-identity provider.
+
+The opt-in `MARIMOHUB_FARGATE_LIVE_TEST=1` harness validates the ECS task,
+agent operations, reconnect, enumeration, and teardown. It does not validate
+the full hub HTTP/WebSocket proxy route. Treat proxy routing from the deployed
+hub network as a separate acceptance check; the harness does not establish
+production verification.
+
 ## Config & secrets
 
 Store `MARIMOHUB_*` in SSM Parameter Store or Secrets Manager and inject as env.

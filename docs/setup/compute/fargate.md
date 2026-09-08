@@ -47,6 +47,13 @@ defaults to `false`; keep it false for private deployments. The configured
 owner is included in `startedBy` and tags, so use a different value for each
 independent hub deployment sharing an AWS account.
 
+The adapter uses the standard AWS SDK for JavaScript region and credential
+providers. Set `AWS_REGION` explicitly when the hub runs outside an
+AWS-managed runtime. Credentials may come from `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`, the shared AWS config and
+credentials files (with `AWS_PROFILE`), or the role provider supplied by the
+runtime. Do not add a second Fargate-specific credential configuration.
+
 Do not set `MARIMOHUB_COMPUTE_IMAGE` for this backend. Compute profiles map to
 valid Fargate CPU/memory pairs and round up to the next billable allocation;
 GPU profiles are unsupported and are rejected before launch.
@@ -67,3 +74,9 @@ reconnect uses the revision recorded on the running task.
 
 The adapter does not use ECS Exec, public subdomains, per-task load balancers,
 Spot capacity, EFS, or runtime task-definition registration.
+
+The opt-in live harness validates task launch, agent operations, reconnect,
+enumeration, and teardown. It does not validate the full hub HTTP/WebSocket
+proxy route; test that route from the deployed hub network before accepting a
+deployment. See the AWS deployment guide for the exact opt-in command and
+environment variables. This harness is not a claim of production verification.

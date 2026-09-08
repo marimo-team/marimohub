@@ -10,6 +10,7 @@ export const FARGATE_PROTOCOL_VERSION = 1;
 export const DEFAULT_AGENT_PORT = 2717;
 export const DEFAULT_KERNEL_PORT = 2718;
 export const DEFAULT_READY_TIMEOUT_MS = 120_000;
+export const AGENT_HEALTH_TIMEOUT_MS = 2_000;
 export const AGENT_TRANSPORT_GRACE_MS = 1_000;
 export const DEFAULT_CONTAINER_NAME = 'marimo';
 export const DEFAULT_IMAGE_KEY = 'default';
@@ -276,7 +277,7 @@ export function privateIpFromTask(task: FargateTask, containerName: string): str
 	)?.privateIpv4Address;
 	if (direct) return direct;
 	for (const attachment of task.attachments ?? []) {
-		if (attachment.type !== 'eni') continue;
+		if (attachment.type !== 'eni' && attachment.type !== 'ElasticNetworkInterface') continue;
 		const value = attachment.details?.find((detail) => detail.name === 'privateIPv4Address')?.value;
 		if (value) return value;
 	}

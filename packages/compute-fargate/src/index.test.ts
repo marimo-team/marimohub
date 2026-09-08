@@ -16,11 +16,13 @@ import type {
 import {
 	CREATED_AT_TAG,
 	DEFAULT_CONTAINER_NAME,
+	AGENT_HEALTH_TIMEOUT_MS,
 	FARGATE_PROTOCOL_VERSION,
 	fargateProfileResources,
 	FargateCompute,
 	IMAGE_KEY_TAG,
 	OWNER_TAG,
+	privateIpFromTask,
 	SANDBOX_ID_TAG,
 	deriveAgentToken,
 	deterministicClientToken,
@@ -41,6 +43,7 @@ class FakeEcs implements FargateClient {
 	describeFailures = 0;
 	describeThrows = 0;
 	stopBeforeReady = false;
+	describeDelayMs = 0;
 	listPageSize = 0;
 	private sequence = 0;
 
@@ -64,6 +67,8 @@ class FakeEcs implements FargateClient {
 
 	async describeTasks(_cluster: string, arns: readonly string[]) {
 		this.describeCalls++;
+		if (this.describeDelayMs > 0)
+			await new Promise((resolve) => setTimeout(resolve, this.describeDelayMs));
 		if (this.describeThrows > 0) {
 			this.describeThrows--;
 			throw new Error('eventual consistency');
@@ -234,11 +239,29 @@ describe('Fargate profile selection', () => {
 			.startProcess('true', {
 				timeout: 1,
 			});
+		expect(timeout).toHaveBeenCalledWith(AGENT_HEALTH_TIMEOUT_MS);
 		expect(timeout).toHaveBeenLastCalledWith(120_000);
 		timeout.mockClear();
 		await process.waitForPort(2718, { timeout: 123 });
 		expect(timeout).toHaveBeenLastCalledWith(1123);
 		timeout.mockRestore();
+	});
+
+	it('reads the private IP from the official ECS ENI attachment shape', () => {
+		expect(
+			privateIpFromTask(
+				{
+					containers: [{ name: DEFAULT_CONTAINER_NAME }],
+					attachments: [
+						{
+							type: 'ElasticNetworkInterface',
+							details: [{ name: 'privateIPv4Address', value: '10.0.0.42' }],
+						},
+					],
+				},
+				DEFAULT_CONTAINER_NAME,
+			),
+		).toBe('10.0.0.42');
 	});
 });
 
@@ -320,6 +343,26 @@ describe('FargateCompute', () => {
 		client.describeThrows = 2;
 		const instance = makeCompute(client).create(ID, { reuse: false });
 		await expect(instance.ready?.()).resolves.toBeUndefined();
+	});
+
+	it('bounds a blackholed health probe by the overall readiness deadline', async () => {
+		const client = new FakeEcs();
+		client.describeDelayMs = 150;
+		vi.mocked(fetch).mockImplementation(async (_input, init) => {
+			const signal = init?.signal;
+			return new Promise<Response>((_resolve, reject) => {
+				const abort = () => {
+					const reason = signal?.reason;
+					reject(reason instanceof Error ? reason : new Error('health probe aborted'));
+				};
+				if (signal?.aborted) abort();
+				else signal?.addEventListener('abort', abort, { once: true });
+			});
+		});
+		const instance = makeCompute(client, { readyTimeoutMs: 200 }).create(ID, { reuse: false });
+		const started = Date.now();
+		await expect(instance.ready?.()).rejects.toThrow(/Timed out waiting/);
+		expect(Date.now() - started).toBeLessThan(300);
 	});
 
 	it('reports a task that stops before agent readiness', async () => {
