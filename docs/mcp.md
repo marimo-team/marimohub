@@ -58,10 +58,15 @@ tag, or text. Includes active sessions by default.
 Creates a local notebook from Python source. Set `launch` to `true` to start an
 edit session and return its session details.
 
-### `launch_notebook`
+### `start_session`
 
-Starts or reuses an edit or app session. The first launch can take about two
+Starts or reuses an edit or app session. The first start can take about two
 minutes. Later calls reuse an eligible session.
+
+### `stop_session`
+
+Stops a session and destroys its sandbox. The stop process attempts to save
+changes from persistent edit sessions.
 
 ### `execute_code`
 
@@ -69,7 +74,7 @@ Runs code in the scratchpad of a live edit session. Open the notebook URL in a
 browser before you call this tool. The kernel remains available while a tab is
 connected and during marimo's short grace period. If no tab is connected, the
 tool returns the URL to open. Pass the project and session ID returned by
-`launch_notebook`; the tool automatically uses the first connected kernel.
+`start_session`. The tool automatically uses the first connected kernel.
 
 The scratchpad shares the notebook's live variables. For durable cell changes,
 first inspect marimo code mode:

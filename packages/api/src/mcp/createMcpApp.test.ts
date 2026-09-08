@@ -228,7 +228,8 @@ describe('MCP OAuth app', () => {
 		expect(toolList.result.tools.map((tool) => tool.name)).toEqual([
 			'list_catalog',
 			'create_notebook',
-			'launch_notebook',
+			'start_session',
+			'stop_session',
 			'execute_code',
 		]);
 
@@ -259,7 +260,7 @@ describe('MCP OAuth app', () => {
 				id: 4,
 				method: 'tools/call',
 				params: {
-					name: 'launch_notebook',
+					name: 'start_session',
 					arguments: {
 						project: 'My Projects',
 						notebook: 'MCP notebook',

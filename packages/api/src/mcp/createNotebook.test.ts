@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { CatalogService, NotebookId, UserId } from '@marimo-hub/core';
+import { CatalogService, NotebookId, SessionId, UserId } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
 import { fakeComputeFrom, makeFakeSandbox, MemoryBucket } from '@marimo-hub/core/testing';
 import { makeTestDeps } from '../testing';
@@ -189,5 +189,91 @@ describe('create_notebook MCP tool', () => {
 
 		expect(response).toMatchObject({ isError: true });
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toEqual([]);
+	});
+});
+
+describe('session MCP tools', () => {
+	it('starts and idempotently stops a session', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: 'import marimo as mo' },
+			USER_ID,
+		);
+		const { client, server } = await connect(deps);
+
+		const started = await client.callTool({
+			name: 'start_session',
+			arguments: { project: project.name, notebook: notebook.title, wait_seconds: 0 },
+		});
+		const sessionId = SessionId.parse(
+			(started.structuredContent as { session_id: string }).session_id,
+		);
+		expect(started).toMatchObject({ structuredContent: { status: 'running', mode: 'edit' } });
+
+		const stopped = await client.callTool({
+			name: 'stop_session',
+			arguments: { project: project.id, session_id: sessionId },
+		});
+		expect(stopped).toMatchObject({
+			structuredContent: {
+				project_id: project.id,
+				notebook_id: notebook.id,
+				session_id: sessionId,
+				status: 'terminated',
+			},
+		});
+
+		const stoppedAgain = await client.callTool({
+			name: 'stop_session',
+			arguments: { project: project.id, session_id: sessionId },
+		});
+		await client.close();
+		await server.close();
+
+		expect(stoppedAgain).toMatchObject({
+			structuredContent: { session_id: sessionId, status: 'terminated' },
+		});
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('does not stop a session when the token omits session.stop', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: 'import marimo as mo' },
+			USER_ID,
+		);
+		const unrestricted = await connect(deps);
+		const started = await unrestricted.client.callTool({
+			name: 'start_session',
+			arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
+		});
+		const sessionId = SessionId.parse(
+			(started.structuredContent as { session_id: string }).session_id,
+		);
+		await unrestricted.client.close();
+		await unrestricted.server.close();
+
+		const principal = principalWithGrant({
+			actions: ['project.read', 'session.attach'],
+			projects: '*',
+		});
+		const restricted = await connect(deps, principal);
+		const response = await restricted.client.callTool({
+			name: 'stop_session',
+			arguments: { project: project.id, session_id: sessionId },
+		});
+		await restricted.client.close();
+		await restricted.server.close();
+
+		expect(response).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'FORBIDDEN' },
+		});
+		expect((await deps.services.sessions.getSession(project.id, sessionId)).status).toBe('running');
+		expect(calls.destroy).toBe(0);
 	});
 });

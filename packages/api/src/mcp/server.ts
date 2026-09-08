@@ -24,9 +24,11 @@ import { errorMetadataChain, logEvent } from '../log';
 import {
 	assertProjectActionOn,
 	assertSessionAccess,
+	assertSessionControl,
 	assertSessionNotebookVisible,
 	loadVisibleProject,
 	sessionGrantsFor,
+	sessionRetirer,
 } from '../shared';
 import {
 	authorizeSessionStart,
@@ -157,7 +159,7 @@ function kernelDiscoveryTimeout(seconds: number): ToolResult {
 	};
 }
 
-async function launchMcpNotebook(input: {
+async function startMcpSession(input: {
 	deps: ApiDeps;
 	principal: AuthenticatedPrincipal;
 	request: StartRequestContext;
@@ -311,7 +313,7 @@ export function createMcpServer(
 					notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebook.id}`,
 				};
 				if (!launch) return result({ ...notebookData, launched: false });
-				const session = await launchMcpNotebook({
+				const session = await startMcpSession({
 					deps,
 					principal,
 					request,
@@ -328,10 +330,10 @@ export function createMcpServer(
 	);
 
 	server.registerTool(
-		'launch_notebook',
+		'start_session',
 		{
 			description:
-				'Create or reuse a marimohub notebook session. Use a project ID or exact project name. Use a notebook ID or exact notebook title. Name matching is case-insensitive. A first launch can take about two minutes. Later calls attach to the same session.',
+				'Create or reuse a marimohub notebook session. Use a project ID or exact project name. Use a notebook ID or exact notebook title. Name matching is case-insensitive. A first start can take about two minutes. Later calls attach to the same session.',
 			inputSchema: z.object({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
 				notebook: z.string().describe(NOTEBOOK_REFERENCE_DESCRIPTION),
@@ -344,7 +346,7 @@ export function createMcpServer(
 				const project = await resolveProject(deps, principal, projectRef);
 				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
 				return result(
-					await launchMcpNotebook({
+					await startMcpSession({
 						deps,
 						principal,
 						request,
@@ -355,7 +357,43 @@ export function createMcpServer(
 					}),
 				);
 			} catch (error) {
-				return errorResult('launch_notebook', error);
+				return errorResult('start_session', error);
+			}
+		},
+	);
+
+	server.registerTool(
+		'stop_session',
+		{
+			description:
+				'Stop a marimohub session and destroy its sandbox. The stop process attempts to save changes from persistent edit sessions.',
+			annotations: { destructiveHint: true, idempotentHint: true },
+			inputSchema: z.object({
+				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
+				session_id: z.string().describe('Session ID returned by start_session or list_catalog.'),
+			}),
+		},
+		async ({ project: projectRef, session_id: sessionId }) => {
+			try {
+				const project = await resolveProject(deps, principal, projectRef);
+				if (!SessionId.is(sessionId)) throw new NotFoundError('Session not found');
+				const existing = await deps.services.sessions.getSession(project.id, sessionId);
+				const labels = await assertSessionNotebookVisible(deps, project, existing, principal);
+				await assertSessionControl(project, existing, principal, deps, labels);
+				const { session, transitioned } = await deps.services.sessions.beginTerminating(
+					project.id,
+					sessionId,
+				);
+				await sessionRetirer(deps).retire(session, { teardown: transitioned });
+				const stopped = await deps.services.sessions.getSession(project.id, sessionId);
+				return result({
+					project_id: project.id,
+					notebook_id: stopped.notebook_id,
+					session_id: stopped.session_id,
+					status: stopped.status,
+				});
+			} catch (error) {
+				return errorResult('stop_session', error);
 			}
 		},
 	);
