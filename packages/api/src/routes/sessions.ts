@@ -46,6 +46,7 @@ import {
 	SessionId,
 	sessionMode,
 	sessionModePolicy,
+	sessionOwner,
 	SubdomainExposure,
 	UnavailableError,
 	EditSessionOwnedError,
@@ -807,7 +808,10 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 		return { state: 'unknown' as const };
 	}
 	const basePath = kernelBasePathFromUrl(session.sandbox_url);
-	const active = await kernelActiveConnections(deps.compute.create(session.sandbox_id), basePath);
+	const active = await kernelActiveConnections(
+		deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
+		basePath,
+	);
 	const checkedAt = new Date().toISOString();
 	if (active === null) return { state: 'unknown' as const, checked_at: checkedAt };
 	await deps.services.sessions
@@ -1611,7 +1615,8 @@ export async function startNotebookSession(input: {
 					observer.tag('provision_used_fallback', usedFallback);
 					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
-				compensate: () => compute.create(sandboxId).destroy(),
+				compensate: () =>
+					compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy(),
 			})
 			.step('mark_running', async () => {
 				if (

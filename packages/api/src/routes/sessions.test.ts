@@ -664,6 +664,15 @@ describe('Session routes', () => {
 		expect(notifier.attempts).toBe(attemptsBeforeTakeover);
 	});
 
+	it('names the holder as owner when reconnecting to inspect editor activity', async () => {
+		const otherCompute = makeFakeCompute();
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER, otherCompute);
+		await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		expect(otherCompute.lastCreateOptions?.owner).toEqual({ projectId: pid, userId: ACTOR });
+	});
+
 	it('does not fail a takeover when notification delivery fails', async () => {
 		const notifier = new MemoryNotifier();
 		notifier.failNext();

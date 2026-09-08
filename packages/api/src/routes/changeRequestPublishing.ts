@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError, UnavailableError } from '@marimo-hub/core';
+import { ConflictError, NotFoundError, sessionOwner, UnavailableError } from '@marimo-hub/core';
 import type {
 	AuthSubject,
 	GitSourceRevision,
@@ -129,7 +129,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 			notebookId: input.notebookId,
 			proposalId: input.proposalId,
 			session,
-			sandbox: input.deps.compute.create(session.sandbox_id),
+			sandbox: input.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
 			workdir: input.deps.sandbox.workdir,
 			author: input.author,
 			targetProposalId: input.targetProposalId,
