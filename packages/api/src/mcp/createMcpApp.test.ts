@@ -5,6 +5,8 @@ import {
 	expandTokenGrantPreset,
 	OAuthAuthorizationId,
 	paths,
+	ProjectId,
+	SessionId,
 	UserId,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
@@ -53,9 +55,11 @@ describe('MCP OAuth app', () => {
 	it('discovers OAuth and exchanges browser consent for a PAT', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const compute = fakeComputeFrom(instance);
+		const kernelAuthorizations: (string | null)[] = [];
 		compute.proxy = async (request) => {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith('/api/sessions')) {
+				kernelAuthorizations.push(request.headers.get('Authorization'));
 				return new Response(
 					JSON.stringify({
 						'kernel-one': { filename: '/workspace/renamed.py', path: '/workspace/renamed.py' },
@@ -64,6 +68,7 @@ describe('MCP OAuth app', () => {
 				);
 			}
 			if (path.endsWith('/api/kernel/execute')) {
+				kernelAuthorizations.push(request.headers.get('Authorization'));
 				return new Response(
 					'event: stdout\ndata: {"data":"2\\n"}\n\n' +
 						'event: done\ndata: {"success":true,"output":{"mimetype":"text/plain","data":"2"}}\n\n',
@@ -308,6 +313,14 @@ describe('MCP OAuth app', () => {
 				},
 			},
 		});
+		const storedSession = await deps.services.sessions.getSession(
+			ProjectId.parse(projectId),
+			SessionId.parse(launchResult.result.structuredContent.session_id),
+		);
+		expect(kernelAuthorizations).toEqual([
+			`Bearer ${storedSession.kernel_auth_token}`,
+			`Bearer ${storedSession.kernel_auth_token}`,
+		]);
 
 		const otherClientId = await registerClient(app, 'https://other.example/callback');
 		const unrelatedRevocation = await app.request('/revoke', {

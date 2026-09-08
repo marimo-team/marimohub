@@ -508,6 +508,23 @@ describe('NotebookPage viewer modes', () => {
 		expect(screen.queryByText(/won't be saved/)).toBeNull();
 	});
 
+	it('preserves the complete kernel URL when it adds marimo display parameters', async () => {
+		makeFetch({
+			role: 'editor',
+			session: runningSession({
+				sandbox_url:
+					'https://sandbox.example/kernel?provider=one&access_token=kernel-secret#notebook',
+			}),
+		});
+		const { container } = renderPage();
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(container.querySelector('iframe')).toHaveAttribute(
+			'src',
+			'https://sandbox.example/kernel?provider=one&access_token=kernel-secret&theme=light#notebook',
+		);
+	});
+
 	it.each([
 		{ variant: 'edit' as const, message: 'Starting sandbox...' },
 		{ variant: 'app' as const, message: 'Starting app...' },

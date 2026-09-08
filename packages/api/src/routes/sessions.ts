@@ -21,6 +21,7 @@ import type {
 import {
 	BadRequestError,
 	ConflictError,
+	createKernelAuthToken,
 	createSandboxId,
 	DomainError,
 	marimoAiContributor,
@@ -53,6 +54,7 @@ import {
 	TakeoverInProgressError,
 	TakeoverRetirementError,
 	kernelActiveConnections,
+	kernelBasePathFromUrl,
 	joinUrlPath,
 	SECONDARY_SURFACE_IDS,
 	SurfaceForbiddenError,
@@ -437,12 +439,11 @@ function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) 
 /**
  * Project a stored Session onto the public Session response envelope, carrying
  * the caller's evaluated grants (`sessionGrantsFor`). `sandbox_url` rides on
- * `can.attach`: in `subdomain` exposure the URL is the kernel capability
- * itself (kernels run `--no-token`), so listing it to a caller the kernel
- * gates would reject hands them the kernel. Exposes `user_id` (who started it)
- * for the collaborative "started by" UI — visible only to users who can
- * already list the project's sessions. Internal infra fields (`sandbox_id`,
- * `used_fallback`) stay private.
+ * `can.attach`: in `subdomain` exposure the URL carries the kernel token, so
+ * listing it to a caller the kernel gates would reject hands them the kernel.
+ * `user_id` supports the collaborative "started by" UI and is visible only to
+ * users who can list the project's sessions. Internal infrastructure fields
+ * (`sandbox_id`, `used_fallback`) stay private.
  */
 export function toSessionResponse(
 	s: Session,
@@ -805,12 +806,7 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	if (session.status !== 'running' || !session.sandbox_id) {
 		return { state: 'unknown' as const };
 	}
-	let basePath = '';
-	try {
-		basePath = session.sandbox_url ? new URL(session.sandbox_url).pathname.replace(/\/$/, '') : '';
-	} catch {
-		basePath = '';
-	}
+	const basePath = kernelBasePathFromUrl(session.sandbox_url);
 	const active = await kernelActiveConnections(deps.compute.create(session.sandbox_id), basePath);
 	const checkedAt = new Date().toISOString();
 	if (active === null) return { state: 'unknown' as const, checked_at: checkedAt };
@@ -1335,6 +1331,7 @@ export async function startNotebookSession(input: {
 	await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
 
 	const sandboxId = createSandboxId();
+	const kernelAuthToken = createKernelAuthToken();
 
 	const restoreFilesystemSnapshot =
 		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
@@ -1385,6 +1382,7 @@ export async function startNotebookSession(input: {
 					project_id: pid,
 					user_id: user.id,
 					sandbox_id: sandboxId,
+					kernel_auth_token: kernelAuthToken,
 					compute_profile: appliedComputeProfile.name,
 					compute_resources: appliedComputeProfile.resources,
 					compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
@@ -1448,6 +1446,7 @@ export async function startNotebookSession(input: {
 						projectId: pid,
 						notebookId: nid,
 						sandboxId,
+						kernelAuthToken,
 						appBaseUrl,
 					};
 					// WIF + integrations share `sandboxEnv.ts` with the job runner, so the
@@ -1568,6 +1567,7 @@ export async function startNotebookSession(input: {
 								assetUrl: sandbox.assetUrl,
 								startupTimeoutMs: sandbox.startupTimeoutMs,
 								baseUrl,
+								kernelAuthToken,
 								// A second editor writes the notebook file, so marimo must reload it.
 								marimoWatch:
 									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),

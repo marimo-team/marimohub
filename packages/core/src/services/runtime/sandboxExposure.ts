@@ -11,9 +11,18 @@ import type {
 import { joinUrlPath } from '../../url';
 import { signProxyToken } from './proxyToken';
 
+export function kernelBasePathFromUrl(sandboxUrl?: string): string {
+	if (!sandboxUrl) return '';
+	try {
+		return new URL(sandboxUrl).pathname.replace(/\/+$/, '');
+	} catch {
+		return '';
+	}
+}
+
 /**
- * `subdomain` (default) — the compute adapter's `exposePort()` URL is used as-is;
- * the browser reaches the kernel directly on its isolated domain. No proxying, no
+ * `subdomain` (default) — the browser reaches the kernel directly on its isolated
+ * domain. The adapter URL carries marimo's access token. There is no proxying or
  * marimo base path.
  */
 export class SubdomainExposure implements SandboxExposure {
@@ -23,8 +32,10 @@ export class SubdomainExposure implements SandboxExposure {
 		return {};
 	}
 
-	async finalize(exposedUrl: string, _ctx: ExposureContext): Promise<ExposureResult> {
-		return { clientUrl: exposedUrl };
+	async finalize(exposedUrl: string, ctx: ExposureContext): Promise<ExposureResult> {
+		const url = new URL(exposedUrl);
+		url.searchParams.set('access_token', ctx.kernelAuthToken);
+		return { clientUrl: url.toString() };
 	}
 }
 

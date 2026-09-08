@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
+	KERNEL_AUTH_TOKEN_PATTERN,
 	ProjectId,
 	ProxyExposure,
 	signProxyToken,
@@ -17,6 +18,7 @@ import {
 	localResourceSecurity,
 	makeFakeCompute,
 	makeSubjectContext,
+	TEST_KERNEL_AUTH_TOKEN,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -74,6 +76,7 @@ describe('authorizeProxyRequest', () => {
 			notebook_id: notebook.id,
 			project_id: pid,
 			user_id: ACTOR,
+			kernel_auth_token: TEST_KERNEL_AUTH_TOKEN,
 		});
 		sessionId = session.session_id;
 		// Mark running with a server-reachable origin (proxy-mode provisioning).
@@ -327,7 +330,25 @@ describe('authorizeProxyRequest', () => {
 			kind: 'forward',
 			targetUrl: `${ORIGIN}/proxy/${token}/assets/app.js?v=1`,
 			sessionId,
+			kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
 		});
+	});
+
+	it('forwards legacy tokenless sessions without a kernel credential', async () => {
+		const services = createServices(bucket);
+		const current = await services.sessions.getSession(pid, sessionId as never);
+		const legacy = await services.sessions.createSession({
+			notebook_id: current.notebook_id,
+			project_id: pid,
+			user_id: ACTOR,
+		});
+		await services.sessions.setRunning(pid, legacy.session_id, '/proxy/legacy/', false, ORIGIN);
+		const legacyProxyToken = await signProxyToken(pid, legacy.session_id, SECRET);
+
+		const allowed = await authorizeProxyRequest(req(`/proxy/${legacyProxyToken}/`), deps(ACTOR));
+
+		expect(allowed).toMatchObject({ kind: 'forward', sessionId: legacy.session_id });
+		expect(allowed).not.toHaveProperty('kernelAuthToken');
 	});
 
 	it('authorizes a VS Code surface separately and strips the code-server proxy prefix', async () => {
@@ -344,6 +365,7 @@ describe('authorizeProxyRequest', () => {
 			targetUrl: 'http://vscode.internal:8443/stable/out.js?v=1',
 			sessionId,
 		});
+		expect(allowed).not.toHaveProperty('kernelAuthToken');
 
 		const denied = await authorizeProxyRequest(req(path), {
 			...deps(STRANGER),
@@ -593,9 +615,11 @@ describe('forwardHttp', () => {
 	let server: Server;
 	let origin: string;
 	let flakyHits: number;
+	let flakyAuthorizations: (string | undefined)[];
 
 	beforeEach(() => {
 		flakyHits = 0;
+		flakyAuthorizations = [];
 	});
 
 	beforeAll(async () => {
@@ -604,6 +628,7 @@ describe('forwardHttp', () => {
 				// First connection dies mid-request (a closed keep-alive socket, from
 				// the client's perspective); subsequent attempts succeed.
 				flakyHits++;
+				flakyAuthorizations.push(req.headers.authorization);
 				if (flakyHits === 1) {
 					req.socket.destroy();
 					return;
@@ -676,6 +701,7 @@ describe('forwardHttp', () => {
 				new Request('https://hub/x'),
 				`${deadOrigin}/proxy/tok/down`,
 				'sess-123',
+				TEST_KERNEL_AUTH_TOKEN,
 			);
 			expect(res.status).toBe(502);
 			expect(await res.json()).toEqual({
@@ -708,6 +734,7 @@ describe('forwardHttp', () => {
 				// the token-bearing target URL, and no token.
 				const line = JSON.stringify(e);
 				expect(line).not.toContain('/proxy/tok');
+				expect(line).not.toContain(TEST_KERNEL_AUTH_TOKEN);
 				expect(line).not.toContain('fetch failed');
 			}
 		} finally {
@@ -716,13 +743,22 @@ describe('forwardHttp', () => {
 		}
 	});
 
-	it('retries a GET once when the connection drops, and succeeds on the fresh connection', async () => {
+	it('keeps kernel authentication on a retried GET', async () => {
 		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 		try {
-			const res = await forwardHttp(new Request('https://hub/x'), `${origin}/flaky`);
+			const res = await forwardHttp(
+				new Request('https://hub/x'),
+				`${origin}/flaky`,
+				'sess-123',
+				TEST_KERNEL_AUTH_TOKEN,
+			);
 			expect(res.status).toBe(200);
 			expect(await res.text()).toBe('recovered');
 			expect(flakyHits).toBe(2);
+			expect(flakyAuthorizations).toEqual([
+				`Bearer ${TEST_KERNEL_AUTH_TOKEN}`,
+				`Bearer ${TEST_KERNEL_AUTH_TOKEN}`,
+			]);
 		} finally {
 			logSpy.mockRestore();
 		}
@@ -768,7 +804,7 @@ describe('forwardHttp', () => {
 		}
 	});
 
-	it('strips hub credentials (Cookie/Authorization/CF-Access) before the kernel sees the request', async () => {
+	it('replaces hub credentials with the kernel token before forwarding', async () => {
 		// Notebook code can read request headers (mo.app_meta().request) — the
 		// caller's hub session cookie / PAT / Access assertion must never reach it.
 		const req = new Request('https://hub.example.com/proxy/tok/api', {
@@ -781,14 +817,20 @@ describe('forwardHttp', () => {
 				'x-custom': 'passes',
 			},
 		});
-		const res = await forwardHttp(req, `${origin}/echo`);
+		const res = await forwardHttp(req, `${origin}/echo`, 'sess-123', TEST_KERNEL_AUTH_TOKEN);
 		const seen = (await res.json()) as Record<string, string>;
 		expect(seen.cookie).toBeUndefined();
-		expect(seen.authorization).toBeUndefined();
+		expect(seen.authorization).toBe(`Bearer ${TEST_KERNEL_AUTH_TOKEN}`);
 		expect(seen['cf-access-jwt-assertion']).toBeUndefined();
 		expect(seen['cf-access-client-id']).toBeUndefined();
 		expect(seen['cf-access-client-secret']).toBeUndefined();
 		expect(seen['x-custom']).toBe('passes');
+	});
+
+	it('forwards no authorization header for a legacy tokenless session', async () => {
+		const res = await forwardHttp(new Request('https://hub/x'), `${origin}/echo`);
+		const seen = (await res.json()) as Record<string, string>;
+		expect(seen.authorization).toBeUndefined();
 	});
 
 	it('strips Set-Cookie from the kernel response', async () => {
@@ -836,7 +878,9 @@ describe('create-session in proxy mode', () => {
 		expect(data.sandbox_url).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);
 		// The server-reachable origin is persisted on the record but never in the response.
 		expect(data).not.toHaveProperty('sandbox_origin_url');
+		expect(data).not.toHaveProperty('kernel_auth_token');
 		const stored = await services.sessions.getSession(pid, data.session_id as never);
 		expect(stored.sandbox_origin_url).toBe('https://sandbox.example/kernel');
+		expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
 	});
 });

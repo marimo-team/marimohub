@@ -306,7 +306,7 @@ describe('Session routes (app mode)', () => {
 		await expectOk<any>(await api.request('POST', sessionsPath(), { mode: 'app' }));
 
 		expect(fake.calls.mountBucket).toHaveLength(0);
-		expect(fake.calls.startProcess[0].cmd).toContain('marimo run');
+		expect(fake.calls.startProcess[0].cmd).toContain('marimo --quiet run');
 		expect(fake.calls.startProcess[0].cmd).not.toContain('--convert');
 	});
 
@@ -425,8 +425,8 @@ describe('Session routes (app mode)', () => {
 		});
 
 		it('read projections withhold the kernel URL from callers the kernel gates would reject', async () => {
-			// In subdomain exposure the URL IS the kernel capability (`--no-token`),
-			// so list/get must not hand it to a viewer who couldn't reach the kernel.
+			// In subdomain exposure the URL carries the kernel token, so list/get must
+			// not hand it to a viewer who could not reach the kernel.
 			const edit = await expectOk<any>(await owner('POST', sessionsPath()));
 			const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
 

@@ -51,6 +51,7 @@ export interface CreateSessionInput {
 	user_id: UserId;
 	runtime?: { python_version?: string; marimo_version?: string };
 	sandbox_id?: SandboxId;
+	kernel_auth_token?: string;
 	sandbox_url?: string;
 	compute_profile?: string;
 	compute_resources?: Session['compute_resources'];
@@ -163,6 +164,7 @@ export class SessionService {
 				: {}),
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,
+			kernel_auth_token: input.kernel_auth_token,
 			sandbox_url: input.sandbox_url,
 			compute_profile: input.compute_profile,
 			compute_resources: input.compute_resources,

@@ -9,7 +9,7 @@
 MARIMOHUB_COMPUTE_BACKEND=docker
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_DOCKER_HOST=localhost         # hostname used in the kernel URL
-MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1    # keep tokenless kernel ports on loopback
+MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1    # keep kernel ports on loopback
 # MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimo         # optional network to attach kernels to
 ```
 
@@ -23,9 +23,9 @@ so kernel traffic goes through the hub's authentication and per-session
 authorization.
 
 ::: danger Direct kernel exposure
-Kernels run without their own authentication token. If you deliberately publish
-them directly on a trusted, isolated network, set
-`MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=0.0.0.0` **and** set
+Kernels use a per-session bearer token, but their URLs carry that token during
+login. If you deliberately publish them directly on a trusted, isolated network,
+set `MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=0.0.0.0` **and** set
 `MARIMOHUB_COMPUTE_DOCKER_HOST` to the server hostname browsers can reach.
 Never expose those ports to the public internet.
 :::

@@ -8,7 +8,7 @@
 #
 # The launch flow mirrors the active strategy in
 # packages/core/src/services/runtime/marimoLaunch.ts (`uv-sync-edit`): checked
-# `uv sync`, followed by `uv run --no-sync marimo edit`.
+# `uv sync`, followed by `uv run --no-sync marimo --quiet edit`.
 #
 # Usage:  acceptance-test.sh [IMAGE_TAG] [CONTEXT_DIR]
 #   IMAGE_TAG    tag to build/test          (default: marimo-sandbox:acceptance)
@@ -21,6 +21,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="${1:-marimo-sandbox:acceptance}"
 CONTEXT="${2:-$HERE}"
+KERNEL_TOKEN="mhub_kernel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+KERNEL_TOKEN_FILE="/tmp/.marimohub-kernel-token"
 
 # --- tiny test harness -------------------------------------------------------
 PASS=0
@@ -52,10 +54,14 @@ run_detached() { # echoes container id; $@ = args after image
 # Poll the kernel's published port until it serves a page (mirrors the
 # provisioner's waitForPort). marimo redirects `/` (303 → /auth/login) so we
 # follow redirects (-L) and require a final 200. Fails after ~90s.
-wait_http_200() { # $1 = host port
-	local port="$1" i code
+wait_http_200() { # $1 = host port; $2 = optional bearer token
+	local port="$1" token="${2:-}" i code
 	for i in $(seq 1 90); do
-		code="$(curl -sSL -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+		if [ -n "$token" ]; then
+			code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:${port}/api/status/connections" 2>/dev/null || true)"
+		else
+			code="$(curl -sSL -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+		fi
 		[ "$code" = "200" ] && return 0
 		sleep 1
 	done
@@ -117,14 +123,16 @@ TOML
 # Start marimo via the active `uv-sync-edit` launch flow (mirrors marimoLaunch.ts),
 # detached, logging to /tmp/m.log.
 launch_kernel() { # $1 = container id
+	docker exec "$1" sh -lc "printf '%s' '$KERNEL_TOKEN' > '$KERNEL_TOKEN_FILE'"
 	docker exec "$1" sh -lc '
 		cd /workspace
 		[ ! -s pyproject.toml ] || uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build
 	'
 	docker exec -d "$1" sh -lc '
 		cd /workspace
-		uv run --no-sync marimo edit notebook.py \
-			--convert --headless --no-token --host 0.0.0.0 --port 2718 >/tmp/m.log 2>&1
+		uv run --no-sync marimo --quiet edit notebook.py \
+			--convert --headless --token --token-password-file /tmp/.marimohub-kernel-token \
+			--host 0.0.0.0 --port 2718 >/tmp/m.log 2>&1
 	'
 }
 
@@ -205,8 +213,12 @@ echo "==> 3. Kernel serves via the uv-sync-edit launch flow"
 cid="$(run_detached -p 127.0.0.1:2718:2718 "$IMAGE" sleep infinity)"
 provision_notebook "$cid"
 launch_kernel "$cid"
-wait_http_200 2718 || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "kernel did not serve HTTP 200 on 2718"; }
-ok "marimo kernel serves HTTP 200 via uv sync + uv run"
+wait_http_200 2718 "$KERNEL_TOKEN" || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "kernel did not serve authenticated HTTP 200 on 2718"; }
+unauth_code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:2718/api/status/connections")"
+[ "$unauth_code" = "401" ] || fail "kernel accepted an unauthenticated status request (HTTP $unauth_code)"
+auth_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections")"
+[ "$auth_code" = "200" ] || fail "kernel rejected its configured token (HTTP $auth_code)"
+ok "marimo kernel rejects unauthenticated requests and accepts its configured token"
 docker rm -f "$cid" >/dev/null 2>&1
 
 # --- 4. --convert rescues a non-marimo python file (no pyproject) ------------
@@ -214,7 +226,7 @@ echo "==> 4. --convert opens a non-marimo file"
 cid="$(run_detached -p 127.0.0.1:2719:2718 "$IMAGE" sleep infinity)"
 docker exec "$cid" sh -lc 'cd /workspace && printf "import marimo\n" > notebook.py'
 launch_kernel "$cid"
-wait_http_200 2719 || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "--convert did not open the non-marimo file"; }
+wait_http_200 2719 "$KERNEL_TOKEN" || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "--convert did not open the non-marimo file"; }
 ok "--convert serves a plain Python file with no pyproject (HTTP 200)"
 docker rm -f "$cid" >/dev/null 2>&1
 

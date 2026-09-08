@@ -594,9 +594,30 @@ describe('SessionLifecycleService', () => {
 describe('kernelActiveConnections', () => {
 	const sandboxWith = (exec: SandboxInstance['exec']) => ({ exec }) as SandboxInstance;
 
-	it('parses the active connection count', async () => {
-		const sandbox = sandboxWith(async () => ({ success: true, stdout: '3\n', stderr: '' }));
+	it('authenticates the probe and keeps a missing-file fallback', async () => {
+		let command = '';
+		const sandbox = sandboxWith(async (cmd) => {
+			command = cmd;
+			return { success: true, stdout: '3\n', stderr: '' };
+		});
 		expect(await kernelActiveConnections(sandbox)).toBe(3);
+		expect(command).toContain('p.exists()');
+		expect(command).toContain('"Authorization":"Bearer "+p.read_text().strip()');
+		expect(command).toContain('if p.exists() else {}');
+	});
+
+	it('shell-quotes an unexpected base path', async () => {
+		let command = '';
+		const sandbox = sandboxWith(async (cmd) => {
+			command = cmd;
+			return { success: true, stdout: '0\n', stderr: '' };
+		});
+		const basePath = `/proxy/'";touch /tmp/probe-injection;#`;
+
+		expect(await kernelActiveConnections(sandbox, basePath)).toBe(0);
+		expect(command).toMatch(/^python3 -c '/);
+		expect(command).toContain(`'\\''`);
+		expect(command).not.toContain(`-c "`);
 	});
 
 	it('returns null when the exec fails', async () => {

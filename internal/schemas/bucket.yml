@@ -2921,6 +2921,9 @@ components:
               type: string
         sandbox_id:
           type: string
+        kernel_auth_token:
+          type: string
+          pattern: ^mhub_kernel_[A-Za-z0-9_-]{43}$
         sandbox_url:
           type: string
         compute_profile:

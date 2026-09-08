@@ -12,8 +12,8 @@
  * it has no isolation and is not safe for shared/production use.
  *
  * Two impedance mismatches with the provider-agnostic core are handled here:
- *  - core hardcodes the workspace at `/workspace`; each sandbox gets a private
- *    root and `/workspace` is rewritten to `<root>/workspace`.
+ *  - core uses sandbox-absolute workspace and control-file paths; each sandbox
+ *    gets a private root and those paths are rewritten beneath it.
  *  - core hardcodes `--port 2718`; we allocate a real free port per sandbox and
  *    map the logical port (2718) → the real port so multiple kernels coexist.
  */
@@ -33,7 +33,7 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
-import { SURFACE_STATE_ROOT } from '@marimo-hub/core';
+import { KERNEL_AUTH_TOKEN_FILE, SURFACE_STATE_ROOT } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
@@ -182,6 +182,12 @@ export function rewriteWorkspace(cmd: string, root: string): string {
 	return cmd.replaceAll(WORKSPACE, path.join(root, WORKSPACE));
 }
 
+export function rewriteSandboxPaths(cmd: string, root: string): string {
+	return rewriteWorkspace(cmd, root)
+		.replaceAll(SURFACE_STATE_ROOT, path.join(root, SURFACE_STATE_ROOT.slice(1)))
+		.replaceAll(KERNEL_AUTH_TOKEN_FILE, path.join(root, KERNEL_AUTH_TOKEN_FILE.slice(1)));
+}
+
 /**
  * Scan from `start` for the end of the current shell command, i.e. the first
  * top-level (outside single/double quotes) separator — `&&`, `||`, `|`, `;`, or
@@ -321,12 +327,9 @@ class LocalSandboxInstance implements SandboxInstance {
 		}
 	}
 
-	/** Rewrite `/workspace` and surface-state references in a shell command to the real root. */
+	/** Map sandbox-absolute paths in a shell command beneath the local sandbox root. */
 	private rewriteCmd(cmd: string): string {
-		return rewriteWorkspace(cmd, this.root).replaceAll(
-			SURFACE_STATE_ROOT,
-			path.join(this.root, SURFACE_STATE_ROOT.slice(1)),
-		);
+		return rewriteSandboxPaths(cmd, this.root);
 	}
 
 	/** Adjust a `uv run … marimo …` command for local execution (see {@link prepareMarimoCommand}). */

@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ACTOR, advanceTime, expectNotFound, MemoryBucket, restoreClock, uid } from '../../testing';
+import {
+	ACTOR,
+	advanceTime,
+	expectNotFound,
+	MemoryBucket,
+	restoreClock,
+	TEST_KERNEL_AUTH_TOKEN,
+	uid,
+} from '../../testing';
 import { ConflictError, PreconditionFailedError } from '../../errors';
 import { createNotebookId, createProjectId, createVersionId } from '../../ids';
 import type { SessionId } from '../../ids';
@@ -30,6 +38,21 @@ describe('SessionService', () => {
 			expect(session.notebook_id).toBe(notebookId);
 			expect(session.project_id).toBe(projectId);
 			expect(session.session_id).toMatch(/^sess-/);
+			expect(session.kernel_auth_token).toBeUndefined();
+		});
+
+		it('persists an interactive kernel token', async () => {
+			const session = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				kernel_auth_token: TEST_KERNEL_AUTH_TOKEN,
+			});
+
+			expect(session.kernel_auth_token).toBe(TEST_KERNEL_AUTH_TOKEN);
+			expect((await sessions.getSession(projectId, session.session_id)).kernel_auth_token).toBe(
+				TEST_KERNEL_AUTH_TOKEN,
+			);
 		});
 
 		it('rejects a source version at or before the prune cutoff', async () => {

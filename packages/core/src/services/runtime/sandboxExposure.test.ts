@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { NotebookId, ProjectId, SandboxId, SessionId } from '../../ids';
+import { TEST_KERNEL_AUTH_TOKEN } from '../../testing';
 import { signProxyToken } from './proxyToken';
-import { ProxyExposure, SubdomainExposure } from './sandboxExposure';
+import { kernelBasePathFromUrl, ProxyExposure, SubdomainExposure } from './sandboxExposure';
 
 const SECRET = 'a-test-signing-secret-at-least-32-bytes-long!!';
 const ctx = {
@@ -9,6 +10,7 @@ const ctx = {
 	projectId: 'proj-1' as ProjectId,
 	notebookId: 'nb-1' as NotebookId,
 	sandboxId: 'sbx-1' as SandboxId,
+	kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
 	appBaseUrl: 'https://hub.example.com',
 };
 
@@ -19,10 +21,22 @@ describe('SubdomainExposure', () => {
 		expect(await exposure.prepare(ctx)).toEqual({});
 	});
 
-	it('uses the adapter URL as-is and records no origin', async () => {
+	it('adds the kernel token to the adapter URL and records no origin', async () => {
 		const result = await exposure.finalize('https://sbx-1.sandbox.example.net', ctx);
-		expect(result).toEqual({ clientUrl: 'https://sbx-1.sandbox.example.net' });
+		expect(result).toEqual({
+			clientUrl: `https://sbx-1.sandbox.example.net/?access_token=${TEST_KERNEL_AUTH_TOKEN}`,
+		});
 		expect(result.originUrl).toBeUndefined();
+	});
+
+	it('preserves provider query parameters and fragments', async () => {
+		const result = await exposure.finalize(
+			'https://sandbox.example.net/open?provider=one&provider=two&empty=#notebook',
+			ctx,
+		);
+		expect(result.clientUrl).toBe(
+			`https://sandbox.example.net/open?provider=one&provider=two&empty=&access_token=${TEST_KERNEL_AUTH_TOKEN}#notebook`,
+		);
 	});
 });
 
@@ -71,4 +85,15 @@ describe('ProxyExposure', () => {
 			expect(result.clientUrl).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);
 		},
 	);
+});
+
+describe('kernelBasePathFromUrl', () => {
+	it.each([
+		[undefined, ''],
+		['not a url', ''],
+		['https://kernel.example/', ''],
+		['https://hub.example/proxy/token///?access_token=secret', '/proxy/token'],
+	])('extracts the marimo base path from %s', (url, expected) => {
+		expect(kernelBasePathFromUrl(url)).toBe(expected);
+	});
 });

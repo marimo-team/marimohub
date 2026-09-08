@@ -66,10 +66,10 @@ every request; the UI simply hides what the caller cannot do. How kernel
 traffic itself is gated depends on the
 [sandbox exposure mode](./security.md): under `proxy` exposure every kernel
 request (and each WebSocket handshake) re-checks the caller's role; under
-`subdomain` exposure (the default) the kernel URL is itself the access
-capability — it is only revealed to admitted callers, but whoever already
-holds it can keep using the running app. Revoking a member or downgrading
-`MARIMOHUB_VIEWER_MODE` always stops new admissions; under `subdomain`
+`subdomain` exposure (the default) the kernel URL carries marimo's per-session
+access token. The API reveals it only to admitted callers, but someone who
+already holds the URL can keep using the running app. Revoking a member or
+downgrading `MARIMOHUB_VIEWER_MODE` always stops new admissions; under `subdomain`
 exposure, stop or restart the app to cut off someone already holding its URL.
 Membership still applies: under `MARIMOHUB_DEFAULT_ROLE=none`, a non-member
 gets nothing from `applications` — only explicit members with at least the

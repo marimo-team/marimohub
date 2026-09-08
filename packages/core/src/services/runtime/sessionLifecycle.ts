@@ -12,6 +12,9 @@ import { SandboxProvisioner } from './SandboxProvisioner';
 import { SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import type { SessionService } from './SessionService';
+import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
+import { kernelBasePathFromUrl } from './sandboxExposure';
+import { shellQuote } from './shell';
 
 const SESSION_SWEEP_CONCURRENCY = 8;
 /** Cadence for informational connection counts; reap decisions always probe immediately. */
@@ -29,8 +32,8 @@ export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
 
 /**
  * Ask the marimo kernel how many websocket connections (editors) it has, via an
- * `exec` INSIDE the sandbox — exposure-mode-independent (works for `subdomain`
- * and `proxy`) and needs no auth (the kernel runs with `--no-token`).
+ * `exec` inside the sandbox. The probe reads the session token file when it is
+ * present and remains compatible with legacy tokenless kernels.
  *
  * `basePath` is the prefix marimo serves under (its `--base-url`, e.g.
  * `/proxy/<token>` in proxy exposure) — the status endpoint exists ONLY under
@@ -46,10 +49,14 @@ export async function kernelActiveConnections(
 	basePath = '',
 ): Promise<number | null> {
 	try {
-		const res = await sandbox.exec(
-			`python3 -c "import json,urllib.request;` +
-				`print(json.load(urllib.request.urlopen('http://127.0.0.1:${MARIMO_PORT}${basePath}/api/status/connections',timeout=3))['active'])"`,
-		);
+		const url = `http://127.0.0.1:${MARIMO_PORT}${basePath}/api/status/connections`;
+		const script =
+			'import json,pathlib,urllib.request;' +
+			`p=pathlib.Path(${JSON.stringify(KERNEL_AUTH_TOKEN_FILE)});` +
+			'h={"Authorization":"Bearer "+p.read_text().strip()} if p.exists() else {};' +
+			`r=urllib.request.Request(${JSON.stringify(url)},headers=h);` +
+			'print(json.load(urllib.request.urlopen(r,timeout=3))["active"])';
+		const res = await sandbox.exec(`python3 -c ${shellQuote(script)}`);
 		if (!res.success) return null;
 		// Whole output or nothing — `parseInt` would read 2 out of "2garbage", and a
 		// half-parsed answer must count as unknown rather than steer reaping. The
@@ -69,21 +76,6 @@ export type ConnectionProbe = (
 	sandbox: SandboxInstance,
 	basePath?: string,
 ) => Promise<number | null>;
-
-/**
- * The kernel's serving prefix, recovered from the session's client URL:
- * `/proxy/<token>` under proxy exposure (where the URL's path IS marimo's
- * `--base-url`), empty under subdomain exposure (kernel at root).
- */
-export function kernelBasePath(s: Session): string {
-	if (!s.sandbox_url) return '';
-	try {
-		return new URL(s.sandbox_url).pathname.replace(/\/$/, '');
-	} catch {
-		return '';
-	}
-}
-
 export interface SessionLifecycleConfig {
 	/** Reap after a stale heartbeat and no connections. */
 	idleTimeoutMsByMode: Record<SessionMode, number>;
@@ -211,7 +203,7 @@ export class SessionLifecycleService {
 				connectionCountCheck &&
 				this.connectionProbeBudget.consume(s.session_id, now);
 			if (this.cfg.connectionAware && (reapCandidate || connectionCountDue)) {
-				active = await this.probe(sandbox, kernelBasePath(s));
+				active = await this.probe(sandbox, kernelBasePathFromUrl(s.sandbox_url));
 				// A null probe is "unknown" — leave the last stamp rather than write a
 				// lie. An unchanged count is skipped too: no CAS/ETag churn against
 				// heartbeats for the steady state.

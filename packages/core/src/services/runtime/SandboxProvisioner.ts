@@ -11,6 +11,7 @@ import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { logEvent } from '../../logs';
 import { paths } from '../../paths';
+import { KERNEL_AUTH_TOKEN_PATTERN } from '../../schema';
 import { logOperationalError } from '../../operationalLog';
 import type {
 	ComputeResources,
@@ -27,6 +28,7 @@ import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
+import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
@@ -229,6 +231,8 @@ export interface ProvisionOptions {
 	 * credential resolution overlaps the (dominant) sandbox create.
 	 */
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
+	/** Interactive marimo credential. Scheduled-job preparation omits it. */
+	kernelAuthToken?: string;
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
 	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
@@ -319,6 +323,7 @@ function formatKernelLogs(stdout: string, stderr: string): string {
 	return [stdout, stderr]
 		.filter((value) => value.trim())
 		.join('\n')
+		.replaceAll(/([?&]access_token=)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
 		.trim();
 }
 
@@ -555,6 +560,37 @@ function loadCounters(load: WorkspaceLoadResult): Record<string, number> {
 		if (load.archiveBytes !== undefined) counters.files_archive_bytes = load.archiveBytes;
 	}
 	return counters;
+}
+
+function normalizeAbsoluteSandboxPath(value: string): string {
+	if (!value.startsWith('/')) return value;
+	const segments: string[] = [];
+	for (const segment of value.split('/')) {
+		if (!segment || segment === '.') continue;
+		if (segment === '..') segments.pop();
+		else segments.push(segment);
+	}
+	return `/${segments.join('/')}`;
+}
+
+async function writeSessionFiles(
+	sandbox: SandboxInstance,
+	files: NonNullable<SessionEnv['files']>,
+	kernelAuthToken?: string,
+): Promise<void> {
+	if (kernelAuthToken !== undefined && !KERNEL_AUTH_TOKEN_PATTERN.test(kernelAuthToken)) {
+		throw new Error('Invalid kernel authentication token');
+	}
+	if (
+		kernelAuthToken !== undefined &&
+		files.some(({ path }) => normalizeAbsoluteSandboxPath(path) === KERNEL_AUTH_TOKEN_FILE)
+	) {
+		throw new Error(`Session credentials cannot write reserved path ${KERNEL_AUTH_TOKEN_FILE}`);
+	}
+	if (files.length > 0) await sandbox.writeFiles(files);
+	if (kernelAuthToken !== undefined) {
+		await sandbox.writeFiles([{ path: KERNEL_AUTH_TOKEN_FILE, content: kernelAuthToken }]);
+	}
 }
 
 export class SandboxProvisioner {
@@ -897,16 +933,15 @@ export class SandboxProvisioner {
 		time: TimeSandboxPhase,
 	): Promise<void> {
 		const sessionEnv = await options.sessionEnv;
-		if (!sessionEnv) return;
+		const kernelAuthToken = options.kernelAuthToken;
+		if (!sessionEnv && kernelAuthToken === undefined) return;
 		await time(async () => {
 			try {
-				// The credential files go in one write; env vars are a separate channel, so
-				// the round-trips overlap.
-				const files = sessionEnv.files ?? [];
-				const vars = sessionEnv.vars;
-				const defaults = sessionEnv.defaults;
+				const files = sessionEnv?.files ?? [];
+				const vars = sessionEnv?.vars;
+				const defaults = sessionEnv?.defaults;
 				await Promise.all([
-					files.length > 0 ? sandbox.writeFiles(files) : undefined,
+					writeSessionFiles(sandbox, files, kernelAuthToken),
 					vars && Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
 					defaults && Object.keys(defaults).length > 0
 						? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
@@ -933,6 +968,8 @@ export class SandboxProvisioner {
 					mode: options.launchMode,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
+					tokenPasswordFile:
+						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,
 				},
 				options.launchStrategy,

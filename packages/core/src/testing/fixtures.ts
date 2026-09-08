@@ -29,6 +29,7 @@ import type {
 
 export const ACTOR = UserId.parse('user_01HXY00000000000000000000');
 export const NOW = '2025-03-05T14:00:00.000Z';
+export const TEST_KERNEL_AUTH_TOKEN = `mhub_kernel_${'a'.repeat(43)}`;
 
 /** Brand a string as a UserId in tests (user ids are opaque, so any value works). */
 export const uid = (s: string): UserId => UserId.parse(s);

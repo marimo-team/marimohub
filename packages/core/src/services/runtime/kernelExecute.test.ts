@@ -48,6 +48,29 @@ describe('kernel execution', () => {
 		await expect(listKernelSessions('https://kernel', { fetchImpl })).resolves.toEqual([
 			{ id: 'one', path: '/notebook.py' },
 		]);
+		expect(new Headers(fetchImpl.mock.calls[0][1]?.headers).has('Authorization')).toBe(false);
+	});
+
+	it('authenticates kernel discovery and execution when a token is present', async () => {
+		const authorizations: (string | null)[] = [];
+		const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			authorizations.push(new Headers(init?.headers).get('Authorization'));
+			return String(input).endsWith('/api/sessions')
+				? new Response(JSON.stringify([{ id: 'one' }]))
+				: sse('event: done\ndata: {"success":true}\n\n');
+		});
+
+		await listKernelSessions('https://kernel', {
+			fetchImpl,
+			kernelAuthToken: 'secret-token',
+		});
+		await executeInKernel(
+			'https://kernel',
+			{ sessionId: 'one', code: '1+1' },
+			{ fetchImpl, kernelAuthToken: 'secret-token' },
+		);
+
+		expect(authorizations).toEqual(['Bearer secret-token', 'Bearer secret-token']);
 	});
 
 	it('normalizes marimo session maps keyed by session id', async () => {

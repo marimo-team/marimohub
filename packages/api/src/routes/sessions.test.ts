@@ -4,6 +4,8 @@ import {
 	createNotebookId,
 	createProjectId,
 	createServices,
+	KERNEL_AUTH_TOKEN_FILE,
+	KERNEL_AUTH_TOKEN_PATTERN,
 	Millis,
 	paths,
 } from '@marimo-hub/core';
@@ -330,6 +332,34 @@ describe('Session routes', () => {
 		expect(data.reused).toBe(false);
 		// A healthy session carries no failure reason.
 		expect(data.error).toBeUndefined();
+	});
+
+	it('stores a kernel token without exposing it in the session response or command', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(instance),
+		}).request;
+
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		const stored = await createServices(bucket).sessions.getSession(
+			pid,
+			data.session_id as SessionId,
+		);
+		expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
+		expect(data).not.toHaveProperty('kernel_auth_token');
+
+		const url = new URL(data.sandbox_url!);
+		expect(url.searchParams.get('access_token')).toBe(stored.kernel_auth_token);
+		expect(calls.writeFile).toContainEqual({
+			path: KERNEL_AUTH_TOKEN_FILE,
+			content: stored.kernel_auth_token,
+		});
+		expect(calls.startProcess[0].cmd).toContain(
+			`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
+		);
+		expect(calls.startProcess[0].cmd).not.toContain(stored.kernel_auth_token!);
 	});
 
 	it('uses the configured sandbox startup timeout to bound the kernel port wait', async () => {

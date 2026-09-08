@@ -5,10 +5,9 @@ import { PassThrough } from 'node:stream';
 import type { Duplex } from 'node:stream';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
-import type { ApiDeps } from '@marimo-hub/api';
 import { createServices, ProxyExposure, signProxyToken } from '@marimo-hub/core';
 import type { Authenticator, ProjectId, UserId } from '@marimo-hub/core';
-import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
+import { ACTOR, MemoryBucket, TEST_KERNEL_AUTH_TOKEN } from '@marimo-hub/core/testing';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
 const SECRET = 'a-test-signing-secret-at-least-32-bytes-long!!';
@@ -37,7 +36,17 @@ function authAs(userId: UserId | null): Authenticator {
 	};
 }
 
-async function runningProxySession(origin: string, authorizationExpiresAt: string) {
+async function runningProxySession(
+	origin: string,
+	options: {
+		authorizationExpiresAt?: string;
+		kernelAuthToken?: string | null;
+	} = {},
+) {
+	const authorizationExpiresAt =
+		options.authorizationExpiresAt ?? new Date(Date.now() + 60_000).toISOString();
+	const kernelAuthToken =
+		options.kernelAuthToken === undefined ? TEST_KERNEL_AUTH_TOKEN : options.kernelAuthToken;
 	const bucket = await createInitializedBucket();
 	const services = createServices(bucket);
 	const project = await services.projects.createProject({ name: 'Owned', description: 'd' }, ACTOR);
@@ -52,6 +61,7 @@ async function runningProxySession(origin: string, authorizationExpiresAt: strin
 		project_id: pid,
 		user_id: ACTOR,
 		authorization_expires_at: authorizationExpiresAt,
+		...(kernelAuthToken !== null ? { kernel_auth_token: kernelAuthToken } : {}),
 	});
 	await services.sessions.setRunning(pid, session.session_id, '/proxy/x/', false, origin);
 	const token = await signProxyToken(pid, session.session_id, SECRET);
@@ -65,7 +75,7 @@ async function runningProxySession(origin: string, authorizationExpiresAt: strin
 			exposure: new ProxyExposure(SECRET),
 		},
 	});
-	return { deps, token };
+	return { deps, token, services, session };
 }
 
 /** Collect bytes written to a client socket, in flowing mode. */
@@ -128,10 +138,7 @@ describe('attachSandboxProxyUpgrade', () => {
 	});
 
 	it('rejects a suspended user with the suspension-specific WebSocket status', async () => {
-		const { deps, token } = await runningProxySession(
-			'http://127.0.0.1:1',
-			new Date(Date.now() + 60_000).toISOString(),
-		);
+		const { deps, token } = await runningProxySession('http://127.0.0.1:1');
 		await deps.services.identities.upsert({
 			id: ACTOR,
 			email: `${ACTOR}@example.com`,
@@ -152,10 +159,9 @@ describe('attachSandboxProxyUpgrade', () => {
 	it('rejects when authorization expires between request validation and the upstream dial', async () => {
 		const now = Date.now();
 		const deadline = now + 1000;
-		const { deps, token } = await runningProxySession(
-			'http://127.0.0.1:1',
-			new Date(deadline).toISOString(),
-		);
+		const { deps, token } = await runningProxySession('http://127.0.0.1:1', {
+			authorizationExpiresAt: new Date(deadline).toISOString(),
+		});
 		const nowSpy = vi.spyOn(Date, 'now').mockReturnValueOnce(now).mockReturnValue(deadline);
 		const server = fakeUpgradeServer();
 		attachSandboxProxyUpgrade(server, deps);
@@ -170,10 +176,7 @@ describe('attachSandboxProxyUpgrade', () => {
 	});
 
 	it('returns 502 when the upstream dial fails before authorization expires', async () => {
-		const { deps, token } = await runningProxySession(
-			'http://127.0.0.1:1',
-			new Date(Date.now() + 60_000).toISOString(),
-		);
+		const { deps, token } = await runningProxySession('http://127.0.0.1:1');
 		const server = fakeUpgradeServer();
 		attachSandboxProxyUpgrade(server, deps);
 		const socket = new PassThrough();
@@ -205,50 +208,14 @@ describe('attachSandboxProxyUpgrade', () => {
 		afterAll(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
 
 		it('relays a non-upgrade upstream response and closes the client socket', async () => {
-			const bucket = await createInitializedBucket();
-			const services = createServices(bucket);
-			const project = await services.projects.createProject(
-				{ name: 'Owned', description: 'd' },
-				ACTOR,
-			);
-			const pid = project.id as ProjectId;
-			const notebook = await services.notebooks.createNotebook(
-				pid,
-				{ title: 'NB', description: 'd', code: 'import marimo as mo' },
-				ACTOR,
-			);
-			const session = await services.sessions.createSession({
-				notebook_id: notebook.id,
-				project_id: pid,
-				user_id: ACTOR,
-				authorization_expires_at: new Date(Date.now() + 60_000).toISOString(),
-			});
-			await services.sessions.setRunning(
-				pid,
-				session.session_id,
-				'/proxy/x/',
-				false,
-				upstreamOrigin,
-			);
-			const token = await signProxyToken(pid, session.session_id, SECRET);
-
-			const deps: ApiDeps = makeTestDeps(bucket, {
-				authenticator: authAs(ACTOR),
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
-					exposure: new ProxyExposure(SECRET),
-				},
-			});
+			const { deps, token } = await runningProxySession(upstreamOrigin);
 			const server = fakeUpgradeServer();
 			attachSandboxProxyUpgrade(server, deps);
 
 			const socket = new PassThrough();
 			const out = collect(socket);
-			// Hub credentials ride the browser's upgrade request; the kernel (and the
-			// notebook code that can read its request headers) must never see them.
+			// Hub credentials ride the browser's upgrade request. Replace them with the
+			// kernel-scoped credential before notebook code can read the headers.
 			const req = fakeIncomingMessage(`/proxy/${token}/`);
 			req.headers.cookie = 'hub_session=secret';
 			req.headers.authorization = 'Bearer mhub_pat_secret';
@@ -261,51 +228,37 @@ describe('attachSandboxProxyUpgrade', () => {
 			expect(out.text()).toMatch(/^HTTP\/1\.1 404/);
 			expect(lastUpstreamHeaders).toBeDefined();
 			expect(lastUpstreamHeaders!.cookie).toBeUndefined();
-			expect(lastUpstreamHeaders!.authorization).toBeUndefined();
+			expect(lastUpstreamHeaders!.authorization).toBe(`Bearer ${TEST_KERNEL_AUTH_TOKEN}`);
 			expect(lastUpstreamHeaders!['cf-access-jwt-assertion']).toBeUndefined();
 			expect(lastUpstreamHeaders!['x-custom']).toBe('passes');
 		});
 
-		it('dials a strip-prefix surface at the path beneath its proxy prefix', async () => {
-			const bucket = await createInitializedBucket();
-			const services = createServices(bucket);
-			const project = await services.projects.createProject(
-				{ name: 'Owned', description: 'd' },
-				ACTOR,
-			);
-			const pid = project.id as ProjectId;
-			const notebook = await services.notebooks.createNotebook(
-				pid,
-				{ title: 'NB', description: 'd', code: 'import marimo as mo' },
-				ACTOR,
-			);
-			const session = await services.sessions.createSession({
-				notebook_id: notebook.id,
-				project_id: pid,
-				user_id: ACTOR,
+		it('strips caller credentials without adding authorization for a legacy kernel', async () => {
+			const { deps, token } = await runningProxySession(upstreamOrigin, {
+				kernelAuthToken: null,
 			});
-			await services.sessions.setRunning(
-				pid,
-				session.session_id,
-				'/proxy/x/',
-				false,
-				'http://kernel',
-			);
-			await services.sessions.setSurfaceState(pid, session.session_id, 'vscode', {
+			const server = fakeUpgradeServer();
+			attachSandboxProxyUpgrade(server, deps);
+			const socket = new PassThrough();
+			const req = fakeIncomingMessage(`/proxy/${token}/`);
+			req.headers.cookie = 'hub_session=secret';
+			req.headers.authorization = 'Bearer caller-secret';
+			lastUpstreamHeaders = undefined;
+
+			server.listeners[0](req, socket, Buffer.alloc(0));
+
+			await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+			expect(lastUpstreamHeaders).toBeDefined();
+			expect(lastUpstreamHeaders!.cookie).toBeUndefined();
+			expect(lastUpstreamHeaders!.authorization).toBeUndefined();
+		});
+
+		it('dials a strip-prefix surface at the path beneath its proxy prefix', async () => {
+			const { deps, token, services, session } = await runningProxySession('http://kernel');
+			await services.sessions.setSurfaceState(session.project_id, session.session_id, 'vscode', {
 				status: 'ready',
 				origin_url: upstreamOrigin,
 				proxy_path: 'strip-prefix',
-			});
-			const token = await signProxyToken(pid, session.session_id, SECRET);
-			const deps: ApiDeps = makeTestDeps(bucket, {
-				authenticator: authAs(ACTOR),
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
-					exposure: new ProxyExposure(SECRET),
-				},
 			});
 			const server = fakeUpgradeServer();
 			attachSandboxProxyUpgrade(server, deps);
@@ -313,26 +266,28 @@ describe('attachSandboxProxyUpgrade', () => {
 			const socket = new PassThrough();
 			const out = collect(socket);
 			lastUpstreamUrl = undefined;
-			server.listeners[0](
-				fakeIncomingMessage(`/surface-proxy/${token}/vscode/stable/out.js?v=1`),
-				socket,
-				Buffer.alloc(0),
-			);
+			lastUpstreamHeaders = undefined;
+			const req = fakeIncomingMessage(`/surface-proxy/${token}/vscode/stable/out.js?v=1`);
+			req.headers.authorization = 'Bearer caller-secret';
+			server.listeners[0](req, socket, Buffer.alloc(0));
 
 			await vi.waitFor(() => expect(socket.destroyed).toBe(true));
 			expect(out.text()).toMatch(/^HTTP\/1\.1 404/);
 			expect(lastUpstreamUrl).toBe('/stable/out.js?v=1');
+			expect(lastUpstreamHeaders!.authorization).toBeUndefined();
 		});
 
-		it('strips Set-Cookie from a successful upgrade handshake', async () => {
+		it('authenticates a successful kernel upgrade and strips Set-Cookie', async () => {
 			// The 101's headers are relayed verbatim, on the app's own origin — so a
 			// kernel cookie would overwrite the caller's hub session.
 			const upgrader = createServer();
 			// An upgraded socket detaches from the server, so keep it to close by hand.
 			let upstreamSocket: Duplex | undefined;
 			let receivedClientHead = '';
-			upgrader.on('upgrade', (_req, socket) => {
+			let receivedAuthorization: string | undefined;
+			upgrader.on('upgrade', (req, socket) => {
 				upstreamSocket = socket;
+				receivedAuthorization = req.headers.authorization;
 				socket.on('data', (chunk) => {
 					receivedClientHead += chunk.toString();
 				});
@@ -347,42 +302,7 @@ describe('attachSandboxProxyUpgrade', () => {
 			const upgraderOrigin = `http://127.0.0.1:${(upgrader.address() as AddressInfo).port}`;
 
 			try {
-				const bucket = await createInitializedBucket();
-				const services = createServices(bucket);
-				const project = await services.projects.createProject(
-					{ name: 'Owned', description: 'd' },
-					ACTOR,
-				);
-				const pid = project.id as ProjectId;
-				const notebook = await services.notebooks.createNotebook(
-					pid,
-					{ title: 'NB', description: 'd', code: 'import marimo as mo' },
-					ACTOR,
-				);
-				const session = await services.sessions.createSession({
-					notebook_id: notebook.id,
-					project_id: pid,
-					user_id: ACTOR,
-				});
-				await services.sessions.setRunning(
-					pid,
-					session.session_id,
-					'/proxy/x/',
-					false,
-					upgraderOrigin,
-				);
-				const token = await signProxyToken(pid, session.session_id, SECRET);
-
-				const deps: ApiDeps = makeTestDeps(bucket, {
-					authenticator: authAs(ACTOR),
-					sandbox: {
-						bucket: { name: 'test', endpoint: '' },
-						hostname: 'localhost',
-						workdir: '/workspace',
-						persistWorkspace: 'source',
-						exposure: new ProxyExposure(SECRET),
-					},
-				});
+				const { deps, token } = await runningProxySession(upgraderOrigin);
 				const server = fakeUpgradeServer();
 				attachSandboxProxyUpgrade(server, deps);
 
@@ -394,6 +314,7 @@ describe('attachSandboxProxyUpgrade', () => {
 				server.listeners[0](req, socket, Buffer.from('client-head'));
 
 				await vi.waitFor(() => expect(out.text()).toMatch(/^HTTP\/1\.1 101/));
+				expect(receivedAuthorization).toBe(`Bearer ${TEST_KERNEL_AUTH_TOKEN}`);
 				expect(out.text().toLowerCase()).not.toContain('set-cookie');
 				await vi.waitFor(() => expect(receivedClientHead).toBe('client-head'));
 			} finally {
@@ -408,10 +329,9 @@ describe('attachSandboxProxyUpgrade', () => {
 			const stalledOrigin = `http://127.0.0.1:${(stalled.address() as AddressInfo).port}`;
 
 			try {
-				const { deps, token } = await runningProxySession(
-					stalledOrigin,
-					new Date(Date.now() + 250).toISOString(),
-				);
+				const { deps, token } = await runningProxySession(stalledOrigin, {
+					authorizationExpiresAt: new Date(Date.now() + 250).toISOString(),
+				});
 				const server = fakeUpgradeServer();
 				attachSandboxProxyUpgrade(server, deps);
 				const socket = new PassThrough();
@@ -437,10 +357,7 @@ describe('attachSandboxProxyUpgrade', () => {
 			const stalledOrigin = `http://127.0.0.1:${(stalled.address() as AddressInfo).port}`;
 
 			try {
-				const { deps, token } = await runningProxySession(
-					stalledOrigin,
-					new Date(Date.now() + 60_000).toISOString(),
-				);
+				const { deps, token } = await runningProxySession(stalledOrigin);
 				const server = fakeUpgradeServer();
 				attachSandboxProxyUpgrade(server, deps);
 				const socket = new PassThrough();
@@ -472,41 +389,8 @@ describe('attachSandboxProxyUpgrade', () => {
 			const upgraderOrigin = `http://127.0.0.1:${(upgrader.address() as AddressInfo).port}`;
 
 			try {
-				const bucket = await createInitializedBucket();
-				const services = createServices(bucket);
-				const project = await services.projects.createProject(
-					{ name: 'Owned', description: 'd' },
-					ACTOR,
-				);
-				const pid = project.id as ProjectId;
-				const notebook = await services.notebooks.createNotebook(
-					pid,
-					{ title: 'NB', description: 'd', code: 'import marimo as mo' },
-					ACTOR,
-				);
-				const session = await services.sessions.createSession({
-					notebook_id: notebook.id,
-					project_id: pid,
-					user_id: ACTOR,
-					authorization_expires_at: new Date(Date.now() + 1500).toISOString(),
-				});
-				await services.sessions.setRunning(
-					pid,
-					session.session_id,
-					'/proxy/x/',
-					false,
-					upgraderOrigin,
-				);
-				const token = await signProxyToken(pid, session.session_id, SECRET);
-				const deps = makeTestDeps(bucket, {
-					authenticator: authAs(ACTOR),
-					sandbox: {
-						bucket: { name: 'test', endpoint: '' },
-						hostname: 'localhost',
-						workdir: '/workspace',
-						persistWorkspace: 'source',
-						exposure: new ProxyExposure(SECRET),
-					},
+				const { deps, token } = await runningProxySession(upgraderOrigin, {
+					authorizationExpiresAt: new Date(Date.now() + 1500).toISOString(),
 				});
 				const server = fakeUpgradeServer();
 				attachSandboxProxyUpgrade(server, deps);

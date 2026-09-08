@@ -104,8 +104,7 @@ kubectl -n marimo-kernels get pods,svc,ingress \
 5. Restart all API and maintenance replicas.
 6. Remove the Ingress RBAC rule.
 
-If a session survives the change, its tokenless Ingress stays public and becomes
-orphaned.
+If a session survives the change, its Ingress stays public and becomes orphaned.
 :::
 
 See [Configuration → Compute → Kubernetes](../configuration.md#compute) for every
@@ -208,8 +207,10 @@ with the
 - Kernel Pods are **bare Pods** (no Deployment/restart): a node failure ends the
   session. That matches the ephemeral one-kernel-per-session model; a `Failed` Pod
   is treated as terminal.
-- marimo runs **tokenless** behind marimohub's own auth (the provisioner passes
-  `--no-token`); do not expose `*.<hostname>` without marimohub in front.
+- marimo uses an independent token for each interactive session. Keep
+  `*.<hostname>` behind TLS and do not publish session URLs.
+- Complete a server rollout promptly. During a mixed-version rollout, an old
+  proxy replica cannot authenticate to a kernel that a new replica started.
 - In subdomain exposure, the Ingress/TLS scheme is cluster-specific. Confirm
   your ingress controller honours per-host rules and the wildcard certificate.
 - A subdomain-mode Ingress route is created but not waited on, so the kernel

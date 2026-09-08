@@ -327,7 +327,7 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 				level: 'danger',
 				title: 'Kubernetes kernel traffic is plaintext',
 				message:
-					'Disabled ingress TLS exposes tokenless kernel traffic. Use a TLS secret or the ingress controller default in production.',
+					'Disabled ingress TLS exposes kernel access tokens and traffic. Use a TLS secret or the ingress controller default in production.',
 			});
 		}
 	}

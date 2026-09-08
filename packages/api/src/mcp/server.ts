@@ -435,12 +435,16 @@ export function createMcpServer(
 				const labels = await assertSessionNotebookVisible(deps, project, session, principal);
 				await assertSessionAccess(project, session, principal, deps, labels);
 				const baseUrl = kernelBaseUrl(session);
+				const kernelRequest = {
+					fetchImpl: kernelFetch(deps),
+					kernelAuthToken: session.kernel_auth_token,
+				};
 				const discoveryTimeoutMs = deadlineAt - Date.now();
 				if (discoveryTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
 				let kernelSessions;
 				try {
 					kernelSessions = await withDeadline(
-						(signal) => listKernelSessions(baseUrl, { fetchImpl: kernelFetch(deps), signal }),
+						(signal) => listKernelSessions(baseUrl, { ...kernelRequest, signal }),
 						{
 							timeoutMs: discoveryTimeoutMs,
 							timeoutError: () => new KernelDiscoveryTimeoutError(),
@@ -474,7 +478,7 @@ export function createMcpServer(
 						maxStderrBytes: 256 * 1024,
 						maxOutputBytes: 1024 * 1024,
 					},
-					{ fetchImpl: kernelFetch(deps), timeoutMs: executionTimeoutMs },
+					{ ...kernelRequest, timeoutMs: executionTimeoutMs },
 				);
 				const data = {
 					project_id: project.id,

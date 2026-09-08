@@ -68,4 +68,4 @@ WORKDIR /workspace
 # Not used in production (the provisioner supplies the launch command); lets a bare
 # `docker run` start a kernel for a sanity check, straight from the pre-installed
 # env. `--convert` opens a plain Python file too.
-CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--no-token", "--host", "0.0.0.0", "--port", "2718"]
+CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--token", "--host", "0.0.0.0", "--port", "2718"]

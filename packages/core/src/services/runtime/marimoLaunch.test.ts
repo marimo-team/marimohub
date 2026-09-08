@@ -8,13 +8,14 @@ const BASE: MarimoLaunchParams = {
 	host: '0.0.0.0',
 	assetUrl: 'https://cdn.example.com/assets',
 	baseUrl: '/proxy/tok',
+	tokenPasswordFile: '/tmp/.marimohub-kernel-token',
 };
 
 describe('buildMarimoLaunch', () => {
 	it('defaults to edit mode', () => {
 		const { start } = buildMarimoLaunch(BASE);
-		expect(start).toContain('marimo edit');
-		expect(start).not.toContain('marimo run');
+		expect(start).toContain('marimo --quiet edit');
+		expect(start).not.toContain('marimo --quiet run');
 	});
 
 	it('edit keeps --convert and --asset-url', () => {
@@ -35,7 +36,7 @@ describe('buildMarimoLaunch', () => {
 	for (const file of ['docs/page.md', 'page.markdown', 'reports/q3.qmd']) {
 		it(`edit drops --convert for ${file}`, () => {
 			const { start } = buildMarimoLaunch({ ...BASE, mode: 'edit', notebookFile: file });
-			expect(start).toContain('marimo edit');
+			expect(start).toContain('marimo --quiet edit');
 			expect(start).not.toContain('--convert');
 		});
 	}
@@ -47,9 +48,11 @@ describe('buildMarimoLaunch', () => {
 
 	it('app drops --convert but keeps host/port/asset-url/base-url', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, mode: 'app' });
-		expect(start).toContain('marimo run');
+		expect(start).toContain('marimo --quiet run');
 		expect(start).not.toContain('--convert');
-		expect(start).toContain('--headless --no-token --host 0.0.0.0 --port 2718');
+		expect(start).toContain(
+			"--headless --token --token-password-file '/tmp/.marimohub-kernel-token' --host 0.0.0.0 --port 2718",
+		);
 		// A hidden-but-real option on `marimo run` — the CDN fast path applies to apps.
 		expect(start).toContain('--asset-url="https://cdn.example.com/assets"');
 		expect(start).toContain('--base-url="/proxy/tok"');
@@ -67,6 +70,28 @@ describe('buildMarimoLaunch', () => {
 		expect(uvPrefix(run.start)).toBe(uvPrefix(edit.start));
 	});
 
+	it('keeps the token value out of the launch command', () => {
+		const { start } = buildMarimoLaunch({
+			...BASE,
+			tokenPasswordFile: '/tmp/token-file',
+		});
+		expect(start).toContain("--token-password-file '/tmp/token-file'");
+		expect(start).not.toContain('mhub_kernel_secret');
+	});
+
+	it('retains tokenless launches for legacy callers without a token file', () => {
+		const { start } = buildMarimoLaunch({ ...BASE, tokenPasswordFile: undefined });
+		expect(start).toContain('marimo --quiet edit');
+		expect(start).toContain('--no-token');
+		expect(start).not.toContain('--token-password-file');
+	});
+
+	it('rejects an explicitly empty token file path instead of launching tokenless', () => {
+		expect(() => buildMarimoLaunch({ ...BASE, tokenPasswordFile: '' })).toThrow(
+			'Token password file path cannot be empty',
+		);
+	});
+
 	it('job creates its output directory before exporting', () => {
 		const { setup, start } = buildMarimoLaunch({ ...BASE, mode: 'job' });
 
@@ -75,6 +100,9 @@ describe('buildMarimoLaunch', () => {
 			command: "mkdir -p '__marimo__'",
 		});
 		expect(start).toContain('marimo export html');
+		expect(start).not.toContain('--quiet');
+		expect(start).not.toContain('--token');
+		expect(start).not.toContain('--no-token');
 	});
 
 	it('job does not establish a session-artifact contract for custom entries', () => {
@@ -90,12 +118,11 @@ describe('buildMarimoLaunch', () => {
 		expect(setup.at(-1)?.command).toBe("mkdir -p '__marimo__'");
 	});
 
-	// Every strategy must honor the mode — a new strategy hardcoding `marimo
-	// edit` would silently break app sessions.
+	// Every strategy must honor the mode and suppress the token-bearing startup URL.
 	for (const [name, strategy] of Object.entries(MARIMO_LAUNCH_STRATEGIES)) {
-		it(`strategy ${name} emits the mode's subcommand`, () => {
-			expect(strategy({ ...BASE, mode: 'edit' }).start).toContain('marimo edit');
-			expect(strategy({ ...BASE, mode: 'app' }).start).toContain('marimo run');
+		it(`strategy ${name} emits a quiet interactive subcommand`, () => {
+			expect(strategy({ ...BASE, mode: 'edit' }).start).toContain('marimo --quiet edit');
+			expect(strategy({ ...BASE, mode: 'app' }).start).toContain('marimo --quiet run');
 		});
 	}
 

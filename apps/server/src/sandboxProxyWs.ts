@@ -79,7 +79,14 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 					if (CREDENTIAL_HEADERS.has(key.toLowerCase())) continue;
 					forwarded[key] = value;
 				}
-				const headers = { ...forwarded, host: target.host, origin: target.origin };
+				const headers = {
+					...forwarded,
+					host: target.host,
+					origin: target.origin,
+					...(decision.kernelAuthToken
+						? { authorization: `Bearer ${decision.kernelAuthToken}` }
+						: {}),
+				};
 				const proxyReq = lib.request({
 					protocol: target.protocol,
 					hostname: target.hostname,

@@ -11,6 +11,7 @@ import {
 	makeLocalSource,
 	MemoryBucket,
 	setupTestEnv,
+	TEST_KERNEL_AUTH_TOKEN,
 } from '../../testing';
 import type {
 	ExecResult,
@@ -21,6 +22,7 @@ import type {
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
+import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 
 const MOUNT_PATH = '/workspace';
 
@@ -105,7 +107,7 @@ describe('SandboxProvisioner', () => {
 
 			expect(calls.startProcess).toHaveLength(1);
 			expect(calls.startProcess[0].options?.cwd).toBe(MOUNT_PATH);
-			expect(calls.startProcess[0].cmd).toContain('marimo edit');
+			expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
 			expect(calls.startProcess[0].cmd).toContain('2718');
 			expect(calls.waitForPort).toEqual([2718]);
 			expect(calls.exposePort[0].port).toBe(2718);
@@ -144,7 +146,7 @@ describe('SandboxProvisioner', () => {
 			expect(cmd).toContain('--no-install-package marimo');
 			expect(cmd).not.toContain('MARIMOHUB_MARIMO_VERSION');
 			expect(cmd).not.toContain('marimo==');
-			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/dash.py'");
+			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
 
@@ -607,6 +609,31 @@ describe('SandboxProvisioner', () => {
 			expect((failure as Error).message).not.toContain('startup timeout');
 		});
 
+		it('redacts a token-bearing startup URL from captured kernel output', async () => {
+			const { instance } = makeFakeSandbox({
+				failWaitForPort: new Error('process exited before the port opened'),
+				logs: {
+					stdout: `Open http://localhost:2718/?access_token=${TEST_KERNEL_AUTH_TOKEN}&mode=edit`,
+					stderr: '',
+				},
+			});
+
+			const failure = await new SandboxProvisioner(fakeComputeFrom(instance))
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+				})
+				.catch((error: Error) => error);
+
+			expect(failure).toBeInstanceOf(Error);
+			expect((failure as Error).message).toContain('access_token=[REDACTED]&mode=edit');
+			expect((failure as Error).message).not.toContain(TEST_KERNEL_AUTH_TOKEN);
+		});
+
 		it('injects sessionEnv (files + env) BEFORE starting the kernel', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
@@ -631,6 +658,110 @@ describe('SandboxProvisioner', () => {
 			]);
 			// Env + token file must land before the kernel process starts.
 			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
+		});
+
+		it('writes the kernel token after other files and launches marimo with its path', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+				sessionEnv: { files: [{ path: '/creds', content: 'credential' }] },
+			});
+
+			expect(calls.writeFile).toEqual([
+				{ path: '/creds', content: 'credential' },
+				{ path: KERNEL_AUTH_TOKEN_FILE, content: TEST_KERNEL_AUTH_TOKEN },
+			]);
+			expect(calls.sequence).toEqual(['writeFiles', 'writeFiles', 'startProcess']);
+			expect(calls.startProcess[0].cmd).toContain(
+				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
+			);
+			expect(calls.startProcess[0].cmd).not.toContain(TEST_KERNEL_AUTH_TOKEN);
+		});
+
+		it('destroys the sandbox without starting marimo when the token file cannot be written', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const writeFiles = instance.writeFiles.bind(instance);
+			instance.writeFiles = async (files) => {
+				await writeFiles(files);
+				if (files.some(({ path }) => path === KERNEL_AUTH_TOKEN_FILE)) {
+					throw new Error('token file write denied');
+				}
+			};
+
+			const failure = await new SandboxProvisioner(fakeComputeFrom(instance))
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+					sessionEnv: { files: [{ path: '/creds', content: 'credential' }] },
+				})
+				.catch((error: Error) => error);
+			expect(failure).toBeInstanceOf(Error);
+			expect((failure as Error).message).toContain('injecting session credentials');
+			expect((failure as Error).message).not.toContain(TEST_KERNEL_AUTH_TOKEN);
+			expect(calls.writeFiles.map(([file]) => file.path)).toEqual([
+				'/creds',
+				KERNEL_AUTH_TOKEN_FILE,
+			]);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it.each(['', 'not-a-kernel-token'])(
+			'rejects an invalid supplied kernel token without starting marimo: %j',
+			async (kernelAuthToken) => {
+				const { instance, calls } = makeFakeSandbox();
+
+				await expect(
+					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						sandboxId,
+						projectId,
+						notebookId,
+						hostname: 'localhost',
+						bucket: bucketConfig,
+						kernelAuthToken,
+					}),
+				).rejects.toThrow('injecting session credentials');
+				expect(calls.writeFiles).toHaveLength(0);
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+			},
+		);
+
+		it.each([
+			KERNEL_AUTH_TOKEN_FILE,
+			'/tmp/./.marimohub-kernel-token',
+			'/tmp/credentials/../.marimohub-kernel-token',
+			'//tmp//.marimohub-kernel-token',
+			'/tmp/.marimohub-kernel-token/',
+			'/../../tmp/.marimohub-kernel-token',
+		])('rejects a session file that targets the reserved kernel token path: %s', async (path) => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+					sessionEnv: { files: [{ path, content: 'overwrite' }] },
+				}),
+			).rejects.toThrow('injecting session credentials');
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('injects sessionEnv defaults with onlyIfUnset, before the kernel starts', async () => {
@@ -896,7 +1027,7 @@ describe('SandboxProvisioner', () => {
 
 				expect(calls.exec).toHaveLength(1);
 				expect(calls.exec[0]).toContain('uv sync');
-				expect(calls.startProcess[0].cmd).toContain('marimo edit');
+				expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
 				expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 			});
 		});
@@ -1087,7 +1218,7 @@ describe('SandboxProvisioner', () => {
 			expect(result.usedFallback).toBe(true);
 			expect(calls.mountBucket).toHaveLength(0);
 			expect(calls.writeFiles.flat().some((f) => f.path.endsWith('apps/my_app.py'))).toBe(true);
-			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/my_app.py'");
+			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/my_app.py'");
 		});
 
 		it('restores a packed synced workspace without listing or fetching individual files', async () => {

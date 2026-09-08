@@ -75,7 +75,7 @@ RUN echo 'export PATH=$VIRTUAL_ENV/bin:$PATH' > /etc/profile.d/venv-path.sh
 USER appuser
 WORKDIR /workspace
 
-CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--no-token", "--host", "0.0.0.0", "--port", "2718"]
+CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--token", "--host", "0.0.0.0", "--port", "2718"]
 
 FROM base AS vscode
 

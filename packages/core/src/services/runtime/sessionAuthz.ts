@@ -20,7 +20,7 @@ export interface SessionActor {
 /**
  * `attach` — reach the session's kernel: proxy/WS traffic, keep-alive
  * heartbeats, and seeing `sandbox_url` (in `subdomain` exposure the URL is
- * the capability). `stop` — terminate or restart it.
+ * a bearer capability). `stop` — terminate or restart it.
  */
 export type SessionAction = 'attach' | 'stop' | 'surface';
 

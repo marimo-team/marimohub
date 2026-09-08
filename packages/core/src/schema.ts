@@ -26,6 +26,8 @@ import {
 	UserId,
 } from './ids';
 
+export const KERNEL_AUTH_TOKEN_PATTERN = /^mhub_kernel_[A-Za-z0-9_-]{43}$/;
+
 // --- Schema versioning ---
 //
 // Only the immutable / append-only objects carry `schema_version`: snapshots,
@@ -841,6 +843,8 @@ export const SessionSchema = z.looseObject({
 	connections_checked_at: z.iso.datetime().optional(),
 	runtime: RuntimeSchema.optional(),
 	sandbox_id: SandboxIdSchema.optional(),
+	/** Plaintext, session-scoped credential for marimo. Never expose it as a response field. */
+	kernel_auth_token: z.string().regex(KERNEL_AUTH_TOKEN_PATTERN).optional(),
 	sandbox_url: z.string().optional(),
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),

@@ -7,8 +7,8 @@ import type { NotebookId, ProjectId, SandboxId, SessionId } from '../ids';
  *
  * - `subdomain` — the kernel is reached DIRECTLY at the compute adapter's public
  *   URL on an isolated sandbox domain (`<id>.sandbox.example.com`). True
- *   cross-origin isolation; not authenticated by the hub (the unguessable sandbox
- *   id is the capability). The default mode.
+ *   cross-origin isolation; not authenticated by the hub. marimo authenticates
+ *   the client with the per-session kernel token. The default mode.
  * - `proxy` — all kernel traffic is forwarded THROUGH the app at
  *   `…/proxy/<token>/…`, so it passes through the hub's auth + per-session
  *   authorization. Same-origin with the app (XSS-capable); for trusted
@@ -22,6 +22,8 @@ export interface ExposureContext {
 	projectId: ProjectId;
 	notebookId: NotebookId;
 	sandboxId: SandboxId;
+	/** Independent credential used by marimo's native authentication. */
+	kernelAuthToken: string;
 	/** The app's public base URL, which may include a path prefix. */
 	appBaseUrl: string;
 }

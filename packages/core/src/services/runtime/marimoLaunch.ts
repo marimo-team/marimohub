@@ -22,6 +22,8 @@ export interface MarimoLaunchParams {
 	outputFile?: string;
 	/** Optional CDN base for the frontend, passed as --asset-url. */
 	assetUrl?: string;
+	/** File containing marimo's session token. Jobs and legacy tokenless launches omit it. */
+	tokenPasswordFile?: string;
 	/**
 	 * Optional path prefix marimo serves under, passed as `--base-url`. Set in
 	 * `proxy` exposure mode (e.g. `/proxy/<token>`) so the kernel's asset and
@@ -46,10 +48,15 @@ export interface MarimoSetupStep {
 export type MarimoLaunchStrategy = (params: MarimoLaunchParams) => MarimoLaunchPlan;
 
 /** Flags both subcommands accept, spelled identically. */
-const commonFlags = ({ host, port, assetUrl, baseUrl }: MarimoLaunchParams) => {
+const commonFlags = ({ host, port, assetUrl, baseUrl, tokenPasswordFile }: MarimoLaunchParams) => {
 	const assetUrlArg = assetUrl ? ` --asset-url="${assetUrl}"` : '';
 	const baseUrlArg = baseUrl ? ` --base-url="${baseUrl}"` : '';
-	return `--headless --no-token --host ${host} --port ${port}${assetUrlArg}${baseUrlArg}`;
+	if (tokenPasswordFile === '') throw new Error('Token password file path cannot be empty');
+	const tokenArg =
+		tokenPasswordFile !== undefined
+			? `--token --token-password-file ${shellQuote(tokenPasswordFile)}`
+			: '--no-token';
+	return `--headless ${tokenArg} --host ${host} --port ${port}${assetUrlArg}${baseUrlArg}`;
 };
 
 interface ModeLaunch {
@@ -92,10 +99,14 @@ const LAUNCH_MODES: Record<MarimoLaunchMode, ModeLaunch> = {
 	},
 };
 
-/** The mode-dependent tail of every strategy: `marimo <subcommand> <file> <flags>`. */
+/** The mode-dependent tail of every strategy: `marimo <global flags> <subcommand> …`. */
 function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
-	const { subcommand, flags } = LAUNCH_MODES[p.mode ?? 'edit'];
-	return `marimo ${subcommand} ${extraFlags}${shellQuote(p.notebookFile)} ${flags(p)}`;
+	const mode = p.mode ?? 'edit';
+	const { subcommand, flags } = LAUNCH_MODES[mode];
+	// marimo's startup URL contains access_token. Suppress it before sandbox
+	// adapters capture process output; jobs do not start an authenticated server.
+	const globalFlags = mode === 'job' ? '' : '--quiet ';
+	return `marimo ${globalFlags}${subcommand} ${extraFlags}${shellQuote(p.notebookFile)} ${flags(p)}`;
 }
 
 // Sync only when the notebook declares real deps; an empty one just gets a

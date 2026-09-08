@@ -35,12 +35,12 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
 `sandboxes.hub.example.com` or `hub.example.com` for kernels is rejected at boot.
 :::
 
-The kernel URL is **not authenticated by the hub** — the per-session sandbox id
-is the only capability. Don't expose the kernel hostname beyond the iframe.
-Because the URL is the capability, the session API shows `sandbox_url` only to
-callers who could reach that kernel: editors, the owner of an ephemeral viewer
-session, and — when the [viewer mode](/apps#who-can-do-what) grants apps —
-viewers, for the shared app only.
+The kernel URL is **not authenticated by the hub**. It includes marimo's
+per-session `access_token` query parameter. marimo exchanges the token for its
+session cookie. Do not expose the kernel hostname or copy the URL outside the
+iframe. The session API shows `sandbox_url` only to callers who can reach that
+kernel: editors, the owner of an ephemeral viewer session, and viewers of the
+shared app when the [viewer mode](/apps#who-can-do-what) grants access.
 
 ### `proxy`: forwarded through the app
 
@@ -68,7 +68,8 @@ server; the Cloudflare Workers deployment uses `subdomain`.
 Kubernetes proxy mode uses each kernel's internal Service URL. It does not query,
 create, or delete Ingresses. Before you change from subdomain exposure, complete
 the required [session drain](/deploying/kubernetes#changing-from-subdomain-to-proxy).
-An old tokenless Ingress otherwise stays public and becomes orphaned.
+A session Ingress from an earlier release otherwise stays public and becomes
+orphaned.
 
 Note the interaction with [notebook apps](/apps): the same-origin risk you
 acknowledge is that notebook-authored JS can script the control plane as
@@ -77,13 +78,32 @@ can be — from editors opening their own notebooks to any viewer opening a
 shared app someone else wrote. Combine proxy mode with viewer apps only if you
 trust every notebook author in the deployment.
 
-## Kernels run tokenless
+## Native kernel authentication
 
-The provisioner launches marimo with `--no-token`, so the kernel has no auth of
-its own. In `proxy` mode the hub's auth + per-session check front it; in
-`subdomain` mode only the high-entropy sandbox id on an isolated domain does.
-Never expose the kernel hostname directly — keep marimohub (and your ingress, for
-the `kubernetes`/`coreweave` backends) in front.
+The provisioner generates an independent 256-bit token for each interactive
+session. It writes the token to a reserved file outside the workspace and starts
+marimo with global `--quiet` plus `--token --token-password-file`. Quiet mode suppresses
+marimo's token-bearing startup URL, and captured failure output redacts an
+`access_token` value as a second safeguard. The token does not appear in the
+process command or server logs. Scheduled jobs do not start a server and do not
+use a token.
+
+In `subdomain` mode, the client URL delivers the token to marimo. In `proxy`
+mode, the hub replaces caller credentials with the kernel token after it
+authorizes the request. This replacement applies to kernel HTTP requests and
+WebSocket upgrades. The hub does not send the token to VS Code or OpenCode.
+
+Keep marimohub and your ingress in front of kernels. Native authentication
+limits access after a hostname or origin leak, but it does not replace TLS,
+origin isolation, or hub authorization.
+
+::: warning Complete rolling upgrades promptly
+An old proxy replica cannot authenticate to a kernel that a new replica starts.
+An old lifecycle replica also cannot read that kernel's connection count. A
+mixed-version rollout can therefore return temporary 401 responses and report
+unknown connection counts. Complete the server rollout promptly. New replicas
+remain compatible with sessions started without a token by an earlier release.
+:::
 
 ## Secondary editor surfaces
 

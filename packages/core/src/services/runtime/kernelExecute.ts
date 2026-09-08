@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Session } from '../../schema';
-import { kernelBasePath } from './sessionLifecycle';
+import { kernelBasePathFromUrl } from './sandboxExposure';
 
 export interface KernelSession {
 	id: string;
@@ -53,7 +53,19 @@ export function kernelBaseUrl(session: Session): string {
 	const endpoint = session.sandbox_origin_url ?? session.sandbox_url;
 	if (!endpoint) throw new Error('Session has no sandbox URL');
 	const origin = new URL(endpoint).origin;
-	return `${origin}${kernelBasePath(session)}`;
+	return `${origin}${kernelBasePathFromUrl(session.sandbox_url)}`;
+}
+
+interface KernelRequestOptions {
+	fetchImpl?: typeof fetch;
+	kernelAuthToken?: string;
+	signal?: AbortSignal;
+}
+
+function kernelRequestHeaders(headers: Record<string, string>, kernelAuthToken?: string): Headers {
+	const result = new Headers(headers);
+	if (kernelAuthToken) result.set('Authorization', `Bearer ${kernelAuthToken}`);
+	return result;
 }
 
 async function responseDetail(response: Response): Promise<string> {
@@ -80,10 +92,10 @@ async function assertKernelResponse(response: Response, contentType?: string): P
 
 export async function listKernelSessions(
 	baseUrl: string,
-	options: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
+	options: KernelRequestOptions = {},
 ): Promise<KernelSession[]> {
 	const response = await (options.fetchImpl ?? globalThis.fetch)(`${baseUrl}/api/sessions`, {
-		headers: { Accept: 'application/json' },
+		headers: kernelRequestHeaders({ Accept: 'application/json' }, options.kernelAuthToken),
 		signal: options.signal,
 	});
 	await assertKernelResponse(response);
@@ -186,7 +198,7 @@ export async function executeInKernel(
 		maxStderrBytes?: number;
 		maxOutputBytes?: number;
 	},
-	options: { fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal } = {},
+	options: KernelRequestOptions & { timeoutMs?: number } = {},
 ): Promise<KernelExecuteResult> {
 	const controller = new AbortController();
 	let timedOut = false;
@@ -208,11 +220,14 @@ export async function executeInKernel(
 			`${baseUrl}/api/kernel/execute`,
 			{
 				method: 'POST',
-				headers: {
-					Accept: 'text/event-stream',
-					'Content-Type': 'application/json',
-					'Marimo-Session-Id': input.sessionId,
-				},
+				headers: kernelRequestHeaders(
+					{
+						Accept: 'text/event-stream',
+						'Content-Type': 'application/json',
+						'Marimo-Session-Id': input.sessionId,
+					},
+					options.kernelAuthToken,
+				),
 				body: JSON.stringify({ code: input.code }),
 				signal: controller.signal,
 			},

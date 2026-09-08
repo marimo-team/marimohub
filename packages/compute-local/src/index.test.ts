@@ -18,7 +18,7 @@ import {
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
 import { buildMarimoLaunch } from '@marimo-hub/core';
-import { LocalCompute, prepareMarimoCommand, rewriteWorkspace } from './index';
+import { LocalCompute, prepareMarimoCommand, rewriteSandboxPaths, rewriteWorkspace } from './index';
 
 const compute = new LocalCompute();
 const created: SandboxId[] = [];
@@ -161,7 +161,7 @@ describe('prepareMarimoCommand (pure)', () => {
 		const command = [...plan.setup.map(({ command }) => command), plan.start].join(' && ');
 		const prepared = prepareMarimoCommand(command, '0.0.0.0');
 		expect(prepared.split(' && ').slice(0, -1)).toEqual(command.split(' && ').slice(0, -1));
-		expect(prepared).toContain('uv run --with marimo --no-sync marimo edit');
+		expect(prepared).toContain('uv run --with marimo --no-sync marimo --quiet edit');
 		expect(prepared.match(/--with marimo/g)).toHaveLength(1);
 		// The strategy's own --host must not be doubled by the bind-host append.
 		expect(prepared.match(/--host/g)).toHaveLength(1);
@@ -252,6 +252,17 @@ describe('rewriteWorkspace (pure)', () => {
 
 	it('leaves commands without /workspace untouched', () => {
 		expect(rewriteWorkspace('echo hello', '/root')).toBe('echo hello');
+	});
+});
+
+describe('rewriteSandboxPaths (pure)', () => {
+	it('maps the kernel token file into the sandbox root', () => {
+		expect(
+			rewriteSandboxPaths(
+				"marimo edit --token-password-file '/tmp/.marimohub-kernel-token'",
+				'/root',
+			),
+		).toBe("marimo edit --token-password-file '/root/tmp/.marimohub-kernel-token'");
 	});
 });
 

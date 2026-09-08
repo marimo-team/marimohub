@@ -142,6 +142,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		const internalSessionFields = [
 			'runtime',
 			'sandbox_id',
+			'kernel_auth_token',
 			'sandbox_origin_url',
 			'used_fallback',
 			'expires_at',

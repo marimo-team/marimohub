@@ -1203,9 +1203,8 @@ export const SessionResponseSchema = z
 		/**
 		 * The kernel URL the browser embeds. Absent while `starting`, and absent
 		 * from list/get projections for callers who may not reach this kernel: in
-		 * `subdomain` exposure the URL itself is the access capability (the kernel
-		 * runs `--no-token`), so it is shown only to callers the kernel gates
-		 * would admit.
+		 * `subdomain` exposure the URL contains the kernel token, so it is shown
+		 * only to callers the kernel gates would admit.
 		 */
 		sandbox_url: z.string().optional(),
 		started_at: dt(),

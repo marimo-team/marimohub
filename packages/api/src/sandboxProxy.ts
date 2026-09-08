@@ -36,6 +36,7 @@ export type ProxyDecision =
 			kind: 'forward';
 			targetUrl: string;
 			sessionId: string;
+			kernelAuthToken?: string;
 			authorizationDeadline?: number;
 	  };
 
@@ -241,6 +242,9 @@ export async function authorizeProxyRequest(
 		kind: 'forward',
 		targetUrl,
 		sessionId,
+		...(kernelMatch && session.kernel_auth_token
+			? { kernelAuthToken: session.kernel_auth_token }
+			: {}),
 		...(effectiveDeadline !== undefined ? { authorizationDeadline: effectiveDeadline } : {}),
 	};
 }
@@ -259,9 +263,10 @@ const HOP_BY_HOP = new Set([
 ]);
 
 /**
- * Hub credentials must never reach the kernel: it runs `--no-token` and needs
- * none, and notebook code can read request headers (`mo.app_meta().request`) —
- * forwarding them would hand every caller's credential to the notebook author.
+ * Hub credentials must never reach the kernel. Notebook code can read request
+ * headers (`mo.app_meta().request`), so forwarding them would expose each
+ * caller's credential to the notebook author. The proxy adds only the
+ * session-scoped marimo token after this filter.
  * `cf-access-jwt-assertion` is exactly that under the Cloudflare Access
  * authenticator (it is the whole proof of identity), and the `cf-access-client-*`
  * service-token pair mints one. Access's `CF_Authorization` cookie is covered by
@@ -282,7 +287,7 @@ export const CREDENTIAL_HEADERS = new Set([
  */
 export const UNSAFE_RESPONSE_HEADERS = new Set(['set-cookie', 'set-cookie2']);
 
-function requestHeaders(request: Request, targetUrl: string): Headers {
+function requestHeaders(request: Request, targetUrl: string, kernelAuthToken?: string): Headers {
 	const out = new Headers();
 	request.headers.forEach((value, key) => {
 		const k = key.toLowerCase();
@@ -291,6 +296,7 @@ function requestHeaders(request: Request, targetUrl: string): Headers {
 	// marimo validates a request's Origin against its own host; present the kernel
 	// origin so the proxied request reads as same-origin (Host is set by `fetch`).
 	out.set('origin', new URL(targetUrl).origin);
+	if (kernelAuthToken) out.set('authorization', `Bearer ${kernelAuthToken}`);
 	return out;
 }
 
@@ -327,10 +333,11 @@ export async function forwardHttp(
 	request: Request,
 	targetUrl: string,
 	sessionId?: string,
+	kernelAuthToken?: string,
 ): Promise<Response> {
 	const init: RequestInit = {
 		method: request.method,
-		headers: requestHeaders(request, targetUrl),
+		headers: requestHeaders(request, targetUrl, kernelAuthToken),
 		redirect: 'manual',
 	};
 	const retryable = request.method === 'GET' || request.method === 'HEAD';
@@ -405,6 +412,6 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 		if (decision.kind === 'reject') {
 			return fail(c, decision.code, decision.message, decision.status);
 		}
-		return forwardHttp(c.req.raw, decision.targetUrl, decision.sessionId);
+		return forwardHttp(c.req.raw, decision.targetUrl, decision.sessionId, decision.kernelAuthToken);
 	};
 }

@@ -311,6 +311,8 @@ export type {
 	SessionScopedAction,
 } from './authorization/actions';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
+export { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './runtime/kernelAuth';
+export { kernelBasePathFromUrl } from './runtime/sandboxExposure';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
 export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolveComputeProfile';
 export type { ComputeProfileConfig, ResolvedComputeProfile } from './runtime/resolveComputeProfile';
@@ -333,7 +335,6 @@ export type {
 	KernelSession,
 	SseEvent,
 } from './runtime/kernelExecute';
-export { kernelBasePath } from './runtime/sessionLifecycle';
 export { runPreflight } from './runtime/preflight';
 export type {
 	CheckOutcome,
