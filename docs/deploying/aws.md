@@ -29,43 +29,9 @@ MARIMOHUB_STORAGE_S3_REGION=us-east-1
 
 ## Compute
 
-```bash
-MARIMOHUB_COMPUTE_BACKEND=fargate
-MARIMOHUB_SANDBOX_EXPOSURE=proxy
-MARIMOHUB_COMPUTE_FARGATE_CLUSTER=marimohub
-MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION=marimohub-kernel:1
-MARIMOHUB_COMPUTE_FARGATE_SUBNETS=subnet-aaa,subnet-bbb
-MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS=sg-kernels
-MARIMOHUB_COMPUTE_FARGATE_OWNER=prod-hub-a
-MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET='<at least 32 random bytes>'
-```
-
-Register the task definition first; copy the standalone Fargate agent into the
-notebook image and run it as a non-root process with writable `/workspace` and
-ports 2717/2718. Keep hub and kernel tasks in private subnets and allow those
-ports only from the hub security group. The task execution role needs ECR and
-CloudWatch Logs access. The hub needs scoped ECS RunTask/Describe/List/Stop
-permissions and PassRole only for the two kernel roles. See
-[the example task definition](../../examples/aws-fargate/kernel-task-definition.json),
-[hub policy](../../examples/aws-fargate/hub-iam-policy.json), and [Fargate setup](../compute.md#aws-ecs-fargate).
-
-Fargate CPU/memory profiles round up to the next official Fargate allocation,
-so billing follows the selected pair. GPU and Spot capacity are not supported.
-There is no public kernel hostname or per-task load balancer. The hub stops
-owned tasks during teardown; periodically review stopped tasks and CloudWatch
-logs when retiring a task-definition revision.
-
-The ECS adapter uses the standard AWS SDK region and credential chain. Set
-`AWS_REGION` explicitly outside an AWS-managed runtime. It accepts standard
-environment credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
-optional `AWS_SESSION_TOKEN`), shared config/credentials files with
-`AWS_PROFILE`, or the runtime's task-role/workload-identity provider.
-
-The opt-in `MARIMOHUB_FARGATE_LIVE_TEST=1` harness validates the ECS task,
-agent operations, reconnect, enumeration, and teardown. It does not validate
-the full hub HTTP/WebSocket proxy route. Treat proxy routing from the deployed
-hub network as a separate acceptance check; the harness does not establish
-production verification.
+Use the [Fargate compute setup](../compute.md#aws-ecs-fargate) to run kernels on
+ECS. The repository includes an [example task definition](../../examples/aws-fargate/kernel-task-definition.json)
+and a [hub IAM policy](../../examples/aws-fargate/hub-iam-policy.json).
 
 ## Config & secrets
 

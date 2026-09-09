@@ -294,7 +294,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_IMAGE',
 						name: 'Sandbox image',
 						description:
-							'Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. The `fargate` backend rejects this variable because its pre-registered ECS task definition owns the image.',
+							'Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`.',
 						example: 'ghcr.io/orgname/marimo-sandbox:latest',
 					},
 					{
@@ -723,7 +723,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'fargate',
 				supportsComputeProfiles: true,
 				description:
-					'Runs one pre-registered Linux Fargate task per sandbox. The hub reaches the authenticated agent and kernel through private task ENIs; v1 requires proxy exposure, uses on-demand Fargate, and does not register task definitions or select arbitrary images.',
+					'Runs one Linux Fargate task per sandbox. The hub connects through private task ENIs. This backend requires proxy exposure and uses on-demand capacity.',
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_CLUSTER',
@@ -736,20 +736,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION',
 						name: 'Fargate task definition',
 						description:
-							'Existing ECS task-definition family:revision or ARN. It must run the standalone Fargate agent as a non-root container and own the pinned image.',
+							'Existing ECS task-definition revision or ARN. It pins the image and runs the standalone agent as a non-root user.',
 						example: 'marimohub-kernel:12',
 						required: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_CONTAINER_NAME',
 						name: 'Fargate container name',
-						description: 'Named task-definition container that runs the agent.',
+						description: 'Task-definition container that runs the agent.',
 						default: 'marimo',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_SUBNETS',
 						name: 'Fargate subnets',
-						description: 'Comma-separated private subnet ids for task ENIs.',
+						description: 'Comma-separated private subnet IDs for task ENIs.',
 						example: 'subnet-0123,subnet-0456',
 						required: true,
 					},
@@ -757,50 +757,46 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS',
 						name: 'Fargate security groups',
 						description:
-							'Comma-separated security groups permitting hub-to-task agent and kernel traffic.',
+							'Comma-separated security group IDs for agent and kernel traffic from the hub.',
 						example: 'sg-0123456789abcdef0',
 						required: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_ASSIGN_PUBLIC_IP',
 						name: 'Assign public IP',
-						description:
-							'Whether ECS assigns a public task ENI. Private networking and false are recommended.',
+						description: 'Whether ECS assigns a public IP to each task ENI.',
 						default: 'false',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_PLATFORM_VERSION',
 						name: 'Fargate platform version',
-						description: 'ECS Fargate platform version passed to RunTask.',
+						description: 'Fargate platform version for RunTask.',
 						default: 'LATEST',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_OWNER',
 						name: 'Fargate deployment owner',
-						description:
-							'Unique deployment ownership key used in startedBy and task tags for reconciliation.',
+						description: 'Unique deployment key used in startedBy and task tags.',
 						example: 'prod-hub-a',
 						required: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET',
 						name: 'Fargate agent master secret',
-						description:
-							'Master secret used to derive per-sandbox agent tokens. Store it in Secrets Manager or SSM; minimum 32 bytes.',
+						description: 'Secret used to derive agent tokens. Minimum length: 32 bytes.',
 						required: true,
 						secret: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_AGENT_PORT',
 						name: 'Fargate agent port',
-						description: 'Private task port for the authenticated control agent.',
+						description: 'Private task port for the agent.',
 						default: '2717',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS',
 						name: 'Fargate ready timeout (seconds)',
-						description:
-							'How long to wait for ECS RUNNING, a private ENI, and an agent health response.',
+						description: 'Seconds to wait for a running task, private ENI, and healthy agent.',
 						default: '120',
 					},
 				],

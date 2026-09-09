@@ -1,11 +1,11 @@
 # AWS ECS Fargate example
 
-This directory contains a starting point for a private Fargate kernel task.
-Replace the image and role ARNs, register the task definition, and grant the
-hub the scoped policy before selecting `backend=fargate`.
+This directory contains an ECS task definition and a scoped IAM policy for the
+Fargate compute adapter.
 
-Copy the single Fargate agent into your own image. The image does not need to
-inherit from the marimohub sandbox image:
+## Container image
+
+Copy the standalone agent into any notebook image:
 
 ```dockerfile
 FROM your-notebook-image
@@ -13,26 +13,31 @@ FROM your-notebook-image
 COPY --chmod=0755 packages/compute-fargate/agent/fargate_agent.py /usr/local/bin/marimohub-fargate-agent
 ```
 
-Run the Docker build from the repository root, or copy `fargate_agent.py` next
-to your own Dockerfile and adjust the `COPY` source. The runtime image needs
-Python 3, `sh`, marimo, uv, and git. The agent itself uses only the Python
-standard library. Set the task definition's `user` to the non-root uid used by
-your image.
+If you build outside the repository root, put `fargate_agent.py` next to your
+Dockerfile. The image needs Python 3, `sh`, marimo, uv, and git. The agent uses
+only the Python standard library.
 
-The hub must be able to route to task ENIs in the selected subnets. Permit the
-hub security group to reach TCP 2717 (agent) and 2718 (marimo) on the task
-security group. Keep public IP assignment disabled unless a deliberate network
-review approves it; the browser still uses the hub proxy.
+## AWS resources
 
-The task role is intentionally separate from the execution role. The execution
-role pulls the image and writes logs. The task role is where notebook-specific
-AWS access would be granted, so keep it empty by default and add only the
-minimum data permissions needed by the deployment.
+Replace the image, region, and role ARNs in `kernel-task-definition.json`.
+Then register the task definition:
 
 ```sh
 aws ecs register-task-definition \
   --cli-input-json file://kernel-task-definition.json
 ```
 
-See [the Fargate setup guide](../../docs/setup/compute/fargate.md) for network,
-secret, profile, cleanup, and proxy configuration.
+The hub security group must reach task ports 2717 and 2718. Keep the notebook
+tasks in private subnets. See the [Fargate setup guide](../../docs/setup/compute/fargate.md)
+for the IAM policy, network, and hub configuration.
+
+## Live acceptance
+
+After you export the required Fargate variables, run the live acceptance test:
+
+```bash
+MARIMOHUB_FARGATE_LIVE_TEST=1 pnpm --filter @marimo-hub/compute-fargate test -- fargate.live.test.ts
+```
+
+This test covers task launch, agent operations, reconnect, discovery, and task
+stop. It does not cover the hub HTTP or WebSocket proxy.

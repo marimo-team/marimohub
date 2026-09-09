@@ -49,9 +49,8 @@ selectable per notebook (for `e2b`, `MARIMOHUB_COMPUTE_E2B_TEMPLATE` takes a
 list of template ids the same way). See [Sandbox image](./sandbox-image.md) for
 the contract, a pre-warmed example, and how multiple images behave.
 
-Fargate is the exception to the shared image setting: its pre-registered ECS
-task definition owns the image and v1 accepts private proxy exposure only. See
-[AWS ECS Fargate](./compute.md#aws-ecs-fargate).
+The Fargate task definition sets the image. The backend rejects
+`MARIMOHUB_COMPUTE_IMAGE` and supports proxy exposure only.
 
 The hub reaps idle sessions after `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`.
 `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` can override this value for **Run as
@@ -103,9 +102,8 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
   session details identify snapshot-backed compute until a fresh sandbox is
   started.
 - Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. Fargate
-  applies CPU and memory through valid billed pairs but ignores GPU values with a
-  startup warning. E2B, Cloudflare, local, and none ignore profiles, hide the
-  feature from the UI, and log a startup warning.
+  applies CPU and memory profiles and warns that it ignores GPU values. E2B,
+  Cloudflare, local, and none ignore profiles and hide the feature from the UI.
 
 Docker and Podman enforce each container's limits but have no admission control.
 Ensure the host can accommodate the expected concurrency; N concurrent
