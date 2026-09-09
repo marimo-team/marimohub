@@ -24,8 +24,13 @@ metadata:
   namespace: marimo-kernels
 rules:
   - apiGroups: ['']
-    resources: ['pods', 'services']
+    resources: ['pods']
     verbs: ['create', 'get', 'list', 'watch', 'delete']
+  # `update` on services: a reconnect reconciles the Service so it picks up
+  # newly reserved surface ports rather than 409-ing on the re-create.
+  - apiGroups: ['']
+    resources: ['services']
+    verbs: ['create', 'get', 'list', 'watch', 'update', 'delete']
   - apiGroups: ['']
     resources: ['pods/exec']
     verbs: ['create', 'get']

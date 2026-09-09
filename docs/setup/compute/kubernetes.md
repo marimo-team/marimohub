@@ -6,7 +6,9 @@ the cluster is ready:
 1. **Bake the client in:** `pnpm add @kubernetes/client-node` (bring-your-own
    dependency) and rebuild your server image.
 2. **Grant RBAC:** marimohub's ServiceAccount needs `pods` and `services` in the
-   kernel namespace. Subdomain exposure also needs `ingresses`.
+   kernel namespace (`services` includes `update`, so a reconnect can reconcile
+   the Service's ports — add it when upgrading). Subdomain exposure also needs
+   `ingresses`.
 3. **For subdomain exposure, configure ingress + TLS:** an ingress controller, a
    `*.{host}` DNS record, and either a matching wildcard TLS secret or an
    ingress-controller default certificate so each `{id}.{host}` kernel URL is
