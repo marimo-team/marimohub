@@ -141,6 +141,8 @@ minimumReleaseAgeExclude:
   - tar
   - undici
   - vite@6.4.3
+  # Renovate security update: smol-toml@1.7.1
+  - smol-toml@1.7.1
 
 onlyBuiltDependencies: []
 
