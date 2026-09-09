@@ -132,14 +132,14 @@ export async function testDatabricksMetadata(
 ): Promise<TestResult> {
 	const started = performance.now();
 	try {
+		if (config.schema && !config.catalog) {
+			throw new ValidationError('Configure a catalog to verify the default Databricks schema.');
+		}
 		await withMetadata(
 			config,
 			probe,
 			options?.signal,
 			async (get) => {
-				if (config.schema && !config.catalog) {
-					throw new ValidationError('Configure a catalog to verify the default Databricks schema.');
-				}
 				if (config.catalog) {
 					parseResponse(named, await get(`catalogs/${encodeURIComponent(config.catalog)}`));
 					if (config.schema)

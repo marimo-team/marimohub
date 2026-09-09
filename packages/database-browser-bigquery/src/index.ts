@@ -16,7 +16,7 @@ import type {
 	TablePreviewRequest,
 	TestResult,
 } from '@marimo-hub/core';
-import { accessToken } from './auth';
+import { BigQueryTokenCache } from './auth';
 import { dataSchema, decodeRow, parseResponse, tableColumns, tableSchema } from './schema';
 
 const datasetPage = z.object({
@@ -41,6 +41,7 @@ export interface BigQueryBrowserOptions {
 export class BigQueryDatabaseBrowser implements DatabaseBrowser {
 	readonly provider = 'bigquery' as const;
 	readonly preview: boolean;
+	private readonly tokens = new BigQueryTokenCache();
 
 	constructor(private readonly options: BigQueryBrowserOptions) {
 		this.preview = options.mode === 'full';
@@ -174,7 +175,7 @@ export class BigQueryDatabaseBrowser implements DatabaseBrowser {
 		try {
 			return await withDeadline(
 				async (bounded) => {
-					const token = await accessToken(source.credentials_json, probe, bounded);
+					const token = await this.tokens.get(source.credentials_json, probe, bounded);
 					return run(async (path, params) => {
 						bounded.throwIfAborted();
 						const url = new URL(
@@ -185,6 +186,8 @@ export class BigQueryDatabaseBrowser implements DatabaseBrowser {
 							headers: { Authorization: `Bearer ${token}` },
 							signal: bounded,
 						});
+						if (response.status === 401)
+							await this.tokens.invalidate(source.credentials_json, token);
 						if (!response.ok)
 							throw new UnavailableError(
 								response.status === 401 || response.status === 403

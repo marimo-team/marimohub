@@ -42,6 +42,33 @@ describe('BigQuery row decoding', () => {
 	});
 
 	it.each([
+		'[2024-01-01, 2024-02-01)',
+		'[2024-01-01T12:00:00.123456, 2024-01-02T12:00:00.654321)',
+		'[1704110400.123456, 1704196800.654321)',
+		'[UNBOUNDED, 2024-02-01)',
+		'[2024-01-01, UNBOUNDED)',
+		'[UNBOUNDED, UNBOUNDED)',
+		'[NULL, NULL)',
+		null,
+	])('preserves REST RANGE values and endpoint precision: %s', (value) => {
+		expect(decodeRow([{ name: 'period', type: 'RANGE' }], { f: [{ v: value }] })).toEqual([value]);
+	});
+
+	it('preserves repeated ranges nested in a record', () => {
+		const values = ['[2024-01-01, 2024-02-01)', '[2024-03-01, UNBOUNDED)'];
+		const fields: BigQueryField[] = [
+			{
+				name: 'schedule',
+				type: 'RECORD',
+				fields: [{ name: 'periods', type: 'RANGE', mode: 'REPEATED' }],
+			},
+		];
+		expect(decodeRow(fields, { f: [{ v: { f: [{ v: values.map((v) => ({ v })) }] } }] })).toEqual([
+			{ periods: values },
+		]);
+	});
+
+	it.each([
 		['FLOAT64', '1.25', 1.25],
 		['FLOAT', 'NaN', 'NaN'],
 		['FLOAT64', 'Infinity', 'Infinity'],

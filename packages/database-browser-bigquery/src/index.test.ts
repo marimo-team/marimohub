@@ -48,7 +48,7 @@ function world(body: (url: URL) => unknown = () => ({}), status = 200) {
 		status,
 		json: async () =>
 			url === 'https://oauth2.googleapis.com/token'
-				? { access_token: 'minted-token' }
+				? { access_token: 'minted-token', expires_in: 3600 }
 				: body(new URL(url)),
 	}));
 	const probe = { fetch, connect: vi.fn() } satisfies IntegrationProbe;
@@ -136,7 +136,7 @@ describe('BigQuery browser', () => {
 		await expect(
 			browser.listTables(source, ['sales'], { limit: 1, cursor: 'continue' }),
 		).rejects.toThrow('non-advancing');
-		expect(new URL(fetch.mock.calls[3][0]).searchParams.get('pageToken')).toBe('continue');
+		expect(new URL(fetch.mock.calls[2][0]).searchParams.get('pageToken')).toBe('continue');
 	});
 
 	it('preserves exact numbers, nested records, and repeated values', async () => {
@@ -218,7 +218,7 @@ describe('BigQuery browser', () => {
 				status: url.endsWith('/token') ? 200 : status,
 				json: async () =>
 					url.endsWith('/token')
-						? { access_token: 'minted-token' }
+						? { access_token: 'minted-token', expires_in: 3600 }
 						: { message: 'minted-token secret-material' },
 			}));
 			const result = await browser.testConnection(source);
@@ -227,7 +227,7 @@ describe('BigQuery browser', () => {
 		},
 	);
 
-	it('propagates cancellation and shares one deadline across token and data requests', async () => {
+	it('bounds a stalled authentication request and rejects pre-canceled requests', async () => {
 		const { probe, fetch } = world();
 		fetch.mockImplementation(() => new Promise(() => {}));
 		const browser = new BigQueryDatabaseBrowser({ probe, mode: 'full', metadataTimeoutMs: 20 });
@@ -291,7 +291,8 @@ describe('BigQuery failure boundaries', () => {
 		fetch.mockImplementation(async (url) => ({
 			ok: !url.endsWith('/data?maxResults=1'),
 			status: url.endsWith('/data?maxResults=1') ? 403 : 200,
-			json: async () => (url.endsWith('/token') ? { access_token: 'minted-token' } : metadata),
+			json: async () =>
+				url.endsWith('/token') ? { access_token: 'minted-token', expires_in: 3600 } : metadata,
 		}));
 		await expect(browser.previewRows(source, ['sales'], 'orders', { limit: 1 })).rejects.toThrow(
 			'BigQuery access was denied.',
@@ -327,7 +328,7 @@ describe('BigQuery failure boundaries', () => {
 		await expect(browser.listNamespaces(source, { limit: 1, cursor })).rejects.toThrow(
 			'non-advancing',
 		);
-		const url = new URL(fetch.mock.calls[3][0]);
+		const url = new URL(fetch.mock.calls[2][0]);
 		expect(url.searchParams.get('pageToken')).toBe(cursor);
 		expect(url.searchParams.get('maxResults')).toBe('1');
 		expect(url.hash).toBe('');
@@ -392,7 +393,7 @@ describe('BigQuery failure boundaries', () => {
 		fetch.mockResolvedValueOnce({
 			ok: true,
 			status: 200,
-			json: async () => ({ access_token: 'minted-token' }),
+			json: async () => ({ access_token: 'minted-token', expires_in: 3600 }),
 		});
 		fetch.mockResolvedValueOnce({
 			ok: true,
@@ -413,7 +414,7 @@ describe('BigQuery failure boundaries', () => {
 		fetch.mockResolvedValueOnce({
 			ok: true,
 			status: 200,
-			json: async () => ({ access_token: 'minted-token' }),
+			json: async () => ({ access_token: 'minted-token', expires_in: 3600 }),
 		});
 		fetch.mockImplementationOnce(async (_url, options) => {
 			started.resolve(options!.signal!);
@@ -427,4 +428,118 @@ describe('BigQuery failure boundaries', () => {
 		expect(signal.aborted).toBe(true);
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
+});
+
+describe('BigQuery token reuse and deadlines', () => {
+	it('reuses a token across browsing and testing and refreshes one minute before expiry', async () => {
+		vi.useFakeTimers();
+		const { browser, fetch } = world(() => ({ datasets: [] }));
+		await browser.listNamespaces(source, { limit: 1 });
+		await browser.testConnection(source);
+		await vi.advanceTimersByTimeAsync(3_539_999);
+		await browser.listNamespaces(source, { limit: 1 });
+		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(1);
+		await browser.listNamespaces(source, { limit: 1 });
+		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(2);
+	});
+
+	it('isolates tokens by credential and browser instance', async () => {
+		const { browser, probe, fetch } = world(() => ({ datasets: [] }));
+		const rotated = {
+			...source,
+			credentials_json: JSON.stringify({
+				...(JSON.parse(source.credentials_json) as Record<string, unknown>),
+				private_key_id: 'rotated-key',
+			}),
+		};
+		await browser.listNamespaces(source, { limit: 1 });
+		await browser.listNamespaces(rotated, { limit: 1 });
+		await browser.listNamespaces(source, { limit: 1 });
+		await new BigQueryDatabaseBrowser({ probe, mode: 'full' }).listNamespaces(source, { limit: 1 });
+		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(3);
+	});
+
+	it('discards a rejected token and authenticates on the next request', async () => {
+		const { browser, fetch } = world(() => ({ datasets: [] }));
+		await browser.listNamespaces(source, { limit: 1 });
+		fetch.mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) });
+		await expect(browser.listNamespaces(source, { limit: 1 })).rejects.toThrow('access was denied');
+		await browser.listNamespaces(source, { limit: 1 });
+		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(2);
+	});
+
+	it('does not reuse tokens whose remaining lifetime is too short', async () => {
+		const { browser, fetch } = world(() => ({ datasets: [] }));
+		fetch.mockImplementation(async (url) => ({
+			ok: true,
+			status: 200,
+			json: async () =>
+				url.endsWith('/token') ? { access_token: 'short-token', expires_in: 60 } : { datasets: [] },
+		}));
+		await browser.listNamespaces(source, { limit: 1 });
+		await browser.listNamespaces(source, { limit: 1 });
+		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(2);
+	});
+
+	it.each([undefined, 0, -1, '3600', 86_401])(
+		'rejects an invalid token lifetime %s without caching it',
+		async (expires_in) => {
+			const { browser, fetch } = world(() => ({ datasets: [] }));
+			fetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({ access_token: 'bad-lifetime', expires_in }),
+			});
+			await expect(browser.listNamespaces(source, { limit: 1 })).rejects.toThrow(
+				'authentication failed',
+			);
+			await browser.listNamespaces(source, { limit: 1 });
+			expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(2);
+		},
+	);
+
+	it.each(['metadata', 'preview'])(
+		'aborts the pending %s request at the shared deadline after authentication',
+		async (operation) => {
+			vi.useFakeTimers();
+			const { browser, fetch } = world();
+			const authStarted = Promise.withResolvers<AbortSignal>();
+			const releaseToken = Promise.withResolvers<void>();
+			const resourceStarted = Promise.withResolvers<AbortSignal>();
+			fetch.mockImplementation(async (url, options) => {
+				if (url.endsWith('/token')) {
+					authStarted.resolve(options!.signal!);
+					await releaseToken.promise;
+					return {
+						ok: true,
+						status: 200,
+						json: async () => ({ access_token: 'minted-token', expires_in: 3600 }),
+					};
+				}
+				if (operation === 'preview' && !new URL(url).pathname.endsWith('/data')) {
+					return { ok: true, status: 200, json: async () => metadata };
+				}
+				resourceStarted.resolve(options!.signal!);
+				return new Promise(() => {});
+			});
+			const pending =
+				operation === 'metadata'
+					? browser.listNamespaces(source, { limit: 1 })
+					: browser.previewRows(source, ['sales'], 'orders', { limit: 1 });
+			const assertion = expect(pending).rejects.toThrow('timed out');
+			const authSignal = await authStarted.promise;
+			await vi.advanceTimersByTimeAsync(25_000);
+			releaseToken.resolve();
+			const resourceSignal = await resourceStarted.promise;
+			expect(resourceSignal).toBe(authSignal);
+			expect(resourceSignal.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(4_999);
+			expect(resourceSignal.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			await assertion;
+			expect(resourceSignal.aborted).toBe(true);
+			expect(fetch).toHaveBeenCalledTimes(operation === 'metadata' ? 2 : 3);
+		},
+	);
 });

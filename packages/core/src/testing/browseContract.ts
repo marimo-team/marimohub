@@ -208,7 +208,7 @@ export function fetchProbe(): IntegrationProbe {
 				headers: init?.headers,
 				body: init?.body,
 				signal: init?.signal,
-				redirect: 'error',
+				redirect: 'manual',
 			});
 			const text = await res.text();
 			return {

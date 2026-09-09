@@ -43,6 +43,7 @@ describe('catalog recovery', () => {
 		failing = false;
 		await user.click(screen.getByRole('button', { name: 'Retry loading more tables' }));
 		expect(await screen.findByText('refunds')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'orders' })).toHaveAttribute('aria-current', 'true');
 		expect(screen.getAllByTestId('browse-table')).toHaveLength(2);
 		expect(screen.getByTestId('location')).toHaveTextContent(route);
 	});
@@ -104,6 +105,33 @@ describe('catalog recovery', () => {
 			expect(screen.getByTestId('location')).toHaveTextContent(route);
 		},
 	);
+
+	it('shows a capability refresh failure and retries without losing the tree or selection', async () => {
+		const user = userEvent.setup();
+		const client = createTestQueryClient();
+		const failures: { capability?: string } = {};
+		setup(route, { objectFailures: failures }, client);
+		const selectedTable = await screen.findByTestId('browse-table');
+		expect(selectedTable).toHaveAttribute('aria-current', 'true');
+		failures.capability = 'Capability refresh unavailable';
+		await act(async () => {
+			await client.invalidateQueries();
+		});
+		expect(await screen.findByText('Capability refresh unavailable')).toBeInTheDocument();
+		expect(screen.getByTestId('browse-table')).toBe(selectedTable);
+		expect(selectedTable).toHaveAttribute('aria-current', 'true');
+		expect(screen.getByTestId('browse-namespace')).toHaveAttribute('aria-expanded', 'true');
+		expect(screen.getByTestId('location')).toHaveTextContent(route);
+		delete failures.capability;
+		await user.click(screen.getByRole('button', { name: 'Retry refreshing capability' }));
+		await waitFor(() =>
+			expect(screen.queryByText('Capability refresh unavailable')).not.toBeInTheDocument(),
+		);
+		expect(screen.getByTestId('browse-table')).toBe(selectedTable);
+		expect(selectedTable).toHaveAttribute('aria-current', 'true');
+		expect(screen.getByTestId('browse-namespace')).toHaveAttribute('aria-expanded', 'true');
+		expect(screen.getByTestId('location')).toHaveTextContent(route);
+	});
 
 	it('distinguishes an empty catalog from an access failure', async () => {
 		setup(`/projects/${PID}/data/${IID}`, {

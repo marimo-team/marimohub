@@ -15,13 +15,52 @@ const tokenSchema = z.object({
 		.string()
 		.min(1)
 		.regex(/^[^\r\n]+$/),
+	expires_in: z.number().int().positive().max(86_400),
 });
 
-export async function accessToken(
+export class BigQueryTokenCache {
+	private readonly entries = new Map<string, { token: string; expiresAt: number }>();
+
+	async get(raw: string, probe: IntegrationProbe, signal: AbortSignal): Promise<string> {
+		signal.throwIfAborted();
+		const key = await credentialKey(raw);
+		signal.throwIfAborted();
+		const now = Date.now();
+		for (const [key, entry] of this.entries) {
+			if (entry.expiresAt <= now + 60_000) this.entries.delete(key);
+		}
+		const cached = this.entries.get(key);
+		if (cached) {
+			this.entries.delete(key);
+			this.entries.set(key, cached);
+			return cached.token;
+		}
+		const result = await accessToken(raw, probe, signal);
+		signal.throwIfAborted();
+		const expiresAt = now + result.expires_in * 1000;
+		if (expiresAt > Date.now() + 60_000) {
+			if (this.entries.size >= 100) this.entries.delete(this.entries.keys().next().value!);
+			this.entries.set(key, { token: result.access_token, expiresAt });
+		}
+		return result.access_token;
+	}
+
+	async invalidate(raw: string, token: string): Promise<void> {
+		const key = await credentialKey(raw);
+		if (this.entries.get(key)?.token === token) this.entries.delete(key);
+	}
+}
+
+async function credentialKey(raw: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function accessToken(
 	raw: string,
 	probe: IntegrationProbe,
 	signal: AbortSignal,
-): Promise<string> {
+): Promise<z.infer<typeof tokenSchema>> {
 	signal.throwIfAborted();
 	let account: z.infer<typeof accountSchema>;
 	try {
@@ -53,7 +92,7 @@ export async function accessToken(
 			}).toString(),
 		});
 		if (!response.ok) throw new Error('authentication');
-		return tokenSchema.parse(await response.json()).access_token;
+		return tokenSchema.parse(await response.json());
 	} catch (error) {
 		signal.throwIfAborted();
 		if (error instanceof ResourceExhaustedError) throw error;

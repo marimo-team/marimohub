@@ -259,15 +259,17 @@ Servers differ in pagination and namespace addressing, so the `iceberg_rest`
 client filters listings to direct children, stops on a non-advancing page
 token, and honors a `namespace-separator` declared by `/v1/config`.
 
-Every browsable kind must run the shared live suite: `browseContract`
+Every browsable kind must provide a shared live suite: `browseContract`
 (`@marimo-hub/core/testing/browse-contract`) pins the cross-kind guarantees —
 roots without descendants, exact direct children under a parent, tables in
 their namespace, schema round-trip — while the kind supplies config, probe,
 and seeding. See `icebergRest.browse.live.test.ts` for the shape; suites gate
-on a `MARIMOHUB_TEST_*` env var and skip otherwise. CI runs them on every PR:
-the `Catalog conformance` workflow (mirroring storage-conformance) starts the
-pinned servers — currently `apache/iceberg-rest-fixture` — and sets the env
-vars. A new kind adds its server container and env var there.
+on a `MARIMOHUB_TEST_*` env var and skip otherwise. On every PR, the
+`Catalog conformance` workflow runs the Iceberg REST, Trino, ClickHouse, and
+PostgreSQL suites against pinned containers. Add new container-backed kinds
+and their env vars there. Databricks and BigQuery require hosted credentials
+and do not run in this workflow; see [Databricks and BigQuery live suites](#databricks-and-bigquery-live-suites)
+for their separate live-validation setup.
 
 ## Secrets
 

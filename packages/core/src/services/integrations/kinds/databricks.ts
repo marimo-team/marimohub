@@ -39,6 +39,11 @@ export const databricks = defineIntegration({
 		'databricks-sqlalchemy>=1.0',
 		'databricks-sdk>=0.18',
 	],
+	resolveRequirements: (config) => [
+		'databricks-sql-connector>=3.4',
+		'databricks-sqlalchemy>=1.0',
+		...(config.auth.method === 'oauth_m2m' ? ['databricks-sdk>=0.18'] : []),
+	],
 	uiHints: {
 		host: { group: 'Connection', order: 1 },
 		http_path: { group: 'Connection', order: 2 },

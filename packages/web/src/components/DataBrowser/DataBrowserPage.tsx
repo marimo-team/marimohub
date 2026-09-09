@@ -630,29 +630,40 @@ function IntegrationSection({
 					{kind?.title ?? entry.kind}
 				</span>
 			</button>
-			{active &&
-				showTree &&
-				(capability.data === undefined ? (
-					<LoadState
-						depth={1}
-						error={capability.error ?? undefined}
-						onRetry={() => void capability.refetch()}
-						pending={capability.isFetching}
-					/>
-				) : tables?.available ? (
-					<NamespaceLevel
-						projectId={projectId}
-						integrationId={entry.id}
-						parent={[]}
-						depth={1}
-						{...handlers}
-					/>
-				) : (
-					<LoadState
-						depth={1}
-						hint={tables?.reason ?? 'This instance cannot be browsed as a table catalog.'}
-					/>
-				))}
+			{active && showTree && (
+				<>
+					{capability.data === undefined ? (
+						<LoadState
+							depth={1}
+							error={capability.error ?? undefined}
+							onRetry={() => void capability.refetch()}
+							pending={capability.isFetching}
+						/>
+					) : tables?.available ? (
+						<NamespaceLevel
+							projectId={projectId}
+							integrationId={entry.id}
+							parent={[]}
+							depth={1}
+							{...handlers}
+						/>
+					) : (
+						<LoadState
+							depth={1}
+							hint={tables?.reason ?? 'This instance cannot be browsed as a table catalog.'}
+						/>
+					)}
+					{capability.data !== undefined && capability.error && (
+						<LoadState
+							depth={1}
+							error={capability.error}
+							onRetry={() => void capability.refetch()}
+							pending={capability.isFetching}
+							retryLabel="Retry refreshing capability"
+						/>
+					)}
+				</>
+			)}
 		</div>
 	);
 }

@@ -14,7 +14,7 @@ const DEPENDENCY_FIELDS = [
 	'optionalDependencies',
 ] as const;
 
-it('recognizes source-control implementations as adapters', () => {
+it('recognizes adapter implementations', () => {
 	expect(ADAPTER_PATTERN.test('@marimo-hub/source-control-github')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/database-browser-bigquery')).toBe(true);
 });

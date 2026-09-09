@@ -268,13 +268,32 @@ describe('Databricks failure boundaries', () => {
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
-	it('rejects a schema default without a catalog before querying metadata', async () => {
-		const { probe, fetch } = probeWith();
-		expect(await databricks.testConnection!({ ...config, schema: 'sales' }, probe)).toMatchObject({
-			ok: false,
-			details: expect.stringContaining('Configure a catalog'),
-		});
-		expect(fetch).not.toHaveBeenCalled();
+	it.each([config, oauth])(
+		'rejects a schema default without a catalog before authentication with $auth.method',
+		async (config) => {
+			const { probe, fetch } = probeWith();
+			expect(await databricks.testConnection!({ ...config, schema: 'sales' }, probe)).toMatchObject(
+				{
+					ok: false,
+					details: 'Configure a catalog to verify the default Databricks schema.',
+				},
+			);
+			expect(fetch).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ config, expected: ['databricks-sql-connector>=3.4', 'databricks-sqlalchemy>=1.0'] },
+		{
+			config: oauth,
+			expected: [
+				'databricks-sql-connector>=3.4',
+				'databricks-sqlalchemy>=1.0',
+				'databricks-sdk>=0.18',
+			],
+		},
+	])('resolves notebook requirements for $config.auth.method', ({ config, expected }) => {
+		expect(databricks.resolveRequirements!(config)).toEqual(expected);
 	});
 
 	it.each([
