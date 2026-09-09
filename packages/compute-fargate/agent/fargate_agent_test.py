@@ -12,20 +12,24 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+from unittest import mock
 
 try:
-    from agent.fargate_agent import AgentServer, AgentState, check_health
+    import agent.fargate_agent as _agent_module
 except ModuleNotFoundError:
     _spec = importlib.util.spec_from_file_location(
         "fargate_agent", os.path.join(os.path.dirname(__file__), "fargate_agent.py")
     )
     if _spec is None or _spec.loader is None:
         raise
-    _module = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_module)
-    AgentServer = _module.AgentServer
-    AgentState = _module.AgentState
-    check_health = _module.check_health
+    _agent_module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_agent_module)
+
+AgentServer = _agent_module.AgentServer
+AgentState = _agent_module.AgentState
+MAX_FILE_BYTES = _agent_module.MAX_FILE_BYTES
+MAX_OUTPUT_BYTES = _agent_module.MAX_OUTPUT_BYTES
+check_health = _agent_module.check_health
 
 
 TOKEN = "t" * 64
@@ -60,7 +64,7 @@ class AgentTest(unittest.TestCase):
     def test_health_requires_auth_and_reports_protocol(self):
         status, body = self.request("GET", "/health")
         self.assertEqual(status, 200)
-        self.assertEqual(body["protocolVersion"], 1)
+        self.assertEqual(body["protocolVersion"], 2)
         request = urllib.request.Request(self.base + "/health", method="GET")
         with self.assertRaises(urllib.error.HTTPError) as failure:
             urllib.request.urlopen(request, timeout=5)
@@ -75,16 +79,20 @@ class AgentTest(unittest.TestCase):
         self.assertFalse(timed["success"])
         self.assertEqual(timed["exitCode"], 124)
 
-    def test_exec_output_is_bounded(self):
-        _, body = self.request(
-            "POST",
-            "/exec",
-            {
-                "command": "python3 -c 'import sys; sys.stdout.write(\"x\" * (9 * 1024 * 1024))'",
-                "cwd": os.getcwd(),
-            },
-        )
-        self.assertEqual(len(body["stdout"].encode()), 8 * 1024 * 1024)
+    def test_exec_output_overflow_fails_explicitly(self):
+        with mock.patch.object(_agent_module, "MAX_OUTPUT_BYTES", 8):
+            _, body = self.request(
+                "POST",
+                "/exec",
+                {"command": "printf 123456789", "cwd": os.getcwd()},
+            )
+        self.assertFalse(body["success"])
+        self.assertEqual(body["stdout"], "")
+        self.assertIn("output exceeds", body["stderr"])
+
+    def test_exec_limit_supports_a_maximum_size_workspace_file(self):
+        encoded_size = ((MAX_FILE_BYTES + 2) // 3) * 4
+        self.assertGreaterEqual(MAX_OUTPUT_BYTES, encoded_size)
 
     def test_token_is_not_in_child_environment(self):
         _, body = self.request("POST", "/exec", {"command": "printf '%s' \"${MARIMOHUB_AGENT_TOKEN:-}\"", "cwd": os.getcwd()})
@@ -160,6 +168,34 @@ class AgentTest(unittest.TestCase):
             },
         )
         self.assertEqual(body["stdout"], "forced")
+
+    def test_env_patches_preserve_defaults_and_task_environment(self):
+        name = "MH_FARGATE_IMAGE_ENV"
+        previous = os.environ.get(name)
+        os.environ[name] = "image"
+        try:
+            self.request("POST", "/env", {"defaults": {name: "default"}})
+            self.request("POST", "/env", {"forced": {"MH_FARGATE_FORCED": "forced"}})
+            _, image = self.request(
+                "POST",
+                "/exec",
+                {"command": f"printf '%s' \"${name}\"", "cwd": os.getcwd()},
+            )
+            _, fallback = self.request(
+                "POST",
+                "/exec",
+                {
+                    "command": "printf '%s' \"$MH_FARGATE_FORCED\"",
+                    "cwd": os.getcwd(),
+                },
+            )
+        finally:
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+        self.assertEqual(image["stdout"], "image")
+        self.assertEqual(fallback["stdout"], "forced")
 
     def test_server_token_is_not_in_process_environment(self):
         with socket.socket() as listener:

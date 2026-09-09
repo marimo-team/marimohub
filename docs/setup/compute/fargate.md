@@ -9,12 +9,17 @@ Before you configure the hub:
 1. Copy `packages/compute-fargate/agent/fargate_agent.py` into your notebook
    image. Make the file executable. The agent needs Python 3 and no third-party
    Python packages.
-2. Register a Linux `awsvpc` task definition with `FARGATE` compatibility. Use
-   a non-root user and a writable `/workspace` directory. Expose ports 2717 and 2718. Set `taskRoleArn` to the IAM role for notebook AWS access. Do not put
-   static AWS access keys in the image or task definition. See the
+2. Register a Linux `awsvpc` task definition with `FARGATE` compatibility.
+   Configure a non-root user. Configure `/workspace` as a writable directory.
+   Expose ports 2717 and 2718. If you enable VS Code, expose port 8443 by
+   default. If you enable OpenCode, expose port 4096 by default. Set
+   `taskRoleArn` to the IAM role for notebook AWS access. Do not put static AWS
+   access keys in the image or task definition. See the
    [example task definition](../../../examples/aws-fargate/kernel-task-definition.json).
 3. Put the hub and notebook tasks in private subnets. Allow the hub security
-   group to reach ports 2717 and 2718 on the notebook security group.
+   group to reach ports 2717 and 2718 on the notebook security group. If you
+   enable VS Code, allow its configured port. If you enable OpenCode, allow its
+   configured port.
 4. Give the hub the required ECS permissions. Permit `iam:PassRole` only for
    the execution role and task role. See the [example policy](../../../examples/aws-fargate/hub-iam-policy.json).
 5. Set these environment variables on the hub:

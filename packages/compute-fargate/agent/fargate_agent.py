@@ -21,11 +21,11 @@ import urllib.request
 import uuid
 from typing import Any
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_BODY_BYTES = 40 * 1024 * 1024
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_WRITE_BATCH_BYTES = 8 * 1024 * 1024
-MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_OUTPUT_BYTES = ((MAX_FILE_BYTES + 2) // 3) * 4
 MAX_LOG_BYTES = 64 * 1024
 
 
@@ -81,6 +81,7 @@ class _BoundedCapture:
         self._limit = limit
         self._keep_tail = keep_tail
         self._data = bytearray()
+        self._truncated = False
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._drain, daemon=True)
         self._thread.start()
@@ -93,18 +94,27 @@ class _BoundedCapture:
                         self._data.extend(chunk)
                         excess = len(self._data) - self._limit
                         if excess > 0:
+                            self._truncated = True
                             del self._data[:excess]
-                    elif len(self._data) < self._limit:
-                        self._data.extend(chunk[: self._limit - len(self._data)])
+                    else:
+                        remaining = self._limit - len(self._data)
+                        if len(chunk) > remaining:
+                            self._truncated = True
+                        if remaining > 0:
+                            self._data.extend(chunk[:remaining])
         finally:
             self._stream.close()
 
     def wait(self) -> None:
-        self._thread.join(timeout=1)
+        self._thread.join()
 
     def read(self) -> bytes:
         with self._lock:
             return bytes(self._data)
+
+    def truncated(self) -> bool:
+        with self._lock:
+            return self._truncated
 
 
 class ProcessTable:
@@ -247,6 +257,7 @@ class AgentState:
             raise ValueError("MARIMOHUB_AGENT_TOKEN must be at least 32 bytes")
         self.forced: dict[str, str] = {}
         self.defaults: dict[str, str] = {}
+        self._environment_lock = threading.Lock()
         self.processes = ProcessTable(self)
 
     def authenticate(self, supplied: str | None) -> bool:
@@ -260,7 +271,10 @@ class AgentState:
         values = dict(os.environ)
         values.pop("MARIMOHUB_AGENT_TOKEN", None)
         values.pop("MARIMOHUB_AGENT_SECRET", None)
-        for key, value in self.defaults.items():
+        with self._environment_lock:
+            defaults = dict(self.defaults)
+            forced = dict(self.forced)
+        for key, value in defaults.items():
             values.setdefault(key, value)
         if isinstance(overrides, dict):
             for key, value in overrides.items():
@@ -269,10 +283,17 @@ class AgentState:
                     "MARIMOHUB_AGENT_SECRET",
                 }:
                     values[key] = value
-        values.update(self.forced)
+        values.update(forced)
         values.pop("MARIMOHUB_AGENT_TOKEN", None)
         values.pop("MARIMOHUB_AGENT_SECRET", None)
         return values
+
+    def update_environment(
+        self, forced: dict[str, str], defaults: dict[str, str]
+    ) -> None:
+        with self._environment_lock:
+            self.forced.update(forced)
+            self.defaults.update(defaults)
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         command = payload.get("command")
@@ -300,6 +321,13 @@ class AgentState:
         code = _wait_process(process, _bounded_timeout(payload.get("timeoutMs")))
         stdout_capture.wait()
         stderr_capture.wait()
+        if stdout_capture.truncated() or stderr_capture.truncated():
+            return {
+                "success": False,
+                "exitCode": code,
+                "stdout": "",
+                "stderr": "command output exceeds the agent limit",
+            }
         output = stdout_capture.read()
         error = stderr_capture.read()
         return {
@@ -425,12 +453,18 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             for key, value in defaults.items():
                 if not isinstance(key, str) or not isinstance(value, str):
                     raise AgentError(400, "environment values must be strings")
-            self.state.forced = {
-                key: value for key, value in forced.items() if key not in {"MARIMOHUB_AGENT_TOKEN", "MARIMOHUB_AGENT_SECRET"}
-            }
-            self.state.defaults = {
-                key: value for key, value in defaults.items() if key not in {"MARIMOHUB_AGENT_TOKEN", "MARIMOHUB_AGENT_SECRET"}
-            }
+            self.state.update_environment(
+                {
+                    key: value
+                    for key, value in forced.items()
+                    if key not in {"MARIMOHUB_AGENT_TOKEN", "MARIMOHUB_AGENT_SECRET"}
+                },
+                {
+                    key: value
+                    for key, value in defaults.items()
+                    if key not in {"MARIMOHUB_AGENT_TOKEN", "MARIMOHUB_AGENT_SECRET"}
+                },
+            )
             self._json(200, {"ok": True})
             return
         if method == "POST" and path == "/processes":

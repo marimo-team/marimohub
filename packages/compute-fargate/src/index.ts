@@ -249,7 +249,6 @@ class FargateSandboxInstance implements SandboxInstance {
 	private readonly agentPort: number;
 	private readonly readyTimeoutMs: number;
 	private readonly env: Record<string, string> = {};
-	private readonly envDefaults: Record<string, string> = {};
 	private ensurePromise?: Promise<void>;
 	private handle?: FargateTaskHandle;
 	private timings: { create?: number; boot?: number } = {};
@@ -511,7 +510,6 @@ class FargateSandboxInstance implements SandboxInstance {
 			if (value !== undefined) extras[key] = value;
 		}
 		const merged: Record<string, string> = {
-			...this.envDefaults,
 			...this.env,
 			...extras,
 		};
@@ -541,11 +539,7 @@ class FargateSandboxInstance implements SandboxInstance {
 					requestedTimeout,
 				),
 			);
-			return execResult(
-				body.success === true || body.exitCode === 0,
-				textValue(body.stdout),
-				textValue(body.stderr),
-			);
+			return execResult(body.success === true, textValue(body.stdout), textValue(body.stderr));
 		} catch (error) {
 			return execResult(false, '', errorMessage(error), 'BACKEND_ERROR');
 		}
@@ -630,13 +624,13 @@ class FargateSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		await this.ensure();
-		if (options?.onlyIfUnset) Object.assign(this.envDefaults, vars);
-		else Object.assign(this.env, vars);
+		const defaults = options?.onlyIfUnset ? vars : {};
+		const forced = options?.onlyIfUnset ? {} : vars;
 		await this.request('/env', {
 			method: 'POST',
-			body: agentJsonBody({ forced: this.env, defaults: this.envDefaults }),
+			body: agentJsonBody({ forced, defaults }),
 		});
+		Object.assign(this.env, forced);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {

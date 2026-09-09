@@ -6,7 +6,7 @@ import type {
 	SandboxExposureMode,
 } from '@marimo-hub/core/ports';
 
-export const FARGATE_PROTOCOL_VERSION = 1;
+export const FARGATE_PROTOCOL_VERSION = 2;
 export const DEFAULT_AGENT_PORT = 2717;
 export const DEFAULT_KERNEL_PORT = 2718;
 export const DEFAULT_READY_TIMEOUT_MS = 120_000;
@@ -17,7 +17,7 @@ export const DEFAULT_IMAGE_KEY = 'default';
 export const MAX_AGENT_BODY_BYTES = 40 * 1024 * 1024;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_WRITE_BATCH_BYTES = 8 * 1024 * 1024;
-export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;
+export const MAX_EXEC_OUTPUT_BYTES = Math.ceil(MAX_FILE_BYTES / 3) * 4;
 
 export const OWNER_TAG = 'marimohub:owner';
 export const SANDBOX_ID_TAG = 'marimohub:sandbox-id';

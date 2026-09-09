@@ -222,6 +222,50 @@ describe('Fargate profile selection', () => {
 		).rejects.toThrow(/file limit/);
 	});
 
+	it('sends environment defaults as agent patches instead of command overrides', async () => {
+		const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+		await Promise.all([
+			instance.setEnvVars({ MH_DEFAULT: 'default' }, { onlyIfUnset: true }),
+			instance.setEnvVars({ MH_FORCED: 'forced' }),
+		]);
+		await instance.exec('true');
+
+		const calls = vi.mocked(fetch).mock.calls;
+		const envPayloads = calls
+			.filter(([url]) => String(url).endsWith('/env'))
+			.map(([, init]) => JSON.parse(String(init?.body)));
+		expect(envPayloads).toEqual(
+			expect.arrayContaining([
+				{ forced: {}, defaults: { MH_DEFAULT: 'default' } },
+				{ forced: { MH_FORCED: 'forced' }, defaults: {} },
+			]),
+		);
+		const exec = calls.findLast(([url]) => String(url).endsWith('/exec'));
+		const execPayload = JSON.parse(String(exec?.[1]?.body)) as {
+			env?: Record<string, string>;
+		};
+		expect(execPayload.env).toEqual({ MH_FORCED: 'forced' });
+	});
+
+	it('honors an explicit failed result even when the process exit code is zero', async () => {
+		vi.mocked(fetch).mockImplementation(async (url) => {
+			if (String(url).endsWith('/health')) {
+				return Response.json({ protocolVersion: FARGATE_PROTOCOL_VERSION });
+			}
+			return Response.json({
+				success: false,
+				exitCode: 0,
+				stdout: '',
+				stderr: 'command output exceeds the agent limit',
+			});
+		});
+		const result = await makeCompute(new FakeEcs()).create(ID, { reuse: false }).exec('true');
+		expect(result).toMatchObject({
+			success: false,
+			stderr: 'command output exceeds the agent limit',
+		});
+	});
+
 	it('gives agent operations their requested timeout and preserves zero as unlimited', async () => {
 		const client = new FakeEcs();
 		const instance = makeCompute(client).create(ID, { reuse: false });

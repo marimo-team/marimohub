@@ -17,7 +17,9 @@
 			"environment": [{ "name": "MARIMOHUB_AGENT_PORT", "value": "2717" }],
 			"portMappings": [
 				{ "name": "agent", "containerPort": 2717, "protocol": "tcp" },
-				{ "name": "marimo", "containerPort": 2718, "protocol": "tcp" }
+				{ "name": "marimo", "containerPort": 2718, "protocol": "tcp" },
+				{ "name": "opencode", "containerPort": 4096, "protocol": "tcp" },
+				{ "name": "vscode", "containerPort": 8443, "protocol": "tcp" }
 			],
 			"logConfiguration": {
 				"logDriver": "awslogs",

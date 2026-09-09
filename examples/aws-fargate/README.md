@@ -35,9 +35,12 @@ static AWS access keys in the image or task definition.
 The hub performs an authenticated agent readiness check. The task definition
 does not need an ECS container health check.
 
-The hub security group must reach task ports 2717 and 2718. Keep the notebook
-tasks in private subnets. See the [Fargate setup guide](../../docs/setup/compute/fargate.md)
-for the IAM policy, network, and hub configuration.
+The hub security group must reach task ports 2717 and 2718. If you enable VS
+Code, it must also reach port 8443 by default. If you enable OpenCode, it must
+also reach port 4096 by default. Use the configured port when you override a
+surface port. Keep the notebook tasks in private subnets. See the
+[Fargate setup guide](../../docs/setup/compute/fargate.md) for the IAM policy,
+network, and hub configuration.
 
 Set the policy's `marimohub:owner` tag value to the same value as
 `MARIMOHUB_COMPUTE_FARGATE_OWNER`.
