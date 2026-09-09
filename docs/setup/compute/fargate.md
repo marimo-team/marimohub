@@ -15,8 +15,11 @@ the hub's authenticated proxy, not through a public task address.
 
 ## Required setup
 
-1. Build the official sandbox image or an image that contains the agent at
-   `/usr/local/lib/marimohub/fargate_agent.py`.
+1. Copy `packages/compute-fargate/agent/fargate_agent.py` into your notebook
+   image and make it executable. It is a standalone Python 3 file with no
+   third-party Python dependencies. The image can otherwise use any base that
+   supplies the notebook runtime requirements. The `examples/aws-fargate`
+   directory contains a Dockerfile snippet.
 2. Register a Linux `awsvpc` task definition with the `FARGATE` compatibility,
    a non-root agent container, writable `/workspace`, ports 2717 and 2718, and
    an ECS logs configuration. See the [example task definition](../../../examples/aws-fargate/kernel-task-definition.json).

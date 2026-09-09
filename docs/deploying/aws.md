@@ -40,12 +40,13 @@ MARIMOHUB_COMPUTE_FARGATE_OWNER=prod-hub-a
 MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET='<at least 32 random bytes>'
 ```
 
-Register the task definition first; it must run the bundled control agent as a
-non-root process with writable `/workspace` and ports 2717/2718. Keep hub and
-kernel tasks in private subnets and allow those ports only from the hub security
-group. The task execution role needs ECR and CloudWatch Logs access. The hub
-needs scoped ECS RunTask/Describe/List/Stop permissions and PassRole only for
-the two kernel roles. See [the example task definition](../../examples/aws-fargate/kernel-task-definition.json),
+Register the task definition first; copy the standalone Fargate agent into the
+notebook image and run it as a non-root process with writable `/workspace` and
+ports 2717/2718. Keep hub and kernel tasks in private subnets and allow those
+ports only from the hub security group. The task execution role needs ECR and
+CloudWatch Logs access. The hub needs scoped ECS RunTask/Describe/List/Stop
+permissions and PassRole only for the two kernel roles. See
+[the example task definition](../../examples/aws-fargate/kernel-task-definition.json),
 [hub policy](../../examples/aws-fargate/hub-iam-policy.json), and [Fargate setup](../compute.md#aws-ecs-fargate).
 
 Fargate CPU/memory profiles round up to the next official Fargate allocation,

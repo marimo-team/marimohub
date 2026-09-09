@@ -14,10 +14,12 @@ import signal
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
 from typing import Any
 
@@ -513,5 +515,30 @@ def run_server(host: str = "0.0.0.0", port: int | None = None) -> None:
         server.server_close()
 
 
+def check_health(host: str = "127.0.0.1", port: int | None = None, token: str | None = None) -> bool:
+    selected_port = (
+        port if port is not None else int(os.environ.get("MARIMOHUB_AGENT_PORT", "2717"))
+    )
+    selected_token = token or os.environ.get("MARIMOHUB_AGENT_TOKEN", "")
+    request = urllib.request.Request(
+        f"http://{host}:{selected_port}/health",
+        headers={"Authorization": f"Bearer {selected_token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            body = json.load(response)
+        return (
+            response.status == 200
+            and body.get("ok") is True
+            and body.get("protocolVersion") == PROTOCOL_VERSION
+        )
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["healthcheck"]:
+        raise SystemExit(0 if check_health() else 1)
+    if sys.argv[1:]:
+        raise SystemExit("usage: fargate_agent.py [healthcheck]")
     run_server()

@@ -227,7 +227,7 @@ Runs one pre-registered Linux Fargate task per sandbox. The hub reaches the auth
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_FARGATE_CLUSTER` | ECS cluster that owns notebook tasks. | Yes | — | `marimohub-prod` |
-| `MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION` | Existing ECS task-definition family:revision or ARN. It must run the bundled agent as a non-root container and own the pinned image. | Yes | — | `marimohub-kernel:12` |
+| `MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION` | Existing ECS task-definition family:revision or ARN. It must run the standalone Fargate agent as a non-root container and own the pinned image. | Yes | — | `marimohub-kernel:12` |
 | `MARIMOHUB_COMPUTE_FARGATE_CONTAINER_NAME` | Named task-definition container that runs the agent. | — | `marimo` | — |
 | `MARIMOHUB_COMPUTE_FARGATE_SUBNETS` | Comma-separated private subnet ids for task ENIs. | Yes | — | `subnet-0123,subnet-0456` |
 | `MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS` | Comma-separated security groups permitting hub-to-task agent and kernel traffic. | Yes | — | `sg-0123456789abcdef0` |

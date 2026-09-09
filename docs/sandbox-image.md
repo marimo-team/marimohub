@@ -5,7 +5,7 @@ description: Build a compatible, pre-installed container image for marimohub not
 # Sandbox image (bring your own container)
 
 A compute **backend** decides _where_ a kernel runs (`docker`, `podman`,
-`kubernetes`, `modal`, `coreweave`, `fargate`). The **sandbox image** decides _what_ runs
+`kubernetes`, `modal`, `coreweave`). The **sandbox image** decides _what_ runs
 inside it — the Python version, system libraries, and pre-installed packages
 your notebooks get.
 
@@ -15,9 +15,8 @@ You bring your own image. Set it once per deployment:
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 ```
 
-Every container-based backend except Fargate reads this same variable. (`local`
-runs `uv` on the host and needs no image; `e2b` uses an E2B template instead;
-Fargate uses the image pinned by its pre-registered task definition — see
+Every container-based backend reads this same variable. (`local` runs `uv` on the
+host and needs no image; `e2b` uses an E2B template instead — see
 [Compute](./compute.md).)
 
 The repository image also publishes optional [session surface](./surfaces.md)

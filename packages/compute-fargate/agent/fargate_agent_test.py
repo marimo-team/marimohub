@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 
 try:
-    from agent.fargate_agent import AgentServer, AgentState
+    from agent.fargate_agent import AgentServer, AgentState, check_health
 except ModuleNotFoundError:
     _spec = importlib.util.spec_from_file_location(
         "fargate_agent", os.path.join(os.path.dirname(__file__), "fargate_agent.py")
@@ -22,6 +22,7 @@ except ModuleNotFoundError:
     _spec.loader.exec_module(_module)
     AgentServer = _module.AgentServer
     AgentState = _module.AgentState
+    check_health = _module.check_health
 
 
 TOKEN = "t" * 64
@@ -119,6 +120,10 @@ class AgentTest(unittest.TestCase):
         self.request("POST", "/env", {"defaults": {"MH_ENV": "default"}, "forced": {"MH_ENV": "forced"}})
         _, body = self.request("POST", "/exec", {"command": "printf '%s' \"$MH_ENV\"", "cwd": os.getcwd()})
         self.assertEqual(body["stdout"], "forced")
+
+    def test_standalone_healthcheck(self):
+        self.assertTrue(check_health(port=self.server.server_port, token=TOKEN))
+        self.assertFalse(check_health(port=self.server.server_port, token="wrong"))
 
     def test_process_waits_for_port_and_kills_group(self):
         _, process = self.request(

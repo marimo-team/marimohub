@@ -13,17 +13,14 @@
 			"essential": true,
 			"user": "1000:1000",
 			"workingDirectory": "/workspace",
-			"command": ["python3", "/usr/local/lib/marimohub/fargate_agent.py"],
+			"command": ["/usr/local/bin/marimohub-fargate-agent"],
 			"environment": [{ "name": "MARIMOHUB_AGENT_PORT", "value": "2717" }],
 			"portMappings": [
 				{ "name": "agent", "containerPort": 2717, "protocol": "tcp" },
 				{ "name": "marimo", "containerPort": 2718, "protocol": "tcp" }
 			],
 			"healthCheck": {
-				"command": [
-					"CMD-SHELL",
-					"curl -fsS -H \"Authorization: Bearer $MARIMOHUB_AGENT_TOKEN\" http://127.0.0.1:2717/health >/dev/null"
-				],
+				"command": ["CMD", "/usr/local/bin/marimohub-fargate-agent", "healthcheck"],
 				"interval": 10,
 				"timeout": 5,
 				"retries": 6,

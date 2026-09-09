@@ -26,9 +26,6 @@ RUN useradd -m appuser \
  && mkdir -p /workspace \
  && chown -R appuser:appuser /workspace
 
-COPY packages/compute-fargate/agent/fargate_agent.py /usr/local/lib/marimohub/fargate_agent.py
-RUN chmod 0755 /usr/local/lib/marimohub/fargate_agent.py
-
 # Retaining uv's cache makes overlapping per-notebook dependency installs cache hits.
 RUN cd /tmp \
  && uv init --bare --no-readme base \

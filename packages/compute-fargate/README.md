@@ -1,10 +1,11 @@
 # AWS ECS Fargate compute
 
 `@marimo-hub/compute-fargate` runs one pre-registered Fargate task per
-notebook sandbox. The task definition owns the image and starts the bundled
-authenticated agent as its main process. The hub reaches the agent over the
-task's private ENI; browser traffic remains on the existing authenticated
-proxy surface.
+notebook sandbox. The task definition owns the image and starts the standalone
+`agent/fargate_agent.py` file as its main process. Copy that file into any
+Python 3 image; it has no third-party Python dependencies and does not require
+the marimohub sandbox image. The hub reaches the agent over the task's private
+ENI; browser traffic remains on the existing authenticated proxy surface.
 
 The adapter accepts one logical image key (`default`) in v1. It never registers
 task-definition revisions and never sends a notebook image to ECS. Operators

@@ -736,7 +736,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION',
 						name: 'Fargate task definition',
 						description:
-							'Existing ECS task-definition family:revision or ARN. It must run the bundled agent as a non-root container and own the pinned image.',
+							'Existing ECS task-definition family:revision or ARN. It must run the standalone Fargate agent as a non-root container and own the pinned image.',
 						example: 'marimohub-kernel:12',
 						required: true,
 					},
