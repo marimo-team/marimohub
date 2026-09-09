@@ -1,12 +1,14 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
-import { ChevronDown, Copy, KeyRound, Moon, Puzzle, Shield, Sun } from 'lucide-react';
+import { ChevronDown, Copy, KeyRound, Moon, Plug, Puzzle, Shield, Sun } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { Brand, UserAvatar } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useDisclosure } from '@/hooks/useDisclosure';
+import { useCapabilitiesQuery } from '@/api/hooks';
+import { McpDialog } from '@/components/Account/McpDialog';
 import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
 import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
 
@@ -15,6 +17,8 @@ export function Header() {
 	const { user, signOut } = useAuth();
 	const { theme, toggleTheme } = useTheme();
 	const tokensDialog = useDisclosure();
+	const mcpDialog = useDisclosure();
+	const { data: capabilities } = useCapabilitiesQuery(!!user);
 	const orgIntegrationsDialog = useDisclosure();
 	const { copy } = useCopyToClipboard();
 
@@ -61,6 +65,7 @@ export function Header() {
 									else if (key === 'copy-id') {
 										void copy(user.id).then((ok) => ok && toast.success('User id copied'));
 									} else if (key === 'api-tokens') tokensDialog.open();
+									else if (key === 'mcp') mcpDialog.open();
 									else if (key === 'org-integrations') orgIntegrationsDialog.open();
 									else if (key === 'admin') void navigate('/admin/users');
 								}}
@@ -90,6 +95,15 @@ export function Header() {
 									<KeyRound className="size-3.5" />
 									API tokens
 								</MenuItem>
+								{capabilities?.mcp?.available && capabilities.mcp.url ? (
+									<MenuItem
+										id="mcp"
+										className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors focus:bg-muted max-md:min-h-11"
+									>
+										<Plug className="size-3.5" />
+										MCP
+									</MenuItem>
+								) : null}
 								{user.is_super_admin && (
 									<MenuItem
 										id="org-integrations"
@@ -122,6 +136,7 @@ export function Header() {
 			</div>
 
 			<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
+			<McpDialog isOpen={mcpDialog.isOpen} onClose={mcpDialog.close} />
 			<OrgIntegrationsDialog
 				isOpen={orgIntegrationsDialog.isOpen}
 				onClose={orgIntegrationsDialog.close}

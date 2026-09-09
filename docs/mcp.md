@@ -25,8 +25,7 @@ The MCP server URL adds `/mcp` to this value:
 https://hub.example.com/mcp
 ```
 
-OAuth discovery uses the base URL to publish stable, absolute URLs. The API
-tokens dialog shows the MCP URL.
+OAuth discovery uses the base URL to publish stable, absolute URLs. The MCP dialog in the user menu shows the MCP URL and client setup instructions.
 
 ## Connect a client
 

@@ -7,6 +7,8 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
 import { Header } from './Header';
 
+const MCP_URL = 'https://hub.example.com/team/mcp';
+
 const USER = { id: 'usr-123', email: 'ada@example.com' };
 
 function LocationProbe() {
@@ -18,14 +20,17 @@ function LocationProbe() {
  * be stubbed afterwards or the copy silently succeeds against user-event's stub.
  */
 function setup(
-	writeText: () => Promise<void> = () => Promise.resolve(),
+	writeText: (value: string) => Promise<void> = () => Promise.resolve(),
 	me: Record<string, unknown> = USER,
+	mcpAvailable = false,
 ) {
 	installMatchMedia(false);
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
+			if (url === '/api/v1/capabilities')
+				return jsonOk({ mcp: { available: mcpAvailable, url: mcpAvailable ? MCP_URL : null } });
 			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/me/tokens') return jsonOk([]);
 			if (url === '/api/v1/projects') return jsonOk({ items: [], next_cursor: null });
@@ -133,7 +138,7 @@ describe('Header', () => {
 	});
 
 	it('opens the API tokens dialog from the menu', async () => {
-		const { user } = setup();
+		const { user } = setup(undefined, USER, true);
 		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 		await openUserMenu(user);
 
@@ -142,6 +147,50 @@ describe('Header', () => {
 		await waitFor(() =>
 			expect(screen.getByRole('heading', { name: 'API tokens' })).toBeInTheDocument(),
 		);
+		expect(screen.queryByLabelText('MCP server URL')).not.toBeInTheDocument();
+	});
+
+	it('connects clients from the dedicated MCP dialog', async () => {
+		const { user, clipboard } = setup(undefined, USER, true);
+		await openUserMenu(user);
+		await user.click(await screen.findByRole('menuitem', { name: 'MCP' }));
+		expect(await screen.findByRole('heading', { name: 'Connect with MCP' })).toBeInTheDocument();
+		const installLink = new URL(
+			screen.getByRole('link', { name: 'Add to Cursor' }).getAttribute('href')!,
+		);
+		expect(installLink.protocol).toBe('cursor:');
+		expect(installLink.searchParams.get('name')).toBe('marimohub');
+		expect(JSON.parse(atob(installLink.searchParams.get('config')!))).toEqual({ url: MCP_URL });
+		await user.click(screen.getByRole('button', { name: 'Copy mcp server url' }));
+		expect(clipboard).toHaveBeenLastCalledWith(MCP_URL);
+
+		await user.click(screen.getByRole('tab', { name: 'Claude' }));
+		await user.click(screen.getByRole('button', { name: 'Copy claude code command' }));
+		expect(clipboard).toHaveBeenLastCalledWith(
+			`claude mcp add --transport http --scope user marimohub '${MCP_URL}'`,
+		);
+
+		await user.click(screen.getByRole('tab', { name: 'Codex' }));
+		expect(screen.getByLabelText('Codex command')).toHaveValue(
+			`codex mcp add marimohub --url '${MCP_URL}'`,
+		);
+		expect(screen.getByLabelText('Codex login command')).toHaveValue('codex mcp login marimohub');
+
+		await user.click(screen.getByRole('tab', { name: 'OpenCode' }));
+		await user.click(screen.getByRole('button', { name: 'Copy configuration' }));
+		expect(JSON.parse(clipboard.mock.calls.at(-1)![0])).toEqual({
+			mcp: { marimohub: { type: 'remote', url: MCP_URL } },
+		});
+		await user.click(screen.getByRole('tab', { name: 'OpenCode' }));
+		await user.keyboard('{ArrowRight}');
+		expect(screen.getByRole('tab', { name: 'Other' })).toHaveAttribute('aria-selected', 'true');
+		expect(screen.getByRole('tabpanel')).toHaveTextContent('Streamable HTTP');
+	});
+
+	it('hides MCP when the deployment does not support it', async () => {
+		const { user } = setup();
+		await openUserMenu(user);
+		expect(screen.queryByRole('menuitem', { name: 'MCP' })).not.toBeInTheDocument();
 	});
 
 	it('toggles the theme', async () => {
