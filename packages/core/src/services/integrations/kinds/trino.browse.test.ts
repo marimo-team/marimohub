@@ -160,24 +160,15 @@ describe('trino browse', () => {
 		);
 	});
 
-	it('caps one statement operation at twelve upstream requests', async () => {
-		const { probe, calls } = queuedProbe([
-			{ nextUri: 'https://trino.example.com/v1/statement/q/1' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/2' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/3' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/4' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/5' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/6' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/7' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/8' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/9' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/10' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/11' },
-			{ nextUri: 'https://trino.example.com/v1/statement/q/12' },
-		]);
+	it('caps one statement operation at one hundred upstream requests', async () => {
+		const { probe, calls } = queuedProbe(
+			Array.from({ length: 100 }, (_, index) => ({
+				nextUri: `https://trino.example.com/v1/statement/q/${index + 1}`,
+			})),
+		);
 		await expect(browse.listNamespaces(config(), probe, { limit: 10 })).rejects.toThrow(
 			'did not finish',
 		);
-		expect(calls).toHaveLength(12);
+		expect(calls).toHaveLength(100);
 	});
 });
