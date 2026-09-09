@@ -56,7 +56,7 @@ import {
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId, Timings } from '@marimo-hub/core';
 import { createK8sClient } from './client';
-import { resolveIngressTlsMode, validateIngressTlsHostnameTemplate } from './shared';
+import { resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 export * from './shared';
@@ -201,14 +201,7 @@ function renderHostname(
 		.replaceAll('{token}', vars.token);
 }
 
-/**
- * The first pair of reserved ports that resolve to the SAME routing destination —
- * the Ingress host in subdomain mode, the full origin (host:port) in proxy mode — or
- * `undefined` when every port routes distinctly. A `{port}` that only lands in the
- * path, or a proxy template with a hardcoded port, collides a surface onto the kernel.
- * Checked against the rendered URL, not the template text, so `config` validation and
- * live routing can never diverge.
- */
+/** Find collisions by Ingress DNS hostname (subdomain) or origin (proxy). */
 export function portRoutingCollision(
 	config: KubernetesConfig,
 ): { ports: [number, number]; destination: string } | undefined {
@@ -228,7 +221,7 @@ export function portRoutingCollision(
 				port,
 			}),
 		);
-		const destination = proxy ? url.origin : url.host;
+		const destination = proxy ? url.origin : url.hostname;
 		const clash = byDestination.get(destination);
 		if (clash !== undefined) return { ports: [clash, port], destination };
 		byDestination.set(destination, port);
@@ -685,7 +678,7 @@ export class KubernetesCompute implements SandboxProvider {
 		const surfaced = (config.surfacePorts?.length ?? 0) > 0;
 		if ((config.exposureMode ?? 'subdomain') === 'subdomain' && config.hostname) {
 			const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
-			validateIngressTlsHostnameTemplate(hostnameTemplate(config), tlsMode);
+			validateIngressHostnameTemplate(hostnameTemplate(config), tlsMode);
 		}
 		if (surfaced) assertDistinctPortRouting(config);
 		this.capabilities = { multiPort: surfaced };

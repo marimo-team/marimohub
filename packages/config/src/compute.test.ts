@@ -442,6 +442,26 @@ describe('makeCompute fail-fast', () => {
 		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
 	});
 
+	it.each([
+		'https://{id}.{host}:{port}',
+		'https://{id}-{port}.{host}:8443',
+		'https://{id}-{port}.{host}:443',
+	])('rejects a kubernetes subdomain template with an authority port: %s', (template) => {
+		const surfaces = surfacesFromEnv({ MARIMOHUB_SURFACES: 'marimo,vscode' });
+		const error = getConfigError(() =>
+			makeCompute(
+				{
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
+					MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: template,
+				},
+				{ surfaces },
+			),
+		);
+		expect(error.message).toMatch(/authority port/);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
+	});
+
 	it('requires URL schemes that match the kubernetes ingress TLS mode', () => {
 		const disabledError = getConfigError(() =>
 			makeCompute({

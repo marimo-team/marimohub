@@ -52,7 +52,7 @@ compute:
   profileOverride: none
 
 surfaces:
-  # On the kubernetes compute backend, enabling a surface needs the sandbox Ingress
+  # With kubernetes subdomain exposure, enabling a surface needs the sandbox Ingress
   # wildcard host/cert to also cover the per-port `{id}-{port}.{host}` subdomain.
   # Use a published `-vscode`, `-opencode`, or `-tools` sandbox image tag.
   sandboxImage: ''

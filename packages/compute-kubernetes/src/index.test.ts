@@ -191,6 +191,19 @@ describe('KubernetesCompute', () => {
 		).not.toThrow();
 	});
 
+	it.each([
+		'https://{id}.{host}:{port}',
+		'https://{id}-{port}.{host}:8443',
+		'https://{id}-{port}.{host}:443',
+	])('rejects an authority port in a subdomain template: %s', (hostnameTemplate) => {
+		const world = makeWorld();
+		for (const surfacePorts of [[], [8443]]) {
+			expect(() => makeCompute(world, { ...baseConfig, surfacePorts, hostnameTemplate })).toThrow(
+				/authority port/,
+			);
+		}
+	});
+
 	describe('secondary surface ports', () => {
 		it('advertises multiPort exactly when surface ports are configured', () => {
 			const world = makeWorld();

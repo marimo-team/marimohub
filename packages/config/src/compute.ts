@@ -14,7 +14,7 @@ import {
 	parseIngressAnnotations,
 	portRoutingCollision,
 	resolveIngressTlsMode,
-	validateIngressTlsHostnameTemplate,
+	validateIngressHostnameTemplate,
 } from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
@@ -108,7 +108,7 @@ function kubernetesIngressTlsMode(env: Env): 'disabled' | 'controller-default' |
 	const template = env[templateKey] ?? 'https://{id}.{host}';
 	try {
 		if (env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME) {
-			validateIngressTlsHostnameTemplate(template, mode);
+			validateIngressHostnameTemplate(template, mode);
 		}
 	} catch (cause) {
 		const detail = cause instanceof Error ? cause.message : 'invalid hostname template';
@@ -116,8 +116,8 @@ function kubernetesIngressTlsMode(env: Env): 'disabled' | 'controller-default' |
 			variable: templateKey,
 			remediation:
 				mode === 'disabled'
-					? 'Use an http:// hostname template with disabled TLS.'
-					: 'Use an https:// hostname template when Kubernetes ingress TLS is enabled.',
+					? 'Use an http:// hostname template without an authority port with disabled TLS.'
+					: 'Use an https:// hostname template without an authority port when Kubernetes ingress TLS is enabled.',
 		});
 	}
 	return mode;

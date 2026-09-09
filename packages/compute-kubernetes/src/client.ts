@@ -334,10 +334,12 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			metadata.labels = { ...existing.metadata.labels, ...desiredLabels };
 			metadata.finalizers = existing.metadata.finalizers;
 			metadata.ownerReferences = existing.metadata.ownerReferences;
-			// clusterIP is immutable; a replace must carry the assigned value forward.
+			// clusterIP is immutable; retain IP-family settings to avoid implicit stack changes.
 			if (desired.spec) {
 				desired.spec.clusterIP = existing.spec?.clusterIP;
 				desired.spec.clusterIPs = existing.spec?.clusterIPs;
+				desired.spec.ipFamilies = existing.spec?.ipFamilies;
+				desired.spec.ipFamilyPolicy = existing.spec?.ipFamilyPolicy;
 			}
 			try {
 				await core.replaceNamespacedService({ name, namespace, body: desired });

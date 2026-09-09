@@ -90,10 +90,17 @@ export function resolveIngressTlsMode(
 	return resolved as ResolvedIngressTlsMode;
 }
 
-export function validateIngressTlsHostnameTemplate(
+export function validateIngressHostnameTemplate(
 	template: string,
 	tlsMode: ResolvedIngressTlsMode,
 ): void {
+	// Inspect the raw authority: URL.port drops explicit default ports such as :443.
+	const host = /^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i.exec(template)?.[1]?.split('@').at(-1);
+	if (host?.includes(':')) {
+		throw new Error(
+			'Kubernetes subdomain hostname templates must not include an authority port; put {port} in the DNS hostname, e.g. https://{id}-{port}.{host}',
+		);
+	}
 	const scheme = /^([a-z][a-z\d+.-]*):\/\//i.exec(template)?.[1]?.toLowerCase();
 	if (tlsMode === 'disabled' && scheme !== 'http') {
 		throw new Error('Disabled Kubernetes ingress TLS requires an http:// hostname template');
