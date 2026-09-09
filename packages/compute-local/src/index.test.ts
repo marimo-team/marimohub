@@ -910,6 +910,7 @@ describe('LocalCompute process hygiene', () => {
 
 computeContract('LocalCompute', () => new LocalCompute(), {
 	mountFallsBack: true,
+	secondaryPort: 8443,
 	semantics: {
 		failingCommand: 'false',
 		absentFile: { path: '/workspace/contract-absent.txt', code: 'NOT_FOUND' },

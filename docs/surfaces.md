@@ -42,10 +42,14 @@ another surface.
 ## Availability
 
 The compute adapter must expose multiple ports from one sandbox. The `local`,
-`e2b`, `cloudflare`, and `coreweave` adapters support this feature. Configuration
-fails for other adapters. Docker, Podman, Kubernetes, and Modal need create-time
+`e2b`, `cloudflare`, `coreweave`, and `kubernetes` adapters support this feature.
+Configuration fails for other adapters. Docker, Podman, and Modal need create-time
 port reservation support. W&B runs on the CoreWeave adapter but is not yet wired
 to reserve surface ports.
+
+On kubernetes with subdomain exposure each port gets its own `{id}-{port}.{host}`
+Ingress host, so the `*.{host}` wildcard DNS record and TLS certificate must cover
+it.
 
 Port 2718 belongs to marimo. Each secondary surface must use a unique port. If
 an image lacks a required binary, only that surface becomes unavailable.

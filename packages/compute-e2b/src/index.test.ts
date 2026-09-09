@@ -903,6 +903,7 @@ computeContract(
 	},
 	{
 		mountFallsBack: true,
+		secondaryPort: 8443,
 		semantics: {
 			failingCommand: 'mh-contract-fail',
 			launch: {},

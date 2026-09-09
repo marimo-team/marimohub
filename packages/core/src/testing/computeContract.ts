@@ -149,6 +149,12 @@ export interface ComputeContractOptions {
 	mountFallsBack?: boolean;
 	/** Hostname passed to `exposePort`; some adapters embed it in the URL. */
 	hostname?: string;
+	/**
+	 * A second port the provider was configured to expose. When set, the contract
+	 * asserts `capabilities.multiPort` and that `exposePort` honours its port
+	 * argument (a distinct, stable, parseable URL per port). URL-shape only.
+	 */
+	secondaryPort?: number;
 	semantics?: ComputeContractSemantics;
 }
 
@@ -282,6 +288,23 @@ export function computeContract(
 			expect(url).toBeTruthy();
 			expect(() => new URL(url)).not.toThrow();
 		});
+
+		if (opts.secondaryPort !== undefined) {
+			const secondaryPort = opts.secondaryPort;
+			it('a multiPort provider exposes a distinct, stable URL per port', async () => {
+				expect(provider.capabilities?.multiPort).toBe(true);
+				const inst = provider.create(CONTRACT_ID);
+				await inst.exec('true');
+				const kernel = await inst.exposePort(CONTRACT_LAUNCH_PORT, { hostname });
+				const secondary = await inst.exposePort(secondaryPort, { hostname });
+				expect(() => new URL(kernel.url)).not.toThrow();
+				expect(() => new URL(secondary.url)).not.toThrow();
+				// Catches an adapter that ignores its port argument.
+				expect(secondary.url).not.toBe(kernel.url);
+				const again = await inst.exposePort(secondaryPort, { hostname });
+				expect(again.url).toBe(secondary.url);
+			});
+		}
 
 		it('proxy() resolves to null or a Response (never throws)', async () => {
 			const res = await provider.proxy(new Request('http://kernel.example/'));

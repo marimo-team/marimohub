@@ -1168,6 +1168,11 @@ computeContract(
 				},
 				startImpl: async (command) => contractLaunchProcess(command) ?? fakeProcess(),
 			}),
+			{ ...baseConfig, extraPorts: [8443] },
 		),
-	{ mountFallsBack: true, semantics: { failingCommand: 'mh-contract-fail', launch: {} } },
+	{
+		mountFallsBack: true,
+		secondaryPort: 8443,
+		semantics: { failingCommand: 'mh-contract-fail', launch: {} },
+	},
 );

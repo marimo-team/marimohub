@@ -448,7 +448,28 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY;
 			const proxyExposure = opts?.sandboxExposureMode === 'proxy';
 			const ingressTlsMode = proxyExposure ? undefined : kubernetesIngressTlsMode(env);
-			const hostnameTemplate = env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE;
+			const ports = surfacePorts(opts?.surfaces);
+			const customTemplate = env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE;
+			// Each surface port needs its own subdomain, so the default becomes
+			// port-aware and a custom template must carry {port} or all ports collide.
+			if (
+				!proxyExposure &&
+				ports.length > 0 &&
+				customTemplate &&
+				!customTemplate.includes('{port}')
+			) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE for secondary surfaces: ${customTemplate} ` +
+						'(each surface port needs a distinct subdomain, so the template must include {port})',
+					{
+						variable: 'MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE',
+						remediation: 'Include {port} in the template, e.g. https://{id}-{port}.{host}.',
+					},
+				);
+			}
+			const hostnameTemplate =
+				customTemplate ??
+				(!proxyExposure && ports.length > 0 ? 'https://{id}-{port}.{host}' : undefined);
 			// Proxy exposure publishes no Ingress, so a template built on the public
 			// host (the subdomain default) would yield a URL with nothing behind it.
 			if (proxyExposure && hostnameTemplate && /\{host\}|\{token\}/.test(hostnameTemplate)) {
@@ -475,6 +496,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				exposureMode: opts?.sandboxExposureMode,
 				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
 				image: defaultImage,
+				surfacePorts: ports,
 				hostname: proxyExposure ? undefined : env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 				hostnameTemplate,
 				ingressClassName: proxyExposure

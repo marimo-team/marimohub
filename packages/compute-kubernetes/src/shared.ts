@@ -120,6 +120,15 @@ export function defaultImagePullPolicy(image: string): ImagePullPolicy {
 	return !tag || tag === 'latest' ? 'Always' : 'IfNotPresent';
 }
 
+/**
+ * Pod/Service port name: `kernel` for the first (kernel) port, `port-<n>` after.
+ * Kubernetes requires a name on every Service port once a Service has more than
+ * one; must stay a DNS-1123 label (≤15 chars).
+ */
+export function portName(index: number, port: number): string {
+	return index === 0 ? 'kernel' : `port-${port}`;
+}
+
 export interface KubernetesResources {
 	/** CPU request/limit (e.g. `1`, `500m`). */
 	cpu?: string;
@@ -145,6 +154,12 @@ export interface KubernetesConfig {
 	hostname?: string;
 	/** Port marimo binds inside the Pod. Default 2718. */
 	kernelPort?: number;
+	/**
+	 * Secondary-surface ports reserved on every sandbox's Pod/Service/Ingress at
+	 * create time (subdomain exposure gives each its own `{id}-{port}` Ingress
+	 * host). Any present makes `multiPort` true.
+	 */
+	surfacePorts?: readonly number[];
 	/**
 	 * Template for the kernel URL. `{id}`, `{name}`, `{namespace}`, `{port}`, `{host}`,
 	 * and `{token}` are substituted. Subdomain exposure defaults to
@@ -184,10 +199,13 @@ export interface EnsureSandboxOptions {
 	name: string;
 	/** Verbatim `SandboxId`, stored in an annotation for `listActive()` mapping. */
 	sandboxId: SandboxId;
-	/** Ingress host for the kernel (`{id}.{host}`); the Ingress routes it to the Pod. */
-	host: string;
+	/**
+	 * Ports opened on the Pod/Service, kernel first. Each `host` is the Ingress
+	 * host that routes the port to the Pod; an empty `host` reserves the port with
+	 * no Ingress rule.
+	 */
+	ports: readonly { port: number; host: string }[];
 	image: string;
-	port: number;
 	namespace: string;
 	ingressClassName?: string;
 	ingressAnnotations?: Record<string, string>;
@@ -239,8 +257,9 @@ export interface K8sExecOptions {
  */
 export interface K8sClient {
 	/**
-	 * Create the Pod + Service and optional Ingress for a session if they don't already
-	 * exist. `createdPod` is false when the Pod pre-existed (a reconnect).
+	 * Create the Pod + Service and an Ingress rule per hosted port for a session if
+	 * they don't already exist. `createdPod` is false when the Pod pre-existed (a
+	 * reconnect).
 	 */
 	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
 	/** Pod phase + boot timestamps, or `undefined` if the Pod does not exist. */

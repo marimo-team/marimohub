@@ -187,6 +187,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly image: string;
 	private readonly hostname: string;
 	private readonly kernelPort: number;
+	private readonly surfacePorts: readonly number[];
 	private readonly subdomainExposure: boolean;
 	private resolved = false;
 	private env: Record<string, string> = {};
@@ -206,27 +207,38 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		this.image = config.image ?? DEFAULT_IMAGE;
 		this.hostname = config.hostname ?? '';
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
+		this.surfacePorts = config.surfacePorts ?? [];
 		this.subdomainExposure = (config.exposureMode ?? 'subdomain') === 'subdomain';
 	}
 
-	/** The per-session Ingress host, or empty when this deployment does not manage one. */
-	private ingressHost(): string {
+	/** The per-session Ingress host for a port, or empty when none is managed. */
+	private ingressHostFor(port: number): string {
 		if (!this.subdomainExposure || !this.hostname) return '';
 		// Reuse the URL template, then keep just its host component.
-		return new URL(this.urlFrom(this.hostname, '')).host;
+		return new URL(this.urlFrom(this.hostname, '', port)).host;
 	}
 
-	private urlFrom(hostname: string, token: string): string {
+	/** Kernel first, then each reserved surface port, with its Ingress host. */
+	private portSpecs(): { port: number; host: string }[] {
+		return [
+			{ port: this.kernelPort, host: this.ingressHostFor(this.kernelPort) },
+			...this.surfacePorts.map((port) => ({ port, host: this.ingressHostFor(port) })),
+		];
+	}
+
+	private urlFrom(hostname: string, token: string, port: number): string {
 		const template =
 			this.config.hostnameTemplate ??
 			(this.config.exposureMode === 'proxy'
 				? 'http://{name}.{namespace}.svc.cluster.local:{port}'
-				: 'https://{id}.{host}');
+				: this.surfacePorts.length > 0
+					? 'https://{id}-{port}.{host}'
+					: 'https://{id}.{host}');
 		return template
 			.replaceAll('{id}', String(this.id))
 			.replaceAll('{name}', this.name)
 			.replaceAll('{namespace}', this.namespace)
-			.replaceAll('{port}', String(this.kernelPort))
+			.replaceAll('{port}', String(port))
 			.replaceAll('{host}', hostname)
 			.replaceAll('{token}', token);
 	}
@@ -244,9 +256,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		const { createdPod } = await this.client.ensure({
 			name: this.name,
 			sandboxId: this.id,
-			host: this.ingressHost(),
+			ports: this.portSpecs(),
 			image: this.image,
-			port: this.kernelPort,
 			namespace: this.namespace,
 			ingressClassName: this.config.ingressClassName,
 			ingressAnnotations: this.config.ingressAnnotations,
@@ -586,11 +597,11 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		});
 	}
 
-	async exposePort(_port: number, options: ExposePortOptions): Promise<ExposePortResult> {
+	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
 		// Prefer the deploy-time hostname for subdomain routing. Proxy mode's default
 		// template does not use it and resolves the Service inside the cluster.
 		await this.ensure();
-		return { url: this.urlFrom(this.hostname || options.hostname, options.token ?? '') };
+		return { url: this.urlFrom(this.hostname || options.hostname, options.token ?? '', port) };
 	}
 
 	async destroy(): Promise<void> {
@@ -602,18 +613,28 @@ class KubernetesSandboxInstance implements SandboxInstance {
 }
 
 export class KubernetesCompute implements SandboxProvider {
-	readonly capabilities = { multiPort: false } as const;
+	readonly capabilities: { multiPort: boolean };
 	private client?: K8sClient;
 
 	constructor(
 		private readonly config: KubernetesConfig,
 		client?: K8sClient,
 	) {
+		const surfaced = (config.surfacePorts?.length ?? 0) > 0;
 		if ((config.exposureMode ?? 'subdomain') === 'subdomain' && config.hostname) {
-			const template = config.hostnameTemplate ?? 'https://{id}.{host}';
+			const template =
+				config.hostnameTemplate ??
+				(surfaced ? 'https://{id}-{port}.{host}' : 'https://{id}.{host}');
 			const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
 			validateIngressTlsHostnameTemplate(template, tlsMode);
+			// Every port shares one host without {port}, colliding on the same Ingress.
+			if (surfaced && !template.includes('{port}')) {
+				throw new Error(
+					'A kubernetes subdomain hostname template with secondary surfaces must include {port} so each port gets a distinct Ingress host',
+				);
+			}
 		}
+		this.capabilities = { multiPort: surfaced };
 		this.client = client;
 	}
 

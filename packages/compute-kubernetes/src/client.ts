@@ -27,6 +27,7 @@ import {
 	defaultImagePullPolicy,
 	MANAGED_BY_LABEL,
 	MANAGED_BY_VALUE,
+	portName,
 	resolveIngressTlsMode,
 	SANDBOX_ID_ANNOTATION,
 	validateIngressAnnotations,
@@ -126,7 +127,7 @@ function podManifest(o: EnsureSandboxOptions): V1Pod {
 					// Keep-alive: the Pod idles while we exec marimo into it (see
 					// startProcess). Mirrors the CoreWeave "main process is keep-alive".
 					command: ['sh', '-c', 'sleep infinity'],
-					ports: [{ containerPort: o.port }],
+					ports: o.ports.map((p, i) => ({ containerPort: p.port, name: portName(i, p.port) })),
 					resources: buildResources(o.resources),
 				},
 			],
@@ -143,7 +144,13 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 		},
 		spec: {
 			selector: { [SANDBOX_NAME_LABEL]: o.name },
-			ports: [{ port: o.port, targetPort: o.port, protocol: 'TCP' }],
+			// A Service with more than one port requires a unique name on each.
+			ports: o.ports.map((p, i) => ({
+				name: portName(i, p.port),
+				port: p.port,
+				targetPort: p.port,
+				protocol: 'TCP',
+			})),
 		},
 	};
 }
@@ -153,7 +160,8 @@ function ingressTls(o: EnsureSandboxOptions): V1IngressTLS[] | undefined {
 	if (mode === 'disabled') return undefined;
 	if (mode === 'controller-default') return [{}];
 	if (!o.tlsSecretName) throw new Error('Ingress TLS mode "secret" requires a TLS secret name');
-	return [{ hosts: [o.host], secretName: o.tlsSecretName }];
+	const hosts = [...new Set(o.ports.filter((p) => p.host).map((p) => p.host))];
+	return [{ hosts, secretName: o.tlsSecretName }];
 }
 
 function ingressManifest(o: EnsureSandboxOptions): V1Ingress {
@@ -167,20 +175,20 @@ function ingressManifest(o: EnsureSandboxOptions): V1Ingress {
 		spec: {
 			ingressClassName: o.ingressClassName,
 			tls: ingressTls(o),
-			rules: [
-				{
-					host: o.host,
+			rules: o.ports
+				.filter((p) => p.host)
+				.map((p) => ({
+					host: p.host,
 					http: {
 						paths: [
 							{
 								path: '/',
 								pathType: 'Prefix',
-								backend: { service: { name: o.name, port: { number: o.port } } },
+								backend: { service: { name: o.name, port: { number: p.port } } },
 							},
 						],
 					},
-				},
-			],
+				})),
 		},
 	};
 }
@@ -307,14 +315,14 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
 			const pod = podManifest(o);
 			const service = serviceManifest(o);
-			const ingress = o.host ? ingressManifest(o) : undefined;
+			const ingress = o.ports.some((p) => p.host) ? ingressManifest(o) : undefined;
 			const { core, net } = await apis();
 			// Order-independent: k8s is declarative (a Service's selector / an
 			// Ingress's backend need not pre-exist), so the creates fan out.
 			const [createdPod] = await Promise.all([
 				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
 				createTolerant(() => core.createNamespacedService({ namespace, body: service })),
-				// No host configured → no Ingress (the URL will be unroutable; documented).
+				// No hosted port → no Ingress (the URL will be unroutable; documented).
 				ingress ? reconcileIngress(net, ingress) : undefined,
 			]);
 			return { createdPod };

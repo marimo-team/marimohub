@@ -191,6 +191,61 @@ describe('KubernetesCompute', () => {
 		).not.toThrow();
 	});
 
+	describe('secondary surface ports', () => {
+		it('advertises multiPort exactly when surface ports are configured', () => {
+			const world = makeWorld();
+			expect(makeCompute(world, baseConfig).capabilities).toEqual({ multiPort: false });
+			expect(makeCompute(world, { ...baseConfig, surfacePorts: [8443] }).capabilities).toEqual({
+				multiPort: true,
+			});
+		});
+
+		it('rejects a custom subdomain template without {port} when surfaces are set', () => {
+			const world = makeWorld();
+			expect(() =>
+				makeCompute(world, {
+					...baseConfig,
+					surfacePorts: [8443],
+					hostnameTemplate: 'https://{id}.{host}',
+				}),
+			).toThrow(/\{port\}/);
+		});
+
+		it('reserves each surface port with its own per-port Ingress host', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, surfacePorts: [8443] })
+				.create(SANDBOX_ID)
+				.exec('true');
+			expect(world.ensured[0].ports).toEqual([
+				{ port: 2718, host: 'sb-abc-2718.hub.example.com' },
+				{ port: 8443, host: 'sb-abc-8443.hub.example.com' },
+			]);
+		});
+
+		it('exposes distinct URLs per port and honours the port argument', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world, { ...baseConfig, surfacePorts: [8443] }).create(SANDBOX_ID);
+			const kernel = await inst.exposePort(2718, { hostname: 'hub.example.com' });
+			const surface = await inst.exposePort(8443, { hostname: 'hub.example.com' });
+			expect(kernel.url).toBe('https://sb-abc-2718.hub.example.com');
+			expect(surface.url).toBe('https://sb-abc-8443.hub.example.com');
+			expect(kernel.url).not.toBe(surface.url);
+		});
+
+		it('exposes a surface port on the in-cluster Service in proxy mode', async () => {
+			const world = makeWorld();
+			const { url } = await makeCompute(world, {
+				...baseConfig,
+				exposureMode: 'proxy',
+				namespace: 'marimo-sandboxes',
+				surfacePorts: [8443],
+			})
+				.create(SANDBOX_ID)
+				.exposePort(8443, { hostname: 'hub.example.com' });
+			expect(url).toBe('http://mh-sb-abc.marimo-sandboxes.svc.cluster.local:8443');
+		});
+	});
+
 	describe('exec()', () => {
 		it('runs user commands in a login shell (profile-provided PATH keeps working)', async () => {
 			const world = makeWorld();
@@ -245,9 +300,8 @@ describe('KubernetesCompute', () => {
 				name: NAME,
 				sandboxId: SANDBOX_ID,
 				image: 'my-image',
-				port: 2718,
 				namespace: 'default',
-				host: 'sb-abc.hub.example.com',
+				ports: [{ port: 2718, host: 'sb-abc.hub.example.com' }],
 			});
 		});
 
@@ -701,7 +755,7 @@ describe('KubernetesCompute', () => {
 				url: 'http://mh-sb-abc-123.marimo-sandboxes.svc.cluster.local:2718',
 			});
 			expect(world.ensured).toHaveLength(1);
-			expect(world.ensured[0]?.host).toBe('');
+			expect(world.ensured[0]?.ports.every((p) => p.host === '')).toBe(true);
 
 			await inst.destroy();
 			expect(world.deleteIngress).toEqual([false]);
@@ -719,7 +773,7 @@ describe('KubernetesCompute', () => {
 				.exposePort(2718, { hostname: 'hub.example.com' });
 
 			expect(url).toBe('http://mh-sb-abc.marimo-sandboxes.svc.cluster.local:2718');
-			expect(world.ensured[0]?.host).toBe('');
+			expect(world.ensured[0]?.ports.every((p) => p.host === '')).toBe(true);
 		});
 
 		it('substitutes the Service name and namespace in a proxy template', async () => {
@@ -754,7 +808,7 @@ describe('KubernetesCompute', () => {
 			const inst = makeCompute(world, { ...baseConfig, hostname: undefined }).create(SANDBOX_ID);
 
 			await inst.exec('true');
-			expect(world.ensured[0]?.host).toBe('');
+			expect(world.ensured[0]?.ports.every((p) => p.host === '')).toBe(true);
 
 			await inst.destroy();
 			expect(world.deleteIngress).toEqual([true]);
@@ -1003,7 +1057,8 @@ computeContract(
 					return;
 				},
 			}),
+			{ ...baseConfig, surfacePorts: [8443] },
 		);
 	},
-	{ mountFallsBack: true, semantics: { failingCommand: 'false', launch: {} } },
+	{ mountFallsBack: true, secondaryPort: 8443, semantics: { failingCommand: 'false', launch: {} } },
 );
