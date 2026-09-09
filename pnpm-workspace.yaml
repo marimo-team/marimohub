@@ -138,6 +138,8 @@ minimumReleaseAgeExclude:
   - tar
   - undici
   - vite@6.4.3
+  # Renovate security update: nodemailer@9.1.1
+  - nodemailer@9.1.1
 
 onlyBuiltDependencies: []
 
