@@ -128,8 +128,8 @@ minimumReleaseAgeExclude:
   - nanoid
   - hono@4.12.34
   - ip-address@10.3.1
-  - js-yaml@3.15.1
-  - js-yaml@4.3.1
+  - js-yaml
+  - nodemailer
   - linkify-it@5.0.2
   - postcss
   - protobufjs@7.6.5
