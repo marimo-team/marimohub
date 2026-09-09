@@ -240,8 +240,15 @@ export function validateFargateTaskDefinition(taskDefinition: string): string {
 	return value;
 }
 
-export function deterministicClientToken(owner: string, sandboxId: string): string {
-	return `mh-${createHash('sha256').update(`${owner}\0${sandboxId}`).digest('hex').slice(0, 48)}`;
+export function deterministicClientToken(
+	owner: string,
+	sandboxId: string,
+	generation: string,
+): string {
+	return `mh-${createHash('sha256')
+		.update(`${owner}\0${sandboxId}\0${generation}`)
+		.digest('hex')
+		.slice(0, 48)}`;
 }
 
 export function deriveAgentToken(masterSecret: string, sandboxId: string): string {

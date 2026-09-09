@@ -25,7 +25,6 @@ import {
 	privateIpFromTask,
 	SANDBOX_ID_TAG,
 	deriveAgentToken,
-	deterministicClientToken,
 } from './index';
 
 let activeContractWorld: ContractWorld | undefined;
@@ -46,6 +45,8 @@ class FakeEcs implements FargateClient {
 	stopBeforeReady = false;
 	describeDelayMs = 0;
 	listPageSize = 0;
+	onRunTask?: () => void;
+	onDescribeTasks?: () => void;
 	taskDefinition: FargateTaskDefinition = {
 		containerNames: [DEFAULT_CONTAINER_NAME],
 		networkMode: 'awsvpc',
@@ -56,6 +57,7 @@ class FakeEcs implements FargateClient {
 	private sequence = 0;
 
 	async runTask(input: FargateRunTaskInput) {
+		this.onRunTask?.();
 		this.runInputs.push(input);
 		const arn = `arn:aws:ecs:region:123:task/${++this.sequence}`;
 		this.tasks.set(arn, {
@@ -74,6 +76,7 @@ class FakeEcs implements FargateClient {
 	}
 
 	async describeTasks(_cluster: string, arns: readonly string[]) {
+		this.onDescribeTasks?.();
 		this.describeCalls++;
 		if (this.describeDelayMs > 0)
 			await new Promise((resolve) => setTimeout(resolve, this.describeDelayMs));
@@ -284,7 +287,7 @@ describe('FargateCompute', () => {
 		const input = client.runInputs[0];
 		expect(input).toMatchObject({
 			startedBy: 'deployment-a',
-			clientToken: deterministicClientToken('deployment-a', ID),
+			clientToken: expect.stringMatching(/^mh-[0-9a-f]{48}$/),
 			count: 1,
 			networkConfiguration: {
 				assignPublicIp: false,
@@ -310,6 +313,33 @@ describe('FargateCompute', () => {
 		);
 		await instance.destroy();
 		expect(client.stopped).toHaveLength(1);
+	});
+
+	it('uses a new client token when a destroyed sandbox is recreated', async () => {
+		const client = new FakeEcs();
+		const compute = makeCompute(client);
+		const first = compute.create(ID, { reuse: false });
+		await first.ready?.();
+		await first.destroy();
+		await compute.create(ID, { reuse: false }).ready?.();
+		expect(client.runInputs).toHaveLength(2);
+		expect(client.runInputs[0]?.clientToken).not.toBe(client.runInputs[1]?.clientToken);
+	});
+
+	it('reports task creation and agent boot as separate timings', async () => {
+		const client = new FakeEcs();
+		let now = 0;
+		const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+		client.onRunTask = () => {
+			now = 20;
+		};
+		client.onDescribeTasks = () => {
+			now = 70;
+		};
+		const instance = makeCompute(client).create(ID, { reuse: false });
+		await instance.ready?.();
+		expect(instance.drainTimings?.()).toEqual({ create: 20, boot: 50 });
+		clock.mockRestore();
 	});
 
 	it('launches a separate task for each sandbox id', async () => {
@@ -421,6 +451,16 @@ describe('FargateCompute', () => {
 		client.stopBeforeReady = true;
 		const instance = makeCompute(client).create(ID, { reuse: false });
 		await expect(instance.ready?.()).rejects.toThrow(/stopped before readiness/);
+	});
+
+	it('reports an incompatible agent protocol without readiness retries', async () => {
+		const client = new FakeEcs();
+		vi.mocked(fetch).mockResolvedValue(Response.json({ protocolVersion: 999 }));
+		const instance = makeCompute(client, { readyTimeoutMs: 10_000 }).create(ID, {
+			reuse: false,
+		});
+		await expect(instance.ready?.()).rejects.toThrow(/protocol 999 is incompatible/);
+		expect(client.describeCalls).toBe(1);
 	});
 
 	it('rejects an unknown logical image key before ECS launch', async () => {

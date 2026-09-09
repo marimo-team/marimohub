@@ -149,9 +149,7 @@ export function createFargateClient(options: AwsFargateClientOptions = {}): Farg
 		},
 
 		async describeTaskDefinition(taskDefinition) {
-			const result = await ecs.send(
-				new DescribeTaskDefinitionCommand({ taskDefinition, include: ['TAGS'] }),
-			);
+			const result = await ecs.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
 			return result.taskDefinition ? mapTaskDefinition(result.taskDefinition) : {};
 		},
 

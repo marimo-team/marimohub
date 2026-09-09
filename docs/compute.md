@@ -102,7 +102,7 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
   session details identify snapshot-backed compute until a fresh sandbox is
   started.
 - Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. Fargate
-  applies CPU and memory profiles and warns that it ignores GPU values. E2B,
+  applies CPU and memory profiles and rejects GPU values before launch. E2B,
   Cloudflare, local, and none ignore profiles and hide the feature from the UI.
 
 Docker and Podman enforce each container's limits but have no admission control.

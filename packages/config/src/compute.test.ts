@@ -265,6 +265,26 @@ describe('makeCompute fail-fast', () => {
 		).toBeInstanceOf(FargateCompute);
 	});
 
+	it('rejects a fargate ready timeout that overflows milliseconds', () => {
+		expect(() =>
+			makeCompute(
+				{
+					MARIMOHUB_COMPUTE_BACKEND: 'fargate',
+					MARIMOHUB_COMPUTE_FARGATE_CLUSTER: 'marimohub',
+					MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION: 'kernel:1',
+					MARIMOHUB_COMPUTE_FARGATE_SUBNETS: 'subnet-a',
+					MARIMOHUB_COMPUTE_FARGATE_SECURITY_GROUPS: 'sg-kernel',
+					MARIMOHUB_COMPUTE_FARGATE_OWNER: 'prod-a',
+					MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET: 'a'.repeat(32),
+					MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS: String(
+						Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1,
+					),
+				},
+				{ sandboxExposureMode: 'proxy' },
+			),
+		).toThrow(/MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS/);
+	});
+
 	it('configures kubernetes proxy mode without public ingress settings', () => {
 		expect(
 			configOf(

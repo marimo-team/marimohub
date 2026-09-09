@@ -19,13 +19,6 @@
 				{ "name": "agent", "containerPort": 2717, "protocol": "tcp" },
 				{ "name": "marimo", "containerPort": 2718, "protocol": "tcp" }
 			],
-			"healthCheck": {
-				"command": ["CMD", "/usr/local/bin/marimohub-fargate-agent", "healthcheck"],
-				"interval": 10,
-				"timeout": 5,
-				"retries": 6,
-				"startPeriod": 20
-			},
 			"logConfiguration": {
 				"logDriver": "awslogs",
 				"options": {

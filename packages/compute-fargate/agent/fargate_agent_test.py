@@ -2,6 +2,9 @@ import base64
 import importlib.util
 import json
 import os
+import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -26,6 +29,7 @@ except ModuleNotFoundError:
 
 
 TOKEN = "t" * 64
+AGENT_PATH = os.path.join(os.path.dirname(__file__), "fargate_agent.py")
 
 
 class AgentTest(unittest.TestCase):
@@ -70,6 +74,17 @@ class AgentTest(unittest.TestCase):
         _, timed = self.request("POST", "/exec", {"command": "sleep 2", "cwd": os.getcwd(), "timeoutMs": 10})
         self.assertFalse(timed["success"])
         self.assertEqual(timed["exitCode"], 124)
+
+    def test_exec_output_is_bounded(self):
+        _, body = self.request(
+            "POST",
+            "/exec",
+            {
+                "command": "python3 -c 'import sys; sys.stdout.write(\"x\" * (9 * 1024 * 1024))'",
+                "cwd": os.getcwd(),
+            },
+        )
+        self.assertEqual(len(body["stdout"].encode()), 8 * 1024 * 1024)
 
     def test_token_is_not_in_child_environment(self):
         _, body = self.request("POST", "/exec", {"command": "printf '%s' \"${MARIMOHUB_AGENT_TOKEN:-}\"", "cwd": os.getcwd()})
@@ -135,8 +150,57 @@ class AgentTest(unittest.TestCase):
 
     def test_env_precedence(self):
         self.request("POST", "/env", {"defaults": {"MH_ENV": "default"}, "forced": {"MH_ENV": "forced"}})
-        _, body = self.request("POST", "/exec", {"command": "printf '%s' \"$MH_ENV\"", "cwd": os.getcwd()})
+        _, body = self.request(
+            "POST",
+            "/exec",
+            {
+                "command": "printf '%s' \"$MH_ENV\"",
+                "cwd": os.getcwd(),
+                "env": {"MH_ENV": "override"},
+            },
+        )
         self.assertEqual(body["stdout"], "forced")
+
+    def test_server_token_is_not_in_process_environment(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        environment = dict(os.environ)
+        environment["MARIMOHUB_AGENT_TOKEN"] = TOKEN
+        environment["MARIMOHUB_AGENT_PORT"] = str(port)
+        process = subprocess.Popen(
+            [sys.executable, AGENT_PATH],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not check_health(port=port, token=TOKEN):
+                time.sleep(0.02)
+            self.assertTrue(check_health(port=port, token=TOKEN))
+            body = json.dumps(
+                {
+                    "command": "if [ -r /proc/$PPID/environ ]; then cat /proc/$PPID/environ; else ps eww -p $PPID; fi",
+                    "cwd": os.getcwd(),
+                }
+            ).encode()
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/exec",
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.load(response)
+            self.assertNotIn(TOKEN, result["stdout"])
+            self.assertNotIn("MARIMOHUB_AGENT_TOKEN", result["stdout"])
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
 
     def test_standalone_healthcheck(self):
         self.assertTrue(check_health(port=self.server.server_port, token=TOKEN))

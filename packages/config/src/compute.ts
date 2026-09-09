@@ -541,6 +541,13 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					{ variable: 'MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS' },
 				);
 			}
+			const readyTimeoutMs = Millis.seconds(readySeconds);
+			if (!Number.isSafeInteger(readyTimeoutMs)) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS: ${env.MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS}`,
+					{ variable: 'MARIMOHUB_COMPUTE_FARGATE_READY_TIMEOUT_SECONDS' },
+				);
+			}
 			const secret = computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET', 'fargate');
 			if (Buffer.byteLength(secret, 'utf8') < 32) {
 				throw new ConfigError('MARIMOHUB_COMPUTE_FARGATE_AGENT_SECRET must be at least 32 bytes', {
@@ -579,7 +586,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				owner: computeVar(env, 'MARIMOHUB_COMPUTE_FARGATE_OWNER', 'fargate'),
 				agentSecret: secret,
 				agentPort,
-				readyTimeoutMs: Millis.seconds(readySeconds),
+				readyTimeoutMs,
 				exposureMode: opts.sandboxExposureMode,
 			});
 		}

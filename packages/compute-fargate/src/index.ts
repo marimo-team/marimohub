@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -136,6 +137,13 @@ class AgentHttpError extends Error {
 	}
 }
 
+class AgentProtocolError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'AgentProtocolError';
+	}
+}
+
 function asJsonRecord(value: unknown): Record<string, unknown> {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		throw new Error('Fargate agent returned an invalid JSON object');
@@ -245,6 +253,7 @@ class FargateSandboxInstance implements SandboxInstance {
 	private ensurePromise?: Promise<void>;
 	private handle?: FargateTaskHandle;
 	private timings: { create?: number; boot?: number } = {};
+	private readonly clientToken: string;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -257,6 +266,7 @@ class FargateSandboxInstance implements SandboxInstance {
 	) {
 		this.agentPort = config.agentPort ?? DEFAULT_AGENT_PORT;
 		this.readyTimeoutMs = config.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+		this.clientToken = deterministicClientToken(config.owner, String(id), randomUUID());
 	}
 
 	private async ensure(): Promise<void> {
@@ -284,7 +294,8 @@ class FargateSandboxInstance implements SandboxInstance {
 					this.handle = cached;
 					this.timings = { create: Date.now() - started, boot: 0 };
 					return;
-				} catch {
+				} catch (error) {
+					if (error instanceof AgentProtocolError) throw error;
 					this.cache.delete(String(this.id));
 				}
 			}
@@ -324,7 +335,7 @@ class FargateSandboxInstance implements SandboxInstance {
 				cluster: this.config.cluster,
 				taskDefinition: resolved.taskDefinition,
 				startedBy: this.config.owner,
-				clientToken: deterministicClientToken(this.config.owner, String(this.id)),
+				clientToken: this.clientToken,
 				platformVersion: this.config.platformVersion ?? 'LATEST',
 				count: 1,
 				networkConfiguration: {
@@ -355,6 +366,7 @@ class FargateSandboxInstance implements SandboxInstance {
 				containerName,
 			);
 		}
+		const createFinished = Date.now();
 		const readyTask = await this.waitForTask(arn, containerName);
 		const privateIp = privateIpFromTask(readyTask, containerName);
 		if (!privateIp) throw new Error(`Fargate task ${arn} has no private ENI address`);
@@ -367,7 +379,7 @@ class FargateSandboxInstance implements SandboxInstance {
 			imageKey,
 		};
 		this.cache.set(String(this.id), this.handle);
-		this.timings = { create: Date.now() - started, boot: Date.now() - started };
+		this.timings = { create: createFinished - started, boot: Date.now() - createFinished };
 	}
 
 	private resolveContainerName(task: FargateTask): string {
@@ -420,6 +432,7 @@ class FargateSandboxInstance implements SandboxInstance {
 					await this.checkAgent(ip, Math.min(AGENT_HEALTH_TIMEOUT_MS, remaining));
 					return last;
 				} catch (error) {
+					if (error instanceof AgentProtocolError) throw error;
 					if (error instanceof AgentHttpError && error.status >= 400 && error.status < 500)
 						throw error;
 				}
@@ -437,7 +450,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		);
 		const protocol = body.protocolVersion ?? body.version;
 		if (protocol !== FARGATE_PROTOCOL_VERSION && protocol !== `v${FARGATE_PROTOCOL_VERSION}`) {
-			throw new Error(
+			throw new AgentProtocolError(
 				`Fargate sandbox agent protocol ${String(protocol)} is incompatible with hub protocol ${FARGATE_PROTOCOL_VERSION}`,
 			);
 		}

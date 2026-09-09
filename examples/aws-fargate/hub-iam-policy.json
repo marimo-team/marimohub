@@ -13,13 +13,41 @@
 			}
 		},
 		{
-			"Sid": "InspectAndStopOwnedTasks",
+			"Sid": "ListTasksInConfiguredCluster",
 			"Effect": "Allow",
-			"Action": ["ecs:DescribeTasks", "ecs:ListTasks", "ecs:StopTask"],
+			"Action": "ecs:ListTasks",
 			"Resource": "*",
 			"Condition": {
 				"ArnEquals": {
 					"ecs:cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
+				}
+			}
+		},
+		{
+			"Sid": "InspectOwnedTasks",
+			"Effect": "Allow",
+			"Action": ["ecs:DescribeTasks", "ecs:ListTagsForResource"],
+			"Resource": "arn:aws:ecs:us-east-1:123456789012:task/marimohub/*",
+			"Condition": {
+				"ArnEquals": {
+					"ecs:cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
+				},
+				"StringEquals": {
+					"aws:ResourceTag/marimohub:owner": "prod-hub-a"
+				}
+			}
+		},
+		{
+			"Sid": "StopOwnedTasks",
+			"Effect": "Allow",
+			"Action": "ecs:StopTask",
+			"Resource": "arn:aws:ecs:us-east-1:123456789012:task/marimohub/*",
+			"Condition": {
+				"ArnEquals": {
+					"ecs:cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
+				},
+				"StringEquals": {
+					"aws:ResourceTag/marimohub:owner": "prod-hub-a"
 				}
 			}
 		},
@@ -30,16 +58,16 @@
 			"Resource": "arn:aws:ecs:us-east-1:123456789012:cluster/marimohub"
 		},
 		{
-			"Sid": "DescribeConfiguredTaskDefinition",
+			"Sid": "DescribeTaskDefinitions",
 			"Effect": "Allow",
 			"Action": "ecs:DescribeTaskDefinition",
-			"Resource": "arn:aws:ecs:us-east-1:123456789012:task-definition/marimohub-kernel:1"
+			"Resource": "*"
 		},
 		{
 			"Sid": "TagRunTaskResources",
 			"Effect": "Allow",
 			"Action": "ecs:TagResource",
-			"Resource": "arn:aws:ecs:us-east-1:123456789012:task/*",
+			"Resource": "arn:aws:ecs:us-east-1:123456789012:task/marimohub/*",
 			"Condition": {
 				"StringEquals": {
 					"ecs:CreateAction": "RunTask"

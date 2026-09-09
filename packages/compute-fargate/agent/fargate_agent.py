@@ -11,11 +11,9 @@ import json
 import os
 import secrets
 import signal
-import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.parse
@@ -59,13 +57,6 @@ def _read_limited(path: str, limit: int) -> bytes:
     return data[:limit]
 
 
-def _read_tail(path: str, limit: int) -> bytes:
-    with open(path, "rb") as stream:
-        stream.seek(0, os.SEEK_END)
-        stream.seek(max(0, stream.tell() - limit), os.SEEK_SET)
-        return stream.read(limit)
-
-
 def _kill_group(process: subprocess.Popen[Any], sig: int = signal.SIGTERM) -> None:
     if process.poll() is not None:
         return
@@ -84,6 +75,38 @@ def _wait_process(process: subprocess.Popen[Any], timeout: float) -> int:
         return 124
 
 
+class _BoundedCapture:
+    def __init__(self, stream: Any, limit: int, keep_tail: bool):
+        self._stream = stream
+        self._limit = limit
+        self._keep_tail = keep_tail
+        self._data = bytearray()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self) -> None:
+        try:
+            while chunk := self._stream.read(64 * 1024):
+                with self._lock:
+                    if self._keep_tail:
+                        self._data.extend(chunk)
+                        excess = len(self._data) - self._limit
+                        if excess > 0:
+                            del self._data[:excess]
+                    elif len(self._data) < self._limit:
+                        self._data.extend(chunk[: self._limit - len(self._data)])
+        finally:
+            self._stream.close()
+
+    def wait(self) -> None:
+        self._thread.join(timeout=1)
+
+    def read(self) -> bytes:
+        with self._lock:
+            return bytes(self._data)
+
+
 class ProcessTable:
     def __init__(self, state: "AgentState"):
         self._state = state
@@ -94,23 +117,19 @@ class ProcessTable:
         with self._lock:
             if self._items.get(process_id) is item:
                 del self._items[process_id]
-        shutil.rmtree(item["dir"], ignore_errors=True)
 
     def _capture_finished(self, item: dict[str, Any]) -> None:
         with item["capture_lock"]:
             if item.get("captured"):
                 return
-            try:
-                item["stdout_tail"] = _read_tail(item["stdout"], MAX_LOG_BYTES).decode(
-                    "utf-8", errors="replace"
-                )
-                item["stderr_tail"] = _read_tail(item["stderr"], MAX_LOG_BYTES).decode(
-                    "utf-8", errors="replace"
-                )
-            except FileNotFoundError:
-                item["stdout_tail"] = ""
-                item["stderr_tail"] = ""
-            shutil.rmtree(item["dir"], ignore_errors=True)
+            item["stdout_capture"].wait()
+            item["stderr_capture"].wait()
+            item["stdout_tail"] = item["stdout_capture"].read().decode(
+                "utf-8", errors="replace"
+            )
+            item["stderr_tail"] = item["stderr_capture"].read().decode(
+                "utf-8", errors="replace"
+            )
             item["captured"] = True
 
     def _watch(self, item: dict[str, Any]) -> None:
@@ -143,36 +162,27 @@ class ProcessTable:
         if not isinstance(cwd, str):
             raise AgentError(400, "cwd must be a string")
         timeout = _bounded_timeout(payload.get("timeoutMs"), 0)
-        directory = tempfile.mkdtemp(prefix="marimohub-process-")
-        stdout_path = os.path.join(directory, "stdout")
-        stderr_path = os.path.join(directory, "stderr")
-        stdout = open(stdout_path, "wb")
-        stderr = open(stderr_path, "wb")
         try:
             process = subprocess.Popen(
                 ["sh", "-lc", command],
                 cwd=cwd,
                 env=self._state.environment(payload.get("env")),
                 stdin=subprocess.DEVNULL,
-                stdout=stdout,
-                stderr=stderr,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 start_new_session=True,
             )
         except OSError as exc:
-            stdout.close()
-            stderr.close()
             raise AgentError(400, f"could not start process: {exc.strerror or 'spawn failed'}") from exc
-        stdout.close()
-        stderr.close()
+        if process.stdout is None or process.stderr is None:
+            raise AgentError(500, "could not capture process output")
         item = {
             "process": process,
-            "stdout": stdout_path,
-            "stderr": stderr_path,
-            "dir": directory,
+            "stdout_capture": _BoundedCapture(process.stdout, MAX_LOG_BYTES, True),
+            "stderr_capture": _BoundedCapture(process.stderr, MAX_LOG_BYTES, True),
             "capture_lock": threading.Lock(),
         }
         conflicting = False
-        stale_directory: str | None = None
         with self._lock:
             existing = self._items.get(process_id)
             if existing is not None and existing["process"].poll() is None:
@@ -180,14 +190,11 @@ class ProcessTable:
             else:
                 if existing is not None:
                     del self._items[process_id]
-                    stale_directory = existing["dir"]
                 self._items[process_id] = item
-        if stale_directory is not None:
-            shutil.rmtree(stale_directory, ignore_errors=True)
         if conflicting:
             _kill_group(process, signal.SIGKILL)
             process.wait()
-            shutil.rmtree(directory, ignore_errors=True)
+            self._capture_finished(item)
             raise AgentError(409, "process id already exists")
         if timeout:
             threading.Thread(
@@ -214,6 +221,7 @@ class ProcessTable:
         except subprocess.TimeoutExpired:
             _kill_group(item["process"], signal.SIGKILL)
             item["process"].wait()
+        self._capture_finished(item)
         self._remove(process_id, item)
 
     def logs(self, process_id: str) -> dict[str, str]:
@@ -224,8 +232,8 @@ class ProcessTable:
             if item.get("captured"):
                 return {"stdout": item["stdout_tail"], "stderr": item["stderr_tail"]}
             return {
-                "stdout": _read_tail(item["stdout"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
-                "stderr": _read_tail(item["stderr"], MAX_LOG_BYTES).decode("utf-8", errors="replace"),
+                "stdout": item["stdout_capture"].read().decode("utf-8", errors="replace"),
+                "stderr": item["stderr_capture"].read().decode("utf-8", errors="replace"),
             }
         finally:
             if item["process"].poll() is not None:
@@ -254,7 +262,6 @@ class AgentState:
         values.pop("MARIMOHUB_AGENT_SECRET", None)
         for key, value in self.defaults.items():
             values.setdefault(key, value)
-        values.update(self.forced)
         if isinstance(overrides, dict):
             for key, value in overrides.items():
                 if isinstance(key, str) and isinstance(value, str) and key not in {
@@ -262,6 +269,7 @@ class AgentState:
                     "MARIMOHUB_AGENT_SECRET",
                 }:
                     values[key] = value
+        values.update(self.forced)
         values.pop("MARIMOHUB_AGENT_TOKEN", None)
         values.pop("MARIMOHUB_AGENT_SECRET", None)
         return values
@@ -273,25 +281,27 @@ class AgentState:
         cwd = payload.get("cwd", "/workspace")
         if not isinstance(cwd, str):
             raise AgentError(400, "cwd must be a string")
-        with tempfile.TemporaryDirectory(prefix="marimohub-exec-") as directory:
-            stdout_path = os.path.join(directory, "stdout")
-            stderr_path = os.path.join(directory, "stderr")
-            with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
-                try:
-                    process = subprocess.Popen(
-                        ["sh", "-lc", command],
-                        cwd=cwd,
-                        env=self.environment(payload.get("env")),
-                        stdin=subprocess.DEVNULL,
-                        stdout=stdout,
-                        stderr=stderr,
-                        start_new_session=True,
-                    )
-                except OSError as exc:
-                    raise AgentError(400, f"could not execute command: {exc.strerror or 'spawn failed'}") from exc
-                code = _wait_process(process, _bounded_timeout(payload.get("timeoutMs")))
-            output = _read_limited(stdout_path, MAX_OUTPUT_BYTES)
-            error = _read_limited(stderr_path, MAX_OUTPUT_BYTES)
+        try:
+            process = subprocess.Popen(
+                ["sh", "-lc", command],
+                cwd=cwd,
+                env=self.environment(payload.get("env")),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise AgentError(400, f"could not execute command: {exc.strerror or 'spawn failed'}") from exc
+        if process.stdout is None or process.stderr is None:
+            raise AgentError(500, "could not capture command output")
+        stdout_capture = _BoundedCapture(process.stdout, MAX_OUTPUT_BYTES, False)
+        stderr_capture = _BoundedCapture(process.stderr, MAX_OUTPUT_BYTES, False)
+        code = _wait_process(process, _bounded_timeout(payload.get("timeoutMs")))
+        stdout_capture.wait()
+        stderr_capture.wait()
+        output = stdout_capture.read()
+        error = stderr_capture.read()
         return {
             "success": code == 0,
             "exitCode": code,
@@ -506,9 +516,9 @@ class AgentServer(http.server.ThreadingHTTPServer):
         self.daemon_threads = True
 
 
-def run_server(host: str = "0.0.0.0", port: int | None = None) -> None:
+def run_server(host: str = "0.0.0.0", port: int | None = None, token: str | None = None) -> None:
     selected_port = port if port is not None else int(os.environ.get("MARIMOHUB_AGENT_PORT", "2717"))
-    server = AgentServer((host, selected_port), AgentState())
+    server = AgentServer((host, selected_port), AgentState(token))
     try:
         server.serve_forever()
     finally:
@@ -537,8 +547,31 @@ def check_health(host: str = "127.0.0.1", port: int | None = None, token: str | 
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["healthcheck"]:
-        raise SystemExit(0 if check_health() else 1)
+    if len(sys.argv) == 3 and sys.argv[1] == "--token-fd":
+        with os.fdopen(int(sys.argv[2]), "rb") as token_stream:
+            inherited_token = token_stream.read().decode("utf-8")
+        run_server(token=inherited_token)
+        raise SystemExit(0)
     if sys.argv[1:]:
-        raise SystemExit("usage: fargate_agent.py [healthcheck]")
-    run_server()
+        raise SystemExit("usage: fargate_agent.py")
+    token = os.environ.get("MARIMOHUB_AGENT_TOKEN", "")
+    encoded_token = token.encode("utf-8")
+    if len(encoded_token) > 4096:
+        raise SystemExit("MARIMOHUB_AGENT_TOKEN must not exceed 4096 bytes")
+    token_fd, token_writer = os.pipe()
+    try:
+        os.write(token_writer, encoded_token)
+    finally:
+        os.close(token_writer)
+    os.set_inheritable(token_fd, True)
+    try:
+        environment = dict(os.environ)
+        environment.pop("MARIMOHUB_AGENT_TOKEN", None)
+        environment.pop("MARIMOHUB_AGENT_SECRET", None)
+        os.execve(
+            sys.executable,
+            [sys.executable, os.path.abspath(__file__), "--token-fd", str(token_fd)],
+            environment,
+        )
+    finally:
+        os.close(token_fd)

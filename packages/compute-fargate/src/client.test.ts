@@ -19,6 +19,8 @@ function makeSdk() {
 		}
 		if (name === 'DescribeTasksCommand') return { tasks: [] };
 		if (name === 'ListTasksCommand') return { taskArns: [], nextToken: undefined };
+		if (name === 'StopTaskCommand') return {};
+		if (name === 'DescribeClustersCommand') return { clusters: [{ clusterName: 'marimo' }] };
 		if (name === 'DescribeTaskDefinitionCommand') {
 			return {
 				taskDefinition: {
@@ -38,7 +40,7 @@ function makeSdk() {
 				},
 			};
 		}
-		return { clusters: [{ clusterName: 'marimo' }] };
+		throw new Error(`unexpected command ${name}`);
 	});
 	return { send };
 }
@@ -97,6 +99,25 @@ describe('createFargateClient', () => {
 			nextToken: 'next-page',
 		});
 		expect(command.input).not.toHaveProperty('launchType');
+	});
+
+	it('requests task tags only when they are needed', async () => {
+		const sdk = makeSdk();
+		const client = createFargateClient({ client: sdk as never });
+		await client.describeTasks('marimo', ['task-1'], true);
+		await client.describeTaskDefinition('family:7');
+		const describeTasks = sdk.send.mock.calls.find(
+			([candidate]) => candidate.constructor.name === 'DescribeTasksCommand',
+		)?.[0] as { input: Record<string, unknown> };
+		const describeDefinition = sdk.send.mock.calls.find(
+			([candidate]) => candidate.constructor.name === 'DescribeTaskDefinitionCommand',
+		)?.[0] as { input: Record<string, unknown> };
+		expect(describeTasks.input).toEqual({
+			cluster: 'marimo',
+			tasks: ['task-1'],
+			include: ['TAGS'],
+		});
+		expect(describeDefinition.input).toEqual({ taskDefinition: 'family:7' });
 	});
 
 	it('maps task definitions and validates a cluster', async () => {
