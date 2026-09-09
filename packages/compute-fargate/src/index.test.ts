@@ -31,6 +31,7 @@ import {
 let activeContractWorld: ContractWorld | undefined;
 
 const ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
+const SECOND_ID = 'sb-bbbbbbbbbbbbbbbb' as SandboxId;
 const TOKEN = 'secret '.repeat(6);
 
 class FakeEcs implements FargateClient {
@@ -45,6 +46,13 @@ class FakeEcs implements FargateClient {
 	stopBeforeReady = false;
 	describeDelayMs = 0;
 	listPageSize = 0;
+	taskDefinition: FargateTaskDefinition = {
+		containerNames: [DEFAULT_CONTAINER_NAME],
+		networkMode: 'awsvpc',
+		requiresCompatibilities: ['FARGATE'],
+		taskRoleArn: 'arn:aws:iam::123:role/kernel',
+		staticCredentialContainers: [],
+	};
 	private sequence = 0;
 
 	async runTask(input: FargateRunTaskInput) {
@@ -113,7 +121,7 @@ class FakeEcs implements FargateClient {
 	}
 
 	async describeTaskDefinition(_taskDefinition: string): Promise<FargateTaskDefinition> {
-		return { containerNames: [DEFAULT_CONTAINER_NAME] };
+		return this.taskDefinition;
 	}
 
 	async describeCluster() {}
@@ -277,6 +285,7 @@ describe('FargateCompute', () => {
 		expect(input).toMatchObject({
 			startedBy: 'deployment-a',
 			clientToken: deterministicClientToken('deployment-a', ID),
+			count: 1,
 			networkConfiguration: {
 				assignPublicIp: false,
 				subnets: ['subnet-a'],
@@ -292,11 +301,53 @@ describe('FargateCompute', () => {
 				{ key: CREATED_AT_TAG, value: expect.any(String) },
 			]),
 		);
+		expect(input.overrides?.containerOverrides?.[0]?.environment).toEqual([
+			{ name: 'MARIMOHUB_AGENT_TOKEN', value: deriveAgentToken(TOKEN, ID) },
+			{ name: 'MARIMOHUB_AGENT_PORT', value: '2717' },
+		]);
 		expect((await instance.exposePort(2718, { hostname: 'hub.example' })).url).toBe(
 			'http://10.0.0.9:2718',
 		);
 		await instance.destroy();
 		expect(client.stopped).toHaveLength(1);
+	});
+
+	it('launches a separate task for each sandbox id', async () => {
+		const client = new FakeEcs();
+		const compute = makeCompute(client);
+		await Promise.all([
+			compute.create(ID, { reuse: false }).ready?.(),
+			compute.create(SECOND_ID, { reuse: false }).ready?.(),
+		]);
+		expect(client.runInputs).toHaveLength(2);
+		expect(client.runInputs.map((input) => input.count)).toEqual([1, 1]);
+		expect(
+			client.runInputs.map((input) => input.tags.find((tag) => tag.key === SANDBOX_ID_TAG)?.value),
+		).toEqual([ID, SECOND_ID]);
+		expect(client.runInputs[0]?.clientToken).not.toBe(client.runInputs[1]?.clientToken);
+	});
+
+	it.each([
+		[{ networkMode: 'bridge' }, /awsvpc/],
+		[{ requiresCompatibilities: [] }, /FARGATE compatibility/],
+		[{ taskRoleArn: undefined }, /task role/],
+		[{ staticCredentialContainers: [DEFAULT_CONTAINER_NAME] }, /static AWS access keys/],
+	] satisfies readonly [Partial<FargateTaskDefinition>, RegExp][])(
+		'rejects a task definition that does not provide task-role isolation',
+		async (override, error) => {
+			const client = new FakeEcs();
+			client.taskDefinition = { ...client.taskDefinition, ...override };
+			await expect(makeCompute(client).healthCheck()).rejects.toThrow(error);
+		},
+	);
+
+	it('validates task-role isolation before RunTask', async () => {
+		const client = new FakeEcs();
+		client.taskDefinition = { ...client.taskDefinition, taskRoleArn: undefined };
+		await expect(makeCompute(client).create(ID, { reuse: false }).ready?.()).rejects.toThrow(
+			/task role/,
+		);
+		expect(client.runInputs).toEqual([]);
 	});
 
 	it('reconnects a task from its old task-definition revision', async () => {

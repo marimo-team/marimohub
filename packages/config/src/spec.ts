@@ -736,7 +736,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_FARGATE_TASK_DEFINITION',
 						name: 'Fargate task definition',
 						description:
-							'Existing ECS task-definition revision or ARN. It pins the image and runs the standalone agent as a non-root user.',
+							'Existing ECS task-definition revision or ARN. It pins the image, runs the standalone agent as non-root, and defines the notebook task role.',
 						example: 'marimohub-kernel:12',
 						required: true,
 					},

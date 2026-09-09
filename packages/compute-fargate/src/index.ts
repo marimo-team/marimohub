@@ -40,6 +40,7 @@ import type {
 	FargateFailure,
 	FargateRunTaskInput,
 	FargateTask,
+	FargateTaskDefinition,
 	FargateTaskDefinitionResolver,
 	FargateTaskHandle,
 } from './shared';
@@ -167,6 +168,27 @@ interface FargateSandboxOptions {
 }
 
 type FargateTaskCache = Map<string, FargateTaskHandle>;
+type FargateTaskDefinitionCheck = (taskDefinition: string, containerName: string) => Promise<void>;
+
+function assertTaskDefinition(definition: FargateTaskDefinition, containerName: string): void {
+	if (!definition.containerNames?.includes(containerName)) {
+		throw new Error(`Fargate task definition does not contain container ${containerName}`);
+	}
+	if (definition.networkMode !== 'awsvpc') {
+		throw new Error('Fargate task definition must use awsvpc network mode');
+	}
+	if (!definition.requiresCompatibilities?.includes('FARGATE')) {
+		throw new Error('Fargate task definition must require FARGATE compatibility');
+	}
+	if (!definition.taskRoleArn) {
+		throw new Error('Fargate task definition must define a task role');
+	}
+	if (definition.staticCredentialContainers?.includes(containerName)) {
+		throw new Error(
+			`Fargate container ${containerName} must use its task role instead of static AWS access keys`,
+		);
+	}
+}
 
 async function findOwnedTasks(
 	client: FargateClient,
@@ -229,6 +251,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		private readonly config: FargateConfig,
 		private readonly client: FargateClient,
 		private readonly resolver: FargateTaskDefinitionResolver,
+		private readonly checkTaskDefinition: FargateTaskDefinitionCheck,
 		private readonly options: FargateSandboxOptions,
 		private readonly cache: FargateTaskCache,
 	) {
@@ -281,6 +304,7 @@ class FargateSandboxInstance implements SandboxInstance {
 			const resolved = await this.resolver.resolve(this.options.imageKey ?? this.config.imageKey);
 			containerName = resolved.containerName;
 			imageKey = resolved.imageKey;
+			await this.checkTaskDefinition(resolved.taskDefinition, containerName);
 			const token = deriveAgentToken(this.config.agentSecret, String(this.id));
 			const resources = fargateProfileResources(this.options.resources);
 			const now = new Date().toISOString();
@@ -324,7 +348,13 @@ class FargateSandboxInstance implements SandboxInstance {
 			task = result.tasks[0];
 		}
 		const arn = taskArn(task);
-		if (reconnecting) containerName = this.resolveContainerName(task);
+		if (reconnecting) {
+			containerName = this.resolveContainerName(task);
+			await this.checkTaskDefinition(
+				task.taskDefinitionArn ?? this.config.taskDefinition,
+				containerName,
+			);
+		}
 		const readyTask = await this.waitForTask(arn, containerName);
 		const privateIp = privateIpFromTask(readyTask, containerName);
 		if (!privateIp) throw new Error(`Fargate task ${arn} has no private ENI address`);
@@ -752,6 +782,7 @@ export class FargateCompute implements SandboxProvider {
 	private readonly resolver: FargateTaskDefinitionResolver;
 	private readonly config: FargateConfig;
 	private readonly cache: FargateTaskCache = new Map();
+	private readonly checkedTaskDefinitions = new Set<string>();
 
 	constructor(options: FargateComputeOptions) {
 		if (options.exposureMode !== undefined && options.exposureMode !== 'proxy') {
@@ -777,6 +808,7 @@ export class FargateCompute implements SandboxProvider {
 			this.config,
 			this.client,
 			this.resolver,
+			(taskDefinition, containerName) => this.checkTaskDefinition(taskDefinition, containerName),
 			{
 				reuse: options?.reuse ?? true,
 				resources: options?.resources,
@@ -828,11 +860,16 @@ export class FargateCompute implements SandboxProvider {
 
 	async healthCheck(): Promise<void> {
 		await this.client.describeCluster(this.config.cluster);
-		const definition = await this.client.describeTaskDefinition(this.config.taskDefinition);
 		const containerName = this.config.containerName ?? DEFAULT_CONTAINER_NAME;
-		if (!definition.containerNames?.includes(containerName)) {
-			throw new Error(`Fargate task definition does not contain container ${containerName}`);
-		}
+		await this.checkTaskDefinition(this.config.taskDefinition, containerName);
+	}
+
+	private async checkTaskDefinition(taskDefinition: string, containerName: string): Promise<void> {
+		const key = `${taskDefinition}\0${containerName}`;
+		if (this.checkedTaskDefinitions.has(key)) return;
+		const definition = await this.client.describeTaskDefinition(taskDefinition);
+		assertTaskDefinition(definition, containerName);
+		this.checkedTaskDefinitions.add(key);
 	}
 }
 

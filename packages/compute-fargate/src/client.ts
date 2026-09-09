@@ -58,13 +58,25 @@ function mapTags(tags: readonly { key: string; value: string }[]): Tag[] {
 }
 
 function mapTaskDefinition(definition: TaskDefinition): FargateTaskDefinition {
+	const staticCredentialNames = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']);
 	return {
 		taskDefinitionArn: definition.taskDefinitionArn,
 		family: definition.family,
 		revision: definition.revision,
+		taskRoleArn: definition.taskRoleArn,
+		networkMode: definition.networkMode,
+		requiresCompatibilities: definition.requiresCompatibilities,
 		containerNames: definition.containerDefinitions?.flatMap((container) =>
 			container.name ? [container.name] : [],
 		),
+		staticCredentialContainers: definition.containerDefinitions?.flatMap((container) => {
+			if (!container.name) return [];
+			const names = [
+				...(container.environment ?? []).map((entry) => entry.name),
+				...(container.secrets ?? []).map((entry) => entry.name),
+			];
+			return names.some((name) => staticCredentialNames.has(name ?? '')) ? [container.name] : [];
+		}),
 	};
 }
 

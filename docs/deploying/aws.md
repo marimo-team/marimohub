@@ -32,6 +32,8 @@ MARIMOHUB_STORAGE_S3_REGION=us-east-1
 Use the [Fargate compute setup](../compute.md#aws-ecs-fargate) to run kernels on
 ECS. The repository includes an [example task definition](../../examples/aws-fargate/kernel-task-definition.json)
 and a [hub IAM policy](../../examples/aws-fargate/hub-iam-policy.json).
+Use ECS task roles for the hub and notebook tasks. Do not configure static AWS
+access keys.
 
 ## Config & secrets
 

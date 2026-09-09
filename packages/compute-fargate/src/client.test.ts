@@ -25,7 +25,16 @@ function makeSdk() {
 					taskDefinitionArn: 'family:7',
 					family: 'family',
 					revision: 7,
-					containerDefinitions: [{ name: 'marimo' }],
+					taskRoleArn: 'arn:aws:iam::123:role/kernel',
+					networkMode: 'awsvpc',
+					requiresCompatibilities: ['FARGATE'],
+					containerDefinitions: [
+						{
+							name: 'marimo',
+							environment: [{ name: 'AWS_REGION', value: 'us-east-1' }],
+							secrets: [{ name: 'AWS_ACCESS_KEY_ID', valueFrom: 'secret-arn' }],
+						},
+					],
 				},
 			};
 		}
@@ -97,7 +106,11 @@ describe('createFargateClient', () => {
 			taskDefinitionArn: 'family:7',
 			family: 'family',
 			revision: 7,
+			taskRoleArn: 'arn:aws:iam::123:role/kernel',
+			networkMode: 'awsvpc',
+			requiresCompatibilities: ['FARGATE'],
 			containerNames: ['marimo'],
+			staticCredentialContainers: ['marimo'],
 		});
 		await expect(client.describeCluster('marimo')).resolves.toBeUndefined();
 	});

@@ -60,7 +60,11 @@ export interface FargateTaskDefinition {
 	taskDefinitionArn?: string;
 	family?: string;
 	revision?: number;
+	taskRoleArn?: string;
+	networkMode?: string;
+	requiresCompatibilities?: readonly string[];
 	containerNames?: readonly string[];
+	staticCredentialContainers?: readonly string[];
 }
 
 export interface FargateRunTaskInput {

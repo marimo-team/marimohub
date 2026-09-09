@@ -75,6 +75,23 @@ class AgentTest(unittest.TestCase):
         _, body = self.request("POST", "/exec", {"command": "printf '%s' \"${MARIMOHUB_AGENT_TOKEN:-}\"", "cwd": os.getcwd()})
         self.assertEqual(body["stdout"], "")
 
+    def test_task_role_endpoint_is_in_child_environment(self):
+        name = "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"
+        previous = os.environ.get(name)
+        os.environ[name] = "/v2/credentials/task"
+        try:
+            _, body = self.request(
+                "POST",
+                "/exec",
+                {"command": f"printf '%s' \"${{{name}:-}}\"", "cwd": os.getcwd()},
+            )
+        finally:
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+        self.assertEqual(body["stdout"], "/v2/credentials/task")
+
     def test_binary_file_write_and_read(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "nested", "file.bin")
