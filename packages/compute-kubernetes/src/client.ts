@@ -311,6 +311,43 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		}
 	}
 
+	async function reconcileService(core: K8s.CoreV1Api, desired: V1Service): Promise<void> {
+		try {
+			await core.createNamespacedService({ namespace, body: desired });
+			return;
+		} catch (err) {
+			if (!hasCode(err, 409)) throw err;
+		}
+
+		const metadata = desired.metadata;
+		const name = metadata?.name;
+		if (!metadata || !name) throw new Error('Cannot reconcile a Service without a name');
+		const desiredLabels = metadata.labels;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const existing = await core.readNamespacedService({ name, namespace });
+			if (existing.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE) {
+				throw new Error(`Refusing to replace unmanaged Service "${name}"`);
+			}
+			const resourceVersion = existing.metadata.resourceVersion;
+			if (!resourceVersion) throw new Error(`Service "${name}" has no resourceVersion`);
+			metadata.resourceVersion = resourceVersion;
+			metadata.labels = { ...existing.metadata.labels, ...desiredLabels };
+			metadata.finalizers = existing.metadata.finalizers;
+			metadata.ownerReferences = existing.metadata.ownerReferences;
+			// clusterIP is immutable; a replace must carry the assigned value forward.
+			if (desired.spec) {
+				desired.spec.clusterIP = existing.spec?.clusterIP;
+				desired.spec.clusterIPs = existing.spec?.clusterIPs;
+			}
+			try {
+				await core.replaceNamespacedService({ name, namespace, body: desired });
+				return;
+			} catch (err) {
+				if (!hasCode(err, 409) || attempt === 2) throw err;
+			}
+		}
+	}
+
 	return {
 		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
 			const pod = podManifest(o);
@@ -318,11 +355,12 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			const ingress = o.ports.some((p) => p.host) ? ingressManifest(o) : undefined;
 			const { core, net } = await apis();
 			// Order-independent: k8s is declarative (a Service's selector / an
-			// Ingress's backend need not pre-exist), so the creates fan out.
+			// Ingress's backend need not pre-exist), so the creates fan out. The
+			// Service and Ingress reconcile so a reconnect picks up newly reserved
+			// surface ports rather than swallowing the create conflict.
 			const [createdPod] = await Promise.all([
 				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
-				createTolerant(() => core.createNamespacedService({ namespace, body: service })),
-				// No hosted port → no Ingress (the URL will be unroutable; documented).
+				reconcileService(core, service),
 				ingress ? reconcileIngress(net, ingress) : undefined,
 			]);
 			return { createdPod };

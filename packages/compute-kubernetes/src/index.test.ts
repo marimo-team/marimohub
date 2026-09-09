@@ -200,15 +200,33 @@ describe('KubernetesCompute', () => {
 			});
 		});
 
-		it('rejects a custom subdomain template without {port} when surfaces are set', () => {
+		it('rejects a subdomain template whose ports share one Ingress host', () => {
+			const world = makeWorld();
+			// {port} absent from the host, and {port} only in the path, both collide.
+			for (const hostnameTemplate of ['https://{id}.{host}', 'https://{id}.{host}/{port}']) {
+				expect(() =>
+					makeCompute(world, { ...baseConfig, surfacePorts: [8443], hostnameTemplate }),
+				).toThrow(/distinct destination/);
+			}
+		});
+
+		it('rejects a proxy template with a hardcoded port when surfaces are set', () => {
 			const world = makeWorld();
 			expect(() =>
 				makeCompute(world, {
 					...baseConfig,
+					exposureMode: 'proxy',
 					surfacePorts: [8443],
-					hostnameTemplate: 'https://{id}.{host}',
+					hostnameTemplate: 'http://mh-{id}.ns.svc.cluster.local:2718',
 				}),
-			).toThrow(/\{port\}/);
+			).toThrow(/distinct destination/);
+		});
+
+		it('accepts the proxy default template, which carries {port} per destination', () => {
+			const world = makeWorld();
+			expect(() =>
+				makeCompute(world, { ...baseConfig, exposureMode: 'proxy', surfacePorts: [8443] }),
+			).not.toThrow();
 		});
 
 		it('reserves each surface port with its own per-port Ingress host', async () => {

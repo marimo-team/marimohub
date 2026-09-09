@@ -346,7 +346,7 @@ describe('makeCompute fail-fast', () => {
 		});
 	});
 
-	it('rejects a kubernetes subdomain template without {port} when surfaces are set', () => {
+	it('rejects a kubernetes subdomain template whose ports share a destination', () => {
 		const surfaces = surfacesFromEnv({ MARIMOHUB_SURFACES: 'marimo,vscode' });
 		const error = getConfigError(() =>
 			makeCompute(
@@ -358,7 +358,7 @@ describe('makeCompute fail-fast', () => {
 				{ surfaces },
 			),
 		);
-		expect(error.message).toMatch(/\{port\}/);
+		expect(error.message).toMatch(/both resolve to/);
 		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
 	});
 

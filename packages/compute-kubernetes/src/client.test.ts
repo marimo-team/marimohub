@@ -10,6 +10,8 @@ const k8sMock = vi.hoisted(() => {
 	const core = {
 		createNamespacedPod: vi.fn(),
 		createNamespacedService: vi.fn(),
+		readNamespacedService: vi.fn(),
+		replaceNamespacedService: vi.fn(),
 		readNamespacedPod: vi.fn(),
 		listNamespacedEvent: vi.fn(),
 		deleteNamespacedService: vi.fn(),
@@ -69,6 +71,8 @@ beforeEach(() => {
 	for (const fn of [
 		k8sMock.core.createNamespacedPod,
 		k8sMock.core.createNamespacedService,
+		k8sMock.core.readNamespacedService,
+		k8sMock.core.replaceNamespacedService,
 		k8sMock.core.readNamespacedPod,
 		k8sMock.core.listNamespacedEvent,
 		k8sMock.core.deleteNamespacedService,
@@ -270,6 +274,47 @@ describe('createK8sClient', () => {
 					finalizers: ['controller.example/finalizer'],
 				}),
 				spec: expect.objectContaining({ tls: [{}] }),
+			}),
+		});
+	});
+
+	it('reconciles an existing managed service so a reconnect gains new surface ports', async () => {
+		k8sMock.core.createNamespacedService.mockRejectedValueOnce({ code: 409 });
+		k8sMock.core.readNamespacedService.mockResolvedValueOnce({
+			metadata: {
+				name: 'mh-sb',
+				resourceVersion: '9',
+				labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			},
+			spec: { clusterIP: '10.0.0.7', clusterIPs: ['10.0.0.7'], ports: [{ port: 2718 }] },
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel-image:v1',
+			ports: [
+				{ port: 2718, host: 'sb.example.com' },
+				{ port: 8443, host: 'sb-8443.example.com' },
+			],
+			namespace: 'kernels',
+		});
+
+		expect(k8sMock.core.readNamespacedService).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+		});
+		expect(k8sMock.core.replaceNamespacedService).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			body: expect.objectContaining({
+				metadata: expect.objectContaining({ resourceVersion: '9' }),
+				spec: expect.objectContaining({
+					// clusterIP carried forward (immutable); ports now include the surface.
+					clusterIP: '10.0.0.7',
+					ports: [expect.objectContaining({ port: 2718 }), expect.objectContaining({ port: 8443 })],
+				}),
 			}),
 		});
 	});
