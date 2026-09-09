@@ -121,7 +121,7 @@ describe('S3 object browser metrics', () => {
 		const browser = harness(
 			[
 				{ Body: body('hello'), ContentLength: 5 },
-				{ Body: body('partial'), ContentLength: 7 },
+				{ Body: pendingBody('partial'), ContentLength: 7 },
 			],
 			metrics,
 		);
@@ -153,7 +153,7 @@ describe('S3 object browser metrics', () => {
 
 	it('records a timed-out download separately from caller cancellation', async () => {
 		const metrics = mockMetrics();
-		const browser = harness([{ Body: body('partial'), ContentLength: 7 }], metrics);
+		const browser = harness([{ Body: pendingBody('partial'), ContentLength: 7 }], metrics);
 		const opened = await browser.openObject(source, context, {
 			bucket: 'private-bucket',
 			key: 'secret.bin',
@@ -260,6 +260,17 @@ function body(value: string): ReadableStream<Uint8Array> {
 		start(controller) {
 			controller.enqueue(new TextEncoder().encode(value));
 			controller.close();
+		},
+	});
+}
+
+function pendingBody(value: string): ReadableStream<Uint8Array> {
+	let sent = false;
+	return new ReadableStream({
+		pull(controller) {
+			if (sent) return;
+			sent = true;
+			controller.enqueue(new TextEncoder().encode(value));
 		},
 	});
 }
