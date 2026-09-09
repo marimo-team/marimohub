@@ -14,6 +14,7 @@ import {
 	zSecret,
 } from '@marimo-hub/core';
 import type {
+	DatabaseBrowser,
 	DataQueryExecution,
 	IntegrationProbe,
 	ObjectBrowser,
@@ -260,7 +261,7 @@ function browserDeps(
 	bucket: MemoryBucket,
 	dataPreview?: DataPreviewService,
 	dataQuery?: DataQueryService,
-	options: { probe?: IntegrationProbe; testClickhouse?: boolean } = {},
+	options: { probe?: IntegrationProbe; testClickhouse?: boolean; bigquery?: DatabaseBrowser } = {},
 ) {
 	const registry = new IntegrationRegistry();
 	registry.register(browsyKind);
@@ -280,6 +281,8 @@ function browserDeps(
 		probe,
 		browseProbe: probe,
 		objectBrowsers: { s3: objectBrowser },
+		databaseBrowsers: options.bigquery ? { bigquery: options.bigquery } : {},
+		databaseTesters: options.bigquery ? { bigquery: options.bigquery } : {},
 		dataPreview,
 		dataQuery,
 	};
@@ -369,6 +372,135 @@ describe('Data browser routes', () => {
 		);
 		return data.id;
 	}
+
+	it('routes BigQuery metadata and bounded previews through the database port', async () => {
+		const pid = await createProject();
+		const previewRows = vi.fn<DatabaseBrowser['previewRows']>(async () => ({
+			columns: ['id'],
+			rows: [['9223372036854775807']],
+		}));
+		const browser: DatabaseBrowser = {
+			provider: 'bigquery',
+			preview: true,
+			testConnection: async () => ({ ok: true }),
+			listNamespaces: async () => ({ items: [['sales']], next_cursor: null }),
+			listTables: async () => ({ items: ['orders'], next_cursor: null }),
+			getTableSchema: async () => ({ columns: [{ name: 'id', type: 'INTEGER', nullable: false }] }),
+			previewRows,
+		};
+		const warehouseDeps = browserDeps(bucket, undefined, undefined, { bigquery: browser });
+		const manager = createTestApi({ bucket, userId: ACTOR, deps: warehouseDeps }).request;
+		const created = await expectOk<{ id: string }>(
+			await manager('POST', `/projects/${pid}/integrations`, {
+				kind: 'bigquery',
+				name: 'warehouse',
+				config: {
+					project_id: 'test-project',
+					auth: { method: 'service_account', credentials_json: 'private-credential-fixture' },
+				},
+			}),
+			201,
+		);
+		const editor = uid('warehouse-editor');
+		const viewer = uid('warehouse-viewer');
+		for (const [user_id, role] of [
+			[editor, 'editor'],
+			[viewer, 'viewer'],
+		]) {
+			await expectOk(await manager('POST', `/projects/${pid}/members`, { user_id, role }), 201);
+		}
+		const asEditor = createTestApi({ bucket, userId: editor, deps: warehouseDeps }).request;
+		const asViewer = createTestApi({ bucket, userId: viewer, deps: warehouseDeps }).request;
+		const base = `/projects/${pid}/integrations/${created.id}/browse`;
+		expect(await expectOk(await asEditor('GET', `${base}/namespaces`))).toMatchObject({
+			items: [['sales']],
+		});
+		const schema = await expectOk<{ snippet: string }>(
+			await asEditor('GET', `${base}/schema?namespace=sales&table=orders`),
+		);
+		expect(schema.snippet).toContain('CREDENTIALS_PATH');
+		expect(schema.snippet).not.toContain('private-credential-fixture');
+		await expectError(await asViewer('GET', base), 403, 'FORBIDDEN');
+		await expectError(
+			await asEditor('POST', `/projects/${pid}/integrations/test`, {
+				source: 'stored',
+				id: created.id,
+			}),
+			403,
+			'FORBIDDEN',
+		);
+		await expectError(
+			await asEditor('POST', `${base}/preview`, {
+				namespace: ['sales'],
+				table: 'orders',
+				limit: 20,
+			}),
+			404,
+			'NOT_FOUND',
+		);
+		expect(previewRows).not.toHaveBeenCalled();
+		warehouseDeps.dataBrowser.preview = true;
+		expect(
+			await expectOk(
+				await asEditor('POST', `${base}/preview`, {
+					namespace: ['sales'],
+					table: 'orders',
+					limit: 20,
+				}),
+			),
+		).toEqual({ columns: ['id'], rows: [['9223372036854775807']] });
+		expect(previewRows).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider: 'bigquery',
+				credentials_json: 'private-credential-fixture',
+			}),
+			['sales'],
+			'orders',
+			expect.objectContaining({ limit: 20, signal: expect.any(AbortSignal) }),
+		);
+	});
+
+	it('advertises Databricks metadata without previews and browses inherited org integrations', async () => {
+		const pid = await createProject();
+		const probe: IntegrationProbe = {
+			connect: vi.fn(),
+			fetch: async () => ({
+				ok: true,
+				status: 200,
+				json: async () => ({ catalogs: [{ name: 'main' }] }),
+			}),
+		};
+		const warehouseDeps = browserDeps(bucket, undefined, undefined, { probe });
+		const created = await warehouseDeps.orgIntegrations.create(
+			{
+				kind: 'databricks',
+				name: 'warehouse',
+				config: {
+					host: 'warehouse.example.test',
+					http_path: '/sql/1.0/warehouses/test',
+					auth: { method: 'personal_access_token', token: 'fixture' },
+				},
+			},
+			ACTOR,
+		);
+		const manager = createTestApi({ bucket, userId: ACTOR, deps: warehouseDeps }).request;
+		const base = `/projects/${pid}/integrations/${created.id}/browse`;
+		expect(await expectOk(await manager('GET', base))).toMatchObject({
+			surfaces: { tables: { available: true, preview: false } },
+		});
+		expect(await expectOk(await manager('GET', `${base}/namespaces`))).toMatchObject({
+			items: [['main']],
+		});
+		await expectOk(
+			await manager('POST', `/projects/${pid}/integrations`, {
+				kind: 'custom_env',
+				name: 'warehouse',
+				config: { vars: {} },
+			}),
+			201,
+		);
+		await expectError(await manager('GET', base), 404, 'NOT_FOUND');
+	});
 
 	async function createBrowsable(pid: string, name = 'lake') {
 		return expectOk<{ id: string }>(

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { defineIntegration, HOSTNAME_REGEX } from '../sdk';
+import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
+import { ValidationError } from '../../../errors';
 import { zSecret } from '../secretFields';
 import { AMBIENT_ENV_DESCRIPTION, connectionUrl, renderConnection, renderFile } from './common';
 
@@ -46,6 +47,40 @@ export const bigquery = defineIntegration({
 		auth: { group: 'Authentication', order: 10 },
 		'auth.credentials_json': { widget: 'textarea' },
 		ambient_env: { group: 'Authentication', order: 11, widget: 'toggle', advanced: true },
+	},
+	databaseBrowse: {
+		provider: 'bigquery',
+		available: (config) =>
+			config.auth.method === 'service_account'
+				? { ok: true }
+				: {
+						ok: false,
+						reason:
+							'Hub browsing requires explicit BigQuery service-account credentials. Ambient credentials remain available in notebooks.',
+					},
+		source(config) {
+			if (config.auth.method !== 'service_account')
+				throw new ValidationError('BigQuery hub browsing requires service-account credentials.');
+			return {
+				provider: 'bigquery',
+				project_id: config.project_id,
+				dataset: config.dataset,
+				credentials_json: config.auth.credentials_json,
+			};
+		},
+		snippet(instanceName, namespace, table) {
+			const prefix = `MARIMOHUB_BIGQUERY_${envSegment(instanceName)}`;
+			return [
+				'import os',
+				'from google.cloud import bigquery',
+				'',
+				`client = bigquery.Client.from_service_account_json(os.environ[${JSON.stringify(`${prefix}_CREDENTIALS_PATH`)}], project=os.environ[${JSON.stringify(`${prefix}_PROJECT_ID`)}])`,
+				`table_ref = bigquery.DatasetReference(client.project, ${JSON.stringify(namespace[0] ?? '')}).table(${JSON.stringify(table)})`,
+				'query = "SELECT * FROM `" + str(table_ref).replace("\\\\", "\\\\\\\\").replace("`", "\\\\`") + "` LIMIT 100"',
+				`rows = list(client.query(query, location=os.environ.get(${JSON.stringify(`${prefix}_LOCATION`)})).result(max_results=100))`,
+				'rows',
+			].join('\n');
+		},
 	},
 
 	render({ config, instanceName }) {

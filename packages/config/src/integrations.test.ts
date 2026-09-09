@@ -28,6 +28,66 @@ const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password
 afterEach(() => vi.restoreAllMocks());
 
 describe('makeIntegrations', () => {
+	it.each(['off', 'metadata', 'full'])('wires warehouse capabilities in %s mode', async (mode) => {
+		const { integrations } = makeIntegrations(
+			{
+				MARIMOHUB_DATA_BROWSER: mode,
+				MARIMOHUB_SECRETS_KEK: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=',
+			},
+			new MemoryBucket(),
+		);
+		const kinds = integrations!.listKinds();
+		for (const kind of ['bigquery', 'databricks']) {
+			expect(kinds.find((item) => item.kind === kind)).toMatchObject({
+				supports_test: true,
+				supports_browse: mode !== 'off',
+			});
+		}
+		if (mode === 'off') return;
+		const pid = createProjectId();
+		const integration = await integrations!.create(
+			pid,
+			{
+				kind: 'bigquery',
+				name: 'warehouse',
+				config: {
+					project_id: 'test-project',
+					auth: { method: 'service_account', credentials_json: 'fixture' },
+				},
+			},
+			ACTOR,
+		);
+		expect(await integrations!.browseCapability(pid, integration.id)).toMatchObject({
+			surfaces: { tables: { available: true, preview: mode === 'full' } },
+		});
+	});
+
+	it('keeps ambient BigQuery notebook configuration valid while explaining hub limitations', async () => {
+		const { integrations } = makeIntegrations({}, new MemoryBucket());
+		const pid = createProjectId();
+		const integration = await integrations!.create(
+			pid,
+			{ kind: 'bigquery', name: 'ambient', config: { project_id: 'test-project' } },
+			ACTOR,
+		);
+		expect(await integrations!.browseCapability(pid, integration.id)).toMatchObject({
+			surfaces: {
+				tables: {
+					available: false,
+					preview: false,
+					reason: expect.stringContaining('explicit BigQuery service-account'),
+				},
+			},
+		});
+		await expect(integrations!.browseNamespaces(pid, integration.id, { limit: 1 })).rejects.toThrow(
+			'explicit BigQuery service-account',
+		);
+		expect(await integrations!.test(pid, { source: 'stored', id: integration.id })).toMatchObject({
+			ok: false,
+			details: expect.stringContaining('explicit BigQuery service-account'),
+		});
+	});
+
 	it('is enabled by default and supports an explicit on/off kill switch', () => {
 		const defaultWiring = makeIntegrations({}, new MemoryBucket());
 		expect(defaultWiring.integrations).toBeDefined();

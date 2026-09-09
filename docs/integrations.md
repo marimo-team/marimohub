@@ -56,8 +56,10 @@ requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
 
 ### Catalog browsing
 
-The hub supports Iceberg REST Catalog, Trino, and ClickHouse. Trino uses the
-catalog → schema → table hierarchy. ClickHouse uses database → table.
+The hub supports Iceberg REST Catalog, Trino, ClickHouse, PostgreSQL, Databricks,
+and BigQuery. PostgreSQL requires its separate data-access switch.
+Trino and Databricks use catalog → schema → table. ClickHouse uses database →
+table. BigQuery lists datasets and tables within the configured project.
 
 The hub cannot browse an Iceberg REST integration that uses:
 
@@ -73,6 +75,13 @@ Password authentication also requires HTTPS.
 
 The `GET …/integrations/{iid}/browse` route reports the capabilities of one
 integration and explains why a capability is unavailable.
+
+Databricks metadata browsing supports personal access tokens and OAuth service
+principals. BigQuery browsing requires explicit service-account credentials.
+Ambient BigQuery credentials remain available in notebook sessions.
+
+If a catalog request fails, use its **Retry** action. The tree keeps loaded
+entries, expanded branches, and the selected table during a retry.
 
 ### Object-store browsing
 
@@ -715,6 +724,26 @@ claiming it.
 
 <!--@include: ./partials/integrations/bigquery.md-->
 
+### Hub browsing and previews
+
+With service-account credentials, **Test connection** checks metadata access.
+It reads the configured dataset, or requests one dataset when no default is set.
+An empty successful listing passes. This test does not check row permissions.
+
+The Data page lists accessible datasets, tables, columns, and partition fields.
+The default dataset does not restrict this listing. IAM permissions control access.
+The hub uses the standard Google token endpoint and the read-only BigQuery scope.
+It does not use the server's ambient Google identity.
+
+In full data-browser mode, **Load preview** requests up to 20 rows from a base table.
+Previews use `tabledata.list` and do not create query jobs. Row access requires
+`bigquery.tables.getData`. Integer and decimal values retain their exact string
+representations. Nested records and repeated values retain their structure.
+
+Views, materialized views, and external tables require **Open in notebook**.
+The generated notebook runs a bounded SQL query with the selected integration.
+The hub does not expose Run SQL for BigQuery.
+
 ## Amazon Redshift
 
 The sandbox gets `MARIMOHUB_REDSHIFT_<NAME>_URL` (a
@@ -867,7 +896,18 @@ for `databricks.sql.connect()`, plus the credential for the chosen method and a
 descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/databricks/<name>.json`. Personal
 access tokens also render `_URL` for `databricks-sqlalchemy`; an OAuth service
 principal cannot be expressed in a URL, so it renders `_CLIENT_ID` and
-`_CLIENT_SECRET` instead. **Test** calls the workspace SCIM identity endpoint.
+`_CLIENT_SECRET` instead.
+
+**Test connection** checks Unity Catalog metadata access with either authentication
+method. It reads the configured catalog and schema, or requests one catalog when
+no default is set. A schema default requires a catalog for this test.
+An empty successful listing passes. The test does not start a SQL warehouse or
+check warehouse execution permissions.
+
+The Data page lists catalogs, schemas, tables, columns, comments, and partition
+fields. **Open in notebook** creates code for the selected table and authentication
+method. Install the listed dependencies, including `databricks-sdk` for OAuth.
+Databricks row previews and Run SQL are unavailable in the hub.
 
 <!--@include: ./partials/integrations/databricks.md-->
 

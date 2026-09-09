@@ -101,7 +101,7 @@ paths:
     x-brand-icon: googlebigquery
     x-secret-paths:
       - auth.credentials_json
-    x-supports-test: false
+    x-supports-test: true
     x-requirements:
       - google-cloud-bigquery>=3.25
       - sqlalchemy-bigquery>=1.11
@@ -213,6 +213,7 @@ paths:
     x-requirements:
       - databricks-sql-connector>=3.4
       - databricks-sqlalchemy>=1.0
+      - databricks-sdk>=0.18
     get:
       operationId: read_databricks_config
       summary: Stored databricks config

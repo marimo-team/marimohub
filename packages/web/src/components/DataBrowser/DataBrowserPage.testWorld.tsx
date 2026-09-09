@@ -1,4 +1,5 @@
 import { afterEach, vi } from 'vitest';
+import type { QueryClient } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';
 import DataBrowserPage from './DataBrowserPage';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
@@ -105,6 +106,7 @@ function makeFetch({
 	queryEnabled = querySurface !== undefined,
 	role = 'editor',
 	namespacesDown = false,
+	catalogResponse,
 	kind = icebergKind,
 	entry = lakeEntry,
 	objectSearch = 'bounded-key-name',
@@ -144,6 +146,7 @@ function makeFetch({
 	queryEnabled?: boolean;
 	role?: 'editor' | 'manager';
 	namespacesDown?: boolean;
+	catalogResponse?: (url: URL) => Response | undefined;
 	kind?: IntegrationKind;
 	entry?: IntegrationEntry;
 	objectSearch?: 'none' | 'bounded-key-name' | 'unknown';
@@ -245,6 +248,8 @@ function makeFetch({
 				: ok({ items: objectEntries, next_cursor: objectNextCursor });
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/namespaces`)) {
+			const override = catalogResponse?.(target);
+			if (override) return override;
 			if (namespacesDown) {
 				return new Response(
 					JSON.stringify({
@@ -264,6 +269,8 @@ function makeFetch({
 				: ok({ items: [], next_cursor: null });
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/tables`)) {
+			const override = catalogResponse?.(target);
+			if (override) return override;
 			if (!pagedTables) return ok({ items: tables, next_cursor: null });
 			return target.searchParams.get('cursor') === 'p2'
 				? ok({ items: ['refunds'], next_cursor: null })
@@ -344,7 +351,11 @@ function makeFetch({
 	return impl;
 }
 
-export function setup(route: string | string[], fetchOpts?: Parameters<typeof makeFetch>[0]) {
+export function setup(
+	route: string | string[],
+	fetchOpts?: Parameters<typeof makeFetch>[0],
+	client?: QueryClient,
+) {
 	installMatchMedia();
 	const fetchImpl = makeFetch(fetchOpts);
 	renderWithClient(
@@ -355,7 +366,7 @@ export function setup(route: string | string[], fetchOpts?: Parameters<typeof ma
 			</Routes>
 			<TestWorldControls deepLink={`/projects/${PID}/data/${IID}?ns=sales&table=orders`} />
 		</ThemeProvider>,
-		{ route },
+		{ route, client },
 	);
 	return fetchImpl;
 }

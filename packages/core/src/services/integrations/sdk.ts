@@ -203,7 +203,11 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * wired. Any throw that is not a `DomainError` becomes a generic failure
 	 * result and its message is discarded, so report failures by returning one.
 	 */
-	testConnection?(config: z.infer<S>, probe: IntegrationProbe): Promise<TestResult>;
+	testConnection?(
+		config: z.infer<S>,
+		probe: IntegrationProbe,
+		options?: { signal?: AbortSignal },
+	): Promise<TestResult>;
 	/**
 	 * Optional read-only catalog browsing (namespaces → tables → schema).
 	 * `defineIntegration` wraps every op so a thrown transport error is replaced
@@ -267,10 +271,10 @@ export function defineIntegration<S extends z.ZodType>(
 		...def,
 		...(testConnection
 			? {
-					async testConnection(config, probe) {
+					async testConnection(config, probe, options) {
 						let result: TestResult;
 						try {
-							result = await testConnection(config, probe);
+							result = await testConnection(config, probe, options);
 						} catch (err) {
 							// A throw means the kind never reached its own sanitizer, so its text is
 							// untrusted wholesale — it can quote material this schema never marked (a

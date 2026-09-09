@@ -25,7 +25,14 @@ export interface PostgresConnectionCapability {
 	tls: PostgresTlsCapability;
 }
 
-export type DatabaseSource = PostgresConnectionCapability;
+export interface BigQueryConnectionCapability {
+	provider: 'bigquery';
+	project_id: string;
+	dataset?: string;
+	credentials_json: string;
+}
+
+export type DatabaseSource = PostgresConnectionCapability | BigQueryConnectionCapability;
 
 export interface DatabaseTestOptions {
 	/** Cancels the probe when the caller goes away (e.g. the HTTP request aborts). */

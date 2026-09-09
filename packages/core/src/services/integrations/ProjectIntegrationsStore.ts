@@ -848,7 +848,7 @@ class ScopedIntegrationsStore {
 				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
 			);
 		}
-		if (def.testConnection) return def.testConnection(parsed.data, probe);
+		if (def.testConnection) return def.testConnection(parsed.data, probe, options);
 		if (def.databaseBrowse) {
 			const blocker = this.databaseTestGate?.({ kind: def.kind, config: parsed.data });
 			if (blocker?.ready === false) return { ok: false, details: blocker.reason };
@@ -1371,6 +1371,8 @@ class ScopedIntegrationsStore {
 			}
 			const gate = this.queryGateBlocker(preflightHead.kind, placeholder);
 			if (gate) throw new ValidationError(gate.reason);
+			const availability = definition.databaseBrowse.available(placeholder);
+			if (!availability.ok) throw new ValidationError(availability.reason);
 		}
 		const { head, def, version, config: parsed } = await this.openResolvedBrowse(scope, id);
 		if (def.databaseBrowse) {

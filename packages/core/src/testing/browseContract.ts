@@ -207,6 +207,8 @@ export function fetchProbe(): IntegrationProbe {
 				method: init?.method ?? 'GET',
 				headers: init?.headers,
 				body: init?.body,
+				signal: init?.signal,
+				redirect: 'error',
 			});
 			const text = await res.text();
 			return {

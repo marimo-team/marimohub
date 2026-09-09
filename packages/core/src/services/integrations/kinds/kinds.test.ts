@@ -3659,7 +3659,7 @@ describe('testConnection goes through the injected probe only', () => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('ambient fetch used in testConnection');
 		});
-		const { probe } = recordingProbe(() => ({ access_token: 'tok' }));
+		const { probe } = recordingProbe(() => ({ access_token: 'tok', name: 'catalog' }));
 		for (const def of defaultRegistry().list()) {
 			if (!def.testConnection) continue;
 			const config = def.configSchema.parse(FIXTURES[def.kind]);

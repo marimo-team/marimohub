@@ -15,6 +15,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
 import { GcsObjectBrowser } from '@marimo-hub/object-browser-gcs';
 import { AzureBlobObjectBrowser } from '@marimo-hub/object-browser-azure';
+import { BigQueryDatabaseBrowser } from '@marimo-hub/database-browser-bigquery';
 import {
 	DEFAULT_POSTGRES_RUNTIME_LIMITS,
 	PostgresDatabaseBrowser,
@@ -116,19 +117,37 @@ export function makeIntegrations(
 		: undefined;
 	// dataBrowser !== 'off' implies policy !== 'off': the default degrades above
 	// and an explicit setting fails fast in makeBrowseProbe.
+	const probe = makeProbe(policy);
+	const browseProbe = makeBrowseProbe(env, policy, dataBrowser);
+	const bigqueryBrowser = probe
+		? new BigQueryDatabaseBrowser({
+				probe: browseProbe ?? probe,
+				testProbe: probe,
+				mode: dataBrowser === 'full' ? 'full' : 'metadata',
+				metadataTimeoutMs: browseDeadlines?.metadataTimeoutMs,
+				previewTimeoutMs: browseDeadlines?.previewTimeoutMs,
+				previewMaxBytes: browseLimits?.previewMaxBytes,
+			})
+		: undefined;
 	const databaseBrowsers =
-		dataBrowser === 'off' || !postgresFeatures.enabled || !postgresRuntime
+		dataBrowser === 'off'
 			? undefined
-			: { postgres: postgresRuntime };
+			: {
+					...(postgresFeatures.enabled && postgresRuntime ? { postgres: postgresRuntime } : {}),
+					...(bigqueryBrowser ? { bigquery: bigqueryBrowser } : {}),
+				};
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
 		codec: secretSources.codec,
 		resolvers: secretSources.resolvers,
-		probe: makeProbe(policy),
-		browseProbe: makeBrowseProbe(env, policy, dataBrowser),
+		probe,
+		browseProbe,
 		...(objectBrowsers ? { objectBrowsers } : {}),
-		...(postgresRuntime ? { databaseTesters: { postgres: postgresRuntime } } : {}),
+		databaseTesters: {
+			...(postgresRuntime ? { postgres: postgresRuntime } : {}),
+			...(bigqueryBrowser ? { bigquery: bigqueryBrowser } : {}),
+		},
 		...(databaseBrowsers ? { databaseBrowsers } : {}),
 		metrics,
 		dataPreview,

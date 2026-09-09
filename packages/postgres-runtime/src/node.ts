@@ -14,6 +14,7 @@ import type {
 	BrowsePage,
 	BrowsePageRequest,
 	DatabaseBrowser,
+	DatabaseSource,
 	DatabaseTestOptions,
 	DataQueryExecution,
 	DataQueryExecutorFactory,
@@ -87,9 +88,10 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	}
 
 	async listNamespaces(
-		source: PostgresConnectionCapability,
+		source: DatabaseSource,
 		request: BrowseNamespacesRequest,
 	): Promise<BrowsePage<string[]>> {
+		assertPostgresSource(source);
 		if (request.parent !== undefined && request.parent.length > 0) {
 			return { items: [], next_cursor: null };
 		}
@@ -101,7 +103,7 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 		);
 	}
 
-	async testConnection(source: PostgresConnectionCapability, options: DatabaseTestOptions = {}) {
+	async testConnection(source: DatabaseSource, options: DatabaseTestOptions = {}) {
 		const started = performance.now();
 		try {
 			await this.run<{ connected: true }>(source, { type: 'test' }, 'test', options.signal);
@@ -120,7 +122,7 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	}
 
 	async listTables(
-		source: PostgresConnectionCapability,
+		source: DatabaseSource,
 		namespace: string[],
 		request: BrowsePageRequest,
 	): Promise<BrowsePage<string>> {
@@ -138,7 +140,7 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	}
 
 	getTableSchema(
-		source: PostgresConnectionCapability,
+		source: DatabaseSource,
 		namespace: string[],
 		table: string,
 		request?: Pick<TablePreviewRequest, 'signal'>,
@@ -152,7 +154,7 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	}
 
 	previewRows(
-		source: PostgresConnectionCapability,
+		source: DatabaseSource,
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
@@ -173,11 +175,12 @@ export class PostgresDatabaseBrowser implements DatabaseBrowser {
 	}
 
 	private async run<T extends PostgresWorkerValue>(
-		source: PostgresConnectionCapability,
+		source: DatabaseSource,
 		operation: PostgresOperation,
 		kind: 'test' | 'metadata' | 'preview',
 		signal?: AbortSignal,
 	): Promise<T> {
+		assertPostgresSource(source);
 		const started = performance.now();
 		const deadline = started + this.timeoutMs(kind);
 		let outcome = 'success';
@@ -452,4 +455,11 @@ function resolveWorkerUrl(): URL {
 		if (existsSync(fileURLToPath(url))) return url;
 	}
 	throw new Error('PostgreSQL worker file not found next to the runtime module.');
+}
+
+function assertPostgresSource(
+	source: DatabaseSource,
+): asserts source is PostgresConnectionCapability {
+	if (source.provider !== 'postgres')
+		throw new ValidationError('The database provider does not match PostgreSQL.');
 }

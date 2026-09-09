@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { defineIntegration, probeEndpoint } from '../sdk';
+import { defineIntegration } from '../sdk';
 import { zSecret } from '../secretFields';
 import { connectionUrl, hostField, renderConnection } from './common';
+import { databricksBrowse, testDatabricksMetadata } from './databricksBrowse';
 
 const HTTP_PATH_REGEX = /^\/[A-Za-z0-9._\-/]+$/;
 
@@ -33,7 +34,11 @@ export const databricks = defineIntegration({
 	brand: { icon: 'databricks', color: '#FF3621' },
 	schemaVersion: 1,
 	configSchema: databricksConfig,
-	requirements: ['databricks-sql-connector>=3.4', 'databricks-sqlalchemy>=1.0'],
+	requirements: [
+		'databricks-sql-connector>=3.4',
+		'databricks-sqlalchemy>=1.0',
+		'databricks-sdk>=0.18',
+	],
 	uiHints: {
 		host: { group: 'Connection', order: 1 },
 		http_path: { group: 'Connection', order: 2 },
@@ -84,23 +89,8 @@ export const databricks = defineIntegration({
 		});
 	},
 
-	testConnection(config, probe) {
-		if (config.auth.method === 'oauth_m2m') {
-			return Promise.resolve({
-				ok: false,
-				latency_ms: 0,
-				details: 'OAuth service principals can only be exercised inside the sandbox',
-			});
-		}
-		return probeEndpoint({
-			probe,
-			url: `https://${config.host}/api/2.0/preview/scim/v2/Me`,
-			init: { headers: { Authorization: `Bearer ${config.auth.token}` } },
-			carriesSecrets: true,
-			describe(body) {
-				const user = (body as { userName?: string } | undefined)?.userName;
-				return user ? `authenticated as ${user}` : 'authenticated';
-			},
-		});
-	},
+	testConnection: testDatabricksMetadata,
+	browse: databricksBrowse,
 });
+
+export type DatabricksConfig = z.infer<typeof databricksConfig>;

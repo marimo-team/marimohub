@@ -633,7 +633,12 @@ function IntegrationSection({
 			{active &&
 				showTree &&
 				(capability.data === undefined ? (
-					<LoadState depth={1} error={capability.error ?? undefined} />
+					<LoadState
+						depth={1}
+						error={capability.error ?? undefined}
+						onRetry={() => void capability.refetch()}
+						pending={capability.isFetching}
+					/>
 				) : tables?.available ? (
 					<NamespaceLevel
 						projectId={projectId}
@@ -652,7 +657,21 @@ function IntegrationSection({
 	);
 }
 
-function LoadState({ depth, error, hint }: { depth: number; error?: unknown; hint?: string }) {
+function LoadState({
+	depth,
+	error,
+	hint,
+	onRetry,
+	pending,
+	retryLabel = 'Retry',
+}: {
+	depth: number;
+	error?: unknown;
+	hint?: string;
+	onRetry?: () => void;
+	pending?: boolean;
+	retryLabel?: string;
+}) {
 	return (
 		<div
 			className="px-2 py-1.5 text-xs text-muted-foreground"
@@ -672,6 +691,16 @@ function LoadState({ depth, error, hint }: { depth: number; error?: unknown; hin
 			) : (
 				<Skeleton className="h-4 w-32" />
 			)}
+			{error && onRetry ? (
+				<button
+					type="button"
+					onClick={onRetry}
+					disabled={pending}
+					className="mt-1 rounded px-1 py-0.5 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+				>
+					{pending ? 'Retrying…' : retryLabel}
+				</button>
+			) : null}
 		</div>
 	);
 }
@@ -712,7 +741,15 @@ function NamespaceLevel({
 } & TreeHandlers) {
 	const namespaces = useBrowseNamespacesQuery(projectId, integrationId, parent);
 	if (namespaces.data === undefined) {
-		return <LoadState depth={depth} error={namespaces.error ?? undefined} />;
+		return (
+			<LoadState
+				depth={depth}
+				error={namespaces.error ?? undefined}
+				onRetry={() => void namespaces.refetch()}
+				pending={namespaces.isFetching}
+				retryLabel="Retry loading namespaces"
+			/>
+		);
 	}
 	// Namespaces are never filtered out: tables load only when their namespace
 	// is expanded, so hiding a collapsed namespace would make its matching
@@ -720,6 +757,29 @@ function NamespaceLevel({
 	const items = namespaces.data.pages.flatMap((page) => page.items);
 	return (
 		<div>
+			{namespaces.error && (
+				<LoadState
+					depth={depth}
+					error={namespaces.error}
+					pending={namespaces.isFetching}
+					retryLabel={
+						namespaces.isFetchNextPageError
+							? 'Retry loading more namespaces'
+							: 'Retry refreshing namespaces'
+					}
+					onRetry={() =>
+						void (namespaces.isFetchNextPageError
+							? namespaces.fetchNextPage()
+							: namespaces.refetch())
+					}
+				/>
+			)}
+			{parent.length === 0 &&
+				items.length === 0 &&
+				!namespaces.hasNextPage &&
+				!namespaces.error && (
+					<LoadState depth={depth} hint="No namespaces are visible to this integration." />
+				)}
 			{items.map((namespace) => (
 				<NamespaceNode
 					key={namespace.join(NS_JOIN)}
@@ -740,7 +800,7 @@ function NamespaceLevel({
 					{...handlers}
 				/>
 			)}
-			{namespaces.hasNextPage && (
+			{namespaces.hasNextPage && !namespaces.isFetchNextPageError && (
 				<LoadMore
 					depth={depth}
 					pending={namespaces.isFetchingNextPage}
@@ -809,7 +869,15 @@ function TableRows({
 } & TreeHandlers) {
 	const tables = useBrowseTablesQuery(projectId, integrationId, namespace);
 	if (tables.data === undefined) {
-		return <LoadState depth={depth} error={tables.error ?? undefined} />;
+		return (
+			<LoadState
+				depth={depth}
+				error={tables.error ?? undefined}
+				onRetry={() => void tables.refetch()}
+				pending={tables.isFetching}
+				retryLabel="Retry loading tables"
+			/>
+		);
 	}
 	const { query, selection, onSelectTable } = handlers;
 	const loaded = tables.data.pages.flatMap((page) => page.items);
@@ -818,6 +886,19 @@ function TableRows({
 	);
 	return (
 		<div>
+			{tables.error && (
+				<LoadState
+					depth={depth}
+					error={tables.error}
+					pending={tables.isFetching}
+					retryLabel={
+						tables.isFetchNextPageError ? 'Retry loading more tables' : 'Retry refreshing tables'
+					}
+					onRetry={() =>
+						void (tables.isFetchNextPageError ? tables.fetchNextPage() : tables.refetch())
+					}
+				/>
+			)}
 			{loaded.length > 0 && items.length === 0 && (
 				<LoadState depth={depth} hint={`No tables here match "${query}".`} />
 			)}
@@ -846,7 +927,7 @@ function TableRows({
 					</button>
 				);
 			})}
-			{tables.hasNextPage && (
+			{tables.hasNextPage && !tables.isFetchNextPageError && (
 				<LoadMore
 					depth={depth}
 					pending={tables.isFetchingNextPage}
@@ -1089,6 +1170,7 @@ function TableDetailTabs({
 				{schemaContent}
 			</TabPanel>
 			<TabPanel id="preview" className="flex flex-col gap-3 outline-none">
+				<p className="text-xs text-muted-foreground">Sample of up to 20 rows.</p>
 				<div>
 					<Button
 						variant="primary"

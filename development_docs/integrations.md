@@ -213,6 +213,17 @@ normalizes values before they cross the worker boundary. Its query plan uses the
 and advertises the `postgresql` dialect. The insecure-transport switch is checked before secret
 resolution.
 
+BigQuery also implements `DatabaseBrowser`, through `packages/database-browser-bigquery`.
+Its adapter signs service-account assertions and sends requests through the injected
+guarded probe. It uses fixed Google API and token endpoints. Metadata and connection
+tests use separate probe budgets. The core kind rejects ambient authentication before
+browse operations resolve secrets. The adapter permits base-table previews only in full mode.
+
+Databricks implements the HTTP `BrowseCapability`. Its probe exchanges OAuth M2M credentials
+at the workspace token endpoint, then reads Unity Catalog metadata. PAT configurations
+skip the exchange. Each operation has one deadline across authentication and metadata requests.
+Neither connection tests nor metadata browsing execute warehouse queries.
+
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.
 
@@ -307,6 +318,39 @@ and session rendering so every consumer sees the current shape.
 
 ## Tests
 
+### Databricks and BigQuery live suites
+
+The warehouse suites read dedicated, pre-existing test resources. They do not create or delete
+cloud resources. Ordinary tests use deterministic fixtures and run the same browse contract.
+
+Set these environment variables before a live run:
+
+| Provider   | Configuration variable             | Fixture variable                    |
+| ---------- | ---------------------------------- | ----------------------------------- |
+| Databricks | `MARIMOHUB_TEST_DATABRICKS_CONFIG` | `MARIMOHUB_TEST_DATABRICKS_FIXTURE` |
+| BigQuery   | `MARIMOHUB_TEST_BIGQUERY_CONFIG`   | `MARIMOHUB_TEST_BIGQUERY_FIXTURE`   |
+
+Configuration values are JSON. Databricks uses its integration configuration with a PAT or
+OAuth M2M credentials. BigQuery uses `provider: "bigquery"`, `project_id`, and `credentials_json`.
+The latter contains the service-account key as a JSON string. Supply credentials through your
+test environment's secret manager.
+
+Each fixture value follows `BrowseContractFixture` in `packages/core/src/testing/browseContract.ts`.
+For Databricks, use `hierarchy: "two-level"`, a catalog root, at least two schema children,
+and a table in the first child. For BigQuery, use `hierarchy: "flat"`, a dataset root,
+an empty children array, and a base table. Set `grandchild` to an empty string in both fixtures.
+Include the expected columns. BigQuery can also include expected preview rows.
+
+```sh
+pnpm --filter @marimo-hub/core test src/services/integrations/kinds/databricks.browse.live.test.ts
+pnpm --filter @marimo-hub/database-browser-bigquery test src/bigquery.live.test.ts
+```
+
+Each suite skips when either variable is absent. These hosted-provider suites do not run in
+the container-based catalog workflow. Record live results separately from fixture test results.
+
+### Repository checks
+
 Add kind-specific coverage to
 `packages/core/src/services/integrations/kinds/kinds.test.ts`. The shared tests
 enforce:
@@ -323,6 +367,7 @@ done criteria before finishing:
 
 ```sh
 pnpm check
+pnpm typecheck
 pnpm test
 pnpm build
 ```

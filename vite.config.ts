@@ -340,6 +340,7 @@ export default defineConfig({
 								'@marimo-hub/secrets-*',
 								'@marimo-hub/notify-*',
 								'@marimo-hub/object-browser-*',
+								'@marimo-hub/database-browser-*',
 								'@marimo-hub/source-control-*',
 								'@marimo-hub/duckdb-wasm-runtime',
 								'@marimo-hub/postgres-runtime',
