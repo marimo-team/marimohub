@@ -38,7 +38,7 @@ jobs:
       - name: Validate distribution plan
         working-directory: apps/cli
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors --retry-delay 2 \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
           dist plan --allow-dirty
       - name: Format

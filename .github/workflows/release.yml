@@ -76,7 +76,7 @@ jobs:
       - name: Install dist
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors --retry-delay 2 \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
       - name: Build archive
         shell: bash
@@ -131,7 +131,7 @@ jobs:
       - name: Install dist
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors --retry-delay 2 \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
       - name: Build archive
         shell: bash
@@ -171,7 +171,7 @@ jobs:
           path: apps/cli/generated
       - name: Install dist
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors --retry-delay 2 \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
       - name: Build installers
         working-directory: apps/cli
