@@ -127,7 +127,8 @@ minimumReleaseAgeExclude:
   - nanoid
   - hono@4.12.34
   - ip-address@10.3.1
-  - js-yaml@3.15.1
+  # Renovate security update: js-yaml@4.3.2
+  - js-yaml@3.15.1 || 4.3.2
   - js-yaml@4.3.1
   - linkify-it@5.0.2
   - postcss
