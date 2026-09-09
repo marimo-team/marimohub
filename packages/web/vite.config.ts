@@ -13,7 +13,7 @@ const webPort = envPort(process.env.WEB_PORT, 5175);
 export default defineConfig({
 	base: './',
 	// lazyPlugins: only loaded for dev/build/preview, not for `vp lint`/`vp fmt`.
-	plugins: lazyPlugins(() => [react(), tailwindcss()]),
+	plugins: lazyPlugins(() => [react({ compiler: true }), tailwindcss()]),
 	resolve: {
 		alias: {
 			'@': path.resolve(fileURLToPath(new URL('.', import.meta.url)), './src'),
