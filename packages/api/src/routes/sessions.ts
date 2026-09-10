@@ -1475,6 +1475,11 @@ export async function startNotebookSession(input: {
 							marimoNotebookDefaults,
 							marimoSharingDisabled,
 						];
+						if (userHome) {
+							contributors.push(() => ({
+								file_browser: { folders: [{ path: userHome.path, name: 'Personal files' }] },
+							}));
+						}
 						if (deps.ai) {
 							try {
 								const token = await mintAiSessionToken(

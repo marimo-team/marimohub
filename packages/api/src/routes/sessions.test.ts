@@ -476,8 +476,10 @@ describe('Session routes', () => {
 			path: `/mnt/${user.email}`,
 		}));
 		const home = { resolve };
-		const ownerCompute = makeFakeCompute();
-		const otherCompute = makeFakeCompute();
+		const ownerSandbox = makeFakeSandbox();
+		const otherSandbox = makeFakeSandbox();
+		const ownerCompute = fakeComputeFrom(ownerSandbox.instance);
+		const otherCompute = fakeComputeFrom(otherSandbox.instance);
 		const exclusiveOwner = exclusiveApi(ACTOR, ownerCompute, {
 			sandbox: sandboxConfig({ userHome: home }),
 		});
@@ -499,6 +501,18 @@ describe('Session routes', () => {
 			path: `/mnt/${STRANGER}@example.com`,
 		});
 		expect(resolve).toHaveBeenCalledTimes(2);
+		for (const [sandbox, userId] of [
+			[ownerSandbox, ACTOR],
+			[otherSandbox, STRANGER],
+		] as const) {
+			const config = sandbox.calls.writeFiles
+				.flat()
+				.find((file) => file.path === '/tmp/marimohub-config/marimo/marimo.toml');
+			expect(config?.content).toContain('[[file_browser.folders]]');
+			expect(config?.content).toContain(`path = "/mnt/${userId}@example.com"`);
+			expect(config?.content).toContain('name = "Personal files"');
+			expect(config?.content).toContain('default_width = "medium"');
+		}
 	});
 
 	it('does not provision shared apps with an editor personal home', async () => {
@@ -1000,6 +1014,7 @@ describe('Session routes', () => {
 		expect(config?.content).toContain('wasm = false');
 		expect(config?.content).toContain('molab = false');
 		expect(config?.content).not.toContain('[ai]');
+		expect(config?.content).not.toContain('file_browser');
 		expect(calls.setEnvVars).toContainEqual({
 			XDG_CONFIG_HOME: '/tmp/marimohub-config',
 		});

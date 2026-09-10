@@ -503,7 +503,10 @@ MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive                        # one kernel p
 MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID=<USER-HOME-TEMPLATE-ID>
 ```
 
-Editors then find their directory at `/mnt/<lowercase-email>`.
+Each editor's `/mnt/<lowercase-email>` appears as **Personal files** in marimo's
+sidebar. This requires a kernel image with
+[multi-root file browsing](https://github.com/marimo-team/marimo/pull/10727).
+Marimo 0.24.0 does not include this feature.
 
 ::: details How the mount works
 
