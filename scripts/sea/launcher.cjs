@@ -81,6 +81,85 @@ for (let dir = resolvedRoot; ; dir = path.dirname(dir)) {
 	if (path.dirname(dir) === dir) break;
 }
 
+// Replacing a damaged payload directory runs under this lock so concurrent
+// starts never remove a payload a peer has just repaired. The lock is held
+// only across a marker check and one rename, so one older than a minute, or
+// one whose creator is gone, belongs to a crashed process and is broken.
+// Breaking a stale lock is an unlink by path, so two starts that observe the
+// same stale lock at the same instant could both proceed; that is safe because
+// the rename that moves the damaged tree aside succeeds for only one of them.
+const repairLock = path.join(resolvedRoot, `${manifest.buildId}.repair.lock`);
+const REPAIR_LOCK_STALE_MS = 60_000;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+function isStaleRepairLock() {
+	let st;
+	let pid;
+	try {
+		st = fs.statSync(repairLock);
+		pid = Number(fs.readFileSync(repairLock, 'utf8'));
+	} catch (error) {
+		if (error.code === 'ENOENT') return false;
+		throw error;
+	}
+	if (Date.now() - st.mtimeMs > REPAIR_LOCK_STALE_MS) return true;
+	if (!Number.isInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (error) {
+		return error.code === 'ESRCH';
+	}
+}
+
+function acquireRepairLock() {
+	for (;;) {
+		try {
+			fs.writeFileSync(repairLock, String(process.pid), { flag: 'wx', mode: 0o600 });
+			return;
+		} catch (error) {
+			if (error.code !== 'EEXIST') throw error;
+		}
+		if (isStaleRepairLock()) {
+			fs.rmSync(repairLock, { force: true });
+			continue;
+		}
+		sleepSync(10);
+	}
+}
+
+// Moves `staging` into place. Returns false when a peer's identical payload
+// won the race, in which case `staging` has been discarded.
+function installPayload(staging) {
+	try {
+		fs.renameSync(staging, payloadDir);
+		return true;
+	} catch (error) {
+		if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
+	}
+	if (fs.existsSync(readyMarker)) {
+		fs.rmSync(staging, { recursive: true, force: true });
+		return false;
+	}
+	// A payload directory without its marker is damaged (the rename is atomic,
+	// so only tampering or a partial delete gets here). Replace it rather than
+	// importing from it forever after. The damaged tree is moved aside before it
+	// is deleted: a recursive rm empties the directory first, and a peer's
+	// rename onto an empty directory succeeds, so deleting in place could
+	// strip a payload the peer just installed.
+	const damaged = `${staging}-damaged`;
+	acquireRepairLock();
+	try {
+		if (!fs.existsSync(readyMarker)) fs.renameSync(payloadDir, damaged);
+	} catch (error) {
+		if (error.code !== 'ENOENT') throw error;
+	} finally {
+		fs.rmSync(repairLock, { force: true });
+	}
+	fs.rmSync(damaged, { recursive: true, force: true });
+	return installPayload(staging);
+}
+
 if (!fs.existsSync(readyMarker)) {
 	// Unpack into a sibling temp dir and rename so a crash mid-extract, or two
 	// instances starting at once, never leave a half-written payload behind.
@@ -91,21 +170,7 @@ if (!fs.existsSync(readyMarker)) {
 		fs.writeFileSync(target, Buffer.from(sea.getRawAsset(file)));
 	}
 	fs.writeFileSync(path.join(staging, '.ready'), '');
-	try {
-		fs.renameSync(staging, payloadDir);
-	} catch (error) {
-		if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
-		if (fs.existsSync(readyMarker)) {
-			// Another instance finished first; its payload is identical.
-			fs.rmSync(staging, { recursive: true, force: true });
-		} else {
-			// A payload directory without its marker is damaged (the rename is
-			// atomic, so only tampering or a partial delete gets here). Replace it
-			// rather than importing from it forever after.
-			fs.rmSync(payloadDir, { recursive: true, force: true });
-			fs.renameSync(staging, payloadDir);
-		}
-	}
+	installPayload(staging);
 }
 
 process.env.MARIMOHUB_STATIC_ROOT ??= path.join(payloadDir, 'public');

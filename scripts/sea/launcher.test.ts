@@ -114,6 +114,23 @@ describe.skipIf(process.platform === 'win32')('SEA launcher', () => {
 		expect(existsSync(join(cache, BUILD_ID, '.ready'))).toBe(true);
 	});
 
+	it('repairs a payload directory that lost its ready marker under concurrent starts', async () => {
+		const rounds = Number(process.env.SEA_LAUNCHER_STRESS_ROUNDS ?? 3);
+		for (let round = 0; round < rounds; round++) {
+			const cache = freshCache('stale-concurrent');
+			const payloadDir = join(cache, BUILD_ID);
+			mkdirSync(payloadDir, { recursive: true, mode: 0o700 });
+			writeFileSync(join(payloadDir, 'leftover'), '');
+
+			const runs = await Promise.all(Array.from({ length: 12 }, () => runLauncher(cache)));
+			for (const run of runs) loadedPayload(run);
+			expect(readdirSync(cache)).toEqual([BUILD_ID]);
+			expect(existsSync(join(payloadDir, '.ready'))).toBe(true);
+			expect(existsSync(join(payloadDir, 'leftover'))).toBe(false);
+			expect(existsSync(join(payloadDir, ENTRY))).toBe(true);
+		}
+	}, 60_000);
+
 	it('replaces a payload directory that lost its ready marker', async () => {
 		const cache = freshCache('stale');
 		const payloadDir = join(cache, BUILD_ID);
