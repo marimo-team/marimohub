@@ -301,7 +301,7 @@ catalogs:
 overrides:
   brace-expansion@>=5.0.0 <5.0.9: 5.0.9
   fast-uri@<3.1.6: 3.1.6
-  hono: 4.12.34
+  hono: 4.13.5
   ip-address@<=10.3.0: 10.3.1
   js-yaml@<4.0.0: 3.15.1
   js-yaml@>=4.0.0 <4.3.2: 4.3.2
@@ -402,10 +402,10 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: 'catalog:'
-        version: 2.0.10(hono@4.12.34)
+        version: 2.0.10(hono@4.13.5)
       '@hono/otel':
         specifier: 'catalog:'
-        version: 1.1.2(hono@4.12.34)
+        version: 1.1.2(hono@4.13.5)
       '@marimo-hub/api':
         specifier: workspace:*
         version: link:../../packages/api
@@ -455,8 +455,8 @@ importers:
         specifier: 'catalog:'
         version: 2.9.0(@opentelemetry/api@1.9.1)
       hono:
-        specifier: 4.12.34
-        version: 4.12.34
+        specifier: 4.13.5
+        version: 4.13.5
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -542,7 +542,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: 'catalog:'
-        version: 2.0.10(hono@4.12.34)
+        version: 2.0.10(hono@4.13.5)
       '@marimo-hub/api':
         specifier: workspace:*
         version: link:../../packages/api
@@ -573,10 +573,10 @@ importers:
     dependencies:
       '@hono/mcp':
         specifier: 'catalog:'
-        version: 0.3.2(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.12.34))(hono@4.12.34)(zod@4.4.3)
+        version: 0.3.2(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.13.5))(hono@4.13.5)(zod@4.4.3)
       '@hono/zod-openapi':
         specifier: 'catalog:'
-        version: 1.4.0(hono@4.12.34)(zod@4.4.3)
+        version: 1.4.0(hono@4.13.5)(zod@4.4.3)
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core
@@ -590,11 +590,11 @@ importers:
         specifier: ^0.8.2
         version: 0.8.3
       hono:
-        specifier: 4.12.34
-        version: 4.12.34
+        specifier: 4.13.5
+        version: 4.13.5
       hono-rate-limiter:
         specifier: 'catalog:'
-        version: 0.5.3(hono@4.12.34)
+        version: 0.5.3(hono@4.13.5)
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -671,8 +671,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       hono:
-        specifier: 4.12.34
-        version: 4.12.34
+        specifier: 4.13.5
+        version: 4.13.5
       jose:
         specifier: 'catalog:'
         version: 6.2.3
@@ -1096,8 +1096,8 @@ importers:
         specifier: 'catalog:'
         version: 7.0.42(zod@4.4.3)
       hono:
-        specifier: 4.12.34
-        version: 4.12.34
+        specifier: 4.13.5
+        version: 4.13.5
     devDependencies:
       '@aws-sdk/client-s3':
         specifier: 'catalog:'
@@ -2883,7 +2883,7 @@ packages:
     resolution: {integrity: sha512-IJQ4RazhwFLRwcTM95Dj9YfNBYXwOQzd1IfnDy4S3hiaBbtnVY0sWiT83auOOnhaCiE0TTbud4JV9UD30zknXA==}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.29.0
-      hono: 4.12.34
+      hono: 4.13.5
       hono-rate-limiter: ^0.5.3
       zod: ^3.25.0 || ^4.0.0
 
@@ -2891,24 +2891,24 @@ packages:
     resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: 4.12.34
+      hono: 4.13.5
 
   '@hono/otel@1.1.2':
     resolution: {integrity: sha512-UaBMKPGaQTj4sjvpGqQ+57eolTwMI2znzxV/QBUF99XxhcmqtqaZX95flXpGgWb+lnlinlCy23Y1sZ8+TzzM9A==}
     peerDependencies:
-      hono: 4.12.34
+      hono: 4.13.5
 
   '@hono/zod-openapi@1.4.0':
     resolution: {integrity: sha512-AFchqR1N/NxfI4hUOSGI2/g8zLROxA1OE7Oh5JJFlTaGxhrdRyH+93gd0tIBpb0z8s9r8hUoNnaOBfHbdb4NMw==}
     engines: {node: '>=16.0.0'}
     peerDependencies:
-      hono: 4.12.34
+      hono: 4.13.5
       zod: ^4.0.0
 
   '@hono/zod-validator@0.8.0':
     resolution: {integrity: sha512-5uS4S1/LKtZQYvD4BtpPUFkOv8d1wNxHHrChm26buMiEYc1FrHWvDUaKVBwkiVtvSExHSpLGDvcnpI2Copyj9w==}
     peerDependencies:
-      hono: 4.12.34
+      hono: 4.13.5
       zod: ^3.25.0 || ^4.0.0
 
   '@humanfs/core@0.19.2':
@@ -5950,14 +5950,14 @@ packages:
   hono-rate-limiter@0.5.3:
     resolution: {integrity: sha512-M0DxbVMpPELEzLi0AJg1XyBHLGJXz7GySjsPoK+gc5YeeBsdGDGe+2RvVuCAv8ydINiwlbxqYMNxUEyYfRji/A==}
     peerDependencies:
-      hono: 4.12.34
+      hono: 4.13.5
       unstorage: ^1.17.3
     peerDependenciesMeta:
       unstorage:
         optional: true
 
-  hono@4.12.34:
-    resolution: {integrity: sha512-GqXJqY/xJkJmuloTrnV1ZEXG3fqte+VjkUqoRNZXcrUidiUOP4fMSIHHY4tsqZBK++kVyWmt/AAfSUuy57/eSA==}
+  hono@4.13.5:
+    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
     engines: {node: '>=16.9.0'}
 
   hookable@5.5.3:
@@ -8850,7 +8850,7 @@ snapshots:
       '@cloudflare/containers': 0.3.7
       aws4fetch: 1.0.20
       capnweb: 0.8.0
-      hono: 4.12.34
+      hono: 4.13.5
 
   '@cloudflare/workers-types@4.20260610.1': {}
 
@@ -9209,35 +9209,35 @@ snapshots:
       protobufjs: 7.6.5
       yargs: 17.7.2
 
-  '@hono/mcp@0.3.2(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.12.34))(hono@4.12.34)(zod@4.4.3)':
+  '@hono/mcp@0.3.2(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.13.5))(hono@4.13.5)(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
-      hono: 4.12.34
-      hono-rate-limiter: 0.5.3(hono@4.12.34)
+      hono: 4.13.5
+      hono-rate-limiter: 0.5.3(hono@4.13.5)
       pkce-challenge: 5.0.1
       zod: 4.4.3
 
-  '@hono/node-server@2.0.10(hono@4.12.34)':
+  '@hono/node-server@2.0.10(hono@4.13.5)':
     dependencies:
-      hono: 4.12.34
+      hono: 4.13.5
 
-  '@hono/otel@1.1.2(hono@4.12.34)':
+  '@hono/otel@1.1.2(hono@4.13.5)':
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/semantic-conventions': 1.43.0
-      hono: 4.12.34
+      hono: 4.13.5
 
-  '@hono/zod-openapi@1.4.0(hono@4.12.34)(zod@4.4.3)':
+  '@hono/zod-openapi@1.4.0(hono@4.13.5)(zod@4.4.3)':
     dependencies:
       '@asteasolutions/zod-to-openapi': 8.5.0(zod@4.4.3)
-      '@hono/zod-validator': 0.8.0(hono@4.12.34)(zod@4.4.3)
-      hono: 4.12.34
+      '@hono/zod-validator': 0.8.0(hono@4.13.5)(zod@4.4.3)
+      hono: 4.13.5
       openapi3-ts: 4.6.0
       zod: 4.4.3
 
-  '@hono/zod-validator@0.8.0(hono@4.12.34)(zod@4.4.3)':
+  '@hono/zod-validator@0.8.0(hono@4.13.5)(zod@4.4.3)':
     dependencies:
-      hono: 4.12.34
+      hono: 4.13.5
       zod: 4.4.3
 
   '@humanfs/core@0.19.2':
@@ -9373,7 +9373,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
     dependencies:
-      '@hono/node-server': 2.0.10(hono@4.12.34)
+      '@hono/node-server': 2.0.10(hono@4.13.5)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -9383,7 +9383,7 @@ snapshots:
       eventsource-parser: 3.1.0
       express: 5.2.1
       express-rate-limit: 8.6.2(express@5.2.1)
-      hono: 4.12.34
+      hono: 4.13.5
       jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -11981,11 +11981,11 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono-rate-limiter@0.5.3(hono@4.12.34):
+  hono-rate-limiter@0.5.3(hono@4.13.5):
     dependencies:
-      hono: 4.12.34
+      hono: 4.13.5
 
-  hono@4.12.34: {}
+  hono@4.13.5: {}
 
   hookable@5.5.3: {}
 
