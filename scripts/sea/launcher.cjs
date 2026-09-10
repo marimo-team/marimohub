@@ -13,11 +13,9 @@ const { pathToFileURL } = require('node:url');
 const manifest = JSON.parse(sea.getAsset('manifest.json', 'utf8'));
 
 const uid = process.getuid ? process.getuid() : null;
-// The bundle still `require()`s optional packages it does not ship (ws's
-// bufferutil, node-fetch's encoding), and Node resolves those through every
-// ancestor node_modules directory up to /. Under a shared tmpdir any local
-// user could plant /tmp/node_modules, so the default cache lives beneath the
-// user's own cache directory, whose ancestors only the user and root can write.
+// The unpacked bundle is executed, so the cache defaults to the user's own
+// cache directory, whose ancestors only the user and root can write. A shared
+// tmpdir would let any local user interfere with the path (see the checks below).
 let homeDir = null;
 try {
 	homeDir = os.homedir();
@@ -44,15 +42,16 @@ if (fs.lstatSync(cacheRoot).isSymbolicLink()) {
 	process.exit(1);
 }
 
-// The unpacked bundle is executed, so every directory on the path to it must
-// be one that no other user can rename or replace: owned by the current user
-// or root, and not group/world-writable. Checking only cacheRoot is not
-// enough, because whoever can write an ancestor can swap cacheRoot for a
-// symlink to a prepared tree between this check and the import below. Sticky
-// ancestors such as /tmp are tolerated: there, only the owner of an entry can
-// rename or unlink it. The resolved path is checked, and used from here on, so
-// an ancestor symlink maintained by root (/home -> /var/home) is allowed while
-// the import path itself contains no symlink component.
+// Every directory on the path to the unpacked bundle must be one no other user
+// can write: owned by the current user or root, and not group/world-writable.
+// Checking only cacheRoot is not enough, because whoever can write an ancestor
+// can swap cacheRoot for a symlink to a prepared tree between this check and
+// the import below. Sticky directories such as /tmp are rejected too: the
+// sticky bit stops renames, but a bundled module that still probes for an
+// optional package would resolve it through /tmp/node_modules. The resolved
+// path is checked, and used from here on, so an ancestor symlink maintained by
+// root (/home -> /var/home) is allowed while the import path itself contains
+// no symlink component.
 const resolvedRoot = fs.realpathSync(cacheRoot);
 const payloadDir = path.join(resolvedRoot, manifest.buildId);
 const readyMarker = path.join(payloadDir, '.ready');
@@ -73,8 +72,7 @@ for (let dir = resolvedRoot; ; dir = path.dirname(dir)) {
 		);
 		process.exit(1);
 	}
-	const sticky = dir !== resolvedRoot && st.mode & 0o1000;
-	if (st.mode & 0o022 && !sticky) {
+	if (st.mode & 0o022) {
 		console.error(
 			`${dir} is group or world-writable (mode ${(st.mode & 0o777).toString(8)}); refusing to use cache at ${cacheRoot}`,
 		);

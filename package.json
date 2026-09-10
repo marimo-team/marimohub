@@ -32,6 +32,7 @@
 		"@oxlint/plugins": "catalog:",
 		"@vitest/coverage-v8": "catalog:",
 		"oxlint": "catalog:",
+		"postject": "catalog:",
 		"react-doctor": "catalog:",
 		"vite-plus": "catalog:"
 	},

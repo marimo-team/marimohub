@@ -5,11 +5,10 @@
 //   node scripts/build-sea.mjs --no-build # reuse existing dist/ output
 //
 // Output: apps/server/dist/sea/marimohub-<platform>-<arch> (plus the
-// intermediate blob/config). Targets the host platform: the executable is a
-// copy of the running `node` with the SEA blob injected, so cross-building
-// means running this on the target OS (or with a downloaded Node binary via
-// NODE_BINARY). Releases only ship marimohub-linux-x64; other platforms are
-// for local testing.
+// intermediate blob/config). Always targets the host: the executable is a copy
+// of the running `node` with the SEA blob injected, and there is no
+// cross-building, so run this on the target OS and architecture. Releases only
+// ship marimohub-linux-x64; other platforms are for local testing.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -24,7 +23,6 @@ import {
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const POSTJECT = 'postject@1.0.0-alpha.6';
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -32,7 +30,7 @@ const serverDist = join(repoRoot, 'apps/server/dist');
 const webDist = join(repoRoot, 'packages/web/dist');
 const outDir = join(serverDist, 'sea');
 const build = !process.argv.includes('--no-build');
-const nodeBinary = process.env.NODE_BINARY ?? process.execPath;
+const nodeBinary = process.execPath;
 
 const run = (cmd, args, opts = {}) => {
 	console.log(`$ ${cmd} ${args.join(' ')}`);
@@ -117,7 +115,7 @@ if (process.platform === 'darwin') run('codesign', ['--remove-signature', exe]);
 
 const postjectArgs = [exe, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', SEA_FUSE];
 if (process.platform === 'darwin') postjectArgs.push('--macho-segment-name', 'NODE_SEA');
-run('npx', ['--yes', POSTJECT, ...postjectArgs]);
+run('pnpm', ['exec', 'postject', ...postjectArgs]);
 
 if (process.platform === 'darwin') run('codesign', ['--sign', '-', exe]);
 

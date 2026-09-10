@@ -9,7 +9,10 @@ set -euo pipefail
 binary="${1:?path to the marimohub binary is required}"
 expected_version="${2:-}"
 port="${PORT:-3123}"
-cache_dir="$(mktemp -d)"
+# The launcher refuses a cache below a world-writable directory such as /tmp,
+# so keep the scratch tree under the user's own cache directory.
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
+cache_dir="$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/marimohub-sea-smoke.XXXXXX")"
 log="$cache_dir/server.log"
 
 cleanup() {

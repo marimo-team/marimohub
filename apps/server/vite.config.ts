@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite-plus';
 import { DUCKDB_EXTENSION_MANIFEST } from '../../packages/duckdb-wasm-runtime/src/extensionManifest';
 
@@ -20,6 +21,16 @@ export default defineConfig({
 		platform: 'node',
 		format: ['esm'],
 		dts: false,
+		// ws, node-fetch and pg probe for optional native packages with a guarded
+		// require(). Left unresolved, those become bare require() calls that Node
+		// resolves through every ancestor node_modules directory of wherever the
+		// bundle runs. Point them at a stub that throws so the fallback is taken.
+		alias: Object.fromEntries(
+			['bufferutil', 'utf-8-validate', 'encoding', 'pg-native'].map((name) => [
+				name,
+				fileURLToPath(new URL('./src/unavailableOptionalDependency.cjs', import.meta.url)),
+			]),
+		),
 		noExternal: [
 			/^@marimo-hub\//,
 			/^@modelcontextprotocol\//,

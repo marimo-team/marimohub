@@ -44,9 +44,8 @@ unpacks its bundled files to `$XDG_CACHE_HOME/marimohub-sea/<build-id>`
 (default `~/.cache/marimohub-sea/<build-id>`); set `MARIMOHUB_SEA_CACHE_DIR` to
 use a different directory. The unpacked files are executed, so the binary
 refuses a cache directory that is a symlink, not owned by the current user, or
-reachable through a directory another user can write to. Do not put it under
-`/tmp`: Node also resolves optional modules through every ancestor
-`node_modules` directory.
+reachable through a directory another user can write to, including sticky
+directories such as `/tmp`.
 
 The example below is a throwaway configuration that keeps all state in memory.
 For a real deployment use the durable variables from the `.env` above.
