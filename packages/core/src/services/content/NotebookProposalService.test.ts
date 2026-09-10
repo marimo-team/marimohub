@@ -1417,10 +1417,17 @@ describe('NotebookProposalService', () => {
 		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
 		const firstProviderResult = deferred<OpenChangeRequestResult>();
 		const secondProviderResult = deferred<OpenChangeRequestResult>();
+		const firstProviderCalled = deferred<void>();
+		const secondProviderCalled = deferred<void>();
 		let providerCalls = 0;
-		const updateChangeRequest = vi.fn(() =>
-			++providerCalls === 1 ? firstProviderResult.promise : secondProviderResult.promise,
-		);
+		const updateChangeRequest = vi.fn(() => {
+			if (++providerCalls === 1) {
+				firstProviderCalled.resolve();
+				return firstProviderResult.promise;
+			}
+			secondProviderCalled.resolve();
+			return secondProviderResult.promise;
+		});
 		const publisher: SourceControlPublisher = {
 			provider: 'github',
 			openChangeRequest: vi.fn(async () => ({
@@ -1484,8 +1491,11 @@ describe('NotebookProposalService', () => {
 			body: '',
 		};
 		const first = service.publishChangeRequest(publishInput);
+		// Provider arrival order can differ from publication invocation order.
+		await firstProviderCalled.promise;
 		const second = service.publishChangeRequest(publishInput);
-		await vi.waitFor(() => expect(updateChangeRequest).toHaveBeenCalledTimes(2));
+		await secondProviderCalled.promise;
+		expect(updateChangeRequest).toHaveBeenCalledTimes(2);
 
 		firstProviderResult.resolve({
 			number: 17,
