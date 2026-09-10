@@ -143,6 +143,8 @@ minimumReleaseAgeExclude:
   - vite@6.4.3
   # Renovate security update: smol-toml@1.7.1
   - smol-toml@1.7.1
+  # Renovate security update: csv-parse@7.0.2
+  - csv-parse@7.0.2
 
 onlyBuiltDependencies: []
 
