@@ -8,7 +8,7 @@
 // claim fixtures — happy paths, every individually-missing requirement, and
 // hostile or malformed claim values. A login policy is a security boundary:
 // claim *values* are provider-controlled data, so the unhappy paths below are
-// the tests that matter most. It is not wired into marimohub's CI.
+// the tests that matter most. CI runs this suite through test:external-adapter.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import manifest from './oidc-login-policy.mjs';

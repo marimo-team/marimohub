@@ -220,19 +220,30 @@ export class JobScheduler {
 
 		const queued: JobRun[] = [];
 		const running: JobRun[] = [];
+		let ownershipComplete = active.complete;
 		for (const { marker, run } of active.entries) {
 			if (!run) {
-				if (
-					now - Date.parse(marker.created_at) > DANGLING_GRACE_MS &&
-					!(await this.deps.runs.runExists(
-						marker.project_id,
-						marker.notebook_id,
-						marker.job_id,
-						marker.run_id,
-					))
-				) {
-					await this.deps.runs.deleteMarker(marker);
-					result.markersPruned++;
+				try {
+					if (
+						now - Date.parse(marker.created_at) > DANGLING_GRACE_MS &&
+						!(await this.deps.runs.runExists(
+							marker.project_id,
+							marker.notebook_id,
+							marker.job_id,
+							marker.run_id,
+						))
+					) {
+						await this.deps.runs.deleteMarker(marker);
+						result.markersPruned++;
+					}
+				} catch (err) {
+					ownershipComplete = false;
+					result.errors++;
+					logOperationalError(
+						'job_run_marker_prune_failed',
+						{ operation: 'job.scheduler.marker.prune', run_id: marker.run_id },
+						err,
+					);
 				}
 				continue;
 			}
@@ -266,7 +277,7 @@ export class JobScheduler {
 		}
 
 		// Unknown owners can hold sandboxes outside the visible concurrency count.
-		const admitted = active.complete ? admit(queued, running, this.deps.config) : [];
+		const admitted = ownershipComplete ? admit(queued, running, this.deps.config) : [];
 		for (const run of admitted) this.dispatch(run);
 		result.dispatched = admitted.length;
 		this.metrics.gauge?.('jobs.runs.active', running.length + admitted.length);

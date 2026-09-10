@@ -835,7 +835,7 @@ app.openapi(getEditorSession, async (c) => {
 		'notebook.write',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
 	const sharing = effectiveEditorSharing(claim, deps.policy.editorSandboxSharing);
 	const claimedSession = claim?.session_id

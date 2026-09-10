@@ -806,6 +806,45 @@ describe('JobScheduler', () => {
 			expect(await env.bucket.head(paths.jobRunMarker(pid, stale))).toBeNull();
 		});
 
+		it('continues known-run cleanup when a stale-marker existence check fails', async () => {
+			const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const job = await createJob({ schedule: undefined });
+			const missing = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			await env.bucket.delete(
+				paths.project(pid).notebook(nid).job(job.id).run(missing.run_id).record,
+			);
+			now = Date.parse(missing.queued_at) + 30 * MINUTE;
+			const queued = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const terminal = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			await env.jobRuns.cancel(terminal, ACTOR);
+			const expired = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			await env.jobRuns.transition(expired, 'provision', () => ({
+				sandbox_id: SB,
+				deadline_at: new Date(now - 2 * MINUTE).toISOString(),
+			}));
+			vi.spyOn(env.jobRuns, 'runExists').mockRejectedValueOnce(new Error('head unavailable'));
+			const runner = fakeRunner(env);
+			const s = scheduler(runner);
+
+			expect(await s.tick()).toMatchObject({
+				dispatched: 0,
+				timedOut: 1,
+				markersPruned: 1,
+				errors: 1,
+			});
+			expect(await env.bucket.head(paths.jobRunMarker(pid, missing.run_id))).not.toBeNull();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, terminal.run_id))).toBeNull();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, expired.run_id))).toBeNull();
+			expect((await env.jobRuns.getRun(pid, nid, job.id, queued.run_id)).status).toBe('queued');
+			expect((await env.jobRuns.getRun(pid, nid, job.id, expired.run_id)).status).toBe('timed_out');
+			expect(runner.executed).toHaveLength(0);
+			expect(
+				errorLog.mock.calls.some(([message]) =>
+					String(message).includes('job_run_marker_prune_failed'),
+				),
+			).toBe(true);
+		});
+
 		it('preserves a stale marker when its run record is unreadable', async () => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const job = await createJob({ schedule: undefined });

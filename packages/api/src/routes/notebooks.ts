@@ -946,7 +946,7 @@ app.openapi(listWorkspaceEntries, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-		await loadAuthorizedNotebook(deps, project, nid, user);
+		await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	}
 	const query = c.req.valid('query');
 	const result = await deps.services.notebooks.workspace.list(
@@ -974,7 +974,7 @@ app.openapi(searchWorkspace, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-		await loadAuthorizedNotebook(deps, project, nid, user);
+		await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	}
 	const query = c.req.valid('query');
 	const items = await deps.services.notebooks.workspace.search(pid, nid, query.query, query.path);
@@ -1026,7 +1026,7 @@ app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 	const { pid, nid, path } = parseWorkspaceRawRequest(c);
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-		await loadAuthorizedNotebook(deps, project, nid, user);
+		await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	}
 	const file = await deps.services.notebooks.workspace.read(pid, nid, path);
 	return new Response(new Uint8Array(file.bytes), {
@@ -1261,7 +1261,7 @@ app.openapi(getNotebook, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	const detail = await loadAuthorizedNotebook(deps, project, nid, user);
+	const detail = await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const data = {
 		meta: toPublicNotebookMeta(detail.meta),
 		readme: detail.readme,
@@ -1277,7 +1277,7 @@ app.openapi(getNotebookContent, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const code = await notebooks.getNotebookContent(pid, nid);
 	return c.json({ success: true, data: { code } }, 200);
 });
@@ -1390,7 +1390,7 @@ app.openapi(listVersions, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const all = await notebooks.listVersions(pid, nid);
 	const page = paginate(all, c.req.valid('query'), {
 		key: (v) => v.saved_at,
@@ -1406,7 +1406,7 @@ app.openapi(getVersion, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, vid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const { version, code } = await notebooks.getVersion(pid, nid, vid);
 	return c.json({ success: true, data: { version: toPublicVersion(version), code } }, 200);
 });
@@ -1441,7 +1441,7 @@ app.openapi(getNotebookHtml, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	// Read-only, gated like reading the notebook's code (viewer visibility).
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const snapshot = await notebooks.getLatestHtmlSnapshot(pid, nid);
 	return serveHtmlSnapshot(c, snapshot);
 });
@@ -1452,7 +1452,7 @@ app.openapi(getVersionHtml, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, vid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const snapshot = await notebooks.getVersionHtmlSnapshot(pid, nid, vid);
 	return serveHtmlSnapshot(c, snapshot);
 });
@@ -1509,7 +1509,7 @@ app.get('/projects/:pid/notebooks/:nid/workspace.zip', async (c) => {
 	}
 	{
 		const project = await loadVisibleProject(projects, pidRaw, user, deps);
-		await loadAuthorizedNotebook(deps, project, nidRaw, user);
+		await loadAuthorizedNotebook(deps, project, nidRaw, user, 'project.read');
 	}
 
 	const files = await notebooks.listWorkspaceFiles(pidRaw, nidRaw);

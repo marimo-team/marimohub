@@ -409,7 +409,13 @@ async function storedResource(
 		if (input.notebook_id && NotebookId.parse(input.notebook_id) !== session.notebook_id) {
 			throw new Error('stored_notebook_session_mismatch');
 		}
-		const notebook = await loadAuthorizedNotebook(deps, project, session.notebook_id, caller);
+		const notebook = await loadAuthorizedNotebook(
+			deps,
+			project,
+			session.notebook_id,
+			caller,
+			'project.read',
+		);
 		return {
 			kind: 'session',
 			project,
@@ -424,6 +430,7 @@ async function storedResource(
 			project,
 			NotebookId.parse(input.notebook_id),
 			caller,
+			'project.read',
 		);
 		notebookLabels = notebook.meta.security_labels;
 	}

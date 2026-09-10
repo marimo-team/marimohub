@@ -476,7 +476,7 @@ async function loadReadableJob(
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	return { project, job: await deps.services.jobs.getJob(pid, nid, jid) };
 }
 
@@ -537,7 +537,7 @@ app.openapi(listJobs, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
 	const query = c.req.valid('query');
 	const cursor = decodeCursor(query.cursor);
 	let after: { createdAt: string; jobId: JobDefinition['id'] } | undefined;

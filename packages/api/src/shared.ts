@@ -201,7 +201,7 @@ export async function loadAuthorizedNotebook(
 	project: Project,
 	nid: NotebookId,
 	subject: AuthSubject,
-	action: ProjectAction = 'project.read',
+	action: ProjectAction,
 ): Promise<NotebookDetail> {
 	const detail = await deps.services.notebooks.getNotebook(project.id, nid);
 	if (detail.meta.status === 'deleted') {

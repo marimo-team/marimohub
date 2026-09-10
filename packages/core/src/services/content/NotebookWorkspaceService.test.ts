@@ -594,6 +594,32 @@ describe('NotebookWorkspaceService', () => {
 		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'destination.txt')).toBeDefined();
 	});
 
+	it('preserves the destination when a rejected source deletion completes later', async () => {
+		const sourceKey = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile('source.txt');
+		await bucket.put(sourceKey, 'keep me');
+		const originalDelete = bucket.delete.bind(bucket);
+		let finishRemoteDelete!: () => Promise<void>;
+		vi.spyOn(bucket, 'delete').mockImplementation(async (keys) => {
+			if (keys === sourceKey) {
+				finishRemoteDelete = () => originalDelete(keys);
+				throw new Error('delete response timed out');
+			}
+			await originalDelete(keys);
+		});
+
+		await expect(
+			service.move(PROJECT_ID, NOTEBOOK_ID, 'source.txt', 'destination.txt'),
+		).rejects.toThrow('delete response timed out');
+		expect(await bucket.head(sourceKey)).not.toBeNull();
+		await finishRemoteDelete();
+		expect(await bucket.head(sourceKey)).toBeNull();
+		expect(
+			new TextDecoder().decode(
+				(await service.read(PROJECT_ID, NOTEBOOK_ID, 'destination.txt')).bytes,
+			),
+		).toBe('keep me');
+	});
+
 	it('preserves every destination file when a directory move only deletes part of its source', async () => {
 		const prefix = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspacePrefix;
 		const names = Array.from(

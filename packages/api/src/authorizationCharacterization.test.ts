@@ -920,6 +920,7 @@ describe('authorization characterization: notebook overrides on mutations and se
 	});
 
 	it.each([
+		['GET', '/editor-session', undefined],
 		['PATCH', '', { title: 'denied rename' }],
 		['DELETE', '', undefined],
 		['POST', '/duplicate', {}],

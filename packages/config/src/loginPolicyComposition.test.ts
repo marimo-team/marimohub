@@ -49,6 +49,18 @@ beforeEach(() => {
 });
 
 describe('createFromEnvAsync OIDC login-policy wiring', () => {
+	it.each(['', '   ', ',,,'])(
+		'rejects an empty login group allowlist before wiring the policy (%j)',
+		async (allowed) => {
+			await expect(
+				createFromEnvAsync({ ...env, MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: allowed }),
+			).rejects.toMatchObject({
+				opts: { variable: 'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS' },
+			});
+			expect(captured.config).toBeUndefined();
+		},
+	);
+
 	it('passes the loaded module and bounded settings into the OIDC adapter', async () => {
 		const deps = await createFromEnvAsync(env);
 

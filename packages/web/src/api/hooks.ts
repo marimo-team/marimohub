@@ -48,6 +48,7 @@ import type {
 const SESSIONS_POLL_INTERVAL_MS = 30_000;
 /** Refresh cadence for job history and active run details. */
 const RUNS_POLL_INTERVAL_MS = 5_000;
+const IDLE_RUNS_POLL_INTERVAL_MS = 60_000;
 
 /**
  * Deployment-scoped facts (identity, version, capabilities): fixed for the life
@@ -1856,7 +1857,10 @@ export function useJobRunsQuery(projectId: string, notebookId: string, jobId: st
 		getNextPageParam: (lastPage) => lastPage.next_cursor,
 		select: (data) => data.pages.flatMap((page) => page.items),
 		enabled: !!jobId,
-		refetchInterval: RUNS_POLL_INTERVAL_MS,
+		refetchInterval: (query) =>
+			query.state.data?.pages.some((page) => page.items.some((run) => !isTerminalRun(run)))
+				? RUNS_POLL_INTERVAL_MS
+				: IDLE_RUNS_POLL_INTERVAL_MS,
 	});
 }
 

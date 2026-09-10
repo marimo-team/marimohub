@@ -310,14 +310,33 @@ describe('useJobRunsQuery', () => {
 
 			runs = [{ run_id: 'run-new', status: 'running' }, ...initialRuns];
 			await act(async () => {
+				await vi.advanceTimersByTimeAsync(55_000);
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			await act(async () => {
 				await vi.advanceTimersByTimeAsync(5_000);
 			});
 			await vi.waitFor(() => expect(result.current.data).toEqual(runs));
 			expect(fetchMock).toHaveBeenCalledTimes(2);
 
+			runs = [{ run_id: 'run-new', status: 'succeeded' }, ...initialRuns];
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await vi.waitFor(() => expect(result.current.data).toEqual(runs));
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(55_000);
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(4);
+
 			unmount();
-			await vi.advanceTimersByTimeAsync(15_000);
-			expect(fetchMock).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(fetchMock).toHaveBeenCalledTimes(4);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -330,7 +349,7 @@ describe('useJobRunsQuery', () => {
 			const { unmount } = renderHookWithClient(() => useJobRunsQuery(PID, NID, null), {
 				toaster: false,
 			});
-			await vi.advanceTimersByTimeAsync(15_000);
+			await vi.advanceTimersByTimeAsync(120_000);
 			expect(fetchMock).not.toHaveBeenCalled();
 			unmount();
 		} finally {

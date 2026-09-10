@@ -620,6 +620,17 @@ describe('makeAuth oidc login policy', () => {
 		expect(authRoutes).toBeDefined();
 	});
 
+	it.each(['', '   ', ',,,'])(
+		'rejects an empty login group allowlist with a preloaded policy (%j)',
+		(allowed) => {
+			const error = getConfigError(() =>
+				makeAuth({ ...loginPolicyEnv, MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: allowed }, libraries),
+			);
+			expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
+			expect(error.message).toContain('lists no groups');
+		},
+	);
+
 	it('rejects an unknown login-policy backend', () => {
 		const error = getConfigError(() =>
 			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'external' }, libraries),
