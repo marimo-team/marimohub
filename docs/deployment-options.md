@@ -40,12 +40,16 @@ The container image is the primary distribution. Each
 [GitHub release](https://github.com/marimo-team/marimohub/releases) also
 attaches `marimohub-linux-x64`, a standalone server binary for x86-64 Linux
 hosts without Node. It reads the same `MARIMOHUB_*` variables. On first start it
-unpacks its bundled files to `$TMPDIR/marimohub-sea/<build-id>`; set
+unpacks its bundled files to `$TMPDIR/marimohub-sea-<uid>/<build-id>`; set
 `MARIMOHUB_SEA_CACHE_DIR` to use a different directory.
 
 ```bash
 curl -fsSLO https://github.com/marimo-team/marimohub/releases/latest/download/marimohub-linux-x64
 chmod +x marimohub-linux-x64
+
+export MARIMOHUB_STORAGE_BACKEND=memory
+export MARIMOHUB_COMPUTE_BACKEND=subprocess
+export MARIMOHUB_AUTH_BACKEND=dev
 ./marimohub-linux-x64
 ```
 

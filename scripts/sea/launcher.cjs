@@ -12,15 +12,33 @@ const { pathToFileURL } = require('node:url');
 
 const manifest = JSON.parse(sea.getAsset('manifest.json', 'utf8'));
 
-const cacheRoot = process.env.MARIMOHUB_SEA_CACHE_DIR ?? path.join(os.tmpdir(), 'marimohub-sea');
+const uid = process.getuid ? process.getuid() : null;
+const defaultCache =
+	uid !== null
+		? path.join(os.tmpdir(), `marimohub-sea-${uid}`)
+		: path.join(os.tmpdir(), 'marimohub-sea');
+const cacheRoot = process.env.MARIMOHUB_SEA_CACHE_DIR ?? defaultCache;
 const payloadDir = path.join(cacheRoot, manifest.buildId);
 const readyMarker = path.join(payloadDir, '.ready');
 
-// The unpacked bundle is executed, so never load it from a directory another
-// user could have pre-populated (the default lives under the shared tmpdir).
 fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
-if (process.getuid && fs.statSync(cacheRoot).uid !== process.getuid()) {
+
+// Reject symlinks: an attacker in /tmp could plant one before the mkdir.
+const rootStat = fs.lstatSync(cacheRoot);
+if (rootStat.isSymbolicLink()) {
+	console.error(`${cacheRoot} is a symlink; refusing to use it`);
+	process.exit(1);
+}
+if (uid !== null && rootStat.uid !== uid) {
 	console.error(`${cacheRoot} is not owned by the current user; set MARIMOHUB_SEA_CACHE_DIR`);
+	process.exit(1);
+}
+// Reject group/world-writable directories: another user could swap files
+// between the permission check and import.
+if (rootStat.mode & 0o022) {
+	console.error(
+		`${cacheRoot} is group or world-writable (mode ${(rootStat.mode & 0o777).toString(8)}); refusing to use it`,
+	);
 	process.exit(1);
 }
 
