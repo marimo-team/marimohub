@@ -13,11 +13,27 @@ const { pathToFileURL } = require('node:url');
 const manifest = JSON.parse(sea.getAsset('manifest.json', 'utf8'));
 
 const uid = process.getuid ? process.getuid() : null;
-const defaultCache =
-	uid !== null
-		? path.join(os.tmpdir(), `marimohub-sea-${uid}`)
-		: path.join(os.tmpdir(), 'marimohub-sea');
-const cacheRoot = process.env.MARIMOHUB_SEA_CACHE_DIR ?? defaultCache;
+// The bundle still `require()`s optional packages it does not ship (ws's
+// bufferutil, node-fetch's encoding), and Node resolves those through every
+// ancestor node_modules directory up to /. Under a shared tmpdir any local
+// user could plant /tmp/node_modules, so the default cache lives beneath the
+// user's own cache directory, whose ancestors only the user and root can write.
+let homeDir = null;
+try {
+	homeDir = os.homedir();
+} catch {
+	homeDir = null;
+}
+const cacheBase =
+	process.env.XDG_CACHE_HOME && path.isAbsolute(process.env.XDG_CACHE_HOME)
+		? process.env.XDG_CACHE_HOME
+		: homeDir && path.join(homeDir, '.cache');
+const cacheRoot =
+	process.env.MARIMOHUB_SEA_CACHE_DIR ?? (cacheBase ? path.join(cacheBase, 'marimohub-sea') : null);
+if (!cacheRoot) {
+	console.error('Cannot determine a cache directory; set MARIMOHUB_SEA_CACHE_DIR');
+	process.exit(1);
+}
 const payloadDir = path.join(cacheRoot, manifest.buildId);
 const readyMarker = path.join(payloadDir, '.ready');
 
