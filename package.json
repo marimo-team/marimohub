@@ -24,6 +24,7 @@
 		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/api cli:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas && pnpm --filter @marimo-hub/client generate && pnpm --filter @marimo-hub/docs integrations:generate",
 		"build": "vp run -r build",
 		"cli:version-check": "node scripts/check-cli-version.mjs",
+		"build:sea": "node scripts/build-sea.mjs",
 		"release": "node scripts/release.mjs",
 		"prepare": "vp config"
 	},

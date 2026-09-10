@@ -36,6 +36,19 @@ MARIMOHUB_PERSIST_WORKSPACE=source
 - Everything is documented in [Configuration](./configuration.md).
 - Best for standard deployments (Docker, Podman, Kubernetes).
 
+The container image is the primary distribution. Each
+[GitHub release](https://github.com/marimo-team/marimohub/releases) also
+attaches `marimohub-linux-x64`, a standalone server binary for x86-64 Linux
+hosts without Node. It reads the same `MARIMOHUB_*` variables. On first start it
+unpacks its bundled files to `$TMPDIR/marimohub-sea/<build-id>`; set
+`MARIMOHUB_SEA_CACHE_DIR` to use a different directory.
+
+```bash
+curl -fsSLO https://github.com/marimo-team/marimohub/releases/latest/download/marimohub-linux-x64
+chmod +x marimohub-linux-x64
+./marimohub-linux-x64
+```
+
 ## 2. SDK / library composition (the complex case)
 
 Import the adapters you want and construct `createApi(deps)` by hand. Use this

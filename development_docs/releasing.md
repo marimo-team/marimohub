@@ -22,6 +22,20 @@ Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
 The x86-64 Linux build uses a glibc 2.28 image. Each native archive contains
 shell completions and man pages.
 
+The release also attaches `marimohub-linux-x64`, a standalone server binary
+built with Node's single executable application (SEA) support by
+[`scripts/build-sea.mjs`](../scripts/build-sea.mjs). It is the runner's `node`
+with the server bundle and the SPA injected as assets; on first start it unpacks
+them to a cache directory and loads the bundle from there. The container image
+stays the primary distribution; the binary is a convenience for hosts without
+Node. It carries its own `.sha256` and a build provenance attestation (verify
+with `gh attestation verify marimohub-linux-x64 --repo marimo-team/marimohub`),
+but it is not in the CLI `SHA256SUMS` or SBOM, and the recovery workflow does
+not rebuild it.
+Build it locally with `pnpm build:sea` (outputs
+`apps/server/dist/sea/marimohub-<platform>-<arch>`) and check it with
+`scripts/smoke-sea.sh <binary>`.
+
 [`apps/cli/dist-workspace.toml`](../apps/cli/dist-workspace.toml) defines shell,
 PowerShell, Homebrew, and npm installers. It also defines the standalone
 `mohub-update` program. Run `dist plan --allow-dirty` from `apps/cli` to check
