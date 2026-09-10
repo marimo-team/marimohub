@@ -95,7 +95,16 @@ if (!fs.existsSync(readyMarker)) {
 		fs.renameSync(staging, payloadDir);
 	} catch (error) {
 		if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
-		fs.rmSync(staging, { recursive: true, force: true });
+		if (fs.existsSync(readyMarker)) {
+			// Another instance finished first; its payload is identical.
+			fs.rmSync(staging, { recursive: true, force: true });
+		} else {
+			// A payload directory without its marker is damaged (the rename is
+			// atomic, so only tampering or a partial delete gets here). Replace it
+			// rather than importing from it forever after.
+			fs.rmSync(payloadDir, { recursive: true, force: true });
+			fs.renameSync(staging, payloadDir);
+		}
 	}
 }
 
