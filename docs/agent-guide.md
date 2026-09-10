@@ -32,9 +32,10 @@ When two summaries appear to disagree, use these sources in order:
 3. The backend pages for provisioning steps and operational constraints.
 4. The platform deployment guide for topology-specific wiring.
 
-At runtime, `GET /api/v1/version` reports the deployed backends and
-`GET /api/v1/capabilities` reports server limits. Prefer those responses over
-assuming a deployment matches a source checkout.
+At runtime, `GET /api/v1/version` reports the deployment version.
+`GET /api/v1/capabilities` reports available features and server limits.
+Super admins can inspect backends through `GET /api/v1/admin/config`.
+Use these responses to determine what a deployment supports.
 
 ## Non-interactive workflow
 

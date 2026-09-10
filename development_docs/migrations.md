@@ -69,8 +69,14 @@ transient `security_labels_pending` marker while a label mutation is in flight.
 Both ride through an old replica's read-modify-write unchanged (`looseObject`).
 A new replica treats an absent projection as indeterminate and resolves it from
 the authoritative `project.json` / `meta.json` (failing closed if that read
-fails), so a mixed-version rollout never widens access; the next routine
-projection write repairs the state. No stored-data migration is required.
+fails). The next routine projection write repairs the state. No stored-data
+migration is required.
+
+Field preservation does not provide policy enforcement on older replicas.
+Before enabling resource constraints or applying labels, upgrade every replica,
+including API servers, kernel proxies, and maintenance workers.
+Replicas from releases before resource security still authorize by project role
+and do not enforce labels. All replicas must use the same resource-security configuration.
 
 Lazy/fan-out migration handles the **old data → new code** direction. The
 dangerous direction during a rolling deploy is the opposite one: a **new-version

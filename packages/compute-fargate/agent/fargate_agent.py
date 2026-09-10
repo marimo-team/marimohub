@@ -58,8 +58,6 @@ def _read_limited(path: str, limit: int) -> bytes:
 
 
 def _kill_group(process: subprocess.Popen[Any], sig: int = signal.SIGTERM) -> None:
-    if process.poll() is not None:
-        return
     try:
         os.killpg(process.pid, sig)
     except ProcessLookupError:
@@ -88,7 +86,7 @@ class _BoundedCapture:
 
     def _drain(self) -> None:
         try:
-            while chunk := self._stream.read(64 * 1024):
+            while chunk := self._stream.read1(64 * 1024):
                 with self._lock:
                     if self._keep_tail:
                         self._data.extend(chunk)
@@ -105,8 +103,9 @@ class _BoundedCapture:
         finally:
             self._stream.close()
 
-    def wait(self) -> None:
-        self._thread.join()
+    def wait(self, timeout: float | None = None) -> bool:
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
 
     def read(self) -> bytes:
         with self._lock:
@@ -302,6 +301,7 @@ class AgentState:
         cwd = payload.get("cwd", "/workspace")
         if not isinstance(cwd, str):
             raise AgentError(400, "cwd must be a string")
+        timeout = _bounded_timeout(payload.get("timeoutMs"))
         try:
             process = subprocess.Popen(
                 ["sh", "-lc", command],
@@ -318,9 +318,15 @@ class AgentState:
             raise AgentError(500, "could not capture command output")
         stdout_capture = _BoundedCapture(process.stdout, MAX_OUTPUT_BYTES, False)
         stderr_capture = _BoundedCapture(process.stderr, MAX_OUTPUT_BYTES, False)
-        code = _wait_process(process, _bounded_timeout(payload.get("timeoutMs")))
-        stdout_capture.wait()
-        stderr_capture.wait()
+        deadline = time.monotonic() + timeout if timeout else None
+        code = _wait_process(process, timeout)
+        for capture in (stdout_capture, stderr_capture):
+            remaining = max(0, deadline - time.monotonic()) if deadline is not None else None
+            if not capture.wait(remaining):
+                # Descendants can retain the pipes after the command's shell exits.
+                _kill_group(process, signal.SIGKILL)
+                code = 124
+                capture.wait()
         if stdout_capture.truncated() or stderr_capture.truncated():
             return {
                 "success": False,

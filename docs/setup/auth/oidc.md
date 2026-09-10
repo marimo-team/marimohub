@@ -55,6 +55,9 @@ Nested claims use JSON Pointer syntax, such as `/realm_access/roles`.
 `ALLOWED_GROUPS` controls login. The other lists map groups to internal
 entitlements. The session cookie stores mapped entitlements, not raw groups.
 
+If `ALLOWED_GROUPS` is set, it must contain at least one group ID. An empty list
+fails at startup. Unset it to disable the login group restriction.
+
 `PROJECT_CREATION_GROUPS` controls who can create projects:
 
 - If the variable is not set, all authenticated users can create projects.

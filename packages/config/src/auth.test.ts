@@ -293,6 +293,19 @@ describe('makeAuth oidc required vars', () => {
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
 	});
 
+	it.each(['', '   ', ',,,'])('rejects an empty login group allowlist (%j)', (allowed) => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: allowed,
+				MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS: 'viewers',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
+		expect(error.message).toContain('lists no groups');
+	});
+
 	it.each([
 		['too many groups', Array.from({ length: 201 }, (_, i) => `group-${i}`).join(',')],
 		['oversized group id', 'g'.repeat(257)],

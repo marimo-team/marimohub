@@ -284,12 +284,29 @@ export class JobRunner {
 		let final: JobRun = claimed.run;
 		const stopwatch = new Stopwatch();
 		let counters: Record<string, number> = {};
+		const destroySandbox = async (instance: SandboxInstance) => {
+			try {
+				await instance.destroy();
+			} catch (err) {
+				logOperationalError(
+					'job_sandbox_destroy_failed',
+					{ operation: 'job.run.destroy', ...fields },
+					err,
+				);
+			}
+		};
 		try {
-			const prepared = await beforeDeadline(
-				this.provisionOptions(context, sandboxId).then((options) =>
-					this.provisioner.prepare(options),
-				),
+			const preparing = this.provisionOptions(context, sandboxId).then((options) =>
+				this.provisioner.prepare(options),
 			);
+			let prepared: PreparedSandbox;
+			try {
+				prepared = await beforeDeadline(preparing);
+			} catch (err) {
+				// A deadline does not cancel prepare(); reclaim a handle that arrives later.
+				void preparing.then((late) => destroySandbox(late.sandbox)).catch(() => {});
+				throw err;
+			}
 			sandbox = prepared.sandbox;
 			Object.assign(stopwatch.timings, prepared.timings);
 			counters = prepared.counters;
@@ -337,17 +354,7 @@ export class JobRunner {
 			}
 		} finally {
 			// prepare() owns cleanup until it returns a sandbox handle.
-			if (sandbox) {
-				try {
-					await sandbox.destroy();
-				} catch (err) {
-					logOperationalError(
-						'job_sandbox_destroy_failed',
-						{ operation: 'job.run.destroy', ...fields },
-						err,
-					);
-				}
-			}
+			if (sandbox) await destroySandbox(sandbox);
 		}
 		this.metrics.increment('jobs.runs.finished', 1, { status: final.status });
 		logEvent({

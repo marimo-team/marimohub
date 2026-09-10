@@ -13,6 +13,7 @@ import {
 	useDownloadWorkspace,
 	useEditorSessionQuery,
 	useJobRunQuery,
+	useJobRunsQuery,
 	useJobsQuery,
 	useNotebookHtmlQuery,
 	useNotebookQuery,
@@ -290,6 +291,51 @@ describe('useNotebookHtmlQuery', () => {
 
 		await waitFor(() => expect(result.current.data).toBeTruthy());
 		expect(result.current.data?.capturedAt).toBeNull();
+	});
+});
+
+describe('useJobRunsQuery', () => {
+	it.each([
+		{ name: 'empty', items: [] },
+		{ name: 'finished', items: [{ run_id: 'run-old', status: 'succeeded' }] },
+	])('discovers new runs with $name history', async ({ items: initialRuns }) => {
+		vi.useFakeTimers();
+		try {
+			let runs = initialRuns;
+			const fetchMock = stubFetch(async () => jsonOk({ items: runs, next_cursor: null }));
+			const { result, unmount } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job-1'), {
+				toaster: false,
+			});
+			await vi.waitFor(() => expect(result.current.data).toEqual(initialRuns));
+
+			runs = [{ run_id: 'run-new', status: 'running' }, ...initialRuns];
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await vi.waitFor(() => expect(result.current.data).toEqual(runs));
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+
+			unmount();
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not fetch without a selected job', async () => {
+		vi.useFakeTimers();
+		try {
+			const fetchMock = stubFetch(async () => jsonOk({ items: [], next_cursor: null }));
+			const { unmount } = renderHookWithClient(() => useJobRunsQuery(PID, NID, null), {
+				toaster: false,
+			});
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(fetchMock).not.toHaveBeenCalled();
+			unmount();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

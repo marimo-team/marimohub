@@ -488,7 +488,7 @@ describe('JobScheduler', () => {
 
 	it('scans active-run storage a constant number of times per tick', async () => {
 		for (let index = 0; index < 3; index++) await createJob({ name: `job ${index}` });
-		const listActive = vi.spyOn(env.jobRuns, 'listActive');
+		const listActive = vi.spyOn(env.jobRuns, 'listActiveSnapshot');
 		const s = scheduler(fakeRunner(env), {
 			config: { ...CONFIG, maxConcurrentRuns: 0 },
 		});
@@ -804,6 +804,53 @@ describe('JobScheduler', () => {
 			expect((await s.tick()).markersPruned).toBe(1);
 			expect(await env.bucket.head(paths.jobRunMarker(pid, fresh))).not.toBeNull();
 			expect(await env.bucket.head(paths.jobRunMarker(pid, stale))).toBeNull();
+		});
+
+		it('preserves a stale marker when its run record is unreadable', async () => {
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const job = await createJob({ schedule: undefined });
+			const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			await env.bucket.put(
+				paths.project(pid).notebook(nid).job(job.id).run(run.run_id).record,
+				'corrupt record',
+			);
+			now = Date.parse(run.queued_at) + 30 * MINUTE;
+			const s = scheduler(fakeRunner(env));
+			expect((await s.tick()).markersPruned).toBe(0);
+			expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+			expect((await env.jobRuns.listActiveSnapshot()).complete).toBe(false);
+		});
+
+		it('blocks new work with incomplete ownership while reclaiming known expired runs', async () => {
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const scheduled = await createJob();
+			const manual = await createJob({ schedule: undefined });
+			const queued = await env.jobRuns.enqueue({
+				job: manual,
+				trigger: 'manual',
+				timeoutSeconds: 60,
+			});
+			const expired = await env.jobRuns.enqueue({
+				job: manual,
+				trigger: 'manual',
+				timeoutSeconds: 60,
+			});
+			await env.jobRuns.transition(expired, 'provision', () => ({
+				sandbox_id: SB,
+				deadline_at: new Date(now - 2 * MINUTE).toISOString(),
+			}));
+			await env.bucket.put(paths.jobRunMarker(pid, createRunId()), 'corrupt marker');
+			const runner = fakeRunner(env);
+			const s = scheduler(runner);
+
+			expect(await s.tick()).toMatchObject({ fired: 0, dispatched: 0, timedOut: 1, errors: 1 });
+			expect(runner.executed).toHaveLength(0);
+			expect(await env.jobRuns.listRuns(pid, nid, scheduled.id)).toEqual([]);
+			expect((await env.jobRuns.getRun(pid, nid, manual.id, queued.run_id)).status).toBe('queued');
+			expect((await env.jobRuns.getRun(pid, nid, manual.id, expired.run_id)).status).toBe(
+				'timed_out',
+			);
+			expect(await env.bucket.head(paths.jobRunMarker(pid, expired.run_id))).toBeNull();
 		});
 
 		it('prunes a marker whose run is already terminal', async () => {

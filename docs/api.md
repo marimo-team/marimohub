@@ -18,8 +18,9 @@ JSON responses under `/api/v1/*` use one envelope:
 { "success": false, "error": { "code": "FORBIDDEN", "message": "…" } }
 ```
 
-The HTML snapshot route returns raw `text/html` on success. Its errors still
-use the JSON envelope.
+Content routes return raw bytes on success. These include notebook HTML snapshots,
+workspace files and archives, and job output and logs. Their errors still use
+the JSON envelope.
 
 Authentication is via the session cookie issued by your [auth](/auth) backend,
 or a [personal access token](/api-tokens) sent as `Authorization: Bearer …`
@@ -30,6 +31,10 @@ role-gated. A project audit log requires project `manager`. The deployment audit
 log requires a super admin (see [Security → Authorization](/security#authorization-roles)).
 Editor ownership, temporary session creation, and takeover are documented in
 [Editor sessions](/editor-sessions).
+
+[Scoped tokens](/api-tokens) further restrict the actions and projects available
+to automation. [Security labels](/security#authorization-roles) can deny access
+even when the project role permits it. Neither mechanism grants extra project permissions.
 
 ## Endpoints
 
@@ -67,6 +72,11 @@ Resource groups:
   manage versions, and rotate notebook sync tokens.
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
+  [Secondary surfaces](/surfaces) provide VS Code and OpenCode access within edit sessions.
+- **Workspace files** — browse, read, upload, copy, move, and delete notebook files
+  under `/projects/{pid}/notebooks/{nid}/workspace`.
+- **Jobs** — manage [job definitions](/jobs), trigger or cancel runs, and read
+  run history, HTML output, and logs under `/projects/{pid}/notebooks/{nid}/jobs`.
 - **Integrations** — discover integration kinds and manage project or
   organization integration instances. Each kind reports its available secret
   sources. Version-history lists use pagination.
@@ -75,10 +85,13 @@ Resource groups:
 - **System** — `GET /api/v1/version` and `GET /api/v1/capabilities` report
   deployment information. `GET /api/health` is the unversioned health probe.
 
+The [MCP server](/mcp) uses `/mcp` with separate OAuth discovery and authorization
+endpoints. These endpoints follow MCP and OAuth protocols rather than the JSON API envelope.
+
 ## Pagination
 
 The project, notebook, notebook-version, project-session, integration-instance,
-integration-version, and deployment-audit list endpoints return this page shape:
+integration-version, job, job-run, and deployment-audit list endpoints return this page shape:
 
 ```jsonc
 {
@@ -104,10 +117,13 @@ server limits.
 
 ## Caching
 
-Every read (`GET`) carries a weak `ETag` and `Cache-Control: no-cache`. Send the
+Most successful reads carry an `ETag` and `Cache-Control: no-cache`. Send the
 ETag back as `If-None-Match` to revalidate; an unchanged resource answers `304
 Not Modified` with no body. Browsers do this automatically, which keeps the
 session-status poll loop cheap.
+
+Content and credential routes can set stricter cache policies, including
+`Cache-Control: private, no-store`. Use the response headers for each route.
 
 ### Integration updates
 

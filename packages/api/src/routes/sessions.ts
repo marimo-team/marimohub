@@ -911,7 +911,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 			'notebook.write',
 			deps,
 		);
-		const notebook = await loadAuthorizedNotebook(deps, project, nid, user);
+		const notebook = await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
 		return { project, notebook };
 	};
 	try {

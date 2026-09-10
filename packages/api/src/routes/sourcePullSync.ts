@@ -83,7 +83,13 @@ export async function pullSourceToHead(
 	subject: AuthSubject,
 ): Promise<PullSyncOutcome> {
 	const { notebooks } = deps.services;
-	const { source } = await loadAuthorizedNotebook(deps, project, notebookId, subject);
+	const { source } = await loadAuthorizedNotebook(
+		deps,
+		project,
+		notebookId,
+		subject,
+		'notebook.write',
+	);
 	const { git, reader, config, head } = await resolveSyncTarget(deps, source);
 	if (isAtBranchHead(git, head.commit)) {
 		return { synced: false, commit: head.commit, version_id: null };

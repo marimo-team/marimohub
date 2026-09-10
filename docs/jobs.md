@@ -60,6 +60,9 @@ so the feature can be turned back on without loss.
   Per job, the default policy **skips** a scheduled fire while the previous run
   is still active (the skip is recorded in the history); choose "run anyway" to
   let runs overlap.
+  If active run records cannot be read, the scheduler pauses new scheduled fires
+  and dispatches to preserve these limits. It still enforces deadlines and
+  completes finalization for readable runs.
 - **Timeouts and retries.** A run past its timeout (`timeout_seconds`, default
   `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS`, capped by
   `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS`) has its sandbox destroyed and lands

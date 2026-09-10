@@ -496,7 +496,7 @@ async function loadWritableJob(
 		'notebook.write',
 		deps,
 	);
-	const notebook = await loadAuthorizedNotebook(deps, project, nid, user);
+	const notebook = await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
 	return { project, notebook, job: await deps.services.jobs.getJob(pid, nid, jid) };
 }
 
@@ -572,7 +572,7 @@ app.openapi(createJob, async (c) => {
 		'notebook.write',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(c, 'POST /projects/{pid}/notebooks/{nid}/jobs', async () => {
 		const job = await deps.services.jobs.createJob(pid, nid, body, user.id, jobLimits(deps));

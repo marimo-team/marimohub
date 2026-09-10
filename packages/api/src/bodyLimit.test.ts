@@ -29,7 +29,7 @@ describe('request body limit', () => {
 		await expectError(res, 413, 'PAYLOAD_TOO_LARGE');
 	});
 
-	it.each(['/register', '/token', '/revoke', '/mcp'])(
+	it.each(['/register', '/authorize', '/token', '/revoke', '/mcp'])(
 		'rejects an oversized MCP request at %s',
 		async (path) => {
 			const { app } = createTestApi({
@@ -48,7 +48,7 @@ describe('request body limit', () => {
 		},
 	);
 
-	it.each(['/register', '/token', '/revoke', '/mcp'])(
+	it.each(['/register', '/authorize', '/token', '/revoke', '/mcp'])(
 		'leaves the disabled MCP route at %s unclaimed',
 		async (path) => {
 			const { app } = createTestApi();
@@ -61,6 +61,19 @@ describe('request body limit', () => {
 			expect(res.status).toBe(404);
 		},
 	);
+
+	it('rejects an oversized OAuth authorization body without Content-Length', async () => {
+		const { app } = createTestApi({
+			deps: { mcp: { publicBaseUrl: 'https://hub.example.com' } },
+		});
+		const res = await app.request('/authorize', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ client_id: 'x'.repeat(MAX_REQUEST_BYTES) }),
+		});
+
+		await expectError(res, 413, 'PAYLOAD_TOO_LARGE');
+	});
 
 	it('lets a normal-sized body through', async () => {
 		const { request } = createTestApi();

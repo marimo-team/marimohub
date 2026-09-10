@@ -348,6 +348,8 @@ describe('JobRunService', () => {
 			expect(byRun.get(corruptRecord.run_id)).toBeNull();
 			expect(byRun.size).toBe(2);
 			expect(snapshot.complete).toBe(false);
+			await runs.pruneStaleMarkers(Date.now() + 60 * 60_000);
+			expect(await env.bucket.head(paths.jobRunMarker(pid, corruptRecord.run_id))).not.toBeNull();
 			expect(await env.bucket.head(corruptMarkerKey)).not.toBeNull();
 			expect(
 				errorSpy.mock.calls.some((c) => String(c[0]).includes('corrupt_job_run_marker_preserved')),

@@ -515,14 +515,9 @@ export class NotebookWorkspaceService {
 		await this.mutableContext(projectId, notebookId, 'move', from);
 		await this.mutableContext(projectId, notebookId, 'move', to);
 		const copied = await this.copyUnlocked(projectId, notebookId, from, to, lease);
-		try {
-			await this.deleteUnlocked(projectId, notebookId, from, lease);
-		} catch (error) {
-			if (await this.ownsWrites(lease, error)) {
-				await this.deleteUnlocked(projectId, notebookId, to, lease).catch(() => {});
-			}
-			throw error;
-		}
+		// A failed delete may have removed part of the source. Keep the complete
+		// destination so an interrupted move cannot destroy the only remaining copy.
+		await this.deleteUnlocked(projectId, notebookId, from, lease);
 		return copied;
 	}
 

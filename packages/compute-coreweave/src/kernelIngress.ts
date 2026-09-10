@@ -80,6 +80,7 @@ export function inClusterKubernetesApi(): KubernetesApi {
 					},
 					(res) => {
 						const chunks: Buffer[] = [];
+						res.on('error', reject);
 						res.on('data', (c: Buffer) => chunks.push(c));
 						res.on('end', () =>
 							resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }),

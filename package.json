@@ -14,6 +14,7 @@
 		"typecheck": "vp run -r typecheck",
 		"test": "vp test tools/oxlint/anti-slop/index.test.ts --silent=passed-only --hideSkippedTests && vp run -r test --configLoader=runner --pool=threads --silent=passed-only --hideSkippedTests",
 		"test:release-scripts": "bash scripts/release-helpers.test.sh",
+		"test:external-adapter": "node --test examples/external-adapter/oidc-login-policy.test.mjs",
 		"test:coverage": "pnpm test:coverage:root && pnpm test:coverage:web",
 		"test:coverage:root": "vp test --coverage",
 		"test:coverage:web": "pnpm --filter @marimo-hub/web test --coverage",

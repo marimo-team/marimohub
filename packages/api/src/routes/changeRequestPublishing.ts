@@ -79,6 +79,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 			input.project,
 			input.notebookId,
 			input.subject,
+			'change-request.publish',
 		);
 		return {
 			proposal: reusable.proposal,
@@ -93,6 +94,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		input.project,
 		input.notebookId,
 		input.subject,
+		'change-request.publish',
 	);
 	const session = await input.deps.services.sessions.getSession(input.project.id, input.sessionId);
 	if (notebook.source.type !== 'git') {

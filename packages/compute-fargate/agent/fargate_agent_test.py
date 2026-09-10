@@ -61,6 +61,15 @@ class AgentTest(unittest.TestCase):
             raw = response.read()
             return response.status, json.loads(raw) if raw else None
 
+    def logs_containing(self, process_id, expected):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            _, logs = self.request("GET", f"/processes/{process_id}/logs")
+            if expected in logs["stdout"]:
+                return logs
+            time.sleep(0.02)
+        self.fail(f"Process logs did not contain {expected!r}")
+
     def test_health_requires_auth_and_reports_protocol(self):
         status, body = self.request("GET", "/health")
         self.assertEqual(status, 200)
@@ -89,6 +98,31 @@ class AgentTest(unittest.TestCase):
         self.assertFalse(body["success"])
         self.assertEqual(body["stdout"], "")
         self.assertIn("output exceeds", body["stderr"])
+
+    def test_exec_timeout_covers_descendants_after_the_shell_exits(self):
+        started = time.monotonic()
+        _, result = self.request(
+            "POST",
+            "/exec",
+            {"command": "sleep 2 &", "cwd": os.getcwd(), "timeoutMs": 100},
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual(result["exitCode"], 124)
+        self.assertLess(time.monotonic() - started, 1.5)
+
+    def test_invalid_exec_timeout_does_not_start_a_command(self):
+        for timeout in [-1, True, 1.5, "invalid"]:
+            with self.subTest(timeout=timeout), mock.patch.object(
+                _agent_module.subprocess, "Popen", side_effect=AssertionError("unexpected spawn")
+            ) as spawn:
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    self.request(
+                        "POST",
+                        "/exec",
+                        {"command": "sleep 10", "cwd": os.getcwd(), "timeoutMs": timeout},
+                    )
+                self.assertEqual(failure.exception.code, 400)
+                spawn.assert_not_called()
 
     def test_exec_limit_supports_a_maximum_size_workspace_file(self):
         encoded_size = ((MAX_FILE_BYTES + 2) // 3) * 4
@@ -266,20 +300,35 @@ class AgentTest(unittest.TestCase):
             "/processes",
             {
                 "processId": "duplicate-id",
-                "command": "python3 -c 'import sys; sys.stdout.write(\"x\" * 70000 + \"READY\")'",
+                "command": "python3 -c 'import sys; sys.stdout.write(\"x\" * 70000 + \"READY\")'; sleep 10",
                 "cwd": os.getcwd(),
             },
         )
-        with self.assertRaises(urllib.error.HTTPError) as failure:
-            self.request(
-                "POST",
-                "/processes",
-                {"processId": "duplicate-id", "command": "sleep 1", "cwd": os.getcwd()},
-            )
-        self.assertEqual(failure.exception.code, 409)
-        time.sleep(0.1)
-        _, logs = self.request("GET", f"/processes/{process['id']}/logs")
-        self.assertIn("READY", logs["stdout"])
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                self.request(
+                    "POST",
+                    "/processes",
+                    {"processId": "duplicate-id", "command": "sleep 1", "cwd": os.getcwd()},
+                )
+            self.assertEqual(failure.exception.code, 409)
+            logs = self.logs_containing(process["id"], "READY")
+            self.assertEqual(len(logs["stdout"]), _agent_module.MAX_LOG_BYTES)
+        finally:
+            self.request("DELETE", f"/processes/{process['id']}")
+
+    def test_process_logs_are_available_before_process_exit(self):
+        _, process = self.request(
+            "POST",
+            "/processes",
+            {"command": "printf READY; sleep 10", "cwd": os.getcwd()},
+        )
+        process_path = f"/processes/{process['id']}"
+        try:
+            self.logs_containing(process["id"], "READY")
+            self.assertIsNone(self.state.processes.get(process["id"])["process"].poll())
+        finally:
+            self.request("DELETE", process_path)
 
     def test_process_timeout_cleans_up_finished_process(self):
         _, process = self.request(
@@ -287,7 +336,7 @@ class AgentTest(unittest.TestCase):
             "/processes",
             {"processId": "short-lived", "command": "sleep 10", "cwd": os.getcwd(), "timeoutMs": 20},
         )
-        time.sleep(0.1)
+        self.state.processes.get(process["id"])["process"].wait(timeout=5)
         _, logs = self.request("GET", f"/processes/{process['id']}/logs")
         self.assertEqual(logs["stdout"], "")
         with self.assertRaises(urllib.error.HTTPError) as failure:

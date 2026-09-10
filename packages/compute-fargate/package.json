@@ -18,6 +18,7 @@
 		"build": "vp pack",
 		"check": "vp check",
 		"test": "vp test",
+		"test:agent": "python3 -m unittest discover -s agent -p '*_test.py'",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {

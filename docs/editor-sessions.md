@@ -89,6 +89,9 @@ The browser is read-only when:
 notebook version through the normal save path. They cannot be renamed, moved,
 deleted, or replaced by a copy.
 
+If a move fails while deleting its source, the complete destination remains.
+The source can be partially deleted; check both locations before retrying or deleting files.
+
 Limits: 25 MB per file, 100 MB per workspace, and 1,000 files. Larger uploads
 are rejected with `413`; a workspace over its total budget with `429`.
 

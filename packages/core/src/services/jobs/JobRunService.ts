@@ -661,6 +661,13 @@ export class JobRunService {
 		for (const { marker, run } of await this.listActive()) {
 			const stale = !run && now - Date.parse(marker.created_at) > DANGLING_MARKER_GRACE_MS;
 			if (!stale) continue;
+			// An unreadable record is not a missing record; its marker protects
+			// the sandbox from being mistaken for an orphan by reconciliation.
+			if (
+				await this.runExists(marker.project_id, marker.notebook_id, marker.job_id, marker.run_id)
+			) {
+				continue;
+			}
 			await this.bucket
 				.delete(paths.jobRunMarker(marker.project_id, marker.run_id))
 				.catch(() => {});

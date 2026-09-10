@@ -195,32 +195,30 @@ export async function assertTokenGrantProjectsVisible(
 	}
 }
 
-/**
- * Load a notebook the caller may see: 404 for a deleted notebook, and a
- * `project.read` decision including the notebook's security-label override — a
- * constraint denial masks the notebook as nonexistent, matching the
- * project-level rule. The project itself must already have passed its own
- * guard; only the override needs evaluating here (the service checks the
- * project labels again regardless — labels only ever remove access).
- */
+/** Notebook overrides must constrain the requested action as well as read visibility. */
 export async function loadAuthorizedNotebook(
 	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
 	project: Project,
 	nid: NotebookId,
 	subject: AuthSubject,
+	action: ProjectAction = 'project.read',
 ): Promise<NotebookDetail> {
 	const detail = await deps.services.notebooks.getNotebook(project.id, nid);
 	if (detail.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
 	if (detail.meta.security_labels !== undefined) {
-		const decision = await authorizationService(deps).authorize(subject, 'project.read', {
-			kind: 'project',
-			project,
-			notebookLabels: detail.meta.security_labels,
-		});
-		if (!decision.allowed) {
-			throw new NotFoundError(`Notebook ${nid} not found`);
+		const actions: ProjectAction[] =
+			action === 'project.read' ? [action] : ['project.read', action];
+		for (const requestedAction of actions) {
+			const decision = await authorizationService(deps).authorize(subject, requestedAction, {
+				kind: 'project',
+				project,
+				notebookLabels: detail.meta.security_labels,
+			});
+			if (!decision.allowed) {
+				throw new NotFoundError(`Notebook ${nid} not found`);
+			}
 		}
 	}
 	return detail;

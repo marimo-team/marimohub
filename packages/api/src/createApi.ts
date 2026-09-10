@@ -302,7 +302,7 @@ export function createApi(rawDeps: ApiDeps) {
 		return (isWorkspaceFilePut ? workspaceFileBodyLimit : standardBodyLimit)(c, next);
 	});
 	if (deps.mcp) {
-		for (const path of ['/register', '/token', '/revoke', '/mcp']) {
+		for (const path of ['/register', '/authorize', '/token', '/revoke', '/mcp']) {
 			app.use(path, standardBodyLimit);
 		}
 	}

@@ -109,7 +109,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 		'change-request.publish',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'change-request.publish');
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);

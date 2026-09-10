@@ -919,6 +919,41 @@ describe('authorization characterization: notebook overrides on mutations and se
 		);
 	});
 
+	it.each([
+		['PATCH', '', { title: 'denied rename' }],
+		['DELETE', '', undefined],
+		['POST', '/duplicate', {}],
+		['POST', '/workspace/directories', { path: '/denied' }],
+	])('enforces action-specific notebook constraints for %s %s', async (method, suffix, body) => {
+		const bucket = new MemoryBucket();
+		const { god, pid, nid } = await seedOverriddenNotebook(bucket);
+		const security = localResourceSecurity(ORDER, ctxWith(['element-x']));
+		const evaluate = vi.spyOn(security.constraints, 'evaluate');
+		evaluate.mockImplementation(async (_context, action, resource) =>
+			action === 'notebook.write' && resource.labels?.compartments.includes('element-x')
+				? { satisfied: false, reason: 'constraint' }
+				: { satisfied: true },
+		);
+		const editor = apiFor(bucket, EDITOR, { resourceSecurity: security });
+		await expectOk(await editor.request('GET', `/projects/${pid}/notebooks/${nid}`));
+
+		await expectError(
+			await editor.request(method, `/projects/${pid}/notebooks/${nid}${suffix}`, body),
+			404,
+			'NOT_FOUND',
+		);
+		expect(evaluate).toHaveBeenCalledWith(
+			expect.anything(),
+			'notebook.write',
+			{ labels: OVERRIDE },
+			expect.any(AbortSignal),
+		);
+		expect(
+			(await god.deps.services.notebooks.getNotebook(ProjectId.parse(pid), NotebookId.parse(nid)))
+				.meta.title,
+		).toBe('nb');
+	});
+
 	it('still allows mutations for a caller whose context satisfies the override', async () => {
 		const bucket = new MemoryBucket();
 		const { god, pid, nid } = await seedOverriddenNotebook(bucket);

@@ -331,6 +331,14 @@ function parseLoginPolicy(
 function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 	const claim = env.MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM?.trim();
 	const allowed = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
+	if (env.MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS !== undefined && !allowed) {
+		throw new ConfigError('MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS is set but lists no groups.', {
+			variable: 'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
+			remediation:
+				'List at least one group ID, or unset the variable to disable the login group restriction.',
+			docs: 'docs/setup/auth/oidc.md',
+		});
+	}
 	const superAdmin = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS');
 	const projectCreation = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS');
 	const viewer = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS');

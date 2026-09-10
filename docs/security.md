@@ -213,6 +213,11 @@ files, environment, secrets, and credentials.
 
 ### Applying labels
 
+Before enabling resource constraints or applying labels, upgrade every API,
+proxy, and maintenance replica to a version that enforces resource security.
+Use the same policy configuration on every replica. Older replicas preserve
+label fields but do not enforce them.
+
 Super admins set and clear labels through four endpoints, from a browser
 session only (personal access tokens are refused):
 

@@ -44,6 +44,8 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 <p>Nested claims use JSON Pointer syntax, such as <code>/realm_access/roles</code>.
 <code>ALLOWED_GROUPS</code> controls login. The other lists map groups to internal
 entitlements. The session cookie stores mapped entitlements, not raw groups.</p>
+<p>If <code>ALLOWED_GROUPS</code> is set, it must contain at least one group ID. An empty list
+fails at startup. Unset it to disable the login group restriction.</p>
 <p><code>PROJECT_CREATION_GROUPS</code> controls who can create projects:</p>
 <ul>
 <li>If the variable is not set, all authenticated users can create projects.</li>

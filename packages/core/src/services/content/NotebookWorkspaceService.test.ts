@@ -580,7 +580,7 @@ describe('NotebookWorkspaceService', () => {
 		).rejects.toThrow(`${MAX_WORKSPACE_FILES} files`);
 	});
 
-	it('removes the copied destination when a move cannot delete its source', async () => {
+	it('preserves the copied destination when a move cannot delete its source', async () => {
 		const failingBucket = new DeleteFailingBucket();
 		service = makeWorkspaceService(failingBucket).service;
 		const sourceKey = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile('source.txt');
@@ -591,8 +591,35 @@ describe('NotebookWorkspaceService', () => {
 			service.move(PROJECT_ID, NOTEBOOK_ID, 'source.txt', 'destination.txt'),
 		).rejects.toThrow('delete failed');
 		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'source.txt')).toBeDefined();
-		await expect(service.read(PROJECT_ID, NOTEBOOK_ID, 'destination.txt')).rejects.toThrow(
-			'not found',
+		expect(await service.read(PROJECT_ID, NOTEBOOK_ID, 'destination.txt')).toBeDefined();
+	});
+
+	it('preserves every destination file when a directory move only deletes part of its source', async () => {
+		const prefix = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspacePrefix;
+		const names = Array.from(
+			{ length: WORKSPACE_MUTATION_HEARTBEAT_EVERY + 1 },
+			(_, index) => `file-${String(index).padStart(3, '0')}.txt`,
 		);
+		for (const name of names) await bucket.put(`${prefix}source/${name}`, name);
+		const originalDelete = bucket.delete.bind(bucket);
+		let sourceBatches = 0;
+		vi.spyOn(bucket, 'delete').mockImplementation(async (keys) => {
+			if (
+				Array.isArray(keys) &&
+				keys.some((key) => key.startsWith(`${prefix}source/`)) &&
+				++sourceBatches === 2
+			) {
+				throw new Error('delete failed');
+			}
+			await originalDelete(keys);
+		});
+
+		await expect(service.move(PROJECT_ID, NOTEBOOK_ID, 'source', 'target')).rejects.toThrow(
+			'delete failed',
+		);
+		expect(await bucket.head(`${prefix}source/${names[0]}`)).toBeNull();
+		for (const name of names) {
+			expect(await (await bucket.get(`${prefix}target/${name}`))?.text()).toBe(name);
+		}
 	});
 });

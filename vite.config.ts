@@ -374,7 +374,14 @@ export default defineConfig({
 	// under its own vite config; cover it with `pnpm --filter @marimo-hub/web
 	// test --coverage`.
 	test: {
-		exclude: ['**/node_modules/**', '**/dist/**', 'packages/web/**', 'apps/e2e/**'],
+		exclude: [
+			'**/node_modules/**',
+			'**/dist/**',
+			'packages/web/**',
+			'apps/e2e/**',
+			// This dependency-free example uses node:test (test:external-adapter).
+			'examples/external-adapter/oidc-login-policy.test.mjs',
+		],
 		// Bound both Vitest file workers and the WASM runtimes spawned by concurrent tests.
 		maxWorkers: 2,
 		maxConcurrency: 2,

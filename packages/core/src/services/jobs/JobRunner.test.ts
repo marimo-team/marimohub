@@ -8,6 +8,8 @@ import type { JobDefinition, JobRun } from '../../schema';
 import { ACTOR, fakeComputeFrom, makeFakeSandbox, setupTestEnv, uid } from '../../testing';
 import type { SandboxCalls } from '../../testing';
 import { listAllKeys } from '../catalog/storage';
+import { SandboxProvisioner } from '../runtime/SandboxProvisioner';
+import type { PreparedSandbox } from '../runtime/SandboxProvisioner';
 import {
 	classifyExport,
 	JobRunner,
@@ -421,6 +423,35 @@ describe('JobRunner unhappy paths', () => {
 			const run = await pending;
 			expect(run).toMatchObject({ status: 'timed_out', error: { code: 'RUN_TIMED_OUT' } });
 			expect(run.output).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('destroys a sandbox whose preparation finishes after the run timed out', async () => {
+		vi.useFakeTimers();
+		try {
+			const sandbox = makeJobSandbox({ html: '<html/>' });
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(sandbox.instance));
+			const prepare = provisioner.prepare.bind(provisioner);
+			let completePreparation!: () => void;
+			vi.spyOn(provisioner, 'prepare').mockImplementation(async (options) => {
+				const prepared = await prepare(options);
+				return new Promise<PreparedSandbox>((resolve) => {
+					completePreparation = () => resolve(prepared);
+				});
+			});
+			const queued = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			const pending = runner(sandbox, { provisioner }).execute(queued);
+			await vi.advanceTimersByTimeAsync(Millis.minutes(11) + 1);
+			expect((await pending).status).toBe('timed_out');
+			expect(sandbox.calls.destroy).toBe(0);
+
+			completePreparation();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(sandbox.calls.destroy).toBe(1);
+			expect(sandbox.jobCommands).toHaveLength(0);
+			expect((await env.jobRuns.getRun(pid, nid, job.id, queued.run_id)).status).toBe('timed_out');
 		} finally {
 			vi.useRealTimers();
 		}

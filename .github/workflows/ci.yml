@@ -43,6 +43,14 @@ jobs:
       - name: Test
         run: vp run -r --concurrency-limit 1 test --configLoader=runner --pool=threads
 
+      - name: Test Fargate Python agent
+        run: |
+          python3 --version
+          vp run --filter @marimo-hub/compute-fargate test:agent
+
+      - name: Test external adapter example
+        run: vp run test:external-adapter
+
       - name: Save Vite Task cache
         if: success() && github.event_name == 'push'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
