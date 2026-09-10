@@ -27,12 +27,11 @@ ARG MARIMOHUB_VERSION=dev
 ARG MARIMOHUB_IMAGE
 ENV MARIMOHUB_VERSION=$MARIMOHUB_VERSION \
     MARIMOHUB_IMAGE=$MARIMOHUB_IMAGE
-# Optionally bundle `uv` so the `local` compute backend can spawn marimo kernels
-# inside this container (used by examples/docker-compose). Off by default to keep
-# the production image lean. uv fetches Python + marimo on first kernel launch.
+# Local compute needs uv and Python 3.11+ for the setup step's tomllib parser.
+# Off by default to keep the production image lean; enabled by examples/docker-compose.
 ARG INSTALL_UV=false
 RUN if [ "$INSTALL_UV" = "true" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+      apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 \
       && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
       && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi
