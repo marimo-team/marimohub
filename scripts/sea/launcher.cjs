@@ -34,34 +34,59 @@ if (!cacheRoot) {
 	console.error('Cannot determine a cache directory; set MARIMOHUB_SEA_CACHE_DIR');
 	process.exit(1);
 }
-const payloadDir = path.join(cacheRoot, manifest.buildId);
-const readyMarker = path.join(payloadDir, '.ready');
 
 fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
 
-// Reject symlinks: an attacker in /tmp could plant one before the mkdir.
-const rootStat = fs.lstatSync(cacheRoot);
-if (rootStat.isSymbolicLink()) {
+// Reject a symlinked cacheRoot outright: in a sticky directory another user
+// could have planted it before the mkdir and can re-point it afterwards.
+if (fs.lstatSync(cacheRoot).isSymbolicLink()) {
 	console.error(`${cacheRoot} is a symlink; refusing to use it`);
 	process.exit(1);
 }
+
+// The unpacked bundle is executed, so every directory on the path to it must
+// be one that no other user can rename or replace: owned by the current user
+// or root, and not group/world-writable. Checking only cacheRoot is not
+// enough, because whoever can write an ancestor can swap cacheRoot for a
+// symlink to a prepared tree between this check and the import below. Sticky
+// ancestors such as /tmp are tolerated: there, only the owner of an entry can
+// rename or unlink it. The resolved path is checked, and used from here on, so
+// an ancestor symlink maintained by root (/home -> /var/home) is allowed while
+// the import path itself contains no symlink component.
+const resolvedRoot = fs.realpathSync(cacheRoot);
+const payloadDir = path.join(resolvedRoot, manifest.buildId);
+const readyMarker = path.join(payloadDir, '.ready');
+const rootStat = fs.lstatSync(resolvedRoot);
 if (uid !== null && rootStat.uid !== uid) {
 	console.error(`${cacheRoot} is not owned by the current user; set MARIMOHUB_SEA_CACHE_DIR`);
 	process.exit(1);
 }
-// Reject group/world-writable directories: another user could swap files
-// between the permission check and import.
-if (rootStat.mode & 0o022) {
-	console.error(
-		`${cacheRoot} is group or world-writable (mode ${(rootStat.mode & 0o777).toString(8)}); refusing to use it`,
-	);
-	process.exit(1);
+for (let dir = resolvedRoot; ; dir = path.dirname(dir)) {
+	const st = dir === resolvedRoot ? rootStat : fs.lstatSync(dir);
+	if (st.isSymbolicLink()) {
+		console.error(`${dir} is a symlink; refusing to use cache at ${cacheRoot}`);
+		process.exit(1);
+	}
+	if (uid !== null && st.uid !== uid && st.uid !== 0) {
+		console.error(
+			`${dir} is owned by uid ${st.uid}, not the current user or root; set MARIMOHUB_SEA_CACHE_DIR`,
+		);
+		process.exit(1);
+	}
+	const sticky = dir !== resolvedRoot && st.mode & 0o1000;
+	if (st.mode & 0o022 && !sticky) {
+		console.error(
+			`${dir} is group or world-writable (mode ${(st.mode & 0o777).toString(8)}); refusing to use cache at ${cacheRoot}`,
+		);
+		process.exit(1);
+	}
+	if (path.dirname(dir) === dir) break;
 }
 
 if (!fs.existsSync(readyMarker)) {
 	// Unpack into a sibling temp dir and rename so a crash mid-extract, or two
 	// instances starting at once, never leave a half-written payload behind.
-	const staging = fs.mkdtempSync(path.join(cacheRoot, 'unpack-'));
+	const staging = fs.mkdtempSync(path.join(resolvedRoot, 'unpack-'));
 	for (const file of manifest.files) {
 		const target = path.join(staging, file);
 		fs.mkdirSync(path.dirname(target), { recursive: true });

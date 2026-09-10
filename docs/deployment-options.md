@@ -42,16 +42,22 @@ attaches `marimohub-linux-x64`, a standalone server binary for x86-64 Linux
 hosts without Node. It reads the same `MARIMOHUB_*` variables. On first start it
 unpacks its bundled files to `$XDG_CACHE_HOME/marimohub-sea/<build-id>`
 (default `~/.cache/marimohub-sea/<build-id>`); set `MARIMOHUB_SEA_CACHE_DIR` to
-use a different directory. The unpacked files are executed, so keep that
-directory on a path other users cannot write to anywhere along it (not under
-`/tmp`).
+use a different directory. The unpacked files are executed, so the binary
+refuses a cache directory that is a symlink, not owned by the current user, or
+reachable through a directory another user can write to. Do not put it under
+`/tmp`: Node also resolves optional modules through every ancestor
+`node_modules` directory.
+
+The example below is a throwaway configuration that keeps all state in memory.
+For a real deployment use the durable variables from the `.env` above.
 
 ```bash
 curl -fsSLO https://github.com/marimo-team/marimohub/releases/latest/download/marimohub-linux-x64
 chmod +x marimohub-linux-x64
 
 export MARIMOHUB_STORAGE_BACKEND=memory
-export MARIMOHUB_COMPUTE_BACKEND=subprocess
+export MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true
+export MARIMOHUB_COMPUTE_BACKEND=none
 export MARIMOHUB_AUTH_BACKEND=dev
 ./marimohub-linux-x64
 ```
