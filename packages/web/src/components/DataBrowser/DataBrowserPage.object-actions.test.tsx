@@ -110,6 +110,8 @@ describe('DataBrowserPage object actions', () => {
 			([url, init]) => String(url).includes('/notebooks') && init?.method === 'POST',
 		);
 		const body = JSON.parse(String(post?.[1]?.body)) as { code: string };
+		expect(body.code).toContain('with app.setup:\n    import marimo as mo');
+		expect(body.code).toContain('@app.cell(hide_code=True)\ndef _():');
 		expect(body.code).toContain('# s3://lake/events.jsonl');
 		expect(body.code).toContain('    import polars as pl');
 	});

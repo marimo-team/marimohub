@@ -239,7 +239,7 @@ const notebookNameSchema = z.object({
 
 const NEW_NOTEBOOK_CODE = (name: string) => {
 	const heading = JSON.stringify(`# ${name}`);
-	return `import marimo\n\napp = marimo.App(width="medium", sql_output="native")\n\n\n@app.cell\ndef _():\n    import marimo as mo\n    return (mo,)\n\n\n@app.cell(hide_code=True)\ndef _(mo):\n    mo.md(${heading})\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
+	return `import marimo\n\napp = marimo.App(width="medium", sql_output="native")\n\n\nwith app.setup:\n    import marimo as mo\n\n\n@app.cell(hide_code=True)\ndef _():\n    mo.md(${heading})\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
 };
 
 function useProjectContent() {

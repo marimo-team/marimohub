@@ -239,7 +239,8 @@ describe('Project — Create Notebook', () => {
 			expect(post?.url).toContain(`/projects/${PID}/notebooks`);
 			expect(post?.body).toMatchObject({ title: 'Churn', description: 'Churn' });
 			const code = (post?.body as { code?: string } | undefined)?.code;
-			expect(code).toContain('import marimo');
+			expect(code).toContain('with app.setup:\n    import marimo as mo');
+			expect(code).toContain('@app.cell(hide_code=True)\ndef _():');
 			expect(code).toContain('marimo.App(width="medium", sql_output="native")');
 			expect(code).toContain('mo.md("# Churn")');
 		});
