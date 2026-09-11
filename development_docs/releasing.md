@@ -15,9 +15,11 @@ Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
 3. The tag push triggers [`release.yml`](../.github/workflows/release.yml),
    which publishes the container image and the Helm chart to GHCR, builds the
    cross-platform `mohub` binaries and binary-only wheels, and creates a GitHub
-   release whose changelog is generated from
-   the commits since the previous tag ([changelogithub](https://github.com/antfu/changelogithub),
-   so conventional-commit prefixes like `feat:`/`fix:` drive the grouping).
+   release whose changelog is generated from the commits since the last
+   published release ([changelogithub](https://github.com/antfu/changelogithub),
+   so conventional-commit prefixes like `feat:`/`fix:` drive the grouping). If
+   a tag's release never shipped, its commits roll into the next release's
+   notes.
 
 The x86-64 Linux build uses a glibc 2.28 image. Each native archive contains
 shell completions and man pages.

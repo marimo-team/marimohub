@@ -103,6 +103,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Match release.yml: notes start at the last published release.
+          FROM=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 \
+            --json tagName --jq '.[0].tagName // empty')
+          FROM_ARGS=()
+          if [[ -n "$FROM" && "$FROM" != "$RELEASE_TAG" ]]; then
+            FROM_ARGS=(--notes-start-tag "$FROM")
+          fi
           for attempt in 1 2 3 4; do
             scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
             if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -111,7 +118,7 @@ jobs:
             fi
             if gh release create "$RELEASE_TAG" \
               --verify-tag \
-              --generate-notes \
+              --generate-notes "${FROM_ARGS[@]}" \
               --title "$RELEASE_TAG"; then
               break
             fi
