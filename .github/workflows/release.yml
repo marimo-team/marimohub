@@ -3,10 +3,9 @@ name: Release
 # Triggered by a semver tag, normally pushed by release-tag.yml when a
 # "release: X.Y.Z" PR is merged (see development_docs/releasing.md).
 # This publishes the container image and Helm chart to GHCR, builds native CLI
-# archives and binary wheels plus a standalone Linux x64 server binary, and
-# creates a GitHub release with checksums, provenance, an SBOM, and a changelog
-# generated from commits since the prior tag. The chart version, appVersion,
-# and image tag are pinned to the git tag.
+# archives and binary wheels, and creates a GitHub release with checksums,
+# provenance, an SBOM, and a changelog generated from commits since the prior
+# tag. The chart version, appVersion, and image tag are pinned to the git tag.
 #   helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
 #     --version 1.4.2 -n marimohub -f values.yaml
 on:
@@ -189,46 +188,6 @@ jobs:
             apps/cli/target/distrib/*.sum
           if-no-files-found: error
 
-  server-binary:
-    name: Build server binary (linux-x64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          version: 0.1.24
-          node-version-file: '.node-version'
-          sfw: true
-          cache: true
-          run-install: |
-            - args: ['--frozen-lockfile']
-
-      - name: Build web and server
-        run: vp run --fail-if-no-match --filter @marimo-hub/web --filter @marimo-hub/server build
-
-      # A Node single-executable (SEA): the runner's `node` with the server
-      # bundle and SPA injected as assets. See scripts/build-sea.mjs.
-      - name: Build binary
-        run: node scripts/build-sea.mjs --no-build
-
-      - name: Smoke test
-        run: scripts/smoke-sea.sh apps/server/dist/sea/marimohub-linux-x64 "${GITHUB_REF_NAME#v}"
-
-      - name: Checksum
-        working-directory: apps/server/dist/sea
-        run: sha256sum marimohub-linux-x64 > marimohub-linux-x64.sha256
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: marimohub-linux-x64
-          path: |
-            apps/server/dist/sea/marimohub-linux-x64
-            apps/server/dist/sea/marimohub-linux-x64.sha256
-          if-no-files-found: error
-
   image:
     name: Build & push image
     runs-on: ubuntu-latest
@@ -386,40 +345,6 @@ jobs:
           scripts/retry.sh gh release upload "$GITHUB_REF_NAME"
           release-assets/* --clobber
 
-  publish-server-binary:
-    name: Attach server binary
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # The CLI job creates the release; this only adds one more asset to it.
-    needs: [server-binary, publish-cli-release]
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: marimohub-linux-x64
-          path: server-binary
-
-      - name: Verify checksum
-        working-directory: server-binary
-        run: sha256sum -c marimohub-linux-x64.sha256
-
-      - name: Attest server binary
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
-        with:
-          subject-path: server-binary/marimohub-linux-x64
-
-      - name: Attach server binary
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          scripts/retry.sh gh release upload "$GITHUB_REF_NAME"
-          server-binary/marimohub-linux-x64 server-binary/marimohub-linux-x64.sha256 --clobber
-
   cli-release-metadata:
     name: Publish CLI release metadata
     runs-on: ubuntu-latest
@@ -468,17 +393,7 @@ jobs:
     timeout-minutes: 5
     # Report the overall outcome once every release job has finished.
     needs:
-      [
-        cli,
-        cli-linux-x64,
-        cli-installers,
-        server-binary,
-        image,
-        chart,
-        publish-cli-release,
-        publish-server-binary,
-        cli-release-metadata,
-      ]
+      [cli, cli-linux-x64, cli-installers, image, chart, publish-cli-release, cli-release-metadata]
     if: always()
     steps:
       - name: Notify Slack - Release Success
