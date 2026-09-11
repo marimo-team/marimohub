@@ -128,10 +128,11 @@ jobs:
           dnf install -y python3-pip
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      # manylinux_2_28 ships curl 7.61, which predates --retry-all-errors (7.71).
       - name: Install dist
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors --retry-delay 2 \
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-delay 2 \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
       - name: Build archive
         shell: bash
