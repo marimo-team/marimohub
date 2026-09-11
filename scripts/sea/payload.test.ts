@@ -105,6 +105,19 @@ describe('SEA payload', () => {
 		expect(buildId()).not.toBe(before);
 	});
 
+	// Raw concatenation makes the boundary between a key and its contents
+	// invisible to the hash, so a single file can impersonate two.
+	it('frames keys and contents so one file cannot stand in for two', () => {
+		rmSync(inputs.serverDist, { recursive: true, force: true });
+		write(join(inputs.serverDist, 'a'), 'A');
+		write(join(inputs.serverDist, 'b'), 'B');
+		const twoFiles = buildId();
+
+		rmSync(inputs.serverDist, { recursive: true, force: true });
+		write(join(inputs.serverDist, 'a'), 'Adist/bB');
+		expect(buildId()).not.toBe(twoFiles);
+	});
+
 	// The launcher has no asset key of its own, so its bytes are hashed behind a
 	// literal. Without one it would run straight on from the last keyed asset,
 	// and these two payloads would produce the same byte stream.

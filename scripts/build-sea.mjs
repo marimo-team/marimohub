@@ -11,7 +11,8 @@
 // ship marimohub-linux-x64; other platforms are for local testing.
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { delimiter, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inject } from 'postject';
 import { collectPayload } from './sea/payload.mjs';
@@ -25,24 +26,26 @@ const outDir = join(serverDist, 'sea');
 const build = !process.argv.includes('--no-build');
 const nodeBinary = process.execPath;
 
-// The release runner installs vite-plus but no package manager, so workspace
-// binaries are reached through node_modules/.bin rather than `pnpm exec`.
-const binDir = join(repoRoot, 'node_modules/.bin');
-// `process.env` is case-insensitive on Windows but a spread copy of it is not,
-// so extend the key that is already there instead of adding a second one.
-const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
 const run = (cmd, args, opts = {}) => {
 	console.log(`$ ${cmd} ${args.join(' ')}`);
-	execFileSync(cmd, args, {
-		stdio: 'inherit',
-		cwd: repoRoot,
-		env: { ...process.env, [pathKey]: `${binDir}${delimiter}${process.env[pathKey]}` },
-		...opts,
-	});
+	execFileSync(cmd, args, { stdio: 'inherit', cwd: repoRoot, ...opts });
 };
 
 if (build) {
-	run('vp', ['run', '--filter', '@marimo-hub/web', '--filter', '@marimo-hub/server', 'build']);
+	// The release runner has vite-plus but no package manager, and on Windows a
+	// `node_modules/.bin` entry is a `.cmd` shim that execFileSync cannot spawn.
+	// vite-plus ships its bin as a plain Node script, so run that.
+	const vpPackage = createRequire(import.meta.url).resolve('vite-plus/package.json');
+	const vp = join(dirname(vpPackage), JSON.parse(readFileSync(vpPackage, 'utf8')).bin.vp);
+	run(nodeBinary, [
+		vp,
+		'run',
+		'--filter',
+		'@marimo-hub/web',
+		'--filter',
+		'@marimo-hub/server',
+		'build',
+	]);
 }
 for (const file of [join(serverDist, 'index.mjs'), join(webDist, 'index.html')]) {
 	if (!statSync(file, { throwIfNoEntry: false })?.isFile()) {

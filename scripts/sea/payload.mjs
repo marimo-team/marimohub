@@ -24,9 +24,18 @@ export const SHIM_ASSET = 'importShim.cjs';
 export function collectPayload({ serverDist, webDist, shim, launcher }) {
 	const assets = {};
 	const hash = createHash('sha256');
+	// Length-prefixed, so where one field ends and the next begins is never in
+	// doubt. Concatenating them raw lets different payloads hash alike without
+	// any SHA weakness: {a: 'A', b: 'B'} and {a: 'Adist/bB'} both produce
+	// `dist/aAdist/bB`, and the second would then run out of the first's cache.
+	const addField = (value) => {
+		const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+		hash.update(`${bytes.length}:`).update(bytes);
+	};
 	const addFile = (key, file) => {
 		assets[key] = file;
-		hash.update(key).update(readFileSync(file));
+		addField(key);
+		addField(readFileSync(file));
 	};
 	const addTree = (root, prefix) => {
 		for (const file of walk(root).sort()) {
@@ -38,6 +47,7 @@ export function collectPayload({ serverDist, webDist, shim, launcher }) {
 	addFile(SHIM_ASSET, shim);
 	// The launcher is the SEA main rather than an asset, so it has no key of its
 	// own; the literal keeps its bytes from colliding with a keyed entry.
-	hash.update('launcher').update(readFileSync(launcher));
+	addField('launcher');
+	addField(readFileSync(launcher));
 	return { assets, buildId: hash.digest('hex').slice(0, 16) };
 }
