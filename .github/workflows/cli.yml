@@ -35,6 +35,12 @@ jobs:
         run: |
           pnpm --filter @marimo-hub/api test cliManifest.spec
           pnpm cli:version-check
+      # Only the release workflow generates these, so a broken generator would
+      # otherwise surface mid-release.
+      - name: Generate shell completions and man pages
+        working-directory: apps/cli
+        run: cargo run --locked --example generate-assets -- generated
+
       - name: Validate distribution plan
         working-directory: apps/cli
         run: |

@@ -101,12 +101,74 @@ jobs:
       # The build task restores dist/ when its cache hits.
       - run: node scripts/check-bundle-size.mjs
 
+      # The release workflow only runs from a tag, so a broken SEA build or
+      # launcher would otherwise surface mid-release. Reuses the dist/ output
+      # the build step above produced.
+      - name: Build and smoke test the server binary
+        run: |
+          node scripts/build-sea.mjs --no-build
+          scripts/smoke-sea.sh apps/server/dist/sea/marimohub-linux-x64 \
+            "$(node -p 'require("./package.json").version')"
+
       - name: Save Vite Task cache
         if: success() && github.event_name == 'push'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: node_modules/.vite/task-cache
           key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
+
+  server-image:
+    name: Build server image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: 0.0.0-ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # The release workflow only builds this image from a tag, and it is the
+      # primary distribution, so build it here too. `load` keeps it on the
+      # runner for the boot check below; nothing is pushed.
+      - name: Build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: marimohub:ci
+          build-args: |
+            MARIMOHUB_VERSION=${{ env.VERSION }}
+          cache-from: type=gha
+          # Forks get a read-only token, so only same-repo runs may write the cache.
+          cache-to: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && 'type=gha,mode=max' || '' }}
+
+      - name: Boot and check
+        id: boot
+        run: |
+          docker run -d --name marimohub-ci -p 3000:3000 \
+            -e MARIMOHUB_STORAGE_BACKEND=memory \
+            -e MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true \
+            -e MARIMOHUB_COMPUTE_BACKEND=none \
+            -e MARIMOHUB_AUTH_BACKEND=dev \
+            marimohub:ci
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && break
+            docker inspect -f '{{.State.Running}}' marimohub-ci | grep -qx true \
+              || { echo '::error::container exited before becoming healthy'; exit 1; }
+            sleep 1
+          done
+          # The loop above can also fall through after 60 tries, so re-check.
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/v1/version | grep -F "\"$VERSION\""
+          curl -fsS http://127.0.0.1:3000/ | grep -F '<div id="root">'
+
+      - name: Container logs
+        if: failure() && steps.boot.outcome == 'failure'
+        run: docker logs marimohub-ci
 
   dependency-review:
     if: github.event_name == 'pull_request'

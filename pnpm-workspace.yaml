@@ -88,6 +88,7 @@ catalog:
   oxlint: 1.67.0
   pg: ^8.23.0
   pg-cursor: ^2.22.0
+  postject: 1.0.0-alpha.6
   react-aria-components: ^1.20.0
   react-doctor: 0.9.12
   simple-icons: ^16.27.0

@@ -36,6 +36,35 @@ MARIMOHUB_PERSIST_WORKSPACE=source
 - Everything is documented in [Configuration](./configuration.md).
 - Best for standard deployments (Docker, Podman, Kubernetes).
 
+The container image is the primary distribution. Each
+[GitHub release](https://github.com/marimo-team/marimohub/releases) also
+attaches `marimohub-linux-x64`, a standalone server binary for x86-64 Linux
+hosts without Node. It reads the same `MARIMOHUB_*` variables. On first start it
+unpacks its bundled files to `$XDG_CACHE_HOME/marimohub-sea/<build-id>`
+(default `~/.cache/marimohub-sea/<build-id>`); set `MARIMOHUB_SEA_CACHE_DIR` to
+use a different directory. The unpacked files are executed, so the binary
+refuses a cache directory that is a symlink, not owned by the current user, or
+reachable through a directory another user can write to, including sticky
+directories such as `/tmp`.
+
+Each release unpacks into its own `<build-id>` directory of roughly 75 MB, and
+earlier ones are left in place, because another instance may still be running
+from one. Delete the directories you no longer need after an upgrade.
+
+The example below is a throwaway configuration that keeps all state in memory.
+For a real deployment use the durable variables from the `.env` above.
+
+```bash
+curl -fsSLO https://github.com/marimo-team/marimohub/releases/latest/download/marimohub-linux-x64
+chmod +x marimohub-linux-x64
+
+export MARIMOHUB_STORAGE_BACKEND=memory
+export MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true
+export MARIMOHUB_COMPUTE_BACKEND=none
+export MARIMOHUB_AUTH_BACKEND=dev
+./marimohub-linux-x64
+```
+
 ## 2. SDK / library composition (the complex case)
 
 Import the adapters you want and construct `createApi(deps)` by hand. Use this

@@ -12,7 +12,7 @@
 		"ready": "vp fmt && vp lint && pnpm typecheck && vp run -r test && vp run -r build",
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",
-		"test": "vp test tools/oxlint/anti-slop/index.test.ts --silent=passed-only --hideSkippedTests && vp run -r test --configLoader=runner --pool=threads --silent=passed-only --hideSkippedTests",
+		"test": "vp test tools/oxlint/anti-slop/index.test.ts scripts/sea/launcher.test.ts scripts/sea/payload.test.ts --silent=passed-only --hideSkippedTests && vp run -r test --configLoader=runner --pool=threads --silent=passed-only --hideSkippedTests",
 		"test:release-scripts": "bash scripts/release-helpers.test.sh",
 		"test:external-adapter": "node --test examples/external-adapter/oidc-login-policy.test.mjs",
 		"test:coverage": "pnpm test:coverage:root && pnpm test:coverage:web",
@@ -25,6 +25,7 @@
 		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/api cli:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas && pnpm --filter @marimo-hub/client generate && pnpm --filter @marimo-hub/docs integrations:generate",
 		"build": "vp run -r build",
 		"cli:version-check": "node scripts/check-cli-version.mjs",
+		"build:sea": "node scripts/build-sea.mjs",
 		"release": "node scripts/release.mjs",
 		"prepare": "vp config"
 	},
@@ -32,6 +33,7 @@
 		"@oxlint/plugins": "catalog:",
 		"@vitest/coverage-v8": "catalog:",
 		"oxlint": "catalog:",
+		"postject": "catalog:",
 		"react-doctor": "catalog:",
 		"vite-plus": "catalog:"
 	},
