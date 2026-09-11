@@ -38,6 +38,8 @@ const assets = {
 	'public/index.html': '<div id="root"></div>',
 	[${JSON.stringify(SHIM)}]: ${JSON.stringify(SHIM_SOURCE)},
 };
+// Lets one test drive the launcher into a failing extract.
+if (process.env.SEA_STUB_MISSING_ASSET) manifest.files = [...manifest.files, 'absent'];
 const load = Module._load;
 Module._load = function (request, ...rest) {
 	if (request !== 'node:sea') return load.call(this, request, ...rest);
@@ -58,10 +60,10 @@ interface Run {
 	stderr: string;
 }
 
-const runLauncher = (cacheDir: string): Promise<Run> =>
+const runLauncher = (cacheDir: string, env: Record<string, string> = {}): Promise<Run> =>
 	new Promise((resolve, reject) => {
 		const child = spawn(process.execPath, ['-r', stub, launcher], {
-			env: { ...process.env, MARIMOHUB_SEA_CACHE_DIR: cacheDir },
+			env: { ...process.env, MARIMOHUB_SEA_CACHE_DIR: cacheDir, ...env },
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		let stdout = '';
@@ -151,6 +153,18 @@ describe.skipIf(process.platform === 'win32')('SEA launcher', () => {
 		expect(existsSync(join(payloadDir, '.ready'))).toBe(true);
 		expect(existsSync(join(payloadDir, 'leftover'))).toBe(false);
 		expect(existsSync(join(payloadDir, ENTRY))).toBe(true);
+	});
+
+	// A supervisor restarting a binary that cannot finish extracting would
+	// otherwise leave most of a payload behind under `unpack-*` every time.
+	it('leaves nothing behind when extraction fails', async () => {
+		const cache = freshCache('failed-extract');
+
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const run = await runLauncher(cache, { SEA_STUB_MISSING_ASSET: '1' });
+			expect(run.code).not.toBe(0);
+			expect(readdirSync(cache)).toEqual([]);
+		}
 	});
 
 	it('refuses a cache root that is a symlink', async () => {

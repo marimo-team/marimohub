@@ -8,7 +8,8 @@
 // intermediate blob/config). Always targets the host: the executable is a copy
 // of the running `node` with the SEA blob injected, and there is no
 // cross-building, so run this on the target OS and architecture. Releases only
-// ship marimohub-linux-x64; other platforms are for local testing.
+// ship marimohub-linux-x64; macOS is for local testing. Windows is refused
+// below.
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -16,6 +17,17 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inject } from 'postject';
 import { collectPayload } from './sea/payload.mjs';
+
+// The launcher guards the directory it unpacks executable code into with POSIX
+// ownership and mode bits. Windows only synthesises those: an ordinary
+// directory reports 0o777, so the binary refuses to start. Until that guard has
+// a Windows equivalent, do not produce an executable that cannot run.
+if (process.platform === 'win32') {
+	console.error(
+		'build-sea.mjs does not support Windows; see the cache checks in scripts/sea/launcher.cjs',
+	);
+	process.exit(1);
+}
 
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
@@ -92,10 +104,7 @@ writeFileSync(
 
 run(nodeBinary, ['--experimental-sea-config', seaConfig]);
 
-const exe = join(
-	outDir,
-	`marimohub-${process.platform}-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`,
-);
+const exe = join(outDir, `marimohub-${process.platform}-${process.arch}`);
 cpSync(nodeBinary, exe);
 if (process.platform === 'darwin') run('codesign', ['--remove-signature', exe]);
 

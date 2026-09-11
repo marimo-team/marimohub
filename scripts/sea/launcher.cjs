@@ -165,13 +165,20 @@ if (!fs.existsSync(readyMarker)) {
 	// Unpack into a sibling temp dir and rename so a crash mid-extract, or two
 	// instances starting at once, never leave a half-written payload behind.
 	const staging = fs.mkdtempSync(path.join(resolvedRoot, 'unpack-'));
-	for (const file of manifest.files) {
-		const target = path.join(staging, file);
-		fs.mkdirSync(path.dirname(target), { recursive: true });
-		fs.writeFileSync(target, Buffer.from(sea.getRawAsset(file)));
+	try {
+		for (const file of manifest.files) {
+			const target = path.join(staging, file);
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.writeFileSync(target, Buffer.from(sea.getRawAsset(file)));
+		}
+		fs.writeFileSync(path.join(staging, '.ready'), '');
+		installPayload(staging);
+	} finally {
+		// A failed extract (a full disk, say) would otherwise leave most of a
+		// payload behind on every restart. After a successful install the
+		// directory has been renamed away, so this is a no-op.
+		fs.rmSync(staging, { recursive: true, force: true });
 	}
-	fs.writeFileSync(path.join(staging, '.ready'), '');
-	installPayload(staging);
 }
 
 process.env.MARIMOHUB_STATIC_ROOT ??= path.join(payloadDir, 'public');
