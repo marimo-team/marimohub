@@ -69,7 +69,7 @@ describe('NotebookPage viewer modes', () => {
 		expect(screen.getByTitle('Forecast in VS Code')).toBe(vscodeFrame);
 		expect(vscodeFrame.parentElement).toBe(vscodePanel);
 		expect(screen.getByTitle('Forecast')).toBe(notebookFrame);
-		expect(notebookFrame.parentElement).toBe(notebookPanel);
+		expect(notebookFrame.closest('[role="tabpanel"]')).toBe(notebookPanel);
 		expect(vscodePanel).toHaveAttribute('inert');
 		expect(opencodeFrame.closest('[role="tabpanel"]')).not.toHaveAttribute('inert');
 		expect(screen.getByRole('separator', { name: 'Resize split view' })).toBeInTheDocument();

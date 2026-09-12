@@ -54,6 +54,7 @@ import { canManageProject } from '@/lib/roles';
 import { SurfaceMenu } from './SurfaceMenu';
 import type { SecondarySurfaceFrame } from './SurfaceMenu';
 import { ShareMenu } from './ShareMenu';
+import { NotebookFrame } from './NotebookFrame';
 
 const SURFACE_TAB_ICONS = {
 	vscode: Code2,
@@ -312,15 +313,7 @@ function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }
 				id: 'notebook',
 				label: 'Notebook',
 				icon: <FileCode2 />,
-				panel: (
-					<iframe
-						className="size-full border-0"
-						src={iframeSrc}
-						sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-						allow="clipboard-read; clipboard-write"
-						title={title}
-					/>
-				),
+				panel: <NotebookFrame src={iframeSrc} title={title} />,
 				...(iframeSrc ? { browserUrl: iframeSrc } : {}),
 			},
 			...activeSecondaryFrames.map((frame) => {

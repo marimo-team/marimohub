@@ -1335,7 +1335,7 @@ export async function startNotebookSession(input: {
 	await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
 
 	const sandboxId = createSandboxId();
-	const kernelAuthToken = createKernelAuthToken();
+	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
 	const restoreFilesystemSnapshot =
 		!ephemeral && workspacePolicy.restoreFilesystemSnapshot

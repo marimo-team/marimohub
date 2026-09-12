@@ -81,7 +81,7 @@ describe('MCP OAuth app', () => {
 			mcp: { publicBaseUrl: 'https://hub.example.com' },
 			compute,
 		});
-		deps.sandbox = { ...deps.sandbox, hostname: 'sandboxes.example.com' };
+		deps.sandbox = { ...deps.sandbox, hostname: 'sandboxes.example.com', auth: 'on' };
 		deps.authenticator = {
 			authenticate: async (request) => {
 				const token = bearerToken(request);

@@ -29,6 +29,14 @@ describe('SubdomainExposure', () => {
 		expect(result.originUrl).toBeUndefined();
 	});
 
+	it('omits authentication when no kernel token is configured', async () => {
+		const result = await exposure.finalize(
+			'https://sandbox.example.net/open?provider=one#notebook',
+			{ ...ctx, kernelAuthToken: undefined },
+		);
+		expect(result.clientUrl).toBe('https://sandbox.example.net/open?provider=one#notebook');
+	});
+
 	it('preserves provider query parameters and fragments', async () => {
 		const result = await exposure.finalize(
 			'https://sandbox.example.net/open?provider=one&provider=two&empty=#notebook',
@@ -39,15 +47,21 @@ describe('SubdomainExposure', () => {
 		);
 	});
 
-	it.each([
-		'https://sandbox.example.net/?access_token=provider-credential',
-		'https://sandbox.example.net/?access_token=',
-		'https://sandbox.example.net/?%61ccess_token=provider-credential',
-	])('rejects an adapter URL containing the reserved token parameter: %s', async (url) => {
-		await expect(exposure.finalize(url, ctx)).rejects.toThrow(
-			'Sandbox exposure URL contains reserved access_token query parameter',
-		);
-	});
+	describe.each([TEST_KERNEL_AUTH_TOKEN, undefined])(
+		'reserved URL tokens (kernel auth %s)',
+		(kernelAuthToken) => {
+			it.each([
+				'https://sandbox.example.net/?access_token=provider-credential',
+				'https://sandbox.example.net/?access_token=',
+				'https://sandbox.example.net/?%61ccess_token=provider-credential',
+				'https://sandbox.example.net/?access_token=one&access_token=two',
+			])('rejects the reserved parameter: %s', async (url) => {
+				await expect(exposure.finalize(url, { ...ctx, kernelAuthToken })).rejects.toThrow(
+					'Sandbox exposure URL contains reserved access_token query parameter',
+				);
+			});
+		},
+	);
 });
 
 describe('ProxyExposure', () => {

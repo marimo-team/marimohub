@@ -222,9 +222,9 @@ Under the default `MARIMOHUB_VIEWER_MODE=static`, viewers cannot start, open,
 or reach an app: session create, heartbeat, and stop require editor+, the
 proxy re-authorizes every HTTP request (WebSockets at each upgrade — an
 established socket lives until it closes) in `proxy` exposure. In `subdomain`
-exposure, the kernel URL contains marimo's per-session access token. The session
-read projections (list/get) withhold `sandbox_url` from callers the kernel gates
-would reject.
+exposure, [native kernel authentication](../docs/security.md#native-kernel-authentication)
+is optional (`MARIMOHUB_SANDBOX_AUTH=on`, default `off`). Session read projections
+(list/get) withhold `sandbox_url` from callers the kernel gates would reject.
 The UI says so rather than dangling an unopenable indicator. The reason is
 credential exposure: app sandboxes keep WIF credentials and integration
 secrets injected (apps commonly exist to query project data), and `marimo run`

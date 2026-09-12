@@ -148,6 +148,8 @@ export interface SandboxConfig {
 	 * routing-token signing secret, so no separate secret field is needed.
 	 */
 	exposure?: SandboxExposure;
+	/** Native marimo token authentication for new sessions. Defaults to off. */
+	auth?: 'on' | 'off';
 	/**
 	 * Public URL for browser links (MARIMOHUB_APP_BASE_URL). Can include a path prefix.
 	 * Falls back to the request origin when unset.

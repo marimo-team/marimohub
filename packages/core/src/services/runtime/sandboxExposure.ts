@@ -22,8 +22,8 @@ export function kernelBasePathFromUrl(sandboxUrl?: string): string {
 
 /**
  * `subdomain` (default) — the browser reaches the kernel directly on its isolated
- * domain. The adapter URL carries marimo's access token. There is no proxying or
- * marimo base path.
+ * domain. When auth is enabled, the adapter URL carries marimo's access token.
+ * There is no proxying or marimo base path.
  */
 export class SubdomainExposure implements SandboxExposure {
 	readonly mode = 'subdomain' as const;
@@ -37,7 +37,9 @@ export class SubdomainExposure implements SandboxExposure {
 		if (url.searchParams.has('access_token')) {
 			throw new Error('Sandbox exposure URL contains reserved access_token query parameter');
 		}
-		url.searchParams.set('access_token', ctx.kernelAuthToken);
+		if (ctx.kernelAuthToken !== undefined) {
+			url.searchParams.set('access_token', ctx.kernelAuthToken);
+		}
 		return { clientUrl: url.toString() };
 	}
 }

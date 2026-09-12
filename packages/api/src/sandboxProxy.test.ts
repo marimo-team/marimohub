@@ -843,44 +843,49 @@ describe('forwardHttp', () => {
 });
 
 describe('create-session in proxy mode', () => {
-	it('returns a /proxy/<token>/ client URL and persists the origin off-response', async () => {
-		const bucket = await createInitializedBucket();
-		const services = createServices(bucket);
-		const project = await services.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
-		const pid = project.id as ProjectId;
-		const notebook = await services.notebooks.createNotebook(
-			pid,
-			{ title: 'NB', description: 'd', code: 'import marimo as mo' },
-			ACTOR,
-		);
+	it.each(['on', 'off'] as const)(
+		'auth %s: returns a proxy URL and persists the origin off-response',
+		async (auth) => {
+			const bucket = await createInitializedBucket();
+			const services = createServices(bucket);
+			const project = await services.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const pid = project.id as ProjectId;
+			const notebook = await services.notebooks.createNotebook(
+				pid,
+				{ title: 'NB', description: 'd', code: 'import marimo as mo' },
+				ACTOR,
+			);
 
-		const deps = makeTestDeps(bucket, {
-			authenticator: authAs(ACTOR),
-			compute: makeFakeCompute(),
-			sandbox: {
-				bucket: { name: 'test', endpoint: '' },
-				hostname: 'localhost',
-				workdir: '/workspace',
-				persistWorkspace: 'source',
-				exposure: new ProxyExposure(SECRET),
-				appBaseUrl: 'https://hub.example.com/marimohub',
-			},
-		});
-		const app = createApi(deps);
+			const deps = makeTestDeps(bucket, {
+				authenticator: authAs(ACTOR),
+				compute: makeFakeCompute(),
+				sandbox: {
+					auth,
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					exposure: new ProxyExposure(SECRET),
+					appBaseUrl: 'https://hub.example.com/marimohub',
+				},
+			});
+			const app = createApi(deps);
 
-		const res = await app.request(`/api/v1/projects/${pid}/notebooks/${notebook.id}/sessions`, {
-			method: 'POST',
-		});
-		expect(res.status).toBe(200);
-		const { data } = (await res.json()) as { data: { session_id: string; sandbox_url: string } };
+			const res = await app.request(`/api/v1/projects/${pid}/notebooks/${notebook.id}/sessions`, {
+				method: 'POST',
+			});
+			expect(res.status).toBe(200);
+			const { data } = (await res.json()) as { data: { session_id: string; sandbox_url: string } };
 
-		const token = await signProxyToken(pid, data.session_id as never, SECRET);
-		expect(data.sandbox_url).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);
-		// The server-reachable origin is persisted on the record but never in the response.
-		expect(data).not.toHaveProperty('sandbox_origin_url');
-		expect(data).not.toHaveProperty('kernel_auth_token');
-		const stored = await services.sessions.getSession(pid, data.session_id as never);
-		expect(stored.sandbox_origin_url).toBe('https://sandbox.example/kernel');
-		expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
-	});
+			const token = await signProxyToken(pid, data.session_id as never, SECRET);
+			expect(data.sandbox_url).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);
+			// The server-reachable origin is persisted on the record but never in the response.
+			expect(data).not.toHaveProperty('sandbox_origin_url');
+			expect(data).not.toHaveProperty('kernel_auth_token');
+			const stored = await services.sessions.getSession(pid, data.session_id as never);
+			expect(stored.sandbox_origin_url).toBe('https://sandbox.example/kernel');
+			if (auth === 'on') expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
+			else expect(stored.kernel_auth_token).toBeUndefined();
+		},
+	);
 });

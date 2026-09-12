@@ -699,6 +699,9 @@ export function createFromEnv(
 			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
 			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
 			exposure,
+			auth: parseEnumOr(env, 'MARIMOHUB_SANDBOX_AUTH', ['on', 'off'] as const, 'off', {
+				docs: 'docs/security.md',
+			}),
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),
 			sessionLifetime,

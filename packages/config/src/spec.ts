@@ -960,6 +960,24 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'Sandbox authentication',
+		backends: [
+			{
+				name: 'Native kernel authentication',
+				vars: [
+					{
+						id: 'MARIMOHUB_SANDBOX_AUTH',
+						name: 'Sandbox authentication',
+						description:
+							'Enable native marimo token authentication for new editor and app sessions: `on` or `off`. See [Native kernel authentication](./security.md#native-kernel-authentication) for deployment requirements.',
+						default: 'off',
+						example: 'on',
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Sandbox exposure',
 		selector: 'MARIMOHUB_SANDBOX_EXPOSURE',
 		selectorDefault: 'subdomain',
