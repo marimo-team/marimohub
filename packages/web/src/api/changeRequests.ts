@@ -94,49 +94,54 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 			requestAttempt.inFlight += 1;
 			requestAttempt.lastUsedAt = now;
 			requestAttempt.settledAt = undefined;
-			try {
-				const data = await apiData(
-					apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests', {
-						params: {
-							path: { pid: projectId, nid: notebookId, sid: sessionId },
-							header: { 'idempotency-key': requestAttempt.idempotencyKey },
-						},
-						body: {
-							...(title ? { title } : {}),
-							...(targetProposalId ? { target_proposal_id: targetProposalId } : {}),
-						},
-						timeout: 120_000,
-					}),
-				);
-				if (currentScope.current === scope && attempts.current.get(attemptKey) === requestAttempt) {
-					requestAttempt.discardWhenSettled = true;
-					setPublished({ scope, value: data });
-				}
-				return data;
-			} catch (error) {
-				if (
-					attempts.current.get(attemptKey) === requestAttempt &&
-					isApiErrorCode(error, 'PROPOSAL_RETRY_REQUIRED')
-				) {
-					requestAttempt.discardWhenSettled = true;
-				}
-				throw error;
-			} finally {
-				requestAttempt.inFlight -= 1;
-				if (requestAttempt.inFlight === 0) {
+			return apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests', {
+					params: {
+						path: { pid: projectId, nid: notebookId, sid: sessionId },
+						header: { 'idempotency-key': requestAttempt.idempotencyKey },
+					},
+					body: {
+						...(title ? { title } : {}),
+						...(targetProposalId ? { target_proposal_id: targetProposalId } : {}),
+					},
+					timeout: 120_000,
+				}),
+			)
+				.then((data) => {
 					if (
-						requestAttempt.discardWhenSettled &&
+						currentScope.current === scope &&
 						attempts.current.get(attemptKey) === requestAttempt
 					) {
-						attempts.current.delete(attemptKey);
-					} else {
-						const settledAt = Date.now();
-						requestAttempt.lastUsedAt = settledAt;
-						requestAttempt.settledAt = settledAt;
-						prunePublishAttempts(attempts.current, settledAt);
+						requestAttempt.discardWhenSettled = true;
+						setPublished({ scope, value: data });
 					}
-				}
-			}
+					return data;
+				})
+				.catch((error: unknown) => {
+					if (
+						attempts.current.get(attemptKey) === requestAttempt &&
+						isApiErrorCode(error, 'PROPOSAL_RETRY_REQUIRED')
+					) {
+						requestAttempt.discardWhenSettled = true;
+					}
+					throw error;
+				})
+				.finally(() => {
+					requestAttempt.inFlight -= 1;
+					if (requestAttempt.inFlight === 0) {
+						if (
+							requestAttempt.discardWhenSettled &&
+							attempts.current.get(attemptKey) === requestAttempt
+						) {
+							attempts.current.delete(attemptKey);
+						} else {
+							const settledAt = Date.now();
+							requestAttempt.lastUsedAt = settledAt;
+							requestAttempt.settledAt = settledAt;
+							prunePublishAttempts(attempts.current, settledAt);
+						}
+					}
+				});
 		},
 		onMutate: () => {
 			setMutationScope(scope);

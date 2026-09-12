@@ -16,6 +16,14 @@ import {
 	MAX_TEXT_EDITOR_BYTES,
 } from './workspacePreview';
 
+function loadEditorRuntime() {
+	return Promise.all([
+		import('codemirror'),
+		import('@codemirror/state'),
+		import('@codemirror/view'),
+	]);
+}
+
 function CodeEditor({
 	value,
 	readOnly,
@@ -28,7 +36,7 @@ function CodeEditor({
 	onSave: () => void;
 }) {
 	const host = useRef<HTMLDivElement>(null);
-	const initialValue = useRef(value).current;
+	const [initialValue] = useState(value);
 	const saveRef = useRef(onSave);
 	const changeRef = useRef(onChange);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -41,11 +49,7 @@ function CodeEditor({
 		if (!host.current) return;
 		let cancelled = false;
 		let view: EditorView | undefined;
-		void Promise.all([
-			import('codemirror'),
-			import('@codemirror/state'),
-			import('@codemirror/view'),
-		])
+		void loadEditorRuntime()
 			.then(([{ basicSetup }, { EditorState }, { EditorView, keymap }]) => {
 				if (cancelled || !host.current) return;
 				view = new EditorView({
@@ -199,9 +203,8 @@ function FilePreviewContent({
 			toast.success(`Saved ${item.name}`);
 		} catch {
 			// The finder store owns adapter error reporting.
-		} finally {
-			setSaving(false);
 		}
+		setSaving(false);
 	};
 
 	if (textLike && blob.size <= MAX_TEXT_EDITOR_BYTES && !textError && text !== null) {

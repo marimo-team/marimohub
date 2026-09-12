@@ -380,11 +380,17 @@ function SecretField({
 	const reference = referenceSecret(value);
 	const [initialManaged] = useState(() => isKeepMarker(value));
 	const lastInline = useRef<unknown>(isKeepMarker(value) || typeof value === 'string' ? value : '');
-	const lastReference = useRef(reference);
+	const [lastReference, setLastReference] = useState(reference);
+	if (
+		reference !== undefined &&
+		(reference.$secret.backend !== lastReference?.$secret.backend ||
+			reference.$secret.locator !== lastReference?.$secret.locator)
+	) {
+		setLastReference(reference);
+	}
 	useEffect(() => {
-		if (reference) lastReference.current = reference;
-		else if (isKeepMarker(value) || typeof value === 'string') lastInline.current = value;
-	}, [reference, value]);
+		if (isKeepMarker(value) || typeof value === 'string') lastInline.current = value;
+	}, [value]);
 	const options = [
 		...(secretSources.inline ? ['inline'] : []),
 		...(secretSources.references.length > 0 ? ['reference'] : []),
@@ -402,7 +408,7 @@ function SecretField({
 	const selected = usesReference ? 'reference' : 'inline';
 	const externalValue =
 		reference ??
-		lastReference.current ??
+		lastReference ??
 		({
 			$secret: {
 				kind: 'reference',

@@ -442,10 +442,11 @@ export function ApplicationTabs({
 			await onClose(closingTab);
 			setCloseKey(undefined);
 		} catch (error) {
-			onCloseError?.(error, closingTab);
-		} finally {
 			setIsClosePending(false);
+			onCloseError?.(error, closingTab);
+			return;
 		}
+		setIsClosePending(false);
 	};
 
 	return (

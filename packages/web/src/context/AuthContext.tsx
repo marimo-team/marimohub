@@ -37,13 +37,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				: withBasePath(`/api/auth/login?redirect_url=${encodeURIComponent(returnTo)}`);
 	}, []);
 
+	const logoutUrl = user?.logout_url;
 	const signOut = useCallback(() => {
-		if (user?.logout_url) {
-			window.location.href = withBasePath(user.logout_url);
+		if (logoutUrl) {
+			window.location.href = withBasePath(logoutUrl);
 		} else {
 			queryClient.setQueryData(userKeys.me(), null);
 		}
-	}, [user?.logout_url, queryClient]);
+	}, [logoutUrl, queryClient]);
 
 	const refetchUser = useCallback(() => {
 		void queryClient.invalidateQueries({ queryKey: userKeys.me() });

@@ -279,6 +279,33 @@ describe('ApplicationTabs', () => {
 		expect(open).toHaveBeenCalledWith('https://notebook.example/', '_blank', 'noopener,noreferrer');
 	});
 
+	it('keeps the close dialog open and allows retrying after a failure', async () => {
+		const user = userEvent.setup();
+		const error = new Error('Close failed');
+		const onClose = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
+		const onCloseError = vi.fn();
+		render(
+			<ApplicationTabs
+				ariaLabel="Workspace applications"
+				tabs={applicationTabs()}
+				onClose={onClose}
+				onCloseError={onCloseError}
+			/>,
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Close VS Code' }));
+		await user.click(screen.getByRole('button', { name: 'Close VS Code' }));
+
+		expect(onCloseError).toHaveBeenCalledWith(error, expect.objectContaining({ id: 'vscode' }));
+		expect(screen.getByRole('dialog')).toBeVisible();
+		expect(screen.getByRole('button', { name: 'Close VS Code' })).toBeEnabled();
+		expect(screen.queryByText('Closing VS Code...')).toBeNull();
+
+		await user.click(screen.getByRole('button', { name: 'Close VS Code' }));
+		expect(onClose).toHaveBeenCalledTimes(2);
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+	});
+
 	it('confirms and awaits a close before dismissing the dialog', async () => {
 		const user = userEvent.setup();
 		let finishClose!: () => void;
