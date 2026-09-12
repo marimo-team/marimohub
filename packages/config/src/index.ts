@@ -82,6 +82,7 @@ import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseOnOff, parseSecondsEnv } from './env';
 import type { Env } from './env';
+import { parseSandboxAuth } from './sandboxAuth';
 import { ConfigError } from './errors';
 import { checkSandboxHostIsolation } from './hostIsolation';
 import { buildPreflightChecks } from './preflightChecks';
@@ -699,9 +700,7 @@ export function createFromEnv(
 			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
 			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
 			exposure,
-			auth: parseEnumOr(env, 'MARIMOHUB_SANDBOX_AUTH', ['on', 'off'] as const, 'off', {
-				docs: 'docs/security.md',
-			}),
+			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),
 			sessionLifetime,

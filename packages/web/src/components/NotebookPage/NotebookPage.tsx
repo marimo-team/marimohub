@@ -879,13 +879,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						aria-hidden={takeover.isPending || undefined}
 					>
 						{isApp ? (
-							<iframe
-								className="size-full border-0"
-								src={iframeSrc}
-								sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-								allow="clipboard-read; clipboard-write"
-								title={title}
-							/>
+							<NotebookFrame src={iframeSrc} title={title} />
 						) : (
 							<ApplicationTabs
 								ariaLabel="Notebook applications"

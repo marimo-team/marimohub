@@ -52,6 +52,41 @@ describe('Cloudflare Worker configuration', () => {
 		SANDBOX: {},
 	};
 
+	it.each([
+		[undefined, 'off'],
+		['', 'off'],
+		[' \t\n', 'off'],
+		['off', 'off'],
+		[' OFF ', 'off'],
+		['on', 'on'],
+		[' ON ', 'on'],
+	])('parses sandbox authentication %j as %s', (raw, expected) => {
+		const deps = buildDeps(new Request('https://hub.example.com'), {
+			...baseEnv,
+			MARIMOHUB_SANDBOX_AUTH: raw,
+		} as unknown as Env);
+		expect(deps.sandbox.auth).toBe(expected);
+	});
+
+	it.each(['true', 'false', 'none', 'partitioned'])(
+		'rejects invalid sandbox authentication %s at the request boundary',
+		async (raw) => {
+			const response = await worker.fetch(
+				new Request('https://hub.example.com/api/v1/capabilities'),
+				{ ...baseEnv, MARIMOHUB_SANDBOX_AUTH: raw } as unknown as Env,
+				{ waitUntil: vi.fn() } as unknown as ExecutionContext,
+			);
+			expect(response.status).toBe(500);
+			expect(await response.json()).toMatchObject({
+				success: false,
+				error: {
+					code: 'CONFIG_ERROR',
+					message: `Invalid MARIMOHUB_SANDBOX_AUTH: ${raw} (expected on, off)`,
+				},
+			});
+		},
+	);
+
 	it('parses MARIMOHUB_SUPER_ADMINS into a trimmed list, dropping empties', () => {
 		const deps = buildDeps(new Request('https://hub.example.com'), {
 			...baseEnv,

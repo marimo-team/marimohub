@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { sessionKeys } from '@/api/queryKeys';
 import {
@@ -20,6 +20,32 @@ async function chooseSurfaceAction(
 }
 
 describe('NotebookPage viewer modes', () => {
+	it.each(['edit', 'app'] as const)('offers recovery for the %s kernel', async (variant) => {
+		const setTimeout = globalThis.setTimeout;
+		vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) =>
+			setTimeout(callback, delay === 15_000 ? 0 : delay, ...args),
+		);
+		makeFetch({
+			role: 'editor',
+			session: runningSession({
+				mode: variant,
+				sandbox_url: 'https://sandbox.example/kernel?access_token=kernel-secret#notebook',
+			}),
+		});
+		const { unmount } = renderPage(variant);
+		try {
+			const iframe = await screen.findByTitle('Forecast');
+			fireEvent.load(iframe);
+			const link = await screen.findByRole('link', { name: 'Open in new window' });
+			expect(link).toHaveAttribute('href', iframe.getAttribute('src'));
+			expect(link).toHaveAttribute('href', expect.stringContaining('access_token=kernel-secret'));
+			fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+			expect(screen.getByTitle('Forecast')).not.toBe(iframe);
+		} finally {
+			unmount();
+		}
+	});
+
 	it('opens and stops the configured VS Code iframe for an authorized editor', async () => {
 		const user = userEvent.setup();
 		makeFetch({

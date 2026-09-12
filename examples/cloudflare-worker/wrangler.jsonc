@@ -14,6 +14,7 @@
 		"R2_BUCKET_NAME": "orgname-marimohub",
 		"R2_S3_ENDPOINT": "",
 		"SANDBOX_HOSTNAME": "",
+		"MARIMOHUB_SANDBOX_AUTH": "off",
 	},
 	// Serve the prebuilt SPA (built by `pnpm --filter @marimo-hub/web build`).
 	"assets": {

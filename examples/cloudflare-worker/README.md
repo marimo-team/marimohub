@@ -18,6 +18,12 @@ npx wrangler deploy                          # or: npx wrangler dev
   `assets.directory` → `../../packages/web/dist`.
 - `sandbox.Dockerfile` — the marimo kernel sandbox image (`cloudflare/sandbox` base).
 
+Set `MARIMOHUB_SANDBOX_AUTH` to `on` in `wrangler.jsonc` to enable native marimo
+authentication for new editor and app sessions. The default is `off`. Existing
+sessions keep their mode until stopped and restarted. See
+[Native kernel authentication](../../docs/security.md#native-kernel-authentication)
+for ingress requirements and cross-site cookie restrictions.
+
 ## Optional: E2B for compute
 
 Compute is a pluggable port — you can run kernels on [E2B](https://e2b.dev)
