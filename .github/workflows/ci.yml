@@ -14,7 +14,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
+  test-suites:
+    name: test (${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [backend, web]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -34,21 +39,31 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: node_modules/.vite/task-cache
-          key: vite-task-test-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vite-task-test-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vite-task-test-${{ runner.os }}-${{ runner.arch }}-
+            vite-task-test-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-
 
       # Keep the package graph sequential so child processes cannot exhaust the
       # runner's process limit under a cold cache.
-      - name: Test
-        run: vp run -r --concurrency-limit 1 test --configLoader=runner --pool=threads
+      # Vitest's result cache is ephemeral on runners; only Vite Task results are restored.
+      - name: Test backend
+        if: matrix.suite == 'backend'
+        run: |
+          vp run test:root --configLoader=runner --pool=threads --no-cache
+          vp run --filter '@marimo-hub/*' --filter '!@marimo-hub/web' --concurrency-limit 1 test --configLoader=runner --pool=threads --no-cache
+
+      - name: Test web
+        if: matrix.suite == 'web'
+        run: vp run --filter @marimo-hub/web test --configLoader=runner --pool=threads --no-cache
 
       - name: Test Fargate Python agent
+        if: matrix.suite == 'backend'
         run: |
           python3 --version
           vp run --filter @marimo-hub/compute-fargate test:agent
 
       - name: Test external adapter example
+        if: matrix.suite == 'backend'
         run: vp run test:external-adapter
 
       - name: Save Vite Task cache
@@ -57,6 +72,16 @@ jobs:
         with:
           path: node_modules/.vite/task-cache
           key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
+
+  # Preserve the required check name while requiring both suites to pass.
+  test:
+    needs: test-suites
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.test-suites.result }}
 
   verify:
     runs-on: ubuntu-latest

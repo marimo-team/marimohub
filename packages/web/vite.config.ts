@@ -5,6 +5,14 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 import { devApiTarget, envPort } from './devProxy';
 
+// Opt in only files whose imports do not require browser globals.
+const nodeTests = [
+	'src/devProxy.test.ts',
+	'src/lib/{integrationBrowse,integrationNotebook,jobs,sessions,search,roles,git,time,listFilters}.test.ts',
+	'src/components/WorkspaceBrowser/{workspacePreview,workspacePolicy}.test.ts',
+	'src/components/form/schema-form/model.test.ts',
+];
+
 const webPort = envPort(process.env.WEB_PORT, 5175);
 
 // React SPA. The Cloudflare vite-plugin is intentionally absent — the SPA is a
@@ -50,13 +58,28 @@ export default defineConfig({
 			build: { command: 'vp build', output: ['dist/**'] },
 		},
 	},
-	// jsdom environment so component/hook tests can render; the pure-logic tests
-	// (lib/*) run fine here too. `setup.ts` wires jest-dom matchers + auto-cleanup.
 	test: {
-		environment: 'jsdom',
 		pool: 'threads',
-		setupFiles: ['./src/test/setup.ts'],
-		include: ['src/**/*.test.{ts,tsx}'],
+		projects: [
+			{
+				extends: true,
+				test: {
+					name: 'node',
+					environment: 'node',
+					include: nodeTests,
+				},
+			},
+			{
+				extends: true,
+				test: {
+					name: 'dom',
+					environment: 'jsdom',
+					setupFiles: ['./src/test/setup.ts'],
+					include: ['src/**/*.test.{ts,tsx}'],
+					exclude: nodeTests,
+				},
+			},
+		],
 		// The root config excludes this package from its coverage run (the `@/`
 		// aliases only resolve under this config), so the settings live here.
 		coverage: {
