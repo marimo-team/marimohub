@@ -805,6 +805,24 @@ describe('createFromEnv sandbox exposure mode', () => {
 		MARIMOHUB_AUTH_BACKEND: 'dev',
 	};
 
+	it.each([undefined, '', ' \t\n', 'off', ' OFF '])(
+		'defaults or disables native kernel auth with %s',
+		(value) => {
+			expect(createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_AUTH: value }).sandbox.auth).toBe('off');
+		},
+	);
+	it.each(['on', ' ON '])('enables native kernel auth with %s', (value) => {
+		expect(createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_AUTH: value }).sandbox.auth).toBe('on');
+	});
+	it.each(['true', 'false', 'none', 'partitioned'])(
+		'rejects invalid sandbox auth policy %s',
+		(value) => {
+			expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_AUTH: value })).toThrow(
+				/MARIMOHUB_SANDBOX_AUTH/,
+			);
+		},
+	);
+
 	it('defaults to subdomain mode when unset', () => {
 		const deps = createFromEnv({ ...baseEnv });
 		expect(deps.sandbox.exposure?.mode).toBe('subdomain');

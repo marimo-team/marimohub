@@ -5,6 +5,7 @@ declare global {
 		MARIMOHUB_EDITOR_SANDBOX_SHARING?: 'shared' | 'exclusive';
 		// Notebook jobs are off unless `on` (see docs/jobs.md).
 		MARIMOHUB_JOBS?: 'on' | 'off';
+		MARIMOHUB_SANDBOX_AUTH?: string;
 		NOTEBOOKS_BUCKET: R2Bucket;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		SANDBOX: DurableObjectNamespace<Sandbox<any>>;

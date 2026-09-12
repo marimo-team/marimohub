@@ -291,6 +291,14 @@ No compute (alias `noop`): notebooks are browsable but provisioning a kernel fai
 
 _No environment variables to set here._
 
+## Sandbox authentication
+
+### Native kernel authentication
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SANDBOX_AUTH` | Enable native marimo token authentication for new editor and app sessions: `on` or `off`. See [Native kernel authentication](./security.md#native-kernel-authentication) for deployment requirements. | — | `off` | `on` |
+
 ## Sandbox exposure
 
 Selected by `MARIMOHUB_SANDBOX_EXPOSURE` (default `subdomain`); one of `subdomain`, `proxy`.

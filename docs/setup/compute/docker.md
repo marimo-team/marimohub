@@ -23,8 +23,8 @@ so kernel traffic goes through the hub's authentication and per-session
 authorization.
 
 ::: danger Direct kernel exposure
-Kernels use a per-session bearer token, but their URLs carry that token during
-login. If you deliberately publish them directly on a trusted, isolated network,
+[Native kernel authentication](/security#native-kernel-authentication) is off by default.
+For direct access on a trusted, isolated network,
 set `MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=0.0.0.0` **and** set
 `MARIMOHUB_COMPUTE_DOCKER_HOST` to the server hostname browsers can reach.
 Never expose those ports to the public internet.

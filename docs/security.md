@@ -35,12 +35,12 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
 `sandboxes.hub.example.com` or `hub.example.com` for kernels is rejected at boot.
 :::
 
-The kernel URL is **not authenticated by the hub**. It includes marimo's
-per-session `access_token` query parameter. marimo exchanges the token for its
-session cookie. Do not expose the kernel hostname or copy the URL outside the
-iframe. The session API shows `sandbox_url` only to callers who can reach that
-kernel: editors, the owner of an ephemeral viewer session, and viewers of the
-shared app when the [viewer mode](/apps#who-can-do-what) grants access.
+The hub does not authenticate direct kernel traffic. Protect the kernel endpoint
+at the ingress. [Native kernel authentication](#native-kernel-authentication)
+is optional and off by default. Treat kernel URLs as sensitive.
+
+The session API exposes `sandbox_url` only to authorized editors, ephemeral
+session owners, and shared-app viewers allowed by the [viewer mode](/apps#who-can-do-what).
 
 ### `proxy`: forwarded through the app
 
@@ -80,30 +80,34 @@ trust every notebook author in the deployment.
 
 ## Native kernel authentication
 
-The provisioner generates an independent 256-bit token for each interactive
-session. It writes the token to a reserved file outside the workspace and starts
-marimo with global `--quiet` plus `--token --token-password-file`. Quiet mode suppresses
-marimo's token-bearing startup URL, and captured failure output redacts an
-`access_token` value as a second safeguard. The token does not appear in the
-process command or server logs. Scheduled jobs do not start a server and do not
-use a token.
+`MARIMOHUB_SANDBOX_AUTH` controls native marimo authentication for new editor and
+app sessions:
 
-In `subdomain` mode, the client URL delivers the token to marimo. In `proxy`
-mode, the hub replaces caller credentials with the kernel token after it
-authorizes the request. This replacement applies to kernel HTTP requests and
-WebSocket upgrades. The hub does not send the token to VS Code or OpenCode.
+| Value           | Behavior                                                                                                          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `off` (default) | Starts marimo with `--no-token` for cross-site iframe compatibility. Protect direct kernel access at the ingress. |
+| `on`            | Creates an independent 256-bit token per session and starts marimo with `--token --token-password-file`.          |
 
-Keep marimohub and your ingress in front of kernels. Native authentication
-limits access after a hostname or origin leak, but it does not replace TLS,
-origin isolation, or hub authorization.
+Hub login and proxy authorization do not change. Existing sessions retain their
+authentication mode. Stop and start them to apply a changed setting. Scheduled
+jobs do not use native authentication.
 
-::: warning Complete rolling upgrades promptly
-An old proxy replica cannot authenticate to a kernel that a new replica starts.
-An old lifecycle replica also cannot read that kernel's connection count. A
-mixed-version rollout can therefore return temporary 401 responses and report
-unknown connection counts. Complete the server rollout promptly. New replicas
-remain compatible with sessions started without a token by an earlier release.
-:::
+With `on`, the provisioner stores the token in a reserved file outside the
+workspace. The launch command contains the file path, not the token. Quiet mode
+suppresses token-bearing startup URLs, and log capture redacts `access_token`.
+
+In `subdomain` mode, marimo exchanges the URL's token for a session cookie. In
+`proxy` mode, the hub supplies the token after authorization for HTTP requests
+and WebSocket upgrades. It does not forward the token to secondary editor surfaces.
+Native authentication does not replace TLS, origin isolation, or hub authorization.
+
+Browser restrictions can block the session cookie inside a cross-site iframe.
+After 15 seconds, the UI offers Retry and Open in new window. Retry reloads only
+the frame. A separate window makes the kernel a first-party page. The prompt is
+dismissible and can also appear for healthy frames because browsers hide
+cross-origin load failures.
+
+This setting does not change cookie attributes or enable partitioned cookies.
 
 ## Secondary editor surfaces
 

@@ -32,6 +32,7 @@ import {
 	unsupportedBackendNotice,
 } from '@marimo-hub/config/compute-profiles';
 import { R2BucketAdapter } from '@marimo-hub/storage-r2';
+import { parseSandboxAuth } from '@marimo-hub/config/sandbox-auth';
 
 // Re-export the Sandbox Durable Object so wrangler can discover it, and
 // ContainerProxy so the sandbox can mount R2 by binding name without credentials.
@@ -188,6 +189,7 @@ export function buildDeps(
 			// Empty in tunnel mode (the adapter ignores it then); set only for
 			// subdomain exposure on a dedicated isolated domain.
 			hostname: sandboxHostname ?? '',
+			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			workdir: env.SANDBOX_WORKDIR || '/workspace',
 			computeProfiles: [],
 			computeProfileOverride: 'none',

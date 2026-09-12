@@ -85,6 +85,20 @@ describe('Session routes', () => {
 		persistWorkspace: 'source',
 		...overrides,
 	});
+	const authWorld = () => {
+		const { instance, calls } = makeFakeSandbox();
+		return {
+			calls,
+			requestFor: (auth?: 'on' | 'off') =>
+				createTestApi({
+					bucket,
+					userId: ACTOR,
+					compute: fakeComputeFrom(instance),
+					deps: { sandbox: sandboxConfig({ auth }) },
+				}).request,
+		};
+	};
+
 	const exclusiveApi = (
 		userId: ReturnType<typeof uid>,
 		compute: ApiDeps['compute'] = makeFakeCompute(),
@@ -334,33 +348,118 @@ describe('Session routes', () => {
 		expect(data.error).toBeUndefined();
 	});
 
-	it('stores a kernel token without exposing it in the session response or command', async () => {
-		const { instance, calls } = makeFakeSandbox();
-		const request = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: fakeComputeFrom(instance),
-		}).request;
+	it.each(['edit', 'app'] as const)(
+		'auth on: protects a new %s kernel without exposing its token in commands',
+		async (mode) => {
+			const { calls, requestFor } = authWorld();
+			const request = requestFor('on');
 
-		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
+			const stored = await createServices(bucket).sessions.getSession(
+				pid,
+				data.session_id as SessionId,
+			);
+			expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
+			expect(data).not.toHaveProperty('kernel_auth_token');
+
+			const url = new URL(data.sandbox_url!);
+			expect(url.searchParams.get('access_token')).toBe(stored.kernel_auth_token);
+			expect(calls.writeFile).toContainEqual({
+				path: KERNEL_AUTH_TOKEN_FILE,
+				content: stored.kernel_auth_token,
+			});
+			expect(calls.startProcess[0].cmd).toContain(
+				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
+			);
+			expect(calls.startProcess[0].cmd).not.toContain(stored.kernel_auth_token!);
+		},
+	);
+
+	it.each([
+		{ mode: 'edit', auth: undefined },
+		{ mode: 'app', auth: undefined },
+		{ mode: 'edit', auth: 'off' },
+		{ mode: 'app', auth: 'off' },
+	] as const)('auth $auth: starts a tokenless $mode kernel', async ({ mode, auth }) => {
+		const { calls, requestFor } = authWorld();
+		const request = requestFor(auth);
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
 		const stored = await createServices(bucket).sessions.getSession(
 			pid,
 			data.session_id as SessionId,
 		);
-		expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
-		expect(data).not.toHaveProperty('kernel_auth_token');
-
-		const url = new URL(data.sandbox_url!);
-		expect(url.searchParams.get('access_token')).toBe(stored.kernel_auth_token);
-		expect(calls.writeFile).toContainEqual({
-			path: KERNEL_AUTH_TOKEN_FILE,
-			content: stored.kernel_auth_token,
-		});
-		expect(calls.startProcess[0].cmd).toContain(
-			`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
-		);
-		expect(calls.startProcess[0].cmd).not.toContain(stored.kernel_auth_token!);
+		expect(stored.kernel_auth_token).toBeUndefined();
+		expect(new URL(data.sandbox_url!).searchParams.has('access_token')).toBe(false);
+		expect(calls.writeFile.some((file) => file.path === KERNEL_AUTH_TOKEN_FILE)).toBe(false);
+		expect(calls.startProcess[0].cmd).toContain('--no-token');
+		expect(calls.startProcess[0].cmd).not.toContain('--token-password-file');
 	});
+
+	it.each([
+		{ mode: 'edit', auth: 'on' },
+		{ mode: 'app', auth: 'on' },
+		{ mode: 'edit', auth: 'off' },
+		{ mode: 'app', auth: 'off' },
+	] as const)(
+		'preserves a running $mode session with auth $auth after configuration changes',
+		async ({ mode, auth }) => {
+			const { calls, requestFor } = authWorld();
+			const created = await expectOk<ApiSession>(
+				await requestFor(auth)('POST', sessionsPath(), { mode }),
+			);
+			const services = createServices(bucket);
+			const before = await services.sessions.getSession(pid, created.session_id as SessionId);
+			const reused = await expectOk<ApiSession>(
+				await requestFor(auth === 'on' ? 'off' : 'on')('POST', sessionsPath(), { mode }),
+			);
+			expect(reused.session_id).toBe(created.session_id);
+			expect(reused.sandbox_url).toBe(created.sandbox_url);
+			expect(reused.reused).toBe(true);
+			expect(
+				(await services.sessions.getSession(pid, created.session_id as SessionId))
+					.kernel_auth_token,
+			).toBe(before.kernel_auth_token);
+			expect(calls.startProcess).toHaveLength(1);
+		},
+	);
+
+	it.each([
+		{ mode: 'edit', before: 'on', after: 'off' },
+		{ mode: 'app', before: 'on', after: 'off' },
+		{ mode: 'edit', before: 'off', after: 'on' },
+		{ mode: 'app', before: 'off', after: 'on' },
+		{ mode: 'edit', before: 'on', after: 'on' },
+		{ mode: 'app', before: 'on', after: 'on' },
+	] as const)(
+		'uses auth $after for a new $mode session after stopping auth $before',
+		async ({ mode, before, after }) => {
+			const { calls, requestFor } = authWorld();
+			const original = await expectOk<ApiSession>(
+				await requestFor(before)('POST', sessionsPath(), { mode }),
+			);
+			const services = createServices(bucket);
+			const oldSession = await services.sessions.getSession(pid, original.session_id as SessionId);
+			const request = requestFor(after);
+			await expectOk(await request('DELETE', sessionsPath(`/${original.session_id}`)));
+			const next = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
+			expect(next.session_id).not.toBe(original.session_id);
+			expect(next.reused).toBe(false);
+			const stored = await services.sessions.getSession(pid, next.session_id as SessionId);
+			const launch = calls.startProcess.at(-1)!.cmd;
+			if (after === 'on') {
+				expect(stored.kernel_auth_token).toMatch(KERNEL_AUTH_TOKEN_PATTERN);
+				expect(stored.kernel_auth_token).not.toBe(oldSession.kernel_auth_token);
+				expect(new URL(next.sandbox_url!).searchParams.get('access_token')).toBe(
+					stored.kernel_auth_token,
+				);
+				expect(launch).toContain('--token-password-file');
+			} else {
+				expect(stored.kernel_auth_token).toBeUndefined();
+				expect(new URL(next.sandbox_url!).searchParams.has('access_token')).toBe(false);
+				expect(launch).toContain('--no-token');
+			}
+		},
+	);
 
 	it('uses the configured sandbox startup timeout to bound the kernel port wait', async () => {
 		const sb = makeFakeSandbox();
