@@ -2541,6 +2541,7 @@ describe('SandboxProvisioner', () => {
 					path: sandboxContextPath(sandboxId),
 					content: '{"public_url":"https://hub.example/proxy/route/"}',
 				},
+				cookiePartitioned: true,
 				sessionEnv: { files: [{ path: '/creds', content: 'credential' }] },
 			});
 
@@ -2558,6 +2559,9 @@ describe('SandboxProvisioner', () => {
 				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
 			);
 			expect(calls.startProcess[0].cmd).not.toContain(TEST_KERNEL_AUTH_TOKEN);
+			expect(calls.startProcess[0].cmd).toMatch(
+				/^\(export MARIMO_SERVER_SESSION_COOKIE_PARTITIONED=true; /,
+			);
 		});
 
 		it('destroys the sandbox without starting marimo when the token file cannot be written', async () => {

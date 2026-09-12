@@ -23,7 +23,33 @@ describe('SubdomainExposure', () => {
 	const exposure = new SubdomainExposure();
 
 	it('serves at root (no marimo base url)', async () => {
-		expect(await exposure.prepare(ctx)).toEqual({});
+		expect(await exposure.prepare(ctx)).toEqual({ cookiePartitioned: true });
+	});
+
+	it('keeps native cookies for HTTP development and unauthenticated sessions', async () => {
+		expect(await exposure.prepare({ ...ctx, appBaseUrl: 'http://localhost:3000' })).toEqual({
+			cookiePartitioned: false,
+		});
+		expect(await exposure.prepare({ ...ctx, kernelAuthToken: undefined })).toEqual({});
+	});
+
+	it('allows an explicit cookie policy', async () => {
+		expect(await new SubdomainExposure(false).prepare(ctx)).toEqual({ cookiePartitioned: false });
+		expect(
+			await new SubdomainExposure(true).prepare({ ...ctx, appBaseUrl: 'http://localhost' }),
+		).toEqual({ cookiePartitioned: true });
+	});
+
+	it('rejects HTTP kernel URLs when partitioned cookies are requested', async () => {
+		await expect(exposure.finalize('http://kernel.example:2718', ctx)).rejects.toThrow(
+			'Partitioned kernel cookies require an HTTPS sandbox URL',
+		);
+		await expect(
+			new SubdomainExposure(false).finalize('http://localhost:2718', ctx),
+		).resolves.toHaveProperty(
+			'clientUrl',
+			`http://localhost:2718/?access_token=${TEST_KERNEL_AUTH_TOKEN}`,
+		);
 	});
 
 	it('adds the kernel token to the adapter URL and records no origin', async () => {

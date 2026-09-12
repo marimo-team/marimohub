@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	BadRequestError,
 	createNotebookId,
+	createSandboxId,
 	createProjectId,
 	createSessionId,
 } from '@marimo-hub/core';
@@ -1135,6 +1136,31 @@ describe('createFromEnv sandbox exposure mode', () => {
 	it('defaults to subdomain mode when unset', () => {
 		const deps = createFromEnv({ ...baseEnv });
 		expect(deps.sandbox.exposure?.mode).toBe('subdomain');
+	});
+
+	it.each([
+		['true', true],
+		['false', false],
+		[' TRUE ', true],
+		['', true],
+	] as const)('applies partitioned cookie policy %s', async (value, expected) => {
+		const deps = createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_COOKIE_PARTITIONED: value });
+		expect(
+			await deps.sandbox.exposure!.prepare({
+				projectId: createProjectId(),
+				sessionId: createSessionId(),
+				notebookId: createNotebookId(),
+				sandboxId: createSandboxId(),
+				kernelAuthToken: 'test-token',
+				appBaseUrl: 'https://hub.example',
+			}),
+		).toEqual({ cookiePartitioned: expected });
+	});
+
+	it('rejects an invalid partitioned cookie policy', () => {
+		expect(() =>
+			createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_COOKIE_PARTITIONED: 'yes' }),
+		).toThrow(/MARIMOHUB_SANDBOX_COOKIE_PARTITIONED/);
 	});
 
 	it('throws on an invalid exposure mode', () => {

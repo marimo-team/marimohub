@@ -130,7 +130,7 @@ describe('Session routes', () => {
 					bucket,
 					userId: ACTOR,
 					compute: fakeComputeFrom(instance),
-					deps: { sandbox: sandboxConfig({ auth }) },
+					deps: { sandbox: sandboxConfig({ auth, appBaseUrl: 'https://hub.example.com' }) },
 				}).request,
 		};
 	};
@@ -1616,6 +1616,9 @@ describe('Session routes', () => {
 				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
 			);
 			expect(calls.startProcess[0].cmd).not.toContain(stored.kernel_auth_token!);
+			expect(calls.startProcess[0].cmd).toMatch(
+				/^\(export MARIMO_SERVER_SESSION_COOKIE_PARTITIONED=true; /,
+			);
 		},
 	);
 
@@ -1636,6 +1639,7 @@ describe('Session routes', () => {
 		expect(new URL(data.sandbox_url!).searchParams.has('access_token')).toBe(false);
 		expect(calls.writeFile.some((file) => file.path === KERNEL_AUTH_TOKEN_FILE)).toBe(false);
 		expect(calls.startProcess[0].cmd).toContain('--no-token');
+		expect(calls.startProcess[0].cmd).not.toContain('MARIMO_SERVER_SESSION_COOKIE');
 		expect(calls.startProcess[0].cmd).not.toContain('--token-password-file');
 	});
 

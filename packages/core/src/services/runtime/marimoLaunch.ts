@@ -37,6 +37,7 @@ export interface MarimoLaunchParams extends RuntimeContributions {
 	 * websocket URLs resolve beneath the proxied prefix. Omit to serve at root.
 	 */
 	baseUrl?: string;
+	cookiePartitioned?: boolean;
 	watch?: boolean;
 }
 
@@ -226,6 +227,12 @@ export function buildMarimoLaunch(
 
 	return {
 		...plan,
+		start:
+			params.mode !== 'job' &&
+			params.cookiePartitioned !== undefined &&
+			params.tokenPasswordFile !== undefined
+				? `(export MARIMO_SERVER_SESSION_COOKIE_PARTITIONED=${params.cookiePartitioned}; ${plan.start})`
+				: plan.start,
 		setup: [
 			...(params.startupScripts ?? []).map((path, index) => ({
 				name: `startup_script_${index + 1}`,

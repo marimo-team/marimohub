@@ -115,7 +115,29 @@ the frame. A separate window makes the kernel a first-party page. The prompt is
 dismissible and can also appear for healthy frames because browsers hide
 cross-origin load failures.
 
-This setting does not change cookie attributes or enable partitioned cookies.
+For authenticated `subdomain` sessions, Hub requests partitioned cookies (CHIPS)
+when its public URL uses HTTPS. Override this with
+`MARIMOHUB_SANDBOX_COOKIE_PARTITIONED=true` or `false`. HTTP Hub URLs default to
+`false` for local development. Partitioned cookies require HTTPS kernel URLs;
+Hub rejects a plaintext kernel URL when this policy is enabled. `proxy` mode,
+tokenless sessions, and jobs do not request partitioned cookies.
+
+This requires a sandbox image with native marimo support for
+`MARIMO_SERVER_SESSION_COOKIE_PARTITIONED` (currently unreleased). Build an image with
+that marimo change before using authenticated cross-site frames. Older images
+ignore the variable and retain their existing cookies; Hub does not separately
+request `SameSite=None`. Existing sessions must be restarted to pick up the policy.
+
+Marimo emits `HttpOnly; SameSite=None; Secure; Partitioned`. The browser chooses
+the top-level-site partition, so the cookie set inside Hub is not shared with
+an unrelated site or a separate kernel tab. Keep the token-bearing URL when
+opening a new window. TLS-terminating tunnels must preserve the public kernel
+`Host` header for marimo's cookie Origin checks.
+
+CHIPS support and browser cookie policy both matter. Blocking all cookies still
+prevents session authentication. The new-window recovery action remains
+available; Hub never falls back automatically to an unpartitioned cross-site
+cookie.
 
 ## Secondary editor surfaces
 
