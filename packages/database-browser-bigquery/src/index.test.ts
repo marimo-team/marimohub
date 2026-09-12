@@ -1,6 +1,7 @@
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
-import type { BigQueryConnectionCapability, IntegrationProbe } from '@marimo-hub/core';
+import type { BigQueryConnectionCapability } from '@marimo-hub/core/ports/database-browser';
+import type { IntegrationProbe } from '@marimo-hub/core/ports/integrations';
 import { browseContract } from '@marimo-hub/core/testing/browse-contract';
 import { BigQueryDatabaseBrowser } from './index';
 

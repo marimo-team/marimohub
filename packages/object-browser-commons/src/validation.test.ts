@@ -1,4 +1,4 @@
-import type { ObjectStoreSource } from '@marimo-hub/core';
+import type { ObjectStoreSource } from '@marimo-hub/core/ports/object-browser';
 import { describe, expect, it } from 'vitest';
 import { assertBucket, assertObjectIdentity } from './validation';
 

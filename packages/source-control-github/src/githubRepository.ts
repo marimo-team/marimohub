@@ -1,5 +1,9 @@
-import { ConflictError, ProposalRetryRequiredError, UnavailableError } from '@marimo-hub/core';
-import type { OpenChangeRequestInput } from '@marimo-hub/core';
+import {
+	ConflictError,
+	ProposalRetryRequiredError,
+	UnavailableError,
+} from '@marimo-hub/core/errors';
+import type { OpenChangeRequestInput } from '@marimo-hub/core/ports/source-control';
 import type { GitHubClient } from './githubClient';
 import {
 	gitTreeEntries,

@@ -1,9 +1,10 @@
-import { isSafeWorkspacePath, ValidationError } from '@marimo-hub/core';
+import { isSafeWorkspacePath } from '@marimo-hub/core/remote-workspace';
+import { ValidationError } from '@marimo-hub/core/errors';
 import type {
 	OpenChangeRequestInput,
 	SourceControlCommitIdentity,
 	UpdateChangeRequestInput,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/source-control';
 
 export interface GitHubRepository {
 	owner: string;

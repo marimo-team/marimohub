@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ProjectId, SecretResolutionError } from '@marimo-hub/core';
-import type { SecretResolutionContext } from '@marimo-hub/core';
+import { ProjectId } from '@marimo-hub/core/ids';
+import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
+import type { SecretResolutionContext } from '@marimo-hub/core/ports/secrets';
 import {
 	INTEGRATION_SECRET_LABEL,
 	KubernetesSecretResolver,

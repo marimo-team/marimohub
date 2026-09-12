@@ -4,9 +4,9 @@ import {
 	NOT_A_DIRECTORY_MARKER,
 	shellQuote,
 } from '@marimo-hub/compute-commons';
-import { Millis } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
-import { listFilesFailure } from '@marimo-hub/core/ports';
+import { Millis } from '@marimo-hub/core/duration';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,
@@ -17,7 +17,7 @@ import {
 	expectExecResult,
 	expectFileResult,
 	expectListFilesResult,
-} from '@marimo-hub/core/testing';
+} from '@marimo-hub/core/testing/result-assertions';
 import {
 	KubernetesCompute,
 	kubernetesProfileResources,

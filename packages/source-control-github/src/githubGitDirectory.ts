@@ -4,16 +4,15 @@ import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import git from 'isomorphic-git';
 import type { GitHttpRequest, HttpClient } from 'isomorphic-git';
+import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import {
-	BadRequestError,
 	GitDirectoryLimitTracker,
 	MAX_GIT_EXPANDED_BYTES,
 	MAX_GIT_EXPANDED_FILES,
 	MAX_GIT_FETCH_BYTES,
-	MAX_WORKSPACE_FILE_BYTES,
-	UnavailableError,
-} from '@marimo-hub/core';
-import type { SourceWorkspaceFile } from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/source-control';
+import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
+import type { SourceWorkspaceFile } from '@marimo-hub/core/ports/source-control';
 import type { GitHubFetch } from './githubClient';
 
 function repositorySizeError(repository: string, limit: number): BadRequestError {

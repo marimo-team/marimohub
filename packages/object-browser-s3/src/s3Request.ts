@@ -1,6 +1,10 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
-import type { ObjectBrowseContext, ObjectIdentity, S3ObjectStoreSource } from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import type {
+	ObjectBrowseContext,
+	ObjectIdentity,
+	S3ObjectStoreSource,
+} from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 export { withOperationDeadline } from '@marimo-hub/object-browser-commons';
 import type { S3ClientFactory, S3ClientLike } from './client';
 import { mapS3Error } from './errors';

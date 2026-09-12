@@ -1,11 +1,11 @@
 import { Readable } from 'node:stream';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
 import {
 	OBJECT_BROWSE_CONTRACT_SEED,
 	objectBrowseContract,
 } from '@marimo-hub/core/testing/object-browse-contract';
-import type { ObjectBrowseContext } from '@marimo-hub/core';
+import type { ObjectBrowseContext } from '@marimo-hub/core/ports/object-browser';
 
 const fake = vi.hoisted(() => ({ createAzureClient: vi.fn() }));
 vi.mock('./client', () => fake);

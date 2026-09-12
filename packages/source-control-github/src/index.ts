@@ -1,9 +1,5 @@
-import {
-	ConflictError,
-	markSourceControlPublishFailure,
-	UnavailableError,
-	ValidationError,
-} from '@marimo-hub/core';
+import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
+import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type {
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
@@ -13,7 +9,7 @@ import type {
 	SourceControlReader,
 	SourceWorkspaceFile,
 	UpdateChangeRequestInput,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/source-control';
 import { GitHubClient } from './githubClient';
 import type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './githubClient';
 import { GitHubPullRequests } from './githubPullRequests';

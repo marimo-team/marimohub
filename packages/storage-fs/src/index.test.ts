@@ -12,8 +12,9 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, afterAll } from 'vitest';
-import { createNotebookId, createProjectId, PreconditionFailedError } from '@marimo-hub/core';
-import { makeWorkspaceService } from '@marimo-hub/core/testing';
+import { createNotebookId, createProjectId } from '@marimo-hub/core/ids';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
+import { makeWorkspaceService } from '@marimo-hub/core/testing/workspace-fixtures';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { FsStorage } from './index';
 

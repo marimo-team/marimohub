@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { sourceControlPublishFailure } from '@marimo-hub/core';
+import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubAppPublisher } from './index';
 
 const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })

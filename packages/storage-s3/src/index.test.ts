@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S3Client } from '@aws-sdk/client-s3';
-import { PreconditionFailedError } from '@marimo-hub/core';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { S3Storage, stripETag } from './index';
 

@@ -1,13 +1,11 @@
 import { Gunzip } from 'fflate';
+import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
+import { isSafeWorkspacePath } from '@marimo-hub/core/remote-workspace';
 import {
-	BadRequestError,
-	isSafeWorkspacePath,
 	MAX_DECOMPRESSED_ARCHIVE_BYTES,
-	UnavailableError,
-	ValidationError,
 	WorkspaceTarCollector,
-} from '@marimo-hub/core';
-import type { ArchiveFile } from '@marimo-hub/core';
+} from '@marimo-hub/core/workspace-archive';
+import type { ArchiveFile } from '@marimo-hub/core/workspace-archive';
 
 /**
  * GitHub serves whole-repository tarballs only, so the download needs bounds of

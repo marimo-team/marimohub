@@ -1,5 +1,5 @@
-import type { ObjectIdentity, ObjectStoreSource } from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import type { ObjectIdentity, ObjectStoreSource } from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 
 export function assertBucket(source: ObjectStoreSource, bucket: string): void {
 	if (!bucket) throw new ObjectBrowseError('not_found', 'A bucket is required.');

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AUTH_ENTITLEMENTS, UserId } from '@marimo-hub/core';
+import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
+import { UserId } from '@marimo-hub/core/ids';
 import type { OidcLoginPolicy, OidcLoginPolicyInput } from './loginPolicy';
 import {
 	evaluateLoginPolicy,

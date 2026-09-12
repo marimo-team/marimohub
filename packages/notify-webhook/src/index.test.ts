@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { notifierContract, NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
+import { notifierContract } from '@marimo-hub/core/testing/notifier-contract';
+import { NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing/notification-fixtures';
 import { signWebhook, WebhookNotifier } from './index';
 
 notifierContract(

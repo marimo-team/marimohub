@@ -2,29 +2,29 @@ import { existsSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import {
-	BadRequestError,
-	DataQueryUserError,
-	noopMetrics,
-	UnavailableError,
-	ValidationError,
-} from '@marimo-hub/core';
+import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
+import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';
+import { noopMetrics } from '@marimo-hub/core/ports/metrics';
 import type {
 	BrowseNamespacesRequest,
 	BrowsePage,
 	BrowsePageRequest,
-	DatabaseBrowser,
-	DatabaseSource,
-	DatabaseTestOptions,
-	DataQueryExecution,
-	DataQueryExecutorFactory,
-	DataQueryResult,
-	Metrics,
-	PostgresConnectionCapability,
 	TablePreview,
 	TablePreviewRequest,
 	TableSchema,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/integrations';
+import type {
+	DatabaseBrowser,
+	DatabaseSource,
+	DatabaseTestOptions,
+	PostgresConnectionCapability,
+} from '@marimo-hub/core/ports/database-browser';
+import type {
+	DataQueryExecution,
+	DataQueryExecutorFactory,
+	DataQueryResult,
+} from '@marimo-hub/core/data-query-contracts';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
 import type {
 	PinnedAddress,
 	PostgresFailureCode,

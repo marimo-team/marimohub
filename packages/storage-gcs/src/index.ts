@@ -22,8 +22,8 @@
 import { importPKCS8, SignJWT } from 'jose';
 import { ofetch } from 'ofetch';
 import type { $Fetch } from 'ofetch';
-import { PreconditionFailedError } from '@marimo-hub/core';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -31,7 +31,7 @@ import type {
 	BucketObject,
 	BucketObjectBody,
 	BucketPutOptions,
-} from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/bucket';
 
 const DEFAULT_API_ENDPOINT = 'https://storage.googleapis.com';
 const DEFAULT_TOKEN_URI = 'https://oauth2.googleapis.com/token';

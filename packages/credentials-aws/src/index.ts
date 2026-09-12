@@ -19,7 +19,7 @@
  */
 import { FetchError, ofetch } from 'ofetch';
 import { z } from 'zod';
-import type { CredentialBroker, TempS3Creds } from '@marimo-hub/core';
+import type { CredentialBroker, TempS3Creds } from '@marimo-hub/core/ports/credential-broker';
 
 export { createAwsSigV4Fetch } from './sigv4';
 export type { AwsSigV4FetchOptions } from './sigv4';

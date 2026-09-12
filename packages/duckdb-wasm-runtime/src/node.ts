@@ -6,14 +6,17 @@ import type {
 	DataQueryExecution,
 	DataQueryExecutorFactory,
 	DataQueryResult,
+} from '@marimo-hub/core/data-query-contracts';
+import type {
 	DuckDBHttpAccess,
 	DuckDBPreviewProgram,
 	DuckDBWasmRuntime,
 	DuckDBWasmRuntimeFactory,
-	Metrics,
-	TablePreview,
-} from '@marimo-hub/core';
-import { DataQueryUserError, noopMetrics } from '@marimo-hub/core';
+} from '@marimo-hub/core/data-preview-programs';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
+import type { TablePreview } from '@marimo-hub/core/ports/integrations';
+import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';
+import { noopMetrics } from '@marimo-hub/core/ports/metrics';
 import { ICEBERG_HTTP_UNAVAILABLE } from './networkPolicy';
 import { isHttpBridgeRequestMessage, rejectHttpBridge, resolveHttpBridge } from './httpBridge';
 import type { HttpBridgeRequestMessage } from './httpBridge';

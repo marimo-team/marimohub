@@ -3,15 +3,15 @@ import { mkdtemp, mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BadRequestError } from '@marimo-hub/core/errors';
 import {
-	BadRequestError,
 	MAX_GIT_DIRECTORY_BYTES,
 	MAX_GIT_DIRECTORY_FILES,
 	MAX_GIT_EXPANDED_BYTES,
 	MAX_GIT_EXPANDED_FILES,
 	MAX_GIT_FETCH_BYTES,
-	MAX_WORKSPACE_FILE_BYTES,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/source-control';
+import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import type { GitHubFetch } from './githubClient';
 import {
 	assertGitCheckoutLimits,

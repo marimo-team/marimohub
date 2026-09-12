@@ -1,11 +1,12 @@
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
 import type {
-	Metrics,
 	ObjectBody,
 	ObjectBrowseContext,
 	ObjectPreview,
 	ObjectStoreProvider,
-} from '@marimo-hub/core';
-import { noopMetrics, ObjectBrowseError } from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/object-browser';
+import { noopMetrics } from '@marimo-hub/core/ports/metrics';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import type { ObjectBrowserLimits } from './limits';
 
 export class ObjectBrowserObserver {

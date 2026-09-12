@@ -12,8 +12,11 @@ import type {
 	IHttpClient,
 	WebResource,
 } from '@azure/storage-blob';
-import type { AzureBlobObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import type {
+	AzureBlobObjectStoreSource,
+	ObjectBrowseContext,
+} from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import {
 	createGuardedFetch,
 	DEFAULT_OBJECT_BROWSER_LIMITS,

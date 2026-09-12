@@ -1,7 +1,11 @@
 import { GoogleAuth } from 'google-auth-library';
 import { importPKCS8, SignJWT } from 'jose';
-import type { GcsObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
-import { ObjectBrowseError, withAbortSignal } from '@marimo-hub/core';
+import type {
+	GcsObjectStoreSource,
+	ObjectBrowseContext,
+} from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
+import { withAbortSignal } from '@marimo-hub/core/async';
 import { isAbortError } from '@marimo-hub/object-browser-commons';
 
 const TOKEN_URI = 'https://oauth2.googleapis.com/token';

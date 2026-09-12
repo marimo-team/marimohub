@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import type { SandboxId } from '@marimo-hub/core';
+import type { SandboxId } from '@marimo-hub/core/ids';
 import { FargateCompute } from './index';
 
 const live = process.env.MARIMOHUB_FARGATE_LIVE_TEST === '1' ? describe : describe.skip;

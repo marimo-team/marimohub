@@ -19,8 +19,8 @@ import {
 	S3Client,
 } from '@aws-sdk/client-s3';
 import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
-import { PreconditionFailedError } from '@marimo-hub/core';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -28,7 +28,7 @@ import type {
 	BucketObject,
 	BucketObjectBody,
 	BucketPutOptions,
-} from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/bucket';
 
 export interface S3StorageConfig {
 	/** Bucket name. */

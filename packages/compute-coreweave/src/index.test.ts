@@ -5,13 +5,14 @@ import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
 import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
-import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import type { SandboxProvider } from '@marimo-hub/core/ports/sandbox';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,
 } from '@marimo-hub/core/testing/compute-contract';
-import { listFilesFailure } from '@marimo-hub/core/ports';
-import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { contractLaunchProcess, fakeProcess, makeWorld, procResult } from './testWorld';

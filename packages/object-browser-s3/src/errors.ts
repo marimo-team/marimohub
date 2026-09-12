@@ -1,4 +1,4 @@
-import { ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import { isAbortError, objectBrowseHttpError } from '@marimo-hub/object-browser-commons';
 
 export function mapS3Error(error: unknown): ObjectBrowseError {

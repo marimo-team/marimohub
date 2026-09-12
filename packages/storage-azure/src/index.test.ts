@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream';
 import type { ContainerClient } from '@azure/storage-blob';
-import { PreconditionFailedError } from '@marimo-hub/core';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { describe, expect, it } from 'vitest';
 import { AzureStorage } from './index';

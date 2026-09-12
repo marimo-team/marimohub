@@ -1,5 +1,5 @@
-import { deadlineSignal } from '@marimo-hub/core';
-import type { ObjectBrowseContext } from '@marimo-hub/core';
+import { deadlineSignal } from '@marimo-hub/core/async';
+import type { ObjectBrowseContext } from '@marimo-hub/core/ports/object-browser';
 
 export async function withOperationDeadline<T>(
 	context: ObjectBrowseContext,

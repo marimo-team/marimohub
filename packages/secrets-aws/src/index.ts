@@ -9,8 +9,12 @@
  */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { SecretsManagerClientConfig } from '@aws-sdk/client-secrets-manager';
-import { SecretResolutionError } from '@marimo-hub/core';
-import type { SecretRef, SecretResolutionContext, SecretResolver } from '@marimo-hub/core';
+import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
+import type {
+	SecretRef,
+	SecretResolutionContext,
+	SecretResolver,
+} from '@marimo-hub/core/ports/secrets';
 
 /** The raw `GetSecretValue` result the resolver needs — the seam tests fake. */
 export interface GetSecretValueResult {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SandboxId } from '@marimo-hub/core';
-import type { SandboxProvider } from '@marimo-hub/core/ports';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import type { SandboxProvider } from '@marimo-hub/core/ports/sandbox';
 import { scriptContractLaunch } from '@marimo-hub/core/testing/compute-contract';
 import type { ContractLaunchScript } from '@marimo-hub/core/testing/compute-contract';
 import { containerResourceArgs } from './index';

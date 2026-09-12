@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectId, ObjectBrowseError, UserId } from '@marimo-hub/core';
-import type { GcsObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
+import type {
+	GcsObjectStoreSource,
+	ObjectBrowseContext,
+} from '@marimo-hub/core/ports/object-browser';
 import type { ObjectBrowserLimits } from '@marimo-hub/object-browser-commons';
 import { GcsObjectBrowser } from './index';
 

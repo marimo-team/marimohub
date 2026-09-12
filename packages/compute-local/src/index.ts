@@ -33,8 +33,9 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
-import { KERNEL_AUTH_TOKEN_FILE, SURFACE_STATE_ROOT } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
+import { KERNEL_AUTH_TOKEN_FILE } from '@marimo-hub/core/kernel-auth';
+import { SURFACE_STATE_ROOT } from '@marimo-hub/core/surface-state';
+import type { SandboxId } from '@marimo-hub/core/ids';
 import type {
 	ActiveSandbox,
 	ExecOptions,
@@ -57,8 +58,8 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 
 // Kernel processes can run for hours; diagnostics only need their recent output.
 const OUTPUT_TAIL_CHARS = 64 * 1024;

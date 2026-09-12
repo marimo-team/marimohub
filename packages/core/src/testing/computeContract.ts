@@ -24,7 +24,7 @@ import {
 	expectFileResult,
 	expectLaunchResult,
 	expectListFilesResult,
-} from './assertions';
+} from './resultAssertions';
 
 export const CONTRACT_SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
 export const CONTRACT_VISIBLE_FILE = 'contract-visible.txt';

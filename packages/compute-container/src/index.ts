@@ -23,7 +23,7 @@ import {
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
-import { SandboxId } from '@marimo-hub/core';
+import { SandboxId } from '@marimo-hub/core/ids';
 import type {
 	ActiveSandbox,
 	ComputeResources,
@@ -47,8 +47,8 @@ import type {
 	StartProcessOptions,
 	SetEnvVarsOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 
 /** marimo's kernel port (matches SandboxProvisioner's MARIMO_PORT). */
 const KERNEL_PORT = 2718;

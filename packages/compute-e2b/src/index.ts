@@ -33,7 +33,8 @@ import {
 	transportFailureResult,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
-import { SandboxId, Seconds } from '@marimo-hub/core';
+import { SandboxId } from '@marimo-hub/core/ids';
+import { Seconds } from '@marimo-hub/core/duration';
 import type {
 	ActiveSandbox,
 	CreateSandboxOptions,
@@ -56,8 +57,8 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 
 /** Sandbox metadata key carrying OUR SandboxId (E2B assigns its own ids). */
 const ID_META_KEY = 'mh-sandbox-id';

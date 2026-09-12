@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxId } from '@marimo-hub/core';
+import type { SandboxId } from '@marimo-hub/core/ids';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,

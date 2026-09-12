@@ -1,4 +1,4 @@
-import { UnavailableError } from '@marimo-hub/core';
+import { UnavailableError } from '@marimo-hub/core/errors';
 
 export type GitTreeEntry = {
 	mode: '040000' | '100644' | '100755' | '120000' | '160000';

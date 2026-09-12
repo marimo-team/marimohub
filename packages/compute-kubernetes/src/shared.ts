@@ -3,7 +3,9 @@
  * (`index.ts`) and the production client (`client.ts`). Kept in its own module so
  * the two can depend on it without forming an import cycle.
  */
-import type { Millis, SandboxExposureMode, SandboxId } from '@marimo-hub/core';
+import type { Millis } from '@marimo-hub/core/duration';
+import type { SandboxExposureMode } from '@marimo-hub/core/ports/sandbox-exposure';
+import type { SandboxId } from '@marimo-hub/core/ids';
 
 /** Label marking resources THIS deployment owns (selection + discovery/cleanup). */
 export const MANAGED_BY_LABEL = 'app.kubernetes.io/managed-by';

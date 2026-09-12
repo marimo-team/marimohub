@@ -4,11 +4,11 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { SandboxId } from '@marimo-hub/core';
+import type { SandboxId } from '@marimo-hub/core/ids';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import type { SandboxInstance } from '@marimo-hub/core/ports';
-import { listFilesFailure } from '@marimo-hub/core/ports';
-import { expectFileResult } from '@marimo-hub/core/testing';
+import type { SandboxInstance } from '@marimo-hub/core/ports/sandbox';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import { expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
@@ -17,7 +17,7 @@ import {
 	CONTRACT_SANDBOX_ID,
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
-import { buildMarimoLaunch } from '@marimo-hub/core';
+import { buildMarimoLaunch } from '@marimo-hub/core/marimo-launch';
 import { LocalCompute, prepareMarimoCommand, rewriteSandboxPaths, rewriteWorkspace } from './index';
 
 const compute = new LocalCompute();

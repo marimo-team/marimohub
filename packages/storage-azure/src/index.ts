@@ -8,8 +8,8 @@ import type {
 	ContainerListBlobHierarchySegmentResponse,
 } from '@azure/storage-blob';
 import type { TokenCredential } from '@azure/core-auth';
-import { PreconditionFailedError } from '@marimo-hub/core';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -17,7 +17,7 @@ import type {
 	BucketObject,
 	BucketObjectBody,
 	BucketPutOptions,
-} from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/bucket';
 
 export type AzureStorageConfig =
 	| { containerClient: ContainerClient }

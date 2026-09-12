@@ -7,8 +7,8 @@
  * `worker/auth.ts`.
  */
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { UserId } from '@marimo-hub/core';
-import type { Authenticator, AuthenticatedPrincipal } from '@marimo-hub/core';
+import { UserId } from '@marimo-hub/core/ids';
+import type { Authenticator, AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
 
 export interface CloudflareAccessConfig {
 	/** Cloudflare Access team name (e.g. `myteam` for myteam.cloudflareaccess.com). */

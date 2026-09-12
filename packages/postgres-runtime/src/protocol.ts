@@ -1,10 +1,6 @@
-import type {
-	BrowsePage,
-	DataQueryResult,
-	PostgresConnectionCapability,
-	TablePreview,
-	TableSchema,
-} from '@marimo-hub/core';
+import type { BrowsePage, TablePreview, TableSchema } from '@marimo-hub/core/ports/integrations';
+import type { DataQueryResult } from '@marimo-hub/core/data-query-contracts';
+import type { PostgresConnectionCapability } from '@marimo-hub/core/ports/database-browser';
 
 export interface PinnedAddress {
 	address: string;

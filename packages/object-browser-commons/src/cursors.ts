@@ -1,4 +1,4 @@
-import { ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 
 export function encodeCursor(value: Record<string, unknown>): string {
 	return Buffer.from(JSON.stringify({ ...value, v: 1 }), 'utf8').toString('base64url');

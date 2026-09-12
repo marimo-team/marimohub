@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 
 export function toWebStream(body: unknown): ReadableStream<Uint8Array> {
 	if (body instanceof ReadableStream) return body;

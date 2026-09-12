@@ -1,6 +1,8 @@
 import { ofetch } from 'ofetch';
-import { NotificationSchema, requireHttpsUrl } from '@marimo-hub/core';
-import type { Notification, NotificationDeliveryOutcome, Notifier } from '@marimo-hub/core';
+import { NotificationSchema } from '@marimo-hub/core/notifications';
+import { requireHttpsUrl } from '@marimo-hub/core/url';
+import type { Notification } from '@marimo-hub/core/notifications';
+import type { NotificationDeliveryOutcome, Notifier } from '@marimo-hub/core/ports/notifier';
 
 interface WebhookRequestOptions {
 	method: 'POST';

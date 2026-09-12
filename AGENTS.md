@@ -63,13 +63,20 @@ imports, `@marimo-hub/{notify,object-browser,source-control}-*` imports, and
 each of `core` and `api` fails if one of these packages appears in its
 `package.json`.
 
+Adapters use focused core exports such as `@marimo-hub/core/errors`,
+`@marimo-hub/core/ports/bucket`, and `@marimo-hub/core/testing/contract`.
+The root, ports, and testing barrels are prohibited in adapters, including type
+imports: traversing their re-exports makes unrelated core changes invalidate
+adapter task caches. Service-backed integration tests can use the focused
+`@marimo-hub/core/testing/workspace-fixtures` export.
+
 ## Conventions
 
 - **Formatting** (from `.oxfmtrc.json`): tabs for indentation, single quotes,
   semicolons, `printWidth: 100`, `trailingComma: all`. Run `pnpm check` (or
   `vp fmt`) before finishing; CI fails on unformatted files.
 - **Tests** are colocated `*.test.ts` files using **vitest**, with the
-  `MemoryBucket` test double imported from `@marimo-hub/core/testing`. Reusable
+  `MemoryBucket` test double imported from `@marimo-hub/core/testing/memory-bucket`. Reusable
   conformance suites live at `@marimo-hub/core/testing/contract` (`bucketContract`,
   run by every storage adapter), `@marimo-hub/core/testing/compute-contract`
   (`computeContract`, run by the hermetic compute adapters), and
@@ -77,7 +84,7 @@ each of `core` and `api` fails if one of these packages appears in its
   browsable integration kind against a live catalog — env-gated, served in CI by
   the `Catalog conformance` workflow). Result-envelope
   assertions (`expectExecResult`, `expectFileResult`) are exported from
-  `@marimo-hub/core/testing` — prefer them over hand-rolled `{ success, … }` checks.
+  `@marimo-hub/core/testing/result-assertions` — prefer them over hand-rolled `{ success, … }` checks.
 - **API response envelope** is always `{ success: true, data }` or
   `{ success: false, error: { code, message } }` (see `packages/api/src`). Sole
   exception: routes serving raw content (e.g. the notebook HTML snapshot at

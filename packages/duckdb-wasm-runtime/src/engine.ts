@@ -1,11 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import * as duckdb from '@duckdb/duckdb-wasm/blocking';
-import type {
-	DataQueryExecution,
-	DataQueryResult,
-	DuckDBPreviewProgram,
-	TablePreview,
-} from '@marimo-hub/core';
+import type { DataQueryExecution, DataQueryResult } from '@marimo-hub/core/data-query-contracts';
+import type { DuckDBPreviewProgram } from '@marimo-hub/core/data-preview-programs';
+import type { TablePreview } from '@marimo-hub/core/ports/integrations';
 // The worker loads TS via Node type-stripping, so only self-contained core
 // subpaths are importable here — never the root index.
 import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';

@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
-import { Seconds } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
-import { listFilesFailure } from '@marimo-hub/core/ports';
-import type { SandboxLaunchResult } from '@marimo-hub/core/ports';
-import { expectLaunchResult, expectListFilesResult } from '@marimo-hub/core/testing';
+import { Seconds } from '@marimo-hub/core/duration';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import type { SandboxLaunchResult } from '@marimo-hub/core/ports/sandbox';
+import {
+	expectLaunchResult,
+	expectListFilesResult,
+} from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,

@@ -3,8 +3,8 @@ import type {
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
-	SandboxExposureMode,
-} from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import type { SandboxExposureMode } from '@marimo-hub/core/ports/sandbox-exposure';
 
 export const FARGATE_PROTOCOL_VERSION = 2;
 export const DEFAULT_AGENT_PORT = 2717;

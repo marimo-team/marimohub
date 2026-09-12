@@ -1,7 +1,10 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
-import type { GcsObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import type {
+	GcsObjectStoreSource,
+	ObjectBrowseContext,
+} from '@marimo-hub/core/ports/object-browser';
 import { GcsAuth } from './auth';
 
 const google = vi.hoisted(() => ({
