@@ -35,6 +35,15 @@ export interface ExposurePreparation {
 	 * serves at root).
 	 */
 	baseUrl?: string;
+	/**
+	 * `SameSite` marimo must set on its session cookie. `'none'` in `subdomain`
+	 * mode, where the kernel is framed cross-site: the cookie is third-party
+	 * there, so under the default `lax` a browser that restricts third-party
+	 * cookies drops it, marimo never completes the token exchange, and it
+	 * redirects to a login page it serves with `X-Frame-Options: DENY`.
+	 * Undefined in `proxy` mode, which is same-origin and needs no relaxation.
+	 */
+	cookieSameSite?: 'none';
 }
 
 export interface ExposureResult {

@@ -29,7 +29,9 @@ export class SubdomainExposure implements SandboxExposure {
 	readonly mode = 'subdomain' as const;
 
 	async prepare(_ctx: ExposureContext): Promise<ExposurePreparation> {
-		return {};
+		// The kernel is framed cross-site here, so marimo's session cookie is a
+		// third-party cookie and must say so; see `ExposurePreparation`.
+		return { cookieSameSite: 'none' };
 	}
 
 	async finalize(exposedUrl: string, ctx: ExposureContext): Promise<ExposureResult> {

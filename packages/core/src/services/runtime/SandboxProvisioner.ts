@@ -201,6 +201,8 @@ export interface ProvisionOptions {
 	 * the proxied prefix. Omit in `subdomain` mode (the kernel serves at root).
 	 */
 	baseUrl?: string;
+	/** `SameSite` marimo must use for its session cookie; from the exposure's `prepare()`. */
+	cookieSameSite?: 'none';
 	marimoWatch?: boolean;
 	/**
 	 * CoreWeave-native filesystem snapshot id to restore the sandbox FROM, when the
@@ -978,6 +980,7 @@ export class SandboxProvisioner {
 					mode: options.launchMode,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
+					cookieSameSite: options.cookieSameSite,
 					tokenPasswordFile:
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,

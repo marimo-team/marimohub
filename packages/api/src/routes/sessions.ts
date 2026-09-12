@@ -1563,7 +1563,7 @@ export async function startNotebookSession(input: {
 							return resolved;
 						},
 						async provision() {
-							const { baseUrl } = await this.$.exposure;
+							const { baseUrl, cookieSameSite } = await this.$.exposure;
 							const launchStrategy = await this.$.launchStrategy;
 							return provisioner.provision({
 								sandboxId,
@@ -1577,6 +1577,7 @@ export async function startNotebookSession(input: {
 								assetUrl: sandbox.assetUrl,
 								startupTimeoutMs: sandbox.startupTimeoutMs,
 								baseUrl,
+								cookieSameSite,
 								kernelAuthToken,
 								// A second editor writes the notebook file, so marimo must reload it.
 								marimoWatch:

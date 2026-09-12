@@ -30,6 +30,14 @@ export interface MarimoLaunchParams {
 	 * websocket URLs resolve beneath the proxied prefix. Omit to serve at root.
 	 */
 	baseUrl?: string;
+	/**
+	 * `SameSite` for marimo's session cookie (`MARIMO_SESSION_COOKIE_SAMESITE`),
+	 * from the exposure's `prepare()`. `'none'` when the kernel is framed
+	 * cross-site. Needs a marimo that reads the variable (marimo-team/marimo PR
+	 * below); older kernels ignore it and keep the `lax` default, so setting it
+	 * unconditionally is safe across a mixed fleet of sandbox images.
+	 */
+	cookieSameSite?: 'none';
 	watch?: boolean;
 }
 
@@ -187,9 +195,17 @@ export function buildMarimoLaunch(
 	strategy: MarimoLaunchStrategyName = DEFAULT_LAUNCH_STRATEGY,
 ): MarimoLaunchPlan {
 	const plan = MARIMO_LAUNCH_STRATEGIES[strategy](params);
-	if (params.mode !== 'job') return plan;
+	// Prefixed on the whole command rather than inside `marimoCommand`, which is
+	// nested under `uv run`; `uv run` passes its own environment through. Jobs
+	// serve no browser and get no cookie, so they are left alone.
+	const start =
+		params.cookieSameSite !== undefined && params.mode !== 'job'
+			? `MARIMO_SESSION_COOKIE_SAMESITE=${params.cookieSameSite} ${plan.start}`
+			: plan.start;
+	if (params.mode !== 'job') return { ...plan, start };
 	return {
 		...plan,
+		start,
 		setup: [...plan.setup, { name: 'job_output_dir', command: "mkdir -p '__marimo__'" }],
 	};
 }

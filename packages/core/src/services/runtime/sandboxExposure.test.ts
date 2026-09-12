@@ -18,7 +18,7 @@ describe('SubdomainExposure', () => {
 	const exposure = new SubdomainExposure();
 
 	it('serves at root (no marimo base url)', async () => {
-		expect(await exposure.prepare(ctx)).toEqual({});
+		expect(await exposure.prepare(ctx)).toEqual({ cookieSameSite: 'none' });
 	});
 
 	it('adds the kernel token to the adapter URL and records no origin', async () => {
@@ -119,5 +119,22 @@ describe('kernelBasePathFromUrl', () => {
 		['https://hub.example/proxy/token///?access_token=secret', '/proxy/token'],
 	])('extracts the marimo base path from %s', (url, expected) => {
 		expect(kernelBasePathFromUrl(url)).toBe(expected);
+	});
+});
+
+describe('cookie SameSite', () => {
+	// The kernel is framed cross-site under `subdomain`, so marimo's session
+	// cookie is third-party: under the default `lax` a browser that restricts
+	// third-party cookies drops it, and marimo then redirects to a login page it
+	// serves with `X-Frame-Options: DENY`. See marimo-team/marimohub#328.
+	it('subdomain asks marimo for SameSite=None', async () => {
+		const prepared = await new SubdomainExposure().prepare(ctx);
+		expect(prepared.cookieSameSite).toBe('none');
+	});
+
+	// Proxy traffic is same-origin with the app, so nothing has to be relaxed.
+	it('proxy leaves the cookie alone', async () => {
+		const prepared = await new ProxyExposure(SECRET).prepare(ctx);
+		expect(prepared.cookieSameSite).toBeUndefined();
 	});
 });
