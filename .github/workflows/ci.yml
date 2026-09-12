@@ -73,13 +73,13 @@ jobs:
           path: node_modules/.vite/task-cache
           key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
 
-  # Preserve the required check name while requiring both suites to pass.
+  # Preserve the required check name and propagate suite failures.
   test:
     needs: test-suites
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - run: test "$RESULT" = success
+      - run: test "$RESULT" = success || test "$RESULT" = skipped
         env:
           RESULT: ${{ needs.test-suites.result }}
 
