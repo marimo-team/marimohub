@@ -4,7 +4,8 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { ListBucketsCommand } from '@aws-sdk/client-s3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ObjectBrowseError, UserId, createProjectId } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
+import { UserId, createProjectId } from '@marimo-hub/core/ids';
 import {
 	assertBucket,
 	assertObjectIdentity,
@@ -16,7 +17,10 @@ import {
 	readBoundedBody,
 	toWebStream,
 } from '@marimo-hub/object-browser-commons';
-import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
+import type {
+	ObjectBrowseContext,
+	S3ObjectStoreSource,
+} from '@marimo-hub/core/ports/object-browser';
 import {
 	createGuardedLookup,
 	createS3ClientFactory,

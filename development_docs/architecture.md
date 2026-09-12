@@ -653,6 +653,14 @@ entrypoints depend on `core`, `api`, and whichever adapters they load. `core` an
 `api` depend on no adapter. This is what lets a single change of entrypoint
 re-target the whole platform.
 
+Adapters import individual core modules, for example
+`@marimo-hub/core/ports/bucket` and `@marimo-hub/core/errors`, rather than the
+root or ports barrel. Tests use focused `core/testing/*` exports. Vite Task
+tracks files read by each command; broad re-exports cause adapter tasks to read
+unrelated services and lose cache hits when those services change. Core keeps
+its existing barrel exports for composition consumers. Service-backed adapter
+integration tests still depend on the services they exercise.
+
 Git-synced notebooks use the existing `git` source type. An external workflow
 pushes content to `/api/sync/git/v1`. The hub does not fetch repository content.
 The sync token has notebook scope. See [§3.1](#31-notebook-storage) and the

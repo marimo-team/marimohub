@@ -1,6 +1,5 @@
 import type {
 	GcsObjectStoreSource,
-	Metrics,
 	ObjectBody,
 	ObjectBrowseCapability,
 	ObjectBrowseContext,
@@ -19,8 +18,9 @@ import type {
 	ObjectSearchRequest,
 	ObjectVersion,
 	ObjectVersionRequest,
-} from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/object-browser';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import {
 	assertBucket,
 	assertObjectIdentity,

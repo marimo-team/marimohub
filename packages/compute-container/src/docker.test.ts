@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
-import type { SandboxId } from '@marimo-hub/core';
-import { listFilesFailure } from '@marimo-hub/core/ports';
-import { expectListFilesResult } from '@marimo-hub/core/testing';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import { expectListFilesResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,

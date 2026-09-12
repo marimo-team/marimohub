@@ -1,14 +1,14 @@
 import {
 	ConflictError,
-	markSourceControlPublishFailure,
 	ProposalRetryRequiredError,
 	UnavailableError,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/errors';
+import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type {
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
 	UpdateChangeRequestInput,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/source-control';
 import type { GitHubClient } from './githubClient';
 import {
 	isRecord,

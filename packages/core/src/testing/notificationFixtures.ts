@@ -1,5 +1,5 @@
-import { NotebookId, ProjectId, UserId } from '..';
-import type { Notification } from '..';
+import { NotebookId, ProjectId, UserId } from '../ids';
+import type { Notification } from '../notifications';
 
 const projectId = ProjectId.parse('proj-0000000000000001');
 const notebookId = NotebookId.parse('nb-0000000000000001');

@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
-import type {
-	DataQueryExecution,
-	IntegrationProbe,
-	PostgresConnectionCapability,
-} from '@marimo-hub/core';
+import type { DataQueryExecution } from '@marimo-hub/core/data-query-contracts';
+import type { IntegrationProbe } from '@marimo-hub/core/ports/integrations';
+import type { PostgresConnectionCapability } from '@marimo-hub/core/ports/database-browser';
 import { browseContract } from '@marimo-hub/core/testing/browse-contract';
 import type { BrowseContractOptions } from '@marimo-hub/core/testing/browse-contract';
 import { createPostgresDataQueryExecutorFactory, PostgresDatabaseBrowser } from './node';

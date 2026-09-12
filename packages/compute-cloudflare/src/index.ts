@@ -11,7 +11,7 @@ import {
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
-import type { SandboxId } from '@marimo-hub/core';
+import type { SandboxId } from '@marimo-hub/core/ids';
 import type {
 	ExecOptions,
 	ExecResult,
@@ -31,8 +31,8 @@ import type {
 	SandboxProvider,
 	SetEnvVarsOptions,
 	StartProcessOptions,
-} from '@marimo-hub/core/ports';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SandboxType = Sandbox<any>;

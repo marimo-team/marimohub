@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { UserId } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core';
+import { UserId } from '@marimo-hub/core/ids';
+import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core/ports/auth';
 
 const DEFAULT_HEADERS = ['X-Forwarded-Email', 'X-Forwarded-User'] as const;
 const DEFAULT_IAP_HEADER = 'X-Goog-IAP-JWT-Assertion';

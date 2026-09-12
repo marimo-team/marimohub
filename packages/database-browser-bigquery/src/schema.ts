@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { UnavailableError } from '@marimo-hub/core';
-import type { TableColumn } from '@marimo-hub/core';
+import { UnavailableError } from '@marimo-hub/core/errors';
+import type { TableColumn } from '@marimo-hub/core/ports/integrations';
 
 export interface BigQueryField {
 	name: string;

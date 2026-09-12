@@ -21,7 +21,7 @@
  */
 import { FetchError, ofetch } from 'ofetch';
 import { z } from 'zod';
-import type { CredentialBroker, TempS3Creds } from '@marimo-hub/core';
+import type { CredentialBroker, TempS3Creds } from '@marimo-hub/core/ports/credential-broker';
 
 /** Default request timeout for the exchange (ms). */
 const DEFAULT_TIMEOUT_MS = 10_000;

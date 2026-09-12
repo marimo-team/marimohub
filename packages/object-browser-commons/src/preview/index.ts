@@ -4,8 +4,8 @@ import type {
 	ObjectPreview,
 	ObjectPreviewRequest,
 	TabularPreview,
-} from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import { parse } from 'csv-parse/sync';
 import { parquetMetadataAsync, parquetReadObjects, parquetSchema } from 'hyparquet';
 import type { AsyncBuffer } from 'hyparquet';

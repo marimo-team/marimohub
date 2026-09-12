@@ -8,7 +8,7 @@ import {
 	S3Client,
 } from '@aws-sdk/client-s3';
 import { describe, it } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
 import {
 	OBJECT_BROWSE_CONTRACT_SEED,
 	objectBrowseContract,

@@ -1,9 +1,9 @@
-import { OBJECT_BROWSE_PROVIDER_METADATA } from '@marimo-hub/core';
+import { OBJECT_BROWSE_PROVIDER_METADATA } from '@marimo-hub/core/ports/object-browser';
 import type {
 	ObjectBrowseCapability,
 	ObjectBrowseError,
 	ObjectStoreProvider,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/object-browser';
 import { OBJECT_PREVIEW_FORMATS } from './formats';
 
 export function objectBrowseCapability(

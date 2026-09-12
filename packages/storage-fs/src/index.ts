@@ -24,8 +24,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants, mkdirSync, realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { PreconditionFailedError } from '@marimo-hub/core';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -33,7 +33,7 @@ import type {
 	BucketObject,
 	BucketObjectBody,
 	BucketPutOptions,
-} from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/bucket';
 
 export interface FsStorageConfig {
 	/** Host directory that confines all objects. Created if missing. */

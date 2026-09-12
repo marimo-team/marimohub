@@ -29,9 +29,9 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
-import type { SandboxId } from '@marimo-hub/core';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 import { createFargateClient } from './client';
 import type {
 	FargateActiveSandbox,

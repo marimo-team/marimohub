@@ -13,8 +13,10 @@
  * sample claims) can reuse them and get the same bounded outcomes.
  */
 import { z } from 'zod';
-import { AUTH_ENTITLEMENTS, withDeadline } from '@marimo-hub/core';
-import type { AuthEntitlement, UserId } from '@marimo-hub/core';
+import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
+import { withDeadline } from '@marimo-hub/core/async';
+import type { AuthEntitlement } from '@marimo-hub/core/ports/auth';
+import type { UserId } from '@marimo-hub/core/ids';
 
 /** Bump on any breaking change to the module contract below. */
 export const OIDC_LOGIN_POLICY_API_VERSION = 1;

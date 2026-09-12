@@ -1,4 +1,4 @@
-import { ProjectId } from '@marimo-hub/core';
+import { ProjectId } from '@marimo-hub/core/ids';
 
 export interface KubernetesSecretPolicy {
 	namespace: string;

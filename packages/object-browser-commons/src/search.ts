@@ -1,5 +1,9 @@
-import { ObjectBrowseError } from '@marimo-hub/core';
-import type { ObjectEntry, ObjectSearchPage, ObjectSearchRequest } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
+import type {
+	ObjectEntry,
+	ObjectSearchPage,
+	ObjectSearchRequest,
+} from '@marimo-hub/core/ports/object-browser';
 import { decodeCursor, encodeCursor } from './cursors';
 
 export interface BoundedSearchPage<T> {

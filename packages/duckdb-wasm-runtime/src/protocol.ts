@@ -1,4 +1,5 @@
-import type { DataQueryExecution, DuckDBPreviewProgram } from '@marimo-hub/core';
+import type { DataQueryExecution } from '@marimo-hub/core/data-query-contracts';
+import type { DuckDBPreviewProgram } from '@marimo-hub/core/data-preview-programs';
 import type { HttpBridgeRequestMessage } from './httpBridge';
 
 export type RuntimeRequestInput =

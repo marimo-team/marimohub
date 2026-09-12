@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SecretResolutionError } from '@marimo-hub/core';
+import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
 import { AwsSecretsManagerResolver } from './index';
 import type { GetSecretValueResult, SecretFetcher } from './index';
 

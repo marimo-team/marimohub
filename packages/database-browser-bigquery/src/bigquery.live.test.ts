@@ -1,6 +1,6 @@
 import { describe } from 'vitest';
 import { z } from 'zod';
-import type { BigQueryConnectionCapability } from '@marimo-hub/core';
+import type { BigQueryConnectionCapability } from '@marimo-hub/core/ports/database-browser';
 import { browseContract, fetchProbe } from '@marimo-hub/core/testing/browse-contract';
 import type { BrowseContractFixture } from '@marimo-hub/core/testing/browse-contract';
 import { BigQueryDatabaseBrowser } from './index';

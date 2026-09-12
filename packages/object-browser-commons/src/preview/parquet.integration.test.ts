@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
-import type { ObjectBrowseContext } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import type { ObjectBrowseContext } from '@marimo-hub/core/ports/object-browser';
 import { OBJECT_BROWSE_PARQUET_FIXTURE } from '@marimo-hub/core/testing/object-browse-contract';
 import { DEFAULT_OBJECT_BROWSER_LIMITS } from '../limits';
 import { previewObject } from './index';

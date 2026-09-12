@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
-import type { SandboxId } from '@marimo-hub/core';
-import { listFilesFailure } from '@marimo-hub/core/ports';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
 import {
 	computeContract,
 	CONTRACT_NON_DIRECTORY_PATH,

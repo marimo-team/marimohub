@@ -22,7 +22,7 @@ import type {
 	V1Service,
 	V1Status,
 } from '@kubernetes/client-node';
-import { SandboxId } from '@marimo-hub/core';
+import { SandboxId } from '@marimo-hub/core/ids';
 import {
 	defaultImagePullPolicy,
 	MANAGED_BY_LABEL,

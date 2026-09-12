@@ -1,7 +1,7 @@
 import { importPKCS8, SignJWT } from 'jose';
 import { z } from 'zod';
-import { ResourceExhaustedError, UnavailableError, ValidationError } from '@marimo-hub/core';
-import type { IntegrationProbe } from '@marimo-hub/core';
+import { ResourceExhaustedError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
+import type { IntegrationProbe } from '@marimo-hub/core/ports/integrations';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const accountSchema = z.object({

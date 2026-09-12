@@ -20,20 +20,18 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import {
-	ASSIGNABLE_ROLES,
-	AUTH_ENTITLEMENTS,
-	logEvent,
-	logOperationalError,
-	UserId,
-} from '@marimo-hub/core';
+import { ASSIGNABLE_ROLES } from '@marimo-hub/core/constants';
+import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
+import { logEvent } from '@marimo-hub/core/logs';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
+import { UserId } from '@marimo-hub/core/ids';
+import type { AssignableRole } from '@marimo-hub/core/constants';
 import type {
-	AssignableRole,
 	AuthenticatedPrincipal,
 	AuthEntitlement,
 	Authenticator,
 	AuthUser,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/auth';
 import { evaluateLoginPolicy } from './loginPolicy';
 import type { OidcLoginPolicy } from './loginPolicy';
 

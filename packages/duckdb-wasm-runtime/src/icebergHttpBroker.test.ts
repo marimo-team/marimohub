@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Metrics } from '@marimo-hub/core';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
 import { IcebergHttpBroker, IcebergHttpBrokerError } from './icebergHttpBroker';
 import type {
 	IcebergHttpBrokerCapability,

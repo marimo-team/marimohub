@@ -1,6 +1,9 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
-import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
+import type {
+	ObjectBrowseContext,
+	S3ObjectStoreSource,
+} from '@marimo-hub/core/ports/object-browser';
 import type { S3ClientLike } from './client';
 import {
 	readObjectRange,

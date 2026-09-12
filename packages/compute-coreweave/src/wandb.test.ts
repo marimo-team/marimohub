@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
-import { Seconds } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
+import { Seconds } from '@marimo-hub/core/duration';
+import type { SandboxId } from '@marimo-hub/core/ids';
 import {
 	computeContract,
 	isContractNonDirectoryFindCommand,
 } from '@marimo-hub/core/testing/compute-contract';
-import { expectExecResult } from '@marimo-hub/core/testing';
+import { expectExecResult } from '@marimo-hub/core/testing/result-assertions';
 import { CoreWeaveCompute } from './index';
 import { createWandbCompute, serviceUrlResolver } from './wandb';
 import type { WandbConfig } from './wandb';

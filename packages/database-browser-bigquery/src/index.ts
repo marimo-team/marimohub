@@ -1,21 +1,19 @@
 import { z } from 'zod';
-import {
-	ResourceExhaustedError,
-	UnavailableError,
-	ValidationError,
-	withDeadline,
-} from '@marimo-hub/core';
+import { ResourceExhaustedError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
+import { withDeadline } from '@marimo-hub/core/async';
 import type {
 	BigQueryConnectionCapability,
-	BrowseNamespacesRequest,
-	BrowsePageRequest,
 	DatabaseBrowser,
 	DatabaseSource,
 	DatabaseTestOptions,
+} from '@marimo-hub/core/ports/database-browser';
+import type {
+	BrowseNamespacesRequest,
+	BrowsePageRequest,
 	IntegrationProbe,
 	TablePreviewRequest,
 	TestResult,
-} from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/integrations';
 import { BigQueryTokenCache } from './auth';
 import { dataSchema, decodeRow, parseResponse, tableColumns, tableSchema } from './schema';
 

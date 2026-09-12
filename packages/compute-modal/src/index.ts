@@ -22,7 +22,8 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
-import { NotFoundError, SandboxId } from '@marimo-hub/core';
+import { NotFoundError } from '@marimo-hub/core/errors';
+import { SandboxId } from '@marimo-hub/core/ids';
 import type {
 	ActiveSandbox,
 	ComputeResources,
@@ -47,8 +48,8 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 
 export interface ModalConfig {
 	tokenId: string;

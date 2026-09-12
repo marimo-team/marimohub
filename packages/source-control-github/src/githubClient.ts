@@ -1,5 +1,6 @@
 import { createPrivateKey, createSign } from 'node:crypto';
-import { markSourceControlPublishFailure, UnavailableError } from '@marimo-hub/core';
+import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
+import { UnavailableError } from '@marimo-hub/core/errors';
 import { numberField, responseJson, stringField } from './githubResponses';
 
 export type GitHubFetch = (input: string, init?: RequestInit) => Promise<Response>;

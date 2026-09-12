@@ -1,4 +1,4 @@
-import { ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 
 /**
  * Operation deadlines are composed from `AbortSignal.timeout`, whose reason is

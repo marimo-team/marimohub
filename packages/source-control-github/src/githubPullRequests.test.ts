@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sourceControlPublishFailure } from '@marimo-hub/core';
+import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type { GitHubClient } from './githubClient';
 import { GitHubPullRequests } from './githubPullRequests';
 import type { GitHubRepositoryWriter } from './githubRepository';

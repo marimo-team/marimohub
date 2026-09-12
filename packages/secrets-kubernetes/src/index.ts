@@ -1,7 +1,11 @@
 import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
 import type { V1Secret } from '@kubernetes/client-node';
-import { SecretResolutionError } from '@marimo-hub/core';
-import type { SecretRef, SecretResolutionContext, SecretResolver } from '@marimo-hub/core';
+import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
+import type {
+	SecretRef,
+	SecretResolutionContext,
+	SecretResolver,
+} from '@marimo-hub/core/ports/secrets';
 import { loadKubernetesConfiguration } from './kubeConfig';
 import {
 	isValidKubernetesNamespace,

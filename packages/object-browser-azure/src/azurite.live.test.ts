@@ -1,6 +1,6 @@
 import { BlobServiceClient } from '@azure/storage-blob';
 import { describe, it } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
 import {
 	OBJECT_BROWSE_CONTRACT_SEED,
 	objectBrowseContract,

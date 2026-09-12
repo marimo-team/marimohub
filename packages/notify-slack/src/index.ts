@@ -1,6 +1,7 @@
 import { ofetch } from 'ofetch';
-import { requireHttpsUrl } from '@marimo-hub/core';
-import type { Notification, NotificationDeliveryOutcome, Notifier } from '@marimo-hub/core';
+import { requireHttpsUrl } from '@marimo-hub/core/url';
+import type { Notification } from '@marimo-hub/core/notifications';
+import type { NotificationDeliveryOutcome, Notifier } from '@marimo-hub/core/ports/notifier';
 
 interface SlackRequestOptions {
 	method: 'POST';

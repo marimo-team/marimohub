@@ -53,12 +53,13 @@ import {
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
-import { Millis } from '@marimo-hub/core';
-import type { SandboxId, Timings } from '@marimo-hub/core';
+import { Millis } from '@marimo-hub/core/duration';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
 import { resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 export * from './shared';
 import type {
 	ActiveSandbox,
@@ -83,7 +84,7 @@ import type {
 	StartProcessOptions,
 	SetEnvVarsOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
 
 /** marimo's hardcoded kernel port (see `SandboxProvisioner`'s `MARIMO_PORT`). */
 const DEFAULT_KERNEL_PORT = 2718;

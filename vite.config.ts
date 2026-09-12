@@ -365,6 +365,44 @@ export default defineConfig({
 					],
 				},
 			},
+			{
+				files: [
+					'packages/storage-*/**',
+					'packages/compute-*/**',
+					'packages/auth-*/**',
+					'packages/credentials-*/**',
+					'packages/secrets-*/**',
+					'packages/notify-*/**',
+					'packages/object-browser-*/**',
+					'packages/database-browser-*/**',
+					'packages/source-control-*/**',
+					'packages/duckdb-wasm-runtime/**',
+					'packages/postgres-runtime/**',
+				],
+				rules: {
+					'no-restricted-imports': [
+						'error',
+						{
+							paths: [
+								{
+									name: '@marimo-hub/core',
+									message:
+										'Use a focused core subpath so adapter tasks do not read unrelated services.',
+								},
+								{
+									name: '@marimo-hub/core/ports',
+									message: 'Import the individual port subpath.',
+								},
+								{
+									name: '@marimo-hub/core/testing',
+									message: 'Import the specific testing helper or contract subpath.',
+								},
+							],
+							patterns: ['@marimo-hub/postgres-runtime', '@marimo-hub/postgres-runtime/*'],
+						},
+					],
+				},
+			},
 		],
 	},
 	// This `test` block governs ONLY the root-level `vp test` run that

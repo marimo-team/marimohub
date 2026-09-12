@@ -1,13 +1,13 @@
 import { describe, it, vi } from 'vitest';
 import type { TestContext } from 'vitest';
+import type { DataQueryExecution } from '@marimo-hub/core/data-query-contracts';
 import type {
-	DataQueryExecution,
 	DuckDBPreviewProgram,
 	DuckDBWasmRuntime,
-	IntegrationId,
-	Metrics,
-} from '@marimo-hub/core';
-import { DataQueryUserError } from '@marimo-hub/core';
+} from '@marimo-hub/core/data-preview-programs';
+import type { IntegrationId } from '@marimo-hub/core/ids';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
+import { DataQueryUserError } from '@marimo-hub/core/data-query-contracts';
 import {
 	createNodeDataQueryExecutorFactory,
 	createNodeDuckDBWasmRuntimeFactory,

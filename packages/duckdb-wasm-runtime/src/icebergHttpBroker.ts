@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { noopMetrics, withAbortSignal } from '@marimo-hub/core';
-import type { Metrics } from '@marimo-hub/core';
+import { noopMetrics } from '@marimo-hub/core/ports/metrics';
+import { withAbortSignal } from '@marimo-hub/core/async';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
 
 export type IcebergHttpBrokerMethod = 'GET' | 'HEAD';
 

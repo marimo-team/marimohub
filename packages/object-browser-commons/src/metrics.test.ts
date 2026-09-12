@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Metrics, ObjectStoreProvider } from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
+import type { ObjectStoreProvider } from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import { ObjectBrowserObserver } from './metrics';
 import { DEFAULT_OBJECT_BROWSER_LIMITS } from './limits';
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
-import type { Metrics, ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
+import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core/ports/object-browser';
 import type { S3ClientLike } from './client';
 import { S3ObjectBrowser } from './index';
 

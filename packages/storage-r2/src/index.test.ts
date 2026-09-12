@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PreconditionFailedError } from '@marimo-hub/core';
+import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { R2BucketAdapter } from './index';
 

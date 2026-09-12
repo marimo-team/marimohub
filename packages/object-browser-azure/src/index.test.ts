@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
-import type { AzureBlobObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import type {
+	AzureBlobObjectStoreSource,
+	ObjectBrowseContext,
+} from '@marimo-hub/core/ports/object-browser';
 import { AzureBlobObjectBrowser } from './index';
 
 const source: AzureBlobObjectStoreSource = {

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
 	BROADCAST_NOTIFICATION_FIXTURE,
-	notifierContract,
 	NOTIFICATION_FIXTURE,
-} from '@marimo-hub/core/testing';
+} from '@marimo-hub/core/testing/notification-fixtures';
+import { notifierContract } from '@marimo-hub/core/testing/notifier-contract';
 import { escapeSlackText, SlackNotifier } from './index';
 
 notifierContract(

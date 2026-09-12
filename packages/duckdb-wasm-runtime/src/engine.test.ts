@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { DataQueryExecution, IntegrationId } from '@marimo-hub/core';
+import type { DataQueryExecution } from '@marimo-hub/core/data-query-contracts';
+import type { IntegrationId } from '@marimo-hub/core/ids';
 import { BlockingDuckDBEngine } from './engine';
 
 describe('BlockingDuckDBEngine initialization', () => {

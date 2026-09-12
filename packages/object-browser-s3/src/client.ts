@@ -3,8 +3,11 @@ import { Agent as HttpsAgent } from 'node:https';
 import { Transform } from 'node:stream';
 import type { TransformCallback } from 'node:stream';
 import { S3Client } from '@aws-sdk/client-s3';
-import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import type {
+	ObjectBrowseContext,
+	S3ObjectStoreSource,
+} from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import {
 	assertPermittedHost,
 	createGuardedLookup,

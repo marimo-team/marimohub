@@ -4,8 +4,8 @@ import type {
 	ObjectBrowseContext,
 	ObjectOpenRequest,
 	S3ObjectStoreSource,
-} from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+} from '@marimo-hub/core/ports/object-browser';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import type { S3ObjectBrowserLimits } from './index';
 import type { S3ClientFactory } from './client';
 import { mapS3Error } from './errors';

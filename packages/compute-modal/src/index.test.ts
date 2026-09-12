@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
-import { Millis } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
-import { listFilesFailure } from '@marimo-hub/core/ports';
-import { expectExecResult, expectFileResult, expectLaunchResult } from '@marimo-hub/core/testing';
+import { Millis } from '@marimo-hub/core/duration';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import {
+	expectExecResult,
+	expectFileResult,
+	expectLaunchResult,
+} from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,

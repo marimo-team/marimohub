@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProjectId, UserId } from '@marimo-hub/core';
-import type { ObjectBrowseContext } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import type { ObjectBrowseContext } from '@marimo-hub/core/ports/object-browser';
 import type { AsyncBuffer } from 'hyparquet';
 import { DEFAULT_OBJECT_BROWSER_LIMITS } from '../limits';
 import type { ObjectBrowserLimits } from '../limits';

@@ -1,4 +1,4 @@
-import type { PostgresTlsCapability } from '@marimo-hub/core';
+import type { PostgresTlsCapability } from '@marimo-hub/core/ports/database-browser';
 
 const MAX_CA_BYTES = 1024 * 1024;
 

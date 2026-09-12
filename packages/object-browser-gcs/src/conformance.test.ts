@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createProjectId, UserId } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
 import {
 	OBJECT_BROWSE_CONTRACT_SEED,
 	objectBrowseContract,

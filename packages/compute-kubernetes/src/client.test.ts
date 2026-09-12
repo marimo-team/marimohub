@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Readable, Writable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxId } from '@marimo-hub/core';
+import type { SandboxId } from '@marimo-hub/core/ids';
 
 const k8sMock = vi.hoisted(() => {
 	class CoreV1Api {}

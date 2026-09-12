@@ -88,15 +88,13 @@ import {
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
+import type { SandboxId } from '@marimo-hub/core/ids';
+import type { Seconds } from '@marimo-hub/core/duration';
+import type { Timings } from '@marimo-hub/core/timing';
+import { logEvent } from '@marimo-hub/core/logs';
 import type {
 	ComputeResources,
-	SandboxId,
 	SandboxUserHome,
-	Seconds,
-	Timings,
-} from '@marimo-hub/core';
-import { logEvent } from '@marimo-hub/core';
-import type {
 	CreateSandboxOptions,
 	ExecOptions,
 	ExecResult,
@@ -117,8 +115,8 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
-} from '@marimo-hub/core/ports';
-import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+} from '@marimo-hub/core/ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 import { instrumentCoreWeaveClient } from './tracing';
 
 /** marimo's hardcoded kernel port (see `SandboxProvisioner`'s `MARIMO_PORT`). */

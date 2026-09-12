@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { gzipSync } from 'fflate';
-import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core';
+import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import { GitHubAppPublisher } from './index';
 import { collectTarballWorkspace, tarballPathMapper } from './githubWorkspace';
 

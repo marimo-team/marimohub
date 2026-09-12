@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
-import type { DataQueryExecution, PostgresConnectionCapability } from '@marimo-hub/core';
+import type { DataQueryExecution } from '@marimo-hub/core/data-query-contracts';
+import type { PostgresConnectionCapability } from '@marimo-hub/core/ports/database-browser';
 import { createPostgresDataQueryExecutorFactory, PostgresDatabaseBrowser } from './node';
 
 const source: PostgresConnectionCapability = {

@@ -1,4 +1,5 @@
-import type { Notification, Notifier } from '..';
+import type { Notification } from '../notifications';
+import type { Notifier } from '../ports/notifier';
 
 export class MemoryNotifier implements Notifier {
 	readonly deliveries: Notification[] = [];

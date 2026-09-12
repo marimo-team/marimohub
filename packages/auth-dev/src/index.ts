@@ -6,8 +6,8 @@
  * stack locally without a provider. Never enable it in a deployment serving real
  * users. Extracted from the original `worker/auth.ts` (`AUTH_MODE === 'none'`).
  */
-import { UserId } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core';
+import { UserId } from '@marimo-hub/core/ids';
+import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core/ports/auth';
 
 export interface DevAuthConfig {
 	userId?: string;

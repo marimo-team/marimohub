@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectId, ObjectBrowseError, UserId } from '@marimo-hub/core';
-import type { ObjectBrowseContext } from '@marimo-hub/core';
+import { createProjectId, UserId } from '@marimo-hub/core/ids';
+import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
+import type { ObjectBrowseContext } from '@marimo-hub/core/ports/object-browser';
 import {
 	decodeCursor,
 	DEFAULT_OBJECT_BROWSER_LIMITS,
