@@ -61,13 +61,15 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 		{ q: search.trim() || undefined },
 		{ enabled: Array.isArray(value.projects), throwOnError: false },
 	);
+	const boundActions = upperBound?.actions;
+	const boundProjects = upperBound?.projects;
 	const upperBoundActions = useMemo(
-		() => (Array.isArray(upperBound?.actions) ? new Set(upperBound.actions) : null),
-		[upperBound?.actions],
+		() => (Array.isArray(boundActions) ? new Set(boundActions) : null),
+		[boundActions],
 	);
 	const upperBoundProjects = useMemo(
-		() => (Array.isArray(upperBound?.projects) ? new Set(upperBound.projects) : null),
-		[upperBound?.projects],
+		() => (Array.isArray(boundProjects) ? new Set(boundProjects) : null),
+		[boundProjects],
 	);
 	const selectedProjectIds = useMemo(
 		() => new Set(Array.isArray(value.projects) ? value.projects : []),

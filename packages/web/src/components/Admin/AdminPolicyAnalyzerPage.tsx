@@ -1529,7 +1529,11 @@ export default function AdminPolicyAnalyzerPage() {
 		try {
 			const suite = parseSuite(suiteText, { allowEmpty: true });
 			if (suite.cases.length >= metadata.max_cases) {
-				throw new Error(`A suite can contain at most ${metadata.max_cases} scenarios.`);
+				reportError(
+					new Error(`A suite can contain at most ${metadata.max_cases} scenarios.`),
+					'The suite is invalid.',
+				);
+				return;
 			}
 			setSuiteText(JSON.stringify({ ...suite, cases: [...suite.cases, buildCase()] }, null, 2));
 			setFormError(null);

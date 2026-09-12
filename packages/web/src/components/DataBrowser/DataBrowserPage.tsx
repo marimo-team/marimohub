@@ -191,11 +191,7 @@ function useDataBrowserPageState() {
 
 	const refresh = async () => {
 		setRefreshing(true);
-		try {
-			await refreshBrowseQueries(queryClient);
-		} finally {
-			setRefreshing(false);
-		}
+		await refreshBrowseQueries(queryClient).finally(() => setRefreshing(false));
 	};
 
 	const selected = dataIntegrations.find((entry) => entry.id === iid);

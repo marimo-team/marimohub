@@ -21,9 +21,11 @@ export interface OAuthConsentPageProps {
 	navigate?: (url: string) => void;
 }
 
-export function OAuthConsentPage({
-	navigate = (url) => window.location.assign(url),
-}: OAuthConsentPageProps) {
+function navigateToUrl(url: string) {
+	window.location.assign(url);
+}
+
+export function OAuthConsentPage({ navigate = navigateToUrl }: OAuthConsentPageProps) {
 	const id = new URLSearchParams(window.location.search).get('id');
 	const { user } = useAuth();
 	const preview = useOAuthAuthorizationPreview(id);

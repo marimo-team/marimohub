@@ -35,9 +35,11 @@ export interface CliDeviceLoginPageProps {
 	navigate?: (url: string) => void;
 }
 
-export function CliDeviceLoginPage({
-	navigate = (url) => window.location.assign(url),
-}: CliDeviceLoginPageProps) {
+function navigateToUrl(url: string) {
+	window.location.assign(url);
+}
+
+export function CliDeviceLoginPage({ navigate = navigateToUrl }: CliDeviceLoginPageProps) {
 	const initialCode = new URLSearchParams(window.location.search).get('user_code') ?? '';
 	const { user } = useAuth();
 	const approve = useApproveCliDeviceAuthorization();

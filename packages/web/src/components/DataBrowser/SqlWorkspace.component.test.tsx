@@ -50,11 +50,9 @@ function useRunDataQueryMock() {
 		isPending,
 		mutateAsync: async (input: { sql: string; signal: AbortSignal }) => {
 			setPending(true);
-			try {
-				return await hookMocks.executeQuery(input);
-			} finally {
-				setPending(false);
-			}
+			return Promise.resolve()
+				.then(() => hookMocks.executeQuery(input))
+				.finally(() => setPending(false));
 		},
 	};
 }

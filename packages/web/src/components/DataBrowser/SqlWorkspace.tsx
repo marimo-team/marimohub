@@ -183,7 +183,7 @@ function SqlWorkspaceSession({
 	const [instruction, setInstruction] = useState('');
 	const [showHistory, setShowHistory] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const editorReadiness = useMemo(createEditorReadinessStore, []);
+	const editorReadiness = useMemo(() => createEditorReadinessStore(), []);
 	const editorReady = useSyncExternalStore(
 		editorReadiness.subscribe,
 		editorReadiness.getSnapshot,
@@ -251,9 +251,8 @@ function SqlWorkspaceSession({
 				await executeStatement(0);
 			} catch (cause) {
 				if (!controller.signal.aborted) setError(errorMessage(cause));
-			} finally {
-				if (abortRef.current === controller) abortRef.current = null;
 			}
+			if (abortRef.current === controller) abortRef.current = null;
 		},
 		[historyItems, query, storageKey],
 	);

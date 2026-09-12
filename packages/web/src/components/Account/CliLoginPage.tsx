@@ -13,9 +13,11 @@ export interface CliLoginPageProps {
 	navigate?: (url: string) => void;
 }
 
-export function CliLoginPage({
-	navigate = (url) => window.location.assign(url),
-}: CliLoginPageProps) {
+function navigateToUrl(url: string) {
+	window.location.assign(url);
+}
+
+export function CliLoginPage({ navigate = navigateToUrl }: CliLoginPageProps) {
 	const request = parseCliLoginRequest(window.location.search);
 	const { user } = useAuth();
 	const approve = useApproveCliAuthorization();
