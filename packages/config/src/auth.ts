@@ -1,6 +1,10 @@
 import type { Authenticator } from '@marimo-hub/core';
 import { basePathFromUrl } from '@marimo-hub/core/url';
-import { createOidcAuth, createOidcAccessTokenAuthenticator } from '@marimo-hub/auth-oidc';
+import {
+	createOidcAuth,
+	createOidcAccessTokenAuthenticator,
+	normalizeEmailDomains,
+} from '@marimo-hub/auth-oidc';
 import type {
 	EmailVerificationPolicy,
 	OidcGroupPolicy,
@@ -60,6 +64,15 @@ function parseEmailDomains(raw: string | undefined): string[] | undefined {
 		throw new ConfigError('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS is set but lists no domains.', {
 			variable: 'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
 			remediation: 'Provide at least one domain (e.g. "marimo.io"), or "*" to allow all.',
+			docs: 'docs/configuration.md#auth',
+		});
+	}
+	try {
+		normalizeEmailDomains(domains);
+	} catch {
+		throw new ConfigError('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS contains a malformed domain.', {
+			variable: 'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
+			remediation: 'Provide a domain after "@", or use "*" to allow all.',
 			docs: 'docs/configuration.md#auth',
 		});
 	}

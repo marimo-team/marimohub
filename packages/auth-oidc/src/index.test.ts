@@ -3,6 +3,7 @@ import { SignJWT } from 'jose';
 import {
 	claimAtPointer,
 	createOidcAuth,
+	createOidcAccessTokenAuthenticator,
 	normalizeEmailDomains,
 	emailDomainAllowed,
 	pictureUrlClaim,
@@ -338,11 +339,28 @@ describe('normalizeEmailDomains', () => {
 	});
 
 	it('drops blank entries', () => {
-		expect(normalizeEmailDomains(['example.com', '', '   ', '@'])).toEqual(['example.com']);
+		expect(normalizeEmailDomains(['example.com', '', '   '])).toEqual(['example.com']);
 	});
 
-	it('returns an empty array for undefined', () => {
+	it.each([['@'], [' @ '], ['@*'], ['example.com', '@'], ['', '   ']])(
+		'rejects a malformed allowlist: %j',
+		(...domains) => {
+			expect(() => normalizeEmailDomains(domains)).toThrow(/empty or malformed domain/);
+			expect(() => makeOidc({ allowedEmailDomains: domains })).toThrow(/empty or malformed domain/);
+			expect(() =>
+				createOidcAccessTokenAuthenticator({
+					issuer: BASE_CONFIG.issuer,
+					clientId: BASE_CONFIG.clientId,
+					audience: 'https://hub.example.com/mcp',
+					allowedEmailDomains: domains,
+				}),
+			).toThrow(/empty or malformed domain/);
+		},
+	);
+
+	it('returns an empty array for omitted or empty policy', () => {
 		expect(normalizeEmailDomains(undefined)).toEqual([]);
+		expect(normalizeEmailDomains([])).toEqual([]);
 	});
 });
 
@@ -360,8 +378,34 @@ describe('claimAtPointer', () => {
 		expect(claimAtPointer({ groups: ['admin'] }, pointer)).toBeUndefined();
 	});
 
-	it('does not traverse arrays, nulls, missing keys, or inherited properties', () => {
-		expect(claimAtPointer({ groups: ['admin'] }, '/groups/0')).toBeUndefined();
+	it('resolves group claims through array indices and numeric object keys', () => {
+		expect(claimAtPointer({ identities: [{ groups: ['admin'] }] }, '/identities/0/groups')).toEqual(
+			['admin'],
+		);
+		expect(claimAtPointer([[{ groups: ['staff'] }]], '/0/0/groups')).toEqual(['staff']);
+		expect(claimAtPointer({ '01': { groups: ['staff'] } }, '/01/groups')).toEqual(['staff']);
+	});
+
+	it.each(['', '-', '-1', '+0', '01', '1.0', '1e0', ' 0', 'length', '1', '9007199254740993'])(
+		'rejects an invalid or out-of-range array index: %j',
+		(index) => {
+			expect(
+				claimAtPointer({ identities: [{ groups: ['admin'] }] }, `/identities/${index}/groups`),
+			).toBeUndefined();
+		},
+	);
+
+	it('rejects named array properties and inherited indices', () => {
+		const identities = [{ groups: ['staff'] }];
+		Object.defineProperty(identities, 'admin', { value: { groups: ['admin'] } });
+		expect(claimAtPointer({ identities }, '/identities/admin/groups')).toBeUndefined();
+		const sparse: unknown[] = [];
+		sparse.length = 1;
+		Object.setPrototypeOf(sparse, { 0: { groups: ['admin'] } });
+		expect(claimAtPointer({ identities: sparse }, '/identities/0/groups')).toBeUndefined();
+	});
+
+	it('does not traverse nulls, missing keys, or inherited properties', () => {
 		expect(claimAtPointer({ realm: null }, '/realm/groups')).toBeUndefined();
 		expect(claimAtPointer({ realm: {} }, '/realm/groups')).toBeUndefined();
 		const inherited = Object.create({ groups: ['admin'] }) as Record<string, unknown>;
@@ -1205,35 +1249,47 @@ describe('OIDC routes', () => {
 		});
 	});
 
-	it('maps exact nested provider groups to bounded internal entitlements', async () => {
-		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
-			sub: 'user-1',
-			email: 'user@example.com',
-			email_verified: true,
-			realm_access: { roles: ['hub-users', 'hub-admins'] },
-		});
-		const { authenticator, routes } = makeOidc({
-			groups: {
-				claim: '/realm_access/roles',
-				allowed: ['hub-users'],
-				superAdmin: ['hub-admins'],
-				projectCreation: ['hub-users'],
-				defaultRoles: { editor: ['hub-editors'], manager: ['hub-admins'] },
-			},
-		});
-		const txn = await beginOidcTransaction(routes);
+	it.each([
+		{
+			claim: '/realm_access/roles',
+			groupClaims: { realm_access: { roles: ['hub-users', 'hub-admins'] } },
+		},
+		{
+			claim: '/identities/0/groups',
+			groupClaims: { identities: [{ groups: ['hub-users', 'hub-admins'] }] },
+		},
+	])(
+		'maps provider groups at $claim to bounded internal entitlements',
+		async ({ claim, groupClaims }) => {
+			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+				sub: 'user-1',
+				email: 'user@example.com',
+				email_verified: true,
+				...groupClaims,
+			});
+			const { authenticator, routes } = makeOidc({
+				groups: {
+					claim,
+					allowed: ['hub-users'],
+					superAdmin: ['hub-admins'],
+					projectCreation: ['hub-users'],
+					defaultRoles: { editor: ['hub-editors'], manager: ['hub-admins'] },
+				},
+			});
+			const txn = await beginOidcTransaction(routes);
 
-		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
+			const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+				headers: { cookie: txn },
+			});
 
-		const sessionCookie = cookiePair(res, SESSION_COOKIE);
-		await expect(
-			authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1])),
-		).resolves.toMatchObject({
-			entitlements: ['super-admin', 'project-creator', 'default-role:manager'],
-		});
-	});
+			const sessionCookie = cookiePair(res, SESSION_COOKIE);
+			await expect(
+				authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1])),
+			).resolves.toMatchObject({
+				entitlements: ['super-admin', 'project-creator', 'default-role:manager'],
+			});
+		},
+	);
 
 	it('does not grant project creation without an exact group match', async () => {
 		oauthMock.getValidatedIdTokenClaims.mockReturnValue({

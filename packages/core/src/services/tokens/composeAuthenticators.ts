@@ -11,11 +11,15 @@ export function composeAuthenticators(
 	const logoutUrl = sso.logoutUrl?.bind(sso);
 	return {
 		async authenticate(request) {
+			const authorization = request.headers.get('authorization') ?? '';
+			const hasBearer = /(?:^|,)\s*bearer(?:\s|,|$)/i.test(authorization);
+			// Fetch combines duplicate Authorization fields; never choose among credentials.
+			if (hasBearer && authorization.includes(',')) return null;
 			const bearer = bearerToken(request);
 			if (bearer !== null && isPersonalAccessToken(bearer)) {
 				return tokens.verify(bearer);
 			}
-			if (external && /^bearer(?:\s|$)/i.test(request.headers.get('authorization') ?? '')) {
+			if (external && hasBearer) {
 				return external.authenticate(request);
 			}
 			return sso.authenticate(request);

@@ -55,6 +55,22 @@ links. The timeouts permit one hour between WebSocket I/O operations. nginx
 passes streamed responses without buffering. The path prefix is runtime
 configuration, so one image can serve different prefixes.
 
+If MCP is enabled, also proxy its root discovery path without stripping any path segment:
+
+```nginx
+location = /.well-known/oauth-protected-resource/marimohub/mcp {
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_pass http://marimohub:3000;
+}
+```
+
+MCP clients can request this root path before they receive an authentication
+challenge. It serves metadata for both Hub and external authorization. Replace
+`marimohub` in this path with your deployment prefix. The metadata URL in the
+`WWW-Authenticate` challenge stays under `/marimohub/` and uses the existing
+prefix proxy rule.
+
 After deploy, validate the same core flow on every platform:
 
 1. Check `/api/health`.

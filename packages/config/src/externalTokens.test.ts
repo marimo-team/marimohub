@@ -119,4 +119,16 @@ describe('signed external tokens through the composition root', () => {
 			).toBe(401);
 		}
 	});
+
+	it('rejects a combined Authorization header even with a valid browser session', async () => {
+		const app = createApi(createFromEnv(env));
+		const cookie = sessionCookie();
+		expect((await app.request('/api/v1/me', { headers: { Cookie: cookie } })).status).toBe(200);
+		for (const token of ['malformed', accessToken()]) {
+			const headers = new Headers({ Cookie: cookie, Authorization: 'Basic dXNlcjpwdw==' });
+			headers.append('Authorization', `Bearer ${token}`);
+			expect((await app.request('/api/v1/me', { headers })).status).toBe(401);
+		}
+		expect(fetch).not.toHaveBeenCalled();
+	});
 });

@@ -298,6 +298,21 @@ describe('external OIDC access tokens', () => {
 		expect(await auth.authenticate(request(await sign()))).toMatchObject({ entitlements: [] });
 	});
 
+	it('authenticates only admitted array-nested groups from a signed access token', async () => {
+		const auth = createOidcAccessTokenAuthenticator({
+			...config,
+			groups: { claim: '/identities/0/groups', allowed: ['staff'], superAdmin: ['admin'] },
+		});
+		expect(
+			await auth.authenticate(
+				request(await sign(claims({ identities: [{ groups: ['staff', 'admin'] }] }))),
+			),
+		).toMatchObject({ id: 'user-one', entitlements: ['super-admin'] });
+		for (const identities of [[], [{ groups: ['guest'] }], [{ groups: 'staff' }]]) {
+			expect(await auth.authenticate(request(await sign(claims({ identities }))))).toBeNull();
+		}
+	});
+
 	it.each(['read', 'run', 'edit', 'full'] as const)(
 		'maps the %s scope to the existing preset',
 		async (preset) => {

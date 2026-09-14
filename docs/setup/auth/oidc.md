@@ -52,6 +52,7 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 ```
 
 Nested claims use JSON Pointer syntax, such as `/realm_access/roles`.
+Array elements use zero-based indices, such as `/identities/0/groups`.
 `ALLOWED_GROUPS` controls login. The other lists map groups to internal
 entitlements. The session cookie stores mapped entitlements, not raw groups.
 

@@ -10,8 +10,8 @@ Every `/api/v1/*` request passes through, in order:
 
 1. **CSRF guard** — rejects state-changing requests a browser flags as
    cross-origin; non-browser callers pass. See [CSRF](#csrf--allowed-origins).
-2. **AuthN guard** — `authenticate(request)` returns an `AuthUser` (`{ id,
-email }`) or `null` → `401`.
+2. **AuthN guard** — `authenticate(request)` returns an `AuthenticatedPrincipal`
+   (user identity plus credential provenance) or `null` → `401`.
 3. **Auto-init** — creates the catalog + default project on first request.
 
 `GET /api/v1/me` returns the current user and an optional provider `logoutUrl`.
@@ -34,21 +34,26 @@ the API tier stays stateless — no session store, preserving the "no database"
 property.
 
 Every adapter returns an `AuthenticatedPrincipal` — the user plus a required
-`credential` naming the provenance (`sso`, `personal-access-token` with the
-token id, `service-account`, or `development`) and, when bounded, its expiry.
-PAT credentials can also carry an immutable `TokenGrant`. The grant contains
-an action boundary and a project boundary. An absent PAT grant means legacy
-unrestricted behavior.
+`credential` naming the provenance: `sso`, `personal-access-token`,
+`external-access-token`, `service-account`, or `development`. Bounded credentials
+include their expiry. PAT credentials include a token ID and can carry an immutable
+`TokenGrant`. An absent PAT grant means legacy unrestricted behavior.
+External access tokens always carry an explicit `TokenGrant`, expiry, and OAuth
+client ID, resource, and scopes. Each grant limits actions and projects.
 
-The authenticator result owns this: consumers such as the API's PAT-only route
-guard read `credential.kind` and never re-derive the credential from request
-headers, which can disagree with the adapter over parsing. A PAT-shaped bearer
-still resolves exclusively through the token path (`composeAuthenticators`),
-so a revoked token can never fall through to SSO.
+Consumers read `credential.kind` from the authenticator result, never from request
+headers. Session-only guards reject both personal and external access tokens,
+including token-management and administration routes.
+
+`composeAuthenticators` routes PAT-shaped bearer values exclusively through Hub
+token verification. With external access tokens enabled, other bearer values use
+the external authenticator. A failed bearer authentication cannot fall back to a
+browser cookie. Cookie-only requests retain browser authentication.
 
 ## Personal access token grants
 
-`AuthorizationService` evaluates each request against three boundaries:
+For personal and external access tokens, `AuthorizationService` evaluates each
+request against three boundaries:
 
 ```text
 allowed = current user authority ∧ resource security ∧ credential grant
@@ -65,9 +70,9 @@ The grant shape is strict:
 
 `'*'` actions include future PAT-accessible actions. An explicit array denies
 new actions by default. `'*'` projects include future projects that the user
-can access. A selected list contains 1 to 100 unique project IDs. The issuer
-expands presets when it creates the token, so later preset changes do not alter
-existing grants.
+can access. A selected list contains 1 to 100 unique project IDs. For PATs, the
+Hub expands presets at token creation. Later preset changes do not alter existing
+PAT grants.
 
 A selected-project grant denies deployment-level actions. It also filters
 project lists before pagination. Super-admin standing and deployment default
@@ -78,7 +83,7 @@ The analyzer uses `credential-resource` for a masked project denial and
 `credential-action` for an action denial. Its `credential` trace stage supports
 both live and synthetic grants.
 
-Scoped tokens use credential version 2. Old replicas reject v2 token records
+Scoped PATs use credential version 2. Old replicas reject v2 token records
 and CLI states. During a rolling upgrade, an old replica can reject a valid
 scoped token but cannot accept it without its grant.
 
@@ -147,6 +152,32 @@ Periodic snapshots limit potential data loss.
 
 > The session cookie is `Secure` (HTTPS only). For local `http://localhost`
 > work, use the [`dev`](#dev-marimohub_auth_backenddev) backend, not `oidc`.
+
+### External access tokens
+
+`MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on` enables a separate JWT access-token
+authenticator in `auth-oidc`, wired through `config`. It trusts the browser-login
+issuer and uses `sub` as the same Hub user ID. It reads identity and group claims
+from the verified access token, without UserInfo requests or stored entitlement
+reuse. Shared helpers enforce browser and token email admission and group policy.
+Custom login-policy modules cannot be combined with external access tokens.
+
+The adapter maps `marimohub:read`, `marimohub:run`, `marimohub:edit`, and
+`marimohub:full` scopes to the corresponding grant presets. It expands and unions
+recognized scopes on each authentication. `full` sets `actions: '*'`.
+Unrelated scopes are ignored, but at least one recognized grant scope is required.
+External grants always use `projects: '*'`: all projects the user can already
+access. Grants cannot elevate user permissions or bypass resource security,
+suspension, or session-only guards.
+
+API and MCP use the same configured audience. MCP also requires the canonical
+public `/mcp` resource and `mcp:tools` scope. Hub OAuth issuance, verification, and
+revocation remain limited to Hub-owned credentials. The Hub does not persist
+external tokens or mint replacement credentials. Issuer-side revocation generally
+takes effect at token expiry.
+
+See [External access tokens](../docs/auth.md#external-access-tokens) for
+configuration, required claims, and lifetime limits.
 
 ### Login-policy module (`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library`)
 
@@ -220,7 +251,7 @@ Known limits:
 ### Policy analyzer
 
 Super admins use **Admin → Policy** to examine policy decisions.
-The endpoints require a super-admin session and reject personal access tokens.
+The endpoints require a super-admin session and reject personal and external access tokens.
 The analyzer calls the production policy functions and returns a deterministic trace without generated reasoning.
 
 A version-1 suite contains 1 to 25 cases.

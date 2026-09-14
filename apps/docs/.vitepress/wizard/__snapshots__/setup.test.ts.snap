@@ -42,6 +42,7 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS=hub-editors
 MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 </code></pre>
 <p>Nested claims use JSON Pointer syntax, such as <code>/realm_access/roles</code>.
+Array elements use zero-based indices, such as <code>/identities/0/groups</code>.
 <code>ALLOWED_GROUPS</code> controls login. The other lists map groups to internal
 entitlements. The session cookie stores mapped entitlements, not raw groups.</p>
 <p>If <code>ALLOWED_GROUPS</code> is set, it must contain at least one group ID. An empty list

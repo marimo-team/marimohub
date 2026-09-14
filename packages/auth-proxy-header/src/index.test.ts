@@ -180,6 +180,15 @@ describe('ProxyHeaderAuthenticator header mode', () => {
 		).resolves.toEqual({ id: 'user-1', email: 'user@example.com', credential: { kind: 'sso' } });
 	});
 
+	it.each([['@'], [' @ '], ['@*'], ['example.com', '@'], ['', '   ']])(
+		'rejects a malformed email-domain allowlist: %j',
+		(...allowedEmailDomains) => {
+			expect(() => new ProxyHeaderAuthenticator({ mode: 'headers', allowedEmailDomains })).toThrow(
+				/empty or malformed domain/,
+			);
+		},
+	);
+
 	it('allows all valid emails when the allowlist is omitted', async () => {
 		const auth = new ProxyHeaderAuthenticator({ mode: 'headers' });
 		await expect(

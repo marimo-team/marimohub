@@ -86,7 +86,12 @@ export function claimAtPointer(claims: unknown, pointer: string): unknown {
 	let value: unknown = claims;
 	for (const rawSegment of pointer.slice(1).split('/')) {
 		const segment = rawSegment.replaceAll('~1', '/').replaceAll('~0', '~');
-		if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+		if (typeof value !== 'object' || value === null) return undefined;
+		if (
+			Array.isArray(value) &&
+			(!/^(?:0|[1-9][0-9]*)$/.test(segment) || Number(segment) >= value.length)
+		)
+			return undefined;
 		if (!Object.hasOwn(value, segment)) return undefined;
 		value = (value as Record<string, unknown>)[segment];
 	}
@@ -161,7 +166,14 @@ export function mappedEntitlements(
 }
 
 export function normalizeEmailDomains(domains: readonly string[] | undefined): string[] {
-	return (domains ?? []).map((d) => d.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
+	const entries = (domains ?? []).map((domain) => domain.trim().toLowerCase()).filter(Boolean);
+	if (
+		(domains?.length && entries.length === 0) ||
+		entries.some((domain) => domain === '@' || domain === '@*')
+	) {
+		throw new Error('Email-domain allowlist contains an empty or malformed domain');
+	}
+	return entries.map((domain) => domain.replace(/^@/, ''));
 }
 
 /** True when `email`'s domain is one of the (already-normalized) allowed domains. */

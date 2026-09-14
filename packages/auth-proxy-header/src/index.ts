@@ -54,9 +54,14 @@ function validUserId(value: string): boolean {
 }
 
 function normalizeDomains(domains: readonly string[] | undefined): string[] {
-	const normalized = (domains ?? [])
-		.map((domain) => domain.trim().toLowerCase().replace(/^@/, ''))
-		.filter(Boolean);
+	const entries = (domains ?? []).map((domain) => domain.trim().toLowerCase()).filter(Boolean);
+	if (
+		(domains?.length && entries.length === 0) ||
+		entries.some((domain) => domain === '@' || domain === '@*')
+	) {
+		throw new Error('Email-domain allowlist contains an empty or malformed domain');
+	}
+	const normalized = entries.map((domain) => domain.replace(/^@/, ''));
 	return normalized.length === 1 && normalized[0] === '*' ? [] : normalized;
 }
 

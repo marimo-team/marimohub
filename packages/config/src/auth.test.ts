@@ -32,6 +32,38 @@ function getConfigError(run: () => unknown): ConfigError {
 	throw new Error('Expected configuration to fail');
 }
 
+describe.each([
+	{ name: 'OIDC', env: oidcEnv },
+	{
+		name: 'OIDC with external tokens',
+		env: {
+			...oidcEnv,
+			MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'on',
+			MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'https://hub.example.com/mcp',
+		},
+	},
+	{ name: 'proxy headers', env: proxyHeaderEnv },
+])('email-domain normalization for $name', ({ env }) => {
+	it.each(['@', ' @ ', ', @, ,', '@*', 'example.com,@', '@*,example.com'])(
+		'rejects malformed domains at startup: %j',
+		(value) => {
+			const error = getConfigError(() =>
+				makeAuth({ ...env, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: value }),
+			);
+			expect(error.message).toMatch(/malformed domain/);
+			expect(error.opts.variable).toBe('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS');
+			expect(error.opts.remediation).toContain('"*" to allow all');
+		},
+	);
+
+	it.each([' , @Example.COM, , example.org, ', ' * '])(
+		'accepts deliberate policies: %j',
+		(value) => {
+			expect(() => makeAuth({ ...env, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: value })).not.toThrow();
+		},
+	);
+});
+
 describe('makeAuth selector errors', () => {
 	it('fails closed when the backend is unset and provides actionable metadata', () => {
 		const error = getConfigError(() => makeAuth({}));
@@ -479,6 +511,23 @@ describe('makeAuth proxy-header', () => {
 			email: 'user@outside.example',
 			credential: { kind: 'sso' },
 		});
+	});
+
+	it('does not normalize a domain more than once', async () => {
+		const { authenticator } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '@@example.com',
+		});
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@example.com',
+						'X-Forwarded-User': 'user-1',
+					},
+				}),
+			),
+		).resolves.toBeNull();
 	});
 
 	it('does not treat a wildcard mixed with a domain as allow-all', async () => {

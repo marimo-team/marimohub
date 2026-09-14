@@ -41,7 +41,8 @@ add a remote HTTP MCP server. The client discovers the authorization server.
 By default, the client registers with the Hub and opens the marimohub consent page.
 With external authorization, the client uses the issuer described in the next section.
 
-On the Hub consent page, check the client name and redirect URL before approval.
+For the default Hub authorization flow, use the following consent checklist.
+Check the client name and redirect URL before approval.
 The default grant permits notebook editing and execution. Use the smallest practical set of
 actions and projects. The token lifetime defaults to 7 days and cannot exceed
 90 days. Revoke a token from the API tokens dialog. Marimohub does not issue

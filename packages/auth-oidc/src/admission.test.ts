@@ -120,6 +120,25 @@ describe('shared OIDC identity admission', () => {
 		).toEqual({ error: 'invalid_groups' });
 	});
 
+	it('applies group admission to array-nested claims from access tokens or UserInfo', () => {
+		const nestedPolicy = createAdmissionPolicy({
+			groups: { ...groupConfig.groups, claim: '/identities/0/groups' },
+		});
+		const nestedIdentity = { ...identity, identities: [{ groups: ['staff'] }] };
+		for (const result of [
+			admitOidcIdentity(nestedIdentity, nestedPolicy),
+			admitOidcIdentity(identity, nestedPolicy, nestedIdentity),
+		]) {
+			expect(result).toMatchObject({ user: { entitlements: ['default-role:editor'] } });
+		}
+		expect(admitOidcIdentity({ ...identity, identities: [] }, nestedPolicy)).toEqual({
+			error: 'group_not_allowed',
+		});
+		expect(
+			admitOidcIdentity({ ...identity, identities: [{ groups: 'staff' }] }, nestedPolicy),
+		).toEqual({ error: 'invalid_groups' });
+	});
+
 	it('resolves escaped JSON pointers without accepting inherited memberships', () => {
 		const groups = createAdmissionPolicy({
 			groups: { claim: '/org~1groups/~0names', allowed: ['staff'] },
