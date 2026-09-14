@@ -1281,6 +1281,26 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'Service accounts',
+		description:
+			'Deployment credentials for unattended org integration provisioning. See [Service accounts](./service-accounts.md).',
+		backends: [
+			{
+				name: 'Deployment credentials',
+				vars: [
+					{
+						id: 'MARIMOHUB_SERVICE_ACCOUNTS',
+						name: 'Service accounts',
+						description:
+							'JSON array of accounts with id, optional name, explicit actions, and credentials (id, sha256, optional expires_at). Unset or [] disables service accounts. Maximum 32 accounts and four credentials per account. Changes require restarting all replicas.',
+						secret: true,
+						optIn: true,
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Server / API',
 		description: 'Server-wide settings; no backend selector.',
 		backends: [

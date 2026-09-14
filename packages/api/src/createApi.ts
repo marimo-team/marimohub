@@ -519,8 +519,8 @@ export function createApi(rawDeps: ApiDeps) {
 		type: 'http',
 		scheme: 'bearer',
 		description:
-			'Personal access token (`mhub_pat_…`) minted at POST /api/v1/me/tokens, for CI/CLI/' +
-			'service callers. Acts as the issuing user; cannot manage tokens.',
+			'Hub personal access token (`mhub_pat_…`), configured service-account token (`mhub_sa_…`), ' +
+			'or a trusted external OIDC access token when enabled. Bearer credentials cannot manage personal tokens.',
 	});
 
 	// OpenAPI spec.

@@ -285,10 +285,7 @@ export const SESSION_ONLY_SECURITY = [{ cookieAuth: [] }];
  */
 export function assertSessionAuthenticated(c: Context<HonoEnv>, action: string): void {
 	if (c.get('authMethod') === 'pat') {
-		const label =
-			c.get('user').credential.kind === 'external-access-token'
-				? 'External access tokens'
-				: 'Personal access tokens';
+		const label = CREDENTIAL_AUTH[c.get('user').credential.kind].label;
 		throw new ForbiddenError(`${label} cannot ${action} — sign in to do this`);
 	}
 }
@@ -298,20 +295,19 @@ export function assertSessionAuthenticated(c: Context<HonoEnv>, action: string):
  * new credential kind must decide here whether it is interactive (`session`)
  * or a bearer secret (`pat`) rather than silently inheriting session powers.
  */
+const CREDENTIAL_AUTH = {
+	sso: { method: 'session', label: 'SSO sessions' },
+	development: { method: 'session', label: 'Development sessions' },
+	'personal-access-token': { method: 'pat', label: 'Personal access tokens' },
+	'external-access-token': { method: 'pat', label: 'External access tokens' },
+	'service-account': { method: 'pat', label: 'Service accounts' },
+} as const satisfies Record<
+	CredentialKind,
+	{ method: HonoEnv['Variables']['authMethod']; label: string }
+>;
+
 export function authMethodFor(kind: CredentialKind): HonoEnv['Variables']['authMethod'] {
-	switch (kind) {
-		case 'sso':
-		case 'development':
-			return 'session';
-		case 'personal-access-token':
-		case 'service-account':
-		case 'external-access-token':
-			return 'pat';
-		default: {
-			const unreachable: never = kind;
-			throw new Error(`Unhandled credential kind: ${String(unreachable)}`);
-		}
-	}
+	return CREDENTIAL_AUTH[kind].method;
 }
 
 export { subjectDefaultRole };

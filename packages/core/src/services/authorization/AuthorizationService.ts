@@ -1,24 +1,6 @@
 /**
- * Application authorization service.
- *
- * One owner for every resource-access decision: the baseline role matrix
- * (`effectiveRole`), lifecycle rules (a deleted project is nonexistent for
- * everyone, super admins included), read-visibility masking (a hidden project
- * is indistinguishable from a missing one), viewer-mode session admission
- * (`sessionCan` / `canStartSessionMode`), and deployment standing (super-admin,
- * project creation). Callers act on the returned {@link AuthorizationDecision}
- * — a bounded verdict with a denial category, never raw attributes — and map
- * it to their transport (403 vs 404) at the edge.
- *
- * The service reproduces the pre-existing rules exactly; it adds no
- * permissions. `effectiveRole` remains the baseline role calculation (and the
- * display value); it is not the complete authorization result. Resource
- * security labels and subject-context constraints, when they arrive, compose
- * here as additional restrictions — a future constraint adapter can deny an
- * access the role permits, never grant one the role denies.
- *
- * Decision methods are asynchronous from this first version so future
- * constraint evaluation (batch, possibly remote) fits without an API break.
+ * Human authority, resource constraints, and credential grants compose here.
+ * Service accounts use explicit deployment grants; human roles cannot expand them.
  */
 import {
 	canCreateProject,
@@ -50,7 +32,11 @@ import { MAX_SECURITY_COMPARTMENTS, SECURITY_LABEL_TOKEN } from '../../securityL
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
 import type { ProjectId, UserId } from '../../ids';
 import type { Project, Session } from '../../schema';
-import { tokenGrantAllowsAction, tokenGrantAllowsProject } from '../../tokenGrants';
+import {
+	serviceAccountGrantAllowsAction,
+	tokenGrantAllowsAction,
+	tokenGrantAllowsProject,
+} from '../../tokenGrants';
 import { canStartSessionMode, sessionCan } from '../runtime/sessionAuthz';
 import type { SessionAction } from '../runtime/sessionAuthz';
 import { ACTION_RULES } from './actions';
@@ -555,6 +541,10 @@ export class AuthorizationService {
 					: {}),
 			},
 		});
+		if ('credential' in subject && subject.credential.kind === 'service-account') {
+			// Machine permissions come only from configuration, never human roles or memberships.
+			return { decision: this.decideCredential(subject, action, resource, null), labelSets: [] };
+		}
 		if (resource.kind === 'deployment') {
 			const decision = this.decideDeployment(subject, action as DeploymentAction);
 			trace?.push({
@@ -697,6 +687,9 @@ export class AuthorizationService {
 
 	credentialAllowsAction(subject: AuthorizationSubject, action: AuthorizationAction): boolean {
 		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		if ('credential' in subject && subject.credential.kind === 'service-account') {
+			return serviceAccountGrantAllowsAction(grant, action);
+		}
 		return tokenGrantAllowsAction(grant, action);
 	}
 
@@ -720,6 +713,13 @@ export class AuthorizationService {
 		role: Role | null,
 	): AuthorizationDecision {
 		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		if (
+			'credential' in subject &&
+			subject.credential.kind === 'service-account' &&
+			!this.credentialAllowsAction(subject, action)
+		) {
+			return { allowed: false, category: 'credential-action', role };
+		}
 		if (!grant) return { allowed: true, role };
 		if (resource.kind === 'deployment') {
 			if (grant.projects !== '*') {

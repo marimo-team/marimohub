@@ -235,6 +235,12 @@ export {
 } from './tokens/TokenService';
 export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
+export {
+	ServiceAccountCredentials,
+	ServiceAccountsConfigSchema,
+	generateServiceAccountToken,
+} from './tokens/ServiceAccountCredentials';
+export type { ServiceAccountsConfig } from './tokens/ServiceAccountCredentials';
 export { listAllKeys, readStoredObjects } from './catalog/storage';
 export {
 	acquireSingletonClaim,

@@ -42,13 +42,37 @@ External access tokens always carry an explicit `TokenGrant`, expiry, and OAuth
 client ID, resource, and scopes. Each grant limits actions and projects.
 
 Consumers read `credential.kind` from the authenticator result, never from request
-headers. Session-only guards reject both personal and external access tokens,
+headers. Session-only guards reject personal tokens, external tokens, and service accounts,
 including token-management and administration routes.
 
-`composeAuthenticators` routes PAT-shaped bearer values exclusively through Hub
-token verification. With external access tokens enabled, other bearer values use
-the external authenticator. A failed bearer authentication cannot fall back to a
-browser cookie. Cookie-only requests retain browser authentication.
+`composeAuthenticators` uses `parseBearerAuthorization` to distinguish absent,
+malformed, and valid bearer credentials. Combined Authorization headers containing
+a bearer scheme fail before verification. PAT and service-account prefixes select
+their own verifier, even when that verifier is disabled. Other bearer values use
+the configured external authenticator or fail. No bearer request falls back to SSO.
+
+The optional third argument names the bearer authenticators:
+
+```ts
+composeAuthenticators(tokens, sso, { external, serviceAccounts });
+```
+
+## Service accounts
+
+`MARIMOHUB_SERVICE_ACCOUNTS` declares accounts and hashed credentials in the Node
+composition root. `ServiceAccountCredentials` verifies the complete token hash and
+expiry without bucket I/O. It supports overlapping credentials for rotation.
+`IdentityService` remains the only writer for the directory and suspension records.
+The reserved `service-account:` namespace separates machines from human identities.
+
+`SERVICE_ACCOUNT_ACTIONS` defines the supported machine authority and the configuration
+schema uses that same vocabulary. Currently only `org-integration.manage` is supported.
+`AuthorizationService` uses this explicit authority for machines. Human roles, ownership,
+entitlements, and default roles cannot expand it. Missing or wildcard grants fail closed.
+Org-integration routes use their specific action, so a narrow human PAT can also manage
+integrations when its owner has super-admin standing.
+
+See [Service accounts](../docs/service-accounts.md) for configuration, expiry, and rotation.
 
 ## Personal access token grants
 

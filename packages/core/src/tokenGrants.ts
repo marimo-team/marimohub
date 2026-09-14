@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ProjectId } from './ids';
 import { ACTION_RULES, AUTHORIZATION_ACTIONS } from './services/authorization/actions';
-import type { AuthorizationAction } from './services/authorization/actions';
+import type { AuthorizationAction, DeploymentAction } from './services/authorization/actions';
 
 export type { AuthorizationAction } from './services/authorization/actions';
 export { AUTHORIZATION_ACTIONS } from './services/authorization/actions';
@@ -30,6 +30,22 @@ export const TokenGrantSchema = z.strictObject({
 });
 
 export type TokenGrant = z.infer<typeof TokenGrantSchema>;
+
+export const SERVICE_ACCOUNT_ACTIONS = [
+	'org-integration.manage',
+] as const satisfies readonly DeploymentAction[];
+
+export function serviceAccountGrantAllowsAction(
+	grant: TokenGrant | undefined,
+	action: AuthorizationAction,
+): boolean {
+	return (
+		grant !== undefined &&
+		grant.actions !== '*' &&
+		SERVICE_ACCOUNT_ACTIONS.some((supported) => supported === action) &&
+		tokenGrantAllowsAction(grant, action)
+	);
+}
 
 const READ_TOKEN_ACTIONS = ['project.read', 'integration.read'] as const;
 const RUN_TOKEN_ACTIONS = [

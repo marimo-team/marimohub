@@ -2,6 +2,8 @@
 description: Create, use, protect, audit, and revoke personal access tokens for automation.
 ---
 
+For unattended deployment provisioning without a human identity, use [service accounts](./service-accounts.md).
+
 # API tokens
 
 Personal access tokens (PATs) let CI jobs, scripts, and the CLI call the

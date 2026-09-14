@@ -8,7 +8,6 @@ import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
 import { principalFromVerifiedAccessToken } from './accessTokenClaims';
 import type { AccessTokenRejection } from './accessTokenClaims';
 
-const MAX_TOKEN_LENGTH = 32768;
 const SIGNING_ALGORITHMS = [
 	'RS256',
 	'RS384',
@@ -75,8 +74,7 @@ export function createOidcAccessTokenAuthenticator(config: OidcAccessTokenConfig
 	return {
 		async authenticate(request) {
 			const token = bearerToken(request);
-			if (!token || token.length > MAX_TOKEN_LENGTH || token.split('.').length !== 3)
-				return reject('invalid_token');
+			if (token?.split('.').length !== 3) return reject('invalid_token');
 			let verified: Awaited<ReturnType<typeof jwtVerify>>;
 			try {
 				verified = await jwtVerify(

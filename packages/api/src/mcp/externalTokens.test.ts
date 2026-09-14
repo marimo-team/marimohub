@@ -76,7 +76,9 @@ beforeEach(async () => {
 		deps.services.tokens,
 		{ authenticate: async () => null },
 		{
-			authenticate: async (request) => (bearerToken(request) === 'external' ? caller : null),
+			external: {
+				authenticate: async (request) => (bearerToken(request) === 'external' ? caller : null),
+			},
 		},
 	);
 	app = createApi(deps);

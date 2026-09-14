@@ -50,6 +50,7 @@ import type {
 import type { ApiDeps, JobsConfig, McpConfig, SessionLifetimeConfig } from '@marimo-hub/api';
 import { evaluateLoginPolicy } from '@marimo-hub/auth-oidc';
 import { makeAi } from './ai';
+import { serviceAccountsFromEnv } from './serviceAccount';
 import {
 	authBackend,
 	makeAuth,
@@ -619,6 +620,7 @@ export function createFromEnv(
 ): ApiDeps {
 	// Warns on unknown experiment IDs; no experiment currently gates behavior.
 	parseExperiments(env);
+	const serviceAccounts = serviceAccountsFromEnv(env);
 	const bucket = makeStorage(env, options?.libraries);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
@@ -704,7 +706,10 @@ export function createFromEnv(
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
 		// 1.5× and CoreWeave/E2B lifetime by 2×.
 		compute,
-		authenticator: composeAuthenticators(services.tokens, authenticator, externalAuthenticator),
+		authenticator: composeAuthenticators(services.tokens, authenticator, {
+			external: externalAuthenticator,
+			serviceAccounts,
+		}),
 		authRoutes,
 		sandbox: {
 			bucket: makeSandboxBucketConfig(env),

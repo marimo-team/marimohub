@@ -20,7 +20,7 @@ import type {
 import {
 	assertProjectActionOn,
 	assertProjectRole,
-	assertSuperAdmin,
+	assertDeploymentAction,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -834,7 +834,7 @@ app.route('/', integrationBrowseApp);
 app.openapi(listOrgIntegrations, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(c.get('user'), 'org-integration.manage', deps);
 	const query = c.req.valid('query');
 	const data = paginate((await integrations.list()).map(entryResponse), query, {
 		key: (entry) => entry.updated_at,
@@ -847,7 +847,7 @@ app.openapi(createOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(user, 'org-integration.manage', deps);
 	const body = c.req.valid('json');
 	const detail = await integrations.create(body, user.id);
 	await appendAudit(
@@ -870,7 +870,7 @@ app.openapi(getOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(c.get('user'), 'org-integration.manage', deps);
 	const detail = await integrations.get(iid);
 	c.header('ETag', etagFor(detail.updated_at));
 	return c.json({ success: true, data: detailResponse(detail) }, 200);
@@ -881,7 +881,7 @@ app.openapi(updateOrgIntegration, async (c) => {
 	const user = c.get('user');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(user, 'org-integration.manage', deps);
 	const body = c.req.valid('json');
 	const detail = await integrations.update(iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
@@ -908,7 +908,7 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	const user = c.get('user');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(user, 'org-integration.manage', deps);
 	const deleted = await integrations.delete(iid, ifMatchToken(c));
 	if (deleted) {
 		await appendAudit(
@@ -931,7 +931,7 @@ app.openapi(listOrgIntegrationVersions, async (c) => {
 	const { iid } = c.req.valid('param');
 	const query = c.req.valid('query');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(c.get('user'), 'org-integration.manage', deps);
 	const page = await integrations.listVersions(iid, {
 		limit: Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
 		cursor: query.cursor,
@@ -943,7 +943,7 @@ app.openapi(testOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(user, 'org-integration.manage', deps);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
 	const objectContext = await objectTestContext(
@@ -974,7 +974,7 @@ app.openapi(testOrgIntegration, async (c) => {
 app.openapi(queryOrgReadiness, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(c.get('user'), 'org-integration.manage', deps);
 	const body = c.req.valid('json') as QueryReadinessRequest;
 	return c.json({ success: true, data: integrations.queryReadiness(body) }, 200);
 });
