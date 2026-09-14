@@ -342,6 +342,9 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET` 🔒 | OAuth2 client secret. | Yes | — | — |
 | `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` | Absolute callback URL. | Yes | — | `https://hub.example.com/api/auth/callback` |
 | `MARIMOHUB_AUTH_OIDC_AUDIENCE` | Deprecated and ignored. The ID-token `aud` claim must contain the configured client ID. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS` | Accept JWT access tokens from the browser OIDC issuer for API and MCP access. Cannot be combined with a custom login policy. | — | `off` | — |
+| `MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE` | Required when external access tokens are on. Must differ from the browser client ID and equal the public MCP URL when MCP is on. | — | — | `https://hub.example.com/mcp` |
+| `MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL` | Optional HTTPS signing-key endpoint. Defaults to the JWKS URL discovered from the OIDC issuer. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` value. `select_account` displays the account chooser. Use `consent` to display consent again. Space-separated combinations are valid. | — | `select_account` | `consent` |
 | `MARIMOHUB_AUTH_OIDC_SCOPES` | Space-separated scopes. Must include `openid` and `email`. Add only scopes that the provider requires for group claims. `offline_access` is invalid because marimohub stores no refresh tokens. | — | `openid email profile` | — |
 | `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid. | — | `required` | `trusted-issuer` |

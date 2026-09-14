@@ -1,3 +1,5 @@
+import { EXTERNAL_TOKEN_SCOPE_PRESETS } from '@marimo-hub/core/token-grants';
+import { ensureInitialized } from '@marimo-hub/core';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { mcpAuthRouter, StreamableHTTPTransport } from '@hono/mcp';
@@ -20,10 +22,12 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 	const provider = createOAuthProvider(deps);
 	const protectedResourceMetadata = {
 		resource,
-		authorization_servers: [publicBaseUrl],
+		authorization_servers: [deps.mcp.externalAuthorizationServer ?? publicBaseUrl],
 		bearer_methods_supported: ['header'],
 		resource_name: 'marimohub',
-		scopes_supported: MCP_SCOPES,
+		scopes_supported: deps.mcp.externalAuthorizationServer
+			? [...MCP_SCOPES, ...Object.keys(EXTERNAL_TOKEN_SCOPE_PRESETS)]
+			: MCP_SCOPES,
 	};
 
 	app.use('/register', async (c, next) => {
@@ -52,6 +56,12 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 	});
 	app.get('/.well-known/oauth-protected-resource', (c) => c.json(protectedResourceMetadata));
 	app.get('/.well-known/oauth-protected-resource/mcp', (c) => c.json(protectedResourceMetadata));
+	const resourcePath = new URL(resource).pathname;
+	if (resourcePath !== '/mcp') {
+		app.get(`/.well-known/oauth-protected-resource${resourcePath}`, (c) =>
+			c.json(protectedResourceMetadata),
+		);
+	}
 	app.get('/.well-known/oauth-authorization-server', (c) =>
 		c.json({
 			issuer: publicBaseUrl,
@@ -108,11 +118,13 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 		cors({
 			origin: '*',
 			allowHeaders: ['Authorization', 'Content-Type', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
+			exposeHeaders: ['WWW-Authenticate'],
 		}),
 	);
 	app.all('/mcp', async (c) => {
 		const authenticated = await authenticateMcpRequest(c, deps);
 		if (authenticated instanceof Response) return authenticated;
+		await ensureInitialized(deps.bucket, authenticated.id);
 		const server = createMcpServer(deps, authenticated, {
 			requestId: c.get('requestId'),
 			method: c.req.method,

@@ -38,6 +38,7 @@ import oauthAuthorizationsApp from './routes/oauthAuthorizations';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { createMcpApp } from './mcp/createMcpApp';
+import { refreshIdentity } from './identity';
 import { sandboxProxyMiddleware } from './sandboxProxy';
 import {
 	authMethodFor,
@@ -458,23 +459,7 @@ export function createApi(rawDeps: ApiDeps) {
 		// parsing. Decided here, once, and read by the token-management guard.
 		c.set('authMethod', authMethodFor(user.credential.kind));
 
-		// Refresh this user's identity-directory record so opaque ids (author /
-		// session user_id) resolve to a name+email at read time. Best-effort and
-		// write-coalesced (see IdentityService.upsert) — a failure must never block
-		// an otherwise-authenticated request.
-		try {
-			await deps.services.identities.upsert(user);
-		} catch (err) {
-			logEvent({
-				level: 'error',
-				event: 'identity_upsert_failed',
-				request_id: c.get('requestId') ?? null,
-				method: c.req.method,
-				path: c.req.path,
-				user: user.id,
-				error: errorMetadata(err),
-			});
-		}
+		await refreshIdentity(c, deps, user);
 
 		await next();
 	});

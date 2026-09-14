@@ -32,6 +32,38 @@ function getConfigError(run: () => unknown): ConfigError {
 	throw new Error('Expected configuration to fail');
 }
 
+describe.each([
+	{ name: 'OIDC', env: oidcEnv },
+	{
+		name: 'OIDC with external tokens',
+		env: {
+			...oidcEnv,
+			MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'on',
+			MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'https://hub.example.com/mcp',
+		},
+	},
+	{ name: 'proxy headers', env: proxyHeaderEnv },
+])('email-domain normalization for $name', ({ env }) => {
+	it.each(['@', ' @ ', ', @, ,', '@*', 'example.com,@', '@*,example.com'])(
+		'rejects malformed domains at startup: %j',
+		(value) => {
+			const error = getConfigError(() =>
+				makeAuth({ ...env, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: value }),
+			);
+			expect(error.message).toMatch(/malformed domain/);
+			expect(error.opts.variable).toBe('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS');
+			expect(error.opts.remediation).toContain('"*" to allow all');
+		},
+	);
+
+	it.each([' , @Example.COM, , example.org, ', ' * '])(
+		'accepts deliberate policies: %j',
+		(value) => {
+			expect(() => makeAuth({ ...env, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: value })).not.toThrow();
+		},
+	);
+});
+
 describe('makeAuth selector errors', () => {
 	it('fails closed when the backend is unset and provides actionable metadata', () => {
 		const error = getConfigError(() => makeAuth({}));
@@ -481,6 +513,23 @@ describe('makeAuth proxy-header', () => {
 		});
 	});
 
+	it('does not normalize a domain more than once', async () => {
+		const { authenticator } = makeAuth({
+			...proxyHeaderEnv,
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '@@example.com',
+		});
+		await expect(
+			authenticator.authenticate(
+				new Request('https://hub.example.com', {
+					headers: {
+						'X-Forwarded-Email': 'user@example.com',
+						'X-Forwarded-User': 'user-1',
+					},
+				}),
+			),
+		).resolves.toBeNull();
+	});
+
 	it('does not treat a wildcard mixed with a domain as allow-all', async () => {
 		const { authenticator } = makeAuth({
 			...proxyHeaderEnv,
@@ -824,5 +873,45 @@ describe('projectCreationRestricted (MARIMOHUB_PROJECT_CREATION)', () => {
 		);
 		expect(error.opts.variable).toBe('MARIMOHUB_PROJECT_CREATION');
 		expect(error.message).toMatch(/expected open, restricted/);
+	});
+});
+
+describe('external access-token configuration', () => {
+	const enabled = {
+		...oidcEnv,
+		MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'on',
+		MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'https://hub.example.com/mcp',
+	};
+	it('is disabled by default and preserves browser login when enabled', () => {
+		expect(makeAuth(oidcEnv).externalAuthenticator).toBeUndefined();
+		const auth = makeAuth(enabled);
+		expect(auth.externalAuthenticator).toBeDefined();
+		expect(auth.externalIssuer).toBe(oidcEnv.MARIMOHUB_AUTH_OIDC_ISSUER);
+		expect(auth.authRoutes).toBeDefined();
+		expect(auth.authenticator.logoutUrl?.()).toBe('/api/auth/logout');
+	});
+	it.each([
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'invalid' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: undefined },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: '' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'client' },
+		{ MARIMOHUB_AUTH_OIDC_ISSUER: 'http://issuer.example.com' },
+		{ MARIMOHUB_AUTH_OIDC_ISSUER: 'https://user:pass@issuer.example.com' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL: '' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL: 'http://issuer.example.com/jwks' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL: 'https://user:pass@issuer.example.com/jwks' },
+		{ MARIMOHUB_AUTH_BACKEND: 'dev' },
+		{ MARIMOHUB_AUTH_BACKEND: 'proxy-header' },
+		{ MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library' },
+	])('fails startup for invalid configuration: %j', (override) => {
+		expect(() => makeAuth({ ...enabled, ...override })).toThrow(ConfigError);
+	});
+	it.each([
+		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
+		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL',
+	])('rejects orphaned %s', (key) => {
+		expect(() => makeAuth({ ...oidcEnv, [key]: 'https://issuer.example.com' })).toThrow(
+			/requires.*ACCESS_TOKENS=on/,
+		);
 	});
 });

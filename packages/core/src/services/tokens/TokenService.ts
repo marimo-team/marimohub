@@ -1,3 +1,5 @@
+import { bearerToken } from '../../bearerToken';
+export { bearerToken } from '../../bearerToken';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -37,21 +39,6 @@ const SECRET_LENGTH = 32;
 /** Whether a bearer credential is (claims to be) a personal access token. */
 export function isPersonalAccessToken(bearer: string): boolean {
 	return bearer.startsWith(PAT_PREFIX);
-}
-
-/**
- * The bearer credential from a request's `Authorization` header, or null. The
- * scheme match is case-insensitive (`Bearer`/`bearer`/`BEARER` all parse), so
- * every consumer sees the same value — anything that re-derives "is this a PAT
- * request?" with a stricter rule would let a differently-cased scheme slip past.
- */
-export function bearerToken(request: Request): string | null {
-	const header = request.headers.get('authorization');
-	if (!header) return null;
-	const [scheme, ...rest] = header.split(' ');
-	if (scheme.toLowerCase() !== 'bearer') return null;
-	const token = rest.join(' ').trim();
-	return token || null;
 }
 
 /** Whether a request authenticates with a personal access token. */

@@ -1056,6 +1056,29 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Deprecated and ignored. The ID-token `aud` claim must contain the configured client ID.',
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS',
+						name: 'External OIDC access tokens',
+						description:
+							'Accept JWT access tokens from the browser OIDC issuer for API and MCP access. Cannot be combined with a custom login policy.',
+						default: 'off',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
+						name: 'External access-token audience',
+						description:
+							'Required when external access tokens are on. Must differ from the browser client ID and equal the public MCP URL when MCP is on.',
+						example: 'https://hub.example.com/mcp',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL',
+						name: 'External access-token JWKS URL',
+						description:
+							'Optional HTTPS signing-key endpoint. Defaults to the JWKS URL discovered from the OIDC issuer.',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_OIDC_PROMPT',
 						name: 'OIDC prompt',
 						description:

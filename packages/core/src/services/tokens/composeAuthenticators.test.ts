@@ -74,7 +74,49 @@ describe('composeAuthenticators', () => {
 			SSO_USER,
 		);
 		expect(await auth.authenticate(req({ authorization: 'Basic dXNlcjpwdw==' }))).toBe(SSO_USER);
-		expect(ssoAuthenticate).toHaveBeenCalledTimes(3);
+		expect(
+			await auth.authenticate(req({ authorization: 'Digest username="user", realm="hub"' })),
+		).toBe(SSO_USER);
+		expect(ssoAuthenticate).toHaveBeenCalledTimes(4);
+	});
+
+	it.each([false, true])(
+		'rejects combined bearer credentials before authentication (external enabled: %s)',
+		async (externalEnabled) => {
+			const { token } = await tokens.create({ name: 'ci' }, OWNER);
+			const verify = vi.spyOn(tokens, 'verify');
+			const external = { authenticate: vi.fn(async () => SSO_USER) };
+			const auth = composeAuthenticators(tokens, sso, externalEnabled ? external : undefined);
+			for (const authorization of [
+				'Basic dXNlcjpwdw==, Bearer invalid',
+				'Basic dXNlcjpwdw==,bEaReR\tinvalid',
+				'Basic dXNlcjpwdw==, Bearer',
+				'Bearer invalid, Basic dXNlcjpwdw==',
+				'Bearer invalid, Bearer another',
+				`Basic dXNlcjpwdw==, Bearer ${token}`,
+				`Bearer ${token}, Basic dXNlcjpwdw==`,
+			]) {
+				expect(
+					await auth.authenticate(req({ authorization, cookie: 'mh_session=valid' })),
+				).toBeNull();
+			}
+			expect(verify).not.toHaveBeenCalled();
+			expect(external.authenticate).not.toHaveBeenCalled();
+			expect(ssoAuthenticate).not.toHaveBeenCalled();
+		},
+	);
+
+	it('rejects duplicate Authorization fields joined by Fetch', async () => {
+		const headers = new Headers({ cookie: 'mh_session=valid' });
+		headers.append('authorization', 'Basic dXNlcjpwdw==');
+		headers.append('authorization', 'Bearer invalid');
+		const external = { authenticate: vi.fn(async () => SSO_USER) };
+		const auth = composeAuthenticators(tokens, sso, external);
+		expect(
+			await auth.authenticate(new Request('https://hub.example/api/v1/me', { headers })),
+		).toBeNull();
+		expect(external.authenticate).not.toHaveBeenCalled();
+		expect(ssoAuthenticate).not.toHaveBeenCalled();
 	});
 
 	// The scheme match must be case-insensitive — a stricter parse anywhere
@@ -98,5 +140,25 @@ describe('composeAuthenticators', () => {
 			logoutUrl: () => 'https://idp.example/logout',
 		});
 		expect(withLogout.logoutUrl?.()).toBe('https://idp.example/logout');
+	});
+});
+
+describe('external bearer composition', () => {
+	it('routes external tokens without cookie fallback, including malformed bearer headers', async () => {
+		const tokens = { verify: vi.fn(async () => null) } as unknown as TokenService;
+		const sso = { authenticate: vi.fn(async () => SSO_USER) };
+		const external = { authenticate: vi.fn(async () => null) };
+		const auth = composeAuthenticators(tokens, sso, external);
+		for (const authorization of ['Bearer external.jwt.token', 'Bearer', 'bearer ', 'BEARER\tbad']) {
+			expect(
+				await auth.authenticate(req({ authorization, cookie: 'mh_session=valid' })),
+			).toBeNull();
+		}
+		expect(external.authenticate).toHaveBeenCalledTimes(4);
+		expect(sso.authenticate).not.toHaveBeenCalled();
+		expect(await auth.authenticate(req({ cookie: 'mh_session=valid' }))).toBe(SSO_USER);
+		expect(await auth.authenticate(req({ authorization: 'Bearer mhub_pat_invalid' }))).toBeNull();
+		expect(tokens.verify).toHaveBeenCalledWith('mhub_pat_invalid');
+		expect(external.authenticate).toHaveBeenCalledTimes(4);
 	});
 });

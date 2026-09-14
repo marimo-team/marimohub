@@ -6,10 +6,8 @@
  * server-side session store), preserving the "no database" property.
  *
  * The OAuth2/OIDC protocol mechanics — discovery, PKCE, the token exchange, and
- * ID-token (JWKS) verification — are delegated to `oauth4webapi` (zero-dependency,
- * Workers-compatible, by the author of `jose`). `jose` is still used for the one
- * thing oauth4webapi does not do: minting/verifying our own symmetric (HS256)
- * session + transaction cookies.
+ * ID-token (JWKS) verification — are delegated to `oauth4webapi`. `jose`
+ * signs and verifies the Hub's session and transaction cookies.
  *
  * - `authenticator.authenticate(req)` validates the `mh_session` cookie.
  * - `routes` is a Hono sub-app exposing `/api/auth/{login,callback,logout}`,
@@ -20,12 +18,10 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { ASSIGNABLE_ROLES } from '@marimo-hub/core/constants';
 import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
 import { logEvent } from '@marimo-hub/core/logs';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { UserId } from '@marimo-hub/core/ids';
-import type { AssignableRole } from '@marimo-hub/core/constants';
 import type {
 	AuthenticatedPrincipal,
 	AuthEntitlement,
@@ -35,24 +31,26 @@ import type {
 import { evaluateLoginPolicy } from './loginPolicy';
 import type { OidcLoginPolicy } from './loginPolicy';
 
+import {
+	utf8ByteLength,
+	hasControlCharacters,
+	validSubject,
+	validEmail,
+	displayNameClaim,
+	pictureUrlClaim,
+} from './claims';
+import { createAdmissionPolicy, admitOidcIdentity } from './admission';
+import type { OidcAdmissionConfig } from './admission';
+import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
+export type { EmailVerificationPolicy, OidcGroupPolicy } from './claims';
+export {
+	pictureUrlClaim,
+	claimAtPointer,
+	normalizeEmailDomains,
+	emailDomainAllowed,
+} from './claims';
+export * from './accessTokens';
 export * from './loginPolicy';
-
-export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
-
-export interface OidcGroupPolicy {
-	/** JSON Pointer locating the provider's group array, e.g. `/groups`. */
-	claim: string;
-	/** At least one exact group match is required to sign in. */
-	allowed?: string[];
-	/** Groups mapped to deployment super-admin. */
-	superAdmin?: string[];
-	/** Groups permitted to create projects. */
-	projectCreation?: string[];
-	/** Groups mapped to a per-user deployment-wide default project role. */
-	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
-	/** Maximum accepted group count (default 200, maximum 200). */
-	maxGroups?: number;
-}
 
 export interface OidcLoginPolicySettings {
 	/** Preloaded, trusted login-policy instance (see `loginPolicy.ts`). */
@@ -61,7 +59,7 @@ export interface OidcLoginPolicySettings {
 	timeoutSeconds?: number;
 }
 
-export interface OidcConfig {
+export interface OidcConfig extends OidcAdmissionConfig {
 	/** OIDC issuer URL (its `/.well-known/openid-configuration` is discovered). */
 	issuer: string;
 	clientId: string;
@@ -76,10 +74,6 @@ export interface OidcConfig {
 	audience?: string;
 	/** OAuth scopes (default `openid email profile`). */
 	scopes?: string;
-	/** Handling for an absent `email_verified` claim (default `required`). */
-	emailVerification?: EmailVerificationPolicy;
-	/** Optional provider-group extraction and entitlement mapping. */
-	groups?: OidcGroupPolicy;
 	/**
 	 * Optional trusted login-policy module, mutually exclusive with `groups`.
 	 * Called after all OIDC/email validation and before session signing; maps
@@ -94,17 +88,6 @@ export interface OidcConfig {
 	postLoginRedirect?: string;
 	/** Session cookie lifetime in seconds (default 8h). */
 	sessionTtlSeconds?: number;
-	/**
-	 * Lowercase email domains allowed to sign in (e.g. `['marimo.io']`). When set
-	 * and non-empty, the callback rejects any user whose `email` is not under one
-	 * of these domains. Email verification follows `emailVerification`: a present
-	 * claim must be true, while `trusted-issuer` permits omission. When exactly one
-	 * domain is configured, it is also passed to the provider as the `hd`
-	 * (hosted-domain) hint — a Google UX nudge, NOT a security boundary; the
-	 * callback check is what actually enforces the restriction. Empty/undefined
-	 * means any successfully-authenticated account is accepted.
-	 */
-	allowedEmailDomains?: string[];
 }
 
 const SESSION_COOKIE = 'mh_session';
@@ -112,15 +95,8 @@ const TXN_COOKIE = 'mh_oidc_txn';
 
 /** Generous bound for an in-app deep link; anything longer is dropped, not truncated. */
 const MAX_RETURN_TO_LENGTH = 512;
-const MAX_SUBJECT_LENGTH = 512;
-const MAX_EMAIL_LENGTH = 320;
-const MAX_NAME_LENGTH = 200;
-const MAX_PICTURE_URL_INPUT_LENGTH = 2048;
-const MAX_PICTURE_URL_BYTES = 2048;
 // Leaves room for the cookie name and attributes under common 4096-byte limits.
 const MAX_SESSION_JWT_BYTES = 3800;
-const MAX_GROUPS = 200;
-const MAX_GROUP_LENGTH = 256;
 const AUTH_ENTITLEMENT_SET: ReadonlySet<string> = new Set(AUTH_ENTITLEMENTS);
 /** Stable operational event per non-allow login-policy outcome. */
 const LOGIN_POLICY_EVENTS = {
@@ -129,83 +105,6 @@ const LOGIN_POLICY_EVENTS = {
 	error: 'oidc_login_policy_failed',
 	invalid: 'oidc_login_policy_result_invalid',
 } as const;
-
-function utf8ByteLength(value: string): number {
-	return new TextEncoder().encode(value).byteLength;
-}
-
-function hasControlCharacters(value: string): boolean {
-	for (let index = 0; index < value.length; index += 1) {
-		const code = value.charCodeAt(index);
-		if (code <= 0x1f || code === 0x7f) return true;
-	}
-	return false;
-}
-
-function validSubject(value: unknown): value is string {
-	return (
-		typeof value === 'string' &&
-		value.length > 0 &&
-		value.length <= MAX_SUBJECT_LENGTH &&
-		!hasControlCharacters(value)
-	);
-}
-
-function validEmail(value: unknown): value is string {
-	if (
-		typeof value !== 'string' ||
-		value.length === 0 ||
-		value.length > MAX_EMAIL_LENGTH ||
-		hasControlCharacters(value) ||
-		/\s/.test(value)
-	) {
-		return false;
-	}
-	const at = value.lastIndexOf('@');
-	return at > 0 && at < value.length - 1;
-}
-
-function displayNameClaim(value: unknown): string | undefined {
-	if (typeof value !== 'string' || hasControlCharacters(value)) return undefined;
-	const name = value.trim();
-	return name.length > 0 && name.length <= MAX_NAME_LENGTH ? name : undefined;
-}
-
-export function pictureUrlClaim(value: unknown): string | undefined {
-	if (typeof value !== 'string' || value.length > MAX_PICTURE_URL_INPUT_LENGTH) return undefined;
-	try {
-		const url = new URL(value);
-		if (url.protocol !== 'https:' || url.username || url.password) return undefined;
-		const normalized = url.toString();
-		return utf8ByteLength(normalized) <= MAX_PICTURE_URL_BYTES ? normalized : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-/** Resolve an RFC 6901 JSON Pointer without evaluating provider-controlled code. */
-export function claimAtPointer(claims: unknown, pointer: string): unknown {
-	if (!pointer.startsWith('/')) return undefined;
-	let value: unknown = claims;
-	for (const rawSegment of pointer.slice(1).split('/')) {
-		if (!/^(?:[^~]|~[01])*$/.test(rawSegment)) return undefined;
-		const segment = rawSegment.replaceAll('~1', '/').replaceAll('~0', '~');
-		if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-		if (!Object.hasOwn(value, segment)) return undefined;
-		value = (value as Record<string, unknown>)[segment];
-	}
-	return value;
-}
-
-function validJsonPointer(pointer: string): boolean {
-	return (
-		pointer.startsWith('/') &&
-		pointer
-			.slice(1)
-			.split('/')
-			.every((segment) => /^(?:[^~]|~[01])*$/.test(segment))
-	);
-}
 
 function parseUrl(value: string, label: string): URL {
 	try {
@@ -232,66 +131,6 @@ function discoveredEndpoint(
 		throw new Error(`OIDC ${endpoint} must not contain credentials`);
 	}
 	return url;
-}
-
-function validateGroupPolicy(policy: OidcGroupPolicy): void {
-	const lists = [
-		policy.allowed,
-		policy.superAdmin,
-		policy.projectCreation,
-		...ASSIGNABLE_ROLES.map((role) => policy.defaultRoles?.[role]),
-	].filter((list): list is string[] => list !== undefined);
-	if (lists.length === 0) throw new Error('OIDC groups claim requires at least one group policy');
-	for (const list of lists) {
-		if (
-			list.length === 0 ||
-			list.length > MAX_GROUPS ||
-			list.some(
-				(group) =>
-					typeof group !== 'string' ||
-					group.length === 0 ||
-					group.length > MAX_GROUP_LENGTH ||
-					hasControlCharacters(group),
-			)
-		) {
-			throw new Error('OIDC group policies must contain 1 to 200 valid group ids');
-		}
-	}
-}
-
-function parseGroups(value: unknown, maxGroups: number): string[] | undefined {
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || value.length > maxGroups) throw new Error('invalid groups claim');
-	const groups: string[] = [];
-	for (const group of value) {
-		if (
-			typeof group !== 'string' ||
-			group.length === 0 ||
-			group.length > MAX_GROUP_LENGTH ||
-			hasControlCharacters(group)
-		) {
-			throw new Error('invalid groups claim');
-		}
-		groups.push(group);
-	}
-	return groups;
-}
-
-function mappedEntitlements(groups: readonly string[], policy: OidcGroupPolicy): AuthEntitlement[] {
-	const memberships = new Set(groups);
-	const entitlements = new Set<AuthEntitlement>();
-	if (policy.superAdmin?.some((group) => memberships.has(group))) {
-		entitlements.add('super-admin');
-	}
-	if (policy.projectCreation?.some((group) => memberships.has(group))) {
-		entitlements.add('project-creator');
-	}
-	for (const role of ASSIGNABLE_ROLES) {
-		if (policy.defaultRoles?.[role]?.some((group) => memberships.has(group))) {
-			entitlements.add(`default-role:${role}`);
-		}
-	}
-	return [...entitlements];
 }
 
 function sanitizeApplicationPath(value: string | null | undefined): string | null {
@@ -324,22 +163,6 @@ export function sanitizeReturnTo(value: string | null | undefined): string | nul
 	return path;
 }
 
-/**
- * Normalize an email-domain allowlist: lowercase, trimmed, leading-`@` stripped,
- * blanks dropped. Exported for direct unit testing of the (otherwise network-gated)
- * login/callback domain logic.
- */
-export function normalizeEmailDomains(domains: readonly string[] | undefined): string[] {
-	return (domains ?? []).map((d) => d.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
-}
-
-/** True when `email`'s domain is one of the (already-normalized) allowed domains. */
-export function emailDomainAllowed(email: string, allowedDomains: readonly string[]): boolean {
-	const at = email.lastIndexOf('@');
-	if (at === -1) return false;
-	return allowedDomains.includes(email.slice(at + 1).toLowerCase());
-}
-
 export function createOidcAuth(config: OidcConfig): { authenticator: Authenticator; routes: Hono } {
 	const secretBytes = new TextEncoder().encode(config.sessionSecret);
 	if (secretBytes.length < 32) {
@@ -360,8 +183,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	// entitlements) default to the short lifetime that bounds deprovisioning delay.
 	const derivedAuthorization = Boolean(config.groups || config.loginPolicy);
 	const sessionTtl = config.sessionTtlSeconds ?? (derivedAuthorization ? 60 * 60 : 8 * 60 * 60);
-	const emailVerification = config.emailVerification ?? 'required';
-	const maxGroups = config.groups?.maxGroups ?? MAX_GROUPS;
+	const admissionPolicy = createAdmissionPolicy(config);
 	const scopeValues = new Set(scopes.split(/\s+/).filter(Boolean));
 	if (!Number.isInteger(sessionTtl) || sessionTtl < 300 || sessionTtl > 86_400) {
 		throw new Error('OIDC session TTL must be an integer between 300 and 86400 seconds');
@@ -382,9 +204,6 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	) {
 		throw new Error('OIDC login-policy timeout must be an integer between 1 and 30 seconds');
 	}
-	if (emailVerification !== 'required' && emailVerification !== 'trusted-issuer') {
-		throw new Error('Invalid OIDC email verification policy');
-	}
 	if (!scopeValues.has('openid')) {
 		throw new Error('OIDC scopes must include openid');
 	}
@@ -400,27 +219,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	) {
 		throw new Error('OIDC scopes contain an invalid scope value');
 	}
-	if (!Number.isInteger(maxGroups) || maxGroups < 1 || maxGroups > MAX_GROUPS) {
-		throw new Error(`OIDC maxGroups must be between 1 and ${MAX_GROUPS}`);
-	}
-	if (config.groups && !validJsonPointer(config.groups.claim)) {
-		throw new Error('OIDC groups claim must be an RFC 6901 JSON Pointer');
-	}
-	if (config.groups) validateGroupPolicy(config.groups);
-	// Normalize the email-domain allowlist once. Empty means "no restriction".
-	const allowedDomains = normalizeEmailDomains(config.allowedEmailDomains);
-	const restrictDomains = allowedDomains.length > 0;
-
-	const issuerUrl = parseUrl(config.issuer, 'OIDC issuer');
-	if (
-		issuerUrl.protocol !== 'https:' ||
-		issuerUrl.username ||
-		issuerUrl.password ||
-		issuerUrl.search ||
-		issuerUrl.hash
-	) {
-		throw new Error('OIDC issuer must be an HTTPS URL without credentials, query, or fragment');
-	}
+	const { allowedDomains } = admissionPolicy;
+	const issuerUrl = oidcIssuerUrl(config.issuer);
 	const redirectUrl = parseUrl(config.redirectUri, 'OIDC redirect URI');
 	if (
 		redirectUrl.protocol !== 'https:' ||
@@ -434,22 +234,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	const client: oauth.Client = { client_id: config.clientId };
 	const clientAuth = oauth.ClientSecretPost(config.clientSecret);
 
-	// Discovery is cached for the lifetime of the adapter (one fetch per process).
-	// A rejected discovery must not stay cached: null the slot so the next request
-	// re-discovers instead of replaying a transient DNS/IdP failure forever.
-	let asPromise: Promise<oauth.AuthorizationServer> | null = null;
-	function authServer(): Promise<oauth.AuthorizationServer> {
-		if (!asPromise) {
-			asPromise = oauth
-				.discoveryRequest(issuerUrl, { algorithm: 'oidc' })
-				.then((res) => oauth.processDiscoveryResponse(issuerUrl, res))
-				.catch((err: unknown) => {
-					asPromise = null;
-					throw err;
-				});
-		}
-		return asPromise;
-	}
+	const authServer = createOidcDiscovery(issuerUrl, (metadata) => metadata);
 
 	async function mintSession(
 		user: AuthUser,
@@ -719,39 +504,22 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 
-		if (!claims || !validSubject(claims.sub)) {
-			return callbackError(c, 'auth_failed', returnTo);
+		if (!claims) return callbackError(c, 'auth_failed', returnTo);
+		const admission = admitOidcIdentity(claims, admissionPolicy, userInfo);
+		if ('error' in admission) {
+			if (admission.error === 'invalid_groups') {
+				logEvent({ level: 'error', event: 'oidc_group_claim_invalid' });
+				return callbackError(c, 'auth_failed', returnTo);
+			}
+			return callbackError(c, admission.error, returnTo);
 		}
-		const identityClaims = userInfo?.email !== undefined ? userInfo : claims;
-		if (!validEmail(identityClaims.email)) return callbackError(c, 'auth_failed', returnTo);
-		const email = identityClaims.email;
-		const emailVerified = identityClaims.email_verified;
-		const emailVerificationClaims = [claims.email_verified, userInfo?.email_verified];
-
-		// Email participates in project authorization, so every validated source
-		// that provides a verification claim must set it to exactly true.
-		if (
-			emailVerificationClaims.some(
-				(verification) => verification !== undefined && verification !== true,
-			)
-		) {
-			return callbackError(c, 'email_not_verified', returnTo);
-		}
-		if (emailVerification === 'required' && emailVerified !== true) {
-			return callbackError(c, 'email_not_verified', returnTo);
-		}
-
-		if (restrictDomains && !emailDomainAllowed(email, allowedDomains)) {
-			return callbackError(c, 'domain_not_allowed', returnTo);
-		}
-
-		let entitlements: AuthEntitlement[] | undefined;
+		const user = admission.user;
+		let entitlements = user.entitlements;
 		if (config.loginPolicy) {
 			const evaluation = await evaluateLoginPolicy(
 				config.loginPolicy.policy,
 				{
-					// validSubject above guarantees a non-empty sub, so parse cannot throw.
-					identity: { id: UserId.parse(claims.sub), email },
+					identity: { id: user.id, email: user.email },
 					idTokenClaims: claims as Record<string, unknown>,
 					...(userInfo ? { userInfoClaims: userInfo as Record<string, unknown> } : {}),
 				},
@@ -774,34 +542,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				return callbackError(c, denied ? 'policy_denied' : 'auth_failed', returnTo);
 			}
 			entitlements = [...evaluation.entitlements];
-		} else if (config.groups) {
-			let rawGroups = userInfo ? claimAtPointer(userInfo, config.groups.claim) : undefined;
-			if (rawGroups === undefined) rawGroups = claimAtPointer(claims, config.groups.claim);
-			let groups: string[];
-			try {
-				groups = parseGroups(rawGroups, maxGroups) ?? [];
-			} catch (err) {
-				logOperationalError('oidc_group_claim_invalid', {}, err);
-				return callbackError(c, 'auth_failed', returnTo);
-			}
-			if (
-				config.groups.allowed?.length &&
-				!config.groups.allowed.some((group) => groups.includes(group))
-			) {
-				return callbackError(c, 'group_not_allowed', returnTo);
-			}
-			entitlements = mappedEntitlements(groups, config.groups);
 		}
 
-		const name = displayNameClaim(userInfo?.name) ?? displayNameClaim(claims.name);
-		const pictureUrl = pictureUrlClaim(userInfo?.picture) ?? pictureUrlClaim(claims.picture);
 		let session: string;
 		try {
 			session = await signSession({
-				id: UserId.parse(claims.sub),
-				email,
-				...(name ? { name } : {}),
-				...(pictureUrl ? { pictureUrl } : {}),
+				...user,
 				// Always present (possibly empty) under derived authorization: the claim
 				// marks the session so `authenticate` exposes `entitlementsExpiresAt`.
 				...(derivedAuthorization ? { entitlements: entitlements ?? [] } : {}),

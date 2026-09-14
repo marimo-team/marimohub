@@ -117,15 +117,24 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | 🟡     | Trusted proxy headers / Google IAP               | `auth-proxy-header`      | oauth2-proxy, IAP, Tailscale, or another trusted proxy  |
 | ✅     | Dev bypass                                       | `auth-dev`               | Dev only (fixed local user)                             |
 | ✅     | Personal access tokens                           | built into `core`        | `mhub_pat_…` bearer → user, for CLI/programmatic access |
+| 🟡     | External OIDC access tokens                      | `auth-oidc`              | Opt-in JWT bearer access for API and MCP                |
 | ⬜     | GitHub OAuth (native)                            | —                        | Partly covered by `auth-oidc` today                     |
 | ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC          |
 | ✅     | OIDC login policy (external module)              | `auth-oidc`              | `oidc-login-policy` library: login-time claim mapping   |
 
 Every adapter returns an `AuthenticatedPrincipal`: the user plus a required
 `credential` with bounded provenance (`sso` | `personal-access-token` |
-`service-account` | `development`, optional id and expiry). Consumers key
-credential-scoped behavior (e.g. the API's PAT-only route guard) off this
-field, never off request-header inference.
+`external-access-token` | `service-account` | `development`, optional id and expiry).
+Consumers use this field for credential restrictions, never request-header
+inference. Session-only guards reject personal and external access tokens.
+
+External credentials always include expiry, OAuth client/resource/scopes, and an
+explicit `TokenGrant`. Recognized scopes select action presets, combined by union.
+Their `projects: '*'` boundary includes only projects the user can already access.
+The grant restricts existing authority and cannot bypass resource security or
+suspension. Legacy PATs can omit a grant. See
+[Authentication](./auth.md#external-access-tokens) for the external-token contract
+and [grant semantics](./auth.md#personal-access-token-grants) for authorization.
 
 ## Subject security context (`SubjectSecurityContextProvider`)
 

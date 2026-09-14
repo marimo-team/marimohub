@@ -285,7 +285,11 @@ export const SESSION_ONLY_SECURITY = [{ cookieAuth: [] }];
  */
 export function assertSessionAuthenticated(c: Context<HonoEnv>, action: string): void {
 	if (c.get('authMethod') === 'pat') {
-		throw new ForbiddenError(`Personal access tokens cannot ${action} — sign in to do this`);
+		const label =
+			c.get('user').credential.kind === 'external-access-token'
+				? 'External access tokens'
+				: 'Personal access tokens';
+		throw new ForbiddenError(`${label} cannot ${action} — sign in to do this`);
 	}
 }
 
@@ -301,6 +305,7 @@ export function authMethodFor(kind: CredentialKind): HonoEnv['Variables']['authM
 			return 'session';
 		case 'personal-access-token':
 		case 'service-account':
+		case 'external-access-token':
 			return 'pat';
 		default: {
 			const unreachable: never = kind;
