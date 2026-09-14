@@ -63,6 +63,11 @@ Clients must request `mcp:tools` and at least one
 `marimohub:edit`. The issuer controls which clients can request these scopes
 and what the user approves.
 
+The initial authorization challenge requests `mcp:tools marimohub:read`.
+Discovery lists all supported scopes, but clients that honor the challenge start with read access.
+For execution or editing, authorize the client with the corresponding grant scope.
+The Hub does not automatically request broader scopes after a tool is denied.
+
 External authorization does not use the Hub consent page or its project selector.
 Token scopes limit actions across all projects that the user can already access.
 They cannot increase user permissions or permit session-only administration.

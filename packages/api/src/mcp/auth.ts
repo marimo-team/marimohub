@@ -2,7 +2,8 @@ import type { Context } from 'hono';
 import { bearerToken } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from '../context';
-import { MCP_SCOPE } from './constants';
+import { refreshIdentity } from '../identity';
+import { MCP_EXTERNAL_INITIAL_SCOPES, MCP_SCOPE } from './constants';
 
 export interface BearerRequirements {
 	resource?: string;
@@ -40,13 +41,20 @@ export async function authenticateMcpRequest(
 		scope: MCP_SCOPE,
 		allowExternal: Boolean(deps.mcp?.externalAuthorizationServer),
 	});
-	if (principal) return principal;
+	if (principal) {
+		await refreshIdentity(c, deps, principal);
+		return principal;
+	}
 	const resourceMetadata = `${deps.mcp?.publicBaseUrl ?? new URL(c.req.url).origin}/.well-known/oauth-protected-resource/mcp`;
+	// Clients prefer the challenge scope over the complete supported-scope list.
+	const scope = deps.mcp?.externalAuthorizationServer
+		? `, scope="${MCP_EXTERNAL_INITIAL_SCOPES.join(' ')}"`
+		: '';
 	return c.json(
 		{ error: 'invalid_token', error_description: 'A valid bearer token is required' },
 		401,
 		{
-			'WWW-Authenticate': `Bearer realm="mcp", error="invalid_token", resource_metadata="${resourceMetadata}"`,
+			'WWW-Authenticate': `Bearer realm="mcp", error="invalid_token", resource_metadata="${resourceMetadata}"${scope}`,
 		},
 	);
 }
