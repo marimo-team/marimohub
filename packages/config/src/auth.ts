@@ -1,15 +1,16 @@
 import type { Authenticator } from '@marimo-hub/core';
 import { basePathFromUrl } from '@marimo-hub/core/url';
-import { createOidcAuth } from '@marimo-hub/auth-oidc';
+import { createOidcAuth, createOidcAccessTokenAuthenticator } from '@marimo-hub/auth-oidc';
 import type {
 	EmailVerificationPolicy,
 	OidcGroupPolicy,
 	OidcLoginPolicySettings,
+	OidcConfig,
 } from '@marimo-hub/auth-oidc';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { ProxyHeaderAuthenticator } from '@marimo-hub/auth-proxy-header';
 import type { Hono } from 'hono';
-import { parseEnum, parseEnumOr, parseList, requiredVar } from './env';
+import { parseEnum, parseEnumOr, parseList, requiredVar, parseOnOff } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import type { LoadedAdapterLibraries } from './library';
@@ -421,11 +422,72 @@ export function projectCreationRestricted(env: Env): boolean {
 	return mode === 'restricted' || (authBackend(env) === 'oidc' && groupsConfigured);
 }
 
+function externalTokensEnabled(env: Env, backend: string | undefined): boolean {
+	const enabled = parseOnOff(env, 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS', { fallback: false });
+	const orphan = [
+		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
+		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL',
+	].find((key) => env[key] !== undefined);
+	if (!enabled && orphan)
+		throw new ConfigError(`${orphan} requires MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on.`, {
+			variable: orphan,
+		});
+	if (enabled && backend !== 'oidc')
+		throw new ConfigError('External access tokens require MARIMOHUB_AUTH_BACKEND=oidc.', {
+			variable: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS',
+		});
+	if (enabled && oidcLoginPolicySelected(env))
+		throw new ConfigError(
+			'External access tokens cannot be combined with a custom OIDC login policy.',
+			{ variable: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS' },
+		);
+	return enabled;
+}
+
+function makeExternalAuthenticator(env: Env, config: OidcConfig): Authenticator {
+	const audience = requiredVar(env, 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE', {
+		docs: 'docs/setup/auth/oidc.md',
+	}).trim();
+	try {
+		const jwksUrl =
+			env.MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL === undefined
+				? undefined
+				: requiredVar(env, 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL', {
+						docs: 'docs/setup/auth/oidc.md',
+					});
+		return createOidcAccessTokenAuthenticator({
+			issuer: config.issuer,
+			audience,
+			clientId: config.clientId,
+			...(jwksUrl !== undefined ? { jwksUrl } : {}),
+			allowedEmailDomains: config.allowedEmailDomains,
+			emailVerification: config.emailVerification,
+			groups: config.groups,
+			maxLifetimeSeconds: config.groups ? Math.min(3600, config.sessionTtlSeconds ?? 3600) : 3600,
+		});
+	} catch (error) {
+		if (error instanceof ConfigError) throw error;
+		throw new ConfigError(
+			error instanceof Error ? error.message : 'Invalid external access-token configuration.',
+			{
+				variable: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS',
+				docs: 'docs/setup/auth/oidc.md',
+			},
+		);
+	}
+}
+
 export function makeAuth(
 	env: Env,
 	libraries?: LoadedAdapterLibraries,
-): { authenticator: Authenticator; authRoutes?: Hono } {
+): {
+	authenticator: Authenticator;
+	authRoutes?: Hono;
+	externalAuthenticator?: Authenticator;
+	externalIssuer?: string;
+} {
 	const backend = authBackend(env);
+	const externalTokens = externalTokensEnabled(env, backend);
 	if (!backend) {
 		throw new ConfigError(
 			'MARIMOHUB_AUTH_BACKEND must be set explicitly. Refusing to start: an unset auth backend ' +
@@ -466,7 +528,7 @@ export function makeAuth(
 			const derivedSessionTtlSeconds = derivedTtlVar
 				? parseSeconds(env, derivedTtlVar, DEFAULT_DERIVED_SESSION_TTL_SECONDS, 300, 3600)
 				: sessionTtlSeconds;
-			const { authenticator, routes } = createOidcAuth({
+			const config: OidcConfig = {
 				issuer: oidc('MARIMOHUB_AUTH_OIDC_ISSUER'),
 				clientId: oidc('MARIMOHUB_AUTH_OIDC_CLIENT_ID'),
 				clientSecret: oidc('MARIMOHUB_AUTH_OIDC_CLIENT_SECRET'),
@@ -486,8 +548,16 @@ export function makeAuth(
 				postLoginRedirect: appRedirectPath(env.MARIMOHUB_APP_BASE_URL),
 				...(groups ? { groups } : {}),
 				...(loginPolicy ? { loginPolicy } : {}),
-			});
-			return { authenticator, authRoutes: routes };
+			};
+			const externalAuthenticator = externalTokens
+				? makeExternalAuthenticator(env, config)
+				: undefined;
+			const { authenticator, routes } = createOidcAuth(config);
+			return {
+				authenticator,
+				authRoutes: routes,
+				...(externalAuthenticator ? { externalAuthenticator, externalIssuer: config.issuer } : {}),
+			};
 		}
 		case 'proxy-header': {
 			const allowedEmailDomains = parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS);

@@ -9,6 +9,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./bearer-token": "./src/bearerToken.ts",
 		"./async": "./src/async.ts",
 		"./constants": "./src/constants.ts",
 		"./data-preview-programs": "./src/services/integrations/data-preview/programs.ts",

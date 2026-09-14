@@ -399,7 +399,7 @@ function parseJobsConfig(env: Env): JobsConfig | undefined {
 	};
 }
 
-function parseMcpConfig(env: Env): McpConfig | undefined {
+function parseMcpConfig(env: Env, externalIssuer?: string): McpConfig | undefined {
 	if (!parseOnOff(env, 'MARIMOHUB_MCP', { fallback: false, docs: 'docs/mcp.md' })) {
 		return undefined;
 	}
@@ -418,7 +418,19 @@ function parseMcpConfig(env: Env): McpConfig | undefined {
 			docs: 'docs/mcp.md',
 		});
 	}
-	return { publicBaseUrl: normalizeBaseUrl(parsed.url) };
+	const publicBaseUrl = normalizeBaseUrl(parsed.url);
+	if (
+		externalIssuer &&
+		env.MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE?.trim() !== `${publicBaseUrl}/mcp`
+	) {
+		throw new ConfigError('OIDC access-token audience must equal the public MCP URL.', {
+			variable: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
+		});
+	}
+	return {
+		publicBaseUrl,
+		...(externalIssuer ? { externalAuthorizationServer: externalIssuer } : {}),
+	};
 }
 
 /** Session-lifecycle defaults (seconds). See docs/configuration.md#server--api. */
@@ -613,7 +625,11 @@ export function createFromEnv(
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
 	// its own explicit acknowledgement above.
 	if (exposure.mode === 'subdomain') assertSandboxHostIsolated(env);
-	const { authenticator, authRoutes } = makeAuth(env, options?.libraries);
+	const { authenticator, authRoutes, externalAuthenticator, externalIssuer } = makeAuth(
+		env,
+		options?.libraries,
+	);
+	const mcp = parseMcpConfig(env, externalIssuer);
 	const configuredLoginPolicy =
 		authBackend(env) === 'oidc' && oidcLoginPolicySelected(env)
 			? options?.libraries?.oidcLoginPolicy
@@ -688,9 +704,7 @@ export function createFromEnv(
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
 		// 1.5× and CoreWeave/E2B lifetime by 2×.
 		compute,
-		// Personal access tokens ride on every deployment: a `mhub_pat_` bearer
-		// resolves through the TokenService, everything else through the SSO adapter.
-		authenticator: composeAuthenticators(services.tokens, authenticator),
+		authenticator: composeAuthenticators(services.tokens, authenticator, externalAuthenticator),
 		authRoutes,
 		sandbox: {
 			bucket: makeSandboxBucketConfig(env),
@@ -713,7 +727,7 @@ export function createFromEnv(
 			surfaces,
 		},
 		jobs: parseJobsConfig(env),
-		mcp: parseMcpConfig(env),
+		mcp,
 		policy: {
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),

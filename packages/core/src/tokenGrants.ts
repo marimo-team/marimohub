@@ -83,3 +83,21 @@ export function tokenGrantIsSubset(candidate: TokenGrant, upperBound: TokenGrant
 			candidate.projects.every((projectId) => upperBound.projects.includes(projectId)));
 	return actionsAllowed && projectsAllowed;
 }
+
+export const EXTERNAL_TOKEN_SCOPE_PRESETS = {
+	'marimohub:read': 'read',
+	'marimohub:run': 'run',
+	'marimohub:edit': 'edit',
+	'marimohub:full': 'full',
+} as const satisfies Record<string, TokenGrantPreset>;
+
+export function externalTokenGrant(scopes: readonly string[]): TokenGrant | null {
+	const actions = new Set<AuthorizationAction>();
+	for (const [scope, preset] of Object.entries(EXTERNAL_TOKEN_SCOPE_PRESETS)) {
+		if (!scopes.includes(scope)) continue;
+		const expanded = expandTokenGrantPreset(preset);
+		if (expanded === '*') return { actions: '*', projects: '*' };
+		for (const action of expanded) actions.add(action);
+	}
+	return actions.size > 0 ? { actions: [...actions], projects: '*' } : null;
+}

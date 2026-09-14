@@ -41,6 +41,7 @@ export interface AuthUser {
 export const CREDENTIAL_KINDS = [
 	'sso',
 	'personal-access-token',
+	'external-access-token',
 	'service-account',
 	'development',
 ] as const;
@@ -64,7 +65,7 @@ export interface AuthCredential {
 	readonly id?: string;
 	/** ISO expiry of the credential itself, when it is bounded. */
 	readonly expiresAt?: string;
-	/** Immutable authorization boundary attached to a scoped personal access token. */
+	/** Authorization boundary attached to a scoped bearer credential. */
 	readonly grant?: TokenGrant;
 	readonly oauth?: OAuthCredentialBinding;
 	/**

@@ -220,3 +220,102 @@ MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
 ```
 
 See [Auth0's OIDC docs](https://auth0.com/docs/authenticate/protocols/openid-connect-protocol).
+
+### External access tokens
+
+The Hub can accept JWT access tokens from the browser-login OIDC issuer.
+This optional feature supports the API and the Node MCP server. Browser login
+and existing Hub tokens continue to work.
+
+After you configure OIDC browser login, add these variables:
+
+```dotenv
+MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on
+MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE=https://hub.example.com/mcp
+# Optional. Otherwise, the Hub discovers JWKS from the configured OIDC issuer.
+# MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL=https://accounts.example.com/jwks
+```
+
+If MCP is enabled, set the audience to the exact public MCP URL.
+For example, a base URL of `https://hub.example.com/hub` requires
+`https://hub.example.com/hub/mcp`. The API accepts this same audience.
+For API-only deployments, choose a Hub resource audience that differs from the browser client ID.
+
+The issuer and JWKS endpoint must use HTTPS without embedded credentials.
+Startup fails for incomplete configuration, non-OIDC backends, or custom OIDC login-policy modules.
+The audience and JWKS variables require `MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on`.
+
+#### Issuer requirements
+
+Configure the issuer to issue JWT access tokens for the Hub resource with these claims:
+
+| Claim            | Requirement                                                                  |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `iss`            | Exact configured OIDC issuer                                                 |
+| `aud`            | Configured access-token audience. Must not include the browser client ID.    |
+| `sub`            | Same subject as browser login                                                |
+| `email`          | User email that satisfies the domain allowlist                               |
+| `email_verified` | Boolean `true`, unless the existing `trusted-issuer` policy permits omission |
+| `client_id`      | Nonempty ID of the OAuth client that requested the token                     |
+| `iat`, `exp`     | Integer issuance and expiry times, in Unix seconds                           |
+| `scope`          | Space-separated OAuth scopes, including a Hub grant scope                    |
+
+The total token lifetime (`exp - iat`) cannot exceed 3,600 seconds.
+If group authorization uses a shorter session lifetime, that limit applies instead.
+The Hub rejects future `iat` or `nbf` values and expired tokens.
+
+The token must use an asymmetric signature and a key from the trusted JWKS.
+Supported algorithms are RS256/384/512, PS256/384/512, ES256/384/512, and EdDSA.
+The Hub accepts an absent `typ`, `JWT`, `at+jwt`, or `application/at+jwt` header.
+It rejects opaque tokens, browser ID tokens, and tokens with a `cnf` binding.
+The Hub does not support DPoP or mutual-TLS token bindings on this path.
+
+If group policies are configured, include those groups in the access token.
+The Hub applies the same email and group admission policies as browser login.
+It does not fetch UserInfo or reuse stored group claims for external authentication.
+Missing group claims grant no group entitlements and cannot satisfy a group allowlist.
+
+The Hub maps `sub` directly to the existing user ID. The issuer must supply
+the same subject across browser login and external clients. The Hub does not
+link accounts by email or translate pairwise subjects. This feature supports
+user identities, not machine identities or client-credentials grants.
+
+#### Scope grants
+
+| OAuth scope      | Permitted actions                                |
+| ---------------- | ------------------------------------------------ |
+| `marimohub:read` | Read projects and integrations                   |
+| `marimohub:run`  | Read, use integrations, and run sessions         |
+| `marimohub:edit` | Run, edit notebooks, and publish change requests |
+| `marimohub:full` | All actions available to a bearer credential     |
+
+Clients must request at least one grant scope. Multiple grant scopes combine
+their actions. The Hub ignores unrelated scopes and rejects tokens without a
+recognized grant scope. MCP also requires `mcp:tools`.
+
+These scopes belong in the access token. `MARIMOHUB_AUTH_OIDC_SCOPES` controls
+browser login and does not request scopes for external clients.
+
+Grants apply to all projects that the user can already access. They cannot
+increase the user's project permissions. External tokens cannot manage Hub
+tokens or access session-only administration, even for a super admin.
+Per-token project selection is not supported.
+
+To call the API, send the access token as a bearer credential:
+
+```bash
+curl https://hub.example.com/api/v1/me \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+#### Expiry and revocation
+
+The Hub checks token signatures locally with cached signing keys. It retrieves
+keys only from the configured or discovered JWKS endpoint. Failed token or key
+checks deny authentication, even with a valid browser cookie in the same request.
+
+The Hub does not store, revoke, or refresh external tokens. It does not query
+the issuer for revocation status. Issuer-side revocation generally takes effect
+at token expiry. Hub user suspension blocks API and MCP access immediately.
+
+For client discovery and gateway behavior, see [MCP external authorization](/mcp#external-authorization).

@@ -826,3 +826,43 @@ describe('projectCreationRestricted (MARIMOHUB_PROJECT_CREATION)', () => {
 		expect(error.message).toMatch(/expected open, restricted/);
 	});
 });
+
+describe('external access-token configuration', () => {
+	const enabled = {
+		...oidcEnv,
+		MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'on',
+		MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'https://hub.example.com/mcp',
+	};
+	it('is disabled by default and preserves browser login when enabled', () => {
+		expect(makeAuth(oidcEnv).externalAuthenticator).toBeUndefined();
+		const auth = makeAuth(enabled);
+		expect(auth.externalAuthenticator).toBeDefined();
+		expect(auth.externalIssuer).toBe(oidcEnv.MARIMOHUB_AUTH_OIDC_ISSUER);
+		expect(auth.authRoutes).toBeDefined();
+		expect(auth.authenticator.logoutUrl?.()).toBe('/api/auth/logout');
+	});
+	it.each([
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'invalid' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: undefined },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: '' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'client' },
+		{ MARIMOHUB_AUTH_OIDC_ISSUER: 'http://issuer.example.com' },
+		{ MARIMOHUB_AUTH_OIDC_ISSUER: 'https://user:pass@issuer.example.com' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL: '' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL: 'http://issuer.example.com/jwks' },
+		{ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL: 'https://user:pass@issuer.example.com/jwks' },
+		{ MARIMOHUB_AUTH_BACKEND: 'dev' },
+		{ MARIMOHUB_AUTH_BACKEND: 'proxy-header' },
+		{ MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library' },
+	])('fails startup for invalid configuration: %j', (override) => {
+		expect(() => makeAuth({ ...enabled, ...override })).toThrow(ConfigError);
+	});
+	it.each([
+		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
+		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL',
+	])('rejects orphaned %s', (key) => {
+		expect(() => makeAuth({ ...oidcEnv, [key]: 'https://issuer.example.com' })).toThrow(
+			/requires.*ACCESS_TOKENS=on/,
+		);
+	});
+});

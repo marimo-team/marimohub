@@ -1610,3 +1610,53 @@ describe('createFromEnv MCP config', () => {
 		).toThrow(/credential-free HTTP\(S\) URL/);
 	});
 });
+
+describe('external issuer MCP composition', () => {
+	const env = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'oidc',
+		MARIMOHUB_AUTH_OIDC_ISSUER: 'https://issuer.example.com',
+		MARIMOHUB_AUTH_OIDC_CLIENT_ID: 'browser',
+		MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: 'secret',
+		MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
+		MARIMOHUB_AUTH_SESSION_SECRET: 's'.repeat(48),
+		MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+		MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS: 'on',
+		MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'https://hub.example.com/hub/mcp',
+		MARIMOHUB_MCP: 'on',
+		MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/hub/',
+	};
+	it('uses the canonical path-prefixed resource and external issuer', async () => {
+		const deps = createFromEnv(env);
+		expect(deps.mcp).toEqual({
+			publicBaseUrl: 'https://hub.example.com/hub',
+			externalAuthorizationServer: 'https://issuer.example.com',
+		});
+		expect(
+			await deps.authenticator.authenticate(
+				new Request('https://hub.example.com/hub/mcp', {
+					headers: { Authorization: 'Bearer malformed', Cookie: 'mh_session=invalid' },
+				}),
+			),
+		).toBeNull();
+	});
+	it('rejects an audience that does not match the canonical MCP resource', () => {
+		expect(() =>
+			createFromEnv({
+				...env,
+				MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'https://gateway.example.com',
+			}),
+		).toThrow(/audience must equal/);
+	});
+	it('supports API-only deployments with their configured audience', () => {
+		expect(
+			createFromEnv({
+				...env,
+				MARIMOHUB_MCP: 'off',
+				MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE: 'hub-api',
+			}).mcp,
+		).toBeUndefined();
+	});
+});

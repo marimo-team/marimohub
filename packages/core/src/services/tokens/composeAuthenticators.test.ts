@@ -100,3 +100,23 @@ describe('composeAuthenticators', () => {
 		expect(withLogout.logoutUrl?.()).toBe('https://idp.example/logout');
 	});
 });
+
+describe('external bearer composition', () => {
+	it('routes external tokens without cookie fallback, including malformed bearer headers', async () => {
+		const tokens = { verify: vi.fn(async () => null) } as unknown as TokenService;
+		const sso = { authenticate: vi.fn(async () => SSO_USER) };
+		const external = { authenticate: vi.fn(async () => null) };
+		const auth = composeAuthenticators(tokens, sso, external);
+		for (const authorization of ['Bearer external.jwt.token', 'Bearer', 'bearer ', 'BEARER\tbad']) {
+			expect(
+				await auth.authenticate(req({ authorization, cookie: 'mh_session=valid' })),
+			).toBeNull();
+		}
+		expect(external.authenticate).toHaveBeenCalledTimes(4);
+		expect(sso.authenticate).not.toHaveBeenCalled();
+		expect(await auth.authenticate(req({ cookie: 'mh_session=valid' }))).toBe(SSO_USER);
+		expect(await auth.authenticate(req({ authorization: 'Bearer mhub_pat_invalid' }))).toBeNull();
+		expect(tokens.verify).toHaveBeenCalledWith('mhub_pat_invalid');
+		expect(external.authenticate).toHaveBeenCalledTimes(4);
+	});
+});
