@@ -398,6 +398,16 @@ Wired by hand in `examples/cloudflare-worker` (reads unprefixed `AUTH_MODE` / `A
 
 _No environment variables to set here._
 
+## Service accounts
+
+Deployment credentials for unattended org integration provisioning. See [Service accounts](./service-accounts.md).
+
+### Deployment credentials
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SERVICE_ACCOUNTS` 🔒 | JSON array of accounts with id, optional name, explicit actions, and credentials (id, sha256, optional expires_at). Unset or [] disables service accounts. Maximum 32 accounts and four credentials per account. Changes require restarting all replicas. | — | — | — |
+
 ## Server / API
 
 Server-wide settings; no backend selector.

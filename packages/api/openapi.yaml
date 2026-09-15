@@ -40,9 +40,9 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Personal access token (`mhub_pat_…`) minted at POST
-        /api/v1/me/tokens, for CI/CLI/service callers. Acts as the issuing user;
-        cannot manage tokens.
+      description: Hub personal access token (`mhub_pat_…`), configured
+        service-account token (`mhub_sa_…`), or a trusted external OIDC access
+        token when enabled. Bearer credentials cannot manage personal tokens.
   schemas:
     ErrorResponse:
       type: object
@@ -16071,7 +16071,7 @@ paths:
       operationId: integrations.org.list
       tags:
         - Integrations
-      summary: List org-wide integrations (super admin only)
+      summary: List org-wide integrations (requires org-integration.manage)
       parameters:
         - schema:
             type: integer
@@ -16163,7 +16163,7 @@ paths:
       operationId: integrations.org.create
       tags:
         - Integrations
-      summary: Create an org-wide integration (super admin only)
+      summary: Create an org-wide integration (requires org-integration.manage)
       requestBody:
         required: true
         content:
@@ -16261,7 +16261,8 @@ paths:
       operationId: integrations.org.get
       tags:
         - Integrations
-      summary: Get an org-wide integration with its redacted config (super admin only)
+      summary: Get an org-wide integration with its redacted config (requires
+        org-integration.manage)
       parameters:
         - schema:
             type: string
@@ -16351,7 +16352,7 @@ paths:
       operationId: integrations.org.update
       tags:
         - Integrations
-      summary: Update an org-wide integration (super admin only)
+      summary: Update an org-wide integration (requires org-integration.manage)
       parameters:
         - schema:
             type: string
@@ -16472,7 +16473,8 @@ paths:
       operationId: integrations.org.delete
       tags:
         - Integrations
-      summary: Delete an org-wide integration and its version history (super admin only)
+      summary: Delete an org-wide integration and its version history (requires
+        org-integration.manage)
       parameters:
         - schema:
             type: string
@@ -16555,7 +16557,8 @@ paths:
       operationId: integrations.org.versions
       tags:
         - Integrations
-      summary: List an org-wide integration's config versions (super admin only)
+      summary: List an org-wide integration's config versions (requires
+        org-integration.manage)
       parameters:
         - schema:
             type: string
@@ -16655,7 +16658,8 @@ paths:
       operationId: integrations.org.test
       tags:
         - Integrations
-      summary: Probe connectivity for an unsaved or stored org config (super admin only)
+      summary: Probe connectivity for an unsaved or stored org config (requires
+        org-integration.manage)
       requestBody:
         required: true
         content:
@@ -16748,7 +16752,8 @@ paths:
       operationId: integrations.org.query-readiness
       tags:
         - Integrations
-      summary: Evaluate SQL readiness for an unsaved org config (super admin only)
+      summary: Evaluate SQL readiness for an unsaved org config (requires
+        org-integration.manage)
       requestBody:
         required: true
         content:

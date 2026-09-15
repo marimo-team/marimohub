@@ -12,7 +12,7 @@ import {
 import { createTokenId, TokenId } from '../../ids';
 import type { UserId } from '../../ids';
 import { timingSafeEqual } from '../../internal/hmac';
-import { toHex } from '../../internal/hex';
+import { sha256Hex } from '../../internal/sha256';
 import type { AuthenticatedPrincipal, AuthUser, OAuthCredentialBinding } from '../../ports/auth';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
@@ -59,8 +59,7 @@ function generateSecret(): string {
 
 /** Lowercase-hex SHA-256 of a token secret — the only form ever persisted. */
 export async function hashPatSecret(secret: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
-	return toHex(new Uint8Array(digest));
+	return sha256Hex(secret);
 }
 
 export async function hashScopedPatSecret(tokenId: TokenId, secret: string): Promise<string> {

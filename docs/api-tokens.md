@@ -4,6 +4,8 @@ description: Create, use, protect, audit, and revoke personal access tokens for 
 
 # API tokens
 
+For deployments without a human identity, use [service accounts](./service-accounts.md).
+
 Personal access tokens (PATs) let CI jobs, scripts, and the CLI call the
 `/api/v1/*` HTTP API without a browser session. A token acts as the user who
 created it. It cannot add authority that the user does not have.

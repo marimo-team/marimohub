@@ -46,6 +46,100 @@ const onSession = (session: SessionAdmissionRecord, p = project): AuthorizationR
 	session,
 });
 
+describe('service account authorization', () => {
+	it('uses explicit deployment actions without inheriting human standing', async () => {
+		const machine: AuthenticatedPrincipal = {
+			...OWNER,
+			entitlements: ['super-admin'],
+			credential: {
+				kind: 'service-account',
+				grant: { actions: ['org-integration.manage'], projects: '*' },
+			},
+		};
+		const authz = service({ superAdmins: [OWNER.id], defaultRole: 'editor' });
+		for (const action of AUTHORIZATION_ACTIONS) {
+			expect(authz.credentialAllowsAction(machine, action), action).toBe(
+				action === 'org-integration.manage',
+			);
+			if (ACTION_RULES[action].scope === 'deployment') {
+				const result = await authz.authorize(machine, action, { kind: 'deployment' });
+				expect(result.allowed, action).toBe(action === 'org-integration.manage');
+			}
+		}
+		for (const action of PROJECT_ACTIONS) {
+			expect((await authz.authorize(machine, action, onProject())).allowed, action).toBe(false);
+		}
+	});
+
+	it('fails closed for missing or wildcard machine grants', async () => {
+		const grants: (TokenGrant | undefined)[] = [
+			undefined,
+			{ actions: '*', projects: '*' },
+			{ actions: [], projects: '*' },
+			{ actions: ['admin.access'], projects: '*' },
+			{ actions: ['org-integration.manage'], projects: [project.id] },
+		];
+		for (const grant of grants) {
+			const machine: AuthenticatedPrincipal = {
+				...OWNER,
+				credential: { kind: 'service-account', ...(grant ? { grant } : {}) },
+			};
+			const decision = await service({ superAdmins: [OWNER.id] }).authorize(
+				machine,
+				'org-integration.manage',
+				{ kind: 'deployment' },
+			);
+			expect(decision.allowed).toBe(false);
+		}
+	});
+
+	it('denies sessions and projects even when a trusted adapter supplies a broader grant', async () => {
+		const machine: AuthenticatedPrincipal = {
+			...OWNER,
+			credential: {
+				kind: 'service-account',
+				grant: { actions: [...AUTHORIZATION_ACTIONS], projects: '*' },
+			},
+		};
+		const authz = service({ superAdmins: [OWNER.id], defaultRole: 'manager' });
+		for (const action of AUTHORIZATION_ACTIONS) {
+			let resource: AuthorizationResource;
+			switch (ACTION_RULES[action].scope) {
+				case 'deployment':
+					resource = { kind: 'deployment' };
+					break;
+				case 'project':
+					resource = onProject();
+					break;
+				case 'session':
+					resource = onSession({ mode: 'edit', ephemeral: false, user_id: OWNER.id });
+					break;
+				case 'session-start':
+					resource = { kind: 'session-start', project, mode: 'edit' };
+					break;
+			}
+			const decisions = await authz.authorizeMany(machine, action, [resource, resource]);
+			expect(
+				decisions.map((decision) => decision.allowed),
+				action,
+			).toEqual([action === 'org-integration.manage', action === 'org-integration.manage']);
+			if (resource.kind !== 'deployment') {
+				const denial = { allowed: false, category: 'credential-resource', role: null };
+				expect(decisions).toEqual([denial, denial]);
+				expect(await authz.authorize(machine, action, resource)).toEqual(denial);
+				const analysis = await authz.analyze(machine, action, resource);
+				expect(analysis.decision).toEqual(denial);
+				expect(analysis.trace).toContainEqual({
+					stage: 'credential',
+					status: 'failed',
+					code: 'service_account_requires_deployment_resource',
+				});
+			}
+		}
+		expect(authz.projectEntryVisibility(machine, { id: project.id, owner: OWNER.id })).toBe(false);
+	});
+});
+
 describe('AuthorizationService: project actions', () => {
 	it('grants each project action at exactly its rule tier', async () => {
 		const bySubject: [AuthSubject, string][] = [

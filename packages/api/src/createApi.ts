@@ -464,11 +464,13 @@ export function createApi(rawDeps: ApiDeps) {
 		await next();
 	});
 
-	// Auto-init: ensure the catalog + default project exist, except for the
-	// metadata routes that must render before any catalog exists (see SKIP_INIT_PATHS).
+	// Org provisioning needs no catalog. Leave bootstrap to a human so the
+	// default project has an owner who can access it.
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		if (SKIP_INIT_PATHS.has(c.req.path)) return next();
-		await ensureInitialized(deps.bucket, c.get('user').id);
+		const user = c.get('user');
+		if (user.credential.kind === 'service-account') return next();
+		await ensureInitialized(deps.bucket, user.id);
 		await next();
 	});
 
@@ -519,8 +521,8 @@ export function createApi(rawDeps: ApiDeps) {
 		type: 'http',
 		scheme: 'bearer',
 		description:
-			'Personal access token (`mhub_pat_…`) minted at POST /api/v1/me/tokens, for CI/CLI/' +
-			'service callers. Acts as the issuing user; cannot manage tokens.',
+			'Hub personal access token (`mhub_pat_…`), configured service-account token (`mhub_sa_…`), ' +
+			'or a trusted external OIDC access token when enabled. Bearer credentials cannot manage personal tokens.',
 	});
 
 	// OpenAPI spec.

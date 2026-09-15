@@ -1,6 +1,7 @@
 import { createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApi } from '@marimo-hub/api';
+import { generateServiceAccountToken, UserId } from '@marimo-hub/core';
 import { createFromEnv } from './index';
 
 const issuer = 'https://issuer.example.com';
@@ -72,6 +73,51 @@ afterEach(() => {
 });
 
 describe('signed external tokens through the composition root', () => {
+	it('keeps service accounts, signed OIDC tokens, PATs, and browser sessions isolated', async () => {
+		const machine = await generateServiceAccountToken('deploy', 'key');
+		const deps = createFromEnv({
+			...env,
+			MARIMOHUB_SERVICE_ACCOUNTS: JSON.stringify([
+				{ id: 'deploy', actions: ['org-integration.manage'], credentials: [machine.credential] },
+			]),
+		});
+		const app = createApi(deps);
+		const cookie = sessionCookie();
+		const me = (authorization?: string) =>
+			app.request('/api/v1/me', {
+				headers: {
+					Cookie: cookie,
+					...(authorization === undefined ? {} : { Authorization: authorization }),
+				},
+			});
+		expect(await (await me(`Bearer ${machine.token}`)).json()).toMatchObject({
+			success: true,
+			data: { id: 'service-account:deploy' },
+		});
+		for (const authorization of [
+			'Bearer mhub_sa_bad',
+			`Bearer ${machine.token}x`,
+			`Bearer ${machine.token}, Bearer external`,
+		]) {
+			expect((await me(authorization)).status).toBe(401);
+		}
+		expect(fetch).not.toHaveBeenCalled();
+		expect(await (await me(`Bearer ${accessToken()}`)).json()).toMatchObject({
+			success: true,
+			data: { id: 'user-one' },
+		});
+		expect(await (await me()).json()).toMatchObject({ success: true, data: { id: 'user-one' } });
+		const pat = await deps.services.tokens.create(
+			{ name: 'test', grant: { actions: ['project.read'], projects: '*' } },
+			UserId.parse('user-one'),
+		);
+		expect(await (await me(`Bearer ${pat.token}`)).json()).toMatchObject({
+			success: true,
+			data: { id: 'user-one' },
+		});
+		expect((await me(`Bearer ${accessToken({ sub: 'service-account:deploy' })}`)).status).toBe(401);
+	});
+
 	it('authenticates API and MCP without issuing or verifying a Hub token', async () => {
 		const deps = createFromEnv(env);
 		const create = vi.spyOn(deps.services.tokens, 'create');

@@ -1205,6 +1205,7 @@ dependencies = [
  "tabled",
  "tempfile",
  "thiserror",
+ "time",
  "toml",
  "update-informer",
  "ureq 2.12.1",

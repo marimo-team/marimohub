@@ -1544,10 +1544,10 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** List org-wide integrations (super admin only) */
+		/** List org-wide integrations (requires org-integration.manage) */
 		get: operations['integrations.org.list'];
 		put?: never;
-		/** Create an org-wide integration (super admin only) */
+		/** Create an org-wide integration (requires org-integration.manage) */
 		post: operations['integrations.org.create'];
 		delete?: never;
 		options?: never;
@@ -1562,15 +1562,15 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Get an org-wide integration with its redacted config (super admin only) */
+		/** Get an org-wide integration with its redacted config (requires org-integration.manage) */
 		get: operations['integrations.org.get'];
 		put?: never;
 		post?: never;
-		/** Delete an org-wide integration and its version history (super admin only) */
+		/** Delete an org-wide integration and its version history (requires org-integration.manage) */
 		delete: operations['integrations.org.delete'];
 		options?: never;
 		head?: never;
-		/** Update an org-wide integration (super admin only) */
+		/** Update an org-wide integration (requires org-integration.manage) */
 		patch: operations['integrations.org.update'];
 		trace?: never;
 	};
@@ -1581,7 +1581,7 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** List an org-wide integration's config versions (super admin only) */
+		/** List an org-wide integration's config versions (requires org-integration.manage) */
 		get: operations['integrations.org.versions'];
 		put?: never;
 		post?: never;
@@ -1600,7 +1600,7 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Probe connectivity for an unsaved or stored org config (super admin only) */
+		/** Probe connectivity for an unsaved or stored org config (requires org-integration.manage) */
 		post: operations['integrations.org.test'];
 		delete?: never;
 		options?: never;
@@ -1617,7 +1617,7 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Evaluate SQL readiness for an unsaved org config (super admin only) */
+		/** Evaluate SQL readiness for an unsaved org config (requires org-integration.manage) */
 		post: operations['integrations.org.query-readiness'];
 		delete?: never;
 		options?: never;

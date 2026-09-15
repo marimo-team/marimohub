@@ -20,7 +20,7 @@ import type {
 import {
 	assertProjectActionOn,
 	assertProjectRole,
-	assertSuperAdmin,
+	assertDeploymentAction,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -409,15 +409,14 @@ const queryReadiness = createRoute({
 	},
 });
 
-// Org-scoped (deployment-wide) instances, inherited by every project. All
-// management is super-admin only — org integrations render into every
-// project's sessions, so no project role can be sufficient.
+// Org integrations render into every project's sessions, so management requires
+// the deployment action org-integration.manage; project roles are insufficient.
 const listOrgIntegrations = createRoute({
 	method: 'get',
 	path: '/org/integrations',
 	operationId: 'integrations.org.list',
 	tags: ['Integrations'],
-	summary: 'List org-wide integrations (super admin only)',
+	summary: 'List org-wide integrations (requires org-integration.manage)',
 	request: { query: PaginationQuery },
 	responses: {
 		200: jsonContent(
@@ -437,7 +436,7 @@ const createOrgIntegration = createRoute({
 	path: '/org/integrations',
 	operationId: 'integrations.org.create',
 	tags: ['Integrations'],
-	summary: 'Create an org-wide integration (super admin only)',
+	summary: 'Create an org-wide integration (requires org-integration.manage)',
 	request: { body: jsonBody(CreateIntegrationBody) },
 	responses: {
 		201: jsonContent(
@@ -454,7 +453,7 @@ const getOrgIntegration = createRoute({
 	path: '/org/integrations/{iid}',
 	operationId: 'integrations.org.get',
 	tags: ['Integrations'],
-	summary: 'Get an org-wide integration with its redacted config (super admin only)',
+	summary: 'Get an org-wide integration with its redacted config (requires org-integration.manage)',
 	request: { params: OrgIntegrationIdParam },
 	responses: {
 		200: jsonContent(
@@ -472,7 +471,7 @@ const updateOrgIntegration = createRoute({
 	path: '/org/integrations/{iid}',
 	operationId: 'integrations.org.update',
 	tags: ['Integrations'],
-	summary: 'Update an org-wide integration (super admin only)',
+	summary: 'Update an org-wide integration (requires org-integration.manage)',
 	request: {
 		params: OrgIntegrationIdParam,
 		headers: IfMatchHeader,
@@ -494,7 +493,8 @@ const deleteOrgIntegration = createRoute({
 	path: '/org/integrations/{iid}',
 	operationId: 'integrations.org.delete',
 	tags: ['Integrations'],
-	summary: 'Delete an org-wide integration and its version history (super admin only)',
+	summary:
+		'Delete an org-wide integration and its version history (requires org-integration.manage)',
 	request: { params: OrgIntegrationIdParam, headers: IfMatchHeader },
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Integration deleted'),
@@ -508,7 +508,7 @@ const listOrgIntegrationVersions = createRoute({
 	path: '/org/integrations/{iid}/versions',
 	operationId: 'integrations.org.versions',
 	tags: ['Integrations'],
-	summary: "List an org-wide integration's config versions (super admin only)",
+	summary: "List an org-wide integration's config versions (requires org-integration.manage)",
 	request: { params: OrgIntegrationIdParam, query: PaginationQuery },
 	responses: {
 		200: jsonContent(
@@ -528,7 +528,8 @@ const testOrgIntegration = createRoute({
 	path: '/org/integrations/test',
 	operationId: 'integrations.org.test',
 	tags: ['Integrations'],
-	summary: 'Probe connectivity for an unsaved or stored org config (super admin only)',
+	summary:
+		'Probe connectivity for an unsaved or stored org config (requires org-integration.manage)',
 	request: { body: jsonBody(TestIntegrationBody) },
 	responses: {
 		200: jsonContent(
@@ -545,7 +546,7 @@ const queryOrgReadiness = createRoute({
 	path: '/org/integrations/query-readiness',
 	operationId: 'integrations.org.query-readiness',
 	tags: ['Integrations'],
-	summary: 'Evaluate SQL readiness for an unsaved org config (super admin only)',
+	summary: 'Evaluate SQL readiness for an unsaved org config (requires org-integration.manage)',
 	request: { body: jsonBody(QueryReadinessBody) },
 	responses: {
 		200: jsonContent(
@@ -834,7 +835,12 @@ app.route('/', integrationBrowseApp);
 app.openapi(listOrgIntegrations, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(
+		c.get('user'),
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const query = c.req.valid('query');
 	const data = paginate((await integrations.list()).map(entryResponse), query, {
 		key: (entry) => entry.updated_at,
@@ -847,7 +853,12 @@ app.openapi(createOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(
+		user,
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const body = c.req.valid('json');
 	const detail = await integrations.create(body, user.id);
 	await appendAudit(
@@ -870,7 +881,12 @@ app.openapi(getOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(
+		c.get('user'),
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const detail = await integrations.get(iid);
 	c.header('ETag', etagFor(detail.updated_at));
 	return c.json({ success: true, data: detailResponse(detail) }, 200);
@@ -881,7 +897,12 @@ app.openapi(updateOrgIntegration, async (c) => {
 	const user = c.get('user');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(
+		user,
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const body = c.req.valid('json');
 	const detail = await integrations.update(iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
@@ -908,7 +929,12 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	const user = c.get('user');
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(
+		user,
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const deleted = await integrations.delete(iid, ifMatchToken(c));
 	if (deleted) {
 		await appendAudit(
@@ -931,7 +957,12 @@ app.openapi(listOrgIntegrationVersions, async (c) => {
 	const { iid } = c.req.valid('param');
 	const query = c.req.valid('query');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(
+		c.get('user'),
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const page = await integrations.listVersions(iid, {
 		limit: Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
 		cursor: query.cursor,
@@ -943,7 +974,12 @@ app.openapi(testOrgIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(user, deps);
+	await assertDeploymentAction(
+		user,
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
 	const objectContext = await objectTestContext(
@@ -974,7 +1010,12 @@ app.openapi(testOrgIntegration, async (c) => {
 app.openapi(queryOrgReadiness, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
-	await assertSuperAdmin(c.get('user'), deps);
+	await assertDeploymentAction(
+		c.get('user'),
+		'org-integration.manage',
+		deps,
+		'Requires org-integration.manage',
+	);
 	const body = c.req.valid('json') as QueryReadinessRequest;
 	return c.json({ success: true, data: integrations.queryReadiness(body) }, 200);
 });

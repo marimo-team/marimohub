@@ -1,5 +1,7 @@
 import { decodeTime } from 'ulidx';
-import { toHex } from '../../internal/hex';
+import { sha256Hex } from '../../internal/sha256';
+
+export { sha256 as authorizationSha256 } from '../../internal/sha256';
 
 const SECRET_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
 const SECRET_LENGTH = 32;
@@ -14,12 +16,8 @@ export function generateAuthorizationSecret(): string {
 	return secret;
 }
 
-export async function authorizationSha256(value: string): Promise<Uint8Array> {
-	return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
-}
-
 export async function hashAuthorizationSecret(value: string): Promise<string> {
-	return toHex(await authorizationSha256(value));
+	return sha256Hex(value);
 }
 
 export async function createAuthorizationCode<T extends string>(createId: () => T, ttlMs: number) {
