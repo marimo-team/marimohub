@@ -13,7 +13,6 @@ import {
 	NotebookId,
 	NotFoundError,
 	MAX_WORKSPACE_FILE_BYTES,
-	notificationRouter,
 	ProjectId,
 	sessionMode,
 	sourceDrift,
@@ -54,8 +53,6 @@ import {
 	resolvePublicBaseUrl,
 	RuntimeResponseSchema,
 	NotebookVersionResponseSchema,
-	retireLiveApps,
-	cancelJobRuns,
 	SnapshotNotebookEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
@@ -66,7 +63,7 @@ import { safeObjectContentType } from './objectBrowse';
 import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
 import type { HonoEnv, SandboxConfig } from '../context';
 import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
-import { scheduleProjectAlert } from '../notifications';
+import { deleteNotebookAndRetire } from './notebookDelete';
 
 // --- Request body schemas ---
 
@@ -1358,28 +1355,12 @@ app.openapi(updateNotebook, async (c) => {
 
 app.openapi(deleteNotebook, async (c) => {
 	const deps = c.get('deps');
-	const { notebooks, projects } = deps.services;
+	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
 	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
-	const deleted = await notebooks.deleteNotebookWithMutation(pid, nid, user.id, ifMatchToken(c));
-	if (deleted) {
-		scheduleProjectAlert(deps, pid, 'notebook.deleted', { project_id: pid, user: user.id }, () =>
-			notificationRouter.render({
-				kind: 'notebook.deleted',
-				project,
-				notebookId: nid,
-				notebookTitle: deleted.notebook.title,
-				actor: user,
-				mutationId: deleted.mutationId,
-				baseUrl: deps.sandbox.appBaseUrl,
-			}),
-		);
-	}
-
-	await retireLiveApps(deps, pid, (s) => s.notebook_id === nid);
-	await cancelJobRuns(deps, pid, user.id, nid);
+	await deleteNotebookAndRetire(deps, project, nid, user, ifMatchToken(c));
 
 	return c.json({ success: true }, 200);
 });

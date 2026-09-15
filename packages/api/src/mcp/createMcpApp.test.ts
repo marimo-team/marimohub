@@ -233,6 +233,9 @@ describe('MCP OAuth app', () => {
 		expect(toolList.result.tools.map((tool) => tool.name)).toEqual([
 			'list_catalog',
 			'create_notebook',
+			'get_notebook',
+			'update_notebook',
+			'delete_notebook',
 			'start_session',
 			'stop_session',
 			'execute_code',
@@ -318,6 +321,7 @@ describe('MCP OAuth app', () => {
 			SessionId.parse(launchResult.result.structuredContent.session_id),
 		);
 		expect(kernelAuthorizations).toEqual([
+			`Bearer ${storedSession.kernel_auth_token}`,
 			`Bearer ${storedSession.kernel_auth_token}`,
 			`Bearer ${storedSession.kernel_auth_token}`,
 		]);
