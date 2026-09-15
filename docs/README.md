@@ -44,6 +44,7 @@ Every deployment picks storage, compute, and auth.
 - [Kubernetes](./deploying/kubernetes.md)
 - [AWS](./deploying/aws.md)
 - [GCP](./deploying/gcp.md)
+- [Azure](./deploying/azure.md)
 - [Cloudflare](./deploying/cloudflare.md)
 
 ## Operate

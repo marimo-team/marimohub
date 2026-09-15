@@ -29,3 +29,5 @@ MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING='…'  # secret
 
 The container must already exist. On startup, marimohub verifies that ETag
 conditions are enforced atomically and refuses to use a data-unsafe store.
+
+See [Deploying → Azure](/deploying/azure) for AKS workload identity and platform configuration.

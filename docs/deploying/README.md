@@ -16,9 +16,14 @@ background maintenance.
 - [CoreWeave (CKS)](./cks.md) — CAIOS + CoreWeave Sandboxes + OIDC.
 - [Kubernetes](./kubernetes.md) — any cluster (EKS/GKE/AKS/self-managed) with native
   Pod kernels via the `kubernetes` compute backend.
-- [GCP](./gcp.md) — GKE or Cloud Run + GCS.
-- [AWS](./aws.md) — EKS or ECS/Fargate + native S3.
+- [GCP](./gcp.md) — GKE, Compute Engine, or Cloud Run with GCS or persistent disk storage.
+- [AWS](./aws.md) — EKS, ECS/Fargate, or EC2 with S3 or persistent disk storage.
+- [Azure](./azure.md) — AKS or Azure VMs with Blob Storage or persistent disk storage.
 - [Cloudflare](./cloudflare.md) — Workers + R2 + Containers + Access (serverless).
+
+The AWS, GCP, and Azure pages cover compute, storage, auth, features, security,
+and operations. Each page lists platform choices and links to detailed setup
+guides. Compute and storage backends are independent choices.
 
 ## Path prefix
 

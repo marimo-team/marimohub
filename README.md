@@ -64,6 +64,7 @@ guide:
 - [Kubernetes](./docs/deploying/kubernetes.md)
 - [AWS](./docs/deploying/aws.md)
 - [GCP](./docs/deploying/gcp.md)
+- [Azure](./docs/deploying/azure.md)
 - [Cloudflare](./docs/deploying/cloudflare.md)
 
 Useful references:

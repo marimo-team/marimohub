@@ -191,6 +191,7 @@ export default defineConfig({
 					{ text: 'Kubernetes', link: '/deploying/kubernetes' },
 					{ text: 'GCP', link: '/deploying/gcp' },
 					{ text: 'AWS', link: '/deploying/aws' },
+					{ text: 'Azure', link: '/deploying/azure' },
 					{ text: 'Cloudflare', link: '/deploying/cloudflare' },
 				],
 			},
