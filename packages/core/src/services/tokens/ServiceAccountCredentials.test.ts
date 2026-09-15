@@ -19,6 +19,15 @@ const config: ServiceAccountsConfig = [
 afterEach(() => vi.useRealTimers());
 
 describe('service account credentials', () => {
+	it('rejects duplicate actions with an explicit uniqueness error', () => {
+		expect(
+			() =>
+				new ServiceAccountCredentials([
+					{ ...config[0], actions: ['org-integration.manage', 'org-integration.manage'] },
+				]),
+		).toThrow('Actions must be unique');
+	});
+
 	it('generates distinct tokens, hashes the entire credential, and exposes bounded provenance', async () => {
 		const next = await generateServiceAccountToken('deploy', 'initial');
 		expect(next.token).not.toBe(initial.token);

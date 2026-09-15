@@ -27,7 +27,11 @@ const CredentialSchema = z.strictObject({
 const AccountSchema = z.strictObject({
 	id: AccountIdSchema,
 	name: z.string().trim().min(1).max(100).optional(),
-	actions: z.array(z.enum(SERVICE_ACCOUNT_ACTIONS)).min(1).max(SERVICE_ACCOUNT_ACTIONS.length),
+	actions: z
+		.array(z.enum(SERVICE_ACCOUNT_ACTIONS))
+		.min(1)
+		.refine((actions) => new Set(actions).size === actions.length, 'Actions must be unique')
+		.meta({ uniqueItems: true }),
 	credentials: z.array(CredentialSchema).min(1).max(4),
 });
 

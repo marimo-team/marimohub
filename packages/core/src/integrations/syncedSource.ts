@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { BadRequestError, ConflictError, ValidationError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
-import { toHex } from '../internal/hex';
+import { sha256Hex } from '../internal/sha256';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
 import type { VersionId } from '../ids';
 import {
@@ -70,11 +70,6 @@ export type SyncTokenRecord = z.infer<typeof SyncTokenRecordSchema>;
 
 const SYNC_TOKEN_BYTES = 32;
 const SYNC_TOKEN_PREFIX = 'mhsync_';
-
-async function sha256(value: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-	return toHex(new Uint8Array(digest));
-}
 
 // Constant-time comparison of two equal-length hex digests. Both operands are
 // SHA-256 outputs, so length is fixed; the loop still avoids an early-exit leak.
@@ -242,7 +237,7 @@ export async function createSyncTokenRecord(
 ): Promise<SyncTokenRecord> {
 	return {
 		schema_version: 1,
-		token_sha256: await sha256(token),
+		token_sha256: await sha256Hex(token),
 		created_at: createdAt,
 	};
 }
@@ -251,7 +246,7 @@ export async function verifySyncTokenRecord(
 	record: SyncTokenRecord,
 	token: string,
 ): Promise<boolean> {
-	return timingSafeEqual(record.token_sha256, await sha256(token));
+	return timingSafeEqual(record.token_sha256, await sha256Hex(token));
 }
 
 export function assertSyncedSource(source: Source): GitSource {

@@ -163,4 +163,64 @@ describe('service account API', () => {
 		await expectOk(await request('GET', '/org/integrations', undefined, patHeaders));
 		await expectError(await request('GET', '/events', undefined, patHeaders), 403);
 	});
+
+	it('identifies the missing action on every org route for a scoped admin PAT', async () => {
+		const { bucket, deps, services } = await setup();
+		const root = UserId.parse('human-admin');
+		await services.identities.upsert({ id: root, email: 'human@example.com' });
+		const pat = await services.tokens.create(
+			{ name: 'admin-only', grant: { actions: ['admin.access'], projects: '*' } },
+			root,
+		);
+		const { request } = createTestApi({
+			bucket,
+			deps: { ...deps, policy: { superAdmins: [root] } },
+		});
+		const body = {
+			kind: 'postgres',
+			name: 'warehouse',
+			config: { host: 'db.internal', database: 'analytics', username: 'ci', password: 'test' },
+		};
+		const { id } = await expectOk<{ id: string }>(
+			await request('POST', '/org/integrations', body, headers),
+			201,
+		);
+		const path = `/org/integrations/${id}`;
+		const requests: [string, string, unknown?][] = [
+			['GET', '/org/integrations'],
+			['POST', '/org/integrations', body],
+			['GET', path],
+			['PATCH', path, { enabled: false }],
+			['DELETE', path],
+			['GET', `${path}/versions`],
+			['POST', '/org/integrations/test', { source: 'stored', id }],
+			['POST', '/org/integrations/query-readiness', { kind: body.kind, config: body.config }],
+		];
+		for (const [method, url, payload] of requests) {
+			const error = await expectError(
+				await request(method, url, payload, { authorization: `Bearer ${pat.token}` }),
+				403,
+			);
+			expect(error.message).toBe('Requires org-integration.manage');
+		}
+	});
+
+	it('identifies the missing action for a machine principal without a grant', async () => {
+		const { bucket, deps } = await setup();
+		const { request } = createTestApi({
+			bucket,
+			deps: {
+				...deps,
+				authenticator: {
+					authenticate: async () => ({
+						id: UserId.parse('service-account:unscoped'),
+						email: 'unscoped@service-accounts.invalid',
+						credential: { kind: 'service-account' },
+					}),
+				},
+			},
+		});
+		const error = await expectError(await request('GET', '/org/integrations'), 403);
+		expect(error.message).toBe('Requires org-integration.manage');
+	});
 });

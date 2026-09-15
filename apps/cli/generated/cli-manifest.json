@@ -283,7 +283,7 @@
 			"command": ["integrations", "org", "create"],
 			"method": "POST",
 			"path": "/api/v1/org/integrations",
-			"summary": "Create an org-wide integration (super admin only)",
+			"summary": "Create an org-wide integration (requires org-integration.manage)",
 			"parameters": [],
 			"body": {
 				"required": true,
@@ -329,7 +329,7 @@
 			"command": ["integrations", "org", "delete"],
 			"method": "DELETE",
 			"path": "/api/v1/org/integrations/{iid}",
-			"summary": "Delete an org-wide integration and its version history (super admin only)",
+			"summary": "Delete an org-wide integration and its version history (requires org-integration.manage)",
 			"parameters": [
 				{
 					"name": "if-match",
@@ -360,7 +360,7 @@
 			"command": ["integrations", "org", "get"],
 			"method": "GET",
 			"path": "/api/v1/org/integrations/{iid}",
-			"summary": "Get an org-wide integration with its redacted config (super admin only)",
+			"summary": "Get an org-wide integration with its redacted config (requires org-integration.manage)",
 			"parameters": [
 				{
 					"name": "iid",
@@ -382,7 +382,7 @@
 			"command": ["integrations", "org", "list"],
 			"method": "GET",
 			"path": "/api/v1/org/integrations",
-			"summary": "List org-wide integrations (super admin only)",
+			"summary": "List org-wide integrations (requires org-integration.manage)",
 			"parameters": [
 				{
 					"name": "cursor",
@@ -412,7 +412,7 @@
 			"command": ["integrations", "org", "query-readiness"],
 			"method": "POST",
 			"path": "/api/v1/org/integrations/query-readiness",
-			"summary": "Evaluate SQL readiness for an unsaved org config (super admin only)",
+			"summary": "Evaluate SQL readiness for an unsaved org config (requires org-integration.manage)",
 			"parameters": [],
 			"body": {
 				"required": true,
@@ -444,7 +444,7 @@
 			"command": ["integrations", "org", "test"],
 			"method": "POST",
 			"path": "/api/v1/org/integrations/test",
-			"summary": "Probe connectivity for an unsaved or stored org config (super admin only)",
+			"summary": "Probe connectivity for an unsaved or stored org config (requires org-integration.manage)",
 			"parameters": [],
 			"body": {
 				"required": true,
@@ -461,7 +461,7 @@
 			"command": ["integrations", "org", "update"],
 			"method": "PATCH",
 			"path": "/api/v1/org/integrations/{iid}",
-			"summary": "Update an org-wide integration (super admin only)",
+			"summary": "Update an org-wide integration (requires org-integration.manage)",
 			"parameters": [
 				{
 					"name": "if-match",
@@ -525,7 +525,7 @@
 			"command": ["integrations", "org", "versions"],
 			"method": "GET",
 			"path": "/api/v1/org/integrations/{iid}/versions",
-			"summary": "List an org-wide integration's config versions (super admin only)",
+			"summary": "List an org-wide integration's config versions (requires org-integration.manage)",
 			"parameters": [
 				{
 					"name": "iid",

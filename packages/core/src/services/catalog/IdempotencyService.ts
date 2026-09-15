@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
 import { PreconditionFailedError } from '../../errors';
-import { toHex } from '../../internal/hex';
+import { sha256Hex } from '../../internal/sha256';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import { readStored } from '../../schema';
@@ -22,8 +22,7 @@ type IdempotencyRecord = z.infer<typeof IdempotencyRecordSchema>;
 async function digestKey(scope: string, key: string): Promise<string> {
 	// Hash so an arbitrary client key never produces an unsafe/oversized object key,
 	// and the (scope, key) pair maps to exactly one object.
-	const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${scope}\n${key}`));
-	return toHex(new Uint8Array(bytes));
+	return sha256Hex(`${scope}\n${key}`);
 }
 
 /**
