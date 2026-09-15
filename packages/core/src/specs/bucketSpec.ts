@@ -539,6 +539,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 			{ name: 'catalog', description: 'Catalog pointer and snapshots (`_system/`)' },
 			{ name: 'project', description: 'Per-project records (`projects/{pid}/`)' },
 			{ name: 'notebook', description: 'Per-notebook records' },
+			{ name: 'deep-links', description: 'Global app aliases and notebook-local indexes' },
 			{ name: 'integration', description: 'Project- and org-scoped integration records' },
 			{ name: 'session', description: 'Session records and sandbox claims' },
 			{ name: 'job', description: 'Notebook job definitions, runs, and active-run markers' },

@@ -52,15 +52,58 @@ describe('App link routes', () => {
 			bucket: api.bucket,
 			deps: { authenticator: { authenticate: async () => null } },
 		});
-		await expectError(await anonymous.request('GET', '/deep-links/sales'), 401);
+		for (const path of ['/deep-links/sales', base]) {
+			const response = await anonymous.request('GET', path);
+			expect(response.headers.get('cache-control')).toBe('no-store');
+			expect(response.headers.get('etag')).toBeNull();
+			await expectError(response, 401);
+		}
 		await expectError(await anonymous.request('POST', base, { slug: 'other' }), 401);
 	});
 
 	it('masks a notebook from a nonmember', async () => {
 		await createLink();
 		const outsider = createTestApi({ bucket: api.bucket, userId: uid('outsider') });
-		await expectError(await outsider.request('GET', '/deep-links/sales'), 404);
-		await expectError(await outsider.request('GET', base), 404);
+		for (const path of ['/deep-links/sales', base]) {
+			const response = await outsider.request('GET', path);
+			expect(response.headers.get('cache-control')).toBe('no-store');
+			expect(response.headers.get('etag')).toBeNull();
+			await expectError(response, 404);
+		}
+	});
+
+	it('never conditionally caches resolutions or notebook alias lists', async () => {
+		const link = await createLink();
+		for (const path of ['/deep-links/sales', base]) {
+			const response = await api.app.request(`/api/v1${path}`, {
+				headers: { 'If-None-Match': '*' },
+			});
+			expect(response.headers.get('cache-control')).toBe('no-store');
+			expect(response.headers.get('etag')).toBeNull();
+			expect(await expectOk(response)).toEqual(path === base ? [link] : link);
+		}
+
+		await expectOk(
+			await api.request('DELETE', `${base}/sales?registration_id=${link.registration_id}`),
+		);
+		const response = await api.app.request(`/api/v1${base}`, {
+			headers: { 'If-None-Match': '*' },
+		});
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(response.headers.get('etag')).toBeNull();
+		expect(await expectOk(response)).toEqual([]);
+	});
+
+	it('does not cache failed notebook alias listings', async () => {
+		await createLink();
+		vi.spyOn(api.deps.services.deepLinks, 'list').mockRejectedValueOnce(
+			new Error('private storage endpoint failed'),
+		);
+		const response = await api.request('GET', base);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(response.headers.get('etag')).toBeNull();
+		const error = await expectError(response, 500, 'INTERNAL_ERROR');
+		expect(JSON.stringify(error)).not.toContain('private storage endpoint');
 	});
 
 	it.each(['viewer', 'editor', 'manager'] as const)(

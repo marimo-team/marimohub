@@ -957,7 +957,7 @@ Registration uses create-if-absent or ETag compare-and-swap (CAS). Release uses
 CAS to replace the mapping with a marker. The bucket has no conditional delete.
 Each new registration gets a new ID, so stale removal requests cannot release it.
 Resolution reads one mapping without a bucket scan, then checks target access.
-Resolver responses use `Cache-Control: no-store`.
+Resolver and notebook link-list responses use `Cache-Control: no-store`.
 
 #### Release and deletion
 

@@ -84,10 +84,6 @@ const release = createRoute({
 });
 
 const app = createApp();
-app.use('/deep-links/*', async (c, next) => {
-	c.header('Cache-Control', 'no-store');
-	await next();
-});
 app.openapi(resolve, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');

@@ -27,12 +27,14 @@ export function useDeepLinksQuery(pid: string, nid: string) {
 				}),
 			),
 		staleTime: 0,
+		gcTime: 0,
 	});
 }
 
 export function useRegisterDeepLink(pid: string, nid: string) {
 	const client = useQueryClient();
 	return useMutation({
+		meta: { suppressErrorToast: true },
 		mutationFn: (slug: string) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/deep-links', {

@@ -83,6 +83,13 @@ const OPENAPI_DOC = {
 /** The versioned API mount. Health and auth routes live outside it, unversioned. */
 const API_PREFIX = '/api/v1';
 
+function isDeepLinkPath(path: string): boolean {
+	return (
+		path.startsWith(`${API_PREFIX}/deep-links/`) ||
+		/^\/api\/v1\/projects\/[^/]+\/notebooks\/[^/]+\/deep-links(?:\/|$)/.test(path)
+	);
+}
+
 /**
  * Mount point of the OpenAI-compatible AI proxy. Not our own v1 API — errors
  * under it keep OpenAI's error shape instead of the hub envelope (see `onError`).
@@ -445,6 +452,11 @@ export function createApi(rawDeps: ApiDeps) {
 		return next();
 	});
 
+	app.use(`${API_PREFIX}/*`, async (c, next) => {
+		if (isDeepLinkPath(c.req.path)) c.header('Cache-Control', 'no-store');
+		await next();
+	});
+
 	// AuthN: reject unauthenticated /api/v1/* requests.
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		const user = await deps.authenticator.authenticate(c.req.raw);
@@ -482,8 +494,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// before `etag` builds the 304 (which retains cache-control).
 	const conditionalGet = etag({ weak: true });
 	app.use(`${API_PREFIX}/*`, (c, next) =>
-		c.req.path.endsWith('/browse/objects/content') ||
-		c.req.path.startsWith(`${API_PREFIX}/deep-links/`)
+		c.req.path.endsWith('/browse/objects/content') || isDeepLinkPath(c.req.path)
 			? next()
 			: conditionalGet(c, next),
 	);

@@ -13,8 +13,13 @@ interface AppLinksDialogProps {
 	onClose: () => void;
 }
 
+function urlFor(slug: string): string {
+	return new URL(withBasePath(`/app/${slug}`), window.location.origin).toString();
+}
+
 export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: AppLinksDialogProps) {
 	const links = useDeepLinksQuery(projectId, notebookId);
+	const currentLinks = links.isFetchedAfterMount && !links.isError ? links.data : undefined;
 	const register = useRegisterDeepLink(projectId, notebookId);
 	const release = useReleaseDeepLink(projectId, notebookId);
 	const { copy } = useCopyToClipboard();
@@ -22,8 +27,6 @@ export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: Ap
 	const canonicalSlug = slug.trim().toLowerCase();
 	const valid =
 		canonicalSlug.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(canonicalSlug);
-	const urlFor = (value: string) =>
-		new URL(withBasePath(`/app/${value}`), window.location.origin).toString();
 	const pending = register.isPending || release.isPending;
 
 	return (
@@ -33,7 +36,9 @@ export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: Ap
 					App links use the notebook’s existing permissions. People must sign in and have permission
 					to run the app.
 				</p>
-				{links.isPending && <output className="text-sm">Loading links…</output>}
+				{!links.isError && !links.isFetchedAfterMount && (
+					<output className="text-sm">Loading links…</output>
+				)}
 				{links.isError && (
 					<div role="alert" className="text-sm text-destructive">
 						{links.error.message}{' '}
@@ -42,11 +47,11 @@ export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: Ap
 						</Button>
 					</div>
 				)}
-				{links.data?.length === 0 && (
+				{currentLinks?.length === 0 && (
 					<p className="text-sm text-muted-foreground">No app links yet.</p>
 				)}
 				<ul className="flex flex-col gap-2">
-					{links.data?.map((link) => (
+					{currentLinks?.map((link) => (
 						<li
 							key={link.registration_id}
 							className="flex items-center gap-2 rounded-md border p-2"
@@ -103,7 +108,10 @@ export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: Ap
 							<TextField
 								label="App slug"
 								value={slug}
-								onChange={setSlug}
+								onChange={(value) => {
+									setSlug(value);
+									register.reset();
+								}}
 								placeholder="my-custom-app"
 								maxLength={63}
 								isDisabled={pending}

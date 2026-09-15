@@ -47,8 +47,21 @@ describe.each(SPECS)('internal/schemas/$file', ({ file, doc }) => {
 
 describe('bucket schema contracts', () => {
 	const doc = buildBucketSpec() as {
+		tags: { name: string; description: string }[];
+		paths: Record<string, { get?: { tags: string[] }; put?: { tags: string[] } }>;
 		components: { schemas: Record<string, Record<string, unknown>> };
 	};
+
+	it('declares and describes every operation tag', () => {
+		const tags = new Map(doc.tags.map(({ name, description }) => [name, description]));
+		for (const [path, item] of Object.entries(doc.paths)) {
+			for (const operation of [item.get, item.put]) {
+				for (const tag of operation?.tags ?? []) {
+					expect(tags.get(tag)?.trim(), `${path}: ${tag}`).toBeTruthy();
+				}
+			}
+		}
+	});
 
 	it('keeps the token schema concrete and publishes grant uniqueness', () => {
 		const token = doc.components.schemas.Token as {
