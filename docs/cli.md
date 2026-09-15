@@ -183,9 +183,9 @@ mohub service-account generate \
   --account ci-deploy --key initial --output-dir ./ci-credentials
 ```
 
-The command writes the server configuration to `accounts.json` and the client secret to `token` in a new private directory.
-It prints no secrets. Use `--config` to preserve existing accounts and keys during rotation.
-See [Service accounts](./service-accounts.md) for configuration, deployment permissions, and rotation steps.
+The command writes server configuration (`accounts.json`) and a client secret (`token`) to a new private directory.
+It prints no secrets. Use `--config` to retain existing accounts and keys during rotation.
+See [Service accounts](./service-accounts.md) for configuration, permissions, and rotation.
 
 ## Deploy notebooks from configuration
 
