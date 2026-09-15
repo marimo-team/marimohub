@@ -4,6 +4,7 @@ pub mod config;
 pub mod deploy;
 pub mod deploy_config;
 pub mod manifest;
+pub mod service_account;
 
 use std::io;
 

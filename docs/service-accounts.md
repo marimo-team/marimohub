@@ -13,11 +13,11 @@ For automation that acts as a person, use a [personal access token](./api-tokens
 
 ## Generate credentials
 
-Use the [standalone server binary](./deployment-options.md#_1-config-driven-the-common-case) in a private provisioning environment.
-The command works offline, without server configuration or a running hub.
+Install the [mohub CLI](./cli.md#install), then generate credentials in a private provisioning environment.
+The command works offline, without a profile, login, or a running hub.
 
 ```sh
-./marimohub-linux-x64 service-account generate \
+mohub service-account generate \
   --account ci-deploy --key initial --output-dir ./ci-credentials
 ```
 
@@ -30,10 +30,7 @@ It prints no secrets and refuses an existing output directory.
 On Unix, the directory has mode `0700` and the files have mode `0600`.
 Store the files in your secret manager, outside source control and CI logs.
 Generated credentials expire after 90 days. Use `--expires-in-days` to select 1–3650 days.
-Use `service-account generate --help` for all options.
-
-For a source checkout, build the server and use `node apps/server/dist/index.mjs` instead of the binary.
-The command reuses the server's credential generator and configuration validation.
+Use `mohub service-account generate --help` for all options.
 
 Supply the complete contents of `accounts.json` as the server environment variable on every replica:
 
@@ -103,7 +100,7 @@ The API retains version history, audit events, name uniqueness, and conditional 
 Use `--config` to preserve existing accounts and keys during rotation:
 
 ```sh
-./marimohub-linux-x64 service-account generate \
+mohub service-account generate \
   --account ci-deploy --key rotated --config ./ci-credentials/accounts.json \
   --output-dir ./rotated-credentials
 ```

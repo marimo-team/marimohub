@@ -14,7 +14,7 @@ function invalidConfiguration(detail: string): ConfigError {
 	});
 }
 
-export function parseServiceAccountsConfig(raw: string) {
+function parseServiceAccountsConfig(raw: string) {
 	if (new TextEncoder().encode(raw).byteLength > MAX_CONFIG_BYTES)
 		throw invalidConfiguration('configuration exceeds 64 KiB');
 	let input: unknown;

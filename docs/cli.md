@@ -174,6 +174,19 @@ terminal colors. Progress and update notices use standard error.
 The CLI skips its daily release check when standard error is not a terminal, including in CI. Use
 `--no-update-check` or `MARIMOHUB_NO_UPDATE_CHECK=true` to disable it explicitly.
 
+## Generate deployment credentials
+
+Generate a service-account credential without a login or a running hub:
+
+```bash
+mohub service-account generate \
+  --account ci-deploy --key initial --output-dir ./ci-credentials
+```
+
+The command writes the server configuration to `accounts.json` and the client secret to `token` in a new private directory.
+It prints no secrets. Use `--config` to preserve existing accounts and keys during rotation.
+See [Service accounts](./service-accounts.md) for configuration, deployment permissions, and rotation steps.
+
 ## Deploy notebooks from configuration
 
 `mohub notebooks deploy` updates existing local-source notebooks from repository files. Before it

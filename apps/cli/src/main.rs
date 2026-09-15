@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use clap::ArgMatches;
-use mohub::{cli, client, config, deploy, manifest, Error};
+use mohub::{cli, client, config, deploy, manifest, service_account, Error};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use update_informer::{registry, Check};
@@ -681,7 +681,12 @@ fn run() -> Result<(), Error> {
     let matches = command.clone().get_matches();
     let (path, leaf) = selected_command(&matches);
     let result = run_command(&manifest, &mut command, &matches, &path, leaf);
-    if result.is_ok() && path.first().map(String::as_str) != Some("completions") {
+    if result.is_ok()
+        && !matches!(
+            path.first().map(String::as_str),
+            Some("completions" | "service-account")
+        )
+    {
         check_for_update(&matches);
     }
     result
@@ -694,6 +699,19 @@ fn run_command(
     path: &[String],
     leaf: &ArgMatches,
 ) -> Result<(), Error> {
+    if path == ["service-account", "generate"] {
+        return service_account::generate(
+            leaf.get_one::<String>("account").expect("required by clap"),
+            leaf.get_one::<String>("key").expect("required by clap"),
+            leaf.get_one::<std::path::PathBuf>("output-dir")
+                .expect("required by clap"),
+            leaf.get_one::<std::path::PathBuf>("config")
+                .map(|path| path.as_path()),
+            *leaf
+                .get_one::<u64>("expires-in-days")
+                .expect("defaulted by clap"),
+        );
+    }
     if path.first().map(String::as_str) == Some("profile") {
         return handle_profile(matches.subcommand().expect("selected profile").1);
     }

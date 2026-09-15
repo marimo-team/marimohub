@@ -242,6 +242,60 @@ fn deploy_command() -> Command {
         )
 }
 
+fn service_account_command() -> Command {
+    Command::new("service-account")
+        .about("Generate credentials for deployment automation")
+        .subcommand_required(true)
+        .subcommand(
+            Command::new("generate")
+                .about("Generate an offline credential without a hub connection or login")
+                .after_help(
+                    "Writes accounts.json for server MARIMOHUB_SERVICE_ACCOUNTS and token for client \
+                     MARIMOHUB_TOKEN_FILE. No secrets are printed. Existing accounts and keys are \
+                     preserved with --config.",
+                )
+                .arg(
+                    Arg::new("account")
+                        .long("account")
+                        .required(true)
+                        .value_name("ID")
+                        .help("Stable service-account ID"),
+                )
+                .arg(
+                    Arg::new("key")
+                        .long("key")
+                        .required(true)
+                        .value_name("ID")
+                        .help("New credential ID, unique within the account"),
+                )
+                .arg(
+                    Arg::new("output-dir")
+                        .long("output-dir")
+                        .required(true)
+                        .value_name("PATH")
+                        .value_parser(value_parser!(std::path::PathBuf))
+                        .value_hint(ValueHint::DirPath)
+                        .help("New directory for accounts.json and token; must not exist"),
+                )
+                .arg(
+                    Arg::new("config")
+                        .long("config")
+                        .value_name("PATH")
+                        .value_parser(value_parser!(std::path::PathBuf))
+                        .value_hint(ValueHint::FilePath)
+                        .help("Existing accounts.json to extend with the new credential"),
+                )
+                .arg(
+                    Arg::new("expires-in-days")
+                        .long("expires-in-days")
+                        .value_name("DAYS")
+                        .default_value("90")
+                        .value_parser(value_parser!(u64).range(1..=3650))
+                        .help("Token lifetime in days"),
+                ),
+        )
+}
+
 pub fn build(manifest: &Manifest) -> Command {
     let mut root = Node::default();
     for operation in &manifest.operations {
@@ -318,6 +372,7 @@ pub fn build(manifest: &Manifest) -> Command {
                 .help("Do not check GitHub Releases for a newer mohub version"),
         )
         .subcommand(profile_command())
+        .subcommand(service_account_command())
         .subcommand(login_command())
         .subcommand(
             Command::new("status").about("Validate authentication for the selected profile"),

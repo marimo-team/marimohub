@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { sha256Hex } from '../../internal/sha256';
 import {
 	generateServiceAccountToken,
@@ -19,6 +20,23 @@ const config: ServiceAccountsConfig = [
 afterEach(() => vi.useRealTimers());
 
 describe('service account credentials', () => {
+	it('accepts the shared Rust CLI credential fixture', async () => {
+		const fixture = JSON.parse(
+			readFileSync(
+				new URL('../../../../../apps/cli/tests/fixtures/service-account.json', import.meta.url),
+				'utf8',
+			),
+		) as { token: string; accounts: ServiceAccountsConfig };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2029-01-01T00:00:00Z'));
+		expect(
+			await new ServiceAccountCredentials(fixture.accounts).verify(fixture.token),
+		).toMatchObject({
+			id: 'service-account:ci-deploy',
+			credential: { kind: 'service-account', id: 'ci-deploy/initial' },
+		});
+	});
+
 	it('rejects duplicate actions with an explicit uniqueness error', () => {
 		expect(
 			() =>
