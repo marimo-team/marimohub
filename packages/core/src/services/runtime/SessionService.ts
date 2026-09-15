@@ -686,6 +686,19 @@ export class SessionService {
 		return sessions.filter((s) => present.includes(s.status));
 	}
 
+	async listEditorsBlockingSourceUpdate(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<Session[]> {
+		const sessions = await this.scanProject(projectId, (session) => session);
+		return sessions.filter(
+			(session) =>
+				session.notebook_id === notebookId &&
+				sessionMode(session) === 'edit' &&
+				(!isTerminal(session.status) || (!!session.sandbox_id && !session.sandbox_reclaimed_at)),
+		);
+	}
+
 	async listProtectedVersionIds(
 		projectId: ProjectId,
 		notebookId: NotebookId,

@@ -1381,21 +1381,32 @@ export async function startNotebookSession(input: {
 	try {
 		await saga(observer)
 			.step('session_record', async () => {
-				session = await sessions.createSession({
-					notebook_id: nid,
-					project_id: pid,
-					user_id: user.id,
-					sandbox_id: sandboxId,
-					kernel_auth_token: kernelAuthToken,
-					compute_profile: appliedComputeProfile.name,
-					compute_resources: appliedComputeProfile.resources,
-					compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
-					ephemeral,
-					mode,
-					source_version_id: sourceVersionId,
-					editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
-					authorization_expires_at: authorizationExpiresAt,
-				});
+				const create = () =>
+					sessions.createSession({
+						notebook_id: nid,
+						project_id: pid,
+						user_id: user.id,
+						sandbox_id: sandboxId,
+						kernel_auth_token: kernelAuthToken,
+						compute_profile: appliedComputeProfile.name,
+						compute_resources: appliedComputeProfile.resources,
+						compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
+						ephemeral,
+						mode,
+						source_version_id: sourceVersionId,
+						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
+						authorization_expires_at: authorizationExpiresAt,
+					});
+				// Publish the starting record under the source-mutation lease. Once visible,
+				// the session itself blocks source replacement through sandbox reclamation.
+				session =
+					mode === 'edit'
+						? await notebooks.workspace.withMutation(pid, nid, {}, async (lease) => {
+								session = await create();
+								await lease.heartbeat();
+								return session;
+							})
+						: await create();
 				observer.tag('session_id', session.session_id);
 			})
 			// The pre-flight cap check alone is raceable; re-rank now that this

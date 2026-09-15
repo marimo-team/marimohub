@@ -484,23 +484,37 @@ export function createMcpServer(
 						'Supply at least one of title, description, code, tags, or readme.',
 					);
 				}
-				if (input.code !== undefined) {
-					const editors = (await deps.services.sessions.listActiveByProject(project.id)).filter(
-						(session) => session.notebook_id === notebook.id && sessionMode(session) === 'edit',
+				const update = (assertWritable?: () => Promise<void>) =>
+					deps.services.notebooks.updateNotebook(
+						project.id,
+						notebook.id,
+						input,
+						principal.id,
+						expected_updated_at ?? detail.meta.updated_at,
+						assertWritable,
 					);
-					if (editors.length > 0) {
-						throw new ConflictError(
-							`Stop active edit sessions with stop_session before replacing stored code: ${editors.map((session) => session.session_id).join(', ')}. Then call get_notebook and retry update_notebook.`,
-						);
-					}
-				}
-				const meta = await deps.services.notebooks.updateNotebook(
-					project.id,
-					notebook.id,
-					input,
-					principal.id,
-					expected_updated_at ?? detail.meta.updated_at,
-				);
+				const meta =
+					input.code === undefined
+						? await update()
+						: await deps.services.notebooks.workspace.withMutation(
+								project.id,
+								notebook.id,
+								{
+									assertMutable: async () => {
+										const editors = await deps.services.sessions.listEditorsBlockingSourceUpdate(
+											project.id,
+											notebook.id,
+										);
+										if (editors.length > 0) {
+											throw new ConflictError(
+												`Stop edit sessions and wait for sandbox cleanup before replacing stored code: ${editors.map((session) => session.session_id).join(', ')}. Then call get_notebook and retry update_notebook.`,
+											);
+										}
+									},
+								},
+								(lease) => update(lease.heartbeat),
+							);
+
 				return result({
 					notebook_id: notebook.id,
 					...toPublicNotebookMeta(meta),

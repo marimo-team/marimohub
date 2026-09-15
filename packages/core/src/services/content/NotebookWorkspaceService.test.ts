@@ -397,6 +397,64 @@ describe('NotebookWorkspaceService', () => {
 		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'late.txt')).rejects.toThrow('not found');
 	});
 
+	it('renews the lease while the session check waits', async () => {
+		vi.useFakeTimers();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		try {
+			const mutation = vi.fn(async () => {});
+			const work = service.withMutation(
+				PROJECT_ID,
+				NOTEBOOK_ID,
+				{
+					assertMutable: async () => {
+						entered.resolve();
+						await release.promise;
+					},
+				},
+				mutation,
+			);
+			await entered.promise;
+			const acquired = await readClaim(bucket);
+			await vi.advanceTimersByTimeAsync(3 * 60_000);
+			const renewed = await readClaim(bucket);
+			expect(renewed.holder).toBe(acquired.holder);
+			expect(Date.parse(renewed.expires_at!)).toBeGreaterThan(Date.now());
+			release.resolve();
+			await work;
+			expect(mutation).toHaveBeenCalledOnce();
+			expect(await readClaim(bucket)).toEqual({ holder: null, expires_at: null });
+		} finally {
+			release.resolve();
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not run a mutation after its session check outlives a stolen lease', async () => {
+		vi.useFakeTimers();
+		try {
+			const other = makeWorkspaceService(bucket).service;
+			const mutation = vi.fn(async () => {});
+			await expect(
+				service.withMutation(
+					PROJECT_ID,
+					NOTEBOOK_ID,
+					{
+						assertMutable: async () => {
+							vi.setSystemTime(Date.now() + 3 * 60_000);
+							await other.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async () => {});
+						},
+					},
+					mutation,
+				),
+			).rejects.toThrow('Workspace mutation lease was lost');
+			expect(mutation).not.toHaveBeenCalled();
+			expect(await readClaim(bucket)).toEqual({ holder: null, expires_at: null });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('renews the lease while copying and deleting many objects', async () => {
 		vi.useFakeTimers();
 		try {
@@ -412,8 +470,8 @@ describe('NotebookWorkspaceService', () => {
 			const claims = observing.claimWrites.map((body) =>
 				WorkspaceMutationClaimSchema.parse(JSON.parse(body)),
 			);
-			expect(claims.map((claim) => claim.holder !== null)).toEqual([true, true, false]);
-			const [acquired, renewed] = claims;
+			expect(claims.map((claim) => claim.holder !== null)).toEqual([true, true, true, false]);
+			const [acquired, , renewed] = claims;
 			expect(Date.parse(renewed?.expires_at ?? '')).toBeGreaterThan(
 				Date.parse(acquired?.expires_at ?? ''),
 			);
@@ -421,7 +479,7 @@ describe('NotebookWorkspaceService', () => {
 
 			observing.claimWrites = [];
 			await service.delete(PROJECT_ID, NOTEBOOK_ID, 'target');
-			expect(observing.claimWrites).toHaveLength(3);
+			expect(observing.claimWrites).toHaveLength(4);
 			expect((await service.list(PROJECT_ID, NOTEBOOK_ID)).items.map((item) => item.path)).toEqual([
 				'source',
 			]);

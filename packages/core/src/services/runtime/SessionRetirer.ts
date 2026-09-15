@@ -76,7 +76,14 @@ export class SessionRetirer {
 				.catch(() => {});
 		}
 		await this.deps.sessions.releaseAppFor(session);
-		if (sandboxDestroyed) await this.deps.sessions.releaseEditorFor(session);
+		if (sandboxDestroyed) {
+			if (opts.teardown !== false && session.sandbox_id) {
+				await this.deps.sessions
+					.markSandboxReclaimed(session.project_id, session.session_id, new Date().toISOString())
+					.catch(() => {});
+			}
+			await this.deps.sessions.releaseEditorFor(session);
+		}
 	}
 
 	/**

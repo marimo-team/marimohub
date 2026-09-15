@@ -601,9 +601,18 @@ export class NotebookService {
 		input: UpdateNotebookInput,
 		actor: UserId,
 		expectedVersion?: string,
+		assertWritable?: () => Promise<void>,
 	): Promise<NotebookMeta> {
 		const detail = await this.getNotebook(projectId, notebookId);
-		return this.updateNotebookFrom(detail, projectId, notebookId, input, actor, expectedVersion);
+		return this.updateNotebookFrom(
+			detail,
+			projectId,
+			notebookId,
+			input,
+			actor,
+			expectedVersion,
+			assertWritable,
+		);
 	}
 
 	private async updateNotebookFrom(
@@ -613,6 +622,7 @@ export class NotebookService {
 		input: UpdateNotebookInput,
 		actor: UserId,
 		expectedVersion?: string,
+		assertWritable?: () => Promise<void>,
 	): Promise<NotebookMeta> {
 		const { meta: existing, source } = detail;
 		// Preserve stale If-Match precedence for remote-source content updates; the CAS
@@ -623,6 +633,7 @@ export class NotebookService {
 		}
 
 		const nb = paths.project(projectId).notebook(notebookId);
+		await assertWritable?.();
 		const updated = await mutateObject(
 			this.bucket,
 			nb.meta,
@@ -653,6 +664,7 @@ export class NotebookService {
 		const now = updated.updated_at;
 
 		if (input.readme !== undefined) {
+			await assertWritable?.();
 			await this.bucket.put(nb.readme, input.readme);
 		}
 
@@ -676,6 +688,7 @@ export class NotebookService {
 			const newSource = localSource(versionId);
 
 			const ver = nb.version(versionId);
+			await assertWritable?.();
 			await Promise.all([
 				this.bucket.put(nb.code, input.code),
 				this.bucket.put(nb.source, JSON.stringify(newSource)),
