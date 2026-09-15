@@ -140,7 +140,7 @@ Inject deployment secrets from SSM Parameter Store or Secrets Manager. This depl
 
 ## Operations
 
-With S3, run one maintenance replica with `MARIMOHUB_RUN_MAINTENANCE=true`. Set it to `false` on API replicas. With `fs`, run maintenance in the sole hub process.
+With S3, run one maintenance replica with `MARIMOHUB_RUN_MAINTENANCE=true`. Set it to `false` on API replicas. With `fs`, set `MARIMOHUB_RUN_MAINTENANCE=true` in the sole hub process. Do not start a separate maintenance process against the same filesystem.
 
 Use [Operations](../operations.md) for backups, logs, metrics, and session limits. If notebook jobs are enabled, keep maintenance active for scheduling and cleanup.
 

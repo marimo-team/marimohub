@@ -20,7 +20,7 @@ The hub serves the API and web UI. The compute backend runs notebook kernels. Th
 
 Run `ghcr.io/marimo-team/marimohub:<VERSION>`, or build `apps/server/Dockerfile` and push it to Artifact Registry. The hub listens on port 3000.
 
-Build a separate [sandbox image](../sandbox-image.md) for notebooks. For GKE, complete the Kubernetes RBAC, ingress, and TLS setup before starting kernels.
+Build a separate [sandbox image](../sandbox-image.md) for notebooks. For GKE, configure Kubernetes RBAC before starting kernels. For subdomain exposure, also configure sandbox ingress and TLS. With `MARIMOHUB_SANDBOX_EXPOSURE=proxy`, kernels need no ingress or TLS configuration. See the [Kubernetes configuration](./kubernetes.md#configuration) for both modes.
 
 ### Cloud Run constraints
 
@@ -29,6 +29,8 @@ Cloud Run can host the hub, but marimohub has no Cloud Run notebook compute adap
 Cloud Run limits the lifetime of each WebSocket request. Configure the request timeout and test reconnects. See [Cloud Run WebSockets](https://docs.cloud.google.com/run/docs/triggering/websockets).
 
 Keep one maintenance process active on GKE or a VM. Alternatively, configure a dedicated Cloud Run service with instance-based billing. Set its minimum and maximum instance counts to one. See [Cloud Run CPU allocation](https://docs.cloud.google.com/run/docs/configuring/billing-settings).
+
+Set `MARIMOHUB_RUN_MAINTENANCE=true` on the dedicated maintenance service. Keep it `false` on the API service. Instance counts and CPU allocation do not enable the maintenance loop.
 
 marimohub has no built-in Cloud Scheduler endpoint for maintenance. A scheduled HTTP request does not replace the maintenance loop or job scheduler.
 
@@ -102,7 +104,16 @@ Runtime variables can come from the image or an [Environment variables integrati
 
 Use an [OpenAI-compatible upstream](../ai.md#openai-compatible-provider) for notebook assistants. For Vertex AI with Google identity, use a gateway that handles Google authentication and token refresh.
 
-The hub's generic AI backend sends a configured bearer API key. It has no native Google credential provider or token refresh. Keep gateway credentials on the hub through `MARIMOHUB_AI_UPSTREAM_API_KEY`.
+The hub's generic AI backend sends a configured bearer API key. It has no native Google credential provider or token refresh. Configure the hub to use your gateway:
+
+```bash
+MARIMOHUB_AI_BACKEND=openai-compatible
+MARIMOHUB_AI_UPSTREAM_BASE_URL=https://<gateway-host>/v1
+MARIMOHUB_AI_UPSTREAM_API_KEY='<gateway-api-key>'
+MARIMOHUB_AI_MODEL=<gateway-model-id>
+```
+
+Keep the gateway key in your deployment's secret manager. Managed AI also requires `MARIMOHUB_AUTH_SESSION_SECRET`, configured in the auth example.
 
 ### Data and notebook identity
 
@@ -124,7 +135,7 @@ Secret Manager injection is deployment configuration. The app has no built-in Go
 
 ## Operations
 
-With GCS, run one maintenance replica with `MARIMOHUB_RUN_MAINTENANCE=true`. Set it to `false` on API replicas. With `fs`, run maintenance in the sole hub process.
+With GCS, run one maintenance replica with `MARIMOHUB_RUN_MAINTENANCE=true`. Set it to `false` on API replicas. With `fs`, set `MARIMOHUB_RUN_MAINTENANCE=true` in the sole hub process. Do not start a separate maintenance process against the same filesystem.
 
 Use [Operations](../operations.md) for backups, logs, metrics, and session limits. If notebook jobs are enabled, keep maintenance active for scheduling and cleanup.
 

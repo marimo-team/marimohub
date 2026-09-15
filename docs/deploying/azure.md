@@ -22,7 +22,7 @@ marimohub has no Azure Container Instances or Azure Container Apps notebook comp
 
 Run `ghcr.io/marimo-team/marimohub:<VERSION>`, or build `apps/server/Dockerfile` and push it to Azure Container Registry. The hub listens on port 3000.
 
-Build a separate [sandbox image](../sandbox-image.md) for notebooks. For AKS, complete the Kubernetes RBAC, ingress, and TLS setup before starting kernels. Configure registry pull access for the hub and notebook images separately.
+Build a separate [sandbox image](../sandbox-image.md) for notebooks. For AKS, complete the Kubernetes RBAC setup before starting kernels. Sandbox ingress and TLS are required only for `MARIMOHUB_SANDBOX_EXPOSURE=subdomain`. With `proxy` exposure, kernels need no ingress or TLS configuration. Configure registry pull access for the hub and notebook images separately.
 
 ## Storage
 
@@ -74,13 +74,14 @@ MARIMOHUB_AUTH_OIDC_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
 MARIMOHUB_AUTH_OIDC_CLIENT_ID=<application-client-id>
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET='<client-secret>'
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer
 MARIMOHUB_AUTH_SESSION_SECRET='<at least 32 random bytes>'
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com
 ```
 
 Create an app registration with a Web callback at the exact redirect URI. Store both secrets in your deployment's secret manager. Use a tenant-scoped issuer for a single-tenant deployment.
 
-If your trusted issuer omits `email_verified`, configure `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer`. Keep the email domain allowlist. See [Entra ID setup](../auth.md#microsoft-entra-id) and [OIDC claim requirements](../auth.md#oidc-production).
+Entra ID omits `email_verified`, so the example uses `trusted-issuer`. The default policy requires `email_verified=true` and rejects tokens that omit it. Keep the tenant-scoped issuer and email domain allowlist. See [Microsoft's ID token claims reference](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference), [Entra ID setup](../auth.md#microsoft-entra-id), and [OIDC claim requirements](../auth.md#oidc-production).
 
 Browser login does not grant notebook access to Azure resources. Configure notebook cloud permissions separately from the hub's storage identity.
 
@@ -114,7 +115,16 @@ Use an [OpenAI-compatible upstream](../ai.md#openai-compatible-provider) for not
 
 The hub sends `Authorization: Bearer <configured-key>`. It has no native Entra token refresh or Azure-specific `api-key` header configuration. Use a compatible endpoint, or a gateway that handles those requirements. See [Azure API authentication](https://learn.microsoft.com/en-us/azure/ai-services/reference/rest-api-resources).
 
-Configure the gateway as `MARIMOHUB_AI_UPSTREAM_BASE_URL` and keep its key in `MARIMOHUB_AI_UPSTREAM_API_KEY`. Use the gateway's model or deployment identifier as `MARIMOHUB_AI_MODEL`.
+Enable managed AI and configure the gateway in the hub environment:
+
+```bash
+MARIMOHUB_AI_BACKEND=openai-compatible
+MARIMOHUB_AI_UPSTREAM_BASE_URL=https://<gateway-host>/v1
+MARIMOHUB_AI_UPSTREAM_API_KEY='<gateway-key>'
+MARIMOHUB_AI_MODEL='<model-or-deployment-id>'
+```
+
+Without `MARIMOHUB_AI_BACKEND`, managed AI stays disabled even when the upstream configuration is present. Keep the gateway key in your deployment's secret manager. Managed AI also requires `MARIMOHUB_AUTH_SESSION_SECRET`, configured in the auth example.
 
 ### Data and secrets
 
@@ -134,7 +144,7 @@ The app has no built-in Key Vault resolver for integration fields. It also has n
 
 ## Operations
 
-With Blob Storage, run one maintenance replica with `MARIMOHUB_RUN_MAINTENANCE=true`. Set it to `false` on API replicas. With `fs`, run maintenance in the sole hub process.
+With Blob Storage, run one maintenance replica with `MARIMOHUB_RUN_MAINTENANCE=true`. Set it to `false` on API replicas. With `fs`, set `MARIMOHUB_RUN_MAINTENANCE=true` in the sole hub process. Do not start a separate maintenance process against the same filesystem.
 
 Use [Operations](../operations.md) for backups, logs, metrics, and session limits. If notebook jobs are enabled, keep maintenance active for scheduling and cleanup.
 

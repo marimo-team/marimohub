@@ -16,14 +16,32 @@ background maintenance.
 - [CoreWeave (CKS)](./cks.md) — CAIOS + CoreWeave Sandboxes + OIDC.
 - [Kubernetes](./kubernetes.md) — any cluster (EKS/GKE/AKS/self-managed) with native
   Pod kernels via the `kubernetes` compute backend.
-- [GCP](./gcp.md) — GKE, Compute Engine, or Cloud Run with GCS or persistent disk storage.
-- [AWS](./aws.md) — EKS, ECS/Fargate, or EC2 with S3 or persistent disk storage.
+- [GCP](./gcp.md) — GKE or Compute Engine with GCS or persistent disk storage. Cloud Run uses GCS in this guide.
+- [AWS](./aws.md) — EKS or EC2 with S3 or persistent disk storage. ECS/Fargate hub deployments use S3 in this guide.
 - [Azure](./azure.md) — AKS or Azure VMs with Blob Storage or persistent disk storage.
 - [Cloudflare](./cloudflare.md) — Workers + R2 + Containers + Access (serverless).
 
 The AWS, GCP, and Azure pages cover compute, storage, auth, features, security,
 and operations. Each page lists platform choices and links to detailed setup
-guides. Compute and storage backends are independent choices.
+guides. Backend choices depend on the hub host and its persistent storage support.
+
+These guides document the following pairings:
+
+| Hub host       | Notebook compute                           | Hub storage                                           |
+| -------------- | ------------------------------------------ | ----------------------------------------------------- |
+| EKS            | `kubernetes` or `fargate`                  | S3 (`s3`), or `fs` on a persistent volume claim (PVC) |
+| ECS/Fargate    | `fargate`                                  | S3 (`s3`)                                             |
+| EC2            | `docker`                                   | S3 (`s3`), or `fs` on EBS                             |
+| GKE            | `kubernetes`                               | Cloud Storage (`gcs`), or `fs` on a PVC               |
+| Compute Engine | `docker`                                   | Cloud Storage (`gcs`), or `fs` on Persistent Disk     |
+| Cloud Run      | External compute, such as `modal` or `e2b` | Cloud Storage (`gcs`)                                 |
+| AKS            | `kubernetes`                               | Blob Storage (`azure`), or `fs` on a PVC              |
+| Azure VM       | `docker`                                   | Blob Storage (`azure`), or `fs` on Managed Disk       |
+
+Every `fs` pairing requires a persistent filesystem mount and exactly one hub
+process, including maintenance. The platform guides do not provide an `fs`
+recipe for a hub hosted on Cloud Run or ECS/Fargate. Notebook compute runs
+separately from the hub's storage mount.
 
 ## Path prefix
 
