@@ -222,3 +222,9 @@ it before `uv sync` starts. A restricted viewer sandbox does not receive it.
 
 `uv sync` runs once at session start — an index change applies to new sessions,
 not already-running kernels.
+
+For package registries with expiring credentials, configure a helper inside the
+notebook runtime. See the platform guides for
+[CodeArtifact](./deploying/aws.md#private-python-packages-with-codeartifact),
+[Google Artifact Registry](./deploying/gcp.md#private-python-packages-with-artifact-registry),
+and [Azure Artifacts](./deploying/azure.md#private-python-packages-with-azure-artifacts).

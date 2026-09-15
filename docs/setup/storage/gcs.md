@@ -17,7 +17,7 @@ MARIMOHUB_STORAGE_GCS_SA_KEY='{ "type": "service_account", … }'  # key JSON (s
 ```
 
 The key is minted into short-lived access tokens at runtime — no token rotation
-to manage. See [Deploying → GCP](/deploying/gcp) for an end-to-end recipe.
+to manage. See [Deploying → GCP](/deploying/gcp) for platform choices and credential requirements.
 
 ::: tip Use this, not the S3 shim, on GCP
 The native GCS backend gets safe concurrent writes via object **generations**.

@@ -94,6 +94,7 @@ Choose the guide closest to your platform:
 - [Kubernetes](./deploying/kubernetes.md)
 - [AWS](./deploying/aws.md)
 - [GCP](./deploying/gcp.md)
+- [Azure](./deploying/azure.md)
 - [Cloudflare](./deploying/cloudflare.md)
 
 After deploy, check `/api/health`, sign in through your auth backend, create a test
