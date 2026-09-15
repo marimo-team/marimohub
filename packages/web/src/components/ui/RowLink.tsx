@@ -12,6 +12,8 @@ export interface RowLinkProps {
 	children: ReactNode;
 	/** Leading control rendered OUTSIDE the anchor (valid HTML — no buttons in `<a>`). */
 	leading?: ReactNode;
+	/** Metadata and controls outside the anchor, before the row actions. */
+	trailing?: ReactNode;
 	/** Trailing controls rendered OUTSIDE the anchor (valid HTML — no buttons in `<a>`). */
 	actions?: ReactNode;
 	/** Layout classes for the anchor's content (e.g. `flex-col gap-1` or `justify-between`). */
@@ -31,6 +33,7 @@ export function RowLink({
 	label,
 	children,
 	leading,
+	trailing,
 	actions,
 	contentClassName,
 	testId,
@@ -53,6 +56,7 @@ export function RowLink({
 			>
 				{children}
 			</Link>
+			{trailing && <div className="flex shrink-0 items-center gap-3 pr-4">{trailing}</div>}
 			{actions && <div className="relative flex shrink-0 items-center gap-1 pr-2">{actions}</div>}
 		</div>
 	);
