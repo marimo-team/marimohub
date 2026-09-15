@@ -143,30 +143,33 @@ describe('AuthProvider', () => {
 		expect(window.location.href).toBe('/api/auth/login');
 	});
 
-	it('signIn carries the current deep link as redirect_url', async () => {
-		const user = userEvent.setup();
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => jsonOk(ME)),
-		);
-		stubLocation({
-			pathname: '/p/proj-1/notebooks/nb-1',
-			search: '?tab=files',
-			hash: '#cell-3',
-		});
+	it.each(['/p/proj-1/notebooks/nb-1', '/app/sales'])(
+		'signIn carries %s as redirect_url',
+		async (pathname) => {
+			const user = userEvent.setup();
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () => jsonOk(ME)),
+			);
+			stubLocation({
+				pathname,
+				search: '?tab=files',
+				hash: '#cell-3',
+			});
 
-		renderWithClient(
-			<AuthProvider>
-				<Probe />
-			</AuthProvider>,
-			{ toaster: false },
-		);
+			renderWithClient(
+				<AuthProvider>
+					<Probe />
+				</AuthProvider>,
+				{ toaster: false },
+			);
 
-		await user.click(screen.getByRole('button', { name: 'Sign in' }));
-		expect(window.location.href).toBe(
-			`/api/auth/login?redirect_url=${encodeURIComponent('/p/proj-1/notebooks/nb-1?tab=files#cell-3')}`,
-		);
-	});
+			await user.click(screen.getByRole('button', { name: 'Sign in' }));
+			expect(window.location.href).toBe(
+				`/api/auth/login?redirect_url=${encodeURIComponent(`${pathname}?tab=files#cell-3`)}`,
+			);
+		},
+	);
 
 	it('signIn strips a stale auth_error from the redirect_url', async () => {
 		const user = userEvent.setup();

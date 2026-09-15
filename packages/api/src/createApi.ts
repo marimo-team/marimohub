@@ -30,6 +30,7 @@ import projectsApp from './routes/projects';
 import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
 import jobsApp from './routes/jobs';
+import deepLinksApp from './routes/deepLinks';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import tokensApp from './routes/tokens';
@@ -81,6 +82,13 @@ const OPENAPI_DOC = {
 
 /** The versioned API mount. Health and auth routes live outside it, unversioned. */
 const API_PREFIX = '/api/v1';
+
+function isDeepLinkPath(path: string): boolean {
+	return (
+		path.startsWith(`${API_PREFIX}/deep-links/`) ||
+		/^\/api\/v1\/projects\/[^/]+\/notebooks\/[^/]+\/deep-links(?:\/|$)/.test(path)
+	);
+}
 
 /**
  * Mount point of the OpenAI-compatible AI proxy. Not our own v1 API — errors
@@ -444,6 +452,11 @@ export function createApi(rawDeps: ApiDeps) {
 		return next();
 	});
 
+	app.use(`${API_PREFIX}/*`, async (c, next) => {
+		if (isDeepLinkPath(c.req.path)) c.header('Cache-Control', 'no-store');
+		await next();
+	});
+
 	// AuthN: reject unauthenticated /api/v1/* requests.
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		const user = await deps.authenticator.authenticate(c.req.raw);
@@ -481,7 +494,9 @@ export function createApi(rawDeps: ApiDeps) {
 	// before `etag` builds the 304 (which retains cache-control).
 	const conditionalGet = etag({ weak: true });
 	app.use(`${API_PREFIX}/*`, (c, next) =>
-		c.req.path.endsWith('/browse/objects/content') ? next() : conditionalGet(c, next),
+		c.req.path.endsWith('/browse/objects/content') || isDeepLinkPath(c.req.path)
+			? next()
+			: conditionalGet(c, next),
 	);
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		await next();
@@ -500,6 +515,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, adminApp);
 	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
+	app.route(API_PREFIX, deepLinksApp);
 	app.route(API_PREFIX, changeRequestsApp);
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, jobsApp);

@@ -27,6 +27,8 @@ tags:
     description: Per-project records (`projects/{pid}/`)
   - name: notebook
     description: Per-notebook records
+  - name: deep-links
+    description: Global app aliases and notebook-local indexes
   - name: integration
     description: Project- and org-scoped integration records
   - name: session
@@ -38,6 +40,42 @@ tags:
   - name: ops
     description: Operational records
 paths:
+  /_system/deep-links/{slug}.json:
+    summary: Authoritative slug mapping or released marker.
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: DeepLinkService
+    get:
+      operationId: read_system_deep_links_json
+      summary: Read DeepLink
+      tags:
+        - deep-links
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeepLink'
+    put:
+      operationId: write_system_deep_links_json
+      summary: Write DeepLink
+      tags:
+        - deep-links
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeepLink'
+      responses:
+        '204':
+          description: Stored.
   /_system/catalog.json:
     summary: The one mutable pointer in the catalog snapshot chain.
     parameters: []
@@ -1232,6 +1270,54 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/deep-links/{slug}.json:
+    summary: Empty index marker. Lists check ownership against the global slug mapping.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: DeepLinkService
+    get:
+      operationId: read_projects_notebooks_deep_links_json
+      summary: Read DeepLinkIndex
+      tags:
+        - deep-links
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_deep_links_json
+      summary: Write DeepLinkIndex
+      tags:
+        - deep-links
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/job-index/{created_at}_{job_id}.json:
     summary: Empty create-if-absent job index entry. Lexicographic key order is
       oldest-first by created_at, then job_id.
@@ -1498,6 +1584,78 @@ paths:
           description: Stored.
 components:
   schemas:
+    DeepLink:
+      anyOf:
+        - type: object
+          properties:
+            schema_version:
+              type: number
+              const: 1
+            registration_id:
+              type: string
+              format: ulid
+              pattern: ^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$
+            slug:
+              type: string
+              minLength: 1
+              maxLength: 63
+              pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+            target:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  const: app
+                project_id:
+                  type: string
+                notebook_id:
+                  type: string
+              required:
+                - kind
+                - project_id
+                - notebook_id
+              additionalProperties: false
+            access:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  const: inherit
+              required:
+                - mode
+              additionalProperties: false
+            created_by:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - schema_version
+            - registration_id
+            - slug
+            - target
+            - access
+            - created_by
+            - created_at
+          additionalProperties: false
+        - type: object
+          properties:
+            schema_version:
+              type: number
+              const: 1
+            released:
+              type: boolean
+              const: true
+            registration_id:
+              type: string
+              format: ulid
+              pattern: ^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$
+          required:
+            - schema_version
+            - released
+            - registration_id
+          additionalProperties: false
     Catalog:
       type: object
       properties:
@@ -3235,6 +3393,7 @@ components:
                       - project.alerts.manage
                       - notebook.write
                       - notebook.manage
+                      - deep-link.manage
                       - integration.read
                       - integration.use
                       - integration.manage

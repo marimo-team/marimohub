@@ -115,8 +115,15 @@ function withMarimoParams(url: string, theme: Theme, isApp: boolean): string {
 	}
 }
 
-function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }) {
-	const { pid, nid } = useParams<{ pid: string; nid: string }>();
+interface NotebookPageProps {
+	variant?: 'edit' | 'app';
+	target?: { projectId: string; notebookId: string };
+}
+
+function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
+	const params = useParams<{ pid: string; nid: string }>();
+	const pid = target?.projectId ?? params.pid;
+	const nid = target?.notebookId ?? params.nid;
 	const navigate = useNavigate();
 	const location = useLocation();
 	const isApp = variant === 'app';
@@ -441,6 +448,7 @@ function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }
 		applicationTabs,
 		author,
 		backToProject,
+		canManageLinks: canManageProject(project.your_role),
 		canOpenChangeRequest,
 		canRunApp,
 		canRetryWithDefault,
@@ -501,7 +509,7 @@ function useNotebookPageModel({ variant = 'edit' }: { variant?: 'edit' | 'app' }
 	};
 }
 
-export function NotebookPage(props: { variant?: 'edit' | 'app' }) {
+export function NotebookPage(props: NotebookPageProps) {
 	return renderNotebookPage(useNotebookPageModel(props));
 }
 
@@ -511,6 +519,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		applicationTabs,
 		author,
 		backToProject,
+		canManageLinks,
 		canOpenChangeRequest,
 		canRunApp,
 		canRetryWithDefault,
@@ -631,7 +640,13 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				)}
 				<div className="ml-auto flex items-center gap-2">
 					{!isApp && (
-						<ShareMenu projectId={pid!} notebookId={nid!} title={title} canRunApp={canRunApp} />
+						<ShareMenu
+							projectId={pid!}
+							notebookId={nid!}
+							title={title}
+							canRunApp={canRunApp}
+							canManageLinks={canManageLinks}
+						/>
 					)}
 					<ChangeRequestActions
 						projectId={pid!}

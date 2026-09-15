@@ -266,6 +266,161 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "deep-links.list",
+			"command": ["deep-links", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/deep-links",
+			"summary": "List notebook app links",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "deep-links.register",
+			"command": ["deep-links", "register"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/deep-links",
+			"summary": "Register a globally unique app slug",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "access",
+						"cli_name": "access",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "kind",
+						"cli_name": "kind",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "slug",
+						"cli_name": "slug",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "deep-links.release",
+			"command": ["deep-links", "release"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/deep-links/{slug}",
+			"summary": "Release an app slug for immediate reuse",
+			"description": "Releases the slug only when the notebook and registration ID match. The slug is immediately available for reuse. Old shared URLs can then open another notebook. App sessions and notebook permissions stay unchanged.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "slug",
+					"cli_name": "slug",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "registration_id",
+					"cli_name": "registration-id",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "deep-links.resolve",
+			"command": ["deep-links", "resolve"],
+			"method": "GET",
+			"path": "/api/v1/deep-links/{slug}",
+			"summary": "Resolve an app link using notebook permissions",
+			"parameters": [
+				{
+					"name": "slug",
+					"cli_name": "slug",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "integrations.kinds.list",
 			"command": ["integrations", "kinds", "list"],
 			"method": "GET",
