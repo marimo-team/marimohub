@@ -30,6 +30,7 @@ import projectsApp from './routes/projects';
 import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
 import jobsApp from './routes/jobs';
+import deepLinksApp from './routes/deepLinks';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import tokensApp from './routes/tokens';
@@ -481,7 +482,10 @@ export function createApi(rawDeps: ApiDeps) {
 	// before `etag` builds the 304 (which retains cache-control).
 	const conditionalGet = etag({ weak: true });
 	app.use(`${API_PREFIX}/*`, (c, next) =>
-		c.req.path.endsWith('/browse/objects/content') ? next() : conditionalGet(c, next),
+		c.req.path.endsWith('/browse/objects/content') ||
+		c.req.path.startsWith(`${API_PREFIX}/deep-links/`)
+			? next()
+			: conditionalGet(c, next),
 	);
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		await next();
@@ -500,6 +504,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, adminApp);
 	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
+	app.route(API_PREFIX, deepLinksApp);
 	app.route(API_PREFIX, changeRequestsApp);
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, jobsApp);

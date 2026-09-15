@@ -859,6 +859,61 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/deep-links/{slug}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Resolve an app link using notebook permissions */
+		get: operations['deep-links.resolve'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/deep-links': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List notebook app links */
+		get: operations['deep-links.list'];
+		put?: never;
+		/** Register a globally unique app slug */
+		post: operations['deep-links.register'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/deep-links/{slug}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		/**
+		 * Release an app slug for immediate reuse
+		 * @description Releases the slug only when the notebook and registration ID match. The slug is immediately available for reuse. Old shared URLs can then open another notebook. App sessions and notebook permissions stay unchanged.
+		 */
+		delete: operations['deep-links.release'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests': {
 		parameters: {
 			query?: never;
@@ -2371,6 +2426,7 @@ export interface components {
 					| 'project.alerts.manage'
 					| 'notebook.write'
 					| 'notebook.manage'
+					| 'deep-link.manage'
 					| 'integration.read'
 					| 'integration.use'
 					| 'integration.manage'
@@ -2554,6 +2610,7 @@ export interface components {
 								| 'project.alerts.manage'
 								| 'notebook.write'
 								| 'notebook.manage'
+								| 'deep-link.manage'
 								| 'integration.read'
 								| 'integration.use'
 								| 'integration.manage'
@@ -2584,6 +2641,7 @@ export interface components {
 				| 'project.alerts.manage'
 				| 'notebook.write'
 				| 'notebook.manage'
+				| 'deep-link.manage'
 				| 'integration.read'
 				| 'integration.use'
 				| 'integration.manage'
@@ -2913,6 +2971,26 @@ export interface components {
 			 * @example 9e107d9d372bb6826bd81d3542a419d6
 			 */
 			commit: string;
+		};
+		DeepLink: {
+			/** @enum {number} */
+			schema_version: 1;
+			/** Format: ulid */
+			registration_id: string;
+			slug: string;
+			target: {
+				/** @enum {string} */
+				kind: 'app';
+				project_id: string;
+				notebook_id: string;
+			};
+			access: {
+				/** @enum {string} */
+				mode: 'inherit';
+			};
+			created_by: string;
+			/** Format: date-time */
+			created_at: string;
 		};
 		OpenNotebookChangeRequestResult: {
 			/**
@@ -3658,6 +3736,7 @@ export interface components {
 							| 'project.alerts.manage'
 							| 'notebook.write'
 							| 'notebook.manage'
+							| 'deep-link.manage'
 							| 'integration.read'
 							| 'integration.use'
 							| 'integration.manage'
@@ -3800,6 +3879,7 @@ export interface operations {
 									| 'project.alerts.manage'
 									| 'notebook.write'
 									| 'notebook.manage'
+									| 'deep-link.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -9851,6 +9931,432 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'deep-links.resolve': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				slug: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Authorized app link */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['DeepLink'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'deep-links.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description App links */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['DeepLink'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'deep-links.register': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					slug: string;
+					/**
+					 * @default app
+					 * @enum {string}
+					 */
+					kind?: 'app';
+					/**
+					 * @default {
+					 *       "mode": "inherit"
+					 *     }
+					 */
+					access?: {
+						/** @enum {string} */
+						mode: 'inherit';
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description New or existing app link for this notebook */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['DeepLink'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'deep-links.release': {
+		parameters: {
+			query: {
+				registration_id: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				slug: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Registration released, absent, or replaced */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: null;
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -15989,6 +16495,7 @@ export interface operations {
 									| 'project.alerts.manage'
 									| 'notebook.write'
 									| 'notebook.manage'
+									| 'deep-link.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -16350,6 +16857,7 @@ export interface operations {
 									| 'project.alerts.manage'
 									| 'notebook.write'
 									| 'notebook.manage'
+									| 'deep-link.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -16381,6 +16889,7 @@ export interface operations {
 									| 'project.alerts.manage'
 									| 'notebook.write'
 									| 'notebook.manage'
+									| 'deep-link.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -16664,6 +17173,7 @@ export interface operations {
 													| 'project.alerts.manage'
 													| 'notebook.write'
 													| 'notebook.manage'
+													| 'deep-link.manage'
 													| 'integration.read'
 													| 'integration.use'
 													| 'integration.manage'
@@ -16803,6 +17313,7 @@ export interface operations {
 									| 'project.alerts.manage'
 									| 'notebook.write'
 									| 'notebook.manage'
+									| 'deep-link.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -17033,6 +17544,7 @@ export interface operations {
 									| 'project.alerts.manage'
 									| 'notebook.write'
 									| 'notebook.manage'
+									| 'deep-link.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'

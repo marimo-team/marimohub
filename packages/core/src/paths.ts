@@ -34,6 +34,8 @@ export interface VersionPaths {
 }
 
 export interface NotebookPaths {
+	deepLinksPrefix: string;
+	deepLinkIndex: (slug: string) => string;
 	/** Base directory: `projects/{pid}/notebooks/{nid}` */
 	base: string;
 	meta: string;
@@ -204,6 +206,8 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		deps: `${workspace}/pyproject.toml`,
 		version: (vid: VersionId) => versionPaths(base, vid),
 		jobsPrefix: `${base}/jobs/`,
+		deepLinksPrefix: `${base}/deep-links/`,
+		deepLinkIndex: (slug: string) => `${base}/deep-links/${slug}.json`,
 		jobIndexPrefix: `${base}/job-index/`,
 		jobIndex: (createdAt: string, jobId: JobId) => `${base}/job-index/${createdAt}_${jobId}.json`,
 		job: (jobId: JobId) => jobPaths(base, jobId),
@@ -248,6 +252,7 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 }
 
 export const paths = {
+	deepLink: (slug: string) => `_system/deep-links/${slug}.json`,
 	catalog: '_system/catalog.json',
 	snapshot: (id: SnapshotId) => `_system/snapshots/${id}.json`,
 	snapshotsPrefix: '_system/snapshots/',

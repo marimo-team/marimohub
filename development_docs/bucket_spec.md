@@ -931,6 +931,46 @@ a newer one, while API inputs accept only the kinds that replica knows.
 Deleting a job deletes its whole prefix (after cancelling active runs);
 deleting a notebook or project reclaims the subtree with everything else.
 
+### 4.14 Pretty app links
+
+`/app/{slug}` opens the existing shared app and keeps the slug in the address bar.
+Project managers and owners manage links through **Share notebook → App links**.
+A notebook can have multiple links. Slugs share one deployment-wide namespace.
+They contain 1–63 lowercase ASCII letters, digits, or hyphens, and start and end
+with a letter or digit.
+
+Links retain authentication, project permissions, notebook security labels, and
+session admission checks. Version 1 accepts only `app` targets and the `inherit`
+access policy. Other target types and access policies require a future change.
+Existing notebooks need no migration.
+
+#### Storage
+
+`DeepLinkService` is the sole writer of these records:
+
+- `_system/deep-links/{slug}.json`: the authoritative mapping, or a released marker.
+- `projects/{pid}/notebooks/{nid}/deep-links/{slug}.json`: an empty index marker
+  for notebook-local lists. The service writes it before the global registration.
+  Lists check ownership against the global record, so stale markers are harmless.
+
+Registration uses create-if-absent or ETag compare-and-swap (CAS). Release uses
+CAS to replace the mapping with a marker. The bucket has no conditional delete.
+Each new registration gets a new ID, so stale removal requests cannot release it.
+Resolution reads one mapping without a bucket scan, then checks target access.
+Resolver responses use `Cache-Control: no-store`.
+
+#### Release and deletion
+
+Release makes the slug available immediately. Old shared URLs can then open
+another notebook. Release does not stop app sessions or change notebook permissions.
+
+Deleted notebooks and projects stop resolving immediately. Cleanup releases their
+slugs with CAS. Registration can also reclaim a slug whose target is deleted or
+missing. Storage errors never count as proof of deletion. Purge retries cleanup
+before it deletes local indexes.
+
+---
+
 ## 5. ID Scheme
 
 Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.

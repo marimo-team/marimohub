@@ -71,3 +71,5 @@ export * from './duration';
 
 // Generic finite state machine
 export * from './fsm';
+
+export * from './deepLinks';

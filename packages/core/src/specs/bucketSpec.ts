@@ -1,3 +1,4 @@
+import { DeepLinkRecordSchema } from '../deepLinks';
 import { z } from 'zod';
 import type {
 	IntegrationId,
@@ -98,6 +99,15 @@ const orgIntegration = paths.orgIntegration(IID);
 const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}');
 
 const OBJECTS: BucketObject[] = [
+	{
+		name: 'DeepLink',
+		key: paths.deepLink('{slug}'),
+		schema: DeepLinkRecordSchema,
+		summary: 'Authoritative slug mapping or released marker.',
+		mutability: 'cas',
+		owner: 'DeepLinkService',
+		tag: 'deep-links',
+	},
 	{
 		name: 'Catalog',
 		key: paths.catalog,
@@ -355,6 +365,14 @@ const OBJECTS: BucketObject[] = [
 ];
 
 const ARTIFACTS: BucketArtifact[] = [
+	{
+		name: 'DeepLinkIndex',
+		key: notebook.deepLinkIndex('{slug}'),
+		summary: 'Empty index marker. Lists check ownership against the global slug mapping.',
+		mutability: 'immutable',
+		owner: 'DeepLinkService',
+		tag: 'deep-links',
+	},
 	{
 		name: 'JobDefinitionIndex',
 		key: notebook.jobIndex('{created_at}', JOB_ID),

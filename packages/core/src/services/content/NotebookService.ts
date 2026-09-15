@@ -64,6 +64,7 @@ import { loadNotebookCatalogPatch } from './catalogProjection';
 import { createListFilter } from './listFilters';
 import type { ListFilters } from './listFilters';
 import { NotebookWorkspaceService } from './NotebookWorkspaceService';
+import { DeepLinkService } from './DeepLinkService';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -156,6 +157,7 @@ export class NotebookService {
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
 		private versionProtector?: NotebookVersionProtector,
+		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
@@ -961,6 +963,9 @@ export class NotebookService {
 		// discipline (claimApp/releaseApp) still holds for live notebooks.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
+		await this.deepLinks.releaseNotebook(projectId, notebookId).catch((error) => {
+			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseNotebook' }, error);
+		});
 		return { notebook: updated, mutationId: snapshot.snapshot_id };
 	}
 
@@ -1211,6 +1216,7 @@ export class NotebookService {
 			);
 		}
 
+		await this.deepLinks.releaseNotebook(projectId, notebookId);
 		const markerKeys = await listAllKeys(this.bucket, paths.jobRunMarkersForProject(projectId));
 		const notebookMarkerKeys = await mapWithConcurrency(
 			markerKeys,
