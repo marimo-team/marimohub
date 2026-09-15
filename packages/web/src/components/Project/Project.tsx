@@ -81,6 +81,7 @@ import {
 } from '@/api/hooks';
 import { supportsIntegrationDataPage } from '@/lib/integrationNotebook';
 import { AppSessionIndicator } from './AppSessionIndicator';
+import { NotebookTags } from './NotebookTags';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
 import { ProjectAlertsDialog } from './ProjectAlertsDialog';
@@ -110,13 +111,6 @@ import type { NotebookEntry, ResolvedUser, Session } from '@/types';
 const WorkspaceBrowserDialog = lazy(
 	() => import('@/components/WorkspaceBrowser/WorkspaceBrowserDialog'),
 );
-
-/** Keep non-active lifecycle state visible even when the notebook has user tags. */
-function notebookBadges(nb: NotebookEntry): string[] {
-	const badges = [...nb.tags];
-	if (nb.status !== 'active' && !badges.includes(nb.status)) badges.push(nb.status);
-	return badges;
-}
 
 const MAX_UPLOAD_BYTES = 1_000_000;
 
@@ -179,7 +173,7 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 			className="flex items-center border-b border-l-2 border-l-transparent bg-muted/20 last:border-b-0"
 		>
 			<div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3.5">
-				<div className="flex min-w-0 items-center gap-3">
+				<div className="flex min-w-0 flex-1 items-center gap-3">
 					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
 						{notebook.source_type === 'git' ? (
 							<GitBranch className="size-4" aria-hidden="true" />
@@ -190,14 +184,11 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 					<span className="truncate text-sm font-medium" title={notebook.title}>
 						{notebook.title}
 					</span>
-					{notebookBadges(notebook).map((badge) => (
-						<Chip key={badge} className={badge === 'deleted' ? undefined : 'max-md:hidden'}>
-							{badge}
-						</Chip>
-					))}
+					<Chip>deleted</Chip>
 				</div>
+				<NotebookTags tags={notebook.tags} title={notebook.title} />
 				<div className="flex shrink-0 items-center gap-3">
-					<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
+					<span className="hidden w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">
 						<span className="text-muted-foreground/70">by</span>
 						<UserLabel
 							user={user}
@@ -209,7 +200,7 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 					<time
 						dateTime={notebook.updated_at}
 						title={new Date(notebook.updated_at).toLocaleString()}
-						className="text-xs tabular-nums text-muted-foreground"
+						className="w-14 text-right text-xs tabular-nums text-muted-foreground"
 					>
 						{formatRelative(notebook.updated_at)}
 					</time>
@@ -796,7 +787,6 @@ function useProjectContent() {
 						);
 					}
 
-					const badges = notebookBadges(nb);
 					const live = sessionByNotebook.get(nb.id);
 					const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
 					return (
@@ -807,6 +797,54 @@ function useProjectContent() {
 							state={{ title: nb.title }}
 							label={nb.title}
 							contentClassName="items-center justify-between gap-3 py-3.5"
+							trailing={
+								<>
+									<NotebookTags tags={nb.tags} title={nb.title} />
+									<div className="flex shrink-0 items-center gap-3">
+										{live?.app && (
+											<AppSessionIndicator
+												session={live.app}
+												canControl={!!live.app.can?.stop}
+												canOpen={!!live.app.can?.attach}
+												editActive={!!live.persistentEdit}
+												profiles={computeProfiles}
+												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
+												selectedProfileName={nb.compute_profile}
+												onStop={() =>
+													appModal.open({ action: 'stop', notebook: nb, session: live.app! })
+												}
+												onRestart={() =>
+													appModal.open({ action: 'restart', notebook: nb, session: live.app! })
+												}
+											/>
+										)}
+										<SessionStatusDot
+											session={live?.edit}
+											loading={sessionsLoading}
+											profiles={computeProfiles}
+											selectedProfileName={
+												canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
+											}
+										/>
+										<span className="hidden w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">
+											<span className="text-muted-foreground/70">by</span>
+											<UserLabel
+												user={users?.[nb.author]}
+												fallbackId={nb.author}
+												loading={usersLoading}
+												className="max-w-[8rem]"
+											/>
+										</span>
+										<time
+											dateTime={nb.updated_at}
+											title={new Date(nb.updated_at).toLocaleString()}
+											className="w-14 text-right text-xs tabular-nums text-muted-foreground"
+										>
+											{formatRelative(nb.updated_at)}
+										</time>
+									</div>
+								</>
+							}
 							leading={
 								nb.source_type === 'git' ? (
 									<GitSourcePopover
@@ -845,61 +883,16 @@ function useProjectContent() {
 								</>
 							}
 						>
-							<div className="flex min-w-0 items-center gap-3">
+							<div className="flex min-w-0 flex-1 items-center gap-3">
 								{nb.source_type !== 'git' && (
 									<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
 										<FileText className="size-4" />
 									</span>
 								)}
-								<span className="truncate text-sm font-medium">{nb.title}</span>
-								{badges.map((badge) => (
-									<Chip key={badge} className="max-md:hidden">
-										{badge}
-									</Chip>
-								))}
-							</div>
-							<div className="flex shrink-0 items-center gap-3">
-								{live?.app && (
-									<AppSessionIndicator
-										session={live.app}
-										canControl={!!live.app.can?.stop}
-										canOpen={!!live.app.can?.attach}
-										editActive={!!live.persistentEdit}
-										profiles={computeProfiles}
-										allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
-										selectedProfileName={nb.compute_profile}
-										onStop={() =>
-											appModal.open({ action: 'stop', notebook: nb, session: live.app! })
-										}
-										onRestart={() =>
-											appModal.open({ action: 'restart', notebook: nb, session: live.app! })
-										}
-									/>
-								)}
-								<SessionStatusDot
-									session={live?.edit}
-									loading={sessionsLoading}
-									profiles={computeProfiles}
-									selectedProfileName={
-										canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
-									}
-								/>
-								<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
-									<span className="text-muted-foreground/70">by</span>
-									<UserLabel
-										user={users?.[nb.author]}
-										fallbackId={nb.author}
-										loading={usersLoading}
-										className="max-w-[8rem]"
-									/>
+								<span className="truncate text-sm font-medium" title={nb.title}>
+									{nb.title}
 								</span>
-								<time
-									dateTime={nb.updated_at}
-									title={new Date(nb.updated_at).toLocaleString()}
-									className="text-xs tabular-nums text-muted-foreground"
-								>
-									{formatRelative(nb.updated_at)}
-								</time>
+								{nb.status !== 'active' && <Chip>{nb.status}</Chip>}
 							</div>
 						</RowLink>
 					);
