@@ -14,9 +14,7 @@ function invalidConfiguration(detail: string): ConfigError {
 	});
 }
 
-export function serviceAccountsFromEnv(env: Env): ServiceAccountCredentials | undefined {
-	const raw = env[VARIABLE];
-	if (raw === undefined) return undefined;
+export function parseServiceAccountsConfig(raw: string) {
 	if (new TextEncoder().encode(raw).byteLength > MAX_CONFIG_BYTES)
 		throw invalidConfiguration('configuration exceeds 64 KiB');
 	let input: unknown;
@@ -36,5 +34,12 @@ export function serviceAccountsFromEnv(env: Env): ServiceAccountCredentials | un
 				: issue.message;
 		throw invalidConfiguration(`${path}: ${message}`);
 	}
-	return result.data.length === 0 ? undefined : new ServiceAccountCredentials(result.data);
+	return result.data;
+}
+
+export function serviceAccountsFromEnv(env: Env): ServiceAccountCredentials | undefined {
+	const raw = env[VARIABLE];
+	if (raw === undefined) return undefined;
+	const accounts = parseServiceAccountsConfig(raw);
+	return accounts.length === 0 ? undefined : new ServiceAccountCredentials(accounts);
 }

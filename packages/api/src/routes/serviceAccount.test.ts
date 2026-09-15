@@ -98,7 +98,7 @@ describe('service account API', () => {
 			await human.request('POST', '/projects', { name: 'private', description: '' }),
 			201,
 		);
-		await expectError(await request('GET', `/projects/${project.id}`, undefined, headers), 403);
+		await expectError(await request('GET', `/projects/${project.id}`, undefined, headers), 404);
 		await expectError(await request('GET', '/projects', undefined, headers), 403);
 		await expectError(
 			await request('POST', '/projects', { name: 'forbidden', description: '' }, headers),

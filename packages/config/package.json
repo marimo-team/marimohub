@@ -11,6 +11,7 @@
 		".": "./src/index.ts",
 		"./compute-profiles": "./src/computeProfiles.ts",
 		"./sandbox-auth": "./src/sandboxAuth.ts",
+		"./service-accounts": "./src/serviceAccount.ts",
 		"./spec": "./src/spec.ts",
 		"./package.json": "./package.json"
 	},

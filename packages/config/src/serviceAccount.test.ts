@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { generateServiceAccountToken } from '@marimo-hub/core';
 import { serviceAccountsFromEnv } from './serviceAccount';
 import { ConfigError } from './errors';
@@ -128,27 +126,5 @@ describe('service account configuration', () => {
 
 	it('validates before constructing adapters', () => {
 		expect(() => createFromEnv({ MARIMOHUB_SERVICE_ACCOUNTS: '{' })).toThrow('expected valid JSON');
-	});
-
-	it('accepts the documented generator output without manual token or hash edits', async () => {
-		const guide = readFileSync(
-			new URL('../../../docs/service-accounts.md', import.meta.url),
-			'utf8',
-		);
-		const code = guide.match(/node --input-type=module <<'JS'\n([\s\S]*?)\nJS/)?.[1];
-		expect(code).toBeDefined();
-		const generated = JSON.parse(
-			execFileSync(process.execPath, ['--input-type=module', '--eval', code!], {
-				encoding: 'utf8',
-				timeout: 10000,
-			}),
-		) as { MARIMOHUB_SERVICE_ACCOUNTS: string; MARIMOHUB_TOKEN: string };
-		const accounts = serviceAccountsFromEnv(generated)!;
-		const principal = await accounts.verify(generated.MARIMOHUB_TOKEN);
-		expect(principal).toMatchObject({
-			id: 'service-account:ci-deploy',
-			credential: { id: 'ci-deploy/initial', kind: 'service-account' },
-		});
-		expect(Date.parse(principal!.credential.expiresAt!)).toBeGreaterThan(Date.now());
 	});
 });

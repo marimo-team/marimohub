@@ -123,6 +123,18 @@ describe('service account authorization', () => {
 				decisions.map((decision) => decision.allowed),
 				action,
 			).toEqual([action === 'org-integration.manage', action === 'org-integration.manage']);
+			if (resource.kind !== 'deployment') {
+				const denial = { allowed: false, category: 'credential-resource', role: null };
+				expect(decisions).toEqual([denial, denial]);
+				expect(await authz.authorize(machine, action, resource)).toEqual(denial);
+				const analysis = await authz.analyze(machine, action, resource);
+				expect(analysis.decision).toEqual(denial);
+				expect(analysis.trace).toContainEqual({
+					stage: 'credential',
+					status: 'failed',
+					code: 'service_account_requires_deployment_resource',
+				});
+			}
 		}
 		expect(authz.projectEntryVisibility(machine, { id: project.id, owner: OWNER.id })).toBe(false);
 	});

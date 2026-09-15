@@ -542,6 +542,17 @@ export class AuthorizationService {
 			},
 		});
 		if ('credential' in subject && subject.credential.kind === 'service-account') {
+			if (resource.kind !== 'deployment') {
+				trace?.push({
+					stage: 'credential',
+					status: 'failed',
+					code: 'service_account_requires_deployment_resource',
+				});
+				return {
+					decision: { allowed: false, category: 'credential-resource', role: null },
+					labelSets: [],
+				};
+			}
 			// Machine permissions come only from configuration, never human roles or memberships.
 			return { decision: this.decideCredential(subject, action, resource, null), labelSets: [] };
 		}

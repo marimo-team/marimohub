@@ -13,36 +13,40 @@ For automation that acts as a person, use a [personal access token](./api-tokens
 
 ## Generate credentials
 
-Run the following command with Node.js 24 or later in a private provisioning environment.
-The output includes the client secret. Store that output in your secret manager, outside source control and CI logs.
-Change `accountId` and `credentialId` before each new account or rotation.
+Use the [standalone server binary](./deployment-options.md#_1-config-driven-the-common-case) in a private provisioning environment.
+The command works offline, without server configuration or a running hub.
 
 ```sh
-node --input-type=module <<'JS'
-import { createHash, randomBytes } from 'node:crypto';
-const accountId = 'ci-deploy';
-const credentialId = 'initial';
-const token = `mhub_sa_${accountId}_${credentialId}_${randomBytes(32).toString('hex')}`;
-const accounts = [{
-  id: accountId,
-  name: 'Deployment automation',
-  actions: ['org-integration.manage'],
-  credentials: [{
-    id: credentialId,
-    sha256: createHash('sha256').update(token).digest('hex'),
-    expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-  }],
-}];
-console.log(JSON.stringify({
-  MARIMOHUB_SERVICE_ACCOUNTS: JSON.stringify(accounts),
-  MARIMOHUB_TOKEN: token,
-}, null, 2));
-JS
+./marimohub-linux-x64 service-account generate \
+  --account ci-deploy --key initial --output-dir ./ci-credentials
 ```
 
-Supply the `MARIMOHUB_SERVICE_ACCOUNTS` value as a server environment variable on every replica.
-Its value must be the JSON array, not the complete output object.
-Supply `MARIMOHUB_TOKEN` only to the client script.
+The command creates a private directory with two files:
+
+- `accounts.json`: the complete service-account configuration, with credential hashes.
+- `token`: the client secret, suitable for `mohub --token-file` or `MARIMOHUB_TOKEN_FILE`.
+
+It prints no secrets and refuses an existing output directory.
+On Unix, the directory has mode `0700` and the files have mode `0600`.
+Store the files in your secret manager, outside source control and CI logs.
+Generated credentials expire after 90 days. Use `--expires-in-days` to select 1–3650 days.
+Use `service-account generate --help` for all options.
+
+For a source checkout, build the server and use `node apps/server/dist/index.mjs` instead of the binary.
+The command reuses the server's credential generator and configuration validation.
+
+Supply the complete contents of `accounts.json` as the server environment variable on every replica:
+
+```sh
+export MARIMOHUB_SERVICE_ACCOUNTS="$(cat ./ci-credentials/accounts.json)"
+```
+
+Supply the token file only to the client script:
+
+```sh
+export MARIMOHUB_TOKEN_FILE="$PWD/ci-credentials/token"
+```
+
 Keep the existing authentication backend configuration for human users.
 Restart all replicas after a configuration change.
 
@@ -75,11 +79,10 @@ The admin configuration summary redacts the complete account configuration.
 
 ## Provision integrations
 
-Set `MARIMOHUB_URL` to your hub URL and `MARIMOHUB_TOKEN` to the client secret.
+Set `MARIMOHUB_URL` to your hub URL. Use the generated token file with the CLI:
 
 ```sh
-curl --fail-with-body "$MARIMOHUB_URL/api/v1/org/integrations" \
-  -H "Authorization: Bearer $MARIMOHUB_TOKEN"
+mohub integrations org list
 ```
 
 Use the existing [integration API](./api.md) for provisioning:
@@ -97,13 +100,25 @@ The API retains version history, audit events, name uniqueness, and conditional 
 
 ## Rotate or revoke
 
+Use `--config` to preserve existing accounts and keys during rotation:
+
+```sh
+./marimohub-linux-x64 service-account generate \
+  --account ci-deploy --key rotated --config ./ci-credentials/accounts.json \
+  --output-dir ./rotated-credentials
+```
+
+Use the current deployment configuration as the input file. The command leaves that file unchanged.
+A duplicate key ID or a fifth credential fails before any output files are written.
+The generated configuration contains both credentials. The generated token file contains only the new token.
+
 For rotation without interrupted access:
 
-1. Generate a token with the same account ID and a new credential ID.
-2. Add its credential entry alongside the old entry in the account configuration.
-3. Restart every replica with both credentials before changing the client token.
-4. Update the client secret and confirm that requests succeed.
-5. Remove the old credential entry and restart every replica again.
+1. Restart every replica with the new `accounts.json` before changing the client token.
+2. Update the client secret to the new `token` file.
+3. Confirm that requests succeed.
+4. Remove the old credential entry from the configuration.
+5. Restart every replica again.
 
 For revocation, remove the credential entry. If it is the last credential, remove the account instead.
 Restart all replicas to complete revocation. A replica with old configuration can still accept the old token until expiry or restart.
@@ -126,7 +141,8 @@ An invalid, expired, removed, or disabled bearer credential cannot fall back to 
 Bearer schemes are case-insensitive. Tokens are case-sensitive.
 The `service-account:` identity namespace is reserved: SSO, PATs, and external OIDC tokens cannot impersonate these identities.
 
-Service-account grants never inherit human memberships, default roles, or super-admin standing.
+Service accounts can authorize only deployment resources, regardless of their grant contents.
+Their grants never inherit human memberships, default roles, or super-admin standing.
 Existing human authentication and PAT grant rules still apply to human callers.
 This feature supplies a static credential, without OAuth token exchange or refresh tokens.
 The Node configuration root supports `MARIMOHUB_SERVICE_ACCOUNTS`; the custom Cloudflare Worker entrypoint needs explicit library wiring.
