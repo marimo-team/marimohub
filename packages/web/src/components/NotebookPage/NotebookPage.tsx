@@ -49,7 +49,7 @@ import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
-import type { Theme } from '@/context/ThemeContext';
+import { notebookFrameUrl } from '@/lib/notebookUrls';
 import { canManageProject } from '@/lib/roles';
 import { SurfaceMenu } from './SurfaceMenu';
 import type { SecondarySurfaceFrame } from './SurfaceMenu';
@@ -101,18 +101,6 @@ function activityWarning(name: string, state: 'active' | 'idle' | 'unknown' | 's
 	if (state === 'idle') return `${name} had no connections at the latest check.`;
 	if (state === 'starting') return `${name}'s sandbox is still starting.`;
 	return `${name}'s connection could not be checked. They may still be active.`;
-}
-
-function withMarimoParams(url: string, theme: Theme, isApp: boolean): string {
-	try {
-		// The origin base is required for proxy-mode URLs, which are relative.
-		const parsed = new URL(url, window.location.origin);
-		parsed.searchParams.set('theme', theme);
-		if (isApp) parsed.searchParams.set('show-code', 'false');
-		return parsed.toString();
-	} catch {
-		return url;
-	}
 }
 
 interface NotebookPageProps {
@@ -220,7 +208,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	const [iframeLocation, setIframeLocation] = useState(() => ({ sandboxUrl, theme }));
 	if (iframeLocation.sandboxUrl !== sandboxUrl) setIframeLocation({ sandboxUrl, theme });
 	const iframeSrc = iframeLocation.sandboxUrl
-		? withMarimoParams(iframeLocation.sandboxUrl, iframeLocation.theme, isApp)
+		? notebookFrameUrl(iframeLocation.sandboxUrl, location.search, iframeLocation.theme, isApp)
 		: undefined;
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
@@ -639,15 +627,13 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
-					{!isApp && (
-						<ShareMenu
-							projectId={pid!}
-							notebookId={nid!}
-							title={title}
-							canRunApp={canRunApp}
-							canManageLinks={canManageLinks}
-						/>
-					)}
+					<ShareMenu
+						projectId={pid!}
+						notebookId={nid!}
+						title={title}
+						canRunApp={!isApp && canRunApp}
+						canManageLinks={canManageLinks}
+					/>
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}

@@ -46,7 +46,7 @@ describe('NotebookPage viewer modes', () => {
 		}
 	});
 
-	it('opens and stops the configured VS Code iframe for an authorized editor', async () => {
+	it('opens and stops VS Code without forwarding notebook query parameters', async () => {
 		const user = userEvent.setup();
 		makeFetch({
 			role: 'editor',
@@ -55,7 +55,16 @@ describe('NotebookPage viewer modes', () => {
 				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
-		renderPage();
+		renderPage('edit', {
+			search: '?id=123&folder=/untrusted&access_token=untrusted&session_id=untrusted',
+		});
+
+		const notebookFrame = await screen.findByTitle('Forecast');
+		const notebookUrl = new URL(notebookFrame.getAttribute('src')!);
+		expect(notebookUrl.searchParams.get('id')).toBe('123');
+		expect(notebookUrl.searchParams.get('folder')).toBe('/untrusted');
+		expect(notebookUrl.searchParams.has('access_token')).toBe(false);
+		expect(notebookUrl.searchParams.has('session_id')).toBe(false);
 
 		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
 		await user.click(await screen.findByRole('button', { name: 'Surfaces' }));

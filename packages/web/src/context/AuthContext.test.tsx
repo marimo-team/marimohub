@@ -143,8 +143,8 @@ describe('AuthProvider', () => {
 		expect(window.location.href).toBe('/api/auth/login');
 	});
 
-	it.each(['/p/proj-1/notebooks/nb-1', '/app/sales'])(
-		'signIn carries %s as redirect_url',
+	it.each(['/projects/proj-1/notebooks/nb-1', '/projects/proj-1/notebooks/nb-1/app', '/app/sales'])(
+		'signIn preserves notebook query parameters through redirect_url (%s)',
 		async (pathname) => {
 			const user = userEvent.setup();
 			vi.stubGlobal(
@@ -153,7 +153,7 @@ describe('AuthProvider', () => {
 			);
 			stubLocation({
 				pathname,
-				search: '?tab=files',
+				search: '?id=123&tag=one&tag=two&empty=&text=a%2Bb%26c',
 				hash: '#cell-3',
 			});
 
@@ -166,7 +166,7 @@ describe('AuthProvider', () => {
 
 			await user.click(screen.getByRole('button', { name: 'Sign in' }));
 			expect(window.location.href).toBe(
-				`/api/auth/login?redirect_url=${encodeURIComponent(`${pathname}?tab=files#cell-3`)}`,
+				`/api/auth/login?redirect_url=${encodeURIComponent(`${pathname}?id=123&tag=one&tag=two&empty=&text=a%2Bb%26c#cell-3`)}`,
 			);
 		},
 	);

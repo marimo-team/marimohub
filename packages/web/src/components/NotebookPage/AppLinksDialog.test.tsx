@@ -17,6 +17,7 @@ function setup(
 	canManage = true,
 	conflict = false,
 	failures: { list?: boolean; release?: boolean } = {},
+	search = '',
 ) {
 	let links = [saved];
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -72,6 +73,7 @@ function setup(
 			projectId="proj-1"
 			notebookId="nb-1"
 			canManage={canManage}
+			search={search}
 			onClose={() => {}}
 		/>,
 		{ toaster: true },
@@ -85,6 +87,39 @@ afterEach(() => {
 });
 
 describe('AppLinksDialog', () => {
+	it('uses filtered parameters for alias navigation, copying, and previews without storing them', async () => {
+		const user = userEvent.setup();
+		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+		const base = document.createElement('base');
+		base.href = `${window.location.origin}/hub/`;
+		document.head.append(base);
+		try {
+			const fetch = setup(
+				true,
+				false,
+				{},
+				'?id=123&tag=one&tag=two&empty=&access_token=evil&%73ession_id=evil&theme=dark',
+			);
+			const search = '?id=123&tag=one&tag=two&empty=';
+			const link = await screen.findByRole('link');
+			expect(link).toHaveAttribute('href', `/hub/app/sales${search}`);
+			expect(link).toHaveTextContent(`${window.location.origin}/hub/app/sales${search}`);
+			await user.click(screen.getByRole('button', { name: 'Copy sales' }));
+			expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/hub/app/sales${search}`);
+			await user.type(screen.getByRole('textbox', { name: 'App slug' }), 'revenue');
+			expect(
+				screen.getByText(`${window.location.origin}/hub/app/revenue${search}`),
+			).toBeInTheDocument();
+			await user.click(screen.getByRole('button', { name: 'Create app link' }));
+			await screen.findByRole('button', { name: 'Copy revenue' });
+			expect(fetch.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body).toBe(
+				JSON.stringify({ slug: 'revenue' }),
+			);
+		} finally {
+			base.remove();
+		}
+	});
+
 	it('lists aliases for readers without mutation controls', async () => {
 		setup(false);
 		expect(await screen.findByRole('link')).toHaveAttribute('href', '/app/sales');

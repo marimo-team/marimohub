@@ -5,19 +5,26 @@ import { useDeepLinksQuery, useRegisterDeepLink, useReleaseDeepLink } from '@/ap
 import { Button, DialogModal, IconButton, TextField } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { withBasePath } from '@/lib/basePath';
+import { notebookQueryParams } from '@/lib/notebookUrls';
 
 interface AppLinksDialogProps {
 	projectId: string;
 	notebookId: string;
 	canManage: boolean;
+	search?: string;
 	onClose: () => void;
 }
 
-function urlFor(slug: string): string {
-	return new URL(withBasePath(`/app/${slug}`), window.location.origin).toString();
-}
-
-export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: AppLinksDialogProps) {
+export function AppLinksDialog({
+	projectId,
+	notebookId,
+	canManage,
+	search = '',
+	onClose,
+}: AppLinksDialogProps) {
+	const query = notebookQueryParams(search).toString();
+	const pathFor = (slug: string) => withBasePath(`/app/${slug}${query ? `?${query}` : ''}`);
+	const urlFor = (slug: string) => new URL(pathFor(slug), window.location.origin).toString();
 	const links = useDeepLinksQuery(projectId, notebookId);
 	const currentLinks = links.isFetchedAfterMount && !links.isError ? links.data : undefined;
 	const register = useRegisterDeepLink(projectId, notebookId);
@@ -57,7 +64,7 @@ export function AppLinksDialog({ projectId, notebookId, canManage, onClose }: Ap
 							className="flex items-center gap-2 rounded-md border p-2"
 						>
 							<a
-								href={withBasePath(`/app/${link.slug}`)}
+								href={pathFor(link.slug)}
 								className="min-w-0 flex-1 break-all text-sm text-primary underline"
 							>
 								{urlFor(link.slug)}

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { AppLinksDialog } from './AppLinksDialog';
 import { Camera, Copy, Link, Play, Share2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { DropdownMenu } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { withBasePath } from '@/lib/basePath';
+import { notebookQueryParams } from '@/lib/notebookUrls';
 
 interface ShareMenuProps {
 	projectId: string;
@@ -24,18 +25,24 @@ export function ShareMenu({
 }: ShareMenuProps) {
 	const [linksOpen, setLinksOpen] = useState(false);
 	const navigate = useNavigate();
+	const location = useLocation();
 	const { copy } = useCopyToClipboard();
 	const notebookPath = `/projects/${projectId}/notebooks/${notebookId}`;
 
 	const handleAction = (action: string) => {
+		const search = notebookQueryParams(location.search).toString();
+		const query = search ? `?${search}` : '';
 		if (action === 'app-links') {
 			setLinksOpen(true);
 		} else if (action === 'static-outputs') {
 			void navigate(`${notebookPath}/snapshot`, { state: { title } });
 		} else if (action === 'run-app') {
-			void navigate(`${notebookPath}/app`, { state: { title } });
+			void navigate(`${notebookPath}/app${query}`, { state: { title } });
 		} else if (action === 'copy-url') {
-			const url = new URL(withBasePath(notebookPath), window.location.origin).toString();
+			const url = new URL(
+				withBasePath(`${location.pathname}${query}`),
+				window.location.origin,
+			).toString();
 			void copy(url).then((copied) => copied && toast.success('Notebook URL copied'));
 		}
 	};
@@ -76,6 +83,7 @@ export function ShareMenu({
 					projectId={projectId}
 					notebookId={notebookId}
 					canManage={canManageLinks}
+					search={location.search}
 					onClose={() => setLinksOpen(false)}
 				/>
 			)}

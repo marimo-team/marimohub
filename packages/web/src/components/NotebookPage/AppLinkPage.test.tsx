@@ -1,7 +1,8 @@
 import { Suspense } from 'react';
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import userEvent from '@testing-library/user-event';
@@ -24,11 +25,13 @@ function renderLink(
 	initialEntry = '/app/sales?filter=2026#chart',
 	basename = '/',
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+	controls?: ReactNode,
 ) {
 	return render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter basename={basename} initialEntries={[initialEntry]}>
 				<ThemeProvider>
+					{controls}
 					<Suspense fallback={<p>Loading…</p>}>
 						<Routes>
 							<Route path="/app/:slug" element={<AppLinkPage />} />
@@ -79,12 +82,68 @@ function linkFetch(
 }
 
 describe('AppLinkPage', () => {
+	it('forwards filtered slug parameters and copies the slug URL under a deployment prefix', async () => {
+		const user = userEvent.setup();
+		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+		const { existing, fetch } = linkFetch();
+		const base = document.createElement('base');
+		base.href = `${window.location.origin}/hub/`;
+		document.head.append(base);
+		try {
+			renderLink(
+				'/hub/app/sales?id=123&tag=one&tag=two&empty=&%61ccess_token=evil&session_id=evil&file=other.py',
+				'/hub',
+			);
+			const frame = await screen.findByTitle('Forecast');
+			expect(frame).toHaveAttribute(
+				'src',
+				'https://sandbox.example/kernel?id=123&tag=one&tag=two&empty=&theme=light&show-code=false',
+			);
+			await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+			expect(writeText).toHaveBeenCalledWith(
+				`${window.location.origin}/hub/app/sales?id=123&tag=one&tag=two&empty=`,
+			);
+			expect(
+				fetch.mock.calls
+					.filter(([input]) => String(input).includes('/api/v1/deep-links/'))
+					.map(([input]) => String(input)),
+			).toEqual(['/api/v1/deep-links/sales']);
+			expect(sessionPosts(existing)).toHaveLength(1);
+		} finally {
+			base.remove();
+		}
+	});
+
+	it('reloads only the notebook frame when a slug query changes', async () => {
+		function Controls() {
+			const navigate = useNavigate();
+			return <button onClick={() => void navigate('?id=456')}>Change query</button>;
+		}
+		const { existing, fetch } = linkFetch();
+		renderLink('/app/sales?id=123', '/', undefined, <Controls />);
+		const initial = await screen.findByTitle('Forecast');
+		const resolves = fetch.mock.calls.filter(([input]) =>
+			String(input).includes('/deep-links/'),
+		).length;
+		fireEvent.click(screen.getByText('Change query'));
+		const frame = screen.getByTitle('Forecast');
+		expect(frame).not.toBe(initial);
+		expect(new URL(frame.getAttribute('src')!).searchParams.get('id')).toBe('456');
+		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales?id=456');
+		expect(sessionPosts(existing)).toHaveLength(1);
+		expect(
+			fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/')),
+		).toHaveLength(resolves);
+	});
+
 	it.each(['/app/sales?filter=2026#chart', '/app/revenue?filter=2026#chart'])(
 		'opens the shared app and preserves %s',
 		async (path) => {
 			const { existing } = linkFetch();
 			renderLink(path);
-			expect(await screen.findByTitle('Forecast')).toBeInTheDocument();
+			const frame = await screen.findByTitle('Forecast');
+			expect(new URL(frame.getAttribute('src')!).searchParams.get('filter')).toBe('2026');
 			expect(screen.getByTestId('location')).toHaveTextContent(path);
 			expect(sessionPosts(existing)).toHaveLength(1);
 		},
@@ -106,13 +165,16 @@ describe('AppLinkPage', () => {
 		const { existing } = linkFetch({ missing: true });
 		renderLink();
 		expect(await screen.findByRole('heading', { name: 'App link not found' })).toBeInTheDocument();
+		expect(screen.queryByTitle('Forecast')).toBeNull();
 		expect(sessionPosts(existing)).toHaveLength(0);
 	});
 
 	it('shows existing app admission errors without redirecting', async () => {
-		linkFetch({ forbiddenSession: true });
+		const { existing } = linkFetch({ forbiddenSession: true });
 		renderLink();
 		expect(await screen.findByText('App access denied')).toBeInTheDocument();
+		expect(screen.queryByTitle('Forecast')).toBeNull();
+		expect(sessionPosts(existing)).toHaveLength(1);
 		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales');
 	});
 	it('does not use a cached target while revalidation is pending or returns 404', async () => {
@@ -190,6 +252,9 @@ describe('AppLinkPage', () => {
 		await user.click(screen.getByRole('button', { name: 'Try again' }));
 		expect(await screen.findByTitle('Forecast')).toBeInTheDocument();
 		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales?filter=2026#chart');
+		expect(
+			new URL(screen.getByTitle('Forecast').getAttribute('src')!).searchParams.get('filter'),
+		).toBe('2026');
 		expect(sessionPosts(existing)).toHaveLength(1);
 	});
 });
