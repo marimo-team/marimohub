@@ -186,7 +186,10 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 					</span>
 					<Chip>deleted</Chip>
 				</div>
-				<NotebookTags tags={notebook.tags} title={notebook.title} />
+				<NotebookTags
+					tags={notebook.tags.filter((tag) => tag !== notebook.status)}
+					title={notebook.title}
+				/>
 				<div className="flex shrink-0 items-center gap-3">
 					<span className="hidden w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">
 						<span className="text-muted-foreground/70">by</span>
@@ -799,7 +802,10 @@ function useProjectContent() {
 							contentClassName="items-center justify-between gap-3 py-3.5"
 							trailing={
 								<>
-									<NotebookTags tags={nb.tags} title={nb.title} />
+									<NotebookTags
+										tags={nb.tags.filter((tag) => nb.status === 'active' || tag !== nb.status)}
+										title={nb.title}
+									/>
 									<div className="flex shrink-0 items-center gap-3">
 										{live?.app && (
 											<AppSessionIndicator
