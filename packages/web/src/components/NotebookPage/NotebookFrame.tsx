@@ -56,6 +56,7 @@ function FrameAttempt({
 				className="min-h-0 w-full flex-1 border-0"
 				src={src}
 				sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+				referrerPolicy="no-referrer"
 				allow="clipboard-read; clipboard-write"
 				title={title}
 			/>

@@ -118,14 +118,15 @@ describe('NotebookFrame recovery', () => {
 	);
 
 	it.each([
-		'/hub/proxy/signed-routing-token/?theme=dark#cell',
-		'https://kernel.example/?access_token=a%2Bb&provider=one&provider=two#cell',
+		'/hub/proxy/signed-routing-token/?theme=dark&id=123&tag=one&tag=two#cell',
+		'https://kernel.example/?access_token=a%2Bb&provider=one&provider=two&id=123#cell',
 	])('preserves the full URL across repeated retries: %s', async (src) => {
 		render(frame(src));
 		for (let attempt = 0; attempt < 2; attempt++) {
 			await advance();
 			expect(screen.getByRole('link', { name: 'Open in new window' })).toHaveAttribute('href', src);
 			const iframe = screen.getByTitle('Forecast');
+			expect(iframe).toHaveAttribute('referrerpolicy', 'no-referrer');
 			fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 			expect(screen.getByTitle('Forecast')).not.toBe(iframe);
 			expect(screen.getByTitle('Forecast')).toHaveAttribute('src', src);

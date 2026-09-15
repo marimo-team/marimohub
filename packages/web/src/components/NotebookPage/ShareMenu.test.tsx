@@ -2,16 +2,29 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ShareMenu } from './ShareMenu';
 
 function LocationProbe() {
-	return <output data-testid="location">{useLocation().pathname}</output>;
+	const location = useLocation();
+	return (
+		<output data-testid="location">
+			{location.pathname}
+			{location.search}
+		</output>
+	);
 }
 
-function renderMenu({ canRunApp = true }: { canRunApp?: boolean } = {}) {
+function renderMenu({
+	canRunApp = true,
+	path = '/projects/proj-1/notebooks/nb-1',
+	basename,
+}: { canRunApp?: boolean; path?: string; basename?: string } = {}) {
 	const wrapper = ({ children }: { children: ReactNode }) => (
-		<MemoryRouter initialEntries={['/projects/proj-1/notebooks/nb-1']}>{children}</MemoryRouter>
+		<MemoryRouter basename={basename} initialEntries={[path]}>
+			{children}
+		</MemoryRouter>
 	);
 	return render(
 		<Routes>
@@ -40,6 +53,32 @@ afterEach(() => {
 });
 
 describe('ShareMenu', () => {
+	it.each(['denied', 'unavailable'])(
+		'reports clipboard %s without a success message or navigation',
+		async (failure) => {
+			const user = userEvent.setup();
+			const success = vi.spyOn(toast, 'success');
+			const error = vi.spyOn(toast, 'error');
+			const writeText = vi.fn().mockRejectedValue(new Error('Permission denied'));
+			Object.defineProperty(navigator, 'clipboard', {
+				value: failure === 'unavailable' ? undefined : { writeText },
+				configurable: true,
+			});
+			const path = '/projects/proj-1/notebooks/nb-1/app?id=123&access_token=evil';
+			renderMenu({ path });
+			await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+			expect(error).toHaveBeenCalledWith('Could not copy to clipboard');
+			expect(success).not.toHaveBeenCalled();
+			expect(screen.getByTestId('location').textContent).toBe(path);
+			if (failure === 'denied') {
+				expect(writeText).toHaveBeenCalledWith(
+					`${window.location.origin}/projects/proj-1/notebooks/nb-1/app?id=123`,
+				);
+			}
+		},
+	);
+
 	it('opens the latest static outputs', async () => {
 		const user = userEvent.setup();
 		renderMenu();
@@ -87,5 +126,42 @@ describe('ShareMenu', () => {
 
 		expect(screen.queryByRole('menuitem', { name: 'Run as app' })).toBeNull();
 		expect(screen.getByRole('menuitem', { name: 'View static outputs' })).toBeInTheDocument();
+	});
+
+	it.each(['', '/app'])('copies the current route and filtered parameters (%s)', async (suffix) => {
+		const user = userEvent.setup();
+		const writeText = vi.fn(() => Promise.resolve());
+		Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+		const base = document.createElement('base');
+		base.href = `${window.location.origin}/hub/`;
+		document.head.append(base);
+		try {
+			renderMenu({
+				basename: '/hub',
+				path: `/hub/projects/proj-1/notebooks/nb-1${suffix}?id=123&tag=one&tag=two&empty=&access_token=evil&%73ession_id=evil&theme=dark`,
+			});
+			await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+			expect(writeText).toHaveBeenCalledWith(
+				`${window.location.origin}/hub/projects/proj-1/notebooks/nb-1${suffix}?id=123&tag=one&tag=two&empty=`,
+			);
+		} finally {
+			base.remove();
+		}
+	});
+
+	it.each([
+		['Run as app', '/app?id=123&tag=one&tag=two&empty='],
+		['View static outputs', '/snapshot'],
+	])('handles query parameters for %s', async (action, suffix) => {
+		const user = userEvent.setup();
+		renderMenu({
+			path: '/projects/proj-1/notebooks/nb-1?id=123&tag=one&tag=two&empty=&access_token=evil&file=other.py',
+		});
+		await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+		await user.click(screen.getByRole('menuitem', { name: action }));
+		expect(screen.getByTestId('location').textContent).toBe(
+			`/projects/proj-1/notebooks/nb-1${suffix}`,
+		);
 	});
 });

@@ -55,7 +55,7 @@ describe('NotebookPage viewer modes', () => {
 				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
 			}),
 		});
-		renderPage();
+		renderPage('edit', { search: '?id=123&folder=/untrusted' });
 
 		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
 		await user.click(await screen.findByRole('button', { name: 'Surfaces' }));

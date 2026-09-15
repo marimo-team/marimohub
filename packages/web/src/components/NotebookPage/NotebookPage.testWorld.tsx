@@ -361,16 +361,20 @@ export function makeFetch(opts: FetchOptions) {
 	return impl;
 }
 
-export function renderPage(variant: 'edit' | 'app' = 'edit') {
+export function renderPage(
+	variant: 'edit' | 'app' = 'edit',
+	{ search = '', controls }: { search?: string; controls?: ReactNode } = {},
+) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const path =
 		variant === 'app'
 			? `/projects/${PID}/notebooks/${NID}/app`
 			: `/projects/${PID}/notebooks/${NID}`;
 	const wrapper = ({ children }: { children: ReactNode }) => (
-		<MemoryRouter initialEntries={[path]}>
+		<MemoryRouter initialEntries={[`${path}${search}`]}>
 			<QueryClientProvider client={client}>
 				<ThemeProvider>
+					{controls}
 					<Suspense fallback={<div>loading</div>}>{children}</Suspense>
 				</ThemeProvider>
 			</QueryClientProvider>

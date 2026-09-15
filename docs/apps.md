@@ -46,6 +46,37 @@ Start an app from the notebook's actions menu ("Run as app"), or via the API:
 `{"mode": "app"}`. The call is create-or-reuse: if the app is already running,
 any admitted caller attaches to it.
 
+## Deep links with query parameters
+
+App and editor deep links pass query parameters to the notebook iframe:
+
+```text
+/projects/<project-id>/notebooks/<notebook-id>/app?id=123
+/projects/<project-id>/notebooks/<notebook-id>?id=123
+```
+
+Read them with [`mo.query_params()`](https://docs.marimo.io/api/query_params/).
+For these links, `mo.query_params()["id"]` returns `"123"`.
+
+- **Sharing:** Sign-in and **Copy URL** preserve the app or editor deep link.
+  **Run as app** carries allowed parameters from the editor to the app.
+- **App tabs:** Each app tab receives its own parameters. Static outputs and secondary tools receive none.
+- **Values:** The iframe URL preserves repeated parameters, empty values, and encoded characters.
+  Marimo determines how repeated parameters reach Python.
+- **Updates:** Changed forwarded values reload the iframe and reset its browser state, while reusing the sandbox.
+  Theme changes and stripped parameters do not trigger reloads. Query changes inside the notebook do not update the outer URL.
+
+### Reserved parameters
+
+The hub strips these names from forwarded parameters and copied links, including duplicates and encoded names:
+
+- Authentication and session controls: `access_token`, `refresh_token`, `session_id`, `auth_error`.
+- Display and runtime controls: `theme`, `show-code`, `include-code`, `kiosk`, `vscode`, `file`, `view-as`, `show-chrome`.
+
+Existing sandbox URL parameters take precedence. The hub then applies its theme and hides code in app mode.
+The iframe omits the referrer header to avoid sending the unfiltered outer URL.
+Query parameters are user input and grant no access to notebooks or data.
+
 ## Who can do what
 
 Editors, managers, and admins always have full app access. What a **viewer** gets is a

@@ -143,30 +143,33 @@ describe('AuthProvider', () => {
 		expect(window.location.href).toBe('/api/auth/login');
 	});
 
-	it('signIn carries the current deep link as redirect_url', async () => {
-		const user = userEvent.setup();
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => jsonOk(ME)),
-		);
-		stubLocation({
-			pathname: '/p/proj-1/notebooks/nb-1',
-			search: '?tab=files',
-			hash: '#cell-3',
-		});
+	it.each(['', '/app'])(
+		'signIn preserves notebook query parameters through redirect_url (%s)',
+		async (suffix) => {
+			const user = userEvent.setup();
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () => jsonOk(ME)),
+			);
+			stubLocation({
+				pathname: `/projects/proj-1/notebooks/nb-1${suffix}`,
+				search: '?id=123&tag=one&tag=two&empty=&text=a%2Bb%26c',
+				hash: '#cell-3',
+			});
 
-		renderWithClient(
-			<AuthProvider>
-				<Probe />
-			</AuthProvider>,
-			{ toaster: false },
-		);
+			renderWithClient(
+				<AuthProvider>
+					<Probe />
+				</AuthProvider>,
+				{ toaster: false },
+			);
 
-		await user.click(screen.getByRole('button', { name: 'Sign in' }));
-		expect(window.location.href).toBe(
-			`/api/auth/login?redirect_url=${encodeURIComponent('/p/proj-1/notebooks/nb-1?tab=files#cell-3')}`,
-		);
-	});
+			await user.click(screen.getByRole('button', { name: 'Sign in' }));
+			expect(window.location.href).toBe(
+				`/api/auth/login?redirect_url=${encodeURIComponent(`/projects/proj-1/notebooks/nb-1${suffix}?id=123&tag=one&tag=two&empty=&text=a%2Bb%26c#cell-3`)}`,
+			);
+		},
+	);
 
 	it('signIn strips a stale auth_error from the redirect_url', async () => {
 		const user = userEvent.setup();
