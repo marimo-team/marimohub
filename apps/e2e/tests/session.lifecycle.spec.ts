@@ -93,7 +93,7 @@ test.describe('session lifecycle', () => {
 		await createAndOpenProject(page, project);
 		await createNotebook(page, notebook);
 
-		await notebookRow(page, notebook).click();
+		await notebookRow(page, notebook).getByRole('link', { name: notebook, exact: true }).click();
 		await expect(page).toHaveURL(/\/projects\/[^/]+\/notebooks\/[^/]+$/);
 		const projectId = projectIdFromUrl(page.url())!;
 
