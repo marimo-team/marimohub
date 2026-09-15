@@ -6,6 +6,7 @@ import {
 	defaultRegistry,
 	hashPatSecret,
 	OrgIntegrationsStore,
+	paths,
 	ServiceAccountCredentials,
 	UserId,
 } from '@marimo-hub/core';
@@ -43,7 +44,7 @@ async function setup() {
 
 describe('service account API', () => {
 	it('provisions org integrations on an empty bucket and preserves conditional updates', async () => {
-		const { request, services } = await setup();
+		const { request, services, bucket } = await setup();
 		expect(await expectPage(await request('GET', '/org/integrations', undefined, headers))).toEqual(
 			[],
 		);
@@ -89,6 +90,38 @@ describe('service account API', () => {
 			]),
 		);
 		await expectOk(await request('DELETE', path, undefined, headers));
+		expect(await bucket.head(paths.catalog)).toBeNull();
+		expect((await bucket.list({ prefix: 'projects/' })).objects).toEqual([]);
+	});
+
+	it('defers default project creation until a human initializes the deployment', async () => {
+		const { request, bucket, services } = await setup();
+		await expectOk(await request('GET', '/org/integrations', undefined, headers));
+		await expectError(await request('GET', '/projects', undefined, headers), 403);
+		await expectError(
+			await request('POST', '/projects', { name: 'forbidden', description: '' }, headers),
+			403,
+		);
+		expect(await bucket.head(paths.catalog)).toBeNull();
+		expect((await bucket.list({ prefix: 'projects/' })).objects).toEqual([]);
+
+		const userId = UserId.parse('human-owner');
+		const human = createTestApi({ bucket, userId });
+		const projects = await expectPage<{ id: string; name: string }>(
+			await human.request('GET', '/projects'),
+		);
+		expect(projects).toMatchObject([{ name: 'My Projects' }]);
+		const projectPath = `/projects/${projects[0].id}`;
+		expect(await expectOk(await human.request('GET', projectPath))).toMatchObject({
+			owner: userId,
+			members: [{ user_id: userId, role: 'admin' }],
+		});
+		expect(await services.projects.listProjects()).toHaveLength(1);
+		await expectError(await request('GET', projectPath, undefined, headers), 404);
+
+		await expectOk(await human.request('DELETE', projectPath));
+		await expectOk(await request('GET', '/org/integrations', undefined, headers));
+		expect(await expectPage(await human.request('GET', '/projects'))).toEqual([]);
 	});
 
 	it('denies unrelated admin actions, project creation, and personal token management', async () => {

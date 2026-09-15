@@ -2,6 +2,7 @@
 
 Service accounts authenticate deployment scripts without a browser login or human-owned PAT, including on an empty deployment.
 `MARIMOHUB_SERVICE_ACCOUNTS` supplies their identities, permissions, and credential hashes. No bucket records are needed before the first request.
+Machine provisioning creates no projects. The first human request that initializes the catalog creates the human-owned default project.
 
 The sole permission, `org-integration.manage`, covers listing, reading, creating, updating, testing, and deleting **all org integrations**.
 Integration tests can contact configured data services with their credentials.
