@@ -1,7 +1,7 @@
 import { notificationRouter } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, NotebookId, Project } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
-import { scheduleProjectAlert } from '../notifications';
+import { assertNotificationMutationAllowed, scheduleProjectAlert } from '../notifications';
 import { cancelJobRuns, retireLiveApps } from '../shared';
 
 export async function deleteNotebookAndRetire(
@@ -11,6 +11,7 @@ export async function deleteNotebookAndRetire(
 	user: AuthenticatedPrincipal,
 	expectedVersion?: string,
 ): Promise<void> {
+	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const deleted = await deps.services.notebooks.deleteNotebookWithMutation(
 		project.id,
 		notebookId,
