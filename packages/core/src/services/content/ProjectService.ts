@@ -42,6 +42,7 @@ import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
+import { DeepLinkService } from './DeepLinkService';
 import { createListFilter } from './listFilters';
 import type { ListFilters } from './listFilters';
 
@@ -211,6 +212,7 @@ export class ProjectService {
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
+		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {}
 
 	/**
@@ -793,6 +795,9 @@ export class ProjectService {
 				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
 				projectCatalogPatch(updated, entry),
 		);
+		await this.deepLinks.releaseProject(id).catch((error) => {
+			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
+		});
 		return { project: updated, mutationId: snapshot.snapshot_id };
 	}
 
@@ -811,6 +816,7 @@ export class ProjectService {
 			);
 		}
 
+		await this.deepLinks.releaseProject(id);
 		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.editorClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.versionPruneCutoffsForProject(id));

@@ -69,6 +69,8 @@ describe('paths', () => {
 			{
 			  "base": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ",
 			  "code": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/workspace/notebook.py",
+			  "deepLinkIndex": [Function],
+			  "deepLinksPrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/deep-links/",
 			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/workspace/pyproject.toml",
 			  "fsSnapshot": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/fs_snapshot.json",
 			  "integrationSyncToken": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/integration_sync_token.json",

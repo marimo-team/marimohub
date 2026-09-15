@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createTestQueryClient, jsonOk } from '@/test/render';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ShareMenu } from './ShareMenu';
 
@@ -21,9 +23,10 @@ function renderMenu({
 	path = '/projects/proj-1/notebooks/nb-1',
 	basename,
 }: { canRunApp?: boolean; path?: string; basename?: string } = {}) {
+	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<MemoryRouter basename={basename} initialEntries={[path]}>
-			{children}
+			<QueryClientProvider client={client}>{children}</QueryClientProvider>
 		</MemoryRouter>
 	);
 	return render(
@@ -48,11 +51,24 @@ function renderMenu({
 }
 
 afterEach(() => {
+	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 	Reflect.deleteProperty(navigator, 'clipboard');
 });
 
 describe('ShareMenu', () => {
+	it('passes the current query to the App links dialog', async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => jsonOk([{ slug: 'sales', registration_id: 'registration-1' }])),
+		);
+		renderMenu({ path: '/app/revenue?id=123&access_token=evil' });
+		await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+		await user.click(screen.getByRole('menuitem', { name: 'App links' }));
+		expect(await screen.findByRole('link')).toHaveAttribute('href', '/app/sales?id=123');
+	});
+
 	it.each(['denied', 'unavailable'])(
 		'reports clipboard %s without a success message or navigation',
 		async (failure) => {

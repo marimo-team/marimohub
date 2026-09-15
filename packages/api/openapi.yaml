@@ -1214,6 +1214,7 @@ components:
                   - project.alerts.manage
                   - notebook.write
                   - notebook.manage
+                  - deep-link.manage
                   - integration.read
                   - integration.use
                   - integration.manage
@@ -1653,6 +1654,7 @@ components:
                           - project.alerts.manage
                           - notebook.write
                           - notebook.manage
+                          - deep-link.manage
                           - integration.read
                           - integration.use
                           - integration.manage
@@ -1702,6 +1704,7 @@ components:
             - project.alerts.manage
             - notebook.write
             - notebook.manage
+            - deep-link.manage
             - integration.read
             - integration.use
             - integration.manage
@@ -2398,6 +2401,61 @@ components:
         - root_path
         - entry_notebook
         - commit
+    DeepLink:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          enum:
+            - 1
+        registration_id:
+          type: string
+          format: ulid
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 63
+          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+        target:
+          type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - app
+            project_id:
+              type: string
+            notebook_id:
+              type: string
+          required:
+            - kind
+            - project_id
+            - notebook_id
+          additionalProperties: false
+        access:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum:
+                - inherit
+          required:
+            - mode
+          additionalProperties: false
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - schema_version
+        - registration_id
+        - slug
+        - target
+        - access
+        - created_by
+        - created_at
+      additionalProperties: false
     OpenNotebookChangeRequestResult:
       type: object
       properties:
@@ -4144,6 +4202,7 @@ components:
                       - project.alerts.manage
                       - notebook.write
                       - notebook.manage
+                      - deep-link.manage
                       - integration.read
                       - integration.use
                       - integration.manage
@@ -4331,6 +4390,7 @@ paths:
                               - project.alerts.manage
                               - notebook.write
                               - notebook.manage
+                              - deep-link.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -10599,6 +10659,427 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/deep-links/{slug}:
+    get:
+      operationId: deep-links.resolve
+      tags:
+        - App links
+      summary: Resolve an app link using notebook permissions
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 63
+            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+          required: true
+          name: slug
+          in: path
+      responses:
+        '200':
+          description: Authorized app link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/DeepLink'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/deep-links:
+    get:
+      operationId: deep-links.list
+      tags:
+        - App links
+      summary: List notebook app links
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: App links
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DeepLink'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: deep-links.register
+      tags:
+        - App links
+      summary: Register a globally unique app slug
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slug:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+                kind:
+                  type: string
+                  enum:
+                    - app
+                  default: app
+                access:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - inherit
+                  default:
+                    mode: inherit
+                  required:
+                    - mode
+                  additionalProperties: false
+              required:
+                - slug
+              additionalProperties: false
+      responses:
+        '200':
+          description: New or existing app link for this notebook
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/DeepLink'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/deep-links/{slug}:
+    delete:
+      operationId: deep-links.release
+      tags:
+        - App links
+      summary: Release an app slug for immediate reuse
+      description: Releases the slug only when the notebook and registration ID match.
+        The slug is immediately available for reuse. Old shared URLs can then
+        open another notebook. App sessions and notebook permissions stay
+        unchanged.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 63
+            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+          required: true
+          name: slug
+          in: path
+        - schema:
+            type: string
+            format: ulid
+          required: true
+          name: registration_id
+          in: query
+      responses:
+        '200':
+          description: Registration released, absent, or replaced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: 'null'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
           content:
             application/json:
               schema:
@@ -17174,6 +17655,7 @@ paths:
                               - project.alerts.manage
                               - notebook.write
                               - notebook.manage
+                              - deep-link.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -17567,6 +18049,7 @@ paths:
                               - project.alerts.manage
                               - notebook.write
                               - notebook.manage
+                              - deep-link.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -17620,6 +18103,7 @@ paths:
                               - project.alerts.manage
                               - notebook.write
                               - notebook.manage
+                              - deep-link.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -17950,6 +18434,7 @@ paths:
                                         - project.alerts.manage
                                         - notebook.write
                                         - notebook.manage
+                                        - deep-link.manage
                                         - integration.read
                                         - integration.use
                                         - integration.manage
@@ -18112,6 +18597,7 @@ paths:
                               - project.alerts.manage
                               - notebook.write
                               - notebook.manage
+                              - deep-link.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -18373,6 +18859,7 @@ paths:
                               - project.alerts.manage
                               - notebook.write
                               - notebook.manage
+                              - deep-link.manage
                               - integration.read
                               - integration.use
                               - integration.manage

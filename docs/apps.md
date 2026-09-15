@@ -46,11 +46,12 @@ Start an app from the notebook's actions menu ("Run as app"), or via the API:
 `{"mode": "app"}`. The call is create-or-reuse: if the app is already running,
 any admitted caller attaches to it.
 
-## Deep links with query parameters
+## Notebooks with query parameters
 
-App and editor deep links pass query parameters to the notebook iframe:
+App and editor URLs pass query parameters to the notebook iframe:
 
 ```text
+/app/<slug>?id=123
 /projects/<project-id>/notebooks/<notebook-id>/app?id=123
 /projects/<project-id>/notebooks/<notebook-id>?id=123
 ```
@@ -58,8 +59,9 @@ App and editor deep links pass query parameters to the notebook iframe:
 Read them with [`mo.query_params()`](https://docs.marimo.io/api/query_params/).
 For these links, `mo.query_params()["id"]` returns `"123"`.
 
-- **Sharing:** Sign-in and **Copy URL** preserve the app or editor deep link.
+- **Sharing:** Sign-in and **Copy URL** preserve the app or editor URL and its allowed parameters.
   **Run as app** carries allowed parameters from the editor to the app.
+  **App links** includes them in alias links, copied URLs, and previews. Slug registrations store no query parameters.
 - **App tabs:** Each app tab receives its own parameters. Static outputs and secondary tools receive none.
 - **Values:** The iframe URL preserves repeated parameters, empty values, and encoded characters.
   Marimo determines how repeated parameters reach Python.

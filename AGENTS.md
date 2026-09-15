@@ -121,6 +121,9 @@ ETag compare-and-swap (conditional PUT) with retries.
 
 These CAS-managed records also have one writer each:
 
+- `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each
+  notebook-local `deep-links/{slug}.json` index marker. Global records use CAS
+  release markers and must not be deleted.
 - `IdentityService` owns each identity at `_system/identities/{user-id}.json`.
 - `CliAuthorizationService` owns each short-lived CLI login grant at
   `_system/cli-authorizations/{authorization-id}.json`.

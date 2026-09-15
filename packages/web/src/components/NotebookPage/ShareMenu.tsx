@@ -1,4 +1,6 @@
-import { Camera, Copy, Play, Share2 } from 'lucide-react';
+import { useState } from 'react';
+import { AppLinksDialog } from './AppLinksDialog';
+import { Camera, Copy, Link, Play, Share2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { DropdownMenu } from '@/components/ui';
@@ -11,9 +13,17 @@ interface ShareMenuProps {
 	notebookId: string;
 	title: string;
 	canRunApp: boolean;
+	canManageLinks?: boolean;
 }
 
-export function ShareMenu({ projectId, notebookId, title, canRunApp }: ShareMenuProps) {
+export function ShareMenu({
+	projectId,
+	notebookId,
+	title,
+	canRunApp,
+	canManageLinks = false,
+}: ShareMenuProps) {
+	const [linksOpen, setLinksOpen] = useState(false);
 	const navigate = useNavigate();
 	const location = useLocation();
 	const { copy } = useCopyToClipboard();
@@ -22,7 +32,9 @@ export function ShareMenu({ projectId, notebookId, title, canRunApp }: ShareMenu
 	const handleAction = (action: string) => {
 		const search = notebookQueryParams(location.search).toString();
 		const query = search ? `?${search}` : '';
-		if (action === 'static-outputs') {
+		if (action === 'app-links') {
+			setLinksOpen(true);
+		} else if (action === 'static-outputs') {
 			void navigate(`${notebookPath}/snapshot`, { state: { title } });
 		} else if (action === 'run-app') {
 			void navigate(`${notebookPath}/app${query}`, { state: { title } });
@@ -36,33 +48,45 @@ export function ShareMenu({ projectId, notebookId, title, canRunApp }: ShareMenu
 	};
 
 	return (
-		<DropdownMenu
-			label="Share notebook"
-			icon={<Share2 className="size-3.5" />}
-			triggerClassName="h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11"
-			options={[
-				{
-					id: 'static-outputs',
-					label: 'View static outputs',
-					icon: <Camera className="size-3.5" />,
-				},
-				...(canRunApp
-					? [
-							{
-								id: 'run-app',
-								label: 'Run as app',
-								icon: <Play className="size-3.5" />,
-							},
-						]
-					: []),
-				{
-					id: 'copy-url',
-					label: 'Copy URL',
-					icon: <Copy className="size-3.5" />,
-					separatorBefore: true,
-				},
-			]}
-			onAction={handleAction}
-		/>
+		<>
+			<DropdownMenu
+				label="Share notebook"
+				icon={<Share2 className="size-3.5" />}
+				triggerClassName="h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11"
+				options={[
+					{ id: 'app-links', label: 'App links', icon: <Link className="size-3.5" /> },
+					{
+						id: 'static-outputs',
+						label: 'View static outputs',
+						icon: <Camera className="size-3.5" />,
+					},
+					...(canRunApp
+						? [
+								{
+									id: 'run-app',
+									label: 'Run as app',
+									icon: <Play className="size-3.5" />,
+								},
+							]
+						: []),
+					{
+						id: 'copy-url',
+						label: 'Copy URL',
+						icon: <Copy className="size-3.5" />,
+						separatorBefore: true,
+					},
+				]}
+				onAction={handleAction}
+			/>
+			{linksOpen && (
+				<AppLinksDialog
+					projectId={projectId}
+					notebookId={notebookId}
+					canManage={canManageLinks}
+					search={location.search}
+					onClose={() => setLinksOpen(false)}
+				/>
+			)}
+		</>
 	);
 }

@@ -8,6 +8,7 @@ import { Footer } from '@/components/Footer/Footer';
 import { ProjectList } from '@/components/ProjectList/ProjectList';
 import { Project } from '@/components/Project/Project';
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
+import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
 import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
 import { JobsPage } from '@/components/Jobs/JobsPage';
 import { SignIn } from '@/components/SignIn/SignIn';
@@ -160,6 +161,7 @@ function AppContent() {
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
+						<Route path="/app/:slug" element={<AppLinkPage />} />
 						<Route path="/cli/login" element={<CliLoginPage />} />
 						<Route path="/cli/device" element={<CliDeviceLoginPage />} />
 						<Route path="/oauth/consent" element={<OAuthConsentPage />} />

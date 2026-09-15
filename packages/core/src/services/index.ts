@@ -11,6 +11,7 @@ import { IdempotencyService } from './catalog/IdempotencyService';
 import { IdentityService } from './identity/IdentityService';
 import { MaintenanceService } from './catalog/MaintenanceService';
 import { NotebookService } from './content/NotebookService';
+import { DeepLinkService } from './content/DeepLinkService';
 import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
@@ -22,6 +23,7 @@ import { OAuthAuthorizationService } from './oauth/OAuthAuthorizationService';
 import { OAuthClientStore } from './oauth/OAuthClientStore';
 import { OAuthRateLimitService } from './oauth/OAuthRateLimitService';
 
+export { DeepLinkService } from './content/DeepLinkService';
 export { CatalogService } from './catalog/CatalogService';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';
@@ -459,9 +461,16 @@ export function createServices(
 		isSuspended: user,
 		setSuspension: user,
 	});
+	const deepLinks = wrap('DeepLinkService', new DeepLinkService(bucket, metrics));
 	const projects = wrap(
 		'ProjectService',
-		new ProjectService(bucket, catalog, metrics, (emails) => identities.getUniqueByEmails(emails)),
+		new ProjectService(
+			bucket,
+			catalog,
+			metrics,
+			(emails) => identities.getUniqueByEmails(emails),
+			deepLinks,
+		),
 		{
 			getProject: project,
 			updateProject: project,
@@ -498,7 +507,7 @@ export function createServices(
 	});
 	const notebooks = wrap(
 		'NotebookService',
-		new NotebookService(bucket, catalog, metrics, sessions),
+		new NotebookService(bucket, catalog, metrics, sessions, deepLinks),
 		{
 			listNotebooks: project,
 			createNotebook: project,
@@ -568,6 +577,7 @@ export function createServices(
 		sessions,
 		jobs,
 		jobRuns,
+		deepLinks,
 		identities,
 		tokens,
 		cliAuthorizations,
