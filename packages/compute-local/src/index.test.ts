@@ -213,7 +213,7 @@ describe('uv-script-pins setup execution', () => {
 	it('creates and targets .venv when UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV are unset', async () => {
 		const { log } = await runSetup({});
 		expect(log).toContain('venv .venv\n');
-		expect(log).toContain('pip install --python .venv --no-build -r');
+		expect(log).toContain('pip install --python .venv -r');
 		expect(log).not.toMatch(/--python\s+--/);
 		// The requirements file lands inside the (lifecycle-managed) pin env.
 		const exportPath = /-o (\S+)/.exec(log)?.[1];
@@ -226,7 +226,7 @@ describe('uv-script-pins setup execution', () => {
 		try {
 			const { log } = await runSetup({ UV_PROJECT_ENVIRONMENT: envDir });
 			expect(log).not.toContain('venv ');
-			expect(log).toContain(`pip install --python ${envDir} --no-build -r`);
+			expect(log).toContain(`pip install --python ${envDir} -r`);
 		} finally {
 			await rm(envDir, { recursive: true, force: true });
 		}

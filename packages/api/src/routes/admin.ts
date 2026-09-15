@@ -100,7 +100,7 @@ const UV_BENCHMARK_SYNC_COMMAND = [
 	'}',
 	'record_cpu_stat cpu_before',
 	'status=0',
-	'uv sync --frozen --inexact --no-compile-bytecode --no-build -v > "$benchmark_dir/uv-sync.log" 2>&1 || status=$?',
+	'uv sync --frozen --inexact --no-compile-bytecode -v > "$benchmark_dir/uv-sync.log" 2>&1 || status=$?',
 	'grep -E \'(^|[[:space:]])(Resolved|Prepared|Installed) [0-9]+ package\' "$benchmark_dir/uv-sync.log" || true',
 	'record_cpu_stat cpu_after',
 	'if [ "$status" -ne 0 ]; then tail -n 100 "$benchmark_dir/uv-sync.log" >&2; fi',

@@ -67,7 +67,7 @@ marimohub copies the notebook into the image and launches the kernel itself,
 reusing the image's pre-installed environment. With cwd `/workspace`:
 
 ```sh
-uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build   # add the notebook's deps (skipped when it declares none)
+uv sync --inexact --no-install-package marimo --no-compile-bytecode   # add the notebook's deps (skipped when it declares none)
 uv run --no-sync marimo --quiet edit notebook.py --headless --token --token-password-file /tmp/.marimohub-kernel-token --host 0.0.0.0 --port 2718
 ```
 
@@ -77,8 +77,7 @@ capture it. Custom images must use a marimo version that supports
 `--token-password-file`. The supported 0.23.10 and 0.24.x images provide it.
 
 During the sync, `--no-install-package marimo` keeps the image's pinned marimo
-version even if the notebook declares another version. `--no-build` permits only
-wheels, so a source build cannot run arbitrary code or delay startup.
+version even if the notebook declares another version.
 
 If a git-synced notebook's entry file contains
 [PEP 723](https://peps.python.org/pep-0723/) inline metadata, marimohub runs three
@@ -88,7 +87,7 @@ inline dependencies into the base environment:
 ```sh
 [ -d "${UV_PROJECT_ENVIRONMENT:-.venv}" ] || uv venv "${UV_PROJECT_ENVIRONMENT:-.venv}"
 uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo -o "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
-uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
+uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
 ```
 
 A setup failure stops the session with `PYTHON_ENV_SETUP_FAILED` before the kernel

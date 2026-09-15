@@ -139,8 +139,7 @@ If the error identifies permissions, make the sandbox user own the parent of
 When a git-synced notebook contains [PEP 723](https://peps.python.org/pep-0723/)
 inline metadata, marimohub installs its dependencies at session start. If uv
 cannot resolve these dependencies, the session fails. Fix the versions in the
-repository, and then push again. marimohub also disables source builds with
-`--no-build`, so use package versions that provide wheels.
+repository, and then push again.
 
 ### Git-synced session with heavy inline dependencies times out
 
