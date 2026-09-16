@@ -186,7 +186,6 @@ describe('buildMarimoLaunch', () => {
 			// ignores and would leave the pins invisible to the kernel.
 			expect(installCmd).toContain('--python "${UV_PROJECT_ENVIRONMENT:-.venv}"');
 			expect(pyproject).not.toContain('--no-build');
-			expect(installCmd).not.toContain('--no-build');
 			expect(plan.start).toMatch(/^uv run --no-sync marimo /);
 		});
 

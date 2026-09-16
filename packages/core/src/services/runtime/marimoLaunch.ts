@@ -134,6 +134,17 @@ const PIN_ENV = `"${PIN_ENV_EXPANSION}"`;
 // repo's own requirements.txt.
 const SCRIPT_REQUIREMENTS = `"${PIN_ENV_EXPANSION}/marimohub-script-requirements.txt"`;
 
+// uv 0.10.9's pip interface ignores UV_NO_BUILD, unlike uv sync/export.
+// Keep the positional arguments local to this setup step.
+const SCRIPT_PIN_INSTALL = [
+	'(set --; case "${UV_NO_BUILD-}" in',
+	'1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) set -- --no-build ;;',
+	"''|0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]) ;;",
+	'*) printf "%s\\n" "UV_NO_BUILD must be a boolean" >&2; exit 2 ;;',
+	'esac;',
+	`uv pip install --python ${PIN_ENV} "$@" -r ${SCRIPT_REQUIREMENTS})`,
+].join(' ');
+
 export const MARIMO_LAUNCH_STRATEGIES = {
 	// marimohub's default. The sandbox image pre-installs marimo (pinned) plus
 	// popular libraries into the project env (UV_PROJECT_ENVIRONMENT), so the base
@@ -162,7 +173,7 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 			},
 			{
 				name: 'install_script_pins',
-				command: `uv pip install --python ${PIN_ENV} -r ${SCRIPT_REQUIREMENTS}`,
+				command: SCRIPT_PIN_INSTALL,
 			},
 		],
 		start: `uv run --no-sync ${marimoCommand(p)}`,

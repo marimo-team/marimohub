@@ -201,6 +201,7 @@ describe('uv-script-pins setup execution', () => {
 		};
 		delete env.UV_PROJECT_ENVIRONMENT;
 		delete env.VIRTUAL_ENV;
+		delete env.UV_NO_BUILD;
 		Object.assign(env, extraEnv);
 		try {
 			await promisify(execFile)('sh', ['-c', setup], { cwd: workdir, env });
@@ -214,6 +215,7 @@ describe('uv-script-pins setup execution', () => {
 		const { log } = await runSetup({});
 		expect(log).toContain('venv .venv\n');
 		expect(log).toContain('pip install --python .venv -r');
+		expect(log).not.toContain('--no-build');
 		expect(log).not.toMatch(/--python\s+--/);
 		// The requirements file lands inside the (lifecycle-managed) pin env.
 		const exportPath = /-o (\S+)/.exec(log)?.[1];
@@ -230,6 +232,28 @@ describe('uv-script-pins setup execution', () => {
 		} finally {
 			await rm(envDir, { recursive: true, force: true });
 		}
+	});
+
+	it.each(['true', '1', 'YES', 'on', 'TrUe'])(
+		'disables inline source builds when UV_NO_BUILD=%s',
+		async (value) => {
+			const { log } = await runSetup({ UV_NO_BUILD: value });
+			expect(log).toContain('pip install --python .venv --no-build -r');
+		},
+	);
+
+	it.each(['false', '0', 'NO', 'off', 'FaLsE'])(
+		'leaves inline build configuration unchanged when UV_NO_BUILD=%s',
+		async (value) => {
+			const { log } = await runSetup({ UV_NO_BUILD: value });
+			expect(log).toContain('pip install --python .venv -r');
+		},
+	);
+
+	it('rejects an invalid UV_NO_BUILD value', async () => {
+		await expect(runSetup({ UV_NO_BUILD: 'invalid' })).rejects.toThrow(
+			'UV_NO_BUILD must be a boolean',
+		);
 	});
 
 	it('does not inspect or install marimo during setup', async () => {
