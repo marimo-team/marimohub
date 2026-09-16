@@ -16,9 +16,11 @@ const test = base.extend<{ runtime: { root: string; launcher: string } }>({
 		const root = await mkdtemp(join(tmpdir(), 'marimohub-bridge-'));
 		const payload = notebookBridgeRuntime();
 		try {
-			await Promise.all(
-				payload.files.map(({ name, content }) => writeFile(join(root, name), content)),
-			);
+			await Promise.all([
+				...payload.files.map(({ name, content }) => writeFile(join(root, name), content)),
+				// marimo searches cwd before user config; editor cells must run in a clean CI environment.
+				writeFile(join(root, '.marimo.toml'), '[runtime]\nauto_instantiate = true\n'),
+			]);
 			await provide({ root, launcher: join(root, payload.launcher) });
 		} finally {
 			await rm(root, { recursive: true, force: true });

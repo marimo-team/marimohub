@@ -118,12 +118,24 @@ if __name__ == "__main__":
 			});
 			expect(response.ok()).toBe(true);
 			const { data } = (await response.json()) as { data: { id: string } };
+			const config = await page.request.put(
+				`/api/v1/projects/${projectId}/notebooks/${data.id}/workspace/files?path=.marimo.toml&create=true`,
+				{
+					headers: { 'Content-Type': 'application/octet-stream' },
+					data: '[runtime]\nauto_instantiate = true\n',
+				},
+			);
+			expect(config.ok()).toBe(true);
 			const path = `/projects/${projectId}/notebooks/${data.id}${mode === 'app' ? '/app' : ''}`;
 			await page.goto(`${path}?id=123#anchor`);
 			const iframe = page.locator('iframe');
 			await expect(iframe).toBeVisible({ timeout: 120_000 });
 			const src = await iframe.getAttribute('src');
 			const frame = page.frameLocator('iframe');
+			const runtimeConfig = JSON.parse(
+				(await frame.locator('marimo-user-config').getAttribute('data-config')) ?? '{}',
+			) as { runtime?: { auto_instantiate?: boolean } };
+			expect(runtimeConfig.runtime?.auto_instantiate).toBe(true);
 			const button = frame.getByRole('button', { name: 'Update Hub URL', exact: true });
 			await expect(button).toBeVisible({ timeout: 120_000 });
 			const mountedFrame = await iframe.elementHandle();
