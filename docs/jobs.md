@@ -134,6 +134,12 @@ With [project alerts](./project-alerts.md) enabled, a job can send
 the project's alert destinations that subscribe to them. The payload names the
 job, run, status, attempt, and sanitized error code.
 
+## MCP
+
+With MCP enabled and `MARIMOHUB_JOBS=on`, agents can list, create, schedule, and run jobs.
+Run tools support polling or bounded waits with optional SSE progress notifications.
+See [MCP jobs](./mcp.md#run-and-schedule-jobs) for inputs and examples.
+
 ## API
 
 All routes are under `/api/v1/projects/{pid}/notebooks/{nid}/jobs` and use the

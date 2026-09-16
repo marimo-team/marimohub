@@ -239,6 +239,11 @@ describe('MCP OAuth app', () => {
 			'start_session',
 			'stop_session',
 			'execute_code',
+			'list_jobs',
+			'create_job',
+			'schedule_job',
+			'run_job',
+			'get_job_run',
 		]);
 
 		const catalog = await app.request('/mcp', {
