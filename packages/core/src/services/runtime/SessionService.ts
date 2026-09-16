@@ -510,6 +510,11 @@ export class SessionService {
 	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
 			if (session.status !== 'running') return null;
+			if (
+				session.authorization_expires_at &&
+				Date.now() >= Date.parse(session.authorization_expires_at)
+			)
+				return null;
 			const ageMs = Date.now() - new Date(session.last_heartbeat).getTime();
 			if (ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
 			return { ...session, last_heartbeat: new Date().toISOString() };

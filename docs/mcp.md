@@ -115,15 +115,36 @@ PEP 723 headers remain in the source but do not install dependencies for local n
 3. Call `execute_code` with the returned project and session IDs.
 4. When finished, call `stop_session` for sessions you no longer need.
 
-The first start can take about two minutes. Session `status` describes the
-sandbox lifecycle. `execution` reports whether a kernel is available for code
-execution. When its status is `awaiting_client`, open `notebook_url` in a browser.
-The browser connection creates the kernel. Readiness can change between calls.
+Edit sessions initialize kernels without a browser and respect the notebook's
+automatic-execution settings. `create_notebook` with `launch: true` does the same.
+Repeated starts reuse the kernel without rerunning cells. The first start can take
+about two minutes.
 
-`execute_code` takes Python statements and shares the notebook's live variables.
-Scratchpad execution does not save notebook cells. For persistent cell edits,
-inspect marimo's code-mode API with `import marimo._code_mode as cm; help(cm)`.
-App sessions serve the notebook and do not support scratchpad execution.
+Session `status` describes the sandbox lifecycle. `execution.status` reports kernel readiness:
+
+| Status            | Next step                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------- |
+| `ready`           | Call `execute_code`. Execution queues behind any running cells.                                     |
+| `initializing`    | Retry `start_session` with a positive `wait_seconds`.                                               |
+| `awaiting_client` | Open `notebook_url` in a browser. This runtime requires browser initialization.                     |
+| `unavailable`     | Retry `start_session`. If it fails again, check the session logs or open the notebook in a browser. |
+
+`wait_seconds` bounds polling and initialization after sandbox startup. Zero only
+inspects readiness and can report `initializing` until a normal start confirms it.
+Custom images need compatible marimo and WebSocket support. MCP does not install
+or upgrade packages during requests.
+
+A browser can attach later without losing notebook variables or cell edits.
+If the kernel disappears, `execute_code` directs you to `start_session`.
+It does not recreate the kernel or replay code after ambiguous failures.
+
+`execute_code` reads live notebook variables, but scratchpad assignments are temporary.
+For persistent variables and cell edits, use marimo's code-mode API:
+`import marimo._code_mode as cm; help(cm)`.
+App sessions do not support scratchpad execution.
+
+Authorized MCP requests keep sessions active until completion, authorization expiry,
+or session termination. When MCP requests and browser activity stop, idle cleanup applies.
 
 ## External authorization
 

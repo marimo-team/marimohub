@@ -1,0 +1,277 @@
+import { spawn, exec as nodeExec } from 'node:child_process';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { SandboxInstance } from '../../ports/sandbox';
+import { bootstrapKernel } from './kernelBootstrap';
+import { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
+import { executeInKernel, listKernelSessions } from './kernelExecute';
+
+const python = process.env.MARIMO_INTEGRATION_PYTHON;
+const exec = promisify(nodeExec);
+const cleanup: (() => Promise<unknown>)[] = [];
+afterEach(async () => {
+	for (const close of cleanup.splice(0).reverse()) await close();
+});
+
+async function runtime(autoRun: boolean, prefix = '', fault?: 'fail' | 'delay') {
+	const root = await mkdtemp(join(tmpdir(), 'mhub-bootstrap-'));
+	cleanup.push(() => rm(root, { recursive: true, force: true }));
+	const port = await new Promise<number>((resolve) => {
+		const server = createServer();
+		server.listen(0, '127.0.0.1', () => {
+			const address = server.address();
+			if (!address || typeof address === 'string') throw new Error('No port');
+			server.close(() => resolve(address.port));
+		});
+	});
+	const token = createKernelAuthToken();
+	const tokenFile = join(root, 'token');
+	await writeFile(tokenFile, token, { mode: 0o600 });
+	await writeFile(join(root, '.marimo.toml'), `[runtime]\nauto_instantiate = ${autoRun}\n`);
+	await writeFile(
+		join(root, 'notebook.py'),
+		`import marimo
+app = marimo.App()
+@app.cell
+def _():
+    from pathlib import Path
+    _p = Path("runs.txt")
+    _p.write_text(_p.read_text() + "x" if _p.exists() else "x")
+    initial_value = 41
+    return (initial_value,)
+if __name__ == "__main__":
+    app.run()
+`,
+	);
+	const serverMain = fault
+		? String.raw`
+from marimo._session.session import SessionImpl as Session
+from marimo._cli.cli import main
+original = Session.instantiate
+def faulty(self, *args, **kwargs):
+    Session.instantiate = original
+    if ${fault === 'fail' ? 'True' : 'False'}:
+        raise RuntimeError("private initialization error")
+    original(self, *args, **kwargs)
+    import time
+    time.sleep(2)
+Session.instantiate = faulty
+if __name__ == "__main__":
+    main(prog_name="marimo")
+`
+		: undefined;
+	if (serverMain) await writeFile(join(root, 'faulty-server.py'), serverMain);
+	const child = spawn(
+		python!,
+		[
+			...(serverMain ? [join(root, 'faulty-server.py')] : ['-m', 'marimo']),
+			'--quiet',
+			'edit',
+			'notebook.py',
+			'--headless',
+			'--token',
+			'--token-password-file',
+			tokenFile,
+			'--host',
+			'127.0.0.1',
+			'--port',
+			String(port),
+			...(prefix ? [`--base-url=${prefix}`] : []),
+		],
+		{
+			cwd: root,
+			stdio: 'ignore',
+			detached: true,
+		},
+	);
+	cleanup.push(async () => {
+		if (child.exitCode === null && child.pid) {
+			const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+			process.kill(-child.pid, 'SIGKILL');
+			await exited;
+		}
+	});
+	const base = `http://127.0.0.1:${port}${prefix}`;
+	await expect
+		.poll(
+			async () => {
+				try {
+					return (await fetch(`${base}/`, { headers: { Authorization: `Bearer ${token}` } }))
+						.status;
+				} catch {
+					return 0;
+				}
+			},
+			{ timeout: 15_000 },
+		)
+		.toBe(200);
+	const sandbox = {
+		async exec(command, options) {
+			try {
+				const result = await exec(command.replaceAll(KERNEL_AUTH_TOKEN_FILE, tokenFile), {
+					timeout: options?.timeout,
+					maxBuffer: 1024 * 1024,
+				});
+				return { success: true, ...result };
+			} catch {
+				return { success: false, stdout: '', stderr: '', error: { code: 'COMMAND_FAILED' } };
+			}
+		},
+	} as SandboxInstance;
+	const request = { kernelAuthToken: token };
+	return {
+		root,
+		tokenFile,
+		base,
+		token,
+		sandbox,
+		request,
+		async execute(code: string) {
+			const sessions = await listKernelSessions(base, request);
+			expect(sessions).toHaveLength(1);
+			return executeInKernel(
+				base,
+				{ sessionId: sessions[0].id, code },
+				{ ...request, timeoutMs: 15_000 },
+			);
+		},
+	};
+}
+
+describe.skipIf(!python)('real marimo headless bootstrap', () => {
+	it.each([true, false])(
+		'initializes with auto execution %s, serializes starts, and preserves state',
+		async (autoRun) => {
+			const rt = await runtime(autoRun, '/nested/prefix');
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+				status: 'initializing',
+			});
+			expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
+			const starts = await Promise.all(
+				[1, 2, 3].map(() => bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })),
+			);
+			expect(starts).toEqual(Array(3).fill({ status: 'ready' }));
+			const initial = await rt.execute('print(globals().get("initial_value", "disabled"))');
+			expect(initial).toMatchObject({
+				completed: true,
+				success: true,
+				stdout: autoRun ? '41\n' : 'disabled\n',
+			});
+			expect(
+				await rt.execute(`import marimo._code_mode as cm
+async with cm.get_context() as ctx:
+    cid = ctx.create_cell("live_values = []")
+    ctx.run_cell(cid)
+`),
+			).toMatchObject({ success: true });
+			expect(await rt.execute('live_values.append(99)')).toMatchObject({ success: true });
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
+			expect(await rt.execute('print(live_values[0])')).toMatchObject({ stdout: '99\n' });
+			expect(
+				await rt.execute(
+					'from pathlib import Path; print(Path("runs.txt").read_text() if Path("runs.txt").exists() else "disabled")',
+				),
+			).toMatchObject({ stdout: autoRun ? 'x\n' : 'disabled\n' });
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+				status: 'ready',
+			});
+		},
+		60_000,
+	);
+
+	it('rejects invalid authentication without exposing credentials', async () => {
+		const rt = await runtime(true);
+		await writeFile(rt.tokenFile, createKernelAuthToken());
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000 })).toEqual({
+			status: 'unavailable',
+		});
+		expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
+	}, 30_000);
+
+	it.each(['fail', 'delay'] as const)(
+		'recovers from initialization %s without rerunning cells',
+		async (fault) => {
+			const rt = await runtime(true, '', fault);
+			expect(
+				await bootstrapKernel(rt.sandbox, { timeoutMs: fault === 'delay' ? 1_000 : 5_000 }),
+			).toEqual({ status: fault === 'delay' ? 'initializing' : 'unavailable' });
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toEqual({ status: 'ready' });
+			expect(
+				await rt.execute('from pathlib import Path; print(Path("runs.txt").read_text())'),
+			).toMatchObject({ success: true, stdout: 'x\n' });
+		},
+		30_000,
+	);
+
+	it('a browser resumes variables and editable cells under a new session ID', async () => {
+		const rt = await runtime(true);
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
+		expect(
+			await rt.execute(`import marimo._code_mode as cm
+async with cm.get_context() as ctx:
+    cid = ctx.create_cell("edited_value = 17; live_values = []")
+    ctx.run_cell(cid)
+`),
+		).toMatchObject({ success: true });
+		expect(await rt.execute('live_values.append(73)')).toMatchObject({ success: true });
+		const oldId = (await listKernelSessions(rt.base, rt.request))[0].id;
+		const browser = String.raw`
+import json, sys
+from websockets.sync.client import connect
+cfg = json.loads(sys.stdin.readline())
+with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-session", additional_headers={"Authorization": "Bearer " + cfg["token"]}) as ws:
+    while True:
+        event = json.loads(ws.recv(timeout=15))
+        if event.get("op") == "kernel-ready":
+            print(json.dumps(event["data"]), flush=True)
+            break
+    sys.stdin.readline()
+`;
+		const browserProcess = spawn(python!, ['-c', browser], { stdio: 'pipe' });
+		browserProcess.stdin.write(`${JSON.stringify({ base: rt.base, token: rt.token })}\n`);
+		cleanup.push(async () => {
+			browserProcess.kill();
+		});
+		let output = '';
+		browserProcess.stdout.on('data', (value: Buffer) => {
+			output += value.toString();
+		});
+		await expect.poll(() => output, { timeout: 15_000 }).not.toBe('');
+		const ready = JSON.parse(output) as { resumed: boolean; codes: string[]; cell_ids: string[] };
+		expect(ready.resumed).toBe(true);
+		expect(ready.codes).toContain('edited_value = 17; live_values = []');
+		const newId = (await listKernelSessions(rt.base, rt.request))[0].id;
+		expect(newId).toBe('browser-session');
+		expect(newId).not.toBe(oldId);
+		expect(await rt.execute('print(live_values[0], initial_value)')).toMatchObject({
+			success: true,
+			stdout: '73 41\n',
+		});
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
+		expect((await listKernelSessions(rt.base, rt.request))[0].id).toBe(newId);
+		expect(browserProcess.exitCode).toBeNull();
+		const cellId = ready.cell_ids[ready.codes.indexOf('edited_value = 17; live_values = []')];
+		expect(
+			await rt.execute(`import marimo._code_mode as cm
+async with cm.get_context() as ctx:
+    ctx.edit_cell(${JSON.stringify(cellId)}, code="edited_value = 23")
+print(cm.get_context().cells[${JSON.stringify(cellId)}].code)
+`),
+		).toMatchObject({ success: true, stdout: expect.stringContaining('edited_value = 23\n') });
+		const stale = await fetch(`${rt.base}/api/kernel/execute`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${rt.token}`,
+				'Content-Type': 'application/json',
+				'Marimo-Session-Id': oldId,
+			},
+			body: JSON.stringify({ code: 'raise Exception("must not execute")' }),
+		});
+		expect(stale.status).toBe(500);
+		expect(await stale.json()).toMatchObject({ detail: `Invalid session id: ${oldId}` });
+	}, 60_000);
+});

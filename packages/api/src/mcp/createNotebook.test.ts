@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CatalogService, NotebookId, SessionId, UserId } from '@marimo-hub/core';
+import {
+	CatalogService,
+	NotebookId,
+	SessionId,
+	SandboxId,
+	UserId,
+	bootstrapKernel,
+} from '@marimo-hub/core';
+import type * as Core from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
 import {
 	fakeComputeFrom,
@@ -9,6 +17,11 @@ import {
 } from '@marimo-hub/core/testing';
 import { makeTestDeps } from '../testing';
 import { connectMcpClient } from '../testing/mcp';
+
+vi.mock('@marimo-hub/core', async (importOriginal) => ({
+	...(await importOriginal<typeof Core>()),
+	bootstrapKernel: vi.fn(),
+}));
 
 const USER_ID = UserId.parse('oauth-user');
 const PRINCIPAL: AuthenticatedPrincipal = {
@@ -42,7 +55,10 @@ async function connect(
 	return connectMcpClient(deps, principal);
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.mocked(bootstrapKernel).mockReset();
+});
 
 describe('create_notebook MCP tool', () => {
 	it('does not advertise dependency metadata as an input', async () => {
@@ -87,6 +103,7 @@ describe('create_notebook MCP tool', () => {
 	});
 
 	it('creates and launches an edit session when launch is true', async () => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
 		const { instance } = makeFakeSandbox();
 		const { deps, project } = await setup({
 			compute: { ...fakeComputeFrom(instance), proxy: async () => Response.json([]) },
@@ -114,6 +131,7 @@ describe('create_notebook MCP tool', () => {
 					project_id: project.id,
 					status: 'running',
 					mode: 'edit',
+					execution: { ready: true, status: 'ready' },
 					sandbox_url: expect.any(String),
 				},
 			},
@@ -453,9 +471,12 @@ describe('stored notebook MCP tools', () => {
 
 describe('MCP session execution readiness', () => {
 	it.each([
-		{ kernels: [], ready: false, status: 'awaiting_client' },
-		{ kernels: [{ id: 'kernel-1' }], ready: true, status: 'ready' },
+		{ kernels: [], ready: false, status: 'initializing' as const },
+		{ kernels: [], ready: false, status: 'awaiting_client' as const },
+		{ kernels: [], ready: false, status: 'unavailable' as const },
+		{ kernels: [{ id: 'kernel-1' }], ready: true, status: 'ready' as const },
 	])('reports $status independently of sandbox status', async ({ kernels, ready, status }) => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status });
 		const { instance } = makeFakeSandbox();
 		const proxy = vi.fn(async () => Response.json(kernels));
 		const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
@@ -475,7 +496,11 @@ describe('MCP session execution readiness', () => {
 				execution: { ready, status, next_step: expect.any(String) },
 			},
 		});
-		expect(proxy).toHaveBeenCalledOnce();
+		expect(bootstrapKernel).toHaveBeenCalledWith(
+			instance,
+			expect.objectContaining({ inspectOnly: true }),
+		);
+		expect(proxy).not.toHaveBeenCalled();
 		const data = response.structuredContent as {
 			execution: unknown;
 			notebook_url: string;
@@ -483,7 +508,9 @@ describe('MCP session execution readiness', () => {
 		};
 		if (!ready) {
 			expect(data.execution).toMatchObject({
-				next_step: expect.stringContaining(data.notebook_url),
+				next_step: expect.stringContaining(
+					status === 'awaiting_client' ? data.notebook_url : 'start_session',
+				),
 			});
 			const execution = await client.callTool({
 				name: 'execute_code',
@@ -500,6 +527,45 @@ describe('MCP session execution readiness', () => {
 					notebook_url: data.notebook_url,
 				},
 			});
+		}
+	});
+
+	it('shares the wait deadline between polling and bootstrap', async () => {
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+			USER_ID,
+		);
+		const session = await deps.services.sessions.createSession({
+			project_id: project.id,
+			notebook_id: notebook.id,
+			user_id: USER_ID,
+			sandbox_id: SandboxId.create(),
+		});
+		const client = await connect(deps);
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
+		vi.useFakeTimers();
+		try {
+			const pending = client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, wait_seconds: 5 },
+			});
+			await vi.advanceTimersByTimeAsync(2_500);
+			await deps.services.sessions.setRunning(
+				project.id,
+				session.session_id,
+				'https://kernel.example',
+			);
+			await vi.advanceTimersByTimeAsync(1_500);
+			expect(await pending).toMatchObject({ structuredContent: { execution: { ready: true } } });
+			expect(bootstrapKernel).toHaveBeenCalledWith(
+				instance,
+				expect.objectContaining({ timeoutMs: 1_000, inspectOnly: false }),
+			);
+		} finally {
+			vi.useRealTimers();
 		}
 	});
 
@@ -541,10 +607,12 @@ describe('MCP session execution readiness', () => {
 				},
 			});
 			expect(proxy).not.toHaveBeenCalled();
+			expect(bootstrapKernel).not.toHaveBeenCalled();
 		},
 	);
 
-	it('returns created notebook and session details when the readiness probe fails', async () => {
+	it('returns created notebook and session details when bootstrap fails', async () => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'unavailable' });
 		const { instance } = makeFakeSandbox();
 		const { deps, project } = await setup({
 			compute: {
@@ -674,7 +742,8 @@ describe('stored notebook access boundaries', () => {
 		expect(await deps.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(1);
 	});
 
-	it('bounds readiness discovery and preserves the started session', async () => {
+	it('preserves the started session when bootstrap times out', async () => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'initializing' });
 		const { instance } = makeFakeSandbox();
 		let discoverySignal: AbortSignal | undefined;
 		const proxy = vi.fn(async (request: Request) => {
@@ -697,10 +766,10 @@ describe('stored notebook access boundaries', () => {
 			structuredContent: {
 				session_id: expect.any(String),
 				status: 'running',
-				execution: { ready: false, status: 'unavailable' },
+				execution: { ready: false, status: 'initializing' },
 			},
 		});
-		expect(discoverySignal?.aborted).toBe(true);
+		expect(discoverySignal).toBeUndefined();
 		expect(await deps.services.sessions.listActiveByProject(project.id)).toHaveLength(1);
 	}, 10_000);
 });

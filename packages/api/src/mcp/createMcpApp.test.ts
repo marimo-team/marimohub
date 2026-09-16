@@ -323,8 +323,9 @@ describe('MCP OAuth app', () => {
 		expect(kernelAuthorizations).toEqual([
 			`Bearer ${storedSession.kernel_auth_token}`,
 			`Bearer ${storedSession.kernel_auth_token}`,
-			`Bearer ${storedSession.kernel_auth_token}`,
 		]);
+
+		expect(calls.exec.join('\n')).not.toContain(storedSession.kernel_auth_token);
 
 		const otherClientId = await registerClient(app, 'https://other.example/callback');
 		const unrelatedRevocation = await app.request('/revoke', {

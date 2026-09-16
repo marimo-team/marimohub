@@ -255,6 +255,44 @@ describe('kernel execution', () => {
 		).rejects.toEqual(new KernelHttpError(200, 'Kernel response had no body'));
 	});
 
+	it('times out a fetch implementation that ignores cancellation', async () => {
+		vi.useFakeTimers();
+		const fetchImpl = vi.fn(() => new Promise<Response>(() => {}));
+		const pending = executeInKernel(
+			'https://kernel',
+			{ sessionId: 'one', code: 'side_effect()' },
+			{ fetchImpl, timeoutMs: 100 },
+		);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(await pending).toMatchObject({ completed: false, timedOut: true });
+		expect(fetchImpl).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it('cancels stalled output streams and retains partial output on timeout', async () => {
+		vi.useFakeTimers();
+		const cancel = vi.fn(() => new Promise<void>(() => {}));
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('event: stdout\ndata: {"data":"started"}\n\n'));
+			},
+			cancel,
+		});
+		const fetchImpl = vi.fn(
+			async () => new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }),
+		);
+		const pending = executeInKernel(
+			'https://kernel',
+			{ sessionId: 'one', code: 'side_effect()' },
+			{ fetchImpl, timeoutMs: 100 },
+		);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(await pending).toMatchObject({ completed: false, timedOut: true, stdout: 'started' });
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(body.locked).toBe(false);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it('interrupts execution when the timeout elapses', async () => {
 		vi.useFakeTimers();
 		const fetchImpl = vi.fn(

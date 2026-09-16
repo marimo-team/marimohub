@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { withAbortSignal } from '../../async';
 import type { Session } from '../../schema';
 import { kernelBasePathFromUrl } from './sandboxExposure';
 
@@ -56,7 +57,7 @@ export function kernelBaseUrl(session: Session): string {
 	return `${origin}${kernelBasePathFromUrl(session.sandbox_url)}`;
 }
 
-interface KernelRequestOptions {
+export interface KernelRequestOptions {
 	fetchImpl?: typeof fetch;
 	kernelAuthToken?: string;
 	signal?: AbortSignal;
@@ -119,7 +120,10 @@ export async function listKernelSessions(
 	});
 }
 
-export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+export async function* parseSseStream(
+	body: ReadableStream<Uint8Array>,
+	signal?: AbortSignal,
+): AsyncGenerator<SseEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
@@ -149,7 +153,7 @@ export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGe
 
 	try {
 		for (;;) {
-			const { done, value } = await reader.read();
+			const { done, value } = await withAbortSignal(reader.read(), signal);
 			buffer += decoder.decode(value, { stream: !done });
 			for (;;) {
 				const newline = buffer.search(/[\r\n]/);
@@ -176,6 +180,7 @@ export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGe
 			}
 		}
 	} finally {
+		if (signal?.aborted) void reader.cancel(signal.reason).catch(() => {});
 		reader.releaseLock();
 	}
 }
@@ -216,9 +221,9 @@ export async function executeInKernel(
 	let completed = false;
 	let success = false;
 	try {
-		const response = await (options.fetchImpl ?? globalThis.fetch)(
-			`${baseUrl}/api/kernel/execute`,
-			{
+		controller.signal.throwIfAborted();
+		const response = await withAbortSignal(
+			(options.fetchImpl ?? globalThis.fetch)(`${baseUrl}/api/kernel/execute`, {
 				method: 'POST',
 				headers: kernelRequestHeaders(
 					{
@@ -230,11 +235,12 @@ export async function executeInKernel(
 				),
 				body: JSON.stringify({ code: input.code }),
 				signal: controller.signal,
-			},
+			}),
+			controller.signal,
 		);
-		await assertKernelResponse(response, 'text/event-stream');
+		await withAbortSignal(assertKernelResponse(response, 'text/event-stream'), controller.signal);
 		if (!response.body) throw new KernelHttpError(response.status, 'Kernel response had no body');
-		for await (const message of parseSseStream(response.body)) {
+		for await (const message of parseSseStream(response.body, controller.signal)) {
 			let payload: unknown;
 			try {
 				payload = JSON.parse(message.data);
