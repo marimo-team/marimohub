@@ -645,6 +645,7 @@ export class SessionService {
 	private async scanPrefix<T>(
 		prefix: string,
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
+		invalidRecords: 'skip' | 'throw' = 'skip',
 	): Promise<Awaited<T>[]> {
 		const objects = await listAllObjects(this.bucket, prefix);
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
@@ -656,6 +657,7 @@ export class SessionService {
 			try {
 				session = await readStored(SessionSchema, body, obj.key);
 			} catch (err) {
+				if (invalidRecords === 'throw') throw err;
 				logOperationalError(
 					'stored_object_skipped',
 					{ operation: 'session.scan', object: obj.key },
@@ -691,7 +693,11 @@ export class SessionService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 	): Promise<Session[]> {
-		const sessions = await this.scanProject(projectId, (session) => session);
+		const sessions = await this.scanPrefix(
+			paths.sessionsForProject(projectId),
+			(session) => session,
+			'throw',
+		);
 		return sessions.filter(
 			(session) =>
 				session.notebook_id === notebookId &&

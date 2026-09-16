@@ -76,6 +76,20 @@ describe('SessionService', () => {
 			},
 		);
 
+		it.each(['{invalid json', JSON.stringify({ status: 'unknown' })])(
+			'fails closed on malformed safety-scan records: %s',
+			async (record) => {
+				await bucket.put(`${paths.sessionsForProject(projectId)}corrupt.json`, record);
+				await expect(
+					sessions.listEditorsBlockingSourceUpdate(projectId, notebookId),
+				).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+				expect(await sessions.listActiveByProject(projectId)).toEqual([]);
+				expect(
+					await sessions.listEditorsBlockingSourceUpdate(createProjectId(), notebookId),
+				).toEqual([]);
+			},
+		);
+
 		it('includes every persistent editor and excludes other notebooks and discard-only sessions', async () => {
 			const create = (input: Partial<Parameters<SessionService['createSession']>[0]> = {}) =>
 				sessions.createSession({

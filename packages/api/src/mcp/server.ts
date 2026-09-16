@@ -278,17 +278,17 @@ export function createMcpServer(
 	const errorResult = (tool: string, error: unknown) =>
 		toolError(error, { ...request, userId: principal.id, tool });
 
-	async function resolveAuthorizedNotebook(
-		projectRef: string,
-		notebookRef: string,
-		action: 'project.read' | 'notebook.write',
-	) {
+	async function resolveWritableNotebook(projectRef: string, notebookRef: string) {
 		const project = await resolveProject(deps, principal, projectRef);
-		if (action === 'notebook.write') {
-			await assertProjectActionOn(project, principal, action, deps);
-		}
+		await assertProjectActionOn(project, principal, 'notebook.write', deps);
 		const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-		const detail = await loadAuthorizedNotebook(deps, project, notebook.id, principal, action);
+		const detail = await loadAuthorizedNotebook(
+			deps,
+			project,
+			notebook.id,
+			principal,
+			'notebook.write',
+		);
 		return { project, notebook, detail };
 	}
 
@@ -434,20 +434,33 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef }) => {
 			try {
-				const { project, notebook, detail } = await resolveAuthorizedNotebook(
-					projectRef,
-					notebookRef,
-					'project.read',
+				const project = await resolveProject(deps, principal, projectRef);
+				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
+				// Updates publish the token before code; hold their lease across both reads.
+				return await deps.services.notebooks.workspace.withMutation(
+					project.id,
+					notebook.id,
+					{},
+					async (lease) => {
+						const detail = await loadAuthorizedNotebook(
+							deps,
+							project,
+							notebook.id,
+							principal,
+							'project.read',
+						);
+						const code = await deps.services.notebooks.getNotebookContent(project.id, notebook.id);
+						await lease.heartbeat();
+						return result({
+							notebook_id: notebook.id,
+							...toPublicNotebookMeta(detail.meta),
+							readme: detail.readme,
+							source: toPublicSource(detail.source),
+							code,
+							notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebook.id}`,
+						});
+					},
 				);
-				const code = await deps.services.notebooks.getNotebookContent(project.id, notebook.id);
-				return result({
-					notebook_id: notebook.id,
-					...toPublicNotebookMeta(detail.meta),
-					readme: detail.readme,
-					source: toPublicSource(detail.source),
-					code,
-					notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebook.id}`,
-				});
 			} catch (error) {
 				return errorResult('get_notebook', error);
 			}
@@ -474,10 +487,9 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, expected_updated_at, ...input }) => {
 			try {
-				const { project, notebook, detail } = await resolveAuthorizedNotebook(
+				const { project, notebook, detail } = await resolveWritableNotebook(
 					projectRef,
 					notebookRef,
-					'notebook.write',
 				);
 				if (
 					[input.title, input.description, input.code, input.tags, input.readme].every(
@@ -520,11 +532,7 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, expected_updated_at }) => {
 			try {
-				const { project, notebook } = await resolveAuthorizedNotebook(
-					projectRef,
-					notebookRef,
-					'notebook.write',
-				);
+				const { project, notebook } = await resolveWritableNotebook(projectRef, notebookRef);
 				await deleteNotebookAndRetire(deps, project, notebook.id, principal, expected_updated_at);
 				return result({ project_id: project.id, notebook_id: notebook.id, status: 'deleted' });
 			} catch (error) {

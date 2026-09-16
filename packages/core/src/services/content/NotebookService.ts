@@ -66,6 +66,7 @@ import type { ListFilters } from './listFilters';
 import { NotebookWorkspaceService } from './NotebookWorkspaceService';
 import { DeepLinkService } from './DeepLinkService';
 import { SessionService } from '../runtime/SessionService';
+import { nextIsoTimestamp } from '../../utcDate';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -520,7 +521,7 @@ export class NotebookService {
 					return {
 						...rest,
 						...(normalized !== undefined ? { security_labels: normalized } : {}),
-						updated_at: new Date().toISOString(),
+						updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 					};
 				},
 				{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
@@ -660,7 +661,7 @@ export class NotebookService {
 						input.compute_profile === null
 							? undefined
 							: (input.compute_profile ?? current.compute_profile),
-					updated_at: new Date().toISOString(),
+					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 				};
 			},
 			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
@@ -860,6 +861,25 @@ export class NotebookService {
 						]
 					: []),
 			]);
+
+			// Invalidate reads made before the editor's final save, including same-millisecond saves.
+			await mutateObject(
+				this.bucket,
+				nb.meta,
+				(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+				(current) => ({
+					...current,
+					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
+				}),
+				{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
+			);
+			await this.catalog.updateNotebookEntry(
+				'notebook.update',
+				actor,
+				projectId,
+				notebookId,
+				(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
+			);
 
 			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
 		} else if (htmlDescriptor || sessionDescriptor) {

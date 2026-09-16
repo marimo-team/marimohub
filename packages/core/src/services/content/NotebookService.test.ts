@@ -123,6 +123,67 @@ describe('NotebookService', () => {
 			expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(2);
 		});
 
+		it('rejects stale source tokens even when updates and editor saves share a millisecond', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			try {
+				const notebook = await notebooks.createNotebook(
+					projectId,
+					{ title: 'NB', description: '', code: 'original' },
+					ACTOR,
+				);
+				const updated = await notebooks.updateNotebook(
+					projectId,
+					notebook.id,
+					{ code: 'updated' },
+					ACTOR,
+					notebook.updated_at,
+				);
+				expect(updated.updated_at).not.toBe(notebook.updated_at);
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ code: 'stale' },
+						ACTOR,
+						notebook.updated_at,
+					),
+				).rejects.toThrow(PreconditionFailedError);
+				await notebooks.commitSession(projectId, notebook.id, { code: 'saved by editor' }, ACTOR);
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ code: 'stale' },
+						ACTOR,
+						updated.updated_at,
+					),
+				).rejects.toThrow(PreconditionFailedError);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('saved by editor');
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not mutate source or metadata when a session record is corrupt', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: '', code: 'original' },
+				ACTOR,
+			);
+			await bucket.put(`${paths.sessionsForProject(projectId)}corrupt.json`, '{invalid json');
+			await expect(
+				notebooks.updateNotebook(
+					projectId,
+					notebook.id,
+					{ code: 'replacement', title: 'Blocked' },
+					ACTOR,
+				),
+			).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+			expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
+			expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+			expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+		});
+
 		it('fails closed on session lookup errors without blocking metadata updates', async () => {
 			const notebook = await notebooks.createNotebook(
 				projectId,

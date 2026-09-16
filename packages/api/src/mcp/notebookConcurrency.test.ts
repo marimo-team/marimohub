@@ -42,16 +42,27 @@ async function setup() {
 	const client = await connectMcpClient(writer, principal, request);
 	return {
 		bucket,
+		instance,
 		writer,
 		starter,
 		project,
 		notebook,
 		stop: (session_id: string) =>
 			client.callTool({ name: 'stop_session', arguments: { project: project.id, session_id } }),
-		update: () =>
+		read: () =>
+			client.callTool({
+				name: 'get_notebook',
+				arguments: { project: project.id, notebook: notebook.id },
+			}),
+		update: (expected_updated_at?: string) =>
 			client.callTool({
 				name: 'update_notebook',
-				arguments: { project: project.id, notebook: notebook.id, code: 'replacement' },
+				arguments: {
+					project: project.id,
+					notebook: notebook.id,
+					code: 'replacement',
+					...(expected_updated_at ? { expected_updated_at } : {}),
+				},
 			}),
 		start: () =>
 			startNotebookSession({
@@ -66,6 +77,134 @@ async function setup() {
 }
 
 describe('MCP source replacement and editor admission', () => {
+	it('does not return a new update token with old code while a source write is pending', async () => {
+		const fixture = await setup();
+		const { bucket, starter, writer, project, notebook } = fixture;
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const get = bucket.get.bind(bucket);
+		let paused = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key === paths.project(project.id).notebook(notebook.id).deps && !paused) {
+				paused = true;
+				entered.resolve();
+				await release.promise;
+			}
+			return get(key);
+		});
+		const writing = starter.services.notebooks.updateNotebook(
+			project.id,
+			notebook.id,
+			{ code: 'new source' },
+			principal.id,
+		);
+		await entered.promise;
+		const readingLease = vi.spyOn(writer.services.notebooks.workspace, 'withMutation');
+		const reading = fixture.read();
+		try {
+			await vi.waitFor(() => expect(readingLease).toHaveBeenCalledOnce());
+		} finally {
+			release.resolve();
+		}
+		const updated = await writing;
+		expect(await reading).toMatchObject({
+			structuredContent: { code: 'new source', updated_at: updated.updated_at },
+		});
+	});
+
+	it('rejects a read token after another replica replaces the source', async () => {
+		const fixture = await setup();
+		const { bucket, starter, project, notebook } = fixture;
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const get = bucket.get.bind(bucket);
+		let paused = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			const object = await get(key);
+			if (key === paths.project(project.id).notebook(notebook.id).code && !paused) {
+				paused = true;
+				entered.resolve();
+				await release.promise;
+			}
+			return object;
+		});
+		const reading = fixture.read();
+		await entered.promise;
+		const writing = starter.services.notebooks.updateNotebook(
+			project.id,
+			notebook.id,
+			{ code: 'intervening source' },
+			principal.id,
+		);
+		release.resolve();
+		const read = await reading;
+		await writing;
+		expect(read).toMatchObject({ structuredContent: { code: 'original' } });
+		const token = (read.structuredContent as { updated_at: string }).updated_at;
+		expect(await fixture.update(token)).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'PRECONDITION_FAILED' },
+		});
+		expect(await starter.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
+			'intervening source',
+		);
+	});
+
+	it.each([
+		{ phase: 'before provision', cleanupFails: false },
+		{ phase: 'during provision', cleanupFails: false },
+		{ phase: 'after provision', cleanupFails: false },
+		{ phase: 'during provision', cleanupFails: true },
+		{ phase: 'after provision', cleanupFails: true },
+	])(
+		'tracks cleanup after a failure $phase (cleanup fails: $cleanupFails)',
+		async ({ phase, cleanupFails }) => {
+			const fixture = await setup();
+			const { instance, starter, notebook } = fixture;
+			const destroy = vi.spyOn(instance, 'destroy');
+			if (cleanupFails) destroy.mockRejectedValue(new Error('destroy failed'));
+			if (phase === 'before provision')
+				vi.spyOn(starter.services.sessions, 'claimEditor').mockRejectedValueOnce(
+					new Error('claim failed'),
+				);
+			if (phase === 'during provision')
+				vi.spyOn(instance, 'exec').mockRejectedValue(new Error('provision failed'));
+			if (phase === 'after provision')
+				vi.spyOn(starter.services.sessions, 'setRunning').mockRejectedValueOnce(
+					new Error('mark running failed'),
+				);
+			await expect(fixture.start()).rejects.toThrow();
+			const [session] = await starter.services.sessions.listSessions(notebook.id);
+			expect(session.status).toBe('failed');
+			expect(!!session.sandbox_reclaimed_at).toBe(!cleanupFails);
+			if (phase === 'before provision') expect(destroy).not.toHaveBeenCalled();
+			else expect(destroy).toHaveBeenCalledOnce();
+			const update = await fixture.update();
+			if (cleanupFails)
+				expect(update).toMatchObject({ isError: true, structuredContent: { code: 'CONFLICT' } });
+			else expect(update.isError).toBeFalsy();
+		},
+	);
+
+	it('keeps source blocked when cleanup succeeds but its marker cannot be stored', async () => {
+		const fixture = await setup();
+		const { instance, starter, notebook } = fixture;
+		const destroy = vi.spyOn(instance, 'destroy');
+		vi.spyOn(instance, 'exec').mockRejectedValue(new Error('provision failed'));
+		vi.spyOn(starter.services.sessions, 'markSandboxReclaimed').mockRejectedValue(
+			new Error('marker storage unavailable'),
+		);
+		await expect(fixture.start()).rejects.toThrow();
+		expect(destroy).toHaveBeenCalledOnce();
+		const [session] = await starter.services.sessions.listSessions(notebook.id);
+		expect(session.status).toBe('failed');
+		expect(session.sandbox_reclaimed_at).toBeUndefined();
+		expect(await fixture.update()).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'CONFLICT' },
+		});
+	});
+
 	it('keeps a second replica from admitting an editor during the source write', async () => {
 		const fixture = await setup();
 		const { bucket, starter, project, notebook } = fixture;

@@ -175,6 +175,8 @@ export interface SessionEnv {
 }
 
 export interface ProvisionOptions {
+	/** Called after failure cleanup confirms sandbox destruction. */
+	onSandboxDestroyed?: () => void | Promise<void>;
 	sandboxId: SandboxId;
 	projectId: ProjectId;
 	notebookId: NotebookId;
@@ -636,6 +638,7 @@ export class SandboxProvisioner {
 			// resource this method created is this method's responsibility.
 			try {
 				await sandbox.destroy();
+				await options.onSandboxDestroyed?.();
 			} catch {
 				// Best-effort: the sandbox may not have been created.
 			}
@@ -684,6 +687,7 @@ export class SandboxProvisioner {
 		} catch (err) {
 			try {
 				await sandbox.destroy();
+				await options.onSandboxDestroyed?.();
 			} catch {
 				// Best-effort: the sandbox may not have been created.
 			}
