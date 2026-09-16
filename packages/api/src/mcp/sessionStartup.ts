@@ -111,14 +111,19 @@ export async function startMcpSession(input: {
 }): Promise<Record<string, unknown>> {
 	const { deps, principal, request, project, notebookId, mode, waitSeconds, computeProfile } =
 		input;
-	const started = await startNotebookSession({
-		deps,
-		user: principal,
-		pid: project.id,
-		nid: notebookId,
-		body: { mode, compute_profile: computeProfile },
-		request,
-	});
+	request.signal?.throwIfAborted();
+	const started = await withAbortSignal(
+		startNotebookSession({
+			deps,
+			user: principal,
+			pid: project.id,
+			nid: notebookId,
+			body: { mode, compute_profile: computeProfile },
+			request,
+		}),
+		request.signal,
+	);
+	request.signal?.throwIfAborted();
 	let session = await deps.services.sessions.getSession(
 		project.id,
 		SessionId.parse(started.session_id),
@@ -130,7 +135,7 @@ export async function startMcpSession(input: {
 	let execution = lifecycleReadiness(session);
 
 	if (sessionMode(session) !== 'edit') {
-		session = await waitForSession(deps, principal, session, deadline);
+		session = await waitForSession(deps, principal, session, deadline, request.signal);
 		execution = {
 			ready: false,
 			status: 'app_mode',
@@ -178,6 +183,7 @@ export async function startMcpSession(input: {
 						return bootstrapReadiness('unavailable', notebookUrl);
 					}
 				},
+				request.signal,
 			);
 		} catch (error) {
 			failure = error;

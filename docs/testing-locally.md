@@ -178,6 +178,24 @@ MARIMO_INTEGRATION_PYTHON="$PWD/.context/marimo-test/bin/python" \
 For another runtime, replace the marimo version. Without `MARIMO_INTEGRATION_PYTHON`,
 the normal test suite skips these tests.
 
+## Thumbnail and app security tests
+
+The thumbnail tests use Chromium to render saved HTML and check that HTTP, WebSocket, and WebRTC requests cannot reach external listeners.
+Use the Python environment from the kernel integration tests:
+
+```bash
+uv pip install --python .context/marimo-test/bin/python 'playwright==1.58.0'
+.context/marimo-test/bin/python -m playwright install chromium
+MARIMOHUB_THUMBNAIL_TEST_PYTHON="$PWD/.context/marimo-test/bin/python" \
+  pnpm --filter @marimo-hub/core test src/services/runtime/thumbnailProgram.live.test.ts
+```
+
+Without `MARIMOHUB_THUMBNAIL_TEST_PYTHON`, the normal test suite skips these tests.
+CI runs both kernel and thumbnail integration tests with pinned dependencies.
+
+Run `uv run scripts/test-app-source.py` to check that app clients cannot retrieve notebook source.
+See [App source protection](./apps.md#verification) for the covered surfaces.
+
 ## Next
 
 When you are ready to deploy, go to [Getting started](./getting-started.md) to

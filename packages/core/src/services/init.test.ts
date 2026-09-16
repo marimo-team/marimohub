@@ -60,6 +60,34 @@ describe('ensureInitialized', () => {
 		expect(getSpy).not.toHaveBeenCalled();
 	});
 
+	it('skips snapshot reads for an unchanged populated catalog', async () => {
+		const bucket = new MemoryBucket();
+		await ensureInitialized(bucket, ACTOR);
+		await ensureInitialized(bucket, ACTOR);
+		const get = vi.spyOn(bucket, 'get');
+
+		await ensureInitialized(bucket, ACTOR);
+
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it('rechecks a changed catalog and initializes again after a storage reset', async () => {
+		const bucket = new MemoryBucket();
+		await ensureInitialized(bucket, ACTOR);
+		await ensureInitialized(bucket, ACTOR);
+		const services = createServices(bucket);
+		await services.projects.createProject({ name: 'Another project', description: '' }, ACTOR);
+		const get = vi.spyOn(bucket, 'get');
+
+		await ensureInitialized(bucket, ACTOR);
+		expect(get).toHaveBeenCalledWith(paths.catalog);
+		expect(await services.projects.listProjects()).toHaveLength(2);
+
+		await bucket.delete(paths.catalog);
+		await ensureInitialized(bucket, ACTOR);
+		expect(await services.projects.listProjects()).toHaveLength(1);
+	});
+
 	it("lets a later authorized user seed an app-only user's empty catalog", async () => {
 		const bucket = new MemoryBucket();
 		const appUser = UserId.parse('user_app_only');

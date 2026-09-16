@@ -672,6 +672,24 @@ describe('app access after authorization changes', () => {
 });
 
 describe('app session credential boundaries', () => {
+	it.each(['viewer', 'editor', 'manager'] as const)(
+		'requires project reads for editor-session metadata and heartbeats with an app-scoped %s token',
+		async (role) => {
+			await services.projects.updateMemberRole(pid, STAKEHOLDER, role, ACTOR);
+			const session = await expectOk<{ session_id: SessionId }>(
+				await owner.request('POST', `${base}/sessions`, { mode: 'edit' }),
+			);
+			const client = stakeholderToken({
+				projects: [pid],
+				actions: ['app.read', 'session.attach'],
+			});
+			const path = `${base}/sessions/${session.session_id}`;
+			await expectError(await client.request('GET', path), 403);
+			await expectError(await client.request('POST', `${path}/heartbeat`), 403);
+			await expectOk(await owner.request('GET', path));
+		},
+	);
+
 	it.each(['app-user', 'viewer', 'editor', 'manager'] as const)(
 		'withholds kernel URLs and metadata from app-scoped %s tokens without attach',
 		async (role) => {

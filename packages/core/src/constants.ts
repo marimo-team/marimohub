@@ -47,25 +47,9 @@ export const SOURCE_TYPES = ['local', 'git'] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
 /**
- * Project membership roles, ordered low→high privilege by `RANK` in authz.ts
- * (`viewer` < `editor` < `manager` < `admin`). Each role subsumes the ones
- * below it.
- *
- * - `app-user` — uses live apps without source or authoring access.
- * - `viewer`  — read-only: list/open projects & notebooks, read notebook code
- *   and versions. Cannot mutate anything.
- * - `editor`  — everything a viewer can, plus create/update/delete notebooks,
- *   save versions, and start/stop kernel sessions. Cannot change the project
- *   itself or its membership.
- * - `manager` — everything an editor can, plus update/delete the project and
- *   manage its members.
- * - `admin`   — reserved for project owners, deployment super admins, and
- *   grandfathered member rows. It currently has the same project capabilities
- *   as manager. A project's `owner` is implicitly `admin`.
- *
- * The deployment-wide fallback for a logged-in non-member is set by
- * `MARIMOHUB_DEFAULT_ROLE` (see authz.ts `effectiveRole`); `none` there means
- * non-members get no role and cannot even see the project.
+ * RANK in authz.ts orders role grants, not all runtime capabilities:
+ * app-user always admits apps, while viewer runtime access depends on viewer mode.
+ * Admin is reserved for owners, super admins, and legacy memberships.
  */
 export const ROLES = ['admin', 'manager', 'editor', 'viewer', 'app-user'] as const;
 export type Role = (typeof ROLES)[number];

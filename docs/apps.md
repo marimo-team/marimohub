@@ -152,6 +152,9 @@ Upgrade all replicas before assigning `app-user` or enabling its default or OIDC
 Older replicas cannot parse the new role.
 Existing memberships do not change during the upgrade.
 
+Session responses omit `user_id` for app-only callers, including app-scoped tokens without `project.read`.
+Clients must handle its absence. Authorized project readers still receive it.
+
 Before rollback, remove app-user assignments and configuration, or explicitly choose replacement roles.
 Do not automatically replace app-user with viewer: viewer grants source access.
 

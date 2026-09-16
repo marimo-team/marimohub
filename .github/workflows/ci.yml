@@ -62,12 +62,13 @@ jobs:
           python3 --version
           vp run --filter @marimo-hub/compute-fargate test:agent
 
-      - name: Test isolated thumbnail rendering
+      - name: Test marimo kernel startup and isolated thumbnail rendering
         if: matrix.suite == 'backend'
         run: |
           python3 -m venv "$RUNNER_TEMP/thumbnail-python"
           "$RUNNER_TEMP/thumbnail-python/bin/pip" install marimo==0.24.2 playwright==1.58.0
           "$RUNNER_TEMP/thumbnail-python/bin/python" -m playwright install --with-deps chromium
+          MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts --configLoader=runner --pool=threads
           MARIMOHUB_THUMBNAIL_TEST_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/thumbnailProgram.live.test.ts --configLoader=runner --pool=threads
 
       - name: Test external adapter example

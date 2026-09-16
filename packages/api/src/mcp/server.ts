@@ -57,8 +57,10 @@ export function createMcpServer(
 	request: StartRequestContext,
 ): McpServer {
 	const server = new McpServer({ name: 'marimohub', version: deps.version?.version ?? 'dev' });
-	const errorResult = (tool: string, error: unknown) =>
-		toolError(error, { ...request, userId: principal.id, tool });
+	const errorResult = (tool: string, error: unknown, signal = request.signal) =>
+		toolError(error, { ...request, signal, userId: principal.id, tool });
+	const requestSignal = (signal: AbortSignal) =>
+		request.signal ? AbortSignal.any([request.signal, signal]) : signal;
 
 	server.registerTool(
 		'list_catalog',
@@ -162,10 +164,13 @@ export function createMcpServer(
 					),
 			}),
 		},
-		async ({ project: projectRef, launch, ...notebookInput }) => {
+		async ({ project: projectRef, launch, ...notebookInput }, extra) => {
+			const signal = requestSignal(extra.signal);
 			try {
+				signal.throwIfAborted();
 				const project = await resolveProject(deps, principal, projectRef, 'notebook.write');
 				if (launch) await authorizeSessionStart(project, principal, 'edit', deps);
+				signal.throwIfAborted();
 				const notebook = await deps.services.notebooks.createNotebook(
 					project.id,
 					{
@@ -186,7 +191,7 @@ export function createMcpServer(
 				const session = await startMcpSession({
 					deps,
 					principal,
-					request,
+					request: { ...request, signal },
 					project,
 					notebookId: notebook.id,
 					mode: 'edit',
@@ -194,7 +199,7 @@ export function createMcpServer(
 				});
 				return result({ ...notebookData, launched: true, session });
 			} catch (error) {
-				return errorResult('create_notebook', error);
+				return errorResult('create_notebook', error, signal);
 			}
 		},
 	);
@@ -367,8 +372,13 @@ export function createMcpServer(
 					),
 			}),
 		},
-		async ({ project: projectRef, notebook: notebookRef, mode, compute_profile, wait_seconds }) => {
+		async (
+			{ project: projectRef, notebook: notebookRef, mode, compute_profile, wait_seconds },
+			extra,
+		) => {
+			const signal = requestSignal(extra.signal);
 			try {
+				signal.throwIfAborted();
 				const project = await resolveProject(
 					deps,
 					principal,
@@ -381,7 +391,7 @@ export function createMcpServer(
 					await startMcpSession({
 						deps,
 						principal,
-						request,
+						request: { ...request, signal },
 						project,
 						notebookId: notebook.id,
 						mode,
@@ -390,7 +400,7 @@ export function createMcpServer(
 					}),
 				);
 			} catch (error) {
-				return errorResult('start_session', error);
+				return errorResult('start_session', error, signal);
 			}
 		},
 	);
@@ -451,10 +461,12 @@ export function createMcpServer(
 				timeout_seconds: z.number().int().min(1).max(300).default(60),
 			}),
 		},
-		async (input) => {
+		async (input, extra) => {
+			const requestAbortSignal = requestSignal(extra.signal);
 			const startedAt = Date.now();
 			const deadlineAt = startedAt + input.timeout_seconds * 1000;
 			try {
+				requestAbortSignal.throwIfAborted();
 				const project = await resolveProject(deps, principal, input.project);
 				if (!SessionId.is(input.session_id)) throw new NotFoundError('Session not found');
 				const session = await deps.services.sessions.getSession(project.id, input.session_id);
@@ -475,9 +487,10 @@ export function createMcpServer(
 							startedAt,
 							appBaseUrl: request.appBaseUrl,
 						}),
+					requestAbortSignal,
 				);
 			} catch (error) {
-				return errorResult('execute_code', error);
+				return errorResult('execute_code', error, requestAbortSignal);
 			}
 		},
 	);

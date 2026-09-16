@@ -40,7 +40,7 @@ at the ingress. [Native kernel authentication](#native-kernel-authentication)
 is optional and off by default. Treat kernel URLs as sensitive.
 
 The session API exposes `sandbox_url` only to authorized editors, ephemeral
-session owners, and shared-app viewers allowed by the [viewer mode](/apps#who-can-do-what).
+session owners, app users, and shared-app viewers allowed by the [viewer mode](/apps#who-can-do-what).
 
 ### `proxy`: forwarded through the app
 
@@ -73,10 +73,9 @@ orphaned.
 
 Note the interaction with [notebook apps](/apps): the same-origin risk you
 acknowledge is that notebook-authored JS can script the control plane as
-whoever opens the kernel. `MARIMOHUB_VIEWER_MODE=applications` widens who that
-can be — from editors opening their own notebooks to any viewer opening a
-shared app someone else wrote. Combine proxy mode with viewer apps only if you
-trust every notebook author in the deployment.
+whoever opens the kernel. App-user assignments and `MARIMOHUB_VIEWER_MODE=applications`
+extend this risk to people who use apps that other authors wrote.
+If you combine proxy mode with app access, trust every notebook author in the deployment.
 
 ## Native kernel authentication
 
@@ -140,8 +139,8 @@ API key. Project configuration and bring-your-own-key providers can override it.
   server privileges — load only pinned, reviewed modules, identical on every
   replica. The host fails closed on module load errors, timeouts, exceptions,
   and out-of-contract results, and accepts only an allow/deny decision plus the
-  built-in entitlements (`project-creator` only matters under
-  `MARIMOHUB_PROJECT_CREATION=restricted`). The host keeps raw provider claims out of cookies,
+  built-in entitlements (`project-creator` permits project creation under
+  `MARIMOHUB_PROJECT_CREATION=restricted` and for app-only users). The host keeps raw provider claims out of cookies,
   storage, logs, and client errors — but the module sees every claim and could
   log or persist them itself, so require and review that policy code does
   neither. Policy sessions expire within one hour. The module
@@ -191,9 +190,10 @@ Known limits:
 - Deployment-wide sandbox storage credentials can cross project boundaries.
   Use scoped credentials (WIF) or non-persistent workspaces.
 
-Project creation is open to every authenticated user unless
-`MARIMOHUB_PROJECT_CREATION=restricted` (or `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS`)
-limits it to super admins and holders of the `project-creator` entitlement.
+Project creation is open by default, except for users with only app-user access.
+App-only users need super-admin status or the `project-creator` entitlement.
+`MARIMOHUB_PROJECT_CREATION=restricted` or `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS`
+requires these grants for everyone.
 Project reads require an effective `viewer` role, obtained through ownership,
 membership, or `MARIMOHUB_DEFAULT_ROLE`. Non-members cannot see a project when
 the default role is `none`. Notebook writes require `editor` or higher against
@@ -203,11 +203,12 @@ edit/delete always requires `manager` or higher, as does reading a project's aud
 activity. See
 [Auth → Authorization](/auth#authorization-roles).
 
-Kernel access follows the same gates. [Notebook apps](/apps) are editor-only by
-default; `MARIMOHUB_VIEWER_MODE=applications` (or `ephemeral-sandbox`) opens
-them to viewers — a deliberate trade-off, because the app kernel runs notebook
-code with the project's integration secrets and federated credentials injected. See
-[Notebook apps → Who can do what](/apps#who-can-do-what).
+Kernel access follows the same gates. App users and editors or higher roles can use
+[notebook apps](/apps). Viewers also get app access under
+`MARIMOHUB_VIEWER_MODE=applications` or `ephemeral-sandbox`.
+Apps run notebook code with the project's integration secrets and federated credentials.
+The app-user role hides source, but cannot hide data that an app displays or offers for download.
+See [Notebook apps → Who can do what](/apps#who-can-do-what).
 
 Persistent editor access also depends on the
 [editor sandbox-sharing policy](/editor-sessions).

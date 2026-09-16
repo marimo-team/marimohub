@@ -198,6 +198,117 @@ describe('create_notebook MCP tool', () => {
 });
 
 describe('session MCP tools', () => {
+	it.each(['start_session', 'create_notebook'])(
+		'cancels the %s response while sandbox readiness is pending',
+		async (name) => {
+			const controller = new AbortController();
+			const portReady = Promise.withResolvers<void>();
+			const { instance } = makeFakeSandbox();
+			const waitForPort = vi.fn(() => portReady.promise);
+			const startProcess = instance.startProcess;
+			vi.spyOn(instance, 'startProcess').mockImplementation(async (...args) => ({
+				...(await startProcess(...args)),
+				waitForPort,
+			}));
+			const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Notebook', description: '', code: '' },
+				USER_ID,
+			);
+			const heartbeat = vi.spyOn(deps.services.sessions, 'heartbeat');
+			const client = await connectMcpClient(deps, PRINCIPAL, {
+				method: 'POST',
+				path: '/mcp',
+				hostname: 'hub.example.com',
+				appBaseUrl: 'https://hub.example.com',
+				signal: controller.signal,
+			});
+			vi.useFakeTimers();
+			let response: unknown;
+			const pending = client
+				.callTool({
+					name,
+					arguments: {
+						project: project.id,
+						notebook: notebook.id,
+						title: 'Launched',
+						code: '',
+						launch: true,
+					},
+				})
+				.then((result) => {
+					response = result;
+				});
+			try {
+				await vi.advanceTimersByTimeAsync(0);
+				expect(waitForPort).toHaveBeenCalledOnce();
+				controller.abort();
+				await vi.advanceTimersByTimeAsync(0);
+				expect(response).toMatchObject({
+					isError: true,
+					structuredContent: { code: 'REQUEST_CANCELLED' },
+				});
+			} finally {
+				portReady.resolve();
+				await vi.advanceTimersByTimeAsync(0);
+				await pending;
+				vi.useRealTimers();
+			}
+			expect(bootstrapKernel).not.toHaveBeenCalled();
+			expect(heartbeat).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['start_session', 'create_notebook'])(
+		'aborts kernel bootstrap when the %s caller disconnects',
+		async (name) => {
+			const controller = new AbortController();
+			const { instance } = makeFakeSandbox();
+			const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Notebook', description: '', code: '' },
+				USER_ID,
+			);
+			const heartbeat = vi.spyOn(deps.services.sessions, 'heartbeat');
+			vi.mocked(bootstrapKernel).mockImplementation(() => new Promise(() => {}));
+			const client = await connectMcpClient(deps, PRINCIPAL, {
+				method: 'POST',
+				path: '/mcp',
+				hostname: 'hub.example.com',
+				appBaseUrl: 'https://hub.example.com',
+				signal: controller.signal,
+			});
+			vi.useFakeTimers();
+			try {
+				const pending = client.callTool({
+					name,
+					arguments: {
+						project: project.id,
+						notebook: notebook.id,
+						title: 'Launched',
+						code: '',
+						launch: true,
+					},
+				});
+				await vi.advanceTimersByTimeAsync(0);
+				expect(bootstrapKernel).toHaveBeenCalledOnce();
+				const heartbeats = heartbeat.mock.calls.length;
+				controller.abort();
+				expect(await pending).toMatchObject({
+					isError: true,
+					structuredContent: { code: 'REQUEST_CANCELLED' },
+				});
+				expect(vi.mocked(bootstrapKernel).mock.calls[0][1].signal?.aborted).toBe(true);
+				await vi.advanceTimersByTimeAsync(60_000);
+				expect(heartbeat).toHaveBeenCalledTimes(heartbeats);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
 	it('starts and idempotently stops a session', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const { deps, project } = await setup({

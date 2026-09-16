@@ -66,6 +66,7 @@ After deployment:
 ## Authorization roles
 
 Roles apply per project and rank `app-user` < `viewer` < `editor` < `manager` < `admin`.
+This rank selects role grants. Runtime permissions differ: app users can always use apps, while viewer access depends on viewer mode.
 Project owners and [super admins](#super-admins-marimohub_super_admins) are `admin`.
 Members can receive any role up to `manager`; existing admin memberships remain valid.
 
