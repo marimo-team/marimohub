@@ -3,6 +3,7 @@ import { ConflictError, NotFoundError, PreconditionFailedError } from '../../err
 import { createJobId, createRunId, createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
@@ -216,6 +217,107 @@ describe('ProjectService', () => {
 				);
 			},
 		);
+
+		describe.each(['id', 'email'] as const)('stale %s membership projection', (kind) => {
+			it.each([
+				{ role: 'app-user', defaultRole: 'manager', visible: false, appOnly: true },
+				{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: false },
+				{ role: 'editor', defaultRole: null, visible: true, appOnly: false },
+			] as const)(
+				'uses the committed $role membership when default is $defaultRole',
+				async ({ role, defaultRole, visible, appOnly }) => {
+					const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+					vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
+						new Error('projection failed'),
+					);
+					await expect(
+						projects.addMember(
+							project.id,
+							kind === 'id' ? { user_id: STRANGER.id } : { email: STRANGER.email },
+							role,
+							ACTOR,
+						),
+					).rejects.toThrow('projection failed');
+					const [entry] = (await catalog.getCurrentSnapshot()).projects;
+					expect(entry.member_ids).not.toContain(STRANGER.id);
+					expect(entry.member_emails).not.toContain(STRANGER.email);
+					const policy = { defaultRole };
+
+					expect(
+						(await projects.listProjects({ subject: STRANGER, policy })).map((p) => p.id),
+					).toEqual(visible ? [project.id] : []);
+					expect(await projects.isAppOnly(STRANGER, policy)).toBe(appOnly);
+					expect(
+						await projects.listProjects({ subject: STRANGER, policy, action: 'app.read' }),
+					).toHaveLength(1);
+				},
+			);
+		});
+
+		it('reuses one project read for role, legacy tags, and legacy labels within a listing', async () => {
+			const project = await projects.createProject(
+				{ name: 'P', description: '', tags: ['team'] },
+				ACTOR,
+			);
+			await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({
+				tags: undefined,
+				security_labels: undefined,
+			}));
+			const get = vi.spyOn(bucket, 'get');
+			expect(
+				await projects.listProjects({
+					subject: STRANGER,
+					policy: { defaultRole: 'viewer' },
+					tag: 'team',
+				}),
+			).toHaveLength(1);
+			expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+				1,
+			);
+		});
+
+		it('does not cache roles across listing or account requests', async () => {
+			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+			await projects.addMember(project.id, { user_id: STRANGER.id }, 'viewer', ACTOR);
+			expect(await projects.listProjects({ subject: STRANGER })).toHaveLength(1);
+			expect(await projects.isAppOnly(STRANGER)).toBe(false);
+
+			await projects.updateMemberRole(project.id, STRANGER.id, 'app-user', ACTOR);
+			expect(await projects.listProjects({ subject: STRANGER })).toEqual([]);
+			expect(await projects.isAppOnly(STRANGER)).toBe(true);
+
+			await projects.removeMember(project.id, STRANGER.id, ACTOR);
+			expect(await projects.listProjects({ subject: STRANGER, action: 'app.read' })).toEqual([]);
+			expect(await projects.isAppOnly(STRANGER)).toBe(false);
+		});
+
+		it('ignores a missing project head but propagates storage failures', async () => {
+			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+			await projects.addMember(project.id, { user_id: STRANGER.id }, 'viewer', ACTOR);
+			const read = vi.spyOn(projects, 'getProject');
+			read.mockRejectedValueOnce(new Error('storage unavailable'));
+			await expect(projects.listProjects({ subject: STRANGER })).rejects.toThrow(
+				'storage unavailable',
+			);
+			read.mockRestore();
+			await bucket.delete(paths.project(project.id).meta);
+
+			expect(
+				await projects.listProjects({ subject: STRANGER, policy: { defaultRole: 'manager' } }),
+			).toEqual([]);
+			expect(await projects.isAppOnly(STRANGER)).toBe(false);
+		});
+
+		it('stops scanning account roles after finding viewer access', async () => {
+			for (let index = 0; index <= BUCKET_SCAN_CONCURRENCY; index++) {
+				await projects.createProject({ name: `Project ${index}`, description: '' }, ACTOR);
+			}
+			const get = vi.spyOn(bucket, 'get');
+			expect(await projects.isAppOnly(STRANGER, { defaultRole: 'viewer' })).toBe(false);
+			expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(
+				BUCKET_SCAN_CONCURRENCY,
+			);
+		});
 
 		it('lists an explicitly-requested deleted project through the legacy fallback too', async () => {
 			const current = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);

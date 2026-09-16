@@ -9,7 +9,7 @@ import type {
 	AuthorizationSubject,
 	ResourceSecurityPolicy,
 } from '../authorization/AuthorizationService';
-import { emailsEqual, memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
+import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
@@ -233,6 +233,15 @@ export class ProjectService {
 		if (filter && authz && !authz.credentialAllowsAction(filter.subject, action)) {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
+		const loaded = new Map<ProjectId, Promise<Project>>();
+		const loadProject = (id: ProjectId): Promise<Project> => {
+			let project = loaded.get(id);
+			if (!project) {
+				project = this.getProject(id);
+				loaded.set(id, project);
+			}
+			return project;
+		};
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		let matching = snapshot.projects.filter(
 			createListFilter<SnapshotProjectEntry>(
@@ -247,19 +256,16 @@ export class ProjectService {
 				matching,
 				BUCKET_SCAN_CONCURRENCY,
 				async (project) =>
-					project.tags?.includes(tag) ?? (await this.getProject(project.id)).tags.includes(tag),
+					project.tags?.includes(tag) ?? (await loadProject(project.id)).tags.includes(tag),
 			);
 			matching = matching.filter((_, index) => tagMatches[index]);
 		}
 		if (!filter || !authz) return matching.map(toPublicProjectEntry);
-		// Visibility routes through the authorization service so listings and
-		// direct reads cannot drift. Both filters run BEFORE pagination (the
-		// caller pages the returned entries), so a hidden project never leaks
-		// through page counts or cursors.
+		// Filter before pagination so hidden projects cannot affect counts or cursors.
 		const admitted = await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (entry) => {
 			const grant = 'credential' in filter.subject ? filter.subject.credential.grant : undefined;
 			if (!tokenGrantAllowsProject(grant, entry.id)) return false;
-			const role = await this.entryRole(entry, filter.subject, filter.policy);
+			const role = await this.entryRole(entry, { ...filter, loadProject });
 			return roleAtLeast(role, projectActionMinRole(action));
 		});
 		const visible = matching.filter((_, index) => admitted[index]);
@@ -268,7 +274,7 @@ export class ProjectService {
 				authz,
 				filter.subject,
 				visible,
-				async (entry) => (await this.getProject(entry.id)).security_labels ?? null,
+				async (entry) => (await loadProject(entry.id)).security_labels ?? null,
 				action,
 			)
 		).map(toPublicProjectEntry);
@@ -276,22 +282,25 @@ export class ProjectService {
 
 	private async entryRole(
 		entry: SnapshotProjectEntry,
-		subject: AuthorizationSubject,
-		policy?: AuthorizationPolicy,
+		{
+			subject,
+			policy,
+			loadProject = (id: ProjectId) => this.getProject(id),
+		}: {
+			subject: AuthorizationSubject;
+			policy?: AuthorizationPolicy;
+			loadProject?: (id: ProjectId) => Promise<Project>;
+		},
 	): Promise<Role | null> {
 		if (isSuperAdmin(subject, policy?.superAdmins) || entry.owner === subject.id) return 'admin';
-		// Catalog memberships omit roles. Explicit members must resolve against the head,
-		// since an app-user assignment can restrict a more permissive default.
-		// Missing projections are unknown, not empty.
-		if (
-			entry.member_ids === undefined ||
-			entry.member_emails === undefined ||
-			entry.member_ids.includes(subject.id) ||
-			entry.member_emails.some((email) => emailsEqual(email, subject.email))
-		) {
-			return effectiveRole(await this.getProject(entry.id), subject, policy);
+		// A roster projection can lag a committed membership change. Even a miss
+		// cannot prove that a more restrictive explicit membership is absent.
+		try {
+			return effectiveRole(await loadProject(entry.id), subject, policy);
+		} catch (error) {
+			if (error instanceof NotFoundError) return null;
+			throw error;
 		}
-		return subjectDefaultRole(subject, policy);
 	}
 
 	async isAppOnly(subject: AuthorizationSubject, policy?: AuthorizationPolicy): Promise<boolean> {
@@ -299,15 +308,19 @@ export class ProjectService {
 		const fallback = subjectDefaultRole(subject, policy);
 		if (!(await this.bucket.head(paths.catalog))) return fallback === 'app-user';
 		const snapshot = await this.catalog.getCurrentSnapshot();
-		const roles = await mapWithConcurrency(
-			snapshot.projects.filter((entry) => entry.status !== 'deleted'),
-			BUCKET_SCAN_CONCURRENCY,
-			(entry) => this.entryRole(entry, subject, policy),
-		);
-		return (
-			!roles.some((role) => roleAtLeast(role, 'viewer')) &&
-			(fallback === 'app-user' || roles.includes('app-user'))
-		);
+		const active = snapshot.projects.filter((entry) => entry.status !== 'deleted');
+		if (active.some((entry) => entry.owner === subject.id)) return false;
+		let hasAppRole = fallback === 'app-user';
+		for (let offset = 0; offset < active.length; offset += BUCKET_SCAN_CONCURRENCY) {
+			const roles = await mapWithConcurrency(
+				active.slice(offset, offset + BUCKET_SCAN_CONCURRENCY),
+				BUCKET_SCAN_CONCURRENCY,
+				(entry) => this.entryRole(entry, { subject, policy }),
+			);
+			if (roles.some((role) => roleAtLeast(role, 'viewer'))) return false;
+			hasAppRole ||= roles.includes('app-user');
+		}
+		return hasAppRole;
 	}
 
 	async getProject(id: ProjectId): Promise<Project> {

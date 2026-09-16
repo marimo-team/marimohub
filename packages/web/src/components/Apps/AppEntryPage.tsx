@@ -1,7 +1,8 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
-import { useCapabilitiesQuery } from '@/api/hooks';
+import { projectQueryOptions, useCapabilitiesQuery, useUserQuery } from '@/api/hooks';
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { NotebookFrame } from '@/components/NotebookPage/NotebookFrame';
 import { Button } from '@/components/ui';
@@ -24,7 +25,8 @@ export function AppEntryPage({
 	const nid = target?.notebookId ?? params.nid ?? '';
 	const location = useLocation();
 	const query = useAppQuery(pid, nid);
-	if (query.isError) return <AppAccessError error={query.error} />;
+	if (query.isError)
+		return <NotebookFallback pid={pid} nid={nid} variant={variant} error={query.error} />;
 	if (!query.data) return <p className="p-6">Opening app…</p>;
 	if (query.data.your_role !== 'app-user')
 		return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
@@ -38,6 +40,39 @@ export function AppEntryPage({
 			canRun={query.data.can.run}
 		/>
 	);
+}
+
+function NotebookFallback({
+	pid,
+	nid,
+	variant,
+	error,
+}: {
+	pid: string;
+	nid: string;
+	variant: 'app' | 'edit';
+	error: Error;
+}) {
+	const user = useUserQuery();
+	const project = useQuery({
+		...projectQueryOptions(pid),
+		enabled: !!user.data && !user.data.app_only,
+		retry: false,
+	});
+	if (
+		user.isPending ||
+		(user.data && !user.data.app_only && !project.isFetchedAfterMount && project.isFetching)
+	)
+		return <p className="p-6">Opening notebook…</p>;
+	if (
+		user.isError ||
+		user.data?.app_only ||
+		project.isError ||
+		!project.data?.your_role ||
+		project.data.your_role === 'app-user'
+	)
+		return <AppAccessError error={error} />;
+	return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
 }
 
 function StakeholderApp({

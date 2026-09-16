@@ -2716,6 +2716,7 @@ export interface components {
 			source: 'stored' | 'synthetic';
 			/** @enum {string} */
 			kind: 'deployment' | 'project' | 'session' | 'session-start';
+			/** @description Whether the subject has only app-user access. Valid only for deployment resources. */
 			app_only?: boolean;
 			project_id?: string;
 			notebook_id?: string;
@@ -3098,7 +3099,7 @@ export interface components {
 			session_id: string;
 			notebook_id: string;
 			project_id: string;
-			user_id: string;
+			user_id?: string;
 			/** @enum {string} */
 			status: 'starting' | 'running' | 'terminating' | 'terminated' | 'failed' | 'expired';
 			sandbox_url?: string;

@@ -47,7 +47,6 @@ function SessionDetails({
 }) {
 	const now = useNow();
 	const { data: users } = useUsersQuery([session.user_id]);
-	const user = users?.[session.user_id];
 	const showDuration = session.status === 'running';
 	const selectedProfile =
 		profiles.find((profile) => profile.name === selectedProfileName) ?? profiles[0];
@@ -57,14 +56,18 @@ function SessionDetails({
 		<div className="flex min-w-[12rem] flex-col gap-2 text-xs">
 			<div className="font-medium text-foreground">{label}</div>
 			<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted-foreground">
-				<dt>Started by</dt>
-				<dd className="min-w-0">
-					<UserLabel
-						user={user}
-						fallbackId={session.user_id}
-						className="block max-w-[10rem] text-foreground"
-					/>
-				</dd>
+				{session.user_id && (
+					<>
+						<dt>Started by</dt>
+						<dd className="min-w-0">
+							<UserLabel
+								user={users?.[session.user_id]}
+								fallbackId={session.user_id}
+								className="block max-w-[10rem] text-foreground"
+							/>
+						</dd>
+					</>
+				)}
 				<dt>Started</dt>
 				<dd className="text-foreground">{formatRelative(session.started_at, now)}</dd>
 				{compute.runningLabel && (

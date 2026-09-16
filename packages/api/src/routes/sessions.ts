@@ -453,7 +453,7 @@ export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof ses
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
 		project_id: s.project_id,
-		user_id: s.user_id,
+		user_id: appUser ? undefined : s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
 		can: {

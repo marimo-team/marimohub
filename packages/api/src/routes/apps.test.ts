@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
 	VIEWER_MODES,
@@ -305,6 +305,78 @@ describe('app-user boundaries', () => {
 		await services.projects.setSecurityLabels(pid, labels, ACTOR);
 		expect(await expectPage(await restricted.request('GET', '/apps'))).toEqual([]);
 		await expectError(await restricted.request('GET', `${base}/app`), 404);
+	});
+
+	it('computes run permission with action-specific notebook constraints', async () => {
+		const labels = { classification: 'SECRET', compartments: ['finance'] };
+		await services.notebooks.setSecurityLabels(pid, nid, labels, ACTOR);
+		const security = localResourceSecurity(['SECRET'], makeSubjectContext());
+		const evaluate = vi
+			.spyOn(security.constraints, 'evaluate')
+			.mockImplementation(async (_context, action) =>
+				action === 'session.start'
+					? { satisfied: false, reason: 'constraint' }
+					: { satisfied: true },
+			);
+		vi.spyOn(security.constraints, 'evaluateMany').mockImplementation(
+			async (_context, _action, resources) => resources.map(() => ({ satisfied: true })),
+		);
+		const client = createTestApi({
+			bucket: api.bucket,
+			userId: STAKEHOLDER,
+			deps: { resourceSecurity: security },
+		});
+		expect(await expectPage(await client.request('GET', '/apps'))).toEqual([
+			expect.objectContaining({ notebook_id: nid, can: { run: false } }),
+		]);
+		expect(await expectOk(await client.request('GET', `${base}/app`))).toMatchObject({
+			can: { run: false },
+		});
+		expect(evaluate).toHaveBeenCalledWith(
+			expect.anything(),
+			'session.start',
+			{ labels },
+			expect.any(AbortSignal),
+		);
+		await expectError(await client.request('POST', `${base}/sessions`, { mode: 'app' }), 404);
+		expect(await services.sessions.listSessions(nid)).toEqual([]);
+	});
+
+	it.each(['deleted', 'revoked'] as const)(
+		'skips a project %s after the gallery catalog read',
+		async (change) => {
+			const other = await services.projects.createProject(
+				{ name: 'Still visible', description: '' },
+				ACTOR,
+			);
+			await services.projects.addMember(other.id, { user_id: STAKEHOLDER }, 'app-user', ACTOR);
+			const notebook = await services.notebooks.createNotebook(
+				other.id,
+				{ title: 'Available', description: '', code: 'pass' },
+				ACTOR,
+			);
+			const listProjects = api.deps.services.projects.listProjects.bind(api.deps.services.projects);
+			vi.spyOn(api.deps.services.projects, 'listProjects').mockImplementationOnce(
+				async (filter) => {
+					const projects = await listProjects(filter);
+					if (change === 'deleted') await services.projects.deleteProject(pid, ACTOR);
+					else await services.projects.removeMember(pid, STAKEHOLDER, ACTOR);
+					return projects;
+				},
+			);
+			const page = await expectOk<{ items: { notebook_id: string }[]; next_cursor: null }>(
+				await api.request('GET', '/apps'),
+			);
+			expect(page.items).toEqual([expect.objectContaining({ notebook_id: notebook.id })]);
+			expect(page.next_cursor).toBeNull();
+		},
+	);
+
+	it('does not suppress unexpected project load errors in the gallery', async () => {
+		vi.spyOn(api.deps.services.notebooks, 'listNotebooks').mockRejectedValueOnce(
+			new Error('Storage unavailable'),
+		);
+		await expectError(await api.request('GET', '/apps'), 500);
 	});
 
 	it('enforces token action and project scopes without widening stored grants', async () => {
@@ -616,6 +688,7 @@ describe('app session credential boundaries', () => {
 		);
 		expect(session).toMatchObject({ can: { attach: false, stop: false } });
 		for (const field of [
+			'user_id',
 			'sandbox_url',
 			'source_version_id',
 			'compute_profile',
@@ -691,6 +764,7 @@ describe('app session credential boundaries', () => {
 		const author = await expectOk(
 			await owner.request('GET', `${base}/sessions/${session.session_id}`),
 		);
+		expect(author).toHaveProperty('user_id', ACTOR);
 		expect(author).toHaveProperty('source_version_id');
 		expect(author).toHaveProperty('compute_profile', 'private-profile');
 		expect(author).toHaveProperty('surfaces');
@@ -705,6 +779,7 @@ describe('app session credential boundaries', () => {
 				sandbox_url: 'https://app.example.com/',
 			});
 			for (const field of [
+				'user_id',
 				'source_version_id',
 				'compute_profile',
 				'compute_resources',

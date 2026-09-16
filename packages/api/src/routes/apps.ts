@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
-	canStartSessionMode,
+	NotFoundError,
 	ProjectId,
 	ROLES,
 	mapWithConcurrency,
@@ -18,7 +18,7 @@ import {
 } from '../shared';
 import { PaginationQuery, paginate, pageSchema } from '../pagination';
 import type { ApiDeps } from '../context';
-import type { AuthUser, Project, NotebookId } from '@marimo-hub/core';
+import type { AuthUser, Project, NotebookId, ResourceSecurityLabels } from '@marimo-hub/core';
 
 const AppProjectSchema = z.object({
 	id: z.string(),
@@ -38,13 +38,19 @@ const AppSummarySchema = z
 	})
 	.openapi('NotebookApp');
 
-function summary(
+async function summary(
 	deps: ApiDeps,
 	user: AuthUser,
 	project: Project,
 	notebook: { id: NotebookId; title: string },
+	notebookLabels: ResourceSecurityLabels | null,
 ) {
-	const role = authorizationService(deps).role(user, project);
+	const { role, allowed } = await authorizationService(deps).authorize(user, 'session.start', {
+		kind: 'session-start',
+		project,
+		mode: 'app',
+		notebookLabels,
+	});
 	return {
 		project_id: project.id,
 		project_name: project.name,
@@ -52,11 +58,7 @@ function summary(
 		title: notebook.title,
 		url: `/projects/${project.id}/notebooks/${notebook.id}/app`,
 		your_role: role,
-		can: {
-			run:
-				canStartSessionMode({ role, viewerMode: deps.policy.viewerMode }, 'app') &&
-				authorizationService(deps).credentialAllowsAction(user, 'session.start'),
-		},
+		can: { run: allowed },
 	};
 }
 
@@ -106,22 +108,34 @@ app.openapi(
 			projects.filter((p) => !query.project_id || p.id === query.project_id),
 			BUCKET_SCAN_CONCURRENCY,
 			async (entry) => {
-				const project = await loadAppProject(deps.services.projects, entry.id, user, deps);
-				const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
-					subject: user,
-					policy: deps.policy,
-					resourceSecurity: deps.resourceSecurity,
-					action: 'app.read',
-				});
-				return notebooks
-					.filter(
+				try {
+					const project = await loadAppProject(deps.services.projects, entry.id, user, deps);
+					const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
+						subject: user,
+						policy: deps.policy,
+						resourceSecurity: deps.resourceSecurity,
+						action: 'app.read',
+					});
+					const matching = notebooks.filter(
 						(notebook) =>
 							!query.q ||
 							`${project.name} ${notebook.title}`
 								.toLocaleLowerCase()
 								.includes(query.q.toLocaleLowerCase()),
-					)
-					.map((notebook) => summary(deps, user, project, notebook));
+					);
+					return await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (notebook) =>
+						summary(
+							deps,
+							user,
+							project,
+							notebook,
+							await deps.services.notebooks.getSecurityLabels(project.id, notebook.id),
+						),
+					);
+				} catch (error) {
+					if (error instanceof NotFoundError) return [];
+					throw error;
+				}
 			},
 		);
 		return c.json(
@@ -168,7 +182,13 @@ app.openapi(
 		const { pid, nid } = c.req.valid('param');
 		const project = await loadAppProject(deps.services.projects, pid, user, deps);
 		const { meta } = await loadAuthorizedNotebook(deps, project, nid, user, 'app.read');
-		return c.json({ success: true as const, data: summary(deps, user, project, meta) }, 200);
+		return c.json(
+			{
+				success: true as const,
+				data: await summary(deps, user, project, meta, meta.security_labels ?? null),
+			},
+			200,
+		);
 	},
 );
 export default app;

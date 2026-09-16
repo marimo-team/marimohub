@@ -174,10 +174,21 @@ describe('AuthorizationService: project actions', () => {
 	});
 
 	it.each(PROJECT_ACTIONS)(
-		'does not let broad token or default grants elevate an app user for %s',
+		'does not let broad tokens or a manager default override explicit app-user membership for %s',
 		async (action) => {
 			const authz = service({ defaultRole: 'manager' });
 			const principal = pat(APP_USER, { actions: [...AUTHORIZATION_ACTIONS], projects: '*' });
+			const decision = await authz.authorize(principal, action, onProject());
+			expect(decision.allowed).toBe(action === 'app.read');
+			expect(decision.role).toBe('app-user');
+		},
+	);
+
+	it.each(PROJECT_ACTIONS)(
+		'bounds an app-user default with broad token grants for %s',
+		async (action) => {
+			const authz = service({ defaultRole: 'app-user' });
+			const principal = pat(STRANGER, { actions: [...AUTHORIZATION_ACTIONS], projects: '*' });
 			const decision = await authz.authorize(principal, action, onProject());
 			expect(decision.allowed).toBe(action === 'app.read');
 			expect(decision.role).toBe('app-user');

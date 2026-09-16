@@ -3,6 +3,7 @@ import {
 	useQuery,
 	useSuspenseQuery,
 	useMutation,
+	queryOptions,
 	keepPreviousData,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
@@ -392,8 +393,8 @@ export function useProjectsQuery(
 	});
 }
 
-export function useProjectQuery(projectId: string) {
-	return useSuspenseQuery({
+export function projectQueryOptions(projectId: string) {
+	return queryOptions({
 		queryKey: projectKeys.detail(projectId),
 		// Full project meta (incl. `federation`), not the snapshot summary the list returns.
 		queryFn: () =>
@@ -403,6 +404,10 @@ export function useProjectQuery(projectId: string) {
 				}),
 			),
 	});
+}
+
+export function useProjectQuery(projectId: string) {
+	return useSuspenseQuery(projectQueryOptions(projectId));
 }
 
 export function useCreateProject() {

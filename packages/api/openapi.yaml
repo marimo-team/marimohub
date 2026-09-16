@@ -1779,6 +1779,8 @@ components:
             - session-start
         app_only:
           type: boolean
+          description: Whether the subject has only app-user access. Valid only for
+            deployment resources.
         project_id:
           type: string
         notebook_id:
@@ -2721,7 +2723,6 @@ components:
         - session_id
         - notebook_id
         - project_id
-        - user_id
         - status
         - started_at
         - last_heartbeat

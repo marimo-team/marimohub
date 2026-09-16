@@ -59,6 +59,14 @@ afterEach(() => {
 });
 
 describe('SessionStatusDot', () => {
+	it('omits attribution and user lookup when the session starter is redacted', async () => {
+		renderDot({ ...makeSession('running'), user_id: undefined });
+		await userEvent.click(screen.getByRole('button'));
+		expect(await screen.findByText('Started')).toBeVisible();
+		expect(screen.queryByText('Started by')).toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it('renders a green Running dot', () => {
 		renderDot(makeSession('running'));
 		expect(dot()).toHaveClass('bg-green-500');

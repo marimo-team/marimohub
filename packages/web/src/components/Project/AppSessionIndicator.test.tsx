@@ -120,6 +120,16 @@ afterEach(() => {
 });
 
 describe('AppSessionIndicator', () => {
+	it('omits attribution and user lookup when the session starter is redacted', async () => {
+		renderIndicator(makeAppSession({ user_id: undefined }));
+		await userEvent.click(screen.getByRole('button'));
+		expect(await screen.findByText('Started')).toBeVisible();
+		expect(screen.queryByText('Started by')).toBeNull();
+		expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/users'))).toBe(
+			false,
+		);
+	});
+
 	it('renders nothing for a terminal session', () => {
 		const { container } = renderIndicator(makeAppSession({ status: 'terminated' }));
 		expect(container.firstChild).toBeNull();

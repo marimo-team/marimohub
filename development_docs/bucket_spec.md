@@ -1336,10 +1336,10 @@ See the [role matrix](../docs/auth.md#authorization-roles) and [app restrictions
 Normal reads mask inaccessible or soft-deleted resources as `404`; insufficient write permissions return `403 FORBIDDEN`.
 Security labels and credential scopes can further restrict access.
 
-Catalog entries carry `member_ids` and `member_emails`, refreshed through the same CAS as membership edits.
-These fields identify candidate memberships but contain no roles.
-Listings load `project.json` for matching members, since an explicit app-user membership can restrict a more permissive default.
-Legacy entries without membership projections also require that load.
+Catalog entries carry `member_ids` and `member_emails`, but no roles.
+These projections can lag committed membership changes.
+Listings resolve membership from `project.json`; a stale roster cannot prove that a restrictive membership is absent.
+Each listing reuses project reads across role, tag, and label checks.
 Roles, credential scopes, and labels are filtered before pagination and totals.
 This preserves the catalog snapshot model (§7.1) without a separate per-user index.
 

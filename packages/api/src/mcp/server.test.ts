@@ -36,7 +36,9 @@ describe('MCP tool boundaries', () => {
 	it('permits stakeholder app launches without exposing authoring tools', async () => {
 		const bucket = new MemoryBucket();
 		await new CatalogService(bucket).initialize(ACTOR);
-		const deps = makeTestDeps(bucket, { compute: makeFakeCompute() });
+		const compute = makeFakeCompute();
+		const proxy = vi.spyOn(compute, 'proxy');
+		const deps = makeTestDeps(bucket, { compute });
 		const project = await deps.services.projects.createProject(
 			{ name: 'Apps', description: '' },
 			ACTOR,
@@ -97,13 +99,71 @@ describe('MCP tool boundaries', () => {
 			]) {
 				const response = await client.callTool(tool);
 				expect(response.isError).toBe(true);
-				expect(JSON.stringify(response)).not.toContain('SOURCE_ONLY_SENTINEL');
+				expect(proxy).not.toHaveBeenCalled();
 			}
 		} finally {
 			await client.close();
 			await server.close();
 		}
 	});
+
+	it.each([false, true])(
+		'never reaches a prior editor kernel after an app-user downgrade (ephemeral: %s)',
+		async (ephemeral) => {
+			const bucket = new MemoryBucket();
+			await new CatalogService(bucket).initialize(ACTOR);
+			const compute = makeFakeCompute();
+			const proxy = vi.spyOn(compute, 'proxy');
+			const deps = makeTestDeps(bucket, { compute });
+			const project = await deps.services.projects.createProject(
+				{ name: 'Project', description: '' },
+				ACTOR,
+			);
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{
+					title: 'Notebook',
+					description: '',
+					code: 'print("private")',
+				},
+				ACTOR,
+			);
+			await deps.services.projects.addMember(
+				project.id,
+				{ user_id: PRINCIPAL.id },
+				'editor',
+				ACTOR,
+			);
+			const session = await deps.services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: PRINCIPAL.id,
+				ephemeral,
+			});
+			await deps.services.sessions.setRunning(
+				project.id,
+				session.session_id,
+				'https://kernel.example',
+			);
+			await deps.services.projects.updateMemberRole(project.id, PRINCIPAL.id, 'app-user', ACTOR);
+			const { client, server } = await connect(deps);
+			try {
+				const response = await client.callTool({
+					name: 'execute_code',
+					arguments: {
+						project: project.id,
+						session_id: session.session_id,
+						code: 'print(open("notebook.py").read())',
+					},
+				});
+				expect(response.isError).toBe(true);
+				expect(proxy).not.toHaveBeenCalled();
+			} finally {
+				await client.close();
+				await server.close();
+			}
+		},
+	);
 
 	it('publishes a project-scoped session selector for execute_code', async () => {
 		const { client, server } = await connect(makeTestDeps(new MemoryBucket()));

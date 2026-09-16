@@ -89,7 +89,12 @@ const AnalysisResourceSchema = z
 	.strictObject({
 		source: z.enum(['stored', 'synthetic']),
 		kind: z.enum(['deployment', 'project', 'session', 'session-start']),
-		app_only: z.boolean().optional(),
+		app_only: z
+			.boolean()
+			.optional()
+			.describe(
+				'Whether the subject has only app-user access. Valid only for deployment resources.',
+			),
 		project_id: z.string().optional(),
 		notebook_id: z.string().optional(),
 		session_id: z.string().optional(),
@@ -104,6 +109,10 @@ const AnalysisResourceSchema = z
 			})
 			.optional(),
 		mode: z.enum(SESSION_MODES).optional(),
+	})
+	.refine((resource) => resource.app_only === undefined || resource.kind === 'deployment', {
+		message: 'app_only is only valid for deployment resources.',
+		path: ['app_only'],
 	})
 	.openapi('PolicyAuthorizationResourceV1');
 

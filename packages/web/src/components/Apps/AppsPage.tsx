@@ -3,6 +3,7 @@ import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAppsQuery } from '@/api/apps';
 import { Project } from '@/components/Project/Project';
 import { Button } from '@/components/ui';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 export function AppAccessError({ error }: { error: Error }) {
 	return (
@@ -29,7 +30,8 @@ export function ProjectEntryPage() {
 export function AppsPage() {
 	const [params] = useSearchParams();
 	const [search, setSearch] = useState('');
-	const query = useAppsQuery(params.get('project_id') ?? undefined, search);
+	const debouncedSearch = useDebouncedValue(search);
+	const query = useAppsQuery(params.get('project_id') ?? undefined, debouncedSearch);
 	if (query.isError) return <AppAccessError error={query.error} />;
 	const items = query.data?.pages.flatMap((page) => page.items) ?? [];
 	const groups = new Map<string, typeof items>();
@@ -54,7 +56,7 @@ export function AppsPage() {
 					<p>Loading apps…</p>
 				) : items.length === 0 ? (
 					<p className="text-muted-foreground">
-						No apps available{search ? ' matching your search' : ''}.
+						No apps available{debouncedSearch ? ' matching your search' : ''}.
 					</p>
 				) : null}
 				{[...groups].map(([pid, apps]) => (

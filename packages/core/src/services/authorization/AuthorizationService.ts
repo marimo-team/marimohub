@@ -652,9 +652,13 @@ export class AuthorizationService {
 		return resolveEffectiveRole(project, subject, this.policy).role;
 	}
 
-	/** Existing viewer tokens retain project.read; app users need app.read. */
-	appReadAction(subject: AuthSubject, project: Project): 'app.read' | 'project.read' {
-		return this.role(subject, project) === 'app-user' ? 'app.read' : 'project.read';
+	/** Prefer explicit app grants; legacy viewer tokens retain project.read. */
+	appReadAction(subject: AuthorizationSubject, project: Project): 'app.read' | 'project.read' {
+		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		return this.role(subject, project) === 'app-user' ||
+			(grant !== undefined && tokenGrantAllowsAction(grant, 'app.read'))
+			? 'app.read'
+			: 'project.read';
 	}
 
 	isSuperAdmin(subject: AuthSubject): boolean {

@@ -20,9 +20,11 @@ describe('Project routes', () => {
 		request = createTestApi({ bucket }).request;
 	});
 
-	it('GET /projects returns empty list initially', async () => {
+	it('GET /projects seeds the default project in an empty catalog', async () => {
 		const res = await request('GET', '/projects');
-		expect(await expectPage(res)).toEqual([]);
+		expect(await expectPage(res)).toEqual([
+			expect.objectContaining({ name: 'My Projects', owner: ACTOR }),
+		]);
 	});
 
 	describe('list filters', () => {
@@ -30,6 +32,7 @@ describe('Project routes', () => {
 			request('POST', '/projects', { name, description, tags });
 
 		it('filters by status, exact tag, and case-insensitive name or description text', async () => {
+			const initial = await expectPage<any>(await request('GET', '/projects'));
 			const finance = await expectOk<any>(
 				await create('Revenue Review', 'Monthly totals', ['finance']),
 				201,
@@ -60,7 +63,9 @@ describe('Project routes', () => {
 				(await expectPage<any>(await request('GET', '/projects')))
 					.map((p) => p.id)
 					.sort((a, b) => a.localeCompare(b)),
-			).toEqual([finance.id, operations.id].sort((a, b) => a.localeCompare(b)));
+			).toEqual(
+				[...initial.map((p) => p.id), finance.id, operations.id].sort((a, b) => a.localeCompare(b)),
+			);
 		});
 
 		it('ANDs filters and paginates the filtered set', async () => {
@@ -272,7 +277,9 @@ describe('Project routes', () => {
 
 		await expectOk(await request('DELETE', `/projects/${created.id}`));
 
-		expect(await expectPage(await request('GET', '/projects'))).toHaveLength(0);
+		expect(await expectPage(await request('GET', '/projects'))).toEqual([
+			expect.objectContaining({ name: 'My Projects' }),
+		]);
 	});
 
 	it('GET /projects/{pid} 404s for a soft-deleted project', async () => {
@@ -899,9 +906,9 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
 		owner = createTestApi({ bucket }).request; // ACTOR owns the project
-		const created = await expectOk<any>(
-			await owner('POST', '/projects', { name: 'Private', description: 'd' }),
-			201,
+		const created = await createServices(bucket).projects.createProject(
+			{ name: 'Private', description: 'd' },
+			ACTOR,
 		);
 		pid = created.id;
 	});
@@ -945,9 +952,9 @@ describe('Super admin (MARIMOHUB_SUPER_ADMINS)', () => {
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
 		owner = createTestApi({ bucket }).request; // ACTOR owns the project
-		const created = await expectOk<any>(
-			await owner('POST', '/projects', { name: 'Private', description: 'd' }),
-			201,
+		const created = await createServices(bucket).projects.createProject(
+			{ name: 'Private', description: 'd' },
+			ACTOR,
 		);
 		pid = created.id;
 	});
@@ -1082,8 +1089,15 @@ describe('Keyset pagination', () => {
 	});
 
 	it('pages through projects with a stable cursor and no overlap', async () => {
+		const expected = (await expectPage<{ id: string }>(await request('GET', '/projects'))).map(
+			(p) => p.id,
+		);
 		for (let i = 0; i < 5; i++) {
-			await request('POST', '/projects', { name: `P${i}`, description: 'd' });
+			const project = await expectOk<{ id: string }>(
+				await request('POST', '/projects', { name: `P${i}`, description: 'd' }),
+				201,
+			);
+			expected.push(project.id);
 		}
 
 		const page1 = await expectOk<any>(await request('GET', '/projects?limit=2'));
@@ -1098,12 +1112,12 @@ describe('Keyset pagination', () => {
 		const page3 = await expectOk<any>(
 			await request('GET', `/projects?limit=2&cursor=${encodeURIComponent(page2.next_cursor)}`),
 		);
-		expect(page3.items).toHaveLength(1);
+		expect(page3.items).toHaveLength(2);
 		expect(page3.next_cursor).toBeNull();
 
-		// The three pages partition the five projects with no duplicates.
 		const ids = [...page1.items, ...page2.items, ...page3.items].map((p: any) => p.id);
-		expect(new Set(ids).size).toBe(5);
+		expect(new Set(ids).size).toBe(6);
+		expect(new Set(ids)).toEqual(new Set(expected));
 	});
 
 	it('rejects a malformed cursor (400)', async () => {
@@ -1131,21 +1145,21 @@ describe('Keyset pagination', () => {
 			);
 
 			expect(second).toEqual(first);
-			expect(await expectPage(await request('GET', '/projects'))).toHaveLength(1);
+			expect(await expectPage(await request('GET', '/projects?q=Idem'))).toHaveLength(1);
 		});
 
 		it('different keys create two projects', async () => {
 			await request('POST', '/projects', body, { 'Idempotency-Key': 'key-a' });
 			await request('POST', '/projects', body, { 'Idempotency-Key': 'key-b' });
 
-			expect(await expectPage(await request('GET', '/projects'))).toHaveLength(2);
+			expect(await expectPage(await request('GET', '/projects?q=Idem'))).toHaveLength(2);
 		});
 
 		it('no key preserves today’s behavior (each request creates a project)', async () => {
 			await request('POST', '/projects', body);
 			await request('POST', '/projects', body);
 
-			expect(await expectPage(await request('GET', '/projects'))).toHaveLength(2);
+			expect(await expectPage(await request('GET', '/projects?q=Idem'))).toHaveLength(2);
 		});
 
 		it('scopes the key per user: the same key for another user still creates', async () => {
@@ -1163,8 +1177,8 @@ describe('Keyset pagination', () => {
 			// The shared key did not dedupe across users — two distinct projects exist,
 			// each visible only to its own owner (harness default is members-only).
 			expect(theirs.id).not.toBe(mine.id);
-			expect(await expectPage(await request('GET', '/projects'))).toHaveLength(1);
-			expect(await expectPage(await other('GET', '/projects'))).toHaveLength(1);
+			expect(await expectPage(await request('GET', '/projects?q=Idem'))).toHaveLength(1);
+			expect(await expectPage(await other('GET', '/projects?q=Idem'))).toHaveLength(1);
 		});
 	});
 });

@@ -108,14 +108,12 @@ export async function initializeForSubject(
 	subject: AuthorizationSubject,
 ): Promise<void> {
 	const appDefault = subjectDefaultRole(subject, deps.policy) === 'app-user';
-	const createDefaultProject =
-		!appDefault ||
-		(
-			await authorizationService(deps).authorize(subject, 'project.create', {
-				kind: 'deployment',
-				appOnly: true,
-			})
-		).allowed;
+	const createDefaultProject = (
+		await authorizationService(deps).authorize(subject, 'project.create', {
+			kind: 'deployment',
+			appOnly: appDefault,
+		})
+	).allowed;
 	await ensureInitialized(deps.bucket, subject.id, { createDefaultProject });
 }
 
@@ -1249,8 +1247,8 @@ export const SessionResponseSchema = z
 		session_id: z.string(),
 		notebook_id: z.string(),
 		project_id: z.string(),
-		/** The user id (auth `sub`) that started the session — resolve via /api/v1/users. */
-		user_id: z.string(),
+		/** Session starter; omitted for app users. Resolve via /api/v1/users. */
+		user_id: z.string().optional(),
 		status: z.enum(SESSION_STATUSES),
 		/**
 		 * The kernel URL the browser embeds. Absent while `starting`, and absent

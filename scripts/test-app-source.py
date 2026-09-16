@@ -173,7 +173,8 @@ def main():
                         if request(origin, "/", "probe")[0] == 200:
                             break
                     except urllib.error.URLError:
-                        time.sleep(0.1)
+                        pass
+                    time.sleep(0.1)
                 else:
                     raise AssertionError("App kernel did not start")
                 asyncio.run(check_kernel(origin))

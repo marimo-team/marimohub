@@ -178,9 +178,8 @@ describe('authorization characterization: deployment standing', () => {
 	});
 
 	it('gates directory search on deployment standing, else project involvement', async () => {
-		// Pre-initialized: auto-init would otherwise seed a default project owned
-		// by the first caller, making the stranger "involved".
 		const bucket = await createInitializedBucket();
+		const pid = await seedProject(bucket);
 		// Members-only deployment (no default role): an uninvolved account is refused.
 		await expectError(
 			await apiFor(bucket, STRANGER).request('GET', '/users/search?q=char'),
@@ -200,7 +199,6 @@ describe('authorization characterization: deployment standing', () => {
 			),
 		);
 		// Involvement still opens the directory without deployment standing.
-		const pid = await seedProject(bucket);
 		await addMember(apiFor(bucket, OWNER), pid, { user_id: STRANGER, role: 'viewer' });
 		await expectOk(await apiFor(bucket, STRANGER).request('GET', '/users/search?q=char'));
 	});

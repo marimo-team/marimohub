@@ -184,6 +184,38 @@ describe('App link routes', () => {
 		await expectError(await restricted.request('GET', '/deep-links/sales'), 404);
 	});
 
+	it.each(['viewer', 'editor', 'manager', undefined] as const)(
+		'resolves scoped app-read links with default role %s without expanding content access',
+		async (defaultRole) => {
+			await createLink();
+			const tokenApi = (actions: ProjectAction[], projects = [target.project_id]) =>
+				createTestApi({
+					bucket: api.bucket,
+					deps: {
+						policy: { defaultRole },
+						authenticator: {
+							authenticate: async () => ({
+								id: uid('token-reader'),
+								email: 'reader@example.com',
+								credential: { kind: 'personal-access-token', grant: { actions, projects } },
+							}),
+						},
+					},
+				});
+			const appToken = tokenApi(['app.read']);
+			if (defaultRole === undefined) {
+				await expectError(await appToken.request('GET', '/deep-links/sales'), 404);
+				return;
+			}
+			await expectOk(await appToken.request('GET', '/deep-links/sales'));
+			await expectOk(await tokenApi(['project.read']).request('GET', '/deep-links/sales'));
+			await expectError(await tokenApi(['app.read'], []).request('GET', '/deep-links/sales'), 404);
+			await expectError(await tokenApi([]).request('GET', '/deep-links/sales'), 403);
+			await expectError(await appToken.request('GET', `/projects/${target.project_id}`), 403);
+			await expectError(await appToken.request('GET', base), 403);
+		},
+	);
+
 	it('enforces notebook security labels for resolution and management', async () => {
 		await createLink();
 		const key = paths.project(target.project_id).notebook(target.notebook_id).meta;

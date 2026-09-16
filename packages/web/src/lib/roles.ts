@@ -2,9 +2,9 @@ import type { AssignableProjectRole, Capabilities, ProjectRole } from '@/types';
 
 const ROLE_ORDER: Record<ProjectRole, true> = {
 	'app-user': true,
-	manager: true,
-	editor: true,
 	viewer: true,
+	editor: true,
+	manager: true,
 	admin: true,
 };
 export const PROJECT_ROLES = Object.keys(ROLE_ORDER) as ProjectRole[];
