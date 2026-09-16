@@ -1267,8 +1267,10 @@ export class NotebookService {
 	 * or cron here — callers (a future GC sweep) own the orchestration.
 	 */
 	async hardDeleteNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
-		const { meta } = await this.getNotebook(projectId, notebookId);
-		if (meta.status !== 'deleted') {
+		const metaKey = paths.project(projectId).notebook(notebookId).meta;
+		const obj = await this.bucket.get(metaKey);
+		const meta = obj ? await readStored(NotebookMetaSchema, obj, metaKey) : null;
+		if (meta && meta.status !== 'deleted') {
 			throw new Error(
 				`Refusing to hard-delete notebook ${notebookId}: status is "${meta.status}", expected "deleted"`,
 			);
@@ -1330,7 +1332,13 @@ export class NotebookService {
 		for (const project of snapshot.projects) {
 			if (project.status === 'deleted') continue; // owned by sweepDeletedProjects
 			for (const nb of project.notebooks) {
-				await this.thumbnails.prune(project.id, nb.id);
+				await this.thumbnails.prune(project.id, nb.id).catch((error) => {
+					logOperationalError(
+						'thumbnails.cleanup_failed',
+						{ operation: 'prune', project_id: project.id, notebook_id: nb.id },
+						error,
+					);
+				});
 				if (nb.status === 'deleted' && now - Date.parse(nb.updated_at) >= retentionMs) {
 					stale.push({ projectId: project.id, notebookId: nb.id });
 				}

@@ -1,4 +1,5 @@
 import type { PercentCrop } from 'react-image-crop';
+import { imageDimensions } from './imageDimensions';
 
 export const THUMBNAIL_ASPECT = 16 / 9;
 export const THUMBNAIL_FILE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -7,9 +8,14 @@ export async function readThumbnailImage(file: File): Promise<string> {
 	if (!THUMBNAIL_FILE_TYPES.includes(file.type) || file.size > 10 * 1024 * 1024) {
 		throw new Error('Choose a PNG, JPEG, or WebP image up to 10 MB.');
 	}
+	const bytes = await file.arrayBuffer();
+	const { width, height } = imageDimensions(new Uint8Array(bytes));
+	if (width < 1 || height < 1 || width > 16384 || height > 16384 || width * height > 32_000_000) {
+		throw new Error('Choose an image up to 32 megapixels and 16,384 pixels per side.');
+	}
 	const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
 	try {
-		// Bound memory while editing large screenshots; export uses the original crop proportions.
+		// Keep the editing canvas smaller than the decoded screenshot.
 		const scale = Math.min(1, 4096 / Math.max(bitmap.width, bitmap.height));
 		const canvas = document.createElement('canvas');
 		canvas.width = Math.max(1, Math.round(bitmap.width * scale));

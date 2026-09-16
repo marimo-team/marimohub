@@ -14,6 +14,8 @@ A notebook and its app share one thumbnail.
 5. Select **Save thumbnail**.
 
 Editors and higher roles can use PNG, JPEG, or WebP files up to 10 MB.
+Images must fit within 32 megapixels and 16,384 pixels per side.
+Animated WebP is not supported.
 The hub uploads only the cropped image. Uploads and cropping work without Playwright.
 Your thumbnail is visible to people who can view this notebook.
 

@@ -1,3 +1,4 @@
+import { pngFile } from '@/test/imageFixtures';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -5,7 +6,7 @@ import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 import ThumbnailEditor from './ThumbnailEditor';
 
 const png = new Blob(['cropped PNG'], { type: 'image/png' });
-const original = () => new File(['original screenshot'], 'screen.jpg', { type: 'image/jpeg' });
+const original = () => pngFile();
 let requests: { method: string; body: unknown }[];
 let rejectUpload = false;
 let drawImage: ReturnType<typeof vi.fn>;
@@ -139,7 +140,7 @@ describe('thumbnail editor', () => {
 		await user.click(screen.getByRole('button', { name: 'Save thumbnail' }));
 		expect(await screen.findByRole('alert')).toHaveTextContent('Upload failed');
 		expect(onClose).not.toHaveBeenCalled();
-		expect(screen.getByRole('button', { name: 'Remove custom thumbnail' })).toBeEnabled();
+		expect(screen.getByRole('button', { name: 'Remove custom thumbnail' })).toBeDisabled();
 	});
 	it('rejects unsupported and oversized pasted images before decoding', async () => {
 		renderEditor();
@@ -184,7 +185,9 @@ describe('thumbnail editor', () => {
 				.mockReturnValueOnce(first.promise)
 				.mockReturnValueOnce(second.promise);
 			pasteImage();
+			await waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(1));
 			pasteImage();
+			await waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(2));
 			await act(async () => {
 				second.resolve();
 			});
@@ -226,6 +229,18 @@ describe('thumbnail editor', () => {
 		await user.click(remove);
 		expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove thumbnail');
 		expect(remove).toBeEnabled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it('cannot remove the saved thumbnail while an unsaved crop is staged', async () => {
+		const user = userEvent.setup();
+		const { onClose } = renderEditor();
+		pasteImage();
+		await loadCrop();
+		const remove = screen.getByRole('button', { name: 'Remove custom thumbnail' });
+		expect(remove).toBeDisabled();
+		await user.click(remove);
+		expect(requests.some((request) => request.method === 'DELETE')).toBe(false);
 		expect(onClose).not.toHaveBeenCalled();
 	});
 

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACTOR, setupTestEnv } from '../../testing';
 import { thumbnailPng } from '../../testing/thumbnail';
 import { paths } from '../../paths';
+import { Millis } from '../../duration';
+import { listAllKeys } from '../catalog/storage';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -205,6 +207,7 @@ describe('thumbnails', () => {
 		await env.notebooks.commitSession(pid, nid, { code: 'x = 1', html: '<div>saved</div>' }, ACTOR);
 		const capture = (await thumbnails.prepare(pid, nid))!;
 		await env.projects.deleteProject(pid, ACTOR);
+		expect(await thumbnails.prepare(pid, nid)).toBeNull();
 		expect(await thumbnails.publish(pid, nid, capture, thumbnailPng())).toBe(false);
 		await expect(thumbnails.setCustom(pid, nid, thumbnailPng())).rejects.toThrow();
 	});
@@ -238,5 +241,182 @@ describe('thumbnails', () => {
 		).not.toBeNull();
 		expect(await env.bucket.get(paths.project(pid).notebook(nid).thumbnailImage(first))).toBeNull();
 		expect(await thumbnails.image(pid, nid)).not.toBeNull();
+	});
+	it('skips identical HTML across versions and retains the rendered version as provenance', async () => {
+		const { pid, nid, thumbnails } = await notebook();
+		const html = '<div>same output</div>';
+		await env.notebooks.commitSession(pid, nid, { code: 'x = 1', html }, ACTOR);
+		const capture = (await thumbnails.prepare(pid, nid))!;
+		await thumbnails.publish(pid, nid, capture, thumbnailPng());
+		const previous = await thumbnails.get(pid, nid);
+		await env.notebooks.commitSession(pid, nid, { code: 'x = 2', html }, ACTOR);
+		const current = await env.notebooks.getNotebook(pid, nid);
+		expect(current.source).not.toMatchObject({ current_version_id: capture.versionId });
+		const skipped = vi.fn();
+		expect(await thumbnails.prepare(pid, nid, skipped)).toBeNull();
+		expect(skipped).toHaveBeenCalledWith('unchanged_html');
+		expect(await thumbnails.get(pid, nid)).toEqual(previous);
+	});
+
+	it('reclaims old capture attempts but retains recent attempts', async () => {
+		const { pid, nid, thumbnails } = await notebook();
+		vi.useFakeTimers();
+		const start = Date.now();
+		await thumbnails.claimAttempt(pid, nid, 'old');
+		vi.setSystemTime(start + Millis.days(1));
+		await thumbnails.claimAttempt(pid, nid, 'recent');
+		await thumbnails.prune(pid, nid, Date.now() + 1);
+		const nb = paths.project(pid).notebook(nid);
+		expect(await env.bucket.get(nb.thumbnailAttempt('old'))).toBeNull();
+		expect(await thumbnails.claimAttempt(pid, nid, 'recent')).toBe(false);
+	});
+
+	it.each([
+		['notebook', false],
+		['notebook', true],
+		['project', false],
+		['project', true],
+	] as const)(
+		'does not recreate a thumbnail record when %s retirement overlaps hard deletion (repeat=%s)',
+		async (scope, repeat) => {
+			const { pid, nid, thumbnails } = await notebook();
+			await thumbnails.setCustom(pid, nid, thumbnailPng());
+			const nb = paths.project(pid).notebook(nid);
+			if (repeat) {
+				if (scope === 'project') await env.projects.deleteProject(pid, ACTOR);
+				else await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+			}
+			const paused = pauseNextWrite(nb.thumbnail);
+			const deletion =
+				scope === 'project'
+					? env.projects.deleteProject(pid, ACTOR)
+					: env.notebooks.deleteNotebook(pid, nid, ACTOR);
+			await paused.entered;
+			if (scope === 'project') await env.projects.sweepDeletedProjects(0);
+			else await env.notebooks.sweepDeletedNotebooks(0);
+			paused.release();
+			await deletion;
+			await thumbnails.retire(pid, nid);
+			expect(await listAllKeys(env.bucket, `${nb.base}/`)).toEqual([]);
+		},
+	);
+
+	it.each(['image', 'record'] as const)(
+		'removes a first automatic %s write that completes after hard deletion',
+		async (stage) => {
+			const { pid, nid, thumbnails } = await notebook();
+			await env.notebooks.commitSession(
+				pid,
+				nid,
+				{ code: 'x = 1', html: '<div>saved</div>' },
+				ACTOR,
+			);
+			const capture = (await thumbnails.prepare(pid, nid))!;
+			const nb = paths.project(pid).notebook(nid);
+			const paused = pauseNextWrite(stage === 'image' ? nb.thumbnailImages : nb.thumbnail);
+			const pending = thumbnails.publish(pid, nid, capture, thumbnailPng());
+			await paused.entered;
+			await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+			await env.notebooks.sweepDeletedNotebooks(0);
+			paused.release();
+			expect(await pending).toBe(false);
+			expect(await listAllKeys(env.bucket, `${nb.base}/`)).toEqual([]);
+		},
+	);
+
+	it('removes a first custom publication that completes after hard deletion', async () => {
+		const { pid, nid, thumbnails } = await notebook();
+		const nb = paths.project(pid).notebook(nid);
+		const paused = pauseNextWrite(nb.thumbnail);
+		const pending = thumbnails.setCustom(pid, nid, thumbnailPng());
+		const rejection = expect(pending).rejects.toThrow('not found');
+		await paused.entered;
+		await env.projects.deleteProject(pid, ACTOR);
+		await env.projects.sweepDeletedProjects(0);
+		paused.release();
+		await rejection;
+		expect(await listAllKeys(env.bucket, `${nb.base}/`)).toEqual([]);
+	});
+
+	it.each(['record', 'listing'] as const)(
+		'continues notebook GC when thumbnail %s pruning fails',
+		async (stage) => {
+			const { pid, nid } = await notebook();
+			const other = await env.notebooks.createNotebook(
+				pid,
+				{ title: 'Keep', description: '', code: 'x = 1' },
+				ACTOR,
+			);
+			await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+			const nb = paths.project(pid).notebook(other.id);
+			if (stage === 'record') await env.bucket.put(nb.thumbnail, 'invalid');
+			else {
+				const list = env.bucket.list.bind(env.bucket);
+				vi.spyOn(env.bucket, 'list').mockImplementation(async (options) => {
+					if (options?.prefix === nb.thumbnailImages) throw new Error('Listing unavailable');
+					return list(options);
+				});
+			}
+			expect((await env.notebooks.sweepDeletedNotebooks(0)).purged).toBe(1);
+			expect(await listAllKeys(env.bucket, `${paths.project(pid).notebook(nid).base}/`)).toEqual(
+				[],
+			);
+		},
+	);
+
+	it('continues project deletion and deep-link cleanup when thumbnail retirement fails', async () => {
+		const { pid, nid, thumbnails } = await notebook();
+		await thumbnails.setCustom(pid, nid, thumbnailPng());
+		const put = env.bucket.put.bind(env.bucket);
+		vi.spyOn(env.bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === paths.project(pid).notebook(nid).thumbnail) throw new Error('Unavailable');
+			return put(key, value, options);
+		});
+		const release = vi.spyOn(env.deepLinks, 'releaseProject');
+		await env.projects.deleteProject(pid, ACTOR);
+		expect((await env.projects.getProject(pid)).status).toBe('deleted');
+		expect(release).toHaveBeenCalledWith(pid);
+		await expect(env.projects.deleteProject(pid, ACTOR)).resolves.toBeUndefined();
+	});
+
+	it.each(['notebook', 'project'] as const)(
+		'retries %s GC after the subtree was purged before the catalog update',
+		async (scope) => {
+			const { pid, nid } = await notebook();
+			if (scope === 'project') {
+				await env.projects.deleteProject(pid, ACTOR);
+				await env.projects.hardDeleteProject(pid);
+				expect(await env.projects.sweepDeletedProjects(0)).toBe(1);
+			} else {
+				await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+				await env.notebooks.hardDeleteNotebook(pid, nid);
+				expect((await env.notebooks.sweepDeletedNotebooks(0)).purged).toBe(1);
+			}
+		},
+	);
+	it('removes an attempt marker whose first write completes after hard deletion', async () => {
+		const { pid, nid, thumbnails } = await notebook();
+		const nb = paths.project(pid).notebook(nid);
+		const paused = pauseNextWrite(nb.thumbnailAttempt('sandbox'));
+		const pending = thumbnails.claimAttempt(pid, nid, 'sandbox');
+		await paused.entered;
+		await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+		await env.notebooks.sweepDeletedNotebooks(0);
+		paused.release();
+		expect(await pending).toBe(false);
+		expect(await listAllKeys(env.bucket, `${nb.base}/`)).toEqual([]);
+	});
+
+	it('continues deep-link cleanup when the thumbnail retirement catalog read fails', async () => {
+		const { pid } = await notebook();
+		const update = env.catalog.updateProjectEntry.bind(env.catalog);
+		vi.spyOn(env.catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+			const snapshot = await update(...args);
+			vi.spyOn(env.catalog, 'getCurrentSnapshot').mockRejectedValue(new Error('Unavailable'));
+			return snapshot;
+		});
+		const release = vi.spyOn(env.deepLinks, 'releaseProject');
+		await expect(env.projects.deleteProject(pid, ACTOR)).resolves.toBeUndefined();
+		expect(release).toHaveBeenCalledWith(pid);
 	});
 });

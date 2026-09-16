@@ -4515,6 +4515,28 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "projects.thumbnails",
+			"command": ["projects", "thumbnails"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/thumbnails",
+			"summary": "List visible notebook thumbnails",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "projects.update",
 			"command": ["projects", "update"],
 			"method": "PATCH",

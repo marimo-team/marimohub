@@ -10,9 +10,9 @@ import { validateThumbnailPng } from '../content/thumbnailPng';
 
 const run = promisify(execFile);
 const python = process.env.MARIMOHUB_THUMBNAIL_TEST_PYTHON;
-it.skipIf(!python)(
-	'renders static marimo outputs without allowing HTTP or WebSocket access',
-	async () => {
+it.skipIf(!python).each([false, true])(
+	'renders isolated outputs and rejects missing installed assets (missing=%s)',
+	async (missingAsset) => {
 		const dir = await mkdtemp(join(tmpdir(), 'thumbnail-smoke-'));
 		let requests = 0;
 		const server = createServer((_req, res) => {
@@ -33,7 +33,7 @@ it.skipIf(!python)(
 				input,
 				fixture.replace(
 					'</body>',
-					`<script>fetch('http://127.0.0.1:${address.port}/mutation', {method:'POST'}).catch(()=>{}); new WebSocket('ws://127.0.0.1:${address.port}/kernel');</script></body>`,
+					`${missingAsset ? '<link rel="stylesheet" href="/assets/not-installed.css">' : ''}<script>fetch('http://127.0.0.1:${address.port}/mutation', {method:'POST'}).catch(()=>{}); new WebSocket('ws://127.0.0.1:${address.port}/kernel');</script></body>`,
 				),
 			);
 			const { stdout } = await run(
@@ -42,13 +42,18 @@ it.skipIf(!python)(
 				{ timeout: 12_000, maxBuffer: 5 * 1024 * 1024 },
 			);
 			const result = JSON.parse(stdout) as { status: string; png: string };
+			expect(requests).toBe(0);
+			await expect(readFile(input)).rejects.toThrow();
+			if (missingAsset) {
+				expect(result.status).toBe('render_failed');
+				expect(result.png).toBeUndefined();
+				return;
+			}
 			expect(result.status).toBe('ok');
 			const png = new Uint8Array(Buffer.from(result.png, 'base64'));
 			validateThumbnailPng(png);
 			// An empty 960×540 Chromium PNG is approximately 2 KB; this fixture contains rendered text.
 			expect(png.byteLength).toBeGreaterThan(6000);
-			expect(requests).toBe(0);
-			await expect(readFile(input)).rejects.toThrow();
 		} finally {
 			server.closeAllConnections();
 			await new Promise<void>((resolve) => server.close(() => resolve()));

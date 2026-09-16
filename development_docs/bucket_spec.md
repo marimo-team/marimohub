@@ -1501,13 +1501,14 @@ Only the successful writer appends the mutation event.
 
 `ThumbnailService` owns `projects/{pid}/notebooks/{nid}/thumbnail.json` (ETag CAS).
 The record holds separate custom and automatic image references. Custom images
-take precedence. Automatic references include the source version, HTML hash,
+take precedence. Automatic references include the captured source version, HTML hash,
 renderer revision, and capture time. A deletion tombstone blocks in-flight captures.
 
 Under the same notebook prefix:
 
 - `thumbnails/{uuid}.png` images are immutable. Maintenance removes unreferenced images after one day.
-- Create-once `thumbnail-attempts/{sandbox-id}.json` markers prevent duplicate shutdown attempts across replicas.
+- Create-once `thumbnail-attempts/{sandbox-id}.json` markers prevent duplicate shutdown attempts across replicas. Maintenance removes markers after one day.
 
-Notebook or project deletion removes all thumbnail objects. Images require
-notebook authorization and have no public bucket URLs.
+Soft deletion retains thumbnail objects during the recovery grace period.
+Hard deletion or garbage collection removes them. Images require notebook
+authorization and have no public bucket URLs.

@@ -1,3 +1,4 @@
+import { useProjectThumbnails } from '@/api/thumbnails';
 import { Thumbnail } from '@/components/Notebook/Thumbnail';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { lazy, Suspense, useMemo, useState } from 'react';
@@ -172,7 +173,7 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 	return (
 		<div
 			data-testid="notebook-row"
-			className="flex items-center border-b border-l-2 border-l-transparent bg-muted/20 last:border-b-0"
+			className="col-span-full flex items-center border-b border-l-2 border-l-transparent bg-muted/20 last:border-b-0"
 		>
 			<div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3.5">
 				<div className="flex min-w-0 flex-1 items-center gap-3">
@@ -253,6 +254,7 @@ function useProjectContent() {
 			return false;
 		}
 	});
+	const thumbnails = useProjectThumbnails(pid!, gallery);
 	// When set, a `.py` file's contents seed the new notebook instead of the template.
 	const [uploadedCode, setUploadedCode] = useState<string | null>(null);
 	const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
@@ -842,7 +844,13 @@ function useProjectContent() {
 							card={gallery}
 							preview={
 								gallery ? (
-									<Thumbnail projectId={pid!} notebookId={nb.id} title={nb.title} />
+									<Thumbnail
+										projectId={pid!}
+										notebookId={nb.id}
+										title={nb.title}
+										metadata={thumbnails.data?.[nb.id]}
+										refreshedAt={thumbnails.dataUpdatedAt}
+									/>
 								) : undefined
 							}
 							to={`/projects/${pid}/notebooks/${nb.id}`}

@@ -7,9 +7,12 @@ import { expect, it } from 'vitest';
 import { THUMBNAIL_PROGRAM } from './thumbnailProgram';
 
 const run = promisify(execFile);
-it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')(
-	'kills a hung renderer and its detached browser child at the deadline',
-	async () => {
+it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin').each([
+	{ delay: 60, status: 'timeout' },
+	{ delay: 1, status: 'render_failed' },
+])(
+	'cleans up detached browsers when the worker ends with $status',
+	async ({ delay, status }) => {
 		const dir = await mkdtemp(join(tmpdir(), 'thumbnail-watchdog-'));
 		try {
 			await mkdir(join(dir, 'playwright'));
@@ -23,9 +26,9 @@ import asyncio, os, subprocess, sys
 from pathlib import Path
 class FakePlaywright:
     async def __aenter__(self):
-        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         Path(os.environ['THUMBNAIL_TEST_PID_FILE']).write_text(str(child.pid))
-        await asyncio.sleep(60)
+        await asyncio.sleep(${delay})
     async def __aexit__(self, *args): pass
 def async_playwright(): return FakePlaywright()
 `,
@@ -42,7 +45,7 @@ def async_playwright(): return FakePlaywright()
 					env: { ...process.env, PYTHONPATH: dir, THUMBNAIL_TEST_PID_FILE: pidFile },
 				},
 			);
-			expect(JSON.parse(stdout)).toEqual({ status: 'timeout' });
+			expect(JSON.parse(stdout)).toEqual({ status });
 			expect(Date.now() - started).toBeLessThan(6000);
 			const pid = Number(await readFile(pidFile, 'utf8'));
 			await expect

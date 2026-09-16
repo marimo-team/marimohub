@@ -1,4 +1,5 @@
 import { bodyLimit } from 'hono/body-limit';
+import { all } from 'better-all';
 import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import {
@@ -11,6 +12,7 @@ import type { ProjectId, NotebookId } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import {
 	assertProjectRole,
+	assertProjectVisible,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -20,6 +22,7 @@ import {
 	loadAuthorizedNotebook,
 	loadVisibleProject,
 	NotebookIdParam,
+	ProjectIdParam,
 } from '../shared';
 
 const app = createApp();
@@ -30,6 +33,54 @@ const thumbnailResponse = jsonContent(
 	'Thumbnail metadata',
 );
 const thumbnailErrors = { ...commonErrors(), ...errorResponses(404, 413) };
+
+app.openapi(
+	createRoute({
+		method: 'get',
+		path: '/projects/{pid}/thumbnails',
+		operationId: 'projects.thumbnails',
+		tags: ['Projects'],
+		summary: 'List visible notebook thumbnails',
+		request: { params: ProjectIdParam },
+		responses: {
+			200: jsonContent(
+				z.object({ success: z.literal(true), data: z.record(z.string(), ThumbnailMetadataSchema) }),
+				'Thumbnail metadata by notebook ID',
+			),
+			...commonErrors(),
+			...errorResponses(404),
+		},
+	}),
+	async (c) => {
+		const deps = c.get('deps');
+		const { notebooks, projects } = deps.services;
+		const user = c.get('user');
+		const { pid } = c.req.valid('param');
+		await assertProjectVisible(projects, pid, user, deps);
+		const visible = await notebooks.listNotebooks(pid, {
+			subject: user,
+			policy: deps.policy,
+			resourceSecurity: deps.resourceSecurity,
+		});
+		const data: Record<string, z.infer<typeof ThumbnailMetadataSchema>> = {};
+		for (let offset = 0; offset < visible.length; offset += 32) {
+			Object.assign(
+				data,
+				await all(
+					Object.fromEntries(
+						visible
+							.slice(offset, offset + 32)
+							.map((notebook) => [
+								notebook.id,
+								() => notebooks.thumbnails.metadata(pid, notebook.id),
+							]),
+					),
+				),
+			);
+		}
+		return c.json({ success: true as const, data }, 200);
+	},
+);
 
 async function authorizeThumbnail(
 	c: Context<HonoEnv>,
@@ -88,7 +139,12 @@ app.openapi(
 		c.header('Cache-Control', 'private, no-cache');
 		c.header('ETag', etag);
 		c.header('X-Content-Type-Options', 'nosniff');
-		if (c.req.header('If-None-Match') === etag) return c.body(null, 304);
+		const validators = c.req.header('If-None-Match');
+		if (
+			validators?.trim() === '*' ||
+			validators?.match(/(?:W\/)?"[^"]*"/g)?.some((tag) => tag.replace(/^W\//, '') === etag)
+		)
+			return c.body(null, 304);
 		c.header('Content-Type', 'image/png');
 		return c.body(new Uint8Array(await image.bytes()), 200);
 	},
@@ -103,7 +159,7 @@ app.openapi(
 		middleware: [
 			bodyLimit({
 				maxSize: THUMBNAIL_MAX_BYTES,
-				onError: (c) => fail(c, 'VALIDATION_ERROR', 'Thumbnail exceeds 3 MB', 413),
+				onError: (c) => fail(c, 'PAYLOAD_TOO_LARGE', 'Thumbnail exceeds 3 MB', 413),
 			}),
 		] as const,
 		request: {

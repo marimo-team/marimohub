@@ -1,3 +1,4 @@
+import { pngFile } from '@/test/imageFixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cropCoordinates, cropThumbnail, isValidCrop, readThumbnailImage } from './thumbnailCrop';
 
@@ -7,6 +8,22 @@ afterEach(() => {
 });
 
 describe('thumbnail crop', () => {
+	it.each([
+		[100000, 100000],
+		[16000, 3000],
+		[0, 100],
+		[20000, 10],
+	])(
+		'rejects excessive or empty dimensions %j before allocating a bitmap',
+		async (width, height) => {
+			const decode = vi.fn();
+			vi.stubGlobal('createImageBitmap', decode);
+			await expect(readThumbnailImage(pngFile(width, height))).rejects.toThrow(
+				'Choose an image up to',
+			);
+			expect(decode).not.toHaveBeenCalled();
+		},
+	);
 	it('maps a crop to original pixels independently of display size', () => {
 		expect(cropCoordinates({ unit: '%', x: 25, y: 10, width: 50, height: 60 }, 2400, 1600)).toEqual(
 			{ x: 600, y: 160, width: 1200, height: 960 },
@@ -39,9 +56,7 @@ describe('thumbnail crop', () => {
 				throw new Error('Canvas failed');
 			},
 		} as never);
-		await expect(
-			readThumbnailImage(new File(['png'], 'screenshot.png', { type: 'image/png' })),
-		).rejects.toThrow('Canvas failed');
+		await expect(readThumbnailImage(pngFile())).rejects.toThrow('Canvas failed');
 		expect(close).toHaveBeenCalledOnce();
 	});
 	it('rejects a failed PNG encode', async () => {

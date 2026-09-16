@@ -2,6 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, apiData, apiErrorFromResponse } from './client';
 import { withBasePath } from '@/lib/basePath';
 
+export const projectThumbnailsKey = (pid: string) => ['project-thumbnails', pid] as const;
+
+export function useProjectThumbnails(pid: string, enabled: boolean) {
+	return useQuery({
+		queryKey: projectThumbnailsKey(pid),
+		enabled,
+		queryFn: () =>
+			apiData(apiClient.GET('/api/v1/projects/{pid}/thumbnails', { params: { path: { pid } } })),
+	});
+}
+
 export const thumbnailKey = (pid: string, nid: string) => ['thumbnail', pid, nid] as const;
 export const thumbnailUrl = (pid: string, nid: string) =>
 	withBasePath(
@@ -34,7 +45,10 @@ export function useSaveThumbnail(pid: string, nid: string) {
 			return response.json();
 		},
 		onSuccess: async () => {
-			await client.invalidateQueries({ queryKey: thumbnailKey(pid, nid) });
+			await Promise.all([
+				client.invalidateQueries({ queryKey: thumbnailKey(pid, nid) }),
+				client.invalidateQueries({ queryKey: projectThumbnailsKey(pid) }),
+			]);
 		},
 	});
 }

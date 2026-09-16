@@ -1,6 +1,6 @@
 // The supervisor stays outside the browser process tree so it can kill descendants on timeout.
 export const THUMBNAIL_PROGRAM = String.raw`
-import base64, json, os, signal, subprocess, sys, time
+import base64, ctypes, json, os, signal, subprocess, sys, time
 from pathlib import Path
 
 input_path = Path(sys.argv[1])
@@ -27,6 +27,7 @@ async def render():
         browser = await pw.chromium.launch(env={"PATH": os.defpath, "HOME": os.environ.get("HOME", "/tmp")})
         try:
             context = await browser.new_context(viewport={"width": 960, "height": 540}, device_scale_factor=1, color_scheme="light", reduced_motion="reduce", service_workers="block")
+            missing_assets = set()
             async def route(request):
                 url = request.request.url
                 path = unquote(urlparse(url).path)
@@ -40,6 +41,7 @@ async def render():
                     if asset.is_relative_to(static / "assets") and asset.is_file() and asset.stat().st_size < 20_000_000:
                         await request.fulfill(status=200, content_type=mimetypes.guess_type(str(asset))[0] or "application/octet-stream", body=asset.read_bytes())
                         return
+                    missing_assets.add(path)
                 await request.abort()
             await context.route("**/*", route)
             await context.route_web_socket("**/*", lambda ws: ws.close())
@@ -49,7 +51,11 @@ async def render():
             await page.add_style_tag(content=".cm-editor, .marimo-code, .print\\:hidden { display: none !important; } body { background: white !important; }")
             await page.evaluate("document.fonts.ready")
             await page.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+            if missing_assets:
+                raise RuntimeError("Snapshot assets do not match installed marimo")
             image = await page.screenshot(type="png", animations="disabled", timeout=1500)
+            if missing_assets:
+                raise RuntimeError("Snapshot asset failed during capture")
             print(json.dumps({"status": "ok", "png": base64.b64encode(image).decode()}))
         finally:
             await browser.close()
@@ -62,7 +68,11 @@ except Exception:
 def descendants(root):
     parents = {}
     if sys.platform == 'darwin':
-        for line in subprocess.check_output(['ps', '-axo', 'pid=,ppid='], timeout=0.25).decode().splitlines():
+        try:
+            rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid='], timeout=0.25).decode().splitlines()
+        except (OSError, subprocess.SubprocessError):
+            rows = []
+        for line in rows:
             pid, parent = line.split()
             parents[int(pid)] = int(parent)
     for entry in Path('/proc').glob('[0-9]*/stat'):
@@ -79,24 +89,38 @@ def descendants(root):
         found |= more
 
 process = None
+tracked = set()
+if sys.platform == 'linux':
+    # Adopt detached browser grandchildren even when the worker exits first.
+    ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)
 try:
     remaining = deadline - time.time()
     if remaining < 1 or sys.platform not in ('linux', 'darwin'):
         print(json.dumps({"status": "insufficient_budget"})); sys.exit(0)
     process = subprocess.Popen([sys.executable, '-c', worker, str(input_path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
-        out, _ = process.communicate(timeout=max(0.1, remaining - 0.5))
+        while True:
+            tracked |= descendants(os.getpid()) - {os.getpid()}
+            budget = deadline - time.time() - 0.5
+            if budget <= 0:
+                raise subprocess.TimeoutExpired(process.args, remaining)
+            try:
+                out, _ = process.communicate(timeout=min(0.05, budget))
+                break
+            except subprocess.TimeoutExpired:
+                continue
         print(out.decode().strip() if out else json.dumps({"status": "render_failed"}))
     except subprocess.TimeoutExpired:
         print(json.dumps({"status": "timeout"}))
 finally:
     input_path.unlink(missing_ok=True)
-    if process and process.poll() is None:
+    if process:
         # Freeze the supervisor's child before collecting descendants, including detached Chromium processes.
         try: os.kill(process.pid, signal.SIGSTOP)
         except ProcessLookupError: pass
         try:
-            for pid in reversed(sorted(descendants(process.pid))):
+            tracked |= descendants(os.getpid()) - {os.getpid()}
+            for pid in reversed(sorted(tracked)):
                 try: os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError: pass
         finally:

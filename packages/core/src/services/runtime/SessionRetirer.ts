@@ -67,12 +67,21 @@ export class SessionRetirer {
 	 */
 	async retire(
 		session: Session,
-		opts: { teardown?: boolean; markTerminated?: boolean; captureBeforeDestroy?: boolean } = {},
+		opts: {
+			teardown?: boolean;
+			markTerminated?: boolean;
+			captureBeforeDestroy?: boolean;
+			thumbnailDeadlineAt?: number;
+		} = {},
 	): Promise<void> {
 		const sandboxDestroyed =
 			opts.teardown === false
 				? !session.sandbox_id
-				: await this.teardownSandbox(session, opts.captureBeforeDestroy ?? true);
+				: await this.teardownSandbox(
+						session,
+						opts.captureBeforeDestroy ?? true,
+						opts.thumbnailDeadlineAt,
+					);
 		if (opts.markTerminated !== false) {
 			await this.deps.sessions
 				.markTerminated(session.project_id, session.session_id)
@@ -254,9 +263,9 @@ export class SessionRetirer {
 	 * leaves the marker and claims untouched so the next sweep retries. Returns
 	 * whether the sandbox is confirmed gone.
 	 */
-	async reclaim(session: Session, save: boolean): Promise<boolean> {
+	async reclaim(session: Session, save: boolean, thumbnailDeadlineAt?: number): Promise<boolean> {
 		if (save) {
-			if (!(await this.teardownSandbox(session))) return false;
+			if (!(await this.teardownSandbox(session, true, thumbnailDeadlineAt))) return false;
 		} else if (session.sandbox_id) {
 			try {
 				await this.deps.compute
@@ -278,7 +287,11 @@ export class SessionRetirer {
 	 * Best-effort persistence followed by a destruction attempt. The return value
 	 * fences editor-claim release until the provider confirms destruction.
 	 */
-	private async teardownSandbox(session: Session, captureBeforeDestroy = true): Promise<boolean> {
+	private async teardownSandbox(
+		session: Session,
+		captureBeforeDestroy = true,
+		thumbnailDeadlineAt?: number,
+	): Promise<boolean> {
 		if (!session.sandbox_id) return true;
 		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
 		await this.stopSecondarySurfaces(sandbox, session);
@@ -313,7 +326,7 @@ export class SessionRetirer {
 				);
 			}
 		}
-		if (persisted) await this.captureSavedArtifacts(sandbox, session);
+		if (persisted) await this.captureSavedArtifacts(sandbox, session, thumbnailDeadlineAt);
 		try {
 			await sandbox.destroy();
 			return true;
@@ -335,6 +348,7 @@ export class SessionRetirer {
 	private async captureSavedArtifacts(
 		sandbox: ReturnType<SandboxProvider['create']>,
 		session: Session,
+		thumbnailDeadlineAt?: number,
 	): Promise<void> {
 		if (this.deps.automaticThumbnails !== false && session.sandbox_id) {
 			await captureThumbnail(
@@ -344,7 +358,7 @@ export class SessionRetirer {
 				session.notebook_id,
 				session.sandbox_id,
 				this.deps.workdir,
-				this.deps.thumbnailDeadline?.(),
+				Math.min(thumbnailDeadlineAt ?? Infinity, this.deps.thumbnailDeadline?.() ?? Infinity),
 			);
 		}
 		await captureFilesystemSnapshot(

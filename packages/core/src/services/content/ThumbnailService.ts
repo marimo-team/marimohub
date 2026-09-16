@@ -86,13 +86,15 @@ export class ThumbnailService {
 			: null;
 	}
 
+	private async getProject(pid: ProjectId) {
+		const key = paths.project(pid).meta;
+		const object = await this.bucket.get(key);
+		return object ? readStored(ProjectSchema, object, key) : null;
+	}
+
 	private async assertActive(pid: ProjectId, nid: NotebookId) {
-		const projectKey = paths.project(pid).meta;
 		const { project, notebook } = await all({
-			project: async () => {
-				const object = await this.bucket.get(projectKey);
-				return object ? readStored(ProjectSchema, object, projectKey) : null;
-			},
+			project: () => this.getProject(pid),
 			notebook: () => this.notebooks.getNotebook(pid, nid),
 		});
 		if (!project || project.status === 'deleted') throw new NotFoundError('Project not found');
@@ -102,7 +104,13 @@ export class ThumbnailService {
 	async setCustom(pid: ProjectId, nid: NotebookId, bytes: Uint8Array) {
 		await this.assertActive(pid, nid);
 		const image = await this.writeImage(pid, nid, bytes);
-		await this.update(pid, nid, (record) => ({ ...record, custom: image }));
+		try {
+			await this.update(pid, nid, (record) => ({ ...record, custom: image }));
+		} catch (error) {
+			if (error instanceof NotFoundError)
+				await this.bucket.delete(paths.project(pid).notebook(nid).thumbnailImage(image.id));
+			throw error;
+		}
 		return this.metadata(pid, nid);
 	}
 
@@ -129,7 +137,19 @@ export class ThumbnailService {
 				JSON.stringify(thumbnailRecord(change(current))),
 				obj ? { onlyIfEtagMatches: obj.etag } : { onlyIfNotExists: true },
 			);
+			await this.checkPublication(pid, nid);
 		});
+	}
+
+	private async checkPublication(pid: ProjectId, nid: NotebookId): Promise<void> {
+		try {
+			await this.assertActive(pid, nid);
+		} catch (error) {
+			// A first publication can race the subtree wipe without an existing ETag to fence it.
+			if (error instanceof NotFoundError)
+				await this.bucket.delete(paths.project(pid).notebook(nid).thumbnail);
+			throw error;
+		}
 	}
 
 	async retire(pid: ProjectId, nid: NotebookId): Promise<void> {
@@ -140,11 +160,11 @@ export class ThumbnailService {
 		const key = paths.project(pid).notebook(nid).thumbnail;
 		await withCasRetry(bucket, async (cas) => {
 			const obj = await bucket.get(key);
-			await cas.put(
-				key,
-				JSON.stringify(thumbnailRecord({ deleted: true })),
-				obj ? { onlyIfEtagMatches: obj.etag } : { onlyIfNotExists: true },
-			);
+			// An absent record may already have been purged; retirement must never recreate it.
+			if (!obj) return;
+			await cas.put(key, JSON.stringify(thumbnailRecord({ deleted: true })), {
+				onlyIfEtagMatches: obj.etag,
+			});
 		});
 	}
 
@@ -154,9 +174,15 @@ export class ThumbnailService {
 			await this.bucket.put(key, JSON.stringify({ started_at: new Date().toISOString() }), {
 				onlyIfNotExists: true,
 			});
+			try {
+				await this.assertActive(pid, nid);
+			} catch (error) {
+				await this.bucket.delete(key);
+				throw error;
+			}
 			return true;
 		} catch (error) {
-			if (error instanceof PreconditionFailedError) return false;
+			if (error instanceof PreconditionFailedError || error instanceof NotFoundError) return false;
 			throw error;
 		}
 	}
@@ -171,13 +197,16 @@ export class ThumbnailService {
 			return null;
 		};
 		const {
+			project,
 			notebook: { meta, source },
 			record,
 		} = await all({
+			project: () => this.getProject(pid),
 			notebook: () => this.notebooks.getNotebook(pid, nid),
 			record: () => this.get(pid, nid),
 		});
-		if (meta.status === 'deleted') return skip('deleted');
+		if (!project || project.status === 'deleted' || meta.status === 'deleted')
+			return skip('deleted');
 		if (source.type !== 'local') return skip('non_local_source');
 		if (record?.custom) return skip('custom_selected');
 		if (record?.deleted) return skip('deleted');
@@ -216,14 +245,15 @@ export class ThumbnailService {
 		if (current?.deleted) return false;
 		if (Date.now() >= deadlineAt) return false;
 		const image = await this.writeImage(pid, nid, bytes);
-		if (Date.now() >= deadlineAt) return false;
-		// Image transfer can outlive a save or deletion; validate the source again before publication.
-		const fresh = await this.prepare(pid, nid);
-		if (!fresh || fresh.hash !== capture.hash || fresh.versionId !== capture.versionId)
-			return false;
-		await this.assertActive(pid, nid);
-		if (Date.now() >= deadlineAt) return false;
+		let published = false;
 		try {
+			if (Date.now() >= deadlineAt) return false;
+			// Image transfer can outlive a save or deletion; validate the source again before publication.
+			const fresh = await this.prepare(pid, nid);
+			if (!fresh || fresh.hash !== capture.hash || fresh.versionId !== capture.versionId)
+				return false;
+			await this.assertActive(pid, nid);
+			if (Date.now() >= deadlineAt) return false;
 			await this.bucket.put(
 				key,
 				JSON.stringify(
@@ -238,10 +268,19 @@ export class ThumbnailService {
 				),
 				obj ? { onlyIfEtagMatches: obj.etag } : { onlyIfNotExists: true },
 			);
+			published = true;
+			await this.checkPublication(pid, nid);
 			return true;
 		} catch (error) {
 			if (error instanceof PreconditionFailedError) return false;
+			if (error instanceof NotFoundError) {
+				published = false;
+				return false;
+			}
 			throw error;
+		} finally {
+			if (!published)
+				await this.bucket.delete(paths.project(pid).notebook(nid).thumbnailImage(image.id));
 		}
 	}
 
@@ -257,9 +296,11 @@ export class ThumbnailService {
 
 	async prune(pid: ProjectId, nid: NotebookId, now = Date.now()): Promise<void> {
 		const nb = paths.project(pid).notebook(nid);
-		const candidates = (await listAllObjects(this.bucket, nb.thumbnailImages)).filter(
-			(o) => now - o.uploaded.getTime() > Millis.days(1),
-		);
+		const { images, attempts } = await all({
+			images: () => listAllObjects(this.bucket, nb.thumbnailImages),
+			attempts: () => listAllObjects(this.bucket, `${nb.base}/thumbnail-attempts/`),
+		});
+		const candidates = images.filter((o) => now - o.uploaded.getTime() > Millis.days(1));
 		// New publications only reference newly-created objects, so old unreferenced IDs cannot return.
 		const current = await this.get(pid, nid);
 		const keep = new Set(
@@ -267,7 +308,10 @@ export class ThumbnailService {
 				.filter(Boolean)
 				.map((id) => nb.thumbnailImage(id)),
 		);
-		const stale = candidates.filter((o) => !keep.has(o.key)).map((o) => o.key);
+		const stale = [
+			...candidates.filter((o) => !keep.has(o.key)),
+			...attempts.filter((o) => now - o.uploaded.getTime() > Millis.days(1)),
+		].map((o) => o.key);
 		if (stale.length > 0) await this.bucket.delete(stale);
 	}
 }

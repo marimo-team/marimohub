@@ -87,6 +87,49 @@ describe('shutdown capture', () => {
 		await captureThumbnail(sandbox, notebooks, pid, nid, 'sandbox', '/workspace', Date.now() + 100);
 		expect(exec).not.toHaveBeenCalled();
 	});
+	it('does not consume the attempt when preparation leaves too little time', async () => {
+		const { notebooks, pid, nid } = await setup();
+		const sandbox = makeFakeSandbox().instance;
+		const capture = (await notebooks.thumbnails.prepare(pid, nid))!;
+		vi.useFakeTimers();
+		vi.spyOn(notebooks.thumbnails, 'prepare').mockImplementation(async () => {
+			vi.setSystemTime(Date.now() + 800);
+			return capture;
+		});
+		const claim = vi.spyOn(notebooks.thumbnails, 'claimAttempt');
+		const exec = vi.spyOn(sandbox, 'exec');
+		await captureThumbnail(sandbox, notebooks, pid, nid, 'budget', '/workspace', Date.now() + 2000);
+		expect(claim).not.toHaveBeenCalled();
+		expect(exec).not.toHaveBeenCalled();
+	});
+	it('waits for timed-out execution to settle within the cleanup reserve', async () => {
+		const { notebooks, pid, nid } = await setup();
+		const sandbox = makeFakeSandbox().instance;
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		vi.spyOn(sandbox, 'exec').mockImplementation(async () => {
+			entered.resolve();
+			await release.promise;
+			return { success: true, stdout: JSON.stringify({ status: 'render_failed' }), stderr: '' };
+		});
+		const log = vi.spyOn(logs, 'logEvent');
+		vi.useFakeTimers();
+		const pending = captureThumbnail(
+			sandbox,
+			notebooks,
+			pid,
+			nid,
+			'settlement',
+			'/workspace',
+			Date.now() + 2000,
+		);
+		await entered.promise;
+		await vi.advanceTimersByTimeAsync(1500);
+		expect(log).not.toHaveBeenCalled();
+		release.resolve();
+		await pending;
+		expect(log).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: 'timeout' }));
+	});
 	it.each(['prepare', 'exec'] as const)(
 		'returns at the deadline and ignores late %s completion',
 		async (stage) => {

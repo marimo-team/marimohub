@@ -177,7 +177,7 @@ export default function ThumbnailEditor({
 					{data?.has_custom && (
 						<Button
 							variant="ghost"
-							isDisabled={busy || loading}
+							isDisabled={busy || loading || !!source}
 							onPress={() => {
 								setError('');
 								void save

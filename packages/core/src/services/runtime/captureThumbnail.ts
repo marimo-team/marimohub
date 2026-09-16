@@ -7,6 +7,8 @@ import { shellQuote } from './shell';
 import { THUMBNAIL_MAX_BYTES } from '../content/thumbnailPng';
 import { THUMBNAIL_PROGRAM } from './thumbnailProgram';
 
+export const THUMBNAIL_MAINTENANCE_BUDGET_MS = 3000;
+
 const CaptureResponseSchema = z.object({
 	status: z.enum([
 		'ok',
@@ -34,34 +36,44 @@ export async function captureThumbnail(
 ): Promise<void> {
 	const started = Date.now();
 	const deadline = Math.min(deadlineAt, started + 10_000);
+	const workDeadline = deadline - 500;
 	let outcome = 'skipped';
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	const remaining = () => Math.max(0, deadline - Date.now());
-	const expired = () => remaining() === 0;
+	let cancelled = false;
+	let execution: ReturnType<SandboxInstance['exec']> | undefined;
+	const remaining = () => Math.max(0, workDeadline - Date.now());
+	const expired = () => cancelled || remaining() === 0;
 	const run = async () => {
 		if (remaining() < 1000) {
 			outcome = 'insufficient_budget';
 			return;
 		}
 		const capture = await notebooks.thumbnails.prepare(pid, nid, (reason) => {
-			outcome = reason;
+			if (!expired()) outcome = reason;
 		});
 		if (!capture || expired()) return;
-		if (!(await notebooks.thumbnails.claimAttempt(pid, nid, sandboxId))) {
+		if (remaining() < 1000) {
+			outcome = 'insufficient_budget';
+			return;
+		}
+		const claimed = await notebooks.thumbnails.claimAttempt(pid, nid, sandboxId);
+		if (expired()) return;
+		if (!claimed) {
 			outcome = 'already_attempted';
 			return;
 		}
-		if (expired()) return;
 		const input = `/tmp/marimohub-thumbnail-${crypto.randomUUID()}.html`;
 		await sandbox.writeFiles([{ path: input, content: capture.html }]);
-		if (expired() || remaining() < 1000) {
+		if (expired()) return;
+		if (remaining() < 1000) {
 			outcome = 'insufficient_budget';
 			return;
 		}
 		const venv = shellQuote(`${workdir}/.venv/bin/python`);
-		const args = `-c ${shellQuote(THUMBNAIL_PROGRAM)} ${shellQuote(input)} ${deadline / 1000}`;
+		const args = `-c ${shellQuote(THUMBNAIL_PROGRAM)} ${shellQuote(input)} ${workDeadline / 1000}`;
 		const command = `if [ -x ${venv} ]; then exec ${venv} ${args}; else exec python3 ${args}; fi`;
-		const result = await sandbox.exec(command, { timeout: remaining() });
+		execution = sandbox.exec(command, { timeout: remaining() });
+		const result = await execution;
 		if (expired()) return;
 		if (!result.success) {
 			outcome = 'exec_failed';
@@ -71,23 +83,35 @@ export async function captureThumbnail(
 		outcome = response.status;
 		if (response.status !== 'ok' || !response.png || expired()) return;
 		const bytes = Uint8Array.from(atob(response.png), (c) => c.charCodeAt(0));
-		outcome = (await notebooks.thumbnails.publish(pid, nid, capture, bytes, deadline))
-			? 'captured'
-			: 'superseded';
+		const published = await notebooks.thumbnails.publish(pid, nid, capture, bytes, workDeadline);
+		if (!expired()) outcome = published ? 'captured' : 'superseded';
 	};
 	try {
 		await Promise.race([
 			run(),
 			new Promise<void>((resolve) => {
 				timer = setTimeout(() => {
+					cancelled = true;
 					outcome = 'timeout';
 					resolve();
 				}, remaining());
 			}),
 		]);
 	} catch {
-		outcome = 'failed';
+		if (!cancelled) outcome = 'failed';
 	} finally {
+		cancelled = true;
+		if (timer) clearTimeout(timer);
+		// The helper and exec have their own deadlines. Allow transport cleanup to settle,
+		// without letting an unresponsive provider hold up sandbox destruction.
+		if (execution) {
+			await Promise.race([
+				execution.catch(() => {}),
+				new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+				}),
+			]);
+		}
 		if (timer) clearTimeout(timer);
 		logEvent({
 			event: 'thumbnail_capture',
