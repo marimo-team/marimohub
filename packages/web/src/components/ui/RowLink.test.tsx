@@ -9,6 +9,18 @@ function renderRow(ui: ReactNode) {
 }
 
 describe('RowLink', () => {
+	it('stretches the card body below the preview without list spacing', () => {
+		renderRow(
+			<RowLink to="/x" card label="Card" preview={<div>Preview</div>}>
+				<span>Body</span>
+			</RowLink>,
+		);
+		const link = screen.getByRole('link', { name: 'Card' });
+		expect(link).toHaveClass('flex-col', 'p-0');
+		expect(link).not.toHaveClass('items-center', 'gap-3');
+		expect(link.parentElement).toHaveClass('items-stretch');
+		expect(screen.getByText('Body').parentElement).toHaveClass('px-4', 'py-3');
+	});
 	it('renders a real anchor pointing at `to` (so cmd/middle-click can open a new tab)', () => {
 		renderRow(
 			<RowLink to="/projects/p1" label="Open project">

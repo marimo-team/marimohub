@@ -32,6 +32,7 @@
 		"react": "^19.1.1",
 		"react-aria-components": "catalog:",
 		"react-dom": "^19.1.1",
+		"react-image-crop": "catalog:",
 		"react-router-dom": "^7.18.2",
 		"simple-icons": "catalog:",
 		"sonner": "catalog:",

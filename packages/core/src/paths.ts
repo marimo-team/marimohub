@@ -34,6 +34,10 @@ export interface VersionPaths {
 }
 
 export interface NotebookPaths {
+	thumbnail: string;
+	thumbnailImages: string;
+	thumbnailAttempt: (sandboxId: string) => string;
+	thumbnailImage: (id: string) => string;
 	deepLinksPrefix: string;
 	deepLinkIndex: (slug: string) => string;
 	/** Base directory: `projects/{pid}/notebooks/{nid}` */
@@ -191,6 +195,11 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 	const workspace = `${base}/workspace`;
 	return {
 		base,
+		thumbnail: `${base}/thumbnail.json`,
+		thumbnailImages: `${base}/thumbnails/`,
+		thumbnailAttempt: (sandboxId: string) =>
+			`${base}/thumbnail-attempts/${encodeURIComponent(sandboxId)}.json`,
+		thumbnailImage: (id: string) => `${base}/thumbnails/${id}.png`,
 		meta: `${base}/meta.json`,
 		readme: `${base}/README.md`,
 		source: `${base}/source.json`,

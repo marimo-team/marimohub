@@ -722,6 +722,7 @@ export function createFromEnv(
 			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),
+			automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false',
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,

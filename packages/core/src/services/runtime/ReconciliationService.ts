@@ -1,3 +1,4 @@
+import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
@@ -82,6 +83,10 @@ export class ReconciliationService {
 		 * so without this Rule 3 would reap every run longer than the grace window.
 		 */
 		private jobRuns?: ActiveSandboxSource,
+		thumbnailOptions?: {
+			automaticThumbnails?: boolean;
+			thumbnailDeadline?: () => number | undefined;
+		},
 	) {
 		this.diagnosticLeases = new SandboxDiagnosticLease(bucket);
 		this.retirer = new SessionRetirer({
@@ -91,10 +96,12 @@ export class ReconciliationService {
 			bucket,
 			persistWorkspace,
 			workdir,
+			...thumbnailOptions,
 		});
 	}
 
 	async reconcile(opts?: { orphanGraceMs?: number }): Promise<ReconcileResult> {
+		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
 		// No provider truth to reconcile against — leave the bucket sweep to do its
 		// record-only job and report a clean no-op.
 		if (!this.compute.listActive) {
@@ -214,7 +221,7 @@ export class ReconciliationService {
 					!authorizationExpired &&
 					!liveNotebooks.has(session.notebook_id) &&
 					sessionPersistsEdits(session);
-				if (await this.retirer.reclaim(session, save)) reclaimed++;
+				if (await this.retirer.reclaim(session, save, thumbnailDeadlineAt)) reclaimed++;
 			} else if (isLive && !activeIds.has(sandboxId)) {
 				// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
 				// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it

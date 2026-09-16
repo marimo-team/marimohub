@@ -110,6 +110,10 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 		deps.sandbox.workdir,
 		// Job sandboxes have no session record; without this Rule 3 would reap them.
 		deps.services.jobRuns,
+		{
+			automaticThumbnails: deps.sandbox.automaticThumbnails,
+			thumbnailDeadline: deps.sandbox.thumbnailDeadline,
+		},
 	);
 	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
 	const lock = new MaintenanceLock(deps.bucket);
@@ -221,6 +225,8 @@ export function startSessionLifecycle(deps: ApiDeps): (() => void) | undefined {
 	const svc = new SessionLifecycleService(sessions, notebooks, deps.compute, deps.bucket, {
 		...lifetime,
 		persistWorkspace: deps.sandbox.persistWorkspace,
+		automaticThumbnails: deps.sandbox.automaticThumbnails,
+		thumbnailDeadline: deps.sandbox.thumbnailDeadline,
 		workdir: deps.sandbox.workdir,
 	});
 	const lock = new MaintenanceLock(deps.bucket, paths.sessionLifecycleLock);

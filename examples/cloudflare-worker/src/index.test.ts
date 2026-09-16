@@ -29,6 +29,17 @@ afterEach(() => {
 });
 
 describe('Cloudflare Worker configuration', () => {
+	it('supports disabling automatic thumbnails while keeping uploads available', () => {
+		const deps = buildDeps(new Request('https://hub.example.com'), {
+			AUTH_MODE: 'dev',
+			NOTEBOOKS_BUCKET: {},
+			SANDBOX: {},
+			MARIMOHUB_AUTOMATIC_THUMBNAILS: 'false',
+		} as unknown as Env);
+		expect(deps.sandbox.automaticThumbnails).toBe(false);
+		expect(deps.services.notebooks.thumbnails).toBeDefined();
+	});
+
 	it('hides configured profiles while warning that Cloudflare ignores them', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const deps = buildDeps(new Request('https://hub.example.com'), {

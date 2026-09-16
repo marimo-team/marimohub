@@ -1,9 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
 
+afterEach(() => localStorage.removeItem('notebook-view'));
+
 describe('notebook filters', () => {
+	it('loads gallery metadata once per project and never in list mode', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			notebooks: [notebook(), { ...notebook(), id: 'nb-2', title: 'Second' }],
+		});
+		await renderProject();
+		expect(calls.filter((call) => call.url.includes('/thumbnail'))).toHaveLength(0);
+		await user.click(screen.getByRole('button', { name: 'Gallery' }));
+		await waitFor(() =>
+			expect(calls.filter((call) => call.url.endsWith(`/projects/${PID}/thumbnails`))).toHaveLength(
+				1,
+			),
+		);
+		expect(calls.filter((call) => call.url.includes('/thumbnail'))).toHaveLength(1);
+	});
 	it('provides labeled controls and announces the result count', async () => {
 		const user = userEvent.setup();
 		makeFetch();
@@ -110,51 +127,63 @@ describe('notebook filters', () => {
 });
 
 describe('deleted notebook tombstones', () => {
-	it('removes live actions and keeps only read-only history and exports', async () => {
-		const user = userEvent.setup();
-		makeFetch({
-			notebooks: [
-				{
-					...notebook(),
-					status: 'deleted',
-					source_type: 'git',
-				},
-			],
-			sessions: [stoppableSession()],
-		});
-		await renderProject(`/projects/${PID}?status=deleted`);
+	it.each(['list', 'gallery'])(
+		'keeps full-width deleted rows and historical actions in %s mode',
+		async (view) => {
+			localStorage.setItem('notebook-view', view);
+			const user = userEvent.setup();
+			makeFetch({
+				notebooks: [
+					{
+						...notebook(),
+						status: 'deleted',
+						source_type: 'git',
+					},
+				],
+				sessions: [stoppableSession()],
+			});
+			await renderProject(`/projects/${PID}?status=deleted`);
 
-		const row = await screen.findByTestId('notebook-row');
-		expect(within(row).getByText('Forecast')).toBeInTheDocument();
-		expect(within(row).getByText('deleted')).toBeInTheDocument();
-		expect(within(row).queryByRole('link', { name: 'Forecast' })).not.toBeInTheDocument();
-		expect(within(row).queryByRole('button', { name: 'Shut down kernel' })).not.toBeInTheDocument();
+			const row = await screen.findByTestId('notebook-row');
+			expect(within(row).getByText('Forecast')).toBeInTheDocument();
+			if (view === 'gallery') {
+				expect(row).toHaveClass('col-span-full');
+				expect(row.parentElement).toHaveClass('grid');
+			}
+			expect(within(row).getByText('deleted')).toBeInTheDocument();
+			expect(within(row).queryByRole('link', { name: 'Forecast' })).not.toBeInTheDocument();
+			expect(
+				within(row).queryByRole('button', { name: 'Shut down kernel' }),
+			).not.toBeInTheDocument();
 
-		await user.click(within(row).getByRole('button', { name: 'Historical actions for Forecast' }));
-		const menu = await screen.findByRole('menu');
-		for (const label of [
-			'View static outputs',
-			'Version history',
-			'Download notebook file',
-			'Download outputs (HTML)',
-			'Download workspace',
-		]) {
-			expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument();
-		}
-		for (const label of [
-			'Jobs & schedules',
-			'Rename',
-			'Duplicate',
-			'Run as app',
-			'Sync settings',
-			'Delete',
-		]) {
-			expect(within(menu).queryByRole('menuitem', { name: label })).not.toBeInTheDocument();
-		}
+			await user.click(
+				within(row).getByRole('button', { name: 'Historical actions for Forecast' }),
+			);
+			const menu = await screen.findByRole('menu');
+			for (const label of [
+				'View static outputs',
+				'Version history',
+				'Download notebook file',
+				'Download outputs (HTML)',
+				'Download workspace',
+			]) {
+				expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument();
+			}
+			for (const label of [
+				'Jobs & schedules',
+				'Rename',
+				'Duplicate',
+				'Run as app',
+				'Sync settings',
+				'Delete',
+			]) {
+				expect(within(menu).queryByRole('menuitem', { name: label })).not.toBeInTheDocument();
+			}
 
-		await user.click(within(menu).getByRole('menuitem', { name: 'View static outputs' }));
-		expect(await screen.findByText('snapshot page')).toBeInTheDocument();
-	});
+			await user.click(within(menu).getByRole('menuitem', { name: 'View static outputs' }));
+			expect(await screen.findByText('snapshot page')).toBeInTheDocument();
+		},
+	);
 });
 
 describe('environment and access', () => {

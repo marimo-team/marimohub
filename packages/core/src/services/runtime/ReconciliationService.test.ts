@@ -17,6 +17,7 @@ import { NotebookService } from '../content/NotebookService';
 import { ReconciliationService } from './ReconciliationService';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { SessionService } from './SessionService';
+import { SessionRetirer } from './SessionRetirer';
 
 describe('ReconciliationService', () => {
 	let bucket: MemoryBucket;
@@ -235,6 +236,23 @@ describe('ReconciliationService', () => {
 			orphanSandboxIds: [],
 			markedDeadSessions: [],
 		});
+	});
+
+	it('shares one short thumbnail deadline across a reconciliation burst', async () => {
+		for (const id of [terminalId, goneId]) {
+			const session = await createSession(id);
+			await sessions.terminate(projectId, session.session_id);
+		}
+		compute.active = [{ id: terminalId }, { id: goneId }];
+		const started = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(started);
+		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockImplementation(async () => {
+			clock.mockReturnValue(started + 4000);
+			return true;
+		});
+		await reconciler.reconcile();
+		expect(reclaim).toHaveBeenCalledTimes(2);
+		expect(reclaim.mock.calls.map((call) => call[2])).toEqual([started + 3000, started + 3000]);
 	});
 
 	it('Rule 1: tears down a still-running sandbox behind a terminal record', async () => {

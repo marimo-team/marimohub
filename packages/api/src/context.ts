@@ -162,6 +162,8 @@ export interface SandboxConfig {
 	 * of the working dir into `workspace/` on teardown and restores it next session.
 	 */
 	persistWorkspace: 'source' | 'workspace';
+	automaticThumbnails?: boolean;
+	thumbnailDeadline?: () => number | undefined;
 	/**
 	 * Session lifetime policy. Optional — absent (library/Workers wiring, tests)
 	 * means sessions get no `expires_at` and no lifecycle sweep runs; the

@@ -121,6 +121,8 @@ ETag compare-and-swap (conditional PUT) with retries.
 
 These CAS-managed records also have one writer each:
 
+- `ThumbnailService` owns each notebook-local `thumbnail.json` CAS record, immutable
+  `thumbnails/{id}.png` images, and create-once `thumbnail-attempts/{sandbox-id}.json` markers.
 - `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each
   notebook-local `deep-links/{slug}.json` index marker. Global records use CAS
   release markers and must not be deleted.

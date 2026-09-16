@@ -1,4 +1,5 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- React does not recognize the HTML search element. */
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, Filter } from 'lucide-react';
 import { Button } from './Button';
@@ -9,6 +10,7 @@ import { hasListFilters } from '@/lib/listFilters';
 import type { ListFilterStatus, ListFilterValues } from '@/lib/listFilters';
 
 interface ListFiltersProps<Status extends string> {
+	actions?: ReactNode;
 	label: string;
 	itemName: string;
 	values: ListFilterValues<Status>;
@@ -27,6 +29,7 @@ function formValue(data: FormData, name: string): string | undefined {
 }
 
 export function ListFilters<Status extends string>({
+	actions,
 	label,
 	itemName,
 	values,
@@ -69,7 +72,7 @@ export function ListFilters<Status extends string>({
 
 	return (
 		<div className="mb-3">
-			<div className="flex items-center gap-2">
+			<div className="flex flex-wrap items-center gap-2">
 				<Button
 					type="button"
 					size="sm"
@@ -92,6 +95,7 @@ export function ListFilters<Status extends string>({
 				>
 					{announcement}
 				</output>
+				{actions && <div className="ml-auto flex shrink-0 items-center gap-1">{actions}</div>}
 			</div>
 			{isOpen ? (
 				<form

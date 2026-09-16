@@ -4,15 +4,22 @@ import userEvent from '@testing-library/user-event';
 import { ListResults } from './ListResults';
 
 interface RenderOptions {
+	gallery?: boolean;
 	count?: number;
 	isFiltered?: boolean;
 	isLoading?: boolean;
 }
 
-function renderResults({ count = 1, isFiltered = false, isLoading = false }: RenderOptions = {}) {
+function renderResults({
+	gallery = false,
+	count = 1,
+	isFiltered = false,
+	isLoading = false,
+}: RenderOptions = {}) {
 	const onReset = vi.fn();
 	const result = render(
 		<ListResults
+			gallery={gallery}
 			count={count}
 			emptyState={<p>No notebooks yet</p>}
 			isFetching={false}
@@ -29,6 +36,22 @@ function renderResults({ count = 1, isFiltered = false, isLoading = false }: Ren
 }
 
 describe('ListResults', () => {
+	it('renders gallery children in a responsive grid', () => {
+		renderResults({ gallery: true });
+		expect(screen.getByText('Notebook row').parentElement).toHaveClass(
+			'grid',
+			'sm:grid-cols-2',
+			'xl:grid-cols-3',
+		);
+	});
+	it('uses card placeholders while the gallery loads', () => {
+		renderResults({ gallery: true, isLoading: true });
+		const cards = screen.getAllByTestId('gallery-skeleton-card');
+		expect(cards).toHaveLength(3);
+		expect(cards[0].parentElement).toHaveClass('grid');
+		expect(cards[0].firstChild).toHaveClass('aspect-video');
+		expect(screen.queryByTestId('list-skeleton-row')).not.toBeInTheDocument();
+	});
 	it('shows skeleton rows while loading', () => {
 		renderResults({ isLoading: true });
 

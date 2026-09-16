@@ -29,6 +29,7 @@ declare global {
 		DEFAULT_ROLE?: AssignableRole | 'none';
 		MARIMOHUB_SUPER_ADMINS?: string;
 		PERSIST_WORKSPACE?: 'source' | 'workspace';
+		MARIMOHUB_AUTOMATIC_THUMBNAILS?: string;
 		AI_UPSTREAM_BASE_URL?: string;
 		AI_UPSTREAM_API_KEY?: string;
 		AI_MODEL?: string;

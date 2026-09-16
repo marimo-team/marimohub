@@ -18,6 +18,7 @@ import { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { SessionRetirer } from './SessionRetirer';
 import { SessionService } from './SessionService';
+import * as thumbnailCapture from './captureThumbnail';
 import { marimoSurface } from './surfaces/marimo';
 import { SurfaceManager } from './surfaces/SurfaceManager';
 import { SurfaceRegistry } from './surfaces/registry';
@@ -91,6 +92,58 @@ describe('SessionRetirer', () => {
 			expectedActivity: 'idle',
 		});
 	}
+
+	it.each([true, false])(
+		'captures a thumbnail only after save and before destruction (enabled=%s)',
+		async (enabled) => {
+			const { instance } = makeFakeSandbox();
+			const order: string[] = [];
+			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+				order.push('save');
+				return true;
+			});
+			vi.spyOn(thumbnailCapture, 'captureThumbnail').mockImplementation(async () => {
+				order.push('thumbnail');
+			});
+			vi.spyOn(instance, 'destroy').mockImplementation(async () => {
+				order.push('destroy');
+			});
+			const session = await persistentSession();
+			await sessions.beginTerminating(projectId, session.session_id);
+			await new SessionRetirer({
+				sessions,
+				notebooks,
+				compute: fakeComputeFrom(instance),
+				bucket,
+				persistWorkspace: 'source',
+				automaticThumbnails: enabled,
+			}).retire(session);
+			expect(order).toEqual(enabled ? ['save', 'thumbnail', 'destroy'] : ['save', 'destroy']);
+		},
+	);
+
+	it.each(['ineligible', 'failed'] as const)(
+		'skips thumbnails after an %s save',
+		async (result) => {
+			const { instance } = makeFakeSandbox();
+			const order: string[] = [];
+			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+				order.push('save');
+				if (result === 'failed') throw new Error('save failed');
+				return false;
+			});
+			vi.spyOn(thumbnailCapture, 'captureThumbnail').mockImplementation(async () => {
+				order.push('thumbnail');
+			});
+			vi.spyOn(instance, 'destroy').mockImplementation(async () => {
+				order.push('destroy');
+			});
+			const session = await persistentSession();
+			await sessions.beginTerminating(projectId, session.session_id);
+			await retirer(fakeComputeFrom(instance)).retire(session);
+			expect(order).toEqual(['save', 'destroy']);
+		},
+	);
 
 	it('marks a destroyed editor as reclaimed before releasing its claim', async () => {
 		const { instance, calls } = makeFakeSandbox();

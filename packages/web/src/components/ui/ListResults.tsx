@@ -6,6 +6,7 @@ import { ListContainer } from './PageLayout';
 import { Skeleton } from './Skeleton';
 
 interface ListResultsProps {
+	gallery?: boolean;
 	children: ReactNode;
 	count: number;
 	emptyState: ReactNode;
@@ -18,9 +19,11 @@ interface ListResultsProps {
 }
 
 const SKELETON_ROWS = [0, 1, 2];
+const GALLERY_CLASSES = 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3';
 
 export function ListResults({
 	children,
+	gallery = false,
 	count,
 	emptyState,
 	isFetching,
@@ -30,9 +33,13 @@ export function ListResults({
 	onReset,
 	resultsId,
 }: ListResultsProps) {
-	let content: ReactNode = <ListContainer>{children}</ListContainer>;
+	let content: ReactNode = gallery ? (
+		<div className={GALLERY_CLASSES}>{children}</div>
+	) : (
+		<ListContainer>{children}</ListContainer>
+	);
 	if (isLoading) {
-		content = <ListSkeleton />;
+		content = <ListSkeleton gallery={gallery} />;
 	} else if (count === 0) {
 		content = isFiltered ? (
 			<EmptyState
@@ -57,7 +64,27 @@ export function ListResults({
 	);
 }
 
-function ListSkeleton() {
+function ListSkeleton({ gallery }: { gallery: boolean }) {
+	if (gallery) {
+		return (
+			<div className={GALLERY_CLASSES}>
+				{SKELETON_ROWS.map((row) => (
+					<div
+						key={row}
+						data-testid="gallery-skeleton-card"
+						aria-hidden="true"
+						className="overflow-hidden rounded-lg border"
+					>
+						<Skeleton className="aspect-video w-full rounded-none" />
+						<div className="flex flex-col gap-2 p-4">
+							<Skeleton className="h-4 w-36" />
+							<Skeleton className="h-3 w-52 max-w-full" />
+						</div>
+					</div>
+				))}
+			</div>
+		);
+	}
 	return (
 		<ListContainer>
 			{SKELETON_ROWS.map((row) => (

@@ -18,6 +18,8 @@ import { SandboxProvisioner } from './SandboxProvisioner';
 import { kernelActiveConnections, SessionLifecycleService } from './sessionLifecycle';
 import type { SessionLifecycleConfig } from './sessionLifecycle';
 import { SessionService } from './SessionService';
+import { SessionRetirer } from './SessionRetirer';
+import * as thumbnailCapture from './captureThumbnail';
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SNAPSHOT_INTERVAL_MS = 2 * 60 * 1000;
@@ -95,6 +97,17 @@ describe('SessionLifecycleService', () => {
 	}
 
 	const getStored = (s: Session) => sessions.getSession(s.project_id, s.session_id);
+
+	it('shares one short thumbnail deadline across a lifecycle sweep', async () => {
+		await putSession({ status: 'expired' });
+		await putSession({ status: 'expired', sandbox_id: createSandboxId() });
+		const started = Date.now();
+		vi.spyOn(Date, 'now').mockReturnValue(started);
+		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockResolvedValue(true);
+		await makeService().sweep(now);
+		expect(reclaim).toHaveBeenCalledTimes(2);
+		expect(reclaim.mock.calls.map((call) => call[2])).toEqual([started + 3000, started + 3000]);
+	});
 
 	describe('lifetime deadline', () => {
 		it('reaps a session past its deadline with no editors (save + destroy + terminated)', async () => {
@@ -458,6 +471,7 @@ describe('SessionLifecycleService', () => {
 
 	describe('periodic snapshots', () => {
 		it('saves a due session source-only and advances last_snapshot_at', async () => {
+			const render = vi.spyOn(thumbnailCapture, 'captureThumbnail');
 			const captureSpy = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
 			const s = await putSession({
 				expires_at: iso(60 * 60 * 1000),
@@ -467,6 +481,7 @@ describe('SessionLifecycleService', () => {
 			const result = await makeService().sweep(now);
 
 			expect(result.snapshotted).toBe(1);
+			expect(render).not.toHaveBeenCalled();
 			expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
 			// Source-only: the workspace mirror is refreshed at teardown, not per snapshot.
 			expect(captureSpy).toHaveBeenCalledWith(

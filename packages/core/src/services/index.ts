@@ -616,3 +616,10 @@ export async function ensureInitialized(
 		);
 	}
 }
+
+export {
+	ThumbnailService,
+	ThumbnailRecordSchema,
+	ThumbnailMetadataSchema,
+} from './content/ThumbnailService';
+export { THUMBNAIL_MAX_BYTES, validateThumbnailPng } from './content/thumbnailPng';

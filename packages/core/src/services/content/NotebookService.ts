@@ -1,3 +1,4 @@
+import { ThumbnailService } from './ThumbnailService';
 import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
@@ -140,6 +141,7 @@ export interface CommitSessionResult {
 
 export class NotebookService {
 	readonly synced: SyncedNotebookService;
+	readonly thumbnails: ThumbnailService;
 	readonly workspace: NotebookWorkspaceService;
 
 	constructor(
@@ -149,6 +151,7 @@ export class NotebookService {
 		private sessions = new SessionService(bucket, metrics),
 		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {
+		this.thumbnails = new ThumbnailService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
 			pruneVersions: (projectId, notebookId, keep) =>
@@ -990,7 +993,10 @@ export class NotebookService {
 			},
 			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 		);
-		if (!written) return null;
+		if (!written) {
+			await this.thumbnails.retire(projectId, notebookId);
+			return null;
+		}
 
 		// Soft-delete in snapshot
 		const snapshot = await this.catalog.updateNotebookEntry(
@@ -1005,6 +1011,8 @@ export class NotebookService {
 				notebook_count: Math.max(0, p.notebook_count - 1),
 			}),
 		);
+
+		await this.thumbnails.retire(projectId, notebookId);
 
 		// Drop the app-singleton claim: a deleted notebook's id never recurs, so
 		// without this the pointer would leak forever (the stale-claim self-heal
@@ -1259,8 +1267,10 @@ export class NotebookService {
 	 * or cron here — callers (a future GC sweep) own the orchestration.
 	 */
 	async hardDeleteNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
-		const { meta } = await this.getNotebook(projectId, notebookId);
-		if (meta.status !== 'deleted') {
+		const metaKey = paths.project(projectId).notebook(notebookId).meta;
+		const obj = await this.bucket.get(metaKey);
+		const meta = obj ? await readStored(NotebookMetaSchema, obj, metaKey) : null;
+		if (meta && meta.status !== 'deleted') {
 			throw new Error(
 				`Refusing to hard-delete notebook ${notebookId}: status is "${meta.status}", expected "deleted"`,
 			);
@@ -1322,6 +1332,13 @@ export class NotebookService {
 		for (const project of snapshot.projects) {
 			if (project.status === 'deleted') continue; // owned by sweepDeletedProjects
 			for (const nb of project.notebooks) {
+				await this.thumbnails.prune(project.id, nb.id).catch((error) => {
+					logOperationalError(
+						'thumbnails.cleanup_failed',
+						{ operation: 'prune', project_id: project.id, notebook_id: nb.id },
+						error,
+					);
+				});
 				if (nb.status === 'deleted' && now - Date.parse(nb.updated_at) >= retentionMs) {
 					stale.push({ projectId: project.id, notebookId: nb.id });
 				}

@@ -3403,6 +3403,126 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "notebooks.thumbnail",
+			"command": ["notebooks", "thumbnail"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/thumbnail",
+			"summary": "Get thumbnail metadata",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.thumbnail.image",
+			"command": ["notebooks", "thumbnail", "image"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/thumbnail/image",
+			"summary": "Read the selected thumbnail",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.thumbnail.remove",
+			"command": ["notebooks", "thumbnail", "remove"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/thumbnail",
+			"summary": "Remove the custom thumbnail",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.thumbnail.set",
+			"command": ["notebooks", "thumbnail", "set"],
+			"method": "PUT",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/thumbnail",
+			"summary": "Upload a custom cropped thumbnail",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "notebooks.update",
 			"command": ["notebooks", "update"],
 			"method": "PATCH",
@@ -4388,6 +4508,28 @@
 					}
 				]
 			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.thumbnails",
+			"command": ["projects", "thumbnails"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/thumbnails",
+			"summary": "List visible notebook thumbnails",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",

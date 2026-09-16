@@ -45,6 +45,7 @@
 		"./ports/subject-context": "./src/ports/subjectContext.ts",
 		"./remote-workspace": "./src/integrations/remoteWorkspace.ts",
 		"./surface-state": "./src/services/runtime/surfaces/state.ts",
+		"./testing/thumbnail": "./src/testing/thumbnail.ts",
 		"./testing": "./src/testing/index.ts",
 		"./testing/browse-contract": "./src/testing/browseContract.ts",
 		"./testing/compute-contract": "./src/testing/computeContract.ts",

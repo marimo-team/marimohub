@@ -1,5 +1,6 @@
 import { projectActionMinRole } from '../authorization/actions';
 import { tokenGrantAllowsProject } from '../../tokenGrants';
+import { ThumbnailService } from './ThumbnailService';
 import type { Bucket } from '../../ports/bucket';
 import { effectiveRole, isSuperAdmin, roleAtLeast, subjectDefaultRole } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
@@ -795,7 +796,32 @@ export class ProjectService {
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
-		if (!written) return null;
+		const retireThumbnails = async () => {
+			try {
+				const notebooks =
+					(await this.catalog.getCurrentSnapshot()).projects.find((p) => p.id === id)?.notebooks ??
+					[];
+				await mapWithConcurrency(notebooks, BUCKET_SCAN_CONCURRENCY, (nb) =>
+					ThumbnailService.retire(this.bucket, id, nb.id).catch((error) => {
+						logOperationalError(
+							'thumbnails.cleanup_failed',
+							{ operation: 'retire', project_id: id, notebook_id: nb.id },
+							error,
+						);
+					}),
+				);
+			} catch (error) {
+				logOperationalError(
+					'thumbnails.cleanup_failed',
+					{ operation: 'retireProject', project_id: id },
+					error,
+				);
+			}
+		};
+		if (!written) {
+			await retireThumbnails();
+			return null;
+		}
 
 		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
 		// the GC sweep can find and purge it later, but mark it deleted so it drops
@@ -808,6 +834,7 @@ export class ProjectService {
 				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
 				projectCatalogPatch(updated, entry),
 		);
+		await retireThumbnails();
 		await this.deepLinks.releaseProject(id).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
 		});
@@ -822,8 +849,10 @@ export class ProjectService {
 	 * sweep) own removing the snapshot entry.
 	 */
 	async hardDeleteProject(id: ProjectId): Promise<void> {
-		const project = await this.getProject(id);
-		if (project.status !== 'deleted') {
+		const key = paths.project(id).meta;
+		const obj = await this.bucket.get(key);
+		const project = obj ? await readStored(ProjectSchema, obj, key) : null;
+		if (project && project.status !== 'deleted') {
 			throw new Error(
 				`Refusing to hard-delete project ${id}: status is "${project.status}", expected "deleted"`,
 			);

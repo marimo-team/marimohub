@@ -26,6 +26,7 @@ describe('Project — Notebook Actions: configuration', () => {
 				.map((item) => item.textContent),
 		).toEqual([
 			'Rename',
+			'Edit thumbnail',
 			'Duplicate',
 			'Run as app',
 			'Browse files',

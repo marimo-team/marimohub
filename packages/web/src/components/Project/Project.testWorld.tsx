@@ -157,6 +157,8 @@ export function makeFetch(
 				headers: { 'content-type': 'text/html' },
 			});
 
+		if (method === 'GET' && parsedUrl.pathname.endsWith(`/projects/${PID}/thumbnails`))
+			return jsonOk({});
 		if (method === 'GET' && parsedUrl.pathname.endsWith(`/projects/${PID}/notebooks`)) {
 			const q = parsedUrl.searchParams.get('q')?.toLocaleLowerCase();
 			const tag = parsedUrl.searchParams.get('tag');

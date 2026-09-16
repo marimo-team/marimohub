@@ -1,3 +1,4 @@
+import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import type { SessionMode } from '../../constants';
@@ -87,6 +88,8 @@ export interface SessionLifecycleConfig {
 	/** Consult the kernel before a lifetime/idle teardown; off = reap on schedule. */
 	connectionAware: boolean;
 	persistWorkspace: 'source' | 'workspace';
+	automaticThumbnails?: boolean;
+	thumbnailDeadline?: () => number | undefined;
 	workdir?: string;
 }
 
@@ -136,11 +139,14 @@ export class SessionLifecycleService {
 			compute,
 			bucket,
 			persistWorkspace: cfg.persistWorkspace,
+			automaticThumbnails: cfg.automaticThumbnails,
+			thumbnailDeadline: cfg.thumbnailDeadline,
 			workdir: cfg.workdir,
 		});
 	}
 
 	async sweep(now = Date.now()): Promise<SweepResult> {
+		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
 		const sessions = await this.sessions.listSessions();
 		// Candidates: `running` sessions, plus any terminal record still holding a
 		// sandbox_id that has not been confirmed destroyed. The `expired` ones are
@@ -244,7 +250,10 @@ export class SessionLifecycleService {
 						sessionPersistsEdits(s);
 					// Only `expired` reclaims are counted: for terminated/failed records the
 					// confirm-destroy is a routine no-op, not a recovered leak.
-					if ((await this.retirer.reclaim(s, save)) && s.status === 'expired') {
+					if (
+						(await this.retirer.reclaim(s, save, thumbnailDeadlineAt)) &&
+						s.status === 'expired'
+					) {
 						result.reclaimed++;
 					}
 					return;
@@ -258,12 +267,12 @@ export class SessionLifecycleService {
 					hasEditors || (this.cfg.connectionAware && active === null && !heartbeatStale);
 
 				if (pastAuthorizationDeadline) {
-					if (await this.gracefulTeardown(s, false)) result.reapedExpired++;
+					if (await this.gracefulTeardown(s, false, thumbnailDeadlineAt)) result.reapedExpired++;
 					return;
 				}
 
 				if (heartbeatStale && !hasEditors) {
-					if (await this.gracefulTeardown(s)) result.reapedIdle++;
+					if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt)) result.reapedIdle++;
 					return;
 				}
 				if (pastDeadline) {
@@ -279,7 +288,7 @@ export class SessionLifecycleService {
 							.catch(() => {});
 						result.extended++;
 					} else {
-						if (await this.gracefulTeardown(s)) result.reapedExpired++;
+						if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt)) result.reapedExpired++;
 						return;
 					}
 				}
@@ -330,12 +339,16 @@ export class SessionLifecycleService {
 	 * inside teardown silently failed, the terminal record re-enters the sweep
 	 * as a reclaim candidate, so nothing is leaked.
 	 */
-	private async gracefulTeardown(s: Session, captureBeforeDestroy = true): Promise<boolean> {
+	private async gracefulTeardown(
+		s: Session,
+		captureBeforeDestroy = true,
+		thumbnailDeadlineAt?: number,
+	): Promise<boolean> {
 		const claimed = await this.sessions
 			.beginTerminating(s.project_id, s.session_id)
 			.catch(() => null);
 		if (!claimed?.transitioned) return false;
-		await this.retirer.retire(s, { captureBeforeDestroy });
+		await this.retirer.retire(s, { captureBeforeDestroy, thumbnailDeadlineAt });
 		return true;
 	}
 }
