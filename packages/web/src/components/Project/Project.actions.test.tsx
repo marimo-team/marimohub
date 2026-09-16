@@ -376,6 +376,28 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 	});
 
+	it.each(['editor', 'viewer'] as const)(
+		'lets an unassigned %s open an app through admission',
+		async (role) => {
+			const user = userEvent.setup();
+			makeFetch({
+				role,
+				capabilities: { viewer_session_modes: ['app'] },
+				sessions: [
+					{
+						...runningSession(),
+						mode: 'app',
+						sandbox_url: undefined,
+						can: { attach: false, stop: role === 'editor' },
+					},
+				],
+			});
+			await renderProject();
+			await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
+			expect(await screen.findByRole('menuitem', { name: 'Open app' })).toBeVisible();
+		},
+	);
+
 	it('shows multiple app sandboxes and stops only the selected one', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({
@@ -394,11 +416,15 @@ describe('Project — Notebook Actions: configuration', () => {
 		await renderProject();
 		const indicators = await screen.findAllByRole('button', { name: 'App running — details' });
 		expect(indicators).toHaveLength(2);
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
+		expect(screen.queryByRole('menuitem', { name: 'Stop app' })).toBeNull();
+		await user.keyboard('{Escape}');
 		await user.click(indicators[1]);
 		expect(await screen.findByText('sess-app-b')).toBeInTheDocument();
 		expect(screen.getByText('3 / 4')).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Stop' }));
 		const dialog = await screen.findByRole('dialog');
+		expect(screen.queryByText('sess-app-b')).toBeNull();
 		expect(within(dialog).getByText(/Stop this app sandbox/)).toBeInTheDocument();
 		await user.click(within(dialog).getByRole('button', { name: 'Stop App' }));
 		await waitFor(() =>

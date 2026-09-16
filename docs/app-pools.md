@@ -60,7 +60,9 @@ Local auxiliary files retain their existing mutable semantics. A missing version
 Notebook rows show each sandbox separately, with its version, pool state, and account occupancy.
 Stop and restart actions affect the selected sandbox and its connected users.
 Restarting a sandbox from the notebook list creates its replacement on the current committed version.
-It does not change an operator's assignment to another sandbox. Repeated requests for the same stopped sandbox reuse its live replacement.
+The hub reserves the replacement before stopping the selected sandbox, then waits for reclamation before starting new compute.
+The reservation uses the selected sandbox's pool slot during teardown; both members remain recorded until reclamation.
+It does not change an operator's assignment to another sandbox. Repeated requests for the same stopped sandbox reuse its current-version replacement.
 Affected accounts must enter through admission again.
 A version notice explains that new users receive the latest version. It does not require restarting occupied older sandboxes.
 
@@ -76,7 +78,7 @@ Coalesced heartbeats do not extend that deadline until the next persisted renewa
 No acknowledged renewal depends on an in-memory buffer surviving a server restart.
 
 An established pool's admission reads three pool snapshots, the committed source head, and one session record per member, without listing bucket objects.
-New account assignments and sandbox reservations read the source head once more after CAS to reject a concurrent version change before admission or compute creation. Reconnects to an existing assignment do not need this extra read.
+New account assignments, sandbox reservations, and replacement retries read the source head once more after CAS to reject a concurrent version change before admission or compute creation. Reconnects to an existing assignment do not need this extra read.
 Each CAS retry rechecks the head. Version IDs identify immutable content; their order does not determine publication order.
 A healthy maintenance pass reads two pool snapshots and one session record per member. It does not rewrite unchanged state.
 First admission discovers legacy sessions through a project-scoped scan.

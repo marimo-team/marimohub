@@ -1031,6 +1031,75 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.isProvisioning).toBe(false);
 	});
 
+	it('replaces the selected app before readmitting this page with a new visit', async () => {
+		let finishReplacement!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			finishReplacement = resolve;
+		});
+		const requests: { method: string; body: Record<string, string> }[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (String(url).endsWith('/leave')) return jsonOk({});
+				const body = JSON.parse(String(init?.body)) as Record<string, string>;
+				requests.push({ method: init?.method ?? 'GET', body });
+				if (body.replace_app_session_id) {
+					await pending;
+					return jsonOk(makeSession({ session_id: 'replacement', mode: 'app' }));
+				}
+				return jsonOk(
+					makeSession({
+						session_id: requests.length === 1 ? 'original' : 'admitted',
+						mode: 'app',
+						app_assignment: { visit_id: body.app_visit_id, generation: 'assignment' },
+					}),
+				);
+			}),
+		);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+		act(() => result.current.restart());
+		await waitFor(() => expect(requests).toHaveLength(2));
+		expect(requests[1].body).toEqual({ mode: 'app', replace_app_session_id: 'original' });
+		expect(result.current.isProvisioning).toBe(true);
+		expect(result.current.session).toBeNull();
+		await act(async () => finishReplacement());
+		await waitFor(() => expect(result.current.session?.session_id).toBe('admitted'));
+		expect(requests).toHaveLength(3);
+		expect(requests.map((request) => request.method)).toEqual(['POST', 'POST', 'POST']);
+		expect(requests[2].body.app_visit_id).not.toBe(requests[0].body.app_visit_id);
+		expect(requests[2].body).not.toHaveProperty('replace_app_session_id');
+	});
+
+	it.each([404, 429, 500])(
+		'surfaces app replacement failure %s without fallback admission',
+		async (status) => {
+			const requests: unknown[] = [];
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+					if (String(url).endsWith('/leave')) return jsonOk({});
+					const body = JSON.parse(String(init?.body)) as Record<string, string>;
+					requests.push(body);
+					return body.replace_app_session_id
+						? jsonError('REPLACEMENT_FAILED', 'replacement failed', status)
+						: jsonOk(makeSession({ mode: 'app' }));
+				}),
+			);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+				toaster: false,
+			});
+			await waitFor(() => expect(result.current.isRunning).toBe(true));
+			act(() => result.current.restart());
+			await waitFor(() => expect(result.current.error?.message).toBe('replacement failed'));
+			expect(requests).toHaveLength(2);
+			expect(result.current.isProvisioning).toBe(false);
+			expect(result.current.session).toBeNull();
+		},
+	);
+
 	it('reports provisioning while a restart’s stop half is still in flight', async () => {
 		let resolveDelete!: () => void;
 		const deletePending = new Promise<void>((resolve) => {
@@ -1043,11 +1112,11 @@ describe('useNotebookSession (app mode)', () => {
 					await deletePending;
 					return jsonOk(undefined);
 				}
-				return jsonOk(makeSession({ mode: 'app' }));
+				return jsonOk(makeSession({ mode: 'edit' }));
 			}),
 		);
 
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'edit' }), {
 			toaster: false,
 		});
 		await waitFor(() => expect(result.current.isRunning).toBe(true));
@@ -1063,7 +1132,7 @@ describe('useNotebookSession (app mode)', () => {
 		await waitFor(() => expect(result.current.isRunning).toBe(true));
 	});
 
-	it('restart stops the current session, then starts a fresh one', async () => {
+	it('editor restart stops the current session, then starts a fresh one', async () => {
 		const calls: string[] = [];
 		let creates = 0;
 		vi.stubGlobal(
@@ -1073,14 +1142,14 @@ describe('useNotebookSession (app mode)', () => {
 				calls.push(`${method} ${String(url)}`);
 				if (method === 'POST') {
 					creates += 1;
-					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'app' }));
+					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'edit' }));
 				}
 				if (method === 'DELETE') return jsonOk(undefined);
 				throw new Error(`unexpected fetch: ${method} ${String(url)}`);
 			}),
 		);
 
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'edit' }), {
 			toaster: false,
 		});
 		await waitFor(() => expect(result.current.isRunning).toBe(true));
@@ -1096,7 +1165,7 @@ describe('useNotebookSession (app mode)', () => {
 		expect(secondCreateIdx).toBeGreaterThan(deleteIdx);
 	});
 
-	it('restart surfaces a failed stop instead of silently re-attaching', async () => {
+	it('editor restart surfaces a failed stop instead of silently re-attaching', async () => {
 		let posts = 0;
 		vi.stubGlobal(
 			'fetch',
@@ -1104,14 +1173,14 @@ describe('useNotebookSession (app mode)', () => {
 				const method = init?.method ?? 'GET';
 				if (method === 'POST') {
 					posts += 1;
-					return jsonOk(makeSession({ mode: 'app' }));
+					return jsonOk(makeSession({ mode: 'edit' }));
 				}
 				if (method === 'DELETE') return jsonError('INTERNAL_ERROR', 'teardown failed', 500);
 				throw new Error(`unexpected fetch: ${method}`);
 			}),
 		);
 
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'edit' }), {
 			toaster: false,
 		});
 		await waitFor(() => expect(result.current.isRunning).toBe(true));
@@ -1182,6 +1251,12 @@ describe('useNotebookSession (app mode)', () => {
 					await watchGate;
 					return jsonOk(makeSession({ session_id: 'sess-1', mode: 'app' }));
 				}
+				if (
+					method === 'POST' &&
+					(JSON.parse(String(init?.body)) as { replace_app_session_id?: string })
+						.replace_app_session_id
+				)
+					return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
 				if (method === 'POST') {
 					creates += 1;
 					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'app' }));
@@ -1228,6 +1303,12 @@ describe('useNotebookSession (app mode)', () => {
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
 				const method = init?.method ?? 'GET';
 				if (String(url).endsWith('/heartbeat')) return jsonOk(undefined);
+				if (
+					method === 'POST' &&
+					(JSON.parse(String(init?.body)) as { replace_app_session_id?: string })
+						.replace_app_session_id
+				)
+					return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
 				if (method === 'POST') {
 					creates += 1;
 					return creates === 1
@@ -1270,7 +1351,7 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.isRunning).toBe(true);
 	});
 
-	it('restart proceeds to a fresh start when the session is already gone (404)', async () => {
+	it('editor restart proceeds to a fresh start when the session is already gone (404)', async () => {
 		let posts = 0;
 		vi.stubGlobal(
 			'fetch',
@@ -1278,14 +1359,14 @@ describe('useNotebookSession (app mode)', () => {
 				const method = init?.method ?? 'GET';
 				if (method === 'POST') {
 					posts += 1;
-					return jsonOk(makeSession({ session_id: `sess-${posts}`, mode: 'app' }));
+					return jsonOk(makeSession({ session_id: `sess-${posts}`, mode: 'edit' }));
 				}
 				if (method === 'DELETE') return jsonError('NOT_FOUND', 'Session not found', 404);
 				throw new Error(`unexpected fetch: ${method}`);
 			}),
 		);
 
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'edit' }), {
 			toaster: false,
 		});
 		await waitFor(() => expect(result.current.isRunning).toBe(true));

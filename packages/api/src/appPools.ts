@@ -62,15 +62,11 @@ export async function sweepAppPools(
 								.destroy();
 							return true;
 						}
-						if (!session.sandbox_reclaimed_at) {
-							const result = await sessions.beginTerminating(pid, session.session_id);
-							if (!result.transitioned && result.session.status === 'terminating') return false;
-							if (!result.session.sandbox_reclaimed_at) {
-								await retirer.retire(result.session, {
-									captureBeforeDestroy: false,
-								});
-							}
-						}
+						if (session.sandbox_reclaimed_at) return true;
+						const result = await sessions.beginTerminating(pid, session.session_id);
+						if (!result.transitioned && result.session.status === 'terminating') return false;
+						if (result.session.sandbox_reclaimed_at) return true;
+						await retirer.retire(result.session, { captureBeforeDestroy: false });
 						return !!(await sessions.getSession(pid, session.session_id)).sandbox_reclaimed_at;
 					},
 				})

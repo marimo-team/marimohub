@@ -819,29 +819,23 @@ export class ProjectService {
 				);
 			}
 		};
-		if (!written) {
-			await this.retireAppPoolsForDeletion(id);
-			await retireThumbnails();
-			return null;
-		}
+		const snapshot = written
+			? await this.catalog.updateProjectEntry(
+					'project.delete',
+					actor,
+					id,
+					async (entry) =>
+						(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
+						projectCatalogPatch(updated, entry),
+				)
+			: null;
 
-		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
-		// the GC sweep can find and purge it later, but mark it deleted so it drops
-		// out of listProjects immediately.
-		const snapshot = await this.catalog.updateProjectEntry(
-			'project.delete',
-			actor,
-			id,
-			async (entry) =>
-				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
-				projectCatalogPatch(updated, entry),
-		);
 		await this.retireAppPoolsForDeletion(id);
 		await retireThumbnails();
 		await this.deepLinks.releaseProject(id).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
 		});
-		return { project: updated, mutationId: snapshot.snapshot_id };
+		return snapshot ? { project: updated, mutationId: snapshot.snapshot_id } : null;
 	}
 
 	private async retireAppPoolsForDeletion(projectId: ProjectId): Promise<void> {
@@ -857,7 +851,7 @@ export class ProjectService {
 				...pools.map((key) => key.slice(poolPrefix.length).replace(/\.json$/, '')),
 			].filter(NotebookId.is),
 		);
-		const store = new AppPoolStore(this.bucket);
+		const store = new AppPoolStore(this.bucket, this.metrics);
 		await mapWithConcurrency([...notebookIds], BUCKET_SCAN_CONCURRENCY, (notebookId) =>
 			store.retireForDeletion(projectId, notebookId),
 		);

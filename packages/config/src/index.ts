@@ -1,4 +1,3 @@
-import { parseAppPoolPolicy } from './appPool';
 /**
  * Configuration composition root.
  *
@@ -81,6 +80,7 @@ import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage'
 import { loadAdapterLibraries } from './library';
 import type { LoadedAdapterLibraries } from './library';
 import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
+import { parseAppPoolPolicy } from './appPool';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseOnOff, parseSecondsEnv } from './env';

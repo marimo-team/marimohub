@@ -16,6 +16,7 @@ import { AppPoolStore } from '../runtime/AppPoolStore';
 import { AppPoolService } from '../runtime/AppPoolService';
 import { DEFAULT_APP_POOL_POLICY } from '../runtime/AppPoolRouter';
 import { SessionService } from '../runtime/SessionService';
+import { DeepLinkService } from './DeepLinkService';
 
 describe('ProjectService', () => {
 	let bucket: MemoryBucket;
@@ -936,6 +937,48 @@ describe('ProjectService', () => {
 	});
 
 	describe('deleteProject (soft-delete)', () => {
+		it('retries interrupted pool cleanup and releases deep links without another catalog commit', async () => {
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			const service = new ProjectService(bucket, catalog, metrics);
+			const project = await service.createProject({ name: 'App project', description: '' }, ACTOR);
+			const notebook = await notebooks.createNotebook(
+				project.id,
+				{ title: 'App', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const target = { kind: 'app' as const, project_id: project.id, notebook_id: notebook.id };
+			const links = new DeepLinkService(bucket);
+			await links.register('deleted-project-app', target, ACTOR);
+			const fence = vi
+				.spyOn(AppPoolStore.prototype, 'retireForDeletion')
+				.mockRejectedValueOnce(new Error('pool unavailable'));
+			try {
+				await expect(service.deleteProject(project.id, ACTOR)).rejects.toThrow('pool unavailable');
+				const committed = await catalog.getCurrentSnapshot();
+				expect(committed.projects.find((p) => p.id === project.id)?.status).toBe('deleted');
+				expect(await links.list(target)).toHaveLength(1);
+
+				const originalPut = bucket.put.bind(bucket);
+				let conflict = true;
+				vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
+					if (key === paths.appPool(project.id, notebook.id) && conflict) {
+						conflict = false;
+						throw new PreconditionFailedError('concurrent pool update');
+					}
+					return originalPut(key, ...args);
+				});
+				await expect(service.deleteProjectWithMutation(project.id, ACTOR)).resolves.toBeNull();
+				expect(await links.list(target)).toEqual([]);
+				expect(await catalog.getCurrentSnapshot()).toEqual(committed);
+				expect((await new AppPoolStore(bucket).read(project.id, notebook.id))?.deleted_at).toEqual(
+					expect.any(Number),
+				);
+				expect(metrics.increment).toHaveBeenCalledWith('app_pool.cas.conflicts');
+			} finally {
+				fence.mockRestore();
+			}
+		});
+
 		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
 			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
 			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);

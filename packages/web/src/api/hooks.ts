@@ -2046,7 +2046,6 @@ function useStartSessionRequest(
 	mode: 'edit' | 'app',
 	computeProfile?: 'default',
 	editIntent?: 'temporary',
-	appVisitId?: string,
 ) {
 	return useApiMutation(
 		(visitId: string | void) =>
@@ -2056,7 +2055,7 @@ function useStartSessionRequest(
 				mode,
 				computeProfile,
 				editIntent,
-				visitId ?? appVisitId,
+				visitId ?? undefined,
 			),
 		() => [sessionKeys.listByProject(projectId)],
 		{ suppressErrorToast: true },
@@ -2068,9 +2067,8 @@ export function useStartSession(
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
 	editIntent?: 'temporary',
-	appVisitId?: string,
 ) {
-	return useStartSessionRequest(projectId, notebookId, mode, undefined, editIntent, appVisitId);
+	return useStartSessionRequest(projectId, notebookId, mode, undefined, editIntent);
 }
 
 export function useStartSessionWithDefault(
@@ -2078,9 +2076,8 @@ export function useStartSessionWithDefault(
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
 	editIntent?: 'temporary',
-	appVisitId?: string,
 ) {
-	return useStartSessionRequest(projectId, notebookId, mode, 'default', editIntent, appVisitId);
+	return useStartSessionRequest(projectId, notebookId, mode, 'default', editIntent);
 }
 
 async function restartEditorSessionRequest(
@@ -2097,7 +2094,11 @@ async function restartEditorSessionRequest(
 	return startSessionRequest(projectId, notebookId, 'edit');
 }
 
-export function useRestartApp(projectId: string, notebookId: string) {
+export function useRestartApp(
+	projectId: string,
+	notebookId: string,
+	opts?: { suppressErrorToast?: boolean },
+) {
 	return useApiMutation(
 		(sessionId: string) =>
 			apiData(
@@ -2108,6 +2109,7 @@ export function useRestartApp(projectId: string, notebookId: string) {
 				}),
 			),
 		() => [sessionKeys.listByProject(projectId)],
+		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
 }
 

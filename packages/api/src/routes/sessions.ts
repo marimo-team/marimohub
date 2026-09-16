@@ -804,13 +804,11 @@ async function presentSession(
 ) {
 	const response = toSessionResponse(session, grants);
 	if (sessionMode(session) !== 'app') return response;
-	const pool = new AppPoolService(
-		deps.bucket,
-		deps.services.sessions,
-		deps.policy.appPool,
-		deps.metrics,
-	);
-	const view = await (poolView ?? pool.view(session.project_id, session.notebook_id));
+	const view = await (poolView ??
+		new AppPoolService(deps.bucket, deps.services.sessions, deps.policy.appPool, deps.metrics).view(
+			session.project_id,
+			session.notebook_id,
+		));
 	const access = view.canAccess(user.id, session.session_id, !session.app_pool);
 	const member = view.members.get(session.session_id);
 	return {
@@ -1380,15 +1378,13 @@ export async function startNotebookSession(input: {
 	if (mode === 'app' && !sourceVersionId)
 		throw new ConflictError('The app has no committed version');
 
+	let replacementTarget: Session | undefined;
 	if (body?.replace_app_session_id) {
 		const target = await sessions.getSession(pid, body.replace_app_session_id);
 		if (target.notebook_id !== nid || sessionMode(target) !== 'app')
 			throw new NotFoundError('App session not found');
 		await assertSessionControl(project, target, user, deps, notebook.meta.security_labels ?? null);
-		await retireSelectedSession(deps, target);
-		const retired = await sessions.getSession(pid, target.session_id);
-		if (!retired.sandbox_reclaimed_at)
-			throw new ConflictError('The selected app is still stopping. Retry shortly.');
+		replacementTarget = target;
 	}
 	const admissionInput = {
 		projectId: pid,
@@ -1500,6 +1496,7 @@ export async function startNotebookSession(input: {
 	// destroyed. A failure *inside* provisioning self-cleans (see
 	// SandboxProvisioner.provision); the saga handles failures after it.
 	let session: Session | undefined;
+	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {
 		if (session) {
@@ -1525,6 +1522,12 @@ export async function startNotebookSession(input: {
 		mode,
 	});
 	try {
+		if (replacementTarget) {
+			await retireSelectedSession(deps, replacementTarget);
+			const retired = await sessions.getSession(pid, replacementTarget.session_id);
+			if (!retired.sandbox_reclaimed_at)
+				throw new ConflictError('The selected app is still stopping. Retry shortly.');
+		}
 		const restoreFilesystemSnapshot =
 			!ephemeral && workspacePolicy.restoreFilesystemSnapshot
 				? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
@@ -1547,8 +1550,9 @@ export async function startNotebookSession(input: {
 				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
 			)
 			.step('session_record', async () => {
-				const create = () =>
-					sessions.createSession({
+				const create = () => {
+					sessionRecordAttempted = true;
+					return sessions.createSession({
 						...(admission
 							? { session_id: admission.member.session_id, app_pool: true as const }
 							: {}),
@@ -1566,6 +1570,7 @@ export async function startNotebookSession(input: {
 						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
 						authorization_expires_at: authorizationExpiresAt,
 					});
+				};
 				// Publish the starting record under the source-mutation lease. Once visible,
 				// the session itself blocks source replacement through sandbox reclamation.
 				session =
@@ -1874,8 +1879,19 @@ export async function startNotebookSession(input: {
 			})
 			.run();
 	} catch (err) {
-		if (admission?.kind === 'reserve')
-			await appPool.invalidate(pid, nid, admission.member.session_id).catch(() => {});
+		if (admission?.kind === 'reserve') {
+			// A failed session PUT may have committed; only release when it was never attempted.
+			await (
+				sessionRecordAttempted
+					? appPool.invalidate(pid, nid, admission.member.session_id)
+					: appPool.releaseReservation(
+							pid,
+							nid,
+							admission.member.session_id,
+							admission.member.operation_token,
+						)
+			).catch(() => {});
+		}
 		if (!sandboxMayExist) await recordSandboxCleanup().catch(() => {});
 
 		if (err instanceof EditorClaimLostError) {
@@ -2085,15 +2101,8 @@ app.openapi(heartbeatSession, async (c) => {
 	) {
 		const pool = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
 		if (!existing.app_pool) await pool.synchronize(pid, nid, [existing]);
-		if (
-			!(await pool.heartbeat(
-				pid,
-				nid,
-				user.id,
-				sid,
-				c.req.valid('json')?.visit_id ? c.req.valid('json') : undefined,
-			))
-		) {
+		const visit = c.req.valid('json');
+		if (!(await pool.heartbeat(pid, nid, user.id, sid, visit?.visit_id ? visit : undefined))) {
 			throw new ConflictError('The app assignment expired. Open the app again.');
 		}
 	}

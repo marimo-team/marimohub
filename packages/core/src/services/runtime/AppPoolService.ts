@@ -119,26 +119,29 @@ export class AppPoolService {
 				};
 			},
 		);
-		if (decision.kind === 'reserve' || newGeneration !== undefined) {
+		const ownsAdmission = decision.kind === 'reserve' || newGeneration !== undefined;
+		if (ownsAdmission || (operation === 'replace' && decision.kind === 'reuse')) {
 			try {
 				// Source and pool heads cannot share a CAS. Validate again before compute or admission.
 				await this.assertCommittedVersion(input);
 			} catch (error) {
-				await this.store.mutate(input.projectId, input.notebookId, (pool) => {
-					if (decision.kind === 'reserve') {
-						const member = pool.members.find(
-							(item) =>
-								item.session_id === reservation.session_id &&
-								item.operation_token === reservation.operation_token,
-						);
-						if (member) member.state = 'retiring';
-					}
-					pool.assignments = pool.assignments.filter(
-						(item) => !(item.user_id === input.userId && item.generation === newGeneration),
+				if (!ownsAdmission) throw error;
+				if (decision.kind === 'reserve') {
+					await this.releaseReservation(
+						input.projectId,
+						input.notebookId,
+						reservation.session_id,
+						reservation.operation_token,
 					);
-					expireAppPresence(pool, this.now());
-					return { pool, value: undefined };
-				});
+				} else {
+					await this.store.mutate(input.projectId, input.notebookId, (pool) => {
+						pool.assignments = pool.assignments.filter(
+							(item) => !(item.user_id === input.userId && item.generation === newGeneration),
+						);
+						expireAppPresence(pool, this.now());
+						return { pool, value: undefined };
+					});
+				}
 				throw error;
 			}
 		}
@@ -195,6 +198,26 @@ export class AppPoolService {
 			project_id: projectId,
 			notebook_id: notebookId,
 			session_id: sessionId,
+		});
+	}
+
+	/** Only before session creation is attempted; ambiguous creation requires reconciliation. */
+	async releaseReservation(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		sessionId: SessionId,
+		token: string,
+	): Promise<void> {
+		await this.store.mutate(projectId, notebookId, (pool) => {
+			const member = pool.members.find((item) => item.session_id === sessionId);
+			if (
+				member?.operation_token === token &&
+				(member.state === 'starting' || member.state === 'retiring')
+			) {
+				pool.members = pool.members.filter((item) => item !== member);
+				pool.assignments = pool.assignments.filter((item) => item.session_id !== sessionId);
+			}
+			return { pool, value: undefined };
 		});
 	}
 

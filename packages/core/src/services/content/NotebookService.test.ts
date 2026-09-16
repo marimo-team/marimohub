@@ -1466,6 +1466,42 @@ describe('NotebookService', () => {
 			},
 		);
 
+		it.each(['soft', 'hard'] as const)(
+			'reports app pool contention during %s deletion',
+			async (mode) => {
+				const metrics = { increment: vi.fn(), gauge: vi.fn() };
+				const service = new NotebookService(bucket, catalog, metrics);
+				const notebookId =
+					mode === 'soft'
+						? (
+								await service.createNotebook(
+									projectId,
+									{ title: 'App', description: '', code: 'v1' },
+									ACTOR,
+								)
+							).id
+						: createNotebookId();
+				const poolKey = paths.appPool(projectId, notebookId);
+				const originalPut = bucket.put.bind(bucket);
+				let conflict = true;
+				vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
+					if (key === poolKey && conflict) {
+						conflict = false;
+						throw new PreconditionFailedError('concurrent pool update');
+					}
+					return originalPut(key, ...args);
+				});
+
+				if (mode === 'soft') await service.deleteNotebook(projectId, notebookId, ACTOR);
+				else await service.hardDeleteNotebook(projectId, notebookId);
+
+				expect(metrics.increment).toHaveBeenCalledWith('app_pool.cas.conflicts');
+				expect((await new AppPoolStore(bucket).read(projectId, notebookId))?.deleted_at).toEqual(
+					expect.any(Number),
+				);
+			},
+		);
+
 		it('retries all cleanup after the deletion fence fails following the catalog commit', async () => {
 			const notebook = await notebooks.createNotebook(
 				projectId,

@@ -385,8 +385,7 @@ describe('app pool admission and lifecycle', () => {
 			const abandoned = stored?.members.filter(
 				(item) => item.session_id !== first.member.session_id,
 			);
-			expect(abandoned).toHaveLength(operation === 'reuse' ? 0 : 1);
-			expect(abandoned?.every((item) => item.state === 'retiring')).toBe(true);
+			expect(abandoned).toEqual([]);
 			expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
 				true,
 			);
@@ -409,8 +408,7 @@ describe('app pool admission and lifecycle', () => {
 		await expect(admit('bob')).rejects.toBe(failure);
 		const stored = await pool.store.read(pid, nid);
 		expect(stored?.assignments.map((item) => item.user_id)).toEqual(['alice']);
-		expect(stored?.members).toHaveLength(2);
-		expect(stored?.members[1].state).toBe('retiring');
+		expect(stored?.members).toHaveLength(1);
 		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
 			true,
 		);
@@ -504,6 +502,117 @@ describe('app pool admission and lifecycle', () => {
 		).toBe(false);
 	});
 
+	it('replaces the selected sandbox at a one-session version limit', async () => {
+		policy.maxSessionsPerVersion = 1;
+		const target = await ready(await admit());
+		const input = {
+			projectId: pid,
+			notebookId: nid,
+			userId: UserId.parse('alice'),
+			versionId: v1,
+			startupMs: 900_000,
+			replacesSessionId: target.member.session_id,
+		};
+		const replacement = await pool.replace(input);
+		expect(replacement.kind).toBe('reserve');
+		expect((await pool.replace(input)).member.session_id).toBe(replacement.member.session_id);
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), target.member.session_id)).toBe(
+			true,
+		);
+	});
+
+	it('reserves the latest source when an older replacement already exists', async () => {
+		policy.maxSessionsPerVersion = 1;
+		const target = await ready(await admit());
+		const input = {
+			projectId: pid,
+			notebookId: nid,
+			userId: UserId.parse('alice'),
+			versionId: v1,
+			startupMs: 900_000,
+			replacesSessionId: target.member.session_id,
+		};
+		const previous = await pool.replace(input);
+		await bucket.put(paths.project(pid).notebook(nid).source, JSON.stringify(makeLocalSource(v2)));
+		const latest = await pool.replace({ ...input, versionId: v2 });
+		expect(latest.kind).toBe('reserve');
+		expect(latest.member.session_id).not.toBe(previous.member.session_id);
+		expect(latest.member.source_version_id).toBe(v2);
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), target.member.session_id)).toBe(
+			true,
+		);
+	});
+
+	it('rejects a reused replacement if the source changes after its initial head check', async () => {
+		const target = await ready(await admit());
+		const input = {
+			projectId: pid,
+			notebookId: nid,
+			userId: UserId.parse('alice'),
+			versionId: v1,
+			startupMs: 900_000,
+			replacesSessionId: target.member.session_id,
+		};
+		const previous = await pool.replace(input);
+		const sourceKey = paths.project(pid).notebook(nid).source;
+		const get = bucket.get.bind(bucket);
+		let changed = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			const object = await get(key);
+			if (key === sourceKey && !changed) {
+				changed = true;
+				await bucket.put(sourceKey, JSON.stringify(makeLocalSource(v2)));
+			}
+			return object;
+		});
+		await expect(pool.replace(input)).rejects.toMatchObject({ status: 409 });
+		const stored = await pool.store.read(pid, nid);
+		expect(
+			stored?.members.find((item) => item.session_id === previous.member.session_id)?.state,
+		).toBe('starting');
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), target.member.session_id)).toBe(
+			true,
+		);
+	});
+
+	it.each(['starting', 'retiring'] as const)(
+		'releases an owned %s reservation before session creation',
+		async (state) => {
+			const admission = await admit();
+			await admit('bob');
+			if (state === 'retiring') await pool.invalidate(pid, nid, admission.member.session_id);
+			await pool.releaseReservation(
+				pid,
+				nid,
+				admission.member.session_id,
+				admission.member.operation_token,
+			);
+			expect((await pool.store.read(pid, nid))?.members).toEqual([]);
+			expect((await pool.store.read(pid, nid))?.assignments).toEqual([]);
+			expect((await admit()).kind).toBe('reserve');
+		},
+	);
+
+	it('does not release another operation token or a ready sandbox', async () => {
+		const admission = await admit();
+		const put = vi.spyOn(bucket, 'put');
+		await pool.releaseReservation(pid, nid, admission.member.session_id, 'stale-token');
+		expect(put).not.toHaveBeenCalled();
+		expect((await pool.store.read(pid, nid))?.members).toHaveLength(1);
+		await ready(admission);
+		put.mockClear();
+		await pool.releaseReservation(
+			pid,
+			nid,
+			admission.member.session_id,
+			admission.member.operation_token,
+		);
+		expect(put).not.toHaveBeenCalled();
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), admission.member.session_id)).toBe(
+			true,
+		);
+	});
+
 	it('enforces the current-version cap for explicit replacement reservations', async () => {
 		policy.maxSessionsPerVersion = 1;
 		const old = await ready(await admit());
@@ -562,6 +671,8 @@ describe('app pool admission and lifecycle', () => {
 			policy.maxSessionsPerVersion = 1;
 			policy.maxUsersPerSession = 1;
 			const first = await ready(await admit());
+			const versionId = operation === 'replace' ? v2 : v1;
+			if (operation === 'replace') await ready(await admit('carol', versionId));
 			const metrics = { increment: vi.fn(), gauge: vi.fn() };
 			const service = new AppPoolService(bucket, sessions, policy, metrics, () => now);
 			await expect(
@@ -569,7 +680,7 @@ describe('app pool admission and lifecycle', () => {
 					projectId: pid,
 					notebookId: nid,
 					userId: UserId.parse('bob'),
-					versionId: v1,
+					versionId,
 					startupMs: 900_000,
 					replacesSessionId: first.member.session_id,
 				}),

@@ -1,7 +1,12 @@
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
-import { useStartSession, useStartSessionWithDefault, useStopSession } from '@/api/hooks';
+import {
+	useRestartApp,
+	useStartSession,
+	useStartSessionWithDefault,
+	useStopSession,
+} from '@/api/hooks';
 import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
 import { useInterval } from '@/hooks/useInterval';
@@ -83,7 +88,7 @@ export interface NotebookSession {
 	defaultRetryAttempted: boolean;
 	/** Stop the current session (saves files, tears down the sandbox). */
 	stop: () => void;
-	/** Stop the selected session, then re-enter through admission. */
+	/** Replace the selected app sandbox or restart the editor, then re-enter through admission. */
 	restart: () => void;
 }
 
@@ -115,6 +120,7 @@ export function useNotebookSession(
 	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode, editIntent);
 	// Stop/restart failures render inline (session panel), never as a toast.
 	const stopSession = useStopSession(projectId, notebookId, { suppressErrorToast: true });
+	const restartApp = useRestartApp(projectId, notebookId, { suppressErrorToast: true });
 
 	const [session, setSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
@@ -124,9 +130,7 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
-	// True while a restart's stop half runs (which can take tens of seconds for a
-	// real save-and-destroy) — the page would otherwise render nothing: no
-	// session, no error, and neither mutation pending yet.
+	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
 	const mountedRef = useRef(true);
@@ -245,23 +249,19 @@ export function useNotebookSession(
 		if (s) {
 			commitSession(null);
 			setRestarting(true);
-			// Await the stop before starting: the create must not attach to the
-			// still-terminating sandbox it is meant to replace. A failed stop must
-			// NOT silently fall through to start() — the create would re-attach to
-			// the very session the restart meant to replace, reading as a restart
-			// that did nothing.
-			stopSession.mutate(s.session_id, {
+			const mutation = mode === 'app' ? restartApp : stopSession;
+			mutation.mutate(s.session_id, {
 				onSuccess: () => {
-					if (!generation.isCurrent(gen)) return;
+					if (!mountedRef.current || !generation.isCurrent(gen)) return;
 					setRestarting(false);
 					start();
 				},
 				onError: (err) => {
-					if (!generation.isCurrent(gen)) return;
+					if (!mountedRef.current || !generation.isCurrent(gen)) return;
 					setRestarting(false);
 					// Already gone (stopped/reaped underneath us): the restart intent
 					// still holds, so start fresh.
-					if (isNotFoundError(err)) {
+					if (mode !== 'app' && isNotFoundError(err)) {
 						start();
 						return;
 					}
@@ -271,7 +271,7 @@ export function useNotebookSession(
 		} else {
 			start();
 		}
-	}, [stopSession, start, commitSession, generation]);
+	}, [stopSession, restartApp, mode, start, commitSession, generation]);
 
 	// Start once, on the first enabled render (guarded so strict-mode's
 	// double-invoke doesn't provision two sandboxes).
@@ -402,14 +402,13 @@ export function useNotebookSession(
 		mode !== 'app' && session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
 	);
 
+	const heartbeatActive =
+		session?.status === 'running' || (mode === 'app' && session?.status === 'starting');
+
 	// App heartbeats also return status, avoiding a separate running-session poll.
 	useInterval(
 		() => {
-			if (
-				!session ||
-				(session.status !== 'running' && !(mode === 'app' && session.status === 'starting'))
-			)
-				return;
+			if (!session || !heartbeatActive) return;
 			const gen = generation.current();
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat', {
@@ -436,7 +435,7 @@ export function useNotebookSession(
 					}
 				});
 		},
-		session && (session.status === 'running' || (mode === 'app' && session.status === 'starting'))
+		heartbeatActive
 			? mode === 'app'
 				? appHeartbeatIntervalSeconds * 1000
 				: HEARTBEAT_INTERVAL_MS

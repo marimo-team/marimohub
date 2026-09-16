@@ -1009,7 +1009,7 @@ export class NotebookService {
 				)
 			: null;
 
-		await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
+		await new AppPoolStore(this.bucket, this.metrics).retireForDeletion(projectId, notebookId);
 		await this.thumbnails.retire(projectId, notebookId);
 
 		// Deleted notebook IDs never recur, so their claims cannot self-heal on admission.
@@ -1269,7 +1269,7 @@ export class NotebookService {
 				`Refusing to hard-delete notebook ${notebookId}: status is "${meta.status}", expected "deleted"`,
 			);
 		}
-		await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
+		await new AppPoolStore(this.bucket, this.metrics).retireForDeletion(projectId, notebookId);
 
 		await this.deepLinks.releaseNotebook(projectId, notebookId);
 		const markerKeys = await listAllKeys(this.bucket, paths.jobRunMarkersForProject(projectId));

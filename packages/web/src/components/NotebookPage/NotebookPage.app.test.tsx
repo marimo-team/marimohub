@@ -132,8 +132,6 @@ describe('NotebookPage app variant', () => {
 		renderPage('app');
 
 		await waitFor(() => expect(screen.getByText(/serves an older version/)).toBeInTheDocument());
-		// Restarting the shared app is editor-only; a viewer clicking through
-		// would 403 on the stop half.
 		expect(screen.queryByText('Restart to update')).toBeNull();
 	});
 
@@ -147,15 +145,17 @@ describe('NotebookPage app variant', () => {
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 
 		await user.click(screen.getByText('Restart'));
-		// The dialog, not a teardown, is what a click produces.
-		expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+		expect(sessionPosts(impl)).toHaveLength(1);
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByText(/About 3 people are connected/)).toBeInTheDocument();
 
 		await user.click(within(dialog).getByRole('button', { name: 'Restart' }));
-		await waitFor(() =>
-			expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
-		);
+		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(3));
+		expect(JSON.parse(String(sessionPosts(impl)[1][1]?.body))).toEqual({
+			mode: 'app',
+			replace_app_session_id: appSession().session_id,
+		});
+		expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
 	});
 
 	it('Stop confirms too; cancel leaves the app untouched', async () => {

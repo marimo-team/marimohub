@@ -417,8 +417,8 @@ function useProjectContent() {
 	const computeLive = computeTarget ? sessionByNotebook.get(computeTarget.id) : undefined;
 	const computeRestartSession = computeLive?.edit?.can?.stop
 		? computeLive.edit
-		: computeLive?.app?.can?.stop
-			? computeLive.app
+		: computeLive?.apps?.length === 1 && computeLive.apps[0].can?.stop
+			? computeLive.apps[0]
 			: undefined;
 
 	// Resolve every author (and session starter) shown on the page in one batch,
@@ -566,7 +566,8 @@ function useProjectContent() {
 				state: { title: nb.title },
 			});
 		else if (key === 'stop-app') {
-			const app = sessionByNotebook.get(nb.id)?.app;
+			const apps = sessionByNotebook.get(nb.id)?.apps;
+			const app = apps?.length === 1 ? apps[0] : undefined;
 			if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
 		} else if (key === 'view-snapshot')
 			void navigate(`/projects/${pid}/notebooks/${nb.id}/snapshot`, {
@@ -606,10 +607,10 @@ function useProjectContent() {
 					? [{ id: 'run-app', label: 'Run as app', icon: <Play className="size-4" /> }]
 					: []
 				: [
-						...(app.can?.attach
+						...(canStartApps
 							? [{ id: 'open-app', label: 'Open app', icon: <AppWindow className="size-4" /> }]
 							: []),
-						...(app.can?.stop
+						...(live?.apps?.length === 1 && app.can?.stop
 							? [
 									{
 										id: 'stop-app',
@@ -869,7 +870,6 @@ function useProjectContent() {
 												key={appSession.session_id}
 												session={appSession}
 												canControl={!!appSession.can?.stop}
-												canOpen={!!appSession.can?.attach}
 												editActive={!!live.persistentEdit}
 												profiles={computeProfiles}
 												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}

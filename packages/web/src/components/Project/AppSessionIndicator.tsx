@@ -25,7 +25,6 @@ function AppSessionDetails({
 	session,
 	label,
 	canControl,
-	canOpen,
 	editActive,
 	onStop,
 	onRestart,
@@ -36,7 +35,6 @@ function AppSessionDetails({
 	session: Session;
 	label: string;
 	canControl: boolean;
-	canOpen: boolean;
 	editActive: boolean;
 	onStop: () => void;
 	onRestart: () => void;
@@ -148,11 +146,7 @@ function AppSessionDetails({
 				</p>
 			)}
 			{!canControl && (
-				<p className="text-muted-foreground">
-					{canOpen
-						? 'Only editors can stop or restart this app.'
-						: 'Apps are editor-only for now — ask an editor for access.'}
-				</p>
+				<p className="text-muted-foreground">Only editors can stop or restart this app.</p>
 			)}
 			{canControl && (
 				<div className="flex gap-1.5 pt-0.5">
@@ -177,7 +171,6 @@ function AppSessionDetails({
 export function AppSessionIndicator({
 	session,
 	canControl,
-	canOpen = false,
 	editActive = false,
 	onStop,
 	onRestart,
@@ -188,8 +181,6 @@ export function AppSessionIndicator({
 	session: Session;
 	/** Editors may stop/restart the shared app; viewers only see its state. */
 	canControl: boolean;
-	/** The caller may open the app (viewers, when the viewer mode grants apps). */
-	canOpen?: boolean;
 	/** An edit session is live on the notebook — suppresses the stale hint (local sources only). */
 	editActive?: boolean;
 	onStop: () => void;
@@ -210,18 +201,25 @@ export function AppSessionIndicator({
 			}
 			triggerClassName="cursor-pointer rounded"
 		>
-			<AppSessionDetails
-				session={session}
-				label={status.label}
-				canControl={canControl}
-				canOpen={canOpen}
-				editActive={editActive}
-				onStop={onStop}
-				onRestart={onRestart}
-				profiles={profiles}
-				allowComputeOverride={allowComputeOverride}
-				selectedProfileName={selectedProfileName}
-			/>
+			{({ close }) => (
+				<AppSessionDetails
+					session={session}
+					label={status.label}
+					canControl={canControl}
+					editActive={editActive}
+					onStop={() => {
+						close();
+						onStop();
+					}}
+					onRestart={() => {
+						close();
+						onRestart();
+					}}
+					profiles={profiles}
+					allowComputeOverride={allowComputeOverride}
+					selectedProfileName={selectedProfileName}
+				/>
+			)}
 		</Popover>
 	);
 }

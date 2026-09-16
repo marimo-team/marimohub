@@ -212,13 +212,11 @@ export function reserveAppReplacement(
 	const next = structuredClone(pool);
 	expireAppPresence(next, input.now);
 	observeVersion(next, input.versionId);
-	const previous = next.members.find(
-		(member) =>
-			member.replaces_session_id === input.replacesSessionId && isReusableMember(member, input.now),
-	);
-	if (previous) return { pool: next, decision: { kind: 'reuse', member: previous } };
 	const current = currentVersionMembers(next, input.versionId, input.now);
-	if (!hasSessionCapacity(policy, current)) return { pool: next, decision: { kind: 'busy' } };
+	const previous = current.find((member) => member.replaces_session_id === input.replacesSessionId);
+	if (previous) return { pool: next, decision: { kind: 'reuse', member: previous } };
+	const retained = current.filter((member) => member.session_id !== input.replacesSessionId);
+	if (!hasSessionCapacity(policy, retained)) return { pool: next, decision: { kind: 'busy' } };
 	const member = { ...input.reservation, replaces_session_id: input.replacesSessionId };
 	next.members.push(member);
 	return { pool: next, decision: { kind: 'reserve', member } };

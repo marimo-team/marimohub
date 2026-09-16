@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
 	DEFAULT_APP_POOL_POLICY,
@@ -38,6 +38,7 @@ describe('app pool HTTP integration', () => {
 			)
 		).id;
 	});
+	afterEach(() => vi.restoreAllMocks());
 	const api = (user = 'alice', maxAppsPerProject?: number) =>
 		createTestApi({
 			bucket,
@@ -110,7 +111,43 @@ describe('app pool HTTP integration', () => {
 		).toBe(uid('alice'));
 	});
 
-	it('does not reserve a replacement until destruction is confirmed, then recovers after cleanup', async () => {
+	it('keeps the selected app running when replacement reservation cannot be persisted', async () => {
+		const selected = await start();
+		const fake = makeFakeSandbox();
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+			deps: { policy: { defaultRole: 'editor', appPool: { ...policy, maxSessionsPerVersion: 1 } } },
+		});
+		const body = { mode: 'app', replace_app_session_id: selected.session_id };
+		const put = bucket.put.bind(bucket);
+		const failure = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (
+				key === paths.appPool(pid, nid) &&
+				typeof value === 'string' &&
+				value.includes('"replaces_session_id"')
+			)
+				throw new Error('pool storage unavailable');
+			return put(key, value, options);
+		});
+		try {
+			expect((await client.request('POST', path(), body)).status).toBe(500);
+		} finally {
+			failure.mockRestore();
+		}
+		expect(fake.calls.destroy).toBe(0);
+		expect(fake.calls.startProcess).toHaveLength(0);
+		expect(await client.deps.services.sessions.getSession(pid, selected.session_id)).toMatchObject({
+			status: 'running',
+		});
+		const replacement = await expectOk<any>(await client.request('POST', path(), body));
+		expect(replacement.status).toBe('running');
+		expect(replacement.session_id).not.toBe(selected.session_id);
+		expect(fake.calls.destroy).toBe(1);
+	});
+
+	it('releases the replacement reservation when destruction fails and retries after cleanup', async () => {
 		const selected = await start();
 		const fake = makeFakeSandbox();
 		const destroy = vi
@@ -215,10 +252,16 @@ describe('app pool HTTP integration', () => {
 				mode: 'app',
 				...(selected ? { replace_app_session_id: selected.session_id } : { app_visit_id: 'tab' }),
 			};
+			const pool = new AppPoolService(bucket, client.deps.services.sessions, policy);
+			let reservedSessionId: SessionId | undefined;
 			const get = bucket.get.bind(bucket);
 			const failure = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-				if (key === paths.project(pid).notebook(nid).fsSnapshot)
+				if (key === paths.project(pid).notebook(nid).fsSnapshot) {
+					reservedSessionId = (await pool.store.read(pid, nid))?.members.find(
+						(member) => member.session_id !== selected?.session_id,
+					)?.session_id;
 					throw new Error('snapshot storage unavailable');
+				}
 				return get(key);
 			});
 			try {
@@ -226,21 +269,18 @@ describe('app pool HTTP integration', () => {
 			} finally {
 				failure.mockRestore();
 			}
-			const pool = new AppPoolService(bucket, client.deps.services.sessions, policy);
 			const stored = await pool.store.read(pid, nid);
-			const abandoned = stored!.members.find(
-				(member) => member.session_id !== selected?.session_id,
-			)!;
-			expect(abandoned.state).toBe('retiring');
+			expect(reservedSessionId).toBeDefined();
+			expect(stored!.members.some((member) => member.session_id === reservedSessionId)).toBe(false);
 			expect(stored!.assignments).toEqual([]);
 			await expect(
-				client.deps.services.sessions.getSession(pid, abandoned.session_id),
+				client.deps.services.sessions.getSession(pid, reservedSessionId!),
 			).rejects.toThrow('not found');
 			expect(fake.calls.startProcess).toHaveLength(0);
 			expect(fake.calls.destroy).toBe(replacement ? 1 : 0);
 			const retry = await expectOk<any>(await client.request('POST', path(), body));
 			expect(retry.status).toBe('running');
-			expect(retry.session_id).not.toBe(abandoned.session_id);
+			expect(retry.session_id).not.toBe(reservedSessionId);
 		},
 	);
 
@@ -379,7 +419,7 @@ describe('app pool HTTP integration', () => {
 			entered = resolve;
 		});
 		let held = false;
-		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+		const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
 			if (key === sourceKey && !held) {
 				held = true;
 				entered();
@@ -388,25 +428,70 @@ describe('app pool HTTP integration', () => {
 			return put(key, value, options);
 		});
 		const slow = notebooks.commitSession(pid, nid, { code: 'slow save A' }, ACTOR);
-		await writing;
-		await notebooks.commitSession(pid, nid, { code: 'fast save B' }, ACTOR);
-		const first = await start();
-		release();
-		await slow;
-		const head = (await notebooks.getNotebook(pid, nid)).source.current_version_id!;
-		expect(head < first.source_version_id).toBe(true);
-		const next = await start('bob');
-		expect(next.source_version_id).toBe(head);
-		expect((await start('alice')).session_id).toBe(first.session_id);
+		try {
+			await Promise.race([writing, slow]);
+			await notebooks.commitSession(pid, nid, { code: 'fast save B' }, ACTOR);
+			const first = await start();
+			release();
+			await slow;
+			const head = (await notebooks.getNotebook(pid, nid)).source.current_version_id!;
+			expect(head < first.source_version_id).toBe(true);
+			const next = await start('bob');
+			expect(next.source_version_id).toBe(head);
+			expect((await start('alice')).session_id).toBe(first.session_id);
+		} finally {
+			release();
+			putSpy.mockRestore();
+			await slow.catch(() => {});
+		}
 	});
 
 	it('retains project compute caps during rollover and returns a retry header', async () => {
-		await start();
+		const first = await start();
 		await createServices(bucket).notebooks.commitSession(pid, nid, { code: 'updated' }, ACTOR);
-		const response = await api('bob', 1).request('POST', path(), { mode: 'app' });
-		expect(response.headers.get('Retry-After')).toBe('5');
-		await expectError(response, 429, 'RESOURCE_EXHAUSTED');
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const response = await api('bob', 1).request('POST', path(), { mode: 'app' });
+			expect(response.headers.get('Retry-After')).toBe('5');
+			await expectError(response, 429, 'RESOURCE_EXHAUSTED');
+			const pool = await new AppPoolService(bucket, createServices(bucket).sessions).store.read(
+				pid,
+				nid,
+			);
+			expect(pool!.members.map((member) => member.session_id)).toEqual([first.session_id]);
+			expect(pool!.assignments.map((assignment) => assignment.user_id)).toEqual([uid('alice')]);
+		}
 		expect((await start()).status).toBe('running');
+	});
+
+	it('retains cleanup intent when a session write commits but its acknowledgement fails', async () => {
+		const client = api();
+		const put = bucket.put.bind(bucket);
+		let sessionId: SessionId | undefined;
+		const create = vi.spyOn(client.deps.services.sessions, 'createSession');
+		const failure = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			const requested = create.mock.calls.at(-1)?.[0];
+			if (requested?.session_id && key === paths.session(pid, requested.session_id)) {
+				sessionId = requested.session_id;
+				await put(key, value, options);
+				throw new Error('session write acknowledgement lost');
+			}
+			return put(key, value, options);
+		});
+		try {
+			expect((await client.request('POST', path(), { mode: 'app' })).status).toBe(500);
+		} finally {
+			failure.mockRestore();
+		}
+		expect(sessionId).toBeDefined();
+		expect(await client.deps.services.sessions.getSession(pid, sessionId!)).toMatchObject({
+			status: 'starting',
+		});
+		const pool = new AppPoolService(bucket, client.deps.services.sessions);
+		expect((await pool.store.read(pid, nid))?.members).toMatchObject([
+			{ session_id: sessionId, state: 'retiring' },
+		]);
+		await sweepAppPools(client.deps);
+		expect((await pool.store.read(pid, nid))?.members).toEqual([]);
 	});
 
 	it('releases the last visit after grace and fences late heartbeats', async () => {
@@ -634,6 +719,22 @@ describe('app pool HTTP integration', () => {
 		await expectOk(await stopping);
 		await sweepAppPools(client.deps);
 		expect(destroy).toHaveBeenCalledTimes(1);
+		expect(
+			await new AppPoolService(bucket, client.deps.services.sessions, policy).inspect(pid, nid),
+		).toEqual([]);
+	});
+
+	it('removes a reclaimed pool member without redundant session reads or teardown', async () => {
+		const selected = await start();
+		const client = api();
+		await expectOk(await client.request('DELETE', path(`/${selected.session_id}`)));
+		const get = vi.spyOn(bucket, 'get');
+		const create = vi.spyOn(client.deps.compute, 'create');
+		await sweepAppPools(client.deps);
+		expect(
+			get.mock.calls.filter(([key]) => key === paths.session(pid, selected.session_id)),
+		).toHaveLength(2);
+		expect(create).not.toHaveBeenCalled();
 		expect(
 			await new AppPoolService(bucket, client.deps.services.sessions, policy).inspect(pid, nid),
 		).toEqual([]);
