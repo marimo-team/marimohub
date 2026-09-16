@@ -89,6 +89,7 @@ describe('service account credentials', () => {
 		for (const token of [
 			'mhub_sa_deploy_initial_short',
 			`mhub_sa_deploy_initial_${'A'.repeat(64)}`,
+			`mhub_sa_deploy_initial_${'a'.repeat(64)}\n`,
 		]) {
 			const accounts = new ServiceAccountCredentials([
 				{ ...config[0], credentials: [{ id: 'initial', sha256: await sha256Hex(token) }] },
@@ -153,11 +154,18 @@ describe('service account credentials', () => {
 		]);
 	});
 
-	it.each(['', '../bad', 'Uppercase', 'bad_id', 'a'.repeat(65)])(
-		'rejects invalid generator IDs %j',
-		async (id) => {
-			await expect(generateServiceAccountToken(id, 'valid')).rejects.toThrow();
-			await expect(generateServiceAccountToken('valid', id)).rejects.toThrow();
-		},
-	);
+	it.each([
+		'',
+		'../bad',
+		'Uppercase',
+		'bad_id',
+		'a'.repeat(65),
+		'deploy\n',
+		'deploy\r',
+		'deploy\u2028',
+		'deploy\u2029',
+	])('rejects invalid generator IDs %j', async (id) => {
+		await expect(generateServiceAccountToken(id, 'valid')).rejects.toThrow();
+		await expect(generateServiceAccountToken('valid', id)).rejects.toThrow();
+	});
 });

@@ -46,6 +46,22 @@ Start an app from the notebook's actions menu ("Run as app"), or via the API:
 `{"mode": "app"}`. The call is create-or-reuse: if the app is already running,
 any admitted caller attaches to it.
 
+## Authenticated app links
+
+From a notebook, open **Share notebook → App links** to create or copy a URL
+such as `/app/sales`. Project managers and admins can create and remove links.
+Each name is unique across the hub. Names contain 1–63 lowercase letters,
+digits, or hyphens, and start and end with a letter or digit.
+
+Links inherit the notebook's permissions. Recipients must sign in and have
+permission to run the app. Several names can point to one notebook, and each
+uses its existing shared app sandbox.
+
+Removing a link releases its name immediately. Old shared URLs can then open
+another notebook that registers the same name. Removal does not stop running
+apps or change notebook permissions. Deleting the notebook or project also
+releases its names.
+
 ## Notebooks with query parameters
 
 App and editor URLs pass query parameters to the notebook iframe:

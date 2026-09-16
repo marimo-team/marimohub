@@ -167,6 +167,20 @@ describe('preview format boundaries', () => {
 		},
 	);
 
+	it('treats duplicate prototype-related CSV headers as ordinary columns', async () => {
+		const bytes = new TextEncoder().encode('__proto__,__proto__,constructor\nfirst,second,third\n');
+		const test = harness([
+			{ ContentLength: bytes.length, ContentType: 'text/csv' },
+			{ Body: body(bytes) },
+		]);
+		await expect(test.preview('headers.csv')).resolves.toMatchObject({
+			kind: 'tabular',
+			columns: [{ name: '__proto__' }, { name: '__proto___2' }, { name: 'constructor' }],
+			rows: [['first', 'second', 'third']],
+			truncated: false,
+		});
+	});
+
 	it('bounds CSV fields before normalizing excluded columns', async () => {
 		const headers = Array.from({ length: 201 }, (_, index) => `c${index}`);
 		const row = [...Array.from({ length: 200 }, () => 'ok'), 'x'.repeat(9 * 1024)];

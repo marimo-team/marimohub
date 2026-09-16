@@ -70,7 +70,9 @@ potential data loss.</p>
 marimohub accepts at most 200 group IDs. It does not resolve group-overage
 references from the provider. Configure the IdP to emit only the groups that
 marimohub needs.
-Group-derived roles and project-creation access apply only to the browser session. They do not transfer to personal access tokens.</p>
+Group-derived roles and project-creation access apply to browser sessions and
+enabled <a href="#external-access-tokens">external access tokens</a>. They do not transfer
+to personal access tokens.</p>
 <p>After you enable project-creation groups, matching users must sign in again. Existing sessions do not contain the new entitlement.</p>
 <p>For a strict rollout, first deploy the new version without the variable. Then set the variable after all replicas run the new version.</p>
 <p>The user ID is the OIDC <code>sub</code> within the configured issuer. The same <code>sub</code> from
@@ -302,7 +304,8 @@ keys only from the configured or discovered JWKS endpoint. Failed token or key
 checks deny authentication, even with a valid browser cookie in the same request.</p>
 <p>The Hub does not store, revoke, or refresh external tokens. It does not query
 the issuer for revocation status. Issuer-side revocation generally takes effect
-at token expiry. Hub user suspension blocks API and MCP access immediately.</p>
+at token expiry. Hub user suspension blocks API and MCP access, with a cache
+delay of up to 30 seconds across server instances.</p>
 <p>For client discovery and gateway behavior, see <a href="/mcp#external-authorization">MCP external authorization</a>.</p>
 "
 `;
