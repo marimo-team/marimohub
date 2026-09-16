@@ -1780,7 +1780,8 @@ components:
         app_only:
           type: boolean
           description: Whether the subject has only app-user access. Valid only for
-            deployment resources.
+            deployment resources. When omitted, project creation requires
+            project-creator or super-admin standing.
         project_id:
           type: string
         notebook_id:

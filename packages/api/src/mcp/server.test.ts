@@ -13,8 +13,8 @@ const PRINCIPAL: AuthenticatedPrincipal = {
 	credential: { kind: 'personal-access-token', id: 'tok-oauth' },
 };
 
-async function connect(deps: ReturnType<typeof makeTestDeps>) {
-	const server = createMcpServer(deps, PRINCIPAL, {
+async function connect(deps: ReturnType<typeof makeTestDeps>, principal = PRINCIPAL) {
+	const server = createMcpServer(deps, principal, {
 		requestId: 'request-123',
 		method: 'POST',
 		path: '/mcp',
@@ -145,9 +145,23 @@ describe('MCP tool boundaries', () => {
 				session.session_id,
 				'https://kernel.example',
 			);
-			await deps.services.projects.updateMemberRole(project.id, PRINCIPAL.id, 'app-user', ACTOR);
+			proxy.mockImplementation(async (request) =>
+				new URL(request.url).pathname === '/api/sessions'
+					? Response.json([{ id: 'kernel-one' }])
+					: new Response('event: done\ndata: {"success":true}\n\n', {
+							headers: { 'Content-Type': 'text/event-stream' },
+						}),
+			);
 			const { client, server } = await connect(deps);
 			try {
+				const allowed = await client.callTool({
+					name: 'execute_code',
+					arguments: { project: project.id, session_id: session.session_id, code: '1 + 1' },
+				});
+				expect(allowed.isError).not.toBe(true);
+				expect(proxy).toHaveBeenCalledTimes(2);
+				proxy.mockClear();
+				await deps.services.projects.updateMemberRole(project.id, PRINCIPAL.id, 'app-user', ACTOR);
 				const response = await client.callTool({
 					name: 'execute_code',
 					arguments: {
@@ -158,6 +172,74 @@ describe('MCP tool boundaries', () => {
 				});
 				expect(response.isError).toBe(true);
 				expect(proxy).not.toHaveBeenCalled();
+			} finally {
+				await client.close();
+				await server.close();
+			}
+		},
+	);
+
+	it.each([false, true])(
+		'checks session grants after project admission (ephemeral: %s)',
+		async (ephemeral) => {
+			const bucket = new MemoryBucket();
+			await new CatalogService(bucket).initialize(ACTOR);
+			const compute = makeFakeCompute();
+			const proxy = vi.spyOn(compute, 'proxy');
+			const deps = makeTestDeps(bucket, { compute });
+			const project = await deps.services.projects.createProject(
+				{ name: 'Project', description: '' },
+				ACTOR,
+			);
+			await deps.services.projects.addMember(
+				project.id,
+				{ user_id: PRINCIPAL.id },
+				'editor',
+				ACTOR,
+			);
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Notebook', description: '', code: 'pass' },
+				ACTOR,
+			);
+			const session = await deps.services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: PRINCIPAL.id,
+				ephemeral,
+			});
+			await deps.services.sessions.setRunning(
+				project.id,
+				session.session_id,
+				'https://kernel.example',
+			);
+			const read = vi.spyOn(deps.services.sessions, 'getSession');
+			const stop = vi.spyOn(deps.services.sessions, 'beginTerminating');
+			const { client, server } = await connect(deps, {
+				...PRINCIPAL,
+				credential: {
+					...PRINCIPAL.credential,
+					grant: { actions: ['project.read'], projects: [project.id] },
+				},
+			});
+			try {
+				for (const tool of [
+					{
+						name: 'execute_code',
+						arguments: { project: project.id, session_id: session.session_id, code: '1 + 1' },
+					},
+					{
+						name: 'stop_session',
+						arguments: { project: project.id, session_id: session.session_id },
+					},
+				]) {
+					read.mockClear();
+					const response = await client.callTool(tool);
+					expect(response.isError).toBe(true);
+					expect(read).toHaveBeenCalledWith(project.id, session.session_id);
+					expect(proxy).not.toHaveBeenCalled();
+					expect(stop).not.toHaveBeenCalled();
+				}
 			} finally {
 				await client.close();
 				await server.close();

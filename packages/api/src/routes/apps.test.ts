@@ -7,7 +7,13 @@ import {
 	createRunId,
 	SECONDARY_SURFACE_IDS,
 } from '@marimo-hub/core';
-import type { NotebookId, ProjectId, SessionId, TokenGrant } from '@marimo-hub/core';
+import type {
+	NotebookId,
+	ProjectId,
+	SessionId,
+	TokenGrant,
+	SandboxProvider,
+} from '@marimo-hub/core';
 import {
 	ACTOR,
 	localResourceSecurity,
@@ -33,11 +39,12 @@ let pid: ProjectId;
 let nid: NotebookId;
 let base: string;
 
-function stakeholderToken(grant: TokenGrant) {
+function stakeholderToken(grant: TokenGrant, compute: SandboxProvider = makeFakeCompute()) {
 	return createTestApi({
 		bucket: api.bucket,
-		compute: makeFakeCompute(),
+		compute,
 		deps: {
+			policy: { viewerMode: 'applications' },
 			authenticator: {
 				authenticate: async () => ({
 					id: STAKEHOLDER,
@@ -195,25 +202,6 @@ describe('app-user access', () => {
 				);
 			}
 		}
-	});
-
-	it('does not preserve ephemeral editor access after a downgrade', async () => {
-		await services.projects.updateMemberRole(pid, STAKEHOLDER, 'viewer', ACTOR);
-		const client = createTestApi({
-			bucket: api.bucket,
-			userId: STAKEHOLDER,
-			compute: makeFakeCompute(),
-			deps: { policy: { viewerMode: 'ephemeral-sandbox' } },
-		});
-		const session = await expectOk<{ session_id: string }>(
-			await client.request('POST', `${base}/sessions`, { mode: 'edit' }),
-		);
-		await services.projects.updateMemberRole(pid, STAKEHOLDER, 'app-user', ACTOR);
-		await expectError(await client.request('GET', `${base}/sessions/${session.session_id}`), 404);
-		await expectError(
-			await client.request('POST', `${base}/sessions/${session.session_id}/heartbeat`),
-			404,
-		);
 	});
 
 	it.each([
@@ -456,39 +444,42 @@ describe('app-user boundaries', () => {
 	});
 });
 
-it('returns generic app startup failures while retaining diagnostics for authors', async () => {
-	const { instance } = makeFakeSandbox();
-	const client = createTestApi({
-		bucket: api.bucket,
-		userId: STAKEHOLDER,
-		compute: fakeComputeFrom({
-			...instance,
-			exec: async (command) =>
-				command.includes('uv sync')
-					? {
-							success: false,
-							stdout: '',
-							stderr: 'SOURCE_ONLY_SENTINEL',
-							error: { code: 'COMMAND_FAILED' },
-						}
-					: instance.exec(command),
-		}),
-	});
-	const failure = await expectError(
-		await client.request('POST', `${base}/sessions`, { mode: 'app' }),
-		503,
-	);
-	expect(failure.message).toBe('The app could not start. Contact its owner.');
-	const [session] = await services.sessions.listSessions(nid);
-	const response = await expectOk(
-		await client.request('GET', `${base}/sessions/${session.session_id}`),
-	);
-	expect(response.error).toEqual({
-		code: 'APP_FAILED',
-		message: 'The app could not start. Contact its owner.',
-	});
-	expect(JSON.stringify(response)).not.toContain('SOURCE_ONLY_SENTINEL');
-});
+it.each(['app-user', 'viewer', 'editor'] as const)(
+	'returns generic app startup failures for app-scoped %s access',
+	async (role) => {
+		await services.projects.updateMemberRole(pid, STAKEHOLDER, role, ACTOR);
+		const { instance } = makeFakeSandbox();
+		const client = stakeholderToken(
+			{ projects: [pid], actions: ['app.read', 'session.start', 'session.attach'] },
+			fakeComputeFrom({
+				...instance,
+				exec: async (command) =>
+					command.includes('uv sync')
+						? {
+								success: false,
+								stdout: '',
+								stderr: 'SOURCE_ONLY_SENTINEL',
+								error: { code: 'COMMAND_FAILED' },
+							}
+						: instance.exec(command),
+			}),
+		);
+		const failure = await expectError(
+			await client.request('POST', `${base}/sessions`, { mode: 'app' }),
+			503,
+		);
+		expect(failure.message).toBe('The app could not start. Contact its owner.');
+		const [session] = await services.sessions.listSessions(nid);
+		const response = await expectOk(
+			await client.request('GET', `${base}/sessions/${session.session_id}`),
+		);
+		expect(response.error).toEqual({
+			code: 'APP_FAILED',
+			message: 'The app could not start. Contact its owner.',
+		});
+		expect(JSON.stringify(response)).not.toContain('SOURCE_ONLY_SENTINEL');
+	},
+);
 
 it('blocks existing version code and version HTML through direct URLs', async () => {
 	const { source } = await services.notebooks.getNotebook(pid, nid);
@@ -681,29 +672,42 @@ describe('app access after authorization changes', () => {
 });
 
 describe('app session credential boundaries', () => {
-	it('does not reveal a kernel URL or operational metadata to a token without attach permission', async () => {
-		const client = stakeholderToken({ projects: [pid], actions: ['app.read', 'session.start'] });
-		const session = await expectOk<{ session_id: SessionId }>(
-			await client.request('POST', `${base}/sessions`, { mode: 'app' }),
-		);
-		expect(session).toMatchObject({ can: { attach: false, stop: false } });
-		for (const field of [
-			'user_id',
-			'sandbox_url',
-			'source_version_id',
-			'compute_profile',
-			'compute_resources',
-			'surfaces',
-			'integrations',
-		]) {
-			expect(session).not.toHaveProperty(field);
-		}
-		await expectError(await client.request('GET', `${base}/sessions/${session.session_id}`), 403);
-		await expectError(
-			await client.request('POST', `${base}/sessions/${session.session_id}/heartbeat`),
-			403,
-		);
-	});
+	it.each(['app-user', 'viewer', 'editor', 'manager'] as const)(
+		'withholds kernel URLs and metadata from app-scoped %s tokens without attach',
+		async (role) => {
+			await services.projects.updateMemberRole(pid, STAKEHOLDER, role, ACTOR);
+			const client = stakeholderToken({ projects: [pid], actions: ['app.read', 'session.start'] });
+			const session = await expectOk<{ session_id: SessionId }>(
+				await client.request('POST', `${base}/sessions`, { mode: 'app' }),
+			);
+			expect(session).toMatchObject({ can: { attach: false, stop: false } });
+			for (const field of [
+				'user_id',
+				'sandbox_url',
+				'source_version_id',
+				'compute_profile',
+				'compute_resources',
+				'surfaces',
+				'integrations',
+			]) {
+				expect(session).not.toHaveProperty(field);
+			}
+			const read = await client.request('GET', `${base}/sessions/${session.session_id}`);
+			if (role === 'app-user') {
+				await expectError(read, 403);
+			} else {
+				const response = await expectOk(read);
+				expect(response).toMatchObject({ can: { attach: false } });
+				expect(response).not.toHaveProperty('sandbox_url');
+				expect(response).not.toHaveProperty('source_version_id');
+				expect(response).not.toHaveProperty('user_id');
+			}
+			await expectError(
+				await client.request('POST', `${base}/sessions/${session.session_id}/heartbeat`),
+				403,
+			);
+		},
+	);
 
 	it('permits attach-only tokens to keep an existing app alive but not to provision one', async () => {
 		const session = await expectOk<{ session_id: SessionId }>(
@@ -741,54 +745,124 @@ describe('app session credential boundaries', () => {
 		},
 	);
 
-	it('redacts populated operational fields when attaching to an author-started app', async () => {
-		const { source } = await services.notebooks.getNotebook(pid, nid);
-		const session = await services.sessions.createSession({
-			project_id: pid,
-			notebook_id: nid,
-			user_id: ACTOR,
-			mode: 'app',
-			source_version_id: source.current_version_id!,
-			compute_profile: 'private-profile',
-			compute_resources: { cpu: 4, memory_bytes: 1024 },
-			compute_from_snapshot: true,
-		});
-		await services.sessions.setRunning(
-			pid,
-			session.session_id,
-			'https://app.example.com/',
-			false,
-			'https://internal.example.com/',
-		);
-		await services.sessions.claimApp(pid, nid, session.session_id);
-		const author = await expectOk(
-			await owner.request('GET', `${base}/sessions/${session.session_id}`),
-		);
-		expect(author).toHaveProperty('user_id', ACTOR);
-		expect(author).toHaveProperty('source_version_id');
-		expect(author).toHaveProperty('compute_profile', 'private-profile');
-		expect(author).toHaveProperty('surfaces');
-		for (const [method, path, body] of [
-			['POST', `${base}/sessions`, { mode: 'app' }],
-			['GET', `${base}/sessions/${session.session_id}`, undefined],
-			['POST', `${base}/sessions/${session.session_id}/heartbeat`, undefined],
-		] as const) {
-			const response = await expectOk(await api.request(method, path, body));
-			expect(response).toMatchObject({
-				session_id: session.session_id,
-				sandbox_url: 'https://app.example.com/',
+	it.each(['app-user', 'viewer', 'editor', 'manager'] as const)(
+		'redacts populated operational fields for app-scoped %s access',
+		async (role) => {
+			await services.projects.updateMemberRole(pid, STAKEHOLDER, role, ACTOR);
+			const client =
+				role === 'app-user'
+					? api
+					: stakeholderToken({
+							projects: [pid],
+							actions: ['app.read', 'session.start', 'session.attach'],
+						});
+			const { source } = await services.notebooks.getNotebook(pid, nid);
+			const session = await services.sessions.createSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: ACTOR,
+				mode: 'app',
+				source_version_id: source.current_version_id!,
+				compute_profile: 'private-profile',
+				compute_resources: { cpu: 4, memory_bytes: 1024 },
+				compute_from_snapshot: true,
 			});
-			for (const field of [
-				'user_id',
-				'source_version_id',
-				'compute_profile',
-				'compute_resources',
-				'compute_from_snapshot',
-				'surfaces',
-				'sandbox_origin_url',
-			]) {
-				expect(response).not.toHaveProperty(field);
+			await services.sessions.setRunning(
+				pid,
+				session.session_id,
+				'https://app.example.com/',
+				false,
+				'https://internal.example.com/',
+			);
+			await services.sessions.claimApp(pid, nid, session.session_id);
+			const author = await expectOk(
+				await owner.request('GET', `${base}/sessions/${session.session_id}`),
+			);
+			expect(author).toHaveProperty('user_id', ACTOR);
+			expect(author).toHaveProperty('source_version_id');
+			expect(author).toHaveProperty('compute_profile', 'private-profile');
+			expect(author).toHaveProperty('surfaces');
+			for (const [method, path, body] of [
+				['POST', `${base}/sessions`, { mode: 'app' }],
+				['GET', `${base}/sessions/${session.session_id}`, undefined],
+				['POST', `${base}/sessions/${session.session_id}/heartbeat`, undefined],
+			] as const) {
+				const response = await expectOk(await client.request(method, path, body));
+				expect(response).toMatchObject({
+					session_id: session.session_id,
+					sandbox_url: 'https://app.example.com/',
+				});
+				for (const field of [
+					'user_id',
+					'source_version_id',
+					'compute_profile',
+					'compute_resources',
+					'compute_from_snapshot',
+					'surfaces',
+					'sandbox_origin_url',
+				]) {
+					expect(response).not.toHaveProperty(field);
+				}
 			}
-		}
-	});
+		},
+	);
 });
+
+it.each([
+	['project.read', 'session.start', 'session.attach'],
+	['app.read', 'project.read', 'session.start', 'session.attach'],
+	'*',
+] as const)(
+	'preserves app operational metadata for a viewer credential with project reads: %j',
+	async (actions) => {
+		await services.projects.updateMemberRole(pid, STAKEHOLDER, 'viewer', ACTOR);
+		const client = stakeholderToken({
+			projects: [pid],
+			actions: actions === '*' ? '*' : [...actions],
+		});
+		const session = await expectOk<{ session_id: SessionId }>(
+			await client.request('POST', `${base}/sessions`, { mode: 'app' }),
+		);
+		for (const response of [
+			session,
+			await expectOk(await client.request('GET', `${base}/sessions/${session.session_id}`)),
+			await expectOk(
+				await client.request('POST', `${base}/sessions/${session.session_id}/heartbeat`),
+			),
+		]) {
+			expect(response).toHaveProperty('user_id', STAKEHOLDER);
+			expect(response).toHaveProperty('source_version_id');
+			expect(response).toHaveProperty('surfaces');
+		}
+	},
+);
+
+it.each(['notebook', 'project'] as const)(
+	'returns not found when an app-user starts an app whose %s is deleted during provisioning',
+	async (resource) => {
+		const fake = makeFakeSandbox();
+		const client = createTestApi({
+			bucket: api.bucket,
+			userId: STAKEHOLDER,
+			compute: fakeComputeFrom({
+				...fake.instance,
+				startProcess: async (...args) => {
+					if (resource === 'notebook') {
+						await services.notebooks.deleteNotebook(pid, nid, ACTOR);
+					} else {
+						await services.projects.deleteProject(pid, ACTOR);
+					}
+					return fake.instance.startProcess(...args);
+				},
+			}),
+		});
+		await expectError(
+			await client.request('POST', `${base}/sessions`, { mode: 'app' }),
+			404,
+			'NOT_FOUND',
+		);
+		expect(fake.calls.destroy).toBeGreaterThan(0);
+		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(0);
+		await expectError(await client.request('GET', `${base}/app`), 404, 'NOT_FOUND');
+	},
+);

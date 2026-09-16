@@ -87,4 +87,33 @@ describe('ensureInitialized', () => {
 		expect(await services.projects.listProjects()).toEqual([]);
 		expect((await services.catalog.getCurrentSnapshot()).projects).toHaveLength(1);
 	});
+
+	it('resolves bootstrap permission only for an empty catalog and retries a prior denial', async () => {
+		const bucket = new MemoryBucket();
+		const authorize = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+		await ensureInitialized(bucket, ACTOR, { createDefaultProject: authorize });
+		const services = createServices(bucket);
+		expect(await services.projects.listProjects()).toEqual([]);
+		expect(authorize).toHaveBeenCalledTimes(1);
+
+		authorize.mockResolvedValue(true);
+		await ensureInitialized(bucket, ACTOR, { createDefaultProject: authorize });
+		expect(await services.projects.listProjects()).toHaveLength(1);
+		expect(authorize).toHaveBeenCalledTimes(2);
+
+		await ensureInitialized(bucket, ACTOR, { createDefaultProject: authorize });
+		expect(authorize).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not seed when bootstrap authorization cannot resolve', async () => {
+		const bucket = new MemoryBucket();
+		await expect(
+			ensureInitialized(bucket, ACTOR, {
+				createDefaultProject: async () => {
+					throw new Error('Membership lookup failed');
+				},
+			}),
+		).rejects.toThrow('Membership lookup failed');
+		expect(await createServices(bucket).projects.listProjects()).toEqual([]);
+	});
 });

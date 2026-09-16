@@ -32,6 +32,7 @@ function setup(
 		appStatus?: number;
 		projectStatus?: number;
 		projectReload?: Promise<void>;
+		appsResponse?: (url: URL) => Response;
 	} = {},
 ) {
 	const existing = makeFetch({
@@ -55,6 +56,7 @@ function setup(
 				{ status, headers: { 'content-type': 'application/json' } },
 			);
 		if (url.pathname === '/api/v1/apps') {
+			if (options.appsResponse) return options.appsResponse(url);
 			const q = url.searchParams.get('q') ?? '';
 			return new Response(
 				JSON.stringify({
@@ -99,6 +101,91 @@ function setup(
 }
 
 describe('stakeholder apps', () => {
+	it('retries an initial gallery failure without navigating away', async () => {
+		const appsResponse = vi
+			.fn()
+			.mockReturnValueOnce(
+				Response.json(
+					{ success: false, error: { code: 'UNAVAILABLE', message: 'Try again later' } },
+					{ status: 503 },
+				),
+			)
+			.mockReturnValueOnce(
+				Response.json({ success: true, data: { items: [app], next_cursor: null } }),
+			);
+		setup('/apps', [app], { appsResponse });
+		expect(await screen.findByRole('alert')).toHaveTextContent('Try again later');
+		expect(screen.queryByRole('link', { name: 'Back to apps' })).toBeNull();
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(await screen.findByRole('link', { name: /Forecast/ })).toBeVisible();
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(appsResponse).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps loaded apps when pagination fails and retries the failed page', async () => {
+		const nextApp = { ...app, notebook_id: 'second', title: 'Revenue', url: '/second/app' };
+		const appsResponse = vi
+			.fn()
+			.mockReturnValueOnce(
+				Response.json({ success: true, data: { items: [app], next_cursor: 'page-two' } }),
+			)
+			.mockReturnValueOnce(
+				Response.json(
+					{ success: false, error: { code: 'UNAVAILABLE', message: 'Unable to load more apps' } },
+					{ status: 503 },
+				),
+			)
+			.mockReturnValueOnce(
+				Response.json({ success: true, data: { items: [nextApp], next_cursor: null } }),
+			);
+		setup('/apps', [app], { appsResponse });
+		expect(await screen.findByRole('link', { name: /Forecast/ })).toBeVisible();
+		fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load more apps');
+		expect(screen.getByRole('link', { name: /Forecast/ })).toBeVisible();
+		expect(screen.getByRole('textbox', { name: 'Search apps' })).toBeVisible();
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(await screen.findByRole('link', { name: /Revenue/ })).toBeVisible();
+		expect(screen.getByRole('link', { name: /Forecast/ })).toBeVisible();
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+		expect(appsResponse.mock.calls.map(([url]) => url.searchParams.get('cursor'))).toEqual([
+			null,
+			'page-two',
+			'page-two',
+		]);
+	});
+
+	it('retains apps after a failed refresh and retries the first page', async () => {
+		const appsResponse = vi
+			.fn()
+			.mockReturnValueOnce(
+				Response.json({ success: true, data: { items: [app], next_cursor: 'page-two' } }),
+			)
+			.mockReturnValueOnce(
+				Response.json(
+					{ success: false, error: { code: 'UNAVAILABLE', message: 'Unable to refresh apps' } },
+					{ status: 503 },
+				),
+			)
+			.mockReturnValueOnce(
+				Response.json({ success: true, data: { items: [app], next_cursor: 'page-two' } }),
+			);
+		const { client } = setup('/apps', [app], { appsResponse });
+		expect(await screen.findByRole('link', { name: /Forecast/ })).toBeVisible();
+		await act(() => client.invalidateQueries({ queryKey: ['apps', 'list'] }));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Unable to refresh apps');
+		expect(screen.getByRole('link', { name: /Forecast/ })).toBeVisible();
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(await screen.findByRole('button', { name: 'Load more' })).toBeVisible();
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(appsResponse.mock.calls.map(([url]) => url.searchParams.get('cursor'))).toEqual([
+			null,
+			null,
+			null,
+		]);
+	});
+
 	it('groups apps by project and debounces searches while preserving the gallery', async () => {
 		const { fetch } = setup();
 		expect(await screen.findByRole('heading', { name: 'Analytics' })).toBeVisible();

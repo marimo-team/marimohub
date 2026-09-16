@@ -2716,7 +2716,7 @@ export interface components {
 			source: 'stored' | 'synthetic';
 			/** @enum {string} */
 			kind: 'deployment' | 'project' | 'session' | 'session-start';
-			/** @description Whether the subject has only app-user access. Valid only for deployment resources. */
+			/** @description Whether the subject has only app-user access. Valid only for deployment resources. When omitted, project creation requires project-creator or super-admin standing. */
 			app_only?: boolean;
 			project_id?: string;
 			notebook_id?: string;

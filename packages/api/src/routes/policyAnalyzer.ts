@@ -93,7 +93,7 @@ const AnalysisResourceSchema = z
 			.boolean()
 			.optional()
 			.describe(
-				'Whether the subject has only app-user access. Valid only for deployment resources.',
+				'Whether the subject has only app-user access. Valid only for deployment resources. When omitted, project creation requires project-creator or super-admin standing.',
 			),
 		project_id: z.string().optional(),
 		notebook_id: z.string().optional(),

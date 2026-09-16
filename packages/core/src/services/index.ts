@@ -591,7 +591,7 @@ export function createServices(
 export async function ensureInitialized(
 	bucket: Bucket,
 	actor: UserId,
-	options: { createDefaultProject?: boolean } = {},
+	options: { createDefaultProject?: boolean | (() => Promise<boolean>) } = {},
 ): Promise<void> {
 	const exists = await bucket.head(paths.catalog);
 	if (exists && options.createDefaultProject === false) return;
@@ -604,6 +604,12 @@ export async function ensureInitialized(
 
 	const snapshot = await services.catalog.getCurrentSnapshot();
 	if (snapshot.projects.length === 0) {
+		if (
+			typeof options.createDefaultProject === 'function' &&
+			!(await options.createDefaultProject())
+		) {
+			return;
+		}
 		await services.projects.createProject(
 			{ name: 'My Projects', description: 'Default project' },
 			actor,

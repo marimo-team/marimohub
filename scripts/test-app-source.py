@@ -45,8 +45,22 @@ if __name__ == "__main__":
 """
 
 
-def check_source(text):
+def check_source(message: str | bytes) -> str:
+    text = message.decode() if isinstance(message, bytes) else message
     assert MARKER not in text, "Notebook source leaked to an app client"
+    return text
+
+
+def check_source_guard():
+    for message in ["safe output", b"safe output"]:
+        assert check_source(message) == "safe output"
+    for message in [MARKER, MARKER.encode()]:
+        try:
+            check_source(message)
+        except AssertionError as error:
+            assert str(error) == "Notebook source leaked to an app client"
+        else:
+            raise AssertionError("Source guard accepted a source-only marker")
 
 
 def request(origin, path, session, body=None):
@@ -84,10 +98,7 @@ async def check_kernel(origin):
         async def until(needle):
             async with asyncio.timeout(45):
                 while not any(needle in message for message in received):
-                    message = await ws.recv()
-                    if isinstance(message, bytes):
-                        message = message.decode()
-                    check_source(message)
+                    message = check_source(await ws.recv())
                     received.append(message)
 
         await until("APP_VALUE_1")
@@ -133,6 +144,7 @@ async def check_kernel(origin):
 
 
 def main():
+    check_source_guard()
     image = Path(__file__).resolve().parents[1] / "images/marimo-sandbox/Dockerfile"
     expected = re.search(r"ARG MARIMO_VERSION=(\S+)", image.read_text())
     assert expected and version("marimo") == expected[1], (

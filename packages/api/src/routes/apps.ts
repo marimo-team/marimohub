@@ -104,36 +104,44 @@ app.openapi(
 			action: 'app.read',
 			status: 'active',
 		});
-		const groups = await mapWithConcurrency(
-			projects.filter((p) => !query.project_id || p.id === query.project_id),
+		const candidates: { project: Project; notebook: { id: NotebookId; title: string } }[] = [];
+		// Notebook listing already bounds label reads; nesting project workers would multiply that limit.
+		for (const entry of projects.filter((p) => !query.project_id || p.id === query.project_id)) {
+			try {
+				const project = await loadAppProject(deps.services.projects, entry.id, user, deps);
+				const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
+					subject: user,
+					policy: deps.policy,
+					resourceSecurity: deps.resourceSecurity,
+					action: 'app.read',
+				});
+				for (const notebook of notebooks) {
+					if (
+						!query.q ||
+						`${project.name} ${notebook.title}`
+							.toLocaleLowerCase()
+							.includes(query.q.toLocaleLowerCase())
+					)
+						candidates.push({ project, notebook });
+				}
+			} catch (error) {
+				if (!(error instanceof NotFoundError)) throw error;
+			}
+		}
+		const apps = await mapWithConcurrency(
+			candidates,
 			BUCKET_SCAN_CONCURRENCY,
-			async (entry) => {
+			async ({ project, notebook }) => {
 				try {
-					const project = await loadAppProject(deps.services.projects, entry.id, user, deps);
-					const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
-						subject: user,
-						policy: deps.policy,
-						resourceSecurity: deps.resourceSecurity,
-						action: 'app.read',
-					});
-					const matching = notebooks.filter(
-						(notebook) =>
-							!query.q ||
-							`${project.name} ${notebook.title}`
-								.toLocaleLowerCase()
-								.includes(query.q.toLocaleLowerCase()),
-					);
-					return await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (notebook) =>
-						summary(
-							deps,
-							user,
-							project,
-							notebook,
-							await deps.services.notebooks.getSecurityLabels(project.id, notebook.id),
-						),
+					return await summary(
+						deps,
+						user,
+						project,
+						notebook,
+						await deps.services.notebooks.getSecurityLabels(project.id, notebook.id),
 					);
 				} catch (error) {
-					if (error instanceof NotFoundError) return [];
+					if (error instanceof NotFoundError) return null;
 					throw error;
 				}
 			},
@@ -142,10 +150,14 @@ app.openapi(
 			{
 				success: true as const,
 				data: {
-					...paginate(groups.flat(), query, {
-						key: (item) => item.project_id,
-						tiebreak: (item) => item.notebook_id,
-					}),
+					...paginate(
+						apps.filter((item) => item !== null),
+						query,
+						{
+							key: (item) => item.project_id,
+							tiebreak: (item) => item.notebook_id,
+						},
+					),
 					...(selectedProject
 						? {
 								project: {

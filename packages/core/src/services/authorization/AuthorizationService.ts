@@ -756,14 +756,15 @@ export class AuthorizationService {
 	private decideDeployment(
 		subject: AuthSubject,
 		action: DeploymentAction,
-		appOnly = subjectDefaultRole(subject, this.policy) === 'app-user',
+		appOnly?: boolean,
 	): AuthorizationDecision {
 		const allowed = ((): boolean => {
 			switch (action) {
 				case 'project.create':
 					return canCreateProject(subject, {
 						...this.policy,
-						projectCreationRestricted: this.policy?.projectCreationRestricted || appOnly,
+						// Defaults cannot establish whether explicit memberships make this user app-only.
+						projectCreationRestricted: this.policy?.projectCreationRestricted || appOnly !== false,
 					});
 				case 'directory.search':
 					return this.listsAllProjects(subject);

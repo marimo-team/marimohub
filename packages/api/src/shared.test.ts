@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { describe, it, expect, expectTypeOf } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 import {
 	createProjectId,
 	createServices,
@@ -12,7 +12,9 @@ import {
 	assertProjectRole,
 	assertSessionAccess,
 	assertSessionControl,
+	canDeploymentAction,
 	createApp,
+	initializeForSubject,
 	loadVisibleProject,
 	ErrorResponseSchema,
 	extensibleResponseEnum,
@@ -23,6 +25,58 @@ import {
 	resolvePublicBaseUrl,
 	SessionIdParam,
 } from './shared';
+
+describe('project creation standing', () => {
+	const owner = { id: uid('creation_owner'), email: 'owner@example.com' };
+	const stakeholder = { id: uid('creation_stakeholder'), email: 'stakeholder@example.com' };
+
+	it('fails closed when membership resolution is unavailable', async () => {
+		expect(
+			await canDeploymentAction(stakeholder, 'project.create', {
+				policy: { defaultRole: 'manager' },
+			}),
+		).toBe(false);
+	});
+
+	it('resolves explicit memberships again after a role change', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(owner.id);
+		const project = await services.projects.createProject(
+			{ name: 'Apps', description: '' },
+			owner.id,
+		);
+		await services.projects.addMember(
+			project.id,
+			{ user_id: stakeholder.id },
+			'app-user',
+			owner.id,
+		);
+		const deps = { services, policy: { defaultRole: 'manager' as const } };
+		expect(await canDeploymentAction(stakeholder, 'project.create', deps)).toBe(false);
+		await services.projects.updateMemberRole(project.id, stakeholder.id, 'viewer', owner.id);
+		expect(await canDeploymentAction(stakeholder, 'project.create', deps)).toBe(true);
+		await services.projects.updateMemberRole(project.id, stakeholder.id, 'app-user', owner.id);
+		expect(await canDeploymentAction(stakeholder, 'project.create', deps)).toBe(false);
+	});
+
+	it('uses current app-only resolution for bootstrap without scanning initialized projects', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		const appOnly = vi.spyOn(services.projects, 'isAppOnly').mockResolvedValue(true);
+		const deps = { bucket, services, policy: { defaultRole: 'manager' as const } };
+		await initializeForSubject(deps, stakeholder);
+		expect(appOnly).toHaveBeenCalledWith(stakeholder, deps.policy);
+		expect(await services.projects.listProjects()).toEqual([]);
+
+		appOnly.mockResolvedValue(false);
+		await initializeForSubject(deps, stakeholder);
+		expect(await services.projects.listProjects()).toHaveLength(1);
+		expect(appOnly).toHaveBeenCalledTimes(2);
+		await initializeForSubject(deps, stakeholder);
+		expect(appOnly).toHaveBeenCalledTimes(2);
+	});
+});
 
 describe('resolvePublicBaseUrl', () => {
 	it('uses the public host and forwarded protocol behind a reverse proxy', async () => {
@@ -270,6 +324,28 @@ describe('session authorization assertions', () => {
 		user_id: owner,
 		editor_sandbox_sharing: 'exclusive' as const,
 	};
+
+	it.each([
+		{ mode: 'edit', ephemeral: false, attach: false },
+		{ mode: 'edit', ephemeral: true, attach: false },
+		{ mode: 'app', ephemeral: false, attach: true },
+	] as const)(
+		'enforces app-user session gates directly for $mode (ephemeral: $ephemeral)',
+		async ({ mode, ephemeral, attach }) => {
+			const subject = { id: editor, email: 'editor@example.com' };
+			const restricted = { ...project, members: [{ user_id: editor, role: 'app-user' as const }] };
+			const owned = { ...session, user_id: editor, mode, ephemeral };
+			const deps = {
+				policy: { defaultRole: 'manager' as const, viewerMode: 'ephemeral-sandbox' as const },
+			};
+			const access = assertSessionAccess(restricted, owned, subject, deps);
+			if (attach) await expect(access).resolves.toEqual({ allowed: true, role: 'app-user' });
+			else await expect(access).rejects.toThrow(ForbiddenError);
+			await expect(assertSessionControl(restricted, owned, subject, deps)).rejects.toThrow(
+				ForbiddenError,
+			);
+		},
+	);
 
 	it('denies a non-owner editor instead of falling back to project role', async () => {
 		const subject = { id: editor, email: 'editor@example.com' };

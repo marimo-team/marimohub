@@ -63,9 +63,9 @@ GET /api/v1/projects/{pid}/notebooks/{nid} added the new `pull` enum value to th
 PATCH /api/v1/projects/{pid}/notebooks/{nid}/source added the new `pull` enum value to the `data/source/sync_mode` response property for the response status `200`
 ```
 
-App-user session responses omit the starter's identity. Existing viewer-or-higher
-responses, including project session listings, still include `user_id`; the shared
-session schema makes it optional for the new role's restricted projection.
+App-only session responses omit the starter's identity, including app-scoped tokens
+without `project.read`. Viewer-or-higher responses with project-read access still
+include `user_id`; the shared session schema makes it optional for app-only access.
 
 ```text
 POST /api/v1/projects/{pid}/notebooks/{nid}/sessions the response property `data/allOf[#/components/schemas/Session]/user_id` became optional for the status `200`

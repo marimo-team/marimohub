@@ -104,17 +104,12 @@ export interface AuthzDeps {
 }
 
 export async function initializeForSubject(
-	deps: Pick<ApiDeps, 'bucket' | 'policy' | 'resourceSecurity'>,
+	deps: Pick<ApiDeps, 'bucket' | 'policy' | 'resourceSecurity' | 'services'>,
 	subject: AuthorizationSubject,
 ): Promise<void> {
-	const appDefault = subjectDefaultRole(subject, deps.policy) === 'app-user';
-	const createDefaultProject = (
-		await authorizationService(deps).authorize(subject, 'project.create', {
-			kind: 'deployment',
-			appOnly: appDefault,
-		})
-	).allowed;
-	await ensureInitialized(deps.bucket, subject.id, { createDefaultProject });
+	await ensureInitialized(deps.bucket, subject.id, {
+		createDefaultProject: () => canDeploymentAction(subject, 'project.create', deps),
+	});
 }
 
 /**
@@ -347,16 +342,26 @@ export async function sessionGrantsFor(
 	session: SessionAdmissionRecord,
 	deps: AuthzDeps,
 	notebookLabels: ResourceSecurityLabels | null = null,
-): Promise<{ role: Role | null; attach: boolean; stop: boolean; surface: boolean }> {
+): Promise<{
+	role: Role | null;
+	appReadOnly: boolean;
+	attach: boolean;
+	stop: boolean;
+	surface: boolean;
+}> {
 	const resource = { kind: 'session' as const, project, session, notebookLabels };
 	const authz = authorizationService(deps);
+	const role = authz.role(subject, project);
 	const decisions = await all({
 		attach: async () => authz.authorize(subject, 'session.attach', resource),
 		stop: async () => authz.authorize(subject, 'session.stop', resource),
 		surface: async () => authz.authorize(subject, 'session.surface', resource),
 	});
 	return {
-		role: authz.role(subject, project),
+		role,
+		appReadOnly:
+			role === 'app-user' ||
+			(session.mode === 'app' && !authz.credentialAllowsAction(subject, 'project.read')),
 		attach: decisions.attach.allowed,
 		stop: decisions.stop.allowed,
 		surface: decisions.surface.allowed,
@@ -1247,7 +1252,7 @@ export const SessionResponseSchema = z
 		session_id: z.string(),
 		notebook_id: z.string(),
 		project_id: z.string(),
-		/** Session starter; omitted for app users. Resolve via /api/v1/users. */
+		/** Session starter; omitted for app-only access. Resolve via /api/v1/users. */
 		user_id: z.string().optional(),
 		status: z.enum(SESSION_STATUSES),
 		/**

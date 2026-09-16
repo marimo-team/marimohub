@@ -77,29 +77,34 @@ describe('policy analyzer routes', () => {
 		expect(data.actions).toContainEqual(expect.objectContaining({ action: 'project.read' }));
 	});
 
-	it.each([true, false])('evaluates project creation for app_only=%s', async (appOnly) => {
-		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
-		const data = await expectOk<any>(
-			await request('POST', '/admin/policy-analyzer/evaluate', {
-				schema_version: 1,
-				cases: [
-					authorizationCase({
-						subject: {
-							id: 'stakeholder',
-							email: 'stakeholder@example.com',
-							entitlement_source: 'explicit',
-							entitlements: [],
-						},
-						action: 'project.create',
-						resource: { source: 'synthetic', kind: 'deployment', app_only: appOnly },
-						expected: { allowed: !appOnly },
-					}),
-				],
-			}),
-		);
-		expect(data.valid).toBe(true);
-		expect(data.cases[0].authorization.decision).toMatchObject({ allowed: !appOnly });
-	});
+	it.each([true, false, undefined])(
+		'evaluates project creation for app_only=%s',
+		async (appOnly) => {
+			const { request } = createTestApi({
+				deps: { policy: { superAdmins: [ACTOR], defaultRole: 'manager' } },
+			});
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						authorizationCase({
+							subject: {
+								id: 'stakeholder',
+								email: 'stakeholder@example.com',
+								entitlement_source: 'explicit',
+								entitlements: [],
+							},
+							action: 'project.create',
+							resource: { source: 'synthetic', kind: 'deployment', app_only: appOnly },
+							expected: { allowed: appOnly === false },
+						}),
+					],
+				}),
+			);
+			expect(data.valid).toBe(true);
+			expect(data.cases[0].authorization.decision).toMatchObject({ allowed: appOnly === false });
+		},
+	);
 
 	it('round-trips app-user membership and app-read decisions', async () => {
 		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });

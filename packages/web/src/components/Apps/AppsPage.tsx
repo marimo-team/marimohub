@@ -5,12 +5,26 @@ import { Project } from '@/components/Project/Project';
 import { Button } from '@/components/ui';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
-export function AppAccessError({ error }: { error: Error }) {
+export function AppAccessError({
+	error,
+	onRetry,
+	isRetrying,
+}: {
+	error: Error;
+	onRetry?: () => void;
+	isRetrying?: boolean;
+}) {
 	return (
 		<div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
 			<h1 className="text-lg font-semibold">Unable to open apps</h1>
 			<p className="text-sm text-muted-foreground">{error.message}</p>
-			<Link to="/apps">Back to apps</Link>
+			{onRetry ? (
+				<Button onPress={onRetry} isDisabled={isRetrying}>
+					Retry
+				</Button>
+			) : (
+				<Link to="/apps">Back to apps</Link>
+			)}
 		</div>
 	);
 }
@@ -18,7 +32,14 @@ export function AppAccessError({ error }: { error: Error }) {
 export function ProjectEntryPage() {
 	const { pid = '' } = useParams();
 	const query = useAppsQuery(pid);
-	if (query.isError) return <AppAccessError error={query.error} />;
+	if (query.isError)
+		return (
+			<AppAccessError
+				error={query.error}
+				onRetry={() => void query.refetch()}
+				isRetrying={query.isFetching}
+			/>
+		);
 	if (!query.data) return <p className="p-6">Loading project…</p>;
 	return query.data.pages[0].project?.your_role === 'app-user' ? (
 		<Navigate to={`/apps?project_id=${encodeURIComponent(pid)}`} replace />
@@ -32,7 +53,14 @@ export function AppsPage() {
 	const [search, setSearch] = useState('');
 	const debouncedSearch = useDebouncedValue(search);
 	const query = useAppsQuery(params.get('project_id') ?? undefined, debouncedSearch);
-	if (query.isError) return <AppAccessError error={query.error} />;
+	if (query.isError && !query.data)
+		return (
+			<AppAccessError
+				error={query.error}
+				onRetry={() => void query.refetch()}
+				isRetrying={query.isFetching}
+			/>
+		);
 	const items = query.data?.pages.flatMap((page) => page.items) ?? [];
 	const groups = new Map<string, typeof items>();
 	for (const item of items) {
@@ -78,7 +106,19 @@ export function AppsPage() {
 						</div>
 					</section>
 				))}
-				{query.hasNextPage ? (
+				{query.isError ? (
+					<div role="alert" className="space-y-3">
+						<p className="text-sm text-muted-foreground">{query.error.message}</p>
+						<Button
+							isDisabled={query.isFetching}
+							onPress={() =>
+								void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())
+							}
+						>
+							Retry
+						</Button>
+					</div>
+				) : query.hasNextPage ? (
 					<Button isDisabled={query.isFetchingNextPage} onPress={() => void query.fetchNextPage()}>
 						Load more
 					</Button>

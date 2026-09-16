@@ -272,10 +272,27 @@ describe('AuthorizationService: deployment actions', () => {
 		).toBe(false);
 	});
 
-	it('gates project creation only under a restricted deployment', async () => {
+	it.each([undefined, 'app-user', 'viewer', 'manager'] as const)(
+		'requires resolved app-only standing even with default role %s',
+		async (defaultRole) => {
+			const authz = service({ defaultRole });
+			await expect(
+				authz.authorize(APP_USER, 'project.create', { kind: 'deployment' }),
+			).resolves.toEqual({ allowed: false, category: 'standing', role: null });
+			for (const entitlement of ['project-creator', 'super-admin'] as const) {
+				await expect(
+					authz.authorize({ ...APP_USER, entitlements: [entitlement] }, 'project.create', {
+						kind: 'deployment',
+					}),
+				).resolves.toEqual({ allowed: true, role: null });
+			}
+		},
+	);
+
+	it('gates resolved non-app users on the deployment creation policy', async () => {
 		const open = service();
 		await expect(
-			open.authorize(STRANGER, 'project.create', { kind: 'deployment' }),
+			open.authorize(STRANGER, 'project.create', { kind: 'deployment', appOnly: false }),
 		).resolves.toEqual({ allowed: true, role: null });
 		const restricted = service({ projectCreationRestricted: true });
 		await expect(
@@ -627,7 +644,7 @@ describe('AuthorizationService: identity-matching edge cases', () => {
 			role: null,
 		});
 		await expect(
-			bare.authorize(STRANGER, 'project.create', { kind: 'deployment' }),
+			bare.authorize(STRANGER, 'project.create', { kind: 'deployment', appOnly: false }),
 		).resolves.toEqual({ allowed: true, role: null });
 	});
 });

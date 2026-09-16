@@ -448,12 +448,12 @@ function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) 
  * (`sandbox_id`, `used_fallback`) stay private.
  */
 export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof sessionGrantsFor>>) {
-	const appUser = can.role === 'app-user';
+	const { appReadOnly } = can;
 	return {
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
 		project_id: s.project_id,
-		user_id: appUser ? undefined : s.user_id,
+		user_id: appReadOnly ? undefined : s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
 		can: {
@@ -461,28 +461,28 @@ export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof ses
 			stop: can.stop,
 			surfaces: surfaceGrants(can.surface),
 		},
-		surfaces: appUser ? undefined : publicSurfaces(s, can),
+		surfaces: appReadOnly ? undefined : publicSurfaces(s, can),
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
-		ephemeral: appUser ? undefined : s.ephemeral,
-		editor_sandbox_sharing: appUser ? undefined : s.editor_sandbox_sharing,
-		ended_reason: appUser ? undefined : s.ended_reason,
-		ended_by_user_id: appUser ? undefined : s.ended_by_user_id,
+		ephemeral: appReadOnly ? undefined : s.ephemeral,
+		editor_sandbox_sharing: appReadOnly ? undefined : s.editor_sandbox_sharing,
+		ended_reason: appReadOnly ? undefined : s.ended_reason,
+		ended_by_user_id: appReadOnly ? undefined : s.ended_by_user_id,
 		// Defaulted in the projection so clients never see `undefined` (stored
 		// records predating the field omit it).
 		mode: sessionMode(s),
-		source_version_id: appUser ? undefined : s.source_version_id,
-		active_connections: appUser ? undefined : s.active_connections,
-		connections_checked_at: appUser ? undefined : s.connections_checked_at,
-		compute_profile: appUser ? undefined : s.compute_profile,
-		compute_resources: appUser ? undefined : s.compute_resources,
-		compute_from_snapshot: appUser ? undefined : s.compute_from_snapshot,
-		integrations: appUser ? undefined : s.integrations,
+		source_version_id: appReadOnly ? undefined : s.source_version_id,
+		active_connections: appReadOnly ? undefined : s.active_connections,
+		connections_checked_at: appReadOnly ? undefined : s.connections_checked_at,
+		compute_profile: appReadOnly ? undefined : s.compute_profile,
+		compute_resources: appReadOnly ? undefined : s.compute_resources,
+		compute_from_snapshot: appReadOnly ? undefined : s.compute_from_snapshot,
+		integrations: appReadOnly ? undefined : s.integrations,
 		// A provision failure's message can name the sandbox host — the very thing
 		// withholding `sandbox_url` protects — so it rides the same grant.
 		error:
 			can.attach && s.error
-				? appUser
+				? appReadOnly
 					? { code: 'APP_FAILED', message: 'The app could not start. Contact its owner.' }
 					: s.error
 				: undefined,
@@ -1813,7 +1813,14 @@ export async function startNotebookSession(input: {
 				);
 			}
 		}
-		if (appUser) throw new UnavailableError('The app could not start. Contact its owner.');
+		if (
+			!(err instanceof NotFoundError) &&
+			(appUser ||
+				(mode === 'app' &&
+					!authorizationService(deps).credentialAllowsAction(user, 'project.read')))
+		) {
+			throw new UnavailableError('The app could not start. Contact its owner.');
+		}
 		throw err;
 	} finally {
 		observer.flush();
