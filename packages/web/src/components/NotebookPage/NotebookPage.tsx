@@ -1,3 +1,4 @@
+import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -10,6 +11,7 @@ import {
 	Eye,
 	FileCode2,
 	GitBranch,
+	Image,
 	Pencil,
 	RefreshCw,
 } from 'lucide-react';
@@ -118,6 +120,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 
 	const notebookTitle = (location.state as { title?: string } | null)?.title ?? nid ?? 'Notebook';
 	const renameModal = useDisclosure();
+	const thumbnailModal = useDisclosure();
 	// Stop/Restart disconnect everyone using the shared app, so both confirm first.
 	const confirmAppAction = useDialogTarget<'stop' | 'restart'>();
 	// Restarting a git-synced editor discards its sandbox scratch state, so confirm.
@@ -437,6 +440,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		author,
 		backToProject,
 		canManageLinks: canManageProject(project.your_role),
+		canEditThumbnail: project.your_role !== null && !isViewer,
 		canOpenChangeRequest,
 		canRunApp,
 		canRetryWithDefault,
@@ -466,6 +470,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		openSecondaryFrame,
 		pid,
 		renameModal,
+		thumbnailModal,
 		resolvingMode,
 		restart,
 		selectedApplicationKey,
@@ -508,6 +513,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		author,
 		backToProject,
 		canManageLinks,
+		canEditThumbnail,
 		canOpenChangeRequest,
 		canRunApp,
 		canRetryWithDefault,
@@ -537,6 +543,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		openSecondaryFrame,
 		pid,
 		renameModal,
+		thumbnailModal,
 		resolvingMode,
 		restart,
 		selectedApplicationKey,
@@ -702,6 +709,15 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							Stop
 						</Button>
 					)}
+					{canEditThumbnail && (
+						<IconButton
+							label="Edit thumbnail"
+							tooltip="Edit thumbnail"
+							onPress={thumbnailModal.open}
+						>
+							<Image className="size-4" />
+						</IconButton>
+					)}
 					<SurfaceMenu
 						actions={surfaceActions}
 						session={session}
@@ -713,6 +729,12 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					/>
 				</div>
 			</header>
+			<ThumbnailDialog
+				projectId={pid!}
+				notebookId={nid!}
+				isOpen={thumbnailModal.isOpen}
+				onClose={thumbnailModal.close}
+			/>
 
 			{staticView && <StaticNotebookView projectId={pid!} notebookId={nid!} title={title} />}
 

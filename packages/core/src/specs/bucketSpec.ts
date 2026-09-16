@@ -1,3 +1,4 @@
+import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
 import { z } from 'zod';
 import type {
@@ -99,6 +100,15 @@ const orgIntegration = paths.orgIntegration(IID);
 const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}');
 
 const OBJECTS: BucketObject[] = [
+	{
+		name: 'Thumbnail',
+		key: notebook.thumbnail,
+		schema: ThumbnailRecordSchema,
+		summary: 'Selected custom and generated thumbnail references.',
+		mutability: 'cas',
+		owner: 'ThumbnailService',
+		tag: 'notebook',
+	},
 	{
 		name: 'DeepLink',
 		key: paths.deepLink('{slug}'),
@@ -365,6 +375,22 @@ const OBJECTS: BucketObject[] = [
 ];
 
 const ARTIFACTS: BucketArtifact[] = [
+	{
+		name: 'ThumbnailImage',
+		key: notebook.thumbnailImage('{image_id}'),
+		summary: 'Immutable 960×540 PNG thumbnail.',
+		mutability: 'immutable',
+		owner: 'ThumbnailService',
+		tag: 'notebook',
+	},
+	{
+		name: 'ThumbnailAttempt',
+		key: notebook.thumbnailAttempt('{sandbox_id}').replace('%7Bsandbox_id%7D', '{sandbox_id}'),
+		summary: 'Create-once shutdown capture attempt with started_at timestamp.',
+		mutability: 'immutable',
+		owner: 'ThumbnailService',
+		tag: 'notebook',
+	},
 	{
 		name: 'DeepLinkIndex',
 		key: notebook.deepLinkIndex('{slug}'),

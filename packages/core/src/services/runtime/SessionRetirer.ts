@@ -1,3 +1,4 @@
+import { captureThumbnail } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { sessionOwner } from './sessionOwner';
@@ -21,6 +22,8 @@ export interface SessionRetirerDeps {
 	compute: SandboxProvider;
 	bucket: Bucket;
 	persistWorkspace: 'source' | 'workspace';
+	automaticThumbnails?: boolean;
+	thumbnailDeadline?: () => number | undefined;
 	workdir?: string;
 }
 
@@ -222,18 +225,7 @@ export class SessionRetirer {
 			await lease.assertLease();
 			if (persisted) {
 				await lease.advanceLease('snapshotting');
-				await captureFilesystemSnapshot(
-					this.deps.compute,
-					this.deps.notebooks,
-					sandbox,
-					session.project_id,
-					session.notebook_id,
-					{
-						compute_profile: session.compute_profile,
-						compute_resources: session.compute_resources,
-						owner_user_id: session.user_id,
-					},
-				);
+				await this.captureSavedArtifacts(sandbox, session);
 				await lease.assertLease();
 			}
 			await this.deps.sessions.markTakeoverCaptureCompleted(
@@ -321,20 +313,7 @@ export class SessionRetirer {
 				);
 			}
 		}
-		if (persisted) {
-			await captureFilesystemSnapshot(
-				this.deps.compute,
-				this.deps.notebooks,
-				sandbox,
-				session.project_id,
-				session.notebook_id,
-				{
-					compute_profile: session.compute_profile,
-					compute_resources: session.compute_resources,
-					owner_user_id: session.user_id,
-				},
-			);
-		}
+		if (persisted) await this.captureSavedArtifacts(sandbox, session);
 		try {
 			await sandbox.destroy();
 			return true;
@@ -351,6 +330,35 @@ export class SessionRetirer {
 			);
 			return false;
 		}
+	}
+
+	private async captureSavedArtifacts(
+		sandbox: ReturnType<SandboxProvider['create']>,
+		session: Session,
+	): Promise<void> {
+		if (this.deps.automaticThumbnails !== false && session.sandbox_id) {
+			await captureThumbnail(
+				sandbox,
+				this.deps.notebooks,
+				session.project_id,
+				session.notebook_id,
+				session.sandbox_id,
+				this.deps.workdir,
+				this.deps.thumbnailDeadline?.(),
+			);
+		}
+		await captureFilesystemSnapshot(
+			this.deps.compute,
+			this.deps.notebooks,
+			sandbox,
+			session.project_id,
+			session.notebook_id,
+			{
+				compute_profile: session.compute_profile,
+				compute_resources: session.compute_resources,
+				owner_user_id: session.user_id,
+			},
+		);
 	}
 
 	private async stopSecondarySurfaces(

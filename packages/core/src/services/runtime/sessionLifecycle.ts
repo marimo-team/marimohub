@@ -87,6 +87,8 @@ export interface SessionLifecycleConfig {
 	/** Consult the kernel before a lifetime/idle teardown; off = reap on schedule. */
 	connectionAware: boolean;
 	persistWorkspace: 'source' | 'workspace';
+	automaticThumbnails?: boolean;
+	thumbnailDeadline?: () => number | undefined;
 	workdir?: string;
 }
 
@@ -136,6 +138,8 @@ export class SessionLifecycleService {
 			compute,
 			bucket,
 			persistWorkspace: cfg.persistWorkspace,
+			automaticThumbnails: cfg.automaticThumbnails,
+			thumbnailDeadline: cfg.thumbnailDeadline,
 			workdir: cfg.workdir,
 		});
 	}

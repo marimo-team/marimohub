@@ -18,6 +18,7 @@ import { SandboxProvisioner } from './SandboxProvisioner';
 import { kernelActiveConnections, SessionLifecycleService } from './sessionLifecycle';
 import type { SessionLifecycleConfig } from './sessionLifecycle';
 import { SessionService } from './SessionService';
+import * as thumbnailCapture from './captureThumbnail';
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SNAPSHOT_INTERVAL_MS = 2 * 60 * 1000;
@@ -458,6 +459,7 @@ describe('SessionLifecycleService', () => {
 
 	describe('periodic snapshots', () => {
 		it('saves a due session source-only and advances last_snapshot_at', async () => {
+			const render = vi.spyOn(thumbnailCapture, 'captureThumbnail');
 			const captureSpy = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
 			const s = await putSession({
 				expires_at: iso(60 * 60 * 1000),
@@ -467,6 +469,7 @@ describe('SessionLifecycleService', () => {
 			const result = await makeService().sweep(now);
 
 			expect(result.snapshotted).toBe(1);
+			expect(render).not.toHaveBeenCalled();
 			expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
 			// Source-only: the workspace mirror is refreshed at teardown, not per snapshot.
 			expect(captureSpy).toHaveBeenCalledWith(

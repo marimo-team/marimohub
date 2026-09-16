@@ -1,5 +1,6 @@
 import { projectActionMinRole } from '../authorization/actions';
 import { tokenGrantAllowsProject } from '../../tokenGrants';
+import { ThumbnailService } from './ThumbnailService';
 import type { Bucket } from '../../ports/bucket';
 import { effectiveRole, isSuperAdmin, roleAtLeast, subjectDefaultRole } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
@@ -795,7 +796,18 @@ export class ProjectService {
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
-		if (!written) return null;
+		const retireThumbnails = async () => {
+			const notebooks =
+				(await this.catalog.getCurrentSnapshot()).projects.find((p) => p.id === id)?.notebooks ??
+				[];
+			await mapWithConcurrency(notebooks, BUCKET_SCAN_CONCURRENCY, (nb) =>
+				ThumbnailService.retire(this.bucket, id, nb.id),
+			);
+		};
+		if (!written) {
+			await retireThumbnails();
+			return null;
+		}
 
 		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
 		// the GC sweep can find and purge it later, but mark it deleted so it drops
@@ -808,6 +820,7 @@ export class ProjectService {
 				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
 				projectCatalogPatch(updated, entry),
 		);
+		await retireThumbnails();
 		await this.deepLinks.releaseProject(id).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
 		});

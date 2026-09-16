@@ -1496,3 +1496,18 @@ Only the successful writer appends the mutation event.
 | Version pruning                   | **Resolved.** `NotebookService.pruneVersions` keeps the most recent `MAX_VERSIONS` (50) per notebook, pruning on each save (`packages/core/src/services/content/NotebookService.ts`). Snapshot and event growth are handled separately by `MaintenanceService` ([`operations.md`](./operations.md) §5). |
 | Configurable version count        | A variable such as `MARIMOHUB_NOTEBOOK_MAX_VERSIONS` can let operators trade history depth for storage. The same count can bound the optional HTML and session snapshots (§8).                                                                                                                          |
 | HTML / session snapshots          | Session teardown can capture both files (§8). `GET …/notebooks/{nid}/html` serves the newest HTML snapshot. The session-state JSON has no read route. API saves do not generate HTML because they have no live kernel.                                                                                  |
+
+### Notebook thumbnails
+
+`ThumbnailService` owns `projects/{pid}/notebooks/{nid}/thumbnail.json` (ETag CAS).
+The record holds separate custom and automatic image references. Custom images
+take precedence. Automatic references include the source version, HTML hash,
+renderer revision, and capture time. A deletion tombstone blocks in-flight captures.
+
+Under the same notebook prefix:
+
+- `thumbnails/{uuid}.png` images are immutable. Maintenance removes unreferenced images after one day.
+- Create-once `thumbnail-attempts/{sandbox-id}.json` markers prevent duplicate shutdown attempts across replicas.
+
+Notebook or project deletion removes all thumbnail objects. Images require
+notebook authorization and have no public bucket URLs.

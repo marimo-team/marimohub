@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 
 export interface RowLinkProps {
+	card?: boolean;
+	preview?: ReactNode;
 	/** Destination URL (a real `<a href>`). */
 	to: string;
 	/** Router state passed on plain navigation (ignored by new-tab opens, which reload). */
@@ -29,6 +31,8 @@ export interface RowLinkProps {
  */
 export function RowLink({
 	to,
+	card = false,
+	preview,
 	state,
 	label,
 	children,
@@ -41,9 +45,16 @@ export function RowLink({
 	return (
 		<div
 			data-testid={testId}
-			className="group relative flex items-center border-b border-l-2 border-l-transparent transition-colors last:border-b-0 hover:border-l-primary hover:bg-accent/60"
+			className={cn(
+				'group relative flex transition-colors hover:bg-accent/60',
+				card
+					? 'min-w-0 flex-col items-stretch overflow-hidden rounded-lg border'
+					: 'items-center border-b border-l-2 border-l-transparent last:border-b-0 hover:border-l-primary',
+			)}
 		>
-			{leading && <div className="relative flex shrink-0 items-center pl-4">{leading}</div>}
+			{!card && leading && (
+				<div className="relative flex shrink-0 items-center pl-4">{leading}</div>
+			)}
 			<Link
 				to={to}
 				state={state}
@@ -52,12 +63,27 @@ export function RowLink({
 					'flex min-w-0 flex-1 px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 					leading && 'pl-3',
 					contentClassName,
+					card && 'flex-col p-0',
 				)}
 			>
-				{children}
+				{preview}
+				{card ? <div className="px-4 py-3">{children}</div> : children}
 			</Link>
-			{trailing && <div className="flex shrink-0 items-center gap-3 pr-4">{trailing}</div>}
-			{actions && <div className="relative flex shrink-0 items-center gap-1 pr-2">{actions}</div>}
+			{trailing && (
+				<div
+					className={cn('flex shrink-0 items-center gap-3', card ? 'flex-wrap px-4 pb-3' : 'pr-4')}
+				>
+					{trailing}
+				</div>
+			)}
+			{card ? (
+				<div className="flex items-center justify-between border-t px-3 py-2">
+					{leading}
+					<div className="ml-auto flex items-center gap-1">{actions}</div>
+				</div>
+			) : (
+				actions && <div className="relative flex shrink-0 items-center gap-1 pr-2">{actions}</div>
+			)}
 		</div>
 	);
 }

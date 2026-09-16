@@ -82,6 +82,10 @@ export class ReconciliationService {
 		 * so without this Rule 3 would reap every run longer than the grace window.
 		 */
 		private jobRuns?: ActiveSandboxSource,
+		thumbnailOptions?: {
+			automaticThumbnails?: boolean;
+			thumbnailDeadline?: () => number | undefined;
+		},
 	) {
 		this.diagnosticLeases = new SandboxDiagnosticLease(bucket);
 		this.retirer = new SessionRetirer({
@@ -91,6 +95,7 @@ export class ReconciliationService {
 			bucket,
 			persistWorkspace,
 			workdir,
+			...thumbnailOptions,
 		});
 	}
 

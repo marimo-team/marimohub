@@ -1382,6 +1382,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Idle-timeout override for Run as app sessions. The general timeout applies when this value is unset. The session maximum lifetime can stop an app before its idle timeout.',
 					},
 					{
+						id: 'MARIMOHUB_AUTOMATIC_THUMBNAILS',
+						name: 'Automatic notebook thumbnails',
+						description:
+							'Capture saved HTML once at editor shutdown when Playwright and Chromium are already installed. Never executes notebook code. Set false to disable.',
+						default: 'true',
+					},
+					{
 						id: 'MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS',
 						name: 'Session snapshot interval (seconds)',
 						description:

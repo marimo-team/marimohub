@@ -24,6 +24,7 @@ import { createAiProxy } from './routes/ai';
 import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
 import notebooksApp from './routes/notebooks';
+import thumbnailsApp from './routes/thumbnails';
 import changeRequestsApp from './routes/changeRequests';
 import projectsApp from './routes/projects';
 import projectAlertsApp from './routes/projectAlerts';
@@ -516,6 +517,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, adminApp);
 	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
+	app.route(API_PREFIX, thumbnailsApp);
 	app.route(API_PREFIX, deepLinksApp);
 	app.route(API_PREFIX, appsApp);
 	app.route(API_PREFIX, changeRequestsApp);

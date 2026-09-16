@@ -50,6 +50,7 @@ export async function bootstrap(
 			return () => process.off(signal, handler);
 		});
 
+	let thumbnailDeadline: number | undefined;
 	// Telemetry sink: services emit CAS/reaper/snapshot signals here; the maintenance
 	// loop flushes them as one wide event per cycle (and request-path CAS contention
 	// surfaces at the next flush).
@@ -80,6 +81,7 @@ export async function bootstrap(
 		}
 		throw err;
 	}
+	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	const backgroundTasks = new InFlightWork();
 	deps.backgroundTasks = {
 		defer(task) {
@@ -178,6 +180,7 @@ export async function bootstrap(
 	};
 	const drain = (): Promise<void> => {
 		drainPromise ??= (async () => {
+			thumbnailDeadline = Date.now() + DRAIN_TIMEOUT_MS - 1000;
 			for (const unregisterSignal of unregisterSignals.splice(0)) unregisterSignal();
 			// Cancel future ticks first. An in-flight sweep still has the remaining drain
 			// window to release its lease; the lease TTL is the fallback if it outlives it.

@@ -40,6 +40,47 @@ tags:
   - name: ops
     description: Operational records
 paths:
+  /projects/{pid}/notebooks/{nid}/thumbnail.json:
+    summary: Selected custom and generated thumbnail references.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ThumbnailService
+    get:
+      operationId: read_projects_notebooks_thumbnail_json
+      summary: Read Thumbnail
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thumbnail'
+    put:
+      operationId: write_projects_notebooks_thumbnail_json
+      summary: Write Thumbnail
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Thumbnail'
+      responses:
+        '204':
+          description: Stored.
   /_system/deep-links/{slug}.json:
     summary: Authoritative slug mapping or released marker.
     parameters:
@@ -1270,6 +1311,102 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/thumbnails/{image_id}.png:
+    summary: Immutable 960×540 PNG thumbnail.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: image_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: ThumbnailService
+    get:
+      operationId: read_projects_notebooks_thumbnails_png
+      summary: Read ThumbnailImage
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_thumbnails_png
+      summary: Write ThumbnailImage
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/thumbnail-attempts/{sandbox_id}.json:
+    summary: Create-once shutdown capture attempt with started_at timestamp.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: sandbox_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: ThumbnailService
+    get:
+      operationId: read_projects_notebooks_thumbnail_attempts_json
+      summary: Read ThumbnailAttempt
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_thumbnail_attempts_json
+      summary: Write ThumbnailAttempt
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/deep-links/{slug}.json:
     summary: Empty index marker. Lists check ownership against the global slug mapping.
     parameters:
@@ -1584,6 +1721,64 @@ paths:
           description: Stored.
 components:
   schemas:
+    Thumbnail:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        revision:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        deleted:
+          type: boolean
+        custom:
+          anyOf:
+            - type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                captured_at:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+              required:
+                - id
+                - captured_at
+            - type: 'null'
+        automatic:
+          anyOf:
+            - type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                captured_at:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                version_id:
+                  type: string
+                html_hash:
+                  type: string
+                renderer_revision:
+                  type: string
+              required:
+                - id
+                - captured_at
+                - version_id
+                - html_hash
+                - renderer_revision
+            - type: 'null'
+      required:
+        - schema_version
+        - revision
+        - custom
+        - automatic
     DeepLink:
       anyOf:
         - type: object

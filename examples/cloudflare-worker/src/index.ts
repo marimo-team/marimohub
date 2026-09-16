@@ -193,6 +193,7 @@ export function buildDeps(
 			workdir: env.SANDBOX_WORKDIR || '/workspace',
 			computeProfiles: [],
 			computeProfileOverride: 'none',
+			automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false',
 			// Which sandbox working-dir files survive a session. `source` persists only
 			// the source files; `workspace` also captures runtime files (e.g. generated
 			// data) into the notebook workspace on teardown and restores them next time.
@@ -262,6 +263,7 @@ export default {
 					env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
 					undefined,
 					jobRuns,
+					{ automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false' },
 				).reconcile();
 				await sessions.reapTerminated();
 				await maintenance.expireSnapshots();

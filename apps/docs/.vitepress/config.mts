@@ -101,7 +101,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|sandbox-image|apps|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -111,6 +111,7 @@ export default defineConfig({
 					{ text: 'Service accounts', link: '/service-accounts' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
+					{ text: 'Notebook thumbnails', link: '/thumbnails' },
 					{ text: 'Notebook jobs', link: '/jobs' },
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
@@ -169,6 +170,7 @@ export default defineConfig({
 					{ text: 'Service accounts', link: '/service-accounts' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
+					{ text: 'Notebook thumbnails', link: '/thumbnails' },
 					{ text: 'Notebook jobs', link: '/jobs' },
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },

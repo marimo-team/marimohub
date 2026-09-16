@@ -491,6 +491,8 @@ export function sessionRetirer(deps: ApiDeps): SessionRetirer {
 		compute: deps.compute,
 		bucket: deps.bucket,
 		persistWorkspace: deps.sandbox.persistWorkspace,
+		automaticThumbnails: deps.sandbox.automaticThumbnails,
+		thumbnailDeadline: deps.sandbox.thumbnailDeadline,
 		workdir: deps.sandbox.workdir,
 	});
 }

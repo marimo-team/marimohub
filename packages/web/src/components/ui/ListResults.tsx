@@ -6,6 +6,7 @@ import { ListContainer } from './PageLayout';
 import { Skeleton } from './Skeleton';
 
 interface ListResultsProps {
+	gallery?: boolean;
 	children: ReactNode;
 	count: number;
 	emptyState: ReactNode;
@@ -21,6 +22,7 @@ const SKELETON_ROWS = [0, 1, 2];
 
 export function ListResults({
 	children,
+	gallery = false,
 	count,
 	emptyState,
 	isFetching,
@@ -30,7 +32,11 @@ export function ListResults({
 	onReset,
 	resultsId,
 }: ListResultsProps) {
-	let content: ReactNode = <ListContainer>{children}</ListContainer>;
+	let content: ReactNode = gallery ? (
+		<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">{children}</div>
+	) : (
+		<ListContainer>{children}</ListContainer>
+	);
 	if (isLoading) {
 		content = <ListSkeleton />;
 	} else if (count === 0) {

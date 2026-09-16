@@ -1,3 +1,5 @@
+import { Thumbnail } from '@/components/Notebook/Thumbnail';
+import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FileTrigger } from 'react-aria-components';
@@ -243,6 +245,14 @@ function useProjectContent() {
 
 	// Dialogs acting on a row use useDialogTarget; plain ones use useDisclosure.
 	const uploadModal = useDisclosure();
+	const thumbnailModal = useDialogTarget<NotebookEntry>();
+	const [gallery, setGallery] = useState(() => {
+		try {
+			return localStorage.getItem('notebook-view') === 'gallery';
+		} catch {
+			return false;
+		}
+	});
 	// When set, a `.py` file's contents seed the new notebook instead of the template.
 	const [uploadedCode, setUploadedCode] = useState<string | null>(null);
 	const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
@@ -544,7 +554,8 @@ function useProjectContent() {
 	};
 
 	const handleNotebookAction = (nb: NotebookEntry, key: string, stoppableEdit?: Session) => {
-		if (key === 'rename') renameModal.open(nb);
+		if (key === 'thumbnail') thumbnailModal.open(nb);
+		else if (key === 'rename') renameModal.open(nb);
 		else if (key === 'duplicate') handleDuplicate(nb);
 		else if (key === 'stop-kernel' && stoppableEdit)
 			stopModal.open({ notebook: nb, session: stoppableEdit });
@@ -612,6 +623,9 @@ function useProjectContent() {
 		const groups: DropdownMenuOption[][] = [
 			[
 				{ id: 'rename', label: 'Rename', icon: <Pencil className="size-4" /> },
+				...(canOperateSource
+					? [{ id: 'thumbnail', label: 'Edit thumbnail', icon: <FileText className="size-4" /> }]
+					: []),
 				{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
 			],
 			runtimeActions,
@@ -743,6 +757,32 @@ function useProjectContent() {
 				</div>
 			</PageHeader>
 
+			<fieldset className="flex justify-end gap-1" aria-label="Notebook view">
+				{(['List', 'Gallery'] as const).map((view) => (
+					<Button
+						key={view}
+						size="sm"
+						variant={gallery === (view === 'Gallery') ? 'default' : 'ghost'}
+						aria-pressed={gallery === (view === 'Gallery')}
+						onPress={() => {
+							setGallery(view === 'Gallery');
+							try {
+								localStorage.setItem('notebook-view', view.toLowerCase());
+							} catch {}
+						}}
+					>
+						{view}
+					</Button>
+				))}
+			</fieldset>
+			{thumbnailModal.target && (
+				<ThumbnailDialog
+					projectId={pid!}
+					notebookId={thumbnailModal.target.id}
+					isOpen={thumbnailModal.isOpen}
+					onClose={thumbnailModal.close}
+				/>
+			)}
 			<ListFilters
 				label="Filter notebooks"
 				itemName="notebook"
@@ -756,6 +796,7 @@ function useProjectContent() {
 			/>
 
 			<ListResults
+				gallery={gallery}
 				count={notebooks.length}
 				emptyState={
 					<EmptyState
@@ -796,6 +837,12 @@ function useProjectContent() {
 						<RowLink
 							key={nb.id}
 							testId="notebook-row"
+							card={gallery}
+							preview={
+								gallery ? (
+									<Thumbnail projectId={pid!} notebookId={nb.id} title={nb.title} />
+								) : undefined
+							}
 							to={`/projects/${pid}/notebooks/${nb.id}`}
 							state={{ title: nb.title }}
 							label={nb.title}
@@ -882,7 +929,11 @@ function useProjectContent() {
 									<DropdownMenu
 										label={`Notebook actions for ${nb.title}`}
 										icon={<MoreHorizontal className="size-4" />}
-										triggerClassName="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
+										triggerClassName={
+											gallery
+												? ''
+												: 'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100'
+										}
 										options={notebookActions(nb)}
 										onAction={(key) => handleNotebookAction(nb, key, stoppableEdit)}
 									/>

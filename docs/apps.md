@@ -176,3 +176,8 @@ CI runs this check with the Chromium end-to-end job.
 
 See [Configuration](./configuration.md) for the full reference and
 [Auth](./auth.md) for roles and viewer modes.
+
+## Gallery thumbnails
+
+Use **Edit thumbnail** to upload and crop a screenshot of your app. See
+[Notebook thumbnails](./thumbnails.md) for screenshot shortcuts and automatic previews.
