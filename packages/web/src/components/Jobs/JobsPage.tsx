@@ -1,3 +1,4 @@
+import { canEditProject } from '@/lib/roles';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -36,7 +37,7 @@ function useJobsPageModel() {
 	const { data: notebook } = useNotebookQuery(projectId, notebookId);
 	const title =
 		notebook?.meta.title ?? (location.state as { title?: string } | null)?.title ?? notebookId;
-	const canEdit = project.your_role !== 'viewer';
+	const canEdit = canEditProject(project.your_role);
 	const { data: capabilities, isError: capabilitiesError } = useCapabilitiesQuery();
 	// Unknown until the probe answers (the list waits, so an off deployment is
 	// never asked); a failed probe assumes on rather than hiding a live feature.

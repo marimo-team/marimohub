@@ -409,7 +409,7 @@ export function useCreateProject() {
 	return useApiMutation(
 		(body: { name: string; description: string }) =>
 			apiData(apiClient.POST('/api/v1/projects', { body })),
-		() => [projectKeys.list()],
+		() => [projectKeys.list(), userKeys.me(), ['apps']],
 	);
 }
 

@@ -134,3 +134,27 @@ describe('sessionGrants', () => {
 		});
 	});
 });
+
+describe('app users', () => {
+	it.each(['static', 'applications', 'ephemeral-sandbox'] as const)(
+		'grants apps without editors under %s',
+		(viewerMode) => {
+			const user = actor({ role: 'app-user', viewerMode });
+			expect(canStartSessionMode(user, 'app')).toBe(true);
+			expect(canStartSessionMode(user, 'edit')).toBe(false);
+			expect(sessionGrants(user, app)).toEqual({ attach: true, stop: false, surface: false });
+			for (const session of [
+				ownEphemeral,
+				otherEdit,
+				otherEphemeral,
+				{ ...app, ephemeral: true, user_id: ME },
+			]) {
+				expect(sessionGrants(user, session)).toEqual({
+					attach: false,
+					stop: false,
+					surface: false,
+				});
+			}
+		},
+	);
+});

@@ -228,6 +228,17 @@ export function makeFetch(opts: FetchOptions) {
 				},
 			});
 		}
+		if (url.endsWith(`/notebooks/${NID}/app`)) {
+			return ok({
+				project_id: PID,
+				project_name: 'Project',
+				notebook_id: NID,
+				title: 'Forecast',
+				url: `/projects/${PID}/notebooks/${NID}/app`,
+				your_role: opts.role ?? 'editor',
+				can: { run: true },
+			});
+		}
 		if (url.endsWith(`/notebooks/${NID}`)) {
 			await opts.notebookPromise;
 			return ok({

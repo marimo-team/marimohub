@@ -1143,7 +1143,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS',
 						name: 'Project creation groups',
 						description:
-							'Exact comma-separated group IDs permitted to create projects. Setting it (even empty) restricts creation like `MARIMOHUB_PROJECT_CREATION=restricted`: unset allows all authenticated users, an empty value allows only super admins.',
+							'Comma-separated group IDs granted `project-creator`. Any value implies `MARIMOHUB_PROJECT_CREATION=restricted`; an empty value allows only super admins. Unset leaves the project creation policy in effect, including the app-only exception.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS',
+						name: 'Default app-user groups',
+						description: 'Comma-separated OIDC groups that grant app access without source access.',
+						example: 'stakeholders',
 						optIn: true,
 					},
 					{
@@ -1412,7 +1419,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_DEFAULT_ROLE',
 						name: 'Default role',
 						description:
-							'Fallback role for any logged-in user who is not an explicit project member (viewer | editor | manager | none). `manager`/`editor`/`viewer` let everyone manage/edit/view every project; `none` hides projects a user does not own or belong to (they can still create their own). Project edit/delete requires manager.',
+							'Fallback role for logged-in non-members (app-user | viewer | editor | manager | none). `app-user` grants apps without source access; `viewer`, `editor`, and `manager` grant read, edit, and management access respectively. `none` grants no fallback access. Explicit membership overrides defaults; ownership grants admin.',
 						example: 'editor',
 						default: 'editor',
 					},
@@ -1433,11 +1440,10 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_PROJECT_CREATION',
 						name: 'Project creation',
 						description:
-							'Who may create projects (open | restricted). `open` lets every authenticated user ' +
-							'create projects. `restricted` allows only super admins and holders of the ' +
-							'`project-creator` entitlement (from an OIDC group mapping or login-policy module), ' +
-							'on any auth backend. Setting `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` implies ' +
-							'`restricted`; combining it with `open` is a configuration error.',
+							'Who may create projects (open | restricted). `open` allows authenticated users except app-only users. ' +
+							'App-only users and everyone under `restricted` need super-admin status or the `project-creator` entitlement ' +
+							'from OIDC groups or a login-policy module. Setting `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` ' +
+							'implies `restricted`; combining it with `open` is a configuration error.',
 						example: 'restricted',
 						default: 'open',
 					},

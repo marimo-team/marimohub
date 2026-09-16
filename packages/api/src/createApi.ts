@@ -6,7 +6,6 @@ import { requestId } from 'hono/request-id';
 import { routePath } from 'hono/route';
 import {
 	DomainError,
-	ensureInitialized,
 	IntegrationId,
 	MAX_REQUEST_BYTES,
 	MAX_WORKSPACE_FILE_BYTES,
@@ -31,6 +30,7 @@ import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
 import jobsApp from './routes/jobs';
 import deepLinksApp from './routes/deepLinks';
+import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import tokensApp from './routes/tokens';
@@ -47,6 +47,7 @@ import {
 	ErrorResponseSchema,
 	fail,
 	resolvePublicBaseUrl,
+	initializeForSubject,
 } from './shared';
 import type { ErrorCode } from './shared';
 
@@ -483,7 +484,7 @@ export function createApi(rawDeps: ApiDeps) {
 		if (SKIP_INIT_PATHS.has(c.req.path)) return next();
 		const user = c.get('user');
 		if (user.credential.kind === 'service-account') return next();
-		await ensureInitialized(deps.bucket, user.id);
+		await initializeForSubject(deps, user);
 		await next();
 	});
 
@@ -516,6 +517,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
 	app.route(API_PREFIX, deepLinksApp);
+	app.route(API_PREFIX, appsApp);
 	app.route(API_PREFIX, changeRequestsApp);
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, jobsApp);

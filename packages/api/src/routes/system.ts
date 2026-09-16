@@ -50,6 +50,7 @@ app.openapi(meRoute, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const logoutUrl = deps.authenticator.logoutUrl?.() ?? null;
+	const appOnly = await deps.services.projects.isAppOnly(user, deps.policy);
 	return ok(c, {
 		id: user.id,
 		email: user.email,
@@ -57,7 +58,8 @@ app.openapi(meRoute, async (c) => {
 		picture_url: user.pictureUrl ?? null,
 		logout_url: logoutUrl,
 		is_super_admin: isSuperAdmin(user, deps.policy.superAdmins),
-		can_create_projects: await canDeploymentAction(user, 'project.create', deps),
+		app_only: appOnly,
+		can_create_projects: await canDeploymentAction(user, 'project.create', deps, appOnly),
 	});
 });
 

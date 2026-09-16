@@ -81,56 +81,98 @@ Query parameters are user input and grant no access to notebooks or data.
 
 ## Who can do what
 
-Editors, managers, and admins always have full app access. What a **viewer** gets is a
-deployment decision, set by
-[`MARIMOHUB_VIEWER_MODE`](./auth.md#what-viewers-see-marimohub_viewer_mode)
-(each tier includes the previous one):
+App users can start and use apps regardless of `MARIMOHUB_VIEWER_MODE`.
+Viewer access depends on that setting; editors and higher roles have full app access.
 
-| Action                                 | `viewer`, `static` (default) | `viewer`, `applications` | `viewer`, `ephemeral-sandbox` | `editor` | `manager` | `admin` |
-| -------------------------------------- | :--------------------------: | :----------------------: | :---------------------------: | :------: | :-------: | :-----: |
-| See that an app is running (indicator) |              x               |            x             |               x               |    x     |     x     |    x    |
-| Open and use a running app             |                              |            x             |               x               |    x     |     x     |    x    |
-| Start the app when none is running     |                              |            x             |               x               |    x     |     x     |    x    |
-| Keep the app alive by having it open   |                              |            x             |               x               |    x     |     x     |    x    |
-| Stop or restart the app                |                              |                          |                               |    x     |     x     |    x    |
+| Action                                       | `app-user` | `viewer`, `static` (default) | `viewer`, `applications` or `ephemeral-sandbox` | `editor` and higher |
+| -------------------------------------------- | :--------: | :--------------------------: | :---------------------------------------------: | :-----------------: |
+| Start, open, interact, and keep an app alive |     x      |                              |                        x                        |          x          |
+| Stop or restart an app                       |            |                              |                                                 |          x          |
 
-Session create, heartbeat, and session listing enforce this server-side on
-every request; the UI simply hides what the caller cannot do. How kernel
-traffic itself is gated depends on the
-[sandbox exposure mode](./security.md): under `proxy` exposure every kernel
-request (and each WebSocket handshake) re-checks the caller's role; under
-`subdomain` exposure (the default) the kernel URL carries marimo's per-session
-access token. The API reveals it only to admitted callers, but someone who
-already holds the URL can keep using the running app. Revoking a member or
-downgrading `MARIMOHUB_VIEWER_MODE` always stops new admissions; under `subdomain`
-exposure, stop or restart the app to cut off someone already holding its URL.
-Membership still applies: under `MARIMOHUB_DEFAULT_ROLE=none`, a non-member
-gets nothing from `applications` — only explicit members with at least the
-`viewer` role are admitted.
+Static viewers can see app activity indicators but cannot use apps.
+Viewer mode grants no project membership or default role.
+The server enforces these permissions on every API request.
 
-> **Security note.** The app kernel runs the notebook's code with resolved
-> [integration secrets](./integration-secrets.md) and federated credentials injected,
-> regardless of who opened the app. An app's inputs drive that code, so
-> enabling viewer access means trusting your viewer audience with everything
-> the app can compute or fetch. That is why apps are editor-only by default.
+## Stakeholders: the App user role
+
+Assign `app-user` to people who need live apps without source access.
+The **Apps** gallery at `/apps` lists every active notebook in accessible projects, grouped by project.
+App links inherit those permissions. No publishing step is required.
+
+| Capability                                        | App user |
+| ------------------------------------------------- | -------- |
+| Discover app titles and project names             | Allowed  |
+| Start, attach, interact, and send heartbeats      | Allowed  |
+| Stop or restart the shared app                    | Denied   |
+| Source, workspace files, versions, and saved HTML | Denied   |
+| Job outputs and logs                              | Denied   |
+| Editors, temporary sandboxes, and terminals       | Denied   |
+| Direct integration queries                        | Denied   |
+| Manage projects, notebooks, members, or app links | Denied   |
+
+Viewers retain source access and their configured runtime modes, including ephemeral sandboxes.
+An explicit viewer membership overrides an app-user default, even when viewer mode is `static`.
+
+Users with only app-user access land in the gallery.
+Users with higher roles in other projects retain the normal hub and an **Apps** navigation link.
+Permissions apply separately to each project.
+App-only users need the `project-creator` entitlement or super-admin status to create a project, even when project creation is open.
+
+### Assignment
+
+Assign the role through any of these mechanisms:
+
+- Project membership: choose **App user** in the member dialog or send `app-user` through the membership API.
+- Deployment default: `MARIMOHUB_DEFAULT_ROLE=app-user`.
+- OIDC groups: configure the groups claim and set `MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS=stakeholders`.
+- Login policy: return the `default-role:app-user` entitlement.
+
+Set `MARIMOHUB_DEFAULT_ROLE=none` if groups should provide the only deployment-wide role grants.
+The highest default grant wins; explicit project membership overrides defaults.
+
+### Source protection and revocation
+
+Apps run with code inclusion disabled. App users receive only app metadata and limited session details.
+Authors remain responsible for source or sensitive data that their notebooks display or offer as downloads.
+App inputs can use the notebook's configured integrations, secrets, and federated credentials.
+Grant app access only to audiences you trust with what the app can compute or fetch.
+
+When a role or viewer-mode change removes app access, the hub blocks new admissions.
+Existing access depends on the [sandbox exposure mode](./security.md):
+
+- `proxy`: each kernel request and WebSocket handshake rechecks access.
+- `subdomain` (default): previously issued kernel URLs remain usable until the app stops.
+  Stop or restart the app to revoke those URLs.
+
+A role change cannot remove source that a former viewer already downloaded.
+
+### Upgrade and rollback
+
+Upgrade all replicas before assigning `app-user` or enabling its default or OIDC mapping.
+Older replicas cannot parse the new role.
+Existing memberships do not change during the upgrade.
+
+Before rollback, remove app-user assignments and configuration, or explicitly choose replacement roles.
+Do not automatically replace app-user with viewer: viewer grants source access.
+
+### Verification
+
+Run `uv run scripts/test-app-source.py` to check the pinned marimo runtime.
+The test checks interaction, bootstrap data, WebSocket messages, error output, source endpoints, and HTML exports.
+CI runs this check with the Chromium end-to-end job.
 
 ## Configuration
 
-| Variable                          | Effect on apps                                                                                                  |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `MARIMOHUB_VIEWER_MODE`           | `applications` (or `ephemeral-sandbox`) lets viewers start, open, and use apps. Default `static` — editor-only. |
-| `MARIMOHUB_MAX_APPS_PER_PROJECT`  | Concurrent apps per project (default `5`, `0` = unlimited).                                                     |
-| `MARIMOHUB_MAX_SESSIONS_PER_USER` | Also bounds the apps a single user may have _started_, across all projects.                                     |
+| Variable                          | Effect on apps                                                                                                         |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_VIEWER_MODE`           | `applications` or `ephemeral-sandbox` enables viewer app access. Default `static` denies it. App users are unaffected. |
+| `MARIMOHUB_MAX_APPS_PER_PROJECT`  | Concurrent apps per project (default `5`, `0` = unlimited).                                                            |
+| `MARIMOHUB_MAX_SESSIONS_PER_USER` | Also bounds the apps a single user may have _started_, across all projects.                                            |
 
-> **Upgrade note.** `ephemeral-sandbox` is a superset of `applications`:
-> deployments already running `MARIMOHUB_VIEWER_MODE=ephemeral-sandbox` grant
-> their viewers app access as of this release, with no configuration change.
-> There is deliberately no tier that grants throwaway edit sandboxes without
-> apps — if your viewers must not reach shared apps (apps carry the project's
-> secrets and federated credentials; ephemeral edit sandboxes never do), the
-> only option is `static`. When rolling out this release, upgrade the
-> maintenance replica first: an older maintenance build does not know the
-> `mode` field and would treat a running app as an edit session.
+> **Legacy upgrade note.** Releases introducing app mode also grant app access to existing `ephemeral-sandbox` viewers.
+> There is no mode that grants ephemeral editors without shared apps.
+> Use `static` if viewers must not reach shared apps, which carry credentials that ephemeral editors never receive.
+> Upgrade the maintenance replica first: builds predating app mode treat apps as edit sessions.
 
 See [Configuration](./configuration.md) for the full reference and
 [Auth](./auth.md) for roles and viewer modes.

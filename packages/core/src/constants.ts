@@ -51,6 +51,7 @@ export type SourceType = (typeof SOURCE_TYPES)[number];
  * (`viewer` < `editor` < `manager` < `admin`). Each role subsumes the ones
  * below it.
  *
+ * - `app-user` — uses live apps without source or authoring access.
  * - `viewer`  — read-only: list/open projects & notebooks, read notebook code
  *   and versions. Cannot mutate anything.
  * - `editor`  — everything a viewer can, plus create/update/delete notebooks,
@@ -66,11 +67,11 @@ export type SourceType = (typeof SOURCE_TYPES)[number];
  * `MARIMOHUB_DEFAULT_ROLE` (see authz.ts `effectiveRole`); `none` there means
  * non-members get no role and cannot even see the project.
  */
-export const ROLES = ['admin', 'manager', 'editor', 'viewer'] as const;
+export const ROLES = ['admin', 'manager', 'editor', 'viewer', 'app-user'] as const;
 export type Role = (typeof ROLES)[number];
 
 /** Roles that project managers may grant to members and deployment defaults. */
-export const ASSIGNABLE_ROLES = ['manager', 'editor', 'viewer'] as const;
+export const ASSIGNABLE_ROLES = ['manager', 'editor', 'viewer', 'app-user'] as const;
 export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 /**

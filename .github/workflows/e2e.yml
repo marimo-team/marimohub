@@ -75,6 +75,10 @@ jobs:
         if: matrix.browser == 'chromium'
         run: uv run --no-project --with marimo python -c "import marimo"
 
+      - name: Check app source confidentiality
+        if: matrix.browser == 'chromium'
+        run: uv run scripts/test-app-source.py
+
       - run: pnpm e2e
         env:
           E2E_BROWSER: ${{ matrix.browser }}

@@ -32,6 +32,7 @@ export function canStartSessionMode(
 	actor: Pick<SessionActor, 'role' | 'viewerMode'>,
 	mode: SessionMode,
 ): boolean {
+	if (actor.role === 'app-user') return mode === 'app';
 	if (roleAtLeast(actor.role, 'editor')) return true;
 	return actor.role === 'viewer' && viewerSessionModes(actor.viewerMode).includes(mode);
 }
@@ -63,6 +64,9 @@ export function sessionCan(
 		if (sharing === 'shared') return true;
 		if (session.user_id === actor.userId) return true;
 		return action === 'stop' && roleAtLeast(actor.role, 'manager');
+	}
+	if (actor.role === 'app-user') {
+		return action === 'attach' && sessionMode(session) === 'app' && !session.ephemeral;
 	}
 	if (actor.role === null) return false;
 	if (session.ephemeral && session.user_id === actor.userId) {

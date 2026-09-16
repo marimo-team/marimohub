@@ -589,17 +589,22 @@ export function createServices(
 }
 
 /**
- * Ensures the catalog and a default project exist.
+ * Initialize the catalog, optionally with a default project.
  * Uses a cheap head() check — only does full init on first call.
  */
-export async function ensureInitialized(bucket: Bucket, actor: UserId): Promise<void> {
+export async function ensureInitialized(
+	bucket: Bucket,
+	actor: UserId,
+	options: { createDefaultProject?: boolean } = {},
+): Promise<void> {
 	const exists = await bucket.head(paths.catalog);
 	if (exists) return;
 
 	const services = createServices(bucket);
-	// initialize() is now atomic (create-if-absent on catalog.json), so concurrent
+	// initialize() is atomic (create-if-absent on catalog.json), so concurrent
 	// callers converge on a single catalog rather than clobbering one another.
 	await services.catalog.initialize(actor);
+	if (options.createDefaultProject === false) return;
 
 	// Re-read snapshot in case a concurrent request already created the default
 	// project. The default-project guard relies on createProject's CAS: a

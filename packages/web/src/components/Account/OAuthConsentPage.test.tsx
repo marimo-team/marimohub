@@ -91,7 +91,7 @@ describe('OAuthConsentPage', () => {
 		expect(calls).toContainEqual({
 			url: `/api/v1/me/oauth-authorizations/${ID}/approve`,
 			body: {
-				grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+				grant: { actions: ['app.read', 'project.read', 'integration.read'], projects: '*' },
 				expires_in_days: 7,
 			},
 		});

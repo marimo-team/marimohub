@@ -179,6 +179,44 @@ describe('ProjectService', () => {
 			expect(list.map((e) => e.id)).toEqual([p.id]);
 		});
 
+		describe.each(['member_ids', 'member_emails', 'both'] as const)(
+			'legacy snapshot missing %s',
+			(missing) => {
+				it.each([
+					{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: false },
+					{ role: 'editor', defaultRole: 'app-user', visible: true, appOnly: false },
+					{ role: 'viewer', defaultRole: null, visible: true, appOnly: false },
+					{ role: 'app-user', defaultRole: 'manager', visible: false, appOnly: true },
+					{ role: null, defaultRole: null, visible: false, appOnly: false },
+				] as const)(
+					'resolves email membership $role with default $defaultRole from the project',
+					async ({ role, defaultRole, visible, appOnly }) => {
+						const project = await projects.createProject(
+							{ name: 'Legacy', description: '' },
+							ACTOR,
+						);
+						if (role) await projects.addMember(project.id, { email: STRANGER.email }, role, ACTOR);
+						await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({
+							...(missing !== 'member_emails' ? { member_ids: undefined } : {}),
+							...(missing !== 'member_ids' ? { member_emails: undefined } : {}),
+						}));
+						const subject = { ...STRANGER, email: STRANGER.email.toUpperCase() };
+						const policy = { defaultRole };
+
+						expect((await projects.listProjects({ subject, policy })).map((p) => p.id)).toEqual(
+							visible ? [project.id] : [],
+						);
+						expect(
+							(await projects.listProjects({ subject, policy, action: 'app.read' })).map(
+								(p) => p.id,
+							),
+						).toEqual(role ? [project.id] : []);
+						expect(await projects.isAppOnly(subject, policy)).toBe(appOnly);
+					},
+				);
+			},
+		);
+
 		it('lists an explicitly-requested deleted project through the legacy fallback too', async () => {
 			const current = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			const legacy = await projects.createProject({ name: 'B', description: 'b' }, ACTOR);

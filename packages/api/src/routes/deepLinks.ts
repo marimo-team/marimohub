@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { DeepLinkAccessSchema, DeepLinkSchema, DeepLinkSlugSchema } from '@marimo-hub/core';
 import {
 	assertProjectRole,
+	authorizationService,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -9,6 +10,7 @@ import {
 	jsonContent,
 	loadAuthorizedNotebook,
 	loadVisibleProject,
+	loadSessionProject,
 	NotebookIdParam,
 } from '../shared';
 
@@ -88,13 +90,19 @@ app.openapi(resolve, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const link = await deps.services.deepLinks.resolve(c.req.valid('param').slug);
-	const project = await loadVisibleProject(
+	const project = await loadSessionProject(
 		deps.services.projects,
 		link.target.project_id,
 		user,
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, link.target.notebook_id, user, 'project.read');
+	await loadAuthorizedNotebook(
+		deps,
+		project,
+		link.target.notebook_id,
+		user,
+		authorizationService(deps).appReadAction(user, project),
+	);
 	return c.json({ success: true as const, data: link }, 200);
 });
 app.openapi(list, async (c) => {

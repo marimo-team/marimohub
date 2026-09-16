@@ -201,7 +201,7 @@ describe('CliDeviceLoginPage', () => {
 				token_name: 'mohub CLI',
 				expires_in_days: 30,
 				grant: {
-					actions: ['project.read', 'integration.read'],
+					actions: ['app.read', 'project.read', 'integration.read'],
 					projects: '*',
 				},
 			},

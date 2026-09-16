@@ -25,7 +25,9 @@ import {
 	SESSION_STATUSES,
 	SessionId,
 	sessionPersistsEdits,
+	sessionCan,
 	subjectDefaultRole,
+	ensureInitialized,
 	SessionRetirer,
 	SOURCE_TYPES,
 	EDITOR_SANDBOX_SHARING_VALUES,
@@ -40,6 +42,7 @@ import type {
 	AuthSubject,
 	CredentialKind,
 	ResourceSecurityLabels,
+	Role,
 	ResourceSecurityPolicy,
 	NotebookDetail,
 	ComputeResources,
@@ -95,8 +98,25 @@ export function extensibleResponseEnum<const Values extends readonly [string, ..
  * route handlers pass `deps` straight through.
  */
 export interface AuthzDeps {
+	services?: Pick<ApiDeps['services'], 'projects'>;
 	policy?: AuthorizationPolicy;
 	resourceSecurity?: ResourceSecurityPolicy;
+}
+
+export async function initializeForSubject(
+	deps: Pick<ApiDeps, 'bucket' | 'policy' | 'resourceSecurity'>,
+	subject: AuthorizationSubject,
+): Promise<void> {
+	const appDefault = subjectDefaultRole(subject, deps.policy) === 'app-user';
+	const createDefaultProject =
+		!appDefault ||
+		(
+			await authorizationService(deps).authorize(subject, 'project.create', {
+				kind: 'deployment',
+				appOnly: true,
+			})
+		).allowed;
+	await ensureInitialized(deps.bucket, subject.id, { createDefaultProject });
 }
 
 /**
@@ -210,7 +230,7 @@ export async function loadAuthorizedNotebook(
 	}
 	if (detail.meta.security_labels !== undefined) {
 		const actions: ProjectAction[] =
-			action === 'project.read' ? [action] : ['project.read', action];
+			action === 'project.read' || action === 'app.read' ? [action] : ['project.read', action];
 		for (const requestedAction of actions) {
 			const decision = await authorizationService(deps).authorize(subject, requestedAction, {
 				kind: 'project',
@@ -234,16 +254,25 @@ export async function loadAuthorizedNotebook(
 export async function assertSessionNotebookVisible(
 	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
 	project: Project,
-	session: { notebook_id: NotebookId },
+	session: SessionAdmissionRecord & { notebook_id: NotebookId },
 	subject: AuthSubject,
 ): Promise<ResourceSecurityLabels | null> {
+	const authz = authorizationService(deps);
+	const role = authz.role(subject, project);
+	if (role === 'app-user' && !sessionCan('attach', { role, userId: subject.id }, session)) {
+		throw new NotFoundError('Session not found');
+	}
 	const labels = await deps.services.notebooks.getSecurityLabels(project.id, session.notebook_id);
 	if (labels !== null) {
-		const decision = await authorizationService(deps).authorize(subject, 'project.read', {
-			kind: 'project',
-			project,
-			notebookLabels: labels,
-		});
+		const decision = await authorizationService(deps).authorize(
+			subject,
+			authz.appReadAction(subject, project),
+			{
+				kind: 'project',
+				project,
+				notebookLabels: labels,
+			},
+		);
 		if (!decision.allowed) {
 			throw new NotFoundError('Session not found');
 		}
@@ -313,14 +342,14 @@ export function authMethodFor(kind: CredentialKind): HonoEnv['Variables']['authM
 
 export { subjectDefaultRole };
 
-/** The caller's evaluated grants on a session — the `can` object in responses. */
+/** Permissions and role must travel together so every response applies the same redaction. */
 export async function sessionGrantsFor(
 	project: Project,
 	subject: AuthorizationSubject,
 	session: SessionAdmissionRecord,
 	deps: AuthzDeps,
 	notebookLabels: ResourceSecurityLabels | null = null,
-): Promise<{ attach: boolean; stop: boolean; surface: boolean }> {
+): Promise<{ role: Role | null; attach: boolean; stop: boolean; surface: boolean }> {
 	const resource = { kind: 'session' as const, project, session, notebookLabels };
 	const authz = authorizationService(deps);
 	const decisions = await all({
@@ -329,6 +358,7 @@ export async function sessionGrantsFor(
 		surface: async () => authz.authorize(subject, 'session.surface', resource),
 	});
 	return {
+		role: authz.role(subject, project),
 		attach: decisions.attach.allowed,
 		stop: decisions.stop.allowed,
 		surface: decisions.surface.allowed,
@@ -636,6 +666,27 @@ export async function loadVisibleProject(
 	// `project.read` denials are all masked (`deniedAs: 'not-found'`), so this is
 	// assertProjectRole with a guaranteed-404 denial shape.
 	return assertProjectRole(projects, pid, subject, 'project.read', deps);
+}
+
+export async function loadSessionProject(
+	projects: ProjectService,
+	pid: ProjectId,
+	subject: AuthSubject,
+	deps: AuthzDeps = {},
+): Promise<Project> {
+	const project = await projects.getProject(pid);
+	const action = authorizationService(deps).appReadAction(subject, project);
+	await assertProjectActionOn(project, subject, action, deps);
+	return project;
+}
+
+export async function loadAppProject(
+	projects: ProjectService,
+	pid: ProjectId,
+	subject: AuthSubject,
+	deps: AuthzDeps = {},
+): Promise<Project> {
+	return assertProjectRole(projects, pid, subject, 'app.read', deps);
 }
 
 /**
@@ -1298,6 +1349,7 @@ export const MeResponseSchema = z
 		is_super_admin: z.boolean(),
 		/** Whether the current credential can create projects. */
 		can_create_projects: z.boolean(),
+		app_only: z.boolean().optional(),
 	})
 	.openapi('Me');
 
@@ -1523,11 +1575,26 @@ export async function canDeploymentAction(
 	subject: AuthorizationSubject,
 	action: DeploymentAction,
 	deps: AuthzDeps = {},
+	appOnly?: boolean,
 ): Promise<boolean> {
-	const decision = await authorizationService(deps).authorize(subject, action, {
+	return (await deploymentDecision(subject, action, deps, appOnly)).allowed;
+}
+
+async function deploymentDecision(
+	subject: AuthorizationSubject,
+	action: DeploymentAction,
+	deps: AuthzDeps = {},
+	appOnly?: boolean,
+) {
+	return authorizationService(deps).authorize(subject, action, {
 		kind: 'deployment',
+		appOnly:
+			appOnly ??
+			(action === 'project.create' &&
+			authorizationService(deps).credentialDecision(subject, action, { kind: 'deployment' }).allowed
+				? await deps.services?.projects.isAppOnly(subject, deps.policy)
+				: undefined),
 	});
-	return decision.allowed;
 }
 
 /** {@link canDeploymentAction} as a guard: a standing denial is a plain 403. */
@@ -1537,9 +1604,7 @@ export async function assertDeploymentAction(
 	deps: AuthzDeps = {},
 	message = 'Requires super admin',
 ): Promise<void> {
-	const decision = await authorizationService(deps).authorize(subject, action, {
-		kind: 'deployment',
-	});
+	const decision = await deploymentDecision(subject, action, deps);
 	if (decision.allowed) return;
 	if (decision.category === 'credential-resource') {
 		throw new NotFoundError('Deployment resource not found');

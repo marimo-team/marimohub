@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CatalogService, UserId } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
-import { MemoryBucket } from '@marimo-hub/core/testing';
+import { MemoryBucket, ACTOR, makeFakeCompute } from '@marimo-hub/core/testing';
 import { makeTestDeps } from '../testing';
 import { createMcpServer, MAX_EXECUTE_CODE_BYTES } from './server';
 
@@ -33,6 +33,78 @@ afterEach(() => {
 });
 
 describe('MCP tool boundaries', () => {
+	it('permits stakeholder app launches without exposing authoring tools', async () => {
+		const bucket = new MemoryBucket();
+		await new CatalogService(bucket).initialize(ACTOR);
+		const deps = makeTestDeps(bucket, { compute: makeFakeCompute() });
+		const project = await deps.services.projects.createProject(
+			{ name: 'Apps', description: '' },
+			ACTOR,
+		);
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{
+				title: 'Stakeholder app',
+				description: '',
+				code: 'SOURCE_ONLY_SENTINEL = 1',
+			},
+			ACTOR,
+		);
+		await deps.services.projects.addMember(
+			project.id,
+			{ user_id: PRINCIPAL.id },
+			'app-user',
+			ACTOR,
+		);
+		const { client, server } = await connect(deps);
+		try {
+			expect(await client.callTool({ name: 'list_catalog', arguments: {} })).toMatchObject({
+				structuredContent: { projects: [] },
+			});
+			const started = await client.callTool({
+				name: 'start_session',
+				arguments: {
+					project: project.name,
+					notebook: notebook.title,
+					mode: 'app',
+					wait_seconds: 0,
+				},
+			});
+			expect(started.isError).not.toBe(true);
+			expect(started.structuredContent).toMatchObject({
+				mode: 'app',
+				notebook_url: `https://hub.example.com/projects/${project.id}/notebooks/${notebook.id}/app`,
+			});
+			const sessionId = (started.structuredContent as { session_id: string }).session_id;
+			for (const tool of [
+				{
+					name: 'start_session',
+					arguments: { project: project.id, notebook: notebook.id, mode: 'edit', wait_seconds: 0 },
+				},
+				{ name: 'stop_session', arguments: { project: project.id, session_id: sessionId } },
+				{
+					name: 'execute_code',
+					arguments: {
+						project: project.id,
+						session_id: sessionId,
+						code: 'print(open("notebook.py").read())',
+					},
+				},
+				{
+					name: 'create_notebook',
+					arguments: { project: project.id, title: 'Forbidden', code: 'pass' },
+				},
+			]) {
+				const response = await client.callTool(tool);
+				expect(response.isError).toBe(true);
+				expect(JSON.stringify(response)).not.toContain('SOURCE_ONLY_SENTINEL');
+			}
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
 	it('publishes a project-scoped session selector for execute_code', async () => {
 		const { client, server } = await connect(makeTestDeps(new MemoryBucket()));
 

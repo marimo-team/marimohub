@@ -132,6 +132,8 @@ components:
           type: boolean
         can_create_projects:
           type: boolean
+        app_only:
+          type: boolean
       required:
         - id
         - email
@@ -328,6 +330,7 @@ components:
             - manager
             - editor
             - viewer
+            - app-user
             - null
         limits:
           type: object
@@ -551,6 +554,7 @@ components:
             - manager
             - editor
             - viewer
+            - app-user
             - null
       required:
         - id
@@ -577,6 +581,7 @@ components:
             - manager
             - editor
             - viewer
+            - app-user
       required:
         - role
     ProjectFederation:
@@ -641,6 +646,7 @@ components:
         - manager
         - editor
         - viewer
+        - app-user
       example: editor
     ProjectAlertDestinationPage:
       type: object
@@ -1147,6 +1153,7 @@ components:
             - manager
             - editor
             - viewer
+            - app-user
             - null
         super_admins:
           type: array
@@ -1186,6 +1193,7 @@ components:
             enum:
               - super-admin
               - project-creator
+              - default-role:app-user
               - default-role:viewer
               - default-role:editor
               - default-role:manager
@@ -1206,6 +1214,7 @@ components:
                   - org-integration.manage
                   - audit.global.read
                   - directory.search
+                  - app.read
                   - project.read
                   - project.update
                   - project.delete
@@ -1238,10 +1247,11 @@ components:
                   - string
                   - 'null'
                 enum:
-                  - viewer
-                  - editor
-                  - manager
                   - admin
+                  - manager
+                  - editor
+                  - viewer
+                  - app-user
                   - null
               denied_as:
                 type:
@@ -1362,6 +1372,7 @@ components:
             enum:
               - super-admin
               - project-creator
+              - default-role:app-user
               - default-role:viewer
               - default-role:editor
               - default-role:manager
@@ -1424,10 +1435,11 @@ components:
             - string
             - 'null'
           enum:
-            - viewer
-            - editor
-            - manager
             - admin
+            - manager
+            - editor
+            - viewer
+            - app-user
             - null
         category:
           type: string
@@ -1586,6 +1598,7 @@ components:
                 enum:
                   - super-admin
                   - project-creator
+                  - default-role:app-user
                   - default-role:viewer
                   - default-role:editor
                   - default-role:manager
@@ -1626,6 +1639,7 @@ components:
                 enum:
                   - super-admin
                   - project-creator
+                  - default-role:app-user
                   - default-role:viewer
                   - default-role:editor
                   - default-role:manager
@@ -1646,6 +1660,7 @@ components:
                           - org-integration.manage
                           - audit.global.read
                           - directory.search
+                          - app.read
                           - project.read
                           - project.update
                           - project.delete
@@ -1696,6 +1711,7 @@ components:
             - org-integration.manage
             - audit.global.read
             - directory.search
+            - app.read
             - project.read
             - project.update
             - project.delete
@@ -1761,6 +1777,8 @@ components:
             - project
             - session
             - session-start
+        app_only:
+          type: boolean
         project_id:
           type: string
         notebook_id:
@@ -1788,10 +1806,11 @@ components:
                   role:
                     type: string
                     enum:
-                      - viewer
-                      - editor
-                      - manager
                       - admin
+                      - manager
+                      - editor
+                      - viewer
+                      - app-user
                 required:
                   - role
                 additionalProperties: false
@@ -2456,6 +2475,59 @@ components:
         - created_by
         - created_at
       additionalProperties: false
+    NotebookApp:
+      type: object
+      properties:
+        project_id:
+          type: string
+        project_name:
+          type: string
+        notebook_id:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        your_role:
+          type:
+            - string
+            - 'null'
+          enum:
+            - admin
+            - manager
+            - editor
+            - viewer
+            - app-user
+            - null
+        can:
+          type: object
+          properties:
+            run:
+              type: boolean
+          required:
+            - run
+      required:
+        - project_id
+        - project_name
+        - notebook_id
+        - title
+        - url
+        - your_role
+        - can
+    NotebookAppPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotebookApp'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
     OpenNotebookChangeRequestResult:
       type: object
       properties:
@@ -4194,6 +4266,7 @@ components:
                       - org-integration.manage
                       - audit.global.read
                       - directory.search
+                      - app.read
                       - project.read
                       - project.update
                       - project.delete
@@ -4382,6 +4455,7 @@ paths:
                               - org-integration.manage
                               - audit.global.read
                               - directory.search
+                              - app.read
                               - project.read
                               - project.update
                               - project.delete
@@ -11116,6 +11190,217 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/apps:
+    get:
+      operationId: apps.list
+      tags:
+        - Apps
+      summary: List accessible notebook apps
+      parameters:
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+          required: false
+          name: q
+          in: query
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+          required: false
+          name: project_id
+          in: query
+      responses:
+        '200':
+          description: Apps
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/NotebookAppPage'
+                      - type: object
+                        properties:
+                          project:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              name:
+                                type: string
+                              your_role:
+                                type:
+                                  - string
+                                  - 'null'
+                                enum:
+                                  - admin
+                                  - manager
+                                  - editor
+                                  - viewer
+                                  - app-user
+                                  - null
+                            required:
+                              - id
+                              - name
+                              - your_role
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/app:
+    get:
+      operationId: apps.get
+      tags:
+        - Apps
+      summary: Get notebook app details
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: App
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/NotebookApp'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests:
     post:
       operationId: notebooks.change-requests.open
@@ -17647,6 +17932,7 @@ paths:
                               - org-integration.manage
                               - audit.global.read
                               - directory.search
+                              - app.read
                               - project.read
                               - project.update
                               - project.delete
@@ -18041,6 +18327,7 @@ paths:
                               - org-integration.manage
                               - audit.global.read
                               - directory.search
+                              - app.read
                               - project.read
                               - project.update
                               - project.delete
@@ -18095,6 +18382,7 @@ paths:
                               - org-integration.manage
                               - audit.global.read
                               - directory.search
+                              - app.read
                               - project.read
                               - project.update
                               - project.delete
@@ -18426,6 +18714,7 @@ paths:
                                         - org-integration.manage
                                         - audit.global.read
                                         - directory.search
+                                        - app.read
                                         - project.read
                                         - project.update
                                         - project.delete
@@ -18589,6 +18878,7 @@ paths:
                               - org-integration.manage
                               - audit.global.read
                               - directory.search
+                              - app.read
                               - project.read
                               - project.update
                               - project.delete
@@ -18851,6 +19141,7 @@ paths:
                               - org-integration.manage
                               - audit.global.read
                               - directory.search
+                              - app.read
                               - project.read
                               - project.update
                               - project.delete

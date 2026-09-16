@@ -1,3 +1,4 @@
+import { canEditProject } from '@/lib/roles';
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- output cannot contain this status's paragraphs */
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -107,7 +108,7 @@ function useDataBrowserPageState() {
 	const { data: project } = useProjectQuery(pid!);
 	const { data: capabilities } = useCapabilitiesQuery();
 	const available =
-		(capabilities?.data_browser?.available ?? false) && project.your_role !== 'viewer';
+		(capabilities?.data_browser?.available ?? false) && canEditProject(project.your_role);
 	const { data: kinds } = useIntegrationKindsQuery(available);
 	const { data: entries } = useIntegrationsQuery({ pid: pid! }, available);
 

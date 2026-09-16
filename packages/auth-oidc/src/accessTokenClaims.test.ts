@@ -91,6 +91,7 @@ describe('access-token claim boundaries', () => {
 					grant: {
 						projects: '*',
 						actions: [
+							'app.read',
 							'project.read',
 							'integration.read',
 							'integration.use',

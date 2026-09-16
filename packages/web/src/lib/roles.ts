@@ -1,11 +1,16 @@
 import type { AssignableProjectRole, Capabilities, ProjectRole } from '@/types';
 
-const ROLE_ORDER: Record<AssignableProjectRole, true> = {
+const ROLE_ORDER: Record<ProjectRole, true> = {
+	'app-user': true,
 	manager: true,
 	editor: true,
 	viewer: true,
+	admin: true,
 };
-export const ASSIGNABLE_ROLES = Object.keys(ROLE_ORDER) as AssignableProjectRole[];
+export const PROJECT_ROLES = Object.keys(ROLE_ORDER) as ProjectRole[];
+export const ASSIGNABLE_ROLES: AssignableProjectRole[] = PROJECT_ROLES.filter(
+	(role) => role !== 'admin',
+);
 
 export function canManageProject(role: ProjectRole | null): boolean {
 	return role === 'manager' || role === 'admin';
@@ -27,6 +32,7 @@ export function roleDescriptions(caps: Capabilities | undefined): Record<Project
 					? 'View notebooks read-only and use notebooks running as apps'
 					: 'View notebooks and their last saved outputs (read-only)';
 	return {
+		'app-user': 'Use notebook apps without access to source code or authoring tools',
 		admin: 'Reserved for project owners, deployment super admins, and legacy assignments',
 		manager: 'Manage members and project settings, plus everything an editor can do',
 		editor: 'Create, edit, and run notebooks',
@@ -43,6 +49,8 @@ export function defaultAccessSummary(caps: Capabilities | undefined): string | n
 	switch (caps.default_role) {
 		case null:
 			return 'This project is members-only: only the owner and the members listed here can access it.';
+		case 'app-user':
+			return 'Everyone who signs in can use this project’s apps by default, without source access.';
 		case 'viewer':
 			return 'Everyone who signs in can view this project by default; add members to grant more access.';
 		case 'editor':
@@ -50,4 +58,8 @@ export function defaultAccessSummary(caps: Capabilities | undefined): string | n
 		case 'manager':
 			return 'Everyone who signs in can manage this project by default.';
 	}
+}
+
+export function canEditProject(role: ProjectRole | null): boolean {
+	return role === 'editor' || canManageProject(role);
 }

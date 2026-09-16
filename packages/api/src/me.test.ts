@@ -15,6 +15,7 @@ describe('GET /api/v1/me', () => {
 			logout_url: null,
 			is_super_admin: false,
 			can_create_projects: true,
+			app_only: false,
 		});
 	});
 

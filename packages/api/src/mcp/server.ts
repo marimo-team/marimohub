@@ -25,6 +25,8 @@ import { errorMetadataChain, logEvent } from '../log';
 import { deleteNotebookAndRetire } from '../routes/notebookDelete';
 import {
 	assertProjectActionOn,
+	authorizationService,
+	loadSessionProject,
 	assertSessionControl,
 	assertSessionNotebookVisible,
 	loadVisibleProject,
@@ -80,11 +82,17 @@ async function resolveProject(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	value: string,
+	appAccess = false,
 ): Promise<Project> {
+	const load = appAccess ? loadSessionProject : loadVisibleProject;
 	if (ProjectId.is(value)) {
-		return loadVisibleProject(deps.services.projects, value, principal, deps);
+		return load(deps.services.projects, value, principal, deps);
 	}
 	const projects = await deps.services.projects.listProjects({
+		action:
+			appAccess && authorizationService(deps).credentialAllowsAction(principal, 'app.read')
+				? 'app.read'
+				: 'project.read',
 		subject: principal,
 		policy: deps.policy,
 		resourceSecurity: deps.resourceSecurity,
@@ -96,7 +104,7 @@ async function resolveProject(
 			`Project name '${value}' is ambiguous; use one of: ${matches.map((item) => item.id).join(', ')}`,
 		);
 	}
-	return loadVisibleProject(deps.services.projects, matches[0].id, principal, deps);
+	return load(deps.services.projects, matches[0].id, principal, deps);
 }
 
 async function resolveNotebook(
@@ -106,6 +114,7 @@ async function resolveNotebook(
 	value: string,
 ) {
 	const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
+		action: authorizationService(deps).appReadAction(principal, project),
 		subject: principal,
 		policy: deps.policy,
 		resourceSecurity: deps.resourceSecurity,
@@ -422,7 +431,7 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, mode, wait_seconds }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef);
+				const project = await resolveProject(deps, principal, projectRef, mode === 'app');
 				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
 				return result(
 					await startMcpSession({

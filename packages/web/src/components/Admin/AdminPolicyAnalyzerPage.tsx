@@ -1,3 +1,4 @@
+import { PROJECT_ROLES } from '@/lib/roles';
 import { useDeferredValue, useMemo, useRef, useState } from 'react';
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
 import {
@@ -45,7 +46,7 @@ type ResourceSource = 'stored' | 'synthetic';
 type LoginOutcome = 'allow' | 'deny';
 type ContextMode = 'synthetic' | 'live-self';
 type Relationship = 'owner' | 'member' | 'none';
-type MemberRole = (typeof MEMBER_ROLES)[number];
+type MemberRole = (typeof PROJECT_ROLES)[number];
 type ProjectStatus = 'active' | 'deleted';
 type SuiteInfo = { valid: true; count: number } | { valid: false; count: 0; message: string };
 
@@ -57,7 +58,6 @@ const DENIAL_CATEGORIES: readonly DenialCategory[] = [
 	'standing',
 	'constraint',
 ];
-const MEMBER_ROLES = ['viewer', 'editor', 'manager', 'admin'] as const;
 const INITIAL_SUITE = JSON.stringify(
 	{ schema_version: 1, name: 'Policy suite', cases: [] },
 	null,
@@ -830,7 +830,7 @@ function ResourceStep({
 										value={memberRole}
 										onChange={(event) => onMemberRoleChange(event.target.value as MemberRole)}
 									>
-										{MEMBER_ROLES.map((role) => (
+										{PROJECT_ROLES.map((role) => (
 											<option key={role} value={role}>
 												{title(role)}
 											</option>
@@ -1442,7 +1442,7 @@ export default function AdminPolicyAnalyzerPage() {
 	const [userInfoClaims, setUserInfoClaims] = useState('');
 	const [contextMode, setContextMode] = useState<'synthetic' | 'live-self'>('synthetic');
 	const [relationship, setRelationship] = useState<'owner' | 'member' | 'none'>('owner');
-	const [memberRole, setMemberRole] = useState<(typeof MEMBER_ROLES)[number]>('viewer');
+	const [memberRole, setMemberRole] = useState<(typeof PROJECT_ROLES)[number]>('viewer');
 	const [projectStatus, setProjectStatus] = useState<'active' | 'deleted'>('active');
 	const [sessionMode, setSessionMode] = useState<SessionMode>('edit');
 	const [heldClassification, setHeldClassification] = useState('');

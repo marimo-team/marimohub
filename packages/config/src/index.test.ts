@@ -933,6 +933,13 @@ describe('createFromEnv default role', () => {
 		).toBeUndefined();
 	});
 
+	it('accepts the app-user default independently of viewer mode', () => {
+		expect(createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'app-user' }).policy).toMatchObject({
+			defaultRole: 'app-user',
+			viewerMode: 'static',
+		});
+	});
+
 	it('throws on an invalid role', () => {
 		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'admin' })).toThrow(
 			/Invalid MARIMOHUB_DEFAULT_ROLE/,

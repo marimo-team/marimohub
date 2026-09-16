@@ -1923,6 +1923,7 @@ components:
                   - manager
                   - editor
                   - viewer
+                  - app-user
             required:
               - role
         federation:
@@ -3385,6 +3386,7 @@ components:
                       - org-integration.manage
                       - audit.global.read
                       - directory.search
+                      - app.read
                       - project.read
                       - project.update
                       - project.delete

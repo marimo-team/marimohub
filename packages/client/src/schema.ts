@@ -914,6 +914,40 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/apps': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List accessible notebook apps */
+		get: operations['apps.list'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/app': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get notebook app details */
+		get: operations['apps.get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests': {
 		parameters: {
 			query?: never;
@@ -1979,6 +2013,7 @@ export interface components {
 			logout_url: string | null;
 			is_super_admin: boolean;
 			can_create_projects: boolean;
+			app_only?: boolean;
 		};
 		DeploymentInfo: {
 			version: string;
@@ -2057,7 +2092,7 @@ export interface components {
 			/** @enum {string} */
 			editor_sandbox_sharing: 'shared' | 'exclusive';
 			/** @enum {string|null} */
-			default_role: 'manager' | 'editor' | 'viewer' | null;
+			default_role: 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 			limits: {
 				max_concurrent_sessions_per_user: number | null;
 				max_apps_per_project: number | null;
@@ -2145,13 +2180,13 @@ export interface components {
 			federation?: components['schemas']['ProjectFederation'];
 			security_labels?: components['schemas']['SecurityLabels'];
 			/** @enum {string|null} */
-			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | null;
+			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 		};
 		ProjectMember: {
 			user_id?: string;
 			email?: string;
 			/** @enum {string} */
-			role: 'admin' | 'manager' | 'editor' | 'viewer';
+			role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user';
 		};
 		ProjectFederation: {
 			enabled: boolean;
@@ -2179,7 +2214,7 @@ export interface components {
 		 * @example editor
 		 * @enum {string}
 		 */
-		AssignableRole: 'manager' | 'editor' | 'viewer';
+		AssignableRole: 'manager' | 'editor' | 'viewer' | 'app-user';
 		ProjectAlertDestinationPage: {
 			items: components['schemas']['ProjectAlertDestination'][];
 			next_cursor: string | null;
@@ -2390,7 +2425,7 @@ export interface components {
 		};
 		AdminPolicy: {
 			/** @enum {string|null} */
-			default_role: 'manager' | 'editor' | 'viewer' | null;
+			default_role: 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 			super_admins: string[];
 		};
 		PolicyAnalyzerMetadata: {
@@ -2405,6 +2440,7 @@ export interface components {
 			entitlements: (
 				| 'super-admin'
 				| 'project-creator'
+				| 'default-role:app-user'
 				| 'default-role:viewer'
 				| 'default-role:editor'
 				| 'default-role:manager'
@@ -2418,6 +2454,7 @@ export interface components {
 					| 'org-integration.manage'
 					| 'audit.global.read'
 					| 'directory.search'
+					| 'app.read'
 					| 'project.read'
 					| 'project.update'
 					| 'project.delete'
@@ -2441,7 +2478,7 @@ export interface components {
 				/** @enum {string} */
 				scope: 'deployment' | 'project' | 'session' | 'session-start';
 				/** @enum {string|null} */
-				minimum_role: 'viewer' | 'editor' | 'manager' | 'admin' | null;
+				minimum_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 				/** @enum {string|null} */
 				denied_as: 'not-found' | 'forbidden' | null;
 				requires_super_admin: boolean;
@@ -2476,6 +2513,7 @@ export interface components {
 			entitlements: (
 				| 'super-admin'
 				| 'project-creator'
+				| 'default-role:app-user'
 				| 'default-role:viewer'
 				| 'default-role:editor'
 				| 'default-role:manager'
@@ -2500,7 +2538,7 @@ export interface components {
 		PolicyAuthorizationDecision: {
 			allowed: boolean;
 			/** @enum {string|null} */
-			role: 'viewer' | 'editor' | 'manager' | 'admin' | null;
+			role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 			/** @enum {string} */
 			category?:
 				| 'lifecycle'
@@ -2571,6 +2609,7 @@ export interface components {
 					entitlements?: (
 						| 'super-admin'
 						| 'project-creator'
+						| 'default-role:app-user'
 						| 'default-role:viewer'
 						| 'default-role:editor'
 						| 'default-role:manager'
@@ -2589,6 +2628,7 @@ export interface components {
 				entitlements?: (
 					| 'super-admin'
 					| 'project-creator'
+					| 'default-role:app-user'
 					| 'default-role:viewer'
 					| 'default-role:editor'
 					| 'default-role:manager'
@@ -2602,6 +2642,7 @@ export interface components {
 								| 'org-integration.manage'
 								| 'audit.global.read'
 								| 'directory.search'
+								| 'app.read'
 								| 'project.read'
 								| 'project.update'
 								| 'project.delete'
@@ -2633,6 +2674,7 @@ export interface components {
 				| 'org-integration.manage'
 				| 'audit.global.read'
 				| 'directory.search'
+				| 'app.read'
 				| 'project.read'
 				| 'project.update'
 				| 'project.delete'
@@ -2674,6 +2716,7 @@ export interface components {
 			source: 'stored' | 'synthetic';
 			/** @enum {string} */
 			kind: 'deployment' | 'project' | 'session' | 'session-start';
+			app_only?: boolean;
 			project_id?: string;
 			notebook_id?: string;
 			session_id?: string;
@@ -2683,7 +2726,7 @@ export interface components {
 					user_id?: string;
 					email?: string;
 					/** @enum {string} */
-					role: 'viewer' | 'editor' | 'manager' | 'admin';
+					role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user';
 				}[];
 				/**
 				 * @default active
@@ -2991,6 +3034,22 @@ export interface components {
 			created_by: string;
 			/** Format: date-time */
 			created_at: string;
+		};
+		NotebookApp: {
+			project_id: string;
+			project_name: string;
+			notebook_id: string;
+			title: string;
+			url: string;
+			/** @enum {string|null} */
+			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
+			can: {
+				run: boolean;
+			};
+		};
+		NotebookAppPage: {
+			items: components['schemas']['NotebookApp'][];
+			next_cursor: string | null;
 		};
 		OpenNotebookChangeRequestResult: {
 			/**
@@ -3728,6 +3787,7 @@ export interface components {
 							| 'org-integration.manage'
 							| 'audit.global.read'
 							| 'directory.search'
+							| 'app.read'
 							| 'project.read'
 							| 'project.update'
 							| 'project.delete'
@@ -3871,6 +3931,7 @@ export interface operations {
 									| 'org-integration.manage'
 									| 'audit.global.read'
 									| 'directory.search'
+									| 'app.read'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -10404,6 +10465,199 @@ export interface operations {
 			};
 		};
 	};
+	'apps.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+				q?: string;
+				project_id?: string;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Apps */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookAppPage'] & {
+							project?: {
+								id: string;
+								name: string;
+								/** @enum {string|null} */
+								your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
+							};
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'apps.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description App */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookApp'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'notebooks.change-requests.open': {
 		parameters: {
 			query?: never;
@@ -16487,6 +16741,7 @@ export interface operations {
 									| 'org-integration.manage'
 									| 'audit.global.read'
 									| 'directory.search'
+									| 'app.read'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -16849,6 +17104,7 @@ export interface operations {
 									| 'org-integration.manage'
 									| 'audit.global.read'
 									| 'directory.search'
+									| 'app.read'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -16881,6 +17137,7 @@ export interface operations {
 									| 'org-integration.manage'
 									| 'audit.global.read'
 									| 'directory.search'
+									| 'app.read'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -17165,6 +17422,7 @@ export interface operations {
 													| 'org-integration.manage'
 													| 'audit.global.read'
 													| 'directory.search'
+													| 'app.read'
 													| 'project.read'
 													| 'project.update'
 													| 'project.delete'
@@ -17305,6 +17563,7 @@ export interface operations {
 									| 'org-integration.manage'
 									| 'audit.global.read'
 									| 'directory.search'
+									| 'app.read'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -17536,6 +17795,7 @@ export interface operations {
 									| 'org-integration.manage'
 									| 'audit.global.read'
 									| 'directory.search'
+									| 'app.read'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'

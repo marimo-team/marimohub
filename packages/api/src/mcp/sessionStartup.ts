@@ -122,7 +122,7 @@ export async function startMcpSession(input: {
 		SessionId.parse(started.session_id),
 	);
 	const deadline = Date.now() + waitSeconds * 1000;
-	const notebookUrl = `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebookId}`;
+	const notebookUrl = `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebookId}${mode === 'app' ? '/app' : ''}`;
 	const labels = await assertSessionNotebookVisible(deps, project, session, principal);
 	const grants = await sessionGrantsFor(project, principal, session, deps, labels);
 	let execution = lifecycleReadiness(session);
@@ -208,6 +208,6 @@ export async function startMcpSession(input: {
 		mode: sessionMode(session),
 		notebook_url: notebookUrl,
 		...(projected.sandbox_url ? { sandbox_url: projected.sandbox_url } : {}),
-		...(session.error ? { error: session.error } : {}),
+		...(projected.error ? { error: projected.error } : {}),
 	};
 }

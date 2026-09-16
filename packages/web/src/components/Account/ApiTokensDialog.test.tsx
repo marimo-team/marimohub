@@ -129,7 +129,7 @@ describe('ApiTokensDialog', () => {
 			tokenMeta({
 				id: '01HXY0S6GWMBASVAG3PZ7Y2K5V',
 				name: 'reader',
-				grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+				grant: { actions: ['app.read', 'project.read', 'integration.read'], projects: '*' },
 			}),
 			tokenMeta({
 				id: '01HXY0S6GWMBASVAG3PZ7Y2K5W',
@@ -180,7 +180,7 @@ describe('ApiTokensDialog', () => {
 				body: {
 					name: 'ci-deploy',
 					expires_in_days: 90,
-					grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+					grant: { actions: ['app.read', 'project.read', 'integration.read'], projects: '*' },
 				},
 			},
 		]);
@@ -234,7 +234,7 @@ describe('ApiTokensDialog', () => {
 			method: 'POST',
 			body: {
 				name: 'all-projects',
-				grant: { actions: ['project.read', 'integration.read'], projects: '*' },
+				grant: { actions: ['app.read', 'project.read', 'integration.read'], projects: '*' },
 			},
 		});
 	});

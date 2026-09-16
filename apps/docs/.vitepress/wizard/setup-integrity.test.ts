@@ -56,6 +56,21 @@ describe('setup snippet integrity', () => {
 		expect([...unknown]).toEqual([]);
 	});
 
+	it.each(
+		[...CONFIG_DOCUMENTED_IDS].filter((id) =>
+			/^MARIMOHUB_AUTH_OIDC_DEFAULT_[A-Z_]+_GROUPS$/.test(id),
+		),
+	)('documents the default-role mapping and entitlement for %s', (id) => {
+		const markdown = getSetup('auth', 'oidc')!.markdown;
+		const role = id
+			.replace('MARIMOHUB_AUTH_OIDC_DEFAULT_', '')
+			.replace(/_GROUPS$/, '')
+			.toLowerCase()
+			.replaceAll('_', '-');
+		expect(markdown).toContain(`${id}=`);
+		expect(markdown).toContain(`default-role:${role}`);
+	});
+
 	it('every wizard "Full docs" deep link points at a real heading', () => {
 		for (const group of SELECTABLE_GROUPS) {
 			for (const backend of group.backends) {

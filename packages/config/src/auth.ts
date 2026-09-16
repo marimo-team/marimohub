@@ -272,6 +272,7 @@ const GROUP_POLICY_VARS = [
 	'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
 	'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
 	'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS',
 	'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
 	'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
 	'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
@@ -359,11 +360,12 @@ function parseGroupPolicy(env: Env, allowed: string[] | undefined): OidcGroupPol
 	const claim = env.MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM?.trim();
 	const superAdmin = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS');
 	const projectCreation = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS');
+	const appUser = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS');
 	const viewer = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS');
 	const editor = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS');
 	const manager = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS');
 	const mappedPolicy = Boolean(
-		allowed || superAdmin || projectCreation || viewer || editor || manager,
+		allowed || superAdmin || projectCreation || appUser || viewer || editor || manager,
 	);
 	if (!claim && !mappedPolicy) return undefined;
 	if (
@@ -392,9 +394,10 @@ function parseGroupPolicy(env: Env, allowed: string[] | undefined): OidcGroupPol
 		...(allowed ? { allowed } : {}),
 		...(superAdmin ? { superAdmin } : {}),
 		...(projectCreation ? { projectCreation } : {}),
-		...(viewer || editor || manager
+		...(appUser || viewer || editor || manager
 			? {
 					defaultRoles: {
+						...(appUser ? { 'app-user': appUser } : {}),
 						...(viewer ? { viewer } : {}),
 						...(editor ? { editor } : {}),
 						...(manager ? { manager } : {}),

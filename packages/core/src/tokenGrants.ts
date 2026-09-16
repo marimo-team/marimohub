@@ -47,7 +47,7 @@ export function serviceAccountGrantAllowsAction(
 	);
 }
 
-const READ_TOKEN_ACTIONS = ['project.read', 'integration.read'] as const;
+const READ_TOKEN_ACTIONS = ['app.read', 'project.read', 'integration.read'] as const;
 const RUN_TOKEN_ACTIONS = [
 	...READ_TOKEN_ACTIONS,
 	'integration.use',

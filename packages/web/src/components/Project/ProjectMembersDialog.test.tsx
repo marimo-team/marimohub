@@ -335,6 +335,7 @@ describe('ProjectMembersDialog — admin', () => {
 			name: 'New member role',
 		}) as HTMLSelectElement;
 		expect([...newRole.options].map((option) => option.value)).toEqual([
+			'app-user',
 			'manager',
 			'editor',
 			'viewer',

@@ -11,6 +11,7 @@ import {
 	SECURITY_LABEL_TOKEN,
 	SessionId,
 	SESSION_MODES,
+	ROLES,
 	SubjectSecurityContextSchema,
 	TokenGrantSchema,
 	UserId,
@@ -71,7 +72,7 @@ const SyntheticMemberSchema = z
 	.strictObject({
 		user_id: z.string().min(1).optional(),
 		email: z.string().min(3).max(320).optional(),
-		role: z.enum(['viewer', 'editor', 'manager', 'admin']),
+		role: z.enum(ROLES),
 	})
 	.refine((member) => (member.user_id === undefined) !== (member.email === undefined), {
 		message: 'A member must contain one user_id or one email.',
@@ -88,6 +89,7 @@ const AnalysisResourceSchema = z
 	.strictObject({
 		source: z.enum(['stored', 'synthetic']),
 		kind: z.enum(['deployment', 'project', 'session', 'session-start']),
+		app_only: z.boolean().optional(),
 		project_id: z.string().optional(),
 		notebook_id: z.string().optional(),
 		session_id: z.string().optional(),
@@ -194,7 +196,7 @@ const LoginResultSchema = z
 const AuthorizationDecisionSchema = z
 	.strictObject({
 		allowed: z.boolean(),
-		role: z.enum(['viewer', 'editor', 'manager', 'admin']).nullable(),
+		role: z.enum(ROLES).nullable(),
 		category: z
 			.enum([
 				'lifecycle',
@@ -282,7 +284,7 @@ const PolicyAnalyzerMetadataSchema = z
 			z.strictObject({
 				action: AuthorizationActionSchema,
 				scope: z.enum(['deployment', 'project', 'session', 'session-start']),
-				minimum_role: z.enum(['viewer', 'editor', 'manager', 'admin']).nullable(),
+				minimum_role: z.enum(ROLES).nullable(),
 				denied_as: z.enum(['not-found', 'forbidden']).nullable(),
 				requires_super_admin: z.boolean(),
 			}),
@@ -444,7 +446,7 @@ async function storedResource(
 
 function syntheticResource(stage: AuthorizationStage): AuthorizationResource {
 	const input = stage.resource;
-	if (input.kind === 'deployment') return { kind: 'deployment' };
+	if (input.kind === 'deployment') return { kind: 'deployment', appOnly: input.app_only };
 	if (!input.project) throw new Error('synthetic_project_required');
 	const project = syntheticProject(input.project);
 	if (input.kind === 'project') {

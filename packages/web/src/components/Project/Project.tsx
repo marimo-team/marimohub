@@ -104,7 +104,7 @@ import { useListFilters } from '@/hooks/useListFilters';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
 import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
-import { canManageProject } from '@/lib/roles';
+import { canEditProject, canManageProject } from '@/lib/roles';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, ResolvedUser, Session } from '@/types';
 
@@ -286,12 +286,12 @@ function useProjectContent() {
 	const deleteProject = useDeleteProject();
 	const { data: capabilities } = useCapabilitiesQuery();
 	const canManage = canManageProject(project.your_role);
-	const canOperateSource = project.your_role !== null && project.your_role !== 'viewer';
+	const canOperateSource = project.your_role !== null && canEditProject(project.your_role);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
 	const canChooseComputeProfile =
-		capabilities?.compute_profile_override === 'editors' && project.your_role !== 'viewer';
+		capabilities?.compute_profile_override === 'editors' && canEditProject(project.your_role);
 	const offersComputeChoice = canChooseComputeProfile && computeProfiles.length > 1;
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
 	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
@@ -302,10 +302,10 @@ function useProjectContent() {
 	// Start has no session to carry grants, so it derives from the evaluated
 	// admission row in capabilities. The server enforces all of it regardless.
 	const canStartApps =
-		project.your_role !== 'viewer' || (capabilities?.viewer_session_modes ?? []).includes('app');
+		canEditProject(project.your_role) || (capabilities?.viewer_session_modes ?? []).includes('app');
 
 	const dataBrowserAvailable =
-		(capabilities?.data_browser?.available ?? false) && project.your_role !== 'viewer';
+		(capabilities?.data_browser?.available ?? false) && canEditProject(project.your_role);
 	const projectAlertsAvailable = (capabilities?.project_alerts?.available ?? false) && canManage;
 	const jobsAvailable = capabilities?.jobs?.available ?? false;
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
@@ -856,7 +856,7 @@ function useProjectContent() {
 									<GitSourcePopover
 										projectId={pid!}
 										notebookId={nb.id}
-										canSync={project.your_role !== 'viewer'}
+										canSync={canEditProject(project.your_role)}
 										triggerClassName="shrink-0 cursor-pointer rounded-lg"
 										trigger={
 											<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
@@ -1008,7 +1008,7 @@ function useProjectContent() {
 					onClose={historyModal.close}
 					projectId={pid!}
 					notebook={historyModal.target}
-					canRestore={project.your_role !== 'viewer'}
+					canRestore={canEditProject(project.your_role)}
 				/>
 			)}
 

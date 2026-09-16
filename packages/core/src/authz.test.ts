@@ -380,3 +380,21 @@ describe('authz', () => {
 		});
 	});
 });
+
+describe('app-user role resolution', () => {
+	it('resolves app-user defaults and preserves explicit membership precedence', () => {
+		expect(effectiveRole(project, STRANGER, { defaultRole: 'app-user' })).toBe('app-user');
+		expect(effectiveRole(project, { ...STRANGER, entitlements: ['default-role:app-user'] })).toBe(
+			'app-user',
+		);
+		expect(roleAtLeast('app-user', 'viewer')).toBe(false);
+		expect(roleAtLeast('viewer', 'app-user')).toBe(true);
+		const invited = makeProject({
+			owner: OWNER.id,
+			members: [{ email: STRANGER.email, role: 'app-user' }],
+		});
+		expect(effectiveRole(invited, STRANGER, { defaultRole: 'editor' })).toBe('app-user');
+		invited.members.push({ user_id: STRANGER.id, role: 'viewer' });
+		expect(effectiveRole(invited, STRANGER)).toBe('viewer');
+	});
+});

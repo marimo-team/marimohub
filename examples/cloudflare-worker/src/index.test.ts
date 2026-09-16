@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('@marimo-hub/compute-cloudflare', () => ({
 	CloudflareSandboxProvider: class CloudflareSandboxProvider {
@@ -18,6 +18,8 @@ vi.mock('@marimo-hub/storage-r2', () => ({
 }));
 
 import { MaintenanceLock } from '@marimo-hub/core';
+import { ASSIGNABLE_ROLES } from '@marimo-hub/core/constants';
+import type { AssignableRole } from '@marimo-hub/core/constants';
 import { JobScheduler } from '@marimo-hub/core/jobs';
 import { MemoryBucket } from '@marimo-hub/core/testing';
 import worker, { buildDeps } from './index';
@@ -145,20 +147,35 @@ describe('Cloudflare Worker configuration', () => {
 		).toThrow('Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING: per-user (expected shared, exclusive)');
 	});
 
-	it('accepts assignable default roles and rejects reserved admin', () => {
-		expect(
-			buildDeps(new Request('https://hub.example.com'), {
-				...baseEnv,
-				DEFAULT_ROLE: 'manager',
-			} as unknown as Env).policy.defaultRole,
-		).toBe('manager');
-		expect(() =>
-			buildDeps(new Request('https://hub.example.com'), {
-				...baseEnv,
-				DEFAULT_ROLE: 'admin',
-			} as unknown as Env),
-		).toThrow('Invalid DEFAULT_ROLE: admin (expected manager, editor, viewer, none)');
+	it('keeps default-role environment types aligned with assignable roles', () => {
+		expectTypeOf<Env['DEFAULT_ROLE']>().toEqualTypeOf<AssignableRole | 'none' | undefined>();
 	});
+
+	it.each([...ASSIGNABLE_ROLES, 'none'] as const)('accepts typed default role %s', (role) => {
+		const env: Env = {
+			AUTH_MODE: 'dev',
+			USER_ID: 'user-test',
+			USER_EMAIL: 'test@example.com',
+			NOTEBOOKS_BUCKET: new MemoryBucket() as never,
+			SANDBOX: {} as never,
+			DEFAULT_ROLE: role,
+		};
+		expect(buildDeps(new Request('https://hub.example.com'), env).policy.defaultRole).toBe(
+			role === 'none' ? undefined : role,
+		);
+	});
+
+	it.each(['admin', 'owner', 'app', 'app_user', 'unknown'])(
+		'rejects unsupported default role %s',
+		(role) => {
+			expect(() =>
+				buildDeps(new Request('https://hub.example.com'), {
+					...baseEnv,
+					DEFAULT_ROLE: role,
+				} as unknown as Env),
+			).toThrow(`Invalid DEFAULT_ROLE: ${role} (expected ${ASSIGNABLE_ROLES.join(', ')}, none)`);
+		},
+	);
 });
 
 describe('Cloudflare Worker scheduled handler', () => {
