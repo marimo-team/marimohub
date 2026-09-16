@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { DeepLinkSlugSchema } from '@marimo-hub/core/deep-link-slug';
 import { Copy, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDeepLinksQuery, useRegisterDeepLink, useReleaseDeepLink } from '@/api/deepLinks';
@@ -32,8 +33,7 @@ export function AppLinksDialog({
 	const { copy } = useCopyToClipboard();
 	const [slug, setSlug] = useState('');
 	const canonicalSlug = slug.trim().toLowerCase();
-	const valid =
-		canonicalSlug.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(canonicalSlug);
+	const valid = DeepLinkSlugSchema.safeParse(canonicalSlug).success;
 	const pending = register.isPending || release.isPending;
 
 	return (
@@ -119,13 +119,14 @@ export function AppLinksDialog({
 									setSlug(value);
 									register.reset();
 								}}
-								placeholder="my-custom-app"
+								placeholder="team/overview"
 								maxLength={63}
 								isDisabled={pending}
 							/>
 							<p className="text-xs text-muted-foreground">
-								Use letters, digits, and hyphens. Start and end with a letter or digit. Names are
-								shared across this hub.
+								Use letters, digits, and hyphens, with / between segments. Start and end each
+								segment with a letter or digit. Maximum 63 characters. Names are shared across this
+								hub.
 							</p>
 							{valid && (
 								<p className="break-all text-xs text-muted-foreground">{urlFor(canonicalSlug)}</p>

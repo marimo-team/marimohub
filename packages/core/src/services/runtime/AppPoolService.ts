@@ -20,7 +20,13 @@ import {
 	reserveAppReplacement,
 	routeAppRetirement,
 } from './AppPoolRouter';
-import type { AppPool, AppPoolMember, AppPoolPolicy, AppVisit } from './AppPoolRouter';
+import type {
+	AppPool,
+	AppPoolAssignment,
+	AppPoolMember,
+	AppPoolPolicy,
+	AppVisit,
+} from './AppPoolRouter';
 import type { SessionService } from './SessionService';
 import { isTerminal, sessionMode } from './sessionState';
 
@@ -67,7 +73,9 @@ export class AppPoolService {
 		return { ...decision, assignment: undefined };
 	}
 
-	private async route<T extends { kind: 'reuse' | 'reserve'; member: AppPoolMember }>(
+	private async route<
+		T extends { kind: 'reuse' | 'reserve'; member: AppPoolMember; assignment?: AppPoolAssignment },
+	>(
 		input: AppPoolRequest,
 		operation: 'admit' | 'replace',
 		decide: (
@@ -91,13 +99,49 @@ export class AppPoolService {
 			operation_token: crypto.randomUUID(),
 			operation_expires_at: now + input.startupMs,
 		};
-		const decision = await this.store.mutate(input.projectId, input.notebookId, async (pool) => {
-			if (pool.deleted_at !== undefined) throw new NotFoundError('App pool was deleted');
-			// Reading the head after the pool snapshot fences stale requests on CAS retries.
-			await this.assertCommittedVersion(input);
-			const routed = decide(pool, reservation, this.now());
-			return { pool: routed.pool, value: routed.decision };
-		});
+		const { decision, newGeneration } = await this.store.mutate(
+			input.projectId,
+			input.notebookId,
+			async (pool) => {
+				if (pool.deleted_at !== undefined) throw new NotFoundError('App pool was deleted');
+				// Reading the head after the pool snapshot fences stale requests on CAS retries.
+				await this.assertCommittedVersion(input);
+				const previous = pool.assignments.find((item) => item.user_id === input.userId);
+				const routed = decide(pool, reservation, this.now());
+				const assignment = routed.decision.kind === 'busy' ? undefined : routed.decision.assignment;
+				return {
+					pool: routed.pool,
+					value: {
+						decision: routed.decision,
+						newGeneration:
+							assignment?.generation !== previous?.generation ? assignment?.generation : undefined,
+					},
+				};
+			},
+		);
+		if (decision.kind === 'reserve' || newGeneration !== undefined) {
+			try {
+				// Source and pool heads cannot share a CAS. Validate again before compute or admission.
+				await this.assertCommittedVersion(input);
+			} catch (error) {
+				await this.store.mutate(input.projectId, input.notebookId, (pool) => {
+					if (decision.kind === 'reserve') {
+						const member = pool.members.find(
+							(item) =>
+								item.session_id === reservation.session_id &&
+								item.operation_token === reservation.operation_token,
+						);
+						if (member) member.state = 'retiring';
+					}
+					pool.assignments = pool.assignments.filter(
+						(item) => !(item.user_id === input.userId && item.generation === newGeneration),
+					);
+					expireAppPresence(pool, this.now());
+					return { pool, value: undefined };
+				});
+				throw error;
+			}
+		}
 		this.metrics.increment('app_pool.admission', 1, { decision: decision.kind, operation });
 		logEvent({
 			level: 'info',

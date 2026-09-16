@@ -74,6 +74,58 @@ describe('useNotebookSession', () => {
 		expect(String(fetchMock.mock.calls[1][0])).toContain('/sess-1/leave');
 	});
 
+	it.each([true, false])(
+		'releases a superseded admission without releasing the winning visit (stale first: %s)',
+		async (staleFirst) => {
+			const admissions: { visitId: string; complete: () => void }[] = [];
+			const departures: unknown[] = [];
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+					if (String(input).endsWith('/leave')) {
+						departures.push(JSON.parse(init!.body as string));
+						return jsonOk({});
+					}
+					const { app_visit_id: visitId } = JSON.parse(init!.body as string) as {
+						app_visit_id: string;
+					};
+					return new Promise<Response>((resolve) => {
+						admissions.push({
+							visitId,
+							complete: () =>
+								resolve(
+									jsonOk(
+										makeSession({
+											app_assignment: { visit_id: visitId, generation: 'shared-generation' },
+										}),
+									),
+								),
+						});
+					});
+				}),
+			);
+			const { result, unmount } = renderHookWithClient(
+				() => useNotebookSession(PID, NID, { mode: 'app' }),
+				{ toaster: false },
+			);
+			await waitFor(() => expect(admissions).toHaveLength(1));
+			act(() => result.current.start());
+			await waitFor(() => expect(admissions).toHaveLength(2));
+			expect(admissions[0].visitId).not.toBe(admissions[1].visitId);
+			for (const index of staleFirst ? [0, 1] : [1, 0]) {
+				await act(async () => admissions[index].complete());
+				await settleHook();
+			}
+			expect(departures).toEqual([
+				{ visit_id: admissions[0].visitId, generation: 'shared-generation' },
+			]);
+			expect(result.current.session?.app_assignment?.visit_id).toBe(admissions[1].visitId);
+			expect(result.current.isRunning).toBe(true);
+			unmount();
+			await settleHook();
+		},
+	);
+
 	it('reaches running under StrictMode (mount effect fires twice)', async () => {
 		const fetchMock = vi.fn(async () => jsonOk(makeSession()));
 		vi.stubGlobal('fetch', fetchMock);

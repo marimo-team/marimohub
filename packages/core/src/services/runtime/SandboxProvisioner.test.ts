@@ -123,6 +123,145 @@ describe('SandboxProvisioner', () => {
 		);
 	});
 
+	describe('notebook bridge', () => {
+		const payload = {
+			launcher: 'marimo-bridge.py',
+			files: [{ name: 'marimo-bridge.py', content: 'launcher' }],
+		};
+		const options = {
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			notebookBridge: payload,
+			bridgeParentOrigin: 'https://hub.example',
+		};
+		it.each(['uv-sync-edit', 'uv-script-pins'] as const)(
+			'launches the extension in the actual %s runtime after setup and injection',
+			async (launchStrategy) => {
+				const { instance, calls } = makeFakeSandbox();
+				const pending = deferred<{ vars: Record<string, string> }>();
+				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+				const provision = provisioner.provision({
+					...options,
+					launchStrategy,
+					sessionEnv: pending.promise,
+				});
+				await vi.waitFor(() =>
+					expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(true),
+				);
+				expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
+					false,
+				);
+				pending.resolve({ vars: { EXISTING: 'kept' } });
+				await provision;
+				expect(calls.startProcess[0].cmd).toContain('uv run --no-sync python');
+				expect(calls.startProcess[0].cmd).toContain(
+					`/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py`,
+				);
+				expect(calls.startProcess[0].cmd).toContain('--quiet edit');
+				expect(calls.setEnvVars).toContainEqual(
+					expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: 'https://hub.example' }),
+				);
+			},
+		);
+		it('keeps the original launch when optional bridge preparation fails', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('write unavailable'));
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
+			expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+		});
+		it('does not activate an installed extension for jobs', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+				...options,
+				launchMode: 'job',
+			});
+			expect(prepared.launch.start).toContain('uv run --no-sync marimo export html ');
+			expect(prepared.launch.start).not.toContain('marimo-bridge.py');
+			expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
+				false,
+			);
+			expect(calls.setEnvVars).not.toContainEqual(
+				expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
+			);
+		});
+		it.each([
+			{ bridgeParentOrigin: undefined },
+			{ notebookBridge: undefined },
+			{ launchStrategy: 'uv-sandbox' as const },
+		])('leaves unsupported or unconfigured launches untouched: %o', async (override) => {
+			const { instance, calls } = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				...override,
+			});
+			expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
+				false,
+			);
+			expect(calls.setEnvVars).not.toContainEqual(
+				expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
+			);
+			expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+		});
+		it('uses the adapter-resolved path, including spaces, for the actual launch', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.resolveProcessPath = () => '/custom sandbox/runtime/marimo-bridge.py';
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
+			expect(calls.startProcess[0].cmd).toContain(
+				"python '/custom sandbox/runtime/marimo-bridge.py' --quiet edit",
+			);
+		});
+		it('starts normally when bridge environment configuration fails', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const setEnv = instance.setEnvVars.bind(instance);
+			vi.spyOn(instance, 'setEnvVars').mockImplementation((vars) => {
+				if (vars.MARIMOHUB_BRIDGE_PARENT_ORIGIN)
+					return Promise.reject(new Error('configuration unavailable'));
+				return setEnv(vars);
+			});
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
+			expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+		});
+		it('bounds stalled preparation and ignores a late write completion', async () => {
+			vi.useFakeTimers();
+			try {
+				const { instance, calls } = makeFakeSandbox();
+				const pending = deferred<void>();
+				const write = vi.spyOn(instance, 'writeFiles').mockReturnValue(pending.promise);
+				const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
+				await vi.waitFor(() => expect(write).toHaveBeenCalled());
+				await vi.advanceTimersByTimeAsync(10_001);
+				await provision;
+				expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+				pending.resolve();
+				await vi.advanceTimersByTimeAsync(1000);
+				expect(calls.startProcess).toHaveLength(1);
+				expect(calls.setEnvVars).not.toContainEqual(
+					expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+		it('prepares restored sandboxes without changing the captured workspace', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const compute = makeSnapshotCompute(instance);
+			await new SandboxProvisioner(compute).provision({
+				...options,
+				restoreFilesystemSnapshotId: 'restored',
+			});
+			expect(compute.createdFrom).toEqual([{ id: sandboxId, snapshotId: 'restored' }]);
+			expect(
+				calls.writeFiles.flat().filter((file) => file.path.endsWith('marimo-bridge.py')),
+			).toEqual([
+				{ path: `/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py`, content: 'launcher' },
+			]);
+			expect(calls.startProcess[0].cmd).toContain('uv run --no-sync python');
+		});
+	});
+
 	describe('provision', () => {
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();

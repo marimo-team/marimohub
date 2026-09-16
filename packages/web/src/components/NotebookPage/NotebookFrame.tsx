@@ -1,32 +1,75 @@
-import { useState } from 'react';
+import { useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
+import { createHostBridge } from '@marimo-hub/notebook-bridge/host';
+import type { QuerySnapshot } from '@marimo-hub/notebook-bridge/protocol';
 import { ExternalLink, X } from 'lucide-react';
 import { Button, IconButton, LinkButton } from '@/components/ui';
 import { useTimeout } from '@/hooks/useTimeout';
 
 const RECOVERY_DELAY_MS = 15_000;
 
-export function NotebookFrame({ src, title }: { src?: string; title: string }) {
+interface NotebookFrameProps {
+	src?: string;
+	title: string;
+	sandboxUrl?: string;
+	retrySrc?: string;
+	onQuery?: (snapshot: QuerySnapshot) => boolean;
+}
+
+export function NotebookFrame({ src, title, sandboxUrl, retrySrc, onQuery }: NotebookFrameProps) {
 	const [attempt, setAttempt] = useState(0);
 	if (!src) return null;
 	return (
 		<FrameAttempt
 			key={`${src}:${attempt}`}
-			src={src}
+			initialSrc={retrySrc ?? src}
 			title={title}
+			sandboxUrl={sandboxUrl}
+			onQuery={onQuery}
 			onRetry={() => setAttempt((current) => current + 1)}
 		/>
 	);
 }
 
 function FrameAttempt({
-	src,
 	title,
 	onRetry,
+	sandboxUrl,
+	onQuery,
+	initialSrc,
 }: {
-	src: string;
 	title: string;
 	onRetry: () => void;
+	sandboxUrl?: string;
+	onQuery?: (snapshot: QuerySnapshot) => boolean;
+	initialSrc: string;
 }) {
+	const [launchSrc] = useState(initialSrc);
+	const frameRef = useRef<HTMLIFrameElement>(null);
+	const receiveQuery = useEffectEvent((snapshot: QuerySnapshot) => onQuery?.(snapshot) ?? false);
+	useLayoutEffect(() => {
+		const iframe = frameRef.current;
+		if (!iframe || !sandboxUrl) return;
+		let bridge: ReturnType<typeof createHostBridge> | undefined;
+		let active = true;
+		try {
+			const trusted = new URL(sandboxUrl, window.location.origin);
+			bridge = createHostBridge({
+				iframe,
+				origin: new URL(launchSrc).origin,
+				excludedKeys: [...trusted.searchParams.keys()],
+				onQuery: (snapshot) => active && receiveQuery(snapshot),
+				onStatus: (status) => {
+					iframe.dataset.notebookBridgeStatus = status;
+				},
+			});
+		} catch {
+			return;
+		}
+		return () => {
+			active = false;
+			bridge?.dispose();
+		};
+	}, [sandboxUrl, launchSrc]);
 	const [loaded, setLoaded] = useState(false);
 	const [showRecovery, setShowRecovery] = useState(false);
 
@@ -44,7 +87,7 @@ function FrameAttempt({
 					<Button size="sm" onPress={onRetry}>
 						Retry
 					</Button>
-					<LinkButton to={src} target="_blank" rel="noopener noreferrer" size="sm">
+					<LinkButton to={initialSrc} target="_blank" rel="noopener noreferrer" size="sm">
 						<ExternalLink className="size-3.5" />
 						Open in new window
 					</LinkButton>
@@ -54,8 +97,9 @@ function FrameAttempt({
 				</output>
 			) : null}
 			<iframe
+				ref={frameRef}
 				className="min-h-0 w-full flex-1 border-0"
-				src={src}
+				src={launchSrc}
 				onLoad={() => setLoaded(true)}
 				sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
 				referrerPolicy="no-referrer"

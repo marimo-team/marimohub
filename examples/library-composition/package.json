@@ -13,6 +13,7 @@
 		"@marimo-hub/auth-dev": "workspace:*",
 		"@marimo-hub/compute-modal": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/notebook-bridge": "workspace:*",
 		"@marimo-hub/storage-s3": "workspace:*"
 	},
 	"devDependencies": {

@@ -2,6 +2,7 @@ import { all, allSettled } from 'better-all';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
+import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
@@ -197,6 +198,8 @@ export interface ProvisionOptions {
 	 * Config: MARIMOHUB_COMPUTE_ASSET_URL. Omit to use the image's bundled assets.
 	 */
 	assetUrl?: string;
+	notebookBridge?: NotebookBridgeRuntime;
+	bridgeParentOrigin?: string;
 	/**
 	 * Path prefix marimo serves under (`--base-url`), set in `proxy` exposure mode
 	 * (e.g. `/proxy/<token>`) so the kernel's asset/websocket URLs resolve beneath
@@ -766,7 +769,72 @@ export class SandboxProvisioner {
 				return setupEnvironment();
 			},
 		});
+		await this.prepareNotebookBridge(sandbox, options, setup);
 		return { load, startup: setup, sw, mountPath };
+	}
+
+	private async prepareNotebookBridge(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		startup: MarimoStartup,
+	): Promise<void> {
+		const payload = options.notebookBridge;
+		if (
+			!payload ||
+			!options.bridgeParentOrigin ||
+			options.launchMode === 'job' ||
+			options.launchStrategy === 'uv-sandbox'
+		)
+			return;
+		const remaining = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
+		if (remaining <= 0) return;
+		const directory = `/tmp/marimohub-bridge/${options.sandboxId}`;
+		try {
+			await withDeadline(
+				sandbox.writeFiles(
+					payload.files.map(({ name, content }) => ({ path: `${directory}/${name}`, content })),
+				),
+				{
+					timeoutMs: Math.min(10_000, remaining),
+					timeoutError: () => new Error('Bridge preparation timed out'),
+				},
+			);
+			const path = `${directory}/${payload.launcher}`;
+			const launcher = sandbox.resolveProcessPath?.(path) ?? path;
+			const budget = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
+			if (budget <= 0) return;
+			await withDeadline(
+				sandbox.setEnvVars({
+					MARIMOHUB_BRIDGE_PARENT_ORIGIN: options.bridgeParentOrigin,
+					MARIMOHUB_BRIDGE_INSTALL_TIMEOUT_MS: String(Math.min(10_000, budget)),
+					...(startup.deadline.timeoutMs > 0
+						? {
+								MARIMOHUB_BRIDGE_STARTUP_DEADLINE_MS: String(
+									startup.deadline.startedAt + startup.deadline.timeoutMs,
+								),
+							}
+						: {}),
+				}),
+				{
+					timeoutMs: Math.min(10_000, budget),
+					timeoutError: () => new Error('Bridge configuration timed out'),
+				},
+			);
+			startup.plan.start = startup.plan.start.replace(
+				'marimo --quiet ',
+				`python ${shellQuote(launcher)} --quiet `,
+			);
+		} catch {
+			logEvent(
+				{
+					level: 'warn',
+					event: 'notebook_bridge_unavailable',
+					reason: 'prepare_failed',
+					sandbox_id: options.sandboxId,
+				},
+				{ channel: 'warn' },
+			);
+		}
 	}
 
 	private async applyWorkspaceOverlay(

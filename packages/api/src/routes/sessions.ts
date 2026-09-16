@@ -766,13 +766,17 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
 	// Only the winner of the terminating transition performs teardown.
 	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
-	if (sessionMode(session) === 'app')
-		await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
-			pid,
-			nid,
-			sid,
-		);
-	await sessionRetirer(deps).retire(session, { teardown: transitioned });
+	try {
+		if (sessionMode(session) === 'app')
+			await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
+				pid,
+				nid,
+				sid,
+			);
+	} finally {
+		// Reconciliation can recover the pool from the terminal session if invalidation fails.
+		await sessionRetirer(deps).retire(session, { teardown: transitioned });
+	}
 }
 
 function withoutConnectionUrls(response: ReturnType<typeof toSessionResponse>) {
@@ -1742,6 +1746,8 @@ export async function startNotebookSession(input: {
 								bucketHandle,
 								workdir: sandbox.workdir,
 								assetUrl: sandbox.assetUrl,
+								notebookBridge: sandbox.notebookBridge,
+								bridgeParentOrigin: new URL(appBaseUrl).origin,
 								startupTimeoutMs: sandbox.startupTimeoutMs,
 								baseUrl,
 								kernelAuthToken,

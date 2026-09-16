@@ -25,6 +25,7 @@ Every deployment picks storage, compute, and auth.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.
 - [Notebook apps](./apps.md) - serve a notebook as a read-only application.
+- [App pools](./app-pools.md) - configure capacity, sticky routing, version rollover, and coordinated upgrades.
 - [Notebook jobs](./jobs.md) - run notebooks headlessly on a schedule or on
   demand, with run history.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.

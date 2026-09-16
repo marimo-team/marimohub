@@ -110,22 +110,9 @@ export function useNotebookSession(
 		appHeartbeatIntervalSeconds?: number;
 	} = {},
 ): NotebookSession {
-	const [appVisitId] = useState(() => crypto.randomUUID());
-	const startSession = useStartSession(projectId, notebookId, mode, editIntent, appVisitId);
-	const startPersistentSession = useStartSession(
-		projectId,
-		notebookId,
-		mode,
-		undefined,
-		appVisitId,
-	);
-	const startDefaultSession = useStartSessionWithDefault(
-		projectId,
-		notebookId,
-		mode,
-		editIntent,
-		appVisitId,
-	);
+	const startSession = useStartSession(projectId, notebookId, mode, editIntent);
+	const startPersistentSession = useStartSession(projectId, notebookId, mode);
+	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode, editIntent);
 	// Stop/restart failures render inline (session panel), never as a toast.
 	const stopSession = useStopSession(projectId, notebookId, { suppressErrorToast: true });
 
@@ -195,13 +182,13 @@ export function useNotebookSession(
 			setEnded(null);
 			setEndedByUserId(null);
 			setStarting(true);
-			void mutation.mutateAsync().then(
+			// Separate attempts need separate visits so late cleanup cannot release the winner.
+			void mutation.mutateAsync(mode === 'app' ? crypto.randomUUID() : undefined).then(
 				(data) => {
-					if (!mountedRef.current) {
+					if (!mountedRef.current || !generation.isCurrent(gen)) {
 						leaveAppVisit(projectId, notebookId, data);
 						return;
 					}
-					if (!generation.isCurrent(gen)) return;
 					setStarting(false);
 					if (data.status === 'running' && !data.sandbox_url) {
 						concludeAccessLost(data.can?.attach ?? false);
@@ -216,7 +203,7 @@ export function useNotebookSession(
 				},
 			);
 		},
-		[concludeAccessLost, commitSession, generation, projectId, notebookId],
+		[concludeAccessLost, commitSession, generation, projectId, notebookId, mode],
 	);
 	const start = useCallback(() => {
 		startWithMutation(startSession);

@@ -14,6 +14,7 @@ import { paths } from '../../paths';
 import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
+import { DeepLinkService } from './DeepLinkService';
 import type { ProjectService } from './ProjectService';
 import type { SessionService } from '../runtime/SessionService';
 import { AppPoolStore } from '../runtime/AppPoolStore';
@@ -1465,24 +1466,52 @@ describe('NotebookService', () => {
 			},
 		);
 
-		it('propagates a failed deletion fence and repairs it when deletion is retried', async () => {
+		it('retries all cleanup after the deletion fence fails following the catalog commit', async () => {
 			const notebook = await notebooks.createNotebook(
 				projectId,
 				{ title: 'App', description: '', code: 'v1' },
 				ACTOR,
 			);
+			const session = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebook.id,
+				user_id: ACTOR,
+			});
+			await sessions.claimApp(projectId, notebook.id, session.session_id);
+			await sessions.claimEditor(projectId, notebook.id, session.session_id, 'shared');
+			const deepLinks = new DeepLinkService(bucket);
+			const target = { kind: 'app' as const, project_id: projectId, notebook_id: notebook.id };
+			await deepLinks.register('deleted-app', target, ACTOR);
 			const fence = vi
 				.spyOn(AppPoolStore.prototype, 'retireForDeletion')
 				.mockRejectedValueOnce(new Error('pool unavailable'));
-			await expect(notebooks.deleteNotebook(projectId, notebook.id, ACTOR)).rejects.toThrow(
-				'pool unavailable',
-			);
-			await notebooks.deleteNotebook(projectId, notebook.id, ACTOR);
-			expect((await new AppPoolStore(bucket).read(projectId, notebook.id))?.deleted_at).toEqual(
-				expect.any(Number),
-			);
-			expect(fence).toHaveBeenCalledTimes(2);
-			fence.mockRestore();
+			try {
+				await expect(notebooks.deleteNotebook(projectId, notebook.id, ACTOR)).rejects.toThrow(
+					'pool unavailable',
+				);
+				const committed = await catalog.getCurrentSnapshot();
+				expect(committed.projects.find((p) => p.id === projectId)).toMatchObject({
+					notebook_count: 0,
+					notebooks: [expect.objectContaining({ id: notebook.id, status: 'deleted' })],
+				});
+				expect(await bucket.get(paths.appClaim(projectId, notebook.id))).not.toBeNull();
+				expect(await bucket.get(paths.editorClaim(projectId, notebook.id))).not.toBeNull();
+				expect(await deepLinks.list(target)).toHaveLength(1);
+
+				await expect(
+					notebooks.deleteNotebookWithMutation(projectId, notebook.id, ACTOR),
+				).resolves.toBeNull();
+				expect((await new AppPoolStore(bucket).read(projectId, notebook.id))?.deleted_at).toEqual(
+					expect.any(Number),
+				);
+				expect(await bucket.get(paths.appClaim(projectId, notebook.id))).toBeNull();
+				expect(await bucket.get(paths.editorClaim(projectId, notebook.id))).toBeNull();
+				expect(await deepLinks.list(target)).toEqual([]);
+				expect(await catalog.getCurrentSnapshot()).toEqual(committed);
+				expect(fence).toHaveBeenCalledTimes(2);
+			} finally {
+				fence.mockRestore();
+			}
 		});
 		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
 			const created = await notebooks.createNotebook(

@@ -66,7 +66,9 @@ export function appOccupancy(pool: AppPool, sessionId: SessionId): number {
 export function expireAppPresence(pool: AppPool, now: number): void {
 	const lastPresence = new Map<SessionId, number>();
 	const liveMembers = new Set(
-		pool.members.filter((member) => member.state !== 'retiring').map((member) => member.session_id),
+		pool.members
+			.filter((member) => isReusableMember(member, now))
+			.map((member) => member.session_id),
 	);
 	for (const assignment of pool.assignments) {
 		const expiresAt = Math.max(
@@ -146,17 +148,14 @@ export function routeApp(
 } {
 	const next = structuredClone(pool);
 	expireAppPresence(next, input.now);
+	observeVersion(next, input.versionId);
 	const existing = next.assignments.find((assignment) => assignment.user_id === input.userId);
 	if (existing) {
 		const member = next.members.find((item) => item.session_id === existing.session_id)!;
-		if (isReusableMember(member, input.now)) {
-			renewAppVisit(existing, input.visitId, input.now + policy.userLeaseMs);
-			delete member.idle_since;
-			return { pool: next, decision: { kind: 'reuse', member, assignment: existing } };
-		}
-		next.assignments = next.assignments.filter((assignment) => assignment !== existing);
+		renewAppVisit(existing, input.visitId, input.now + policy.userLeaseMs);
+		delete member.idle_since;
+		return { pool: next, decision: { kind: 'reuse', member, assignment: existing } };
 	}
-	observeVersion(next, input.versionId);
 	const counts = new Map<SessionId, number>();
 	for (const assignment of next.assignments)
 		counts.set(assignment.session_id, (counts.get(assignment.session_id) ?? 0) + 1);
@@ -212,12 +211,12 @@ export function reserveAppReplacement(
 } {
 	const next = structuredClone(pool);
 	expireAppPresence(next, input.now);
+	observeVersion(next, input.versionId);
 	const previous = next.members.find(
 		(member) =>
 			member.replaces_session_id === input.replacesSessionId && isReusableMember(member, input.now),
 	);
 	if (previous) return { pool: next, decision: { kind: 'reuse', member: previous } };
-	observeVersion(next, input.versionId);
 	const current = currentVersionMembers(next, input.versionId, input.now);
 	if (!hasSessionCapacity(policy, current)) return { pool: next, decision: { kind: 'busy' } };
 	const member = { ...input.reservation, replaces_session_id: input.replacesSessionId };

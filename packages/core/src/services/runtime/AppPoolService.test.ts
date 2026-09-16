@@ -127,6 +127,24 @@ describe('app pool admission and lifecycle', () => {
 		expect((await pool.inspect(pid, nid))[0]).toMatchObject({ state: 'retiring', users: 0 });
 	});
 
+	it('rejects startup heartbeats at the operation deadline and frees the account slot', async () => {
+		const first = await admit();
+		now = first.member.operation_expires_at - 1;
+		expect(
+			await pool.heartbeat(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first)),
+		).toBe(true);
+		now++;
+		expect(
+			await pool.heartbeat(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first)),
+		).toBe(false);
+		expect((await pool.store.read(pid, nid))?.assignments).toEqual([]);
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
+			false,
+		);
+		const replacement = await admit();
+		expect(replacement.member.session_id).not.toBe(first.member.session_id);
+	});
+
 	it('does not infer missing records from a partial legacy adoption snapshot', async () => {
 		const first = await ready(await admit());
 		await pool.synchronize(pid, nid, []);
@@ -163,6 +181,7 @@ describe('app pool admission and lifecycle', () => {
 			sessionKey,
 			poolKey,
 			poolKey,
+			paths.project(pid).notebook(nid).source,
 			paths.project(pid).notebook(nid).source,
 		]);
 		expect(put.mock.calls.map(([key]) => key)).toEqual([poolKey]);
@@ -322,6 +341,111 @@ describe('app pool admission and lifecycle', () => {
 		await admit('alice', v2);
 		await expect(admit('bob', v1)).rejects.toMatchObject({ status: 409 });
 		expect((await pool.store.read(pid, nid))?.latest_version_id).toBe(v2);
+	});
+
+	it('observes the latest version while preserving a reconnecting account assignment', async () => {
+		const first = await ready(await admit());
+		const reconnect = await admit('alice', v2, 'second-tab');
+		expect(reconnect.assignment.generation).toBe(first.assignment.generation);
+		expect(reconnect.member.session_id).toBe(first.member.session_id);
+		expect(reconnect.member.state).toBe('draining');
+		expect((await pool.store.read(pid, nid))?.latest_version_id).toBe(v2);
+		await expect(admit('alice', v1)).rejects.toMatchObject({ status: 409 });
+		expect((await pool.store.read(pid, nid))?.latest_version_id).toBe(v2);
+	});
+
+	it.each(['reserve', 'reuse', 'replace'] as const)(
+		'%s compensates a source commit between the head read and pool CAS',
+		async (operation) => {
+			const first = await ready(await admit());
+			if (operation === 'reserve') policy.maxUsersPerSession = 1;
+			const put = bucket.put.bind(bucket);
+			let committed = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === paths.appPool(pid, nid) && !committed) {
+					committed = true;
+					await put(paths.project(pid).notebook(nid).source, JSON.stringify(makeLocalSource(v2)));
+				}
+				return put(key, value, options);
+			});
+			const admission =
+				operation === 'replace'
+					? pool.replace({
+							projectId: pid,
+							notebookId: nid,
+							userId: UserId.parse('bob'),
+							versionId: v1,
+							startupMs: 900_000,
+							replacesSessionId: first.member.session_id,
+						})
+					: admit('bob');
+			await expect(admission).rejects.toMatchObject({ status: 409 });
+			const stored = await pool.store.read(pid, nid);
+			expect(stored?.assignments.map((item) => item.user_id)).toEqual(['alice']);
+			const abandoned = stored?.members.filter(
+				(item) => item.session_id !== first.member.session_id,
+			);
+			expect(abandoned).toHaveLength(operation === 'reuse' ? 0 : 1);
+			expect(abandoned?.every((item) => item.state === 'retiring')).toBe(true);
+			expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
+				true,
+			);
+			const next = await admit('bob', v2);
+			expect(next.member.source_version_id).toBe(v2);
+		},
+	);
+
+	it('abandons a reservation when the post-CAS source check is unavailable', async () => {
+		const first = await ready(await admit());
+		policy.maxUsersPerSession = 1;
+		const sourceKey = paths.project(pid).notebook(nid).source;
+		const get = bucket.get.bind(bucket);
+		const failure = new Error('source unavailable');
+		let sourceReads = 0;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key === sourceKey && ++sourceReads === 2) throw failure;
+			return get(key);
+		});
+		await expect(admit('bob')).rejects.toBe(failure);
+		const stored = await pool.store.read(pid, nid);
+		expect(stored?.assignments.map((item) => item.user_id)).toEqual(['alice']);
+		expect(stored?.members).toHaveLength(2);
+		expect(stored?.members[1].state).toBe('retiring');
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
+			true,
+		);
+		await pool.reconcile(pid, nid, effects());
+		expect((await pool.inspect(pid, nid)).map((item) => item.session_id)).toEqual([
+			first.member.session_id,
+		]);
+	});
+
+	it('preserves a newer assignment when stale admission compensation loses a race', async () => {
+		const first = await ready(await admit());
+		const get = bucket.get.bind(bucket);
+		const put = bucket.put.bind(bucket);
+		const sourceKey = paths.project(pid).notebook(nid).source;
+		let sourceReads = 0;
+		let current: Awaited<ReturnType<typeof admit>> | undefined;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key === sourceKey && ++sourceReads === 2) {
+				await put(sourceKey, JSON.stringify(makeLocalSource(v2)));
+				await pool.store.mutate(pid, nid, (stored) => {
+					stored.assignments = stored.assignments.filter((item) => item.user_id !== 'bob');
+					return { pool: stored, value: undefined };
+				});
+				current = await admit('bob', v2);
+			}
+			return get(key);
+		});
+		await expect(admit('bob')).rejects.toMatchObject({ status: 409 });
+		expect(current).toBeDefined();
+		const stored = await pool.store.read(pid, nid);
+		expect(stored?.latest_version_id).toBe(v2);
+		expect(stored?.assignments.find((item) => item.user_id === 'bob')).toEqual(current?.assignment);
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
+			true,
+		);
 	});
 
 	it('rechecks the authoritative head after a competing admission wins CAS', async () => {
@@ -736,11 +860,24 @@ describe('app pool admission and lifecycle', () => {
 			session_id: admission.member.session_id,
 			sandbox_id: admission.member.sandbox_id,
 		});
-		await sessions.beginTerminating(pid, session.session_id);
-		await sessions.markTerminated(pid, session.session_id);
+		await pool.invalidate(pid, nid, session.session_id);
+		const retire = vi.fn(async () => {
+			await sessions.beginTerminating(pid, session.session_id);
+			await sessions.markTerminated(pid, session.session_id);
+			return false;
+		});
+		await pool.reconcile(pid, nid, { ...effects(), retire });
+		expect(retire).toHaveBeenCalledOnce();
+		expect((await pool.inspect(pid, nid))[0].state).toBe('retiring');
 		expect(await sessions.countActiveAppsForProject(pid)).toBe(1);
 		expect(await sessions.countActiveForUser(UserId.parse('alice'), 'project')).toBe(1);
-		await sessions.markSandboxReclaimed(pid, session.session_id, new Date(now).toISOString());
+		retire.mockImplementation(async () => {
+			await sessions.markSandboxReclaimed(pid, session.session_id, new Date(now).toISOString());
+			return true;
+		});
+		await pool.reconcile(pid, nid, { ...effects(), retire });
+		expect(retire).toHaveBeenCalledTimes(2);
+		expect(await pool.inspect(pid, nid)).toEqual([]);
 		expect(await sessions.countActiveAppsForProject(pid)).toBe(0);
 		expect(await sessions.countActiveForUser(UserId.parse('alice'), 'project')).toBe(0);
 	});

@@ -1835,7 +1835,7 @@ components:
               type: string
               minLength: 1
               maxLength: 63
-              pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+              pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
             target:
               type: object
               properties:

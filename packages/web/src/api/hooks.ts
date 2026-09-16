@@ -2049,7 +2049,15 @@ function useStartSessionRequest(
 	appVisitId?: string,
 ) {
 	return useApiMutation(
-		() => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent, appVisitId),
+		(visitId: string | void) =>
+			startSessionRequest(
+				projectId,
+				notebookId,
+				mode,
+				computeProfile,
+				editIntent,
+				visitId ?? appVisitId,
+			),
 		() => [sessionKeys.listByProject(projectId)],
 		{ suppressErrorToast: true },
 	);

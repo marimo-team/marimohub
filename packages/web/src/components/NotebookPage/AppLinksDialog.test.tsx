@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { onlineManager } from '@tanstack/react-query';
@@ -87,6 +87,59 @@ afterEach(() => {
 });
 
 describe('AppLinksDialog', () => {
+	it('creates, copies, and removes a nested alias with encoded API requests', async () => {
+		const user = userEvent.setup();
+		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+		const fetch = setup();
+		await user.type(screen.getByRole('textbox', { name: 'App slug' }), 'Team/Overview');
+		expect(screen.getByText(`${window.location.origin}/app/team/overview`)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Create app link' }));
+		await user.click(await screen.findByRole('button', { name: 'Copy team/overview' }));
+		expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/app/team/overview`);
+		expect(
+			screen.getByRole('link', { name: `${window.location.origin}/app/team/overview` }),
+		).toHaveAttribute('href', '/app/team/overview');
+		expect(fetch.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body).toBe(
+			JSON.stringify({ slug: 'team/overview' }),
+		);
+		await user.click(screen.getByRole('button', { name: 'Remove team/overview' }));
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('button', { name: 'Remove team/overview' }),
+			).not.toBeInTheDocument(),
+		);
+		expect(String(fetch.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[0])).toContain(
+			'/deep-links/team%2Foverview?registration_id=',
+		);
+		expect(screen.getByRole('button', { name: 'Copy sales' })).toBeInTheDocument();
+	});
+
+	it.each([
+		'',
+		'/team',
+		'team/',
+		'team//overview',
+		'team/../overview',
+		'team/./overview',
+		'team/-overview',
+		'team/overview-',
+		'team/over_view',
+		'team/over view',
+		'team\\overview',
+		'team/%2f',
+		'team/é',
+		'team/overview?x=1',
+		'team/overview#x',
+		`a/${'b'.repeat(62)}`,
+	])('does not submit invalid slug %j', async (slug) => {
+		const fetch = setup();
+		const input = screen.getByRole('textbox', { name: 'App slug' });
+		fireEvent.change(input, { target: { value: slug } });
+		expect(screen.getByRole('button', { name: 'Create app link' })).toBeDisabled();
+		fireEvent.submit(input.closest('form')!);
+		expect(fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+	});
+
 	it('uses filtered parameters for alias navigation, copying, and previews without storing them', async () => {
 		const user = userEvent.setup();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');

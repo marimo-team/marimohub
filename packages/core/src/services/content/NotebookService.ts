@@ -994,40 +994,31 @@ export class NotebookService {
 			},
 			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 		);
-		if (!written) {
-			await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
-			await this.thumbnails.retire(projectId, notebookId);
-			return null;
-		}
-
-		// Soft-delete in snapshot
-		const snapshot = await this.catalog.updateNotebookEntry(
-			'notebook.delete',
-			actor,
-			projectId,
-			notebookId,
-			async (entry) =>
-				(await loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry)) ??
-				notebookCatalogPatch(updated, entry),
-			(p) => ({
-				notebook_count: Math.max(0, p.notebook_count - 1),
-			}),
-		);
+		const snapshot = written
+			? await this.catalog.updateNotebookEntry(
+					'notebook.delete',
+					actor,
+					projectId,
+					notebookId,
+					async (entry) =>
+						(await loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry)) ??
+						notebookCatalogPatch(updated, entry),
+					(p) => ({
+						notebook_count: Math.max(0, p.notebook_count - 1),
+					}),
+				)
+			: null;
 
 		await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
 		await this.thumbnails.retire(projectId, notebookId);
 
-		// Drop the app-singleton claim: a deleted notebook's id never recurs, so
-		// without this the pointer would leak forever (the stale-claim self-heal
-		// only runs on the next `claimApp`, which a deleted notebook never gets).
-		// Cleanup of an orphaned pointer, not a claim write — the claim's write
-		// discipline (claimApp/releaseApp) still holds for live notebooks.
+		// Deleted notebook IDs never recur, so their claims cannot self-heal on admission.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
 		await this.deepLinks.releaseNotebook(projectId, notebookId).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseNotebook' }, error);
 		});
-		return { notebook: updated, mutationId: snapshot.snapshot_id };
+		return snapshot ? { notebook: updated, mutationId: snapshot.snapshot_id } : null;
 	}
 
 	async listVersions(projectId: ProjectId, notebookId: NotebookId): Promise<Version[]> {

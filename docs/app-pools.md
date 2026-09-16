@@ -20,6 +20,7 @@ Apps use the existing `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` for empty-san
 When unset, it inherits `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`, which defaults to 1,800 seconds.
 The idle clock starts when the last live account assignment expires, including reconnect grace.
 Connection protection can delay retirement. Set the app idle timeout to `60` explicitly to opt into faster cleanup.
+Fresh account leases protect managed pool members even when the session heartbeat is older than this timeout.
 
 The router fills available sandboxes before it starts more. Starting sandboxes reserve account slots too.
 There is no minimum warm pool. An unused app can scale to zero.
@@ -75,6 +76,7 @@ Coalesced heartbeats do not extend that deadline until the next persisted renewa
 No acknowledged renewal depends on an in-memory buffer surviving a server restart.
 
 An established pool's admission reads three pool snapshots, the committed source head, and one session record per member, without listing bucket objects.
+New account assignments and sandbox reservations read the source head once more after CAS to reject a concurrent version change before admission or compute creation. Reconnects to an existing assignment do not need this extra read.
 Each CAS retry rechecks the head. Version IDs identify immutable content; their order does not determine publication order.
 A healthy maintenance pass reads two pool snapshots and one session record per member. It does not rewrite unchanged state.
 First admission discovers legacy sessions through a project-scoped scan.

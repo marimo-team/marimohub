@@ -1,3 +1,4 @@
+import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
 	AppPoolPolicy,
@@ -133,6 +134,8 @@ export interface SandboxConfig {
 	 * Undefined = use the image's bundled assets.
 	 */
 	assetUrl?: string;
+	/** Composition roots supply the offline runtime payload to enable notebook URL mirroring. */
+	notebookBridge?: NotebookBridgeRuntime;
 	/**
 	 * How long a session provision waits for the marimo kernel to come up before
 	 * failing the start (config: MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS).

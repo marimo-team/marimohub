@@ -127,16 +127,69 @@ describe('app pool HTTP integration', () => {
 		expect(fake.calls.startProcess).toHaveLength(0);
 		const services = createServices(bucket);
 		const stored = await services.sessions.getSession(pid, selected.session_id);
+		expect(stored.status).toBe('terminated');
 		expect(stored.sandbox_reclaimed_at).toBeUndefined();
 		const pool = new AppPoolService(bucket, services.sessions, policy);
 		expect((await pool.store.read(pid, nid))?.members).toHaveLength(1);
 		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(1);
 		destroy.mockResolvedValue();
 		await sweepAppPools(client.deps);
+		expect(destroy).toHaveBeenCalledTimes(2);
+		expect(
+			(await services.sessions.getSession(pid, selected.session_id)).sandbox_reclaimed_at,
+		).toBeTruthy();
 		const replacement = await expectOk<any>(await client.request('POST', path(), body));
 		expect(replacement.session_id).not.toBe(selected.session_id);
 		expect(replacement.status).toBe('running');
 	});
+
+	it.each(['get', 'put'] as const)(
+		'retires the sandbox when pool invalidation fails during %s and reconciles later',
+		async (operation) => {
+			const selected = await start();
+			const fake = makeFakeSandbox();
+			const client = createTestApi({
+				bucket,
+				userId: uid('alice'),
+				compute: fakeComputeFrom(fake.instance),
+				deps: { policy: { defaultRole: 'editor', appPool: policy } },
+			});
+			const failPoolAccess = (key: string) => {
+				if (key === paths.appPool(pid, nid)) throw new Error('pool storage unavailable');
+			};
+			const originalGet = bucket.get.bind(bucket);
+			const originalPut = bucket.put.bind(bucket);
+			const failure =
+				operation === 'get'
+					? vi.spyOn(bucket, 'get').mockImplementation((key) => {
+							failPoolAccess(key);
+							return originalGet(key);
+						})
+					: vi.spyOn(bucket, 'put').mockImplementation((key, ...args) => {
+							failPoolAccess(key);
+							return originalPut(key, ...args);
+						});
+			try {
+				expect((await client.request('DELETE', path(`/${selected.session_id}`))).status).toBe(500);
+				expect(fake.calls.destroy).toBe(1);
+				expect(
+					await client.deps.services.sessions.getSession(pid, selected.session_id),
+				).toMatchObject({
+					status: 'terminated',
+					sandbox_reclaimed_at: expect.any(String),
+				});
+			} finally {
+				failure.mockRestore();
+			}
+			const pool = new AppPoolService(bucket, client.deps.services.sessions, policy);
+			expect((await pool.store.read(pid, nid))?.members).toMatchObject([
+				{ session_id: selected.session_id, state: 'ready' },
+			]);
+			await sweepAppPools(client.deps);
+			expect(await pool.store.read(pid, nid)).toMatchObject({ members: [], assignments: [] });
+			expect(fake.calls.destroy).toBe(1);
+		},
+	);
 
 	it('reclaims a failed replacement startup and permits a subsequent retry', async () => {
 		const selected = await start();
@@ -305,7 +358,7 @@ describe('app pool HTTP integration', () => {
 
 	it('releases the last visit after grace and fences late heartbeats', async () => {
 		const first = await start();
-		await start('alice', 'phone');
+		const phone = await start('alice', 'phone');
 		await expectOk(
 			await api().request('POST', path(`/${first.session_id}/leave`), first.app_assignment),
 		);
@@ -316,6 +369,28 @@ describe('app pool HTTP integration', () => {
 		);
 		const current = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
 		expect(current.app_pool.users).toBe(1);
+		const now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+		try {
+			await expectOk(
+				await api().request('POST', path(`/${first.session_id}/leave`), phone.app_assignment),
+			);
+			const pool = new AppPoolService(bucket, createServices(bucket).sessions, policy);
+			expect((await pool.store.read(pid, nid))?.assignments).toMatchObject([
+				{ visits: [], grace_until: now + policy.reconnectGraceMs },
+			]);
+			expect((await pool.inspect(pid, nid))[0].users).toBe(1);
+			clock.mockReturnValue(now + policy.reconnectGraceMs + 1);
+			await expectError(
+				await api().request('POST', path(`/${first.session_id}/heartbeat`), phone.app_assignment),
+				409,
+				'CONFLICT',
+			);
+			expect((await pool.store.read(pid, nid))?.assignments).toEqual([]);
+			expect((await pool.inspect(pid, nid))[0].users).toBe(0);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it('requires admission before heartbeat or direct URL discovery', async () => {
@@ -332,7 +407,7 @@ describe('app pool HTTP integration', () => {
 		expect((await start('bob')).sandbox_url).toBeTruthy();
 	});
 
-	it('checks the same pool assignment for HTTP and WebSocket proxy admission', async () => {
+	it('checks pool assignments in shared proxy authorization', async () => {
 		const exposure = new ProxyExposure('test-secret');
 		const owner = createTestApi({
 			bucket,
@@ -353,17 +428,16 @@ describe('app pool HTTP integration', () => {
 		);
 		const other = api('bob');
 		other.deps.sandbox = owner.deps.sandbox;
-		for (const headers of [new Headers(), new Headers({ Upgrade: 'websocket' })]) {
-			expect(
-				await authorizeProxyRequest(new Request(first.sandbox_url, { headers }), other.deps),
-			).toMatchObject({ kind: 'reject', status: 410 });
-			expect(
-				await authorizeProxyRequest(new Request(first.sandbox_url, { headers }), owner.deps),
-			).toMatchObject({ kind: 'forward' });
-		}
+		expect(await authorizeProxyRequest(new Request(first.sandbox_url), other.deps)).toMatchObject({
+			kind: 'reject',
+			status: 410,
+		});
+		expect(await authorizeProxyRequest(new Request(first.sandbox_url), owner.deps)).toMatchObject({
+			kind: 'forward',
+		});
 	});
 
-	it('returns service unavailable for failed pool reads on HTTP and WebSocket admission', async () => {
+	it('returns service unavailable for failed pool reads in shared proxy authorization', async () => {
 		const selected = await start();
 		const client = api();
 		const secret = 'proxy-secret';
@@ -376,14 +450,9 @@ describe('app pool HTTP integration', () => {
 			if (key === paths.appPool(pid, nid)) throw new Error('storage unavailable');
 			return get(key);
 		});
-		for (const headers of [new Headers(), new Headers({ Upgrade: 'websocket' })]) {
-			expect(
-				await authorizeProxyRequest(
-					new Request(`https://hub.test/proxy/${token}/`, { headers }),
-					client.deps,
-				),
-			).toMatchObject({ kind: 'reject', status: 503, code: 'SERVICE_UNAVAILABLE' });
-		}
+		expect(
+			await authorizeProxyRequest(new Request(`https://hub.test/proxy/${token}/`), client.deps),
+		).toMatchObject({ kind: 'reject', status: 503, code: 'SERVICE_UNAVAILABLE' });
 	});
 
 	it('keeps a late legacy app reachable until heartbeat adoption completes', async () => {

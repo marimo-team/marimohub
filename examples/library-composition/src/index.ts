@@ -12,6 +12,7 @@ import { createServices } from '@marimo-hub/core';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
+import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 
 const bucket = new S3Storage({
 	bucket: process.env.S3_BUCKET ?? 'my-bucket',
@@ -41,6 +42,7 @@ const app = createApi({
 		},
 		hostname: process.env.SANDBOX_HOSTNAME ?? 'localhost',
 		workdir: process.env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
+		notebookBridge: notebookBridgeRuntime(),
 		persistWorkspace: 'source',
 	},
 	policy: {},

@@ -13,6 +13,7 @@ import { parseAppPoolPolicy } from './appPool';
  * need platform bindings, not env credentials) and are wired by hand in
  * examples/cloudflare-worker rather than here.
  */
+import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
 	composeAuthenticators,
 	createServices,
@@ -711,6 +712,7 @@ export function createFromEnv(
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
 			assetUrl: env.MARIMOHUB_COMPUTE_ASSET_URL,
+			notebookBridge: notebookBridgeRuntime(),
 			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
 			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
 			exposure,

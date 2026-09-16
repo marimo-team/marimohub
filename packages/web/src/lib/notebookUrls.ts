@@ -1,26 +1,7 @@
 import type { Theme } from '@/context/ThemeContext';
 
-// Keep aligned with marimo's KnownQueryParams when upgrading the sandbox image.
-const RESERVED_PARAMS = new Set([
-	'access_token',
-	'refresh_token',
-	'session_id',
-	'auth_error',
-	'theme',
-	'show-code',
-	'include-code',
-	'kiosk',
-	'vscode',
-	'file',
-	'view-as',
-	'show-chrome',
-]);
-
-export function notebookQueryParams(search: string): URLSearchParams {
-	const params = new URLSearchParams(search);
-	for (const key of RESERVED_PARAMS) params.delete(key);
-	return params;
-}
+import { notebookQueryParams } from '@marimo-hub/notebook-bridge/query';
+export { notebookQueryParams } from '@marimo-hub/notebook-bridge/query';
 
 export function notebookFrameUrl(
 	url: string,

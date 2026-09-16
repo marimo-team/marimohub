@@ -1,0 +1,5 @@
+{
+	"extends": "@marimo-hub/tsconfig/library.json",
+	"compilerOptions": { "lib": ["ES2023", "DOM", "DOM.Iterable"] },
+	"include": ["src", "browser", "playwright.config.ts"]
+}

@@ -260,3 +260,18 @@ notebook runtime. See the platform guides for
 [CodeArtifact](./deploying/aws.md#private-python-packages-with-codeartifact),
 [Google Artifact Registry](./deploying/gcp.md#private-python-packages-with-artifact-registry),
 and [Azure Artifacts](./deploying/azure.md#private-python-packages-with-azure-artifacts).
+
+## Notebook URL bridge
+
+Hub installs the bundled notebook bridge into the active marimo interpreter before
+the CLI starts. Both `uv-sync-edit` and `uv-script-pins` support installation.
+The installer uses `uv pip install --no-deps --no-index` and preserves the installed
+marimo version. Custom environment paths work through `sys.executable`.
+
+The wheel and launcher live outside captured notebook files. An artifact identity
+prevents repeat installation. New environments and changed artifacts trigger installation again.
+Installation failures preserve the normal launch behavior.
+
+No image change is required for marimo 0.23.10 or 0.24.2. The environment must permit
+local wheel installation. See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md)
+for timeout, fallback, and compatibility details.

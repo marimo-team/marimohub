@@ -81,33 +81,33 @@ const satisfied = {
 	elements: ['element-a', 'element-b'],
 };
 
-describe('manifest', () => {
-	test('declares the oidc-login-policy contract', () => {
+void describe('manifest', () => {
+	void test('declares the oidc-login-policy contract', () => {
 		assert.equal(manifest.apiVersion, 1);
 		assert.equal(manifest.kind, 'oidc-login-policy');
 		assert.equal(typeof policy.evaluate, 'function');
 	});
 });
 
-describe('allow paths', () => {
-	test('allows a subject that satisfies every requirement', () => {
+void describe('allow paths', () => {
+	void test('allows a subject that satisfies every requirement', () => {
 		assert.deepEqual(evaluate(satisfied), {
 			decision: 'allow',
 			entitlements: ['default-role:editor'],
 		});
 	});
 
-	test('accepts each allowed department', () => {
+	void test('accepts each allowed department', () => {
 		for (const department of ['orgcode1', 'orgcode2']) {
 			assert.equal(evaluate({ ...satisfied, department }).decision, 'allow');
 		}
 	});
 
-	test('accepts a level above the minimum', () => {
+	void test('accepts a level above the minimum', () => {
 		assert.equal(evaluate({ ...satisfied, access_level: 'restricted' }).decision, 'allow');
 	});
 
-	test('accepts required elements in any order, with duplicates and extras', () => {
+	void test('accepts required elements in any order, with duplicates and extras', () => {
 		for (const elements of [
 			['element-b', 'element-a'],
 			['element-a', 'element-a', 'element-b'],
@@ -117,30 +117,30 @@ describe('allow paths', () => {
 		}
 	});
 
-	test('ignores unrelated extra attributes', () => {
+	void test('ignores unrelated extra attributes', () => {
 		assert.equal(evaluate({ ...satisfied, favorite_color: 'teal' }).decision, 'allow');
 	});
 });
 
-describe('deny paths — one missing requirement at a time', () => {
-	test('denies a subject outside the allowed departments, with a bounded reason', () => {
+void describe('deny paths — one missing requirement at a time', () => {
+	void test('denies a subject outside the allowed departments, with a bounded reason', () => {
 		assert.deepEqual(evaluate({ ...satisfied, department: 'orgcode9' }), {
 			decision: 'deny',
 			reason: 'example_access_policy',
 		});
 	});
 
-	test('denies a subject below the minimum level', () => {
+	void test('denies a subject below the minimum level', () => {
 		assert.equal(evaluate({ ...satisfied, access_level: 'baseline' }).decision, 'deny');
 	});
 
-	test('denies a subject missing any required element', () => {
+	void test('denies a subject missing any required element', () => {
 		for (const elements of [['element-a'], ['element-b'], [], ['element-c']]) {
 			assert.equal(evaluate({ ...satisfied, elements }).decision, 'deny');
 		}
 	});
 
-	test('denies when any single requirement is absent', () => {
+	void test('denies when any single requirement is absent', () => {
 		for (const requirement of ['department', 'access_level', 'elements']) {
 			const attributes = { ...satisfied };
 			delete attributes[requirement];
@@ -149,20 +149,20 @@ describe('deny paths — one missing requirement at a time', () => {
 	});
 });
 
-describe('unhappy paths — malformed and hostile claims', () => {
-	test('fails closed when user_attributes is missing or not an object', () => {
+void describe('unhappy paths — malformed and hostile claims', () => {
+	void test('fails closed when user_attributes is missing or not an object', () => {
 		for (const attributes of [undefined, null, 'elevated', 42, true, [], ['orgcode1']]) {
 			assert.equal(evaluate(attributes).decision, 'deny');
 		}
 	});
 
-	test('fails closed on type-confused departments', () => {
+	void test('fails closed on type-confused departments', () => {
 		for (const department of [null, 1, ['orgcode1'], { name: 'orgcode1' }, true]) {
 			assert.equal(evaluate({ ...satisfied, department }).decision, 'deny');
 		}
 	});
 
-	test('level comparison is exact — no case folding, coercion, or lookup tricks', () => {
+	void test('level comparison is exact — no case folding, coercion, or lookup tricks', () => {
 		for (const access_level of [
 			'ELEVATED',
 			' elevated',
@@ -180,7 +180,7 @@ describe('unhappy paths — malformed and hostile claims', () => {
 		}
 	});
 
-	test('fails closed on non-string-array elements', () => {
+	void test('fails closed on non-string-array elements', () => {
 		for (const elements of [
 			'element-a,element-b',
 			['element-a', 42],
@@ -193,7 +193,7 @@ describe('unhappy paths — malformed and hostile claims', () => {
 		}
 	});
 
-	test('survives claims that shadow Object.prototype names', () => {
+	void test('survives claims that shadow Object.prototype names', () => {
 		// JSON.parse produces own properties even for `__proto__`, matching how
 		// hostile provider claims actually arrive.
 		const hostile = JSON.parse(
@@ -209,7 +209,7 @@ describe('unhappy paths — malformed and hostile claims', () => {
 		assert.equal({}.polluted, undefined);
 	});
 
-	test('does not throw on any garbage input — a throw would deny ALL logins as auth_failed', () => {
+	void test('does not throw on any garbage input — a throw would deny ALL logins as auth_failed', () => {
 		for (const attributes of [
 			undefined,
 			null,
@@ -226,8 +226,8 @@ describe('unhappy paths — malformed and hostile claims', () => {
 	});
 });
 
-describe('host-contract details', () => {
-	test('reads only ID-token claims — satisfying UserInfo claims do not grant access', () => {
+void describe('host-contract details', () => {
+	void test('reads only ID-token claims — satisfying UserInfo claims do not grant access', () => {
 		// The host passes ID-token and UserInfo claims as separate objects and
 		// never merges them; this policy deliberately keys off the ID token only.
 		const result = evaluate(undefined, {
@@ -236,7 +236,7 @@ describe('host-contract details', () => {
 		assert.equal(result.decision, 'deny');
 	});
 
-	test('is deterministic and side-effect free on a frozen fixture', () => {
+	void test('is deterministic and side-effect free on a frozen fixture', () => {
 		// The host deep-freezes every claim object; a policy that mutates its
 		// input throws in strict-mode ESM. Repeat evaluations must agree.
 		const fixture = input(
@@ -246,7 +246,7 @@ describe('host-contract details', () => {
 		assert.equal(policy.evaluate(fixture).decision, 'allow');
 	});
 
-	test('never leaks claim values through the deny reason', () => {
+	void test('never leaks claim values through the deny reason', () => {
 		const marker = 'zz_secret_department_value';
 		const result = evaluate({ ...satisfied, department: marker });
 		assert.equal(result.decision, 'deny');

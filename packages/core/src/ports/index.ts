@@ -10,6 +10,7 @@ export * from './databaseBrowser';
 export * from './secrets';
 export * from './integrations';
 export * from './notifier';
+export * from './notebookBridge';
 export * from './objectBrowser';
 export * from './projectAlerts';
 export * from './sourceControl';
