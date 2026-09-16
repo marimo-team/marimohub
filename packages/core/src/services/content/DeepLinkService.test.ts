@@ -39,6 +39,57 @@ const register = (target = first, slug = 'sales') =>
 	services.deepLinks.register(slug, target, ACTOR);
 
 describe('DeepLinkService', () => {
+	it('keeps nested aliases independent through conflicts, release, reuse, and stale cleanup', async () => {
+		const parent = await register(second, 'team');
+		const child = await register(first, 'team/overview');
+		const grandchild = await register(second, 'team/overview/details');
+		expect(await register(first, child.slug)).toEqual(child);
+		await expect(register(second, child.slug)).rejects.toBeInstanceOf(ConflictError);
+		expect(await services.deepLinks.list(first)).toEqual([child]);
+		expect(await services.deepLinks.list(second)).toEqual([parent, grandchild]);
+		await services.deepLinks.release(child.slug, second, child.registration_id);
+		expect(await services.deepLinks.resolve(child.slug)).toEqual(child);
+		await services.deepLinks.release(child.slug, first, child.registration_id);
+		await expect(services.deepLinks.resolve(child.slug)).rejects.toBeInstanceOf(NotFoundError);
+		const replacement = await register(second, child.slug);
+		await services.deepLinks.release(child.slug, first, child.registration_id);
+		await services.deepLinks.releaseNotebook(first.project_id, first.notebook_id);
+		expect(await services.deepLinks.resolve(child.slug)).toEqual(replacement);
+		expect(await services.deepLinks.resolve(parent.slug)).toEqual(parent);
+		expect(await services.deepLinks.resolve(grandchild.slug)).toEqual(grandchild);
+	});
+
+	it.each(['notebook', 'project'] as const)(
+		'releases every nested alias during %s deletion and purges its indexes',
+		async (kind) => {
+			const slugs = ['team', 'team/overview', 'team/overview/details'];
+			for (const slug of slugs) await register(first, slug);
+			const neighbor = await register(second, 'team/other');
+			const list = bucket.list.bind(bucket);
+			vi.spyOn(bucket, 'list').mockImplementation((options) => list({ ...options, limit: 1 }));
+			if (kind === 'notebook') {
+				await services.notebooks.deleteNotebook(first.project_id, first.notebook_id, ACTOR);
+				await services.notebooks.hardDeleteNotebook(first.project_id, first.notebook_id);
+			} else {
+				await services.projects.deleteProject(first.project_id, ACTOR);
+				await services.projects.hardDeleteProject(first.project_id);
+			}
+			for (const slug of slugs) {
+				await expect(services.deepLinks.resolve(slug)).rejects.toBeInstanceOf(NotFoundError);
+				expect(await (await bucket.get(paths.deepLink(slug)))!.json()).toMatchObject({
+					released: true,
+				});
+				expect(
+					await bucket.get(
+						paths.project(first.project_id).notebook(first.notebook_id).deepLinkIndex(slug),
+					),
+				).toBeNull();
+				await register(second, slug);
+			}
+			expect(await services.deepLinks.resolve(neighbor.slug)).toEqual(neighbor);
+		},
+	);
+
 	it('resolves with one mapping read and no listing; multiple aliases share a target', async () => {
 		const link = await register();
 		await register(first, 'revenue');
@@ -192,13 +243,28 @@ describe('DeepLinkService', () => {
 		'Sales',
 		'sales\n',
 		'sales\r',
-		'a/b',
+		'a//b',
+		'a/../b',
+		'a/%2fb',
+		'a/b\0',
+		'a/b\n',
+		'a/\\b',
+		'/a/b',
+		'a/b/',
 		'a.b',
 		'a_b',
 		'é',
 		'a'.repeat(64),
 	])('rejects invalid slug %j', async (slug) => {
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
 		await expect(register(first, slug)).rejects.toBeInstanceOf(ValidationError);
+		await expect(services.deepLinks.resolve(slug)).rejects.toBeInstanceOf(ValidationError);
+		await expect(services.deepLinks.release(slug, first, 'invalid')).rejects.toBeInstanceOf(
+			ValidationError,
+		);
+		expect(get).not.toHaveBeenCalled();
+		expect(put).not.toHaveBeenCalled();
 	});
 
 	it('rejects unsupported stored access policies and target kinds', async () => {

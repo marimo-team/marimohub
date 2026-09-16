@@ -936,8 +936,17 @@ deleting a notebook or project reclaims the subtree with everything else.
 `/app/{slug}` opens the existing shared app and keeps the slug in the address bar.
 Project managers and owners manage links through **Share notebook → App links**.
 A notebook can have multiple links. Slugs share one deployment-wide namespace.
-They contain 1–63 lowercase ASCII letters, digits, or hyphens, and start and end
-with a letter or digit.
+They contain 1–63 characters total: lowercase ASCII letters, digits, or hyphens,
+with `/` between segments (for example, `/app/team/overview`). Each segment must
+start and end with a letter or digit. Empty segments, dots, backslashes, spaces,
+and percent escapes are rejected. Prefixes are independent aliases: owning
+`team` grants no rights to `team/overview`.
+
+Browser URLs and storage keys preserve slashes. API clients percent-encode the
+whole slug as one path parameter, for example `/api/v1/deep-links/team%2Foverview`.
+Resolve and release also accept literal slashes because path-prefix proxies can
+decode `%2F` before forwarding the request. Both forms use the same slug validation
+and notebook permissions.
 
 Links retain authentication, project permissions, notebook security labels, and
 session admission checks. Version 1 accepts only `app` targets and the `inherit`

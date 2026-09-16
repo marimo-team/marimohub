@@ -28,6 +28,166 @@ async function createLink() {
 }
 
 describe('App link routes', () => {
+	it.each([
+		['team/overview', 'team%2Foverview'],
+		['team/overview', 'team/overview'],
+		['team/overview/details', 'team%2Foverview%2Fdetails'],
+		['team/overview/details', 'team/overview/details'],
+		['team/overview/details', 'team/overview%2fdetails'],
+	])('registers, resolves and releases %s via %s', async (slug, requestSlug) => {
+		const parent = await expectOk<DeepLink>(await api.request('POST', base, { slug: 'team' }));
+		const link = await expectOk<DeepLink>(await api.request('POST', base, { slug }));
+		expect(await expectOk(await api.request('GET', base))).toEqual([parent, link]);
+		const response = await api.request('GET', `/deep-links/${requestSlug}`);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(await expectOk(response)).toEqual(link);
+		expect(await expectOk(await api.request('GET', `/deep-links/${slug}`))).toEqual(link);
+		await expectError(await api.request('GET', `/deep-links/${slug}/missing`), 404);
+		const anonymous = createTestApi({
+			bucket: api.bucket,
+			deps: { authenticator: { authenticate: async () => null } },
+		});
+		await expectError(await anonymous.request('GET', `/deep-links/${requestSlug}`), 401);
+		await expectError(
+			await anonymous.request(
+				'DELETE',
+				`${base}/${requestSlug}?registration_id=${link.registration_id}`,
+			),
+			401,
+		);
+		await expectError(await api.request('DELETE', `${base}/${requestSlug}`), 422);
+		const outsider = createTestApi({ bucket: api.bucket, userId: uid('outsider') });
+		await expectError(await outsider.request('GET', `/deep-links/${requestSlug}`), 404);
+		await expectError(
+			await outsider.request(
+				'DELETE',
+				`${base}/${requestSlug}?registration_id=${link.registration_id}`,
+			),
+			403,
+		);
+		await expectOk(
+			await api.request('DELETE', `${base}/${requestSlug}?registration_id=${link.registration_id}`),
+		);
+		await expectError(await api.request('GET', `/deep-links/${requestSlug}`), 404);
+		expect(await expectOk(await api.request('GET', '/deep-links/team'))).toEqual(parent);
+		const replacement = await expectOk<DeepLink>(await api.request('POST', base, { slug }));
+		await expectOk(
+			await api.request('DELETE', `${base}/${requestSlug}?registration_id=${link.registration_id}`),
+		);
+		expect(await expectOk(await api.request('GET', `/deep-links/${requestSlug}`))).toEqual(
+			replacement,
+		);
+	});
+
+	it.each([
+		'/team',
+		'team/',
+		'team//overview',
+		'team/../overview',
+		'team/./overview',
+		'team/-overview',
+		'team/overview-',
+		'team/Overview',
+		'team/over_view',
+		'team/overview.json',
+		'team\\overview',
+		'team/over view',
+		'team/é',
+		'team/overview\n',
+		'team/overview\r',
+		'team/over\0view',
+		'team/over\tview',
+		'team/overview?x=1',
+		'team/overview#x',
+		'team/%2f',
+		'team/%252f',
+		'team/%2e%2e/overview',
+		'team/%252e%252e/overview',
+		`a/${'b'.repeat(62)}`,
+	])('rejects malformed slug %j before storage access on all endpoints', async (slug) => {
+		const register = vi.spyOn(api.deps.services.deepLinks, 'register');
+		const resolve = vi.spyOn(api.deps.services.deepLinks, 'resolve');
+		const release = vi.spyOn(api.deps.services.deepLinks, 'release');
+		const encoded = encodeURIComponent(slug);
+		await expectError(await api.request('POST', base, { slug }), 422);
+		await expectError(await api.request('GET', `/deep-links/${encoded}`), 422);
+		await expectError(
+			await api.request('DELETE', `${base}/${encoded}?registration_id=01ARZ3NDEKTSV4RRFFQ69G5FAV`),
+			422,
+		);
+		expect(register).not.toHaveBeenCalled();
+		expect(resolve).not.toHaveBeenCalled();
+		expect(release).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'/',
+		'/team',
+		'team/',
+		'team//overview',
+		'team/-overview',
+		'team/overview-',
+		'team/over_view',
+		'team/overview.json',
+		'team/over view',
+		'team/é',
+		'team/over\\view',
+		'team/overview\n',
+		'team/over\0view',
+		'team/%2f',
+		'team/%252f',
+		'team/%2e%2e/overview',
+		`team/${'a'.repeat(59)}`,
+	])(
+		'rejects invalid multi-segment API paths %j without changing a registered alias',
+		async (slug) => {
+			const parent = await expectOk<DeepLink>(await api.request('POST', base, { slug: 'team' }));
+			const child = await expectOk<DeepLink>(
+				await api.request('POST', base, { slug: 'team/overview' }),
+			);
+			const path = slug.split('/').map(encodeURIComponent).join('/');
+			await expectError(await api.request('GET', `/deep-links/${path}`), 422);
+			await expectError(
+				await api.request('DELETE', `${base}/${path}?registration_id=${child.registration_id}`),
+				422,
+			);
+			expect(await expectOk(await api.request('GET', '/deep-links/team'))).toEqual(parent);
+			expect(await expectOk(await api.request('GET', '/deep-links/team/overview'))).toEqual(child);
+		},
+	);
+
+	it('resolves and releases links after a prefix proxy decodes the request path', async () => {
+		const slug = 'team/overview';
+		const link = await expectOk<DeepLink>(await api.request('POST', base, { slug }));
+		const upstreamPaths: string[] = [];
+		const proxyRequest = async (method: string, publicPath: string) => {
+			const url = new URL(publicPath, 'https://hub.example.com');
+			// nginx proxy_pass with a URI replaces the prefix of the normalized path.
+			const upstreamPath =
+				decodeURIComponent(url.pathname).replace(/^\/marimohub/, '') + url.search;
+			upstreamPaths.push(upstreamPath);
+			return api.app.request(upstreamPath, { method });
+		};
+		expect(
+			await expectOk(await proxyRequest('GET', '/marimohub/api/v1/deep-links/team%2Foverview')),
+		).toEqual(link);
+		await expectOk(
+			await proxyRequest(
+				'DELETE',
+				`/marimohub/api/v1${base}/team%2Foverview?registration_id=${link.registration_id}`,
+			),
+		);
+		await expectError(
+			await proxyRequest('GET', '/marimohub/api/v1/deep-links/team%2Foverview'),
+			404,
+		);
+		expect(upstreamPaths).toEqual([
+			'/api/v1/deep-links/team/overview',
+			`/api/v1${base}/team/overview?registration_id=${link.registration_id}`,
+			'/api/v1/deep-links/team/overview',
+		]);
+	});
+
 	it('registers, lists, resolves without caching or listing, and releases', async () => {
 		const link = await createLink();
 		expect(await createLink()).toEqual(link);
@@ -243,7 +403,7 @@ describe('App link routes', () => {
 	it.each([
 		{ slug: 'UPPER' },
 		{ slug: '-sales' },
-		{ slug: 'a/b' },
+		{ slug: 'a//b' },
 		{ slug: 'a'.repeat(64) },
 		{ slug: 'sales', kind: 'notebook' },
 		{ slug: 'sales', access: { mode: 'public' } },

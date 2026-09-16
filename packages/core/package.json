@@ -15,6 +15,7 @@
 		"./data-preview-programs": "./src/services/integrations/data-preview/programs.ts",
 		"./data-query-contracts": "./src/services/integrations/data-query/contracts.ts",
 		"./data-query-sql": "./src/services/integrations/data-query/sql.ts",
+		"./deep-link-slug": "./src/deepLinkSlug.ts",
 		"./duration": "./src/duration.ts",
 		"./errors": "./src/errors.ts",
 		"./ids": "./src/ids.ts",
