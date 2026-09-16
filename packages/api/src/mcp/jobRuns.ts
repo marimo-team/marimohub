@@ -141,6 +141,7 @@ export async function observeJobRun({
 	extra,
 	signal,
 	request,
+	action,
 }: {
 	deps: ApiDeps;
 	target: AuthorizedNotebook;
@@ -150,20 +151,26 @@ export async function observeJobRun({
 	extra: JobToolExtra;
 	signal: AbortSignal;
 	request: StartRequestContext;
+	action: 'project.read' | 'notebook.write';
 }) {
 	let authorized = target;
-	const authorize = () =>
-		authorizeJobNotebook(deps, target.user, job.project_id, job.notebook_id, 'project.read');
+	const authorize = async (checkSignal: AbortSignal) => {
+		const current = await withAbortSignal(
+			authorizeJobNotebook(deps, target.user, job.project_id, job.notebook_id, action),
+			checkSignal,
+		);
+		await withAbortSignal(
+			deps.services.jobs.getJob(job.project_id, job.notebook_id, job.id),
+			checkSignal,
+		);
+		return current;
+	};
 	const initial = await withAbortSignal(loadJobRun(deps, job, runId), signal);
 	const { run, waitExpired } = await waitForRun(
 		initial,
 		async (waitSignal) => {
 			// Membership and notebook visibility can change while a call waits.
-			const current = await withAbortSignal(authorize(), waitSignal);
-			await withAbortSignal(
-				deps.services.jobs.getJob(job.project_id, job.notebook_id, job.id),
-				waitSignal,
-			);
+			const current = await authorize(waitSignal);
 			const next = await withAbortSignal(loadJobRun(deps, job, runId), waitSignal);
 			waitSignal.throwIfAborted();
 			authorized = current;

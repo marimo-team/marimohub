@@ -213,8 +213,11 @@ Active results include `poll` with `tool: "get_job_run"`, its `arguments`, and
 start another run.
 
 `create_job` and `run_job` accept `idempotency_key`. After a lost response, reuse
-the key and inputs. Replay records last 24 hours. As with REST, concurrent first
-requests can create duplicates.
+the key and inputs. Replay records last 24 hours. Concurrent `run_job` calls
+with the same key, caller, and job reuse one run. `create_job` and REST retain
+best-effort replay: concurrent first requests can create duplicates. A crash
+or storage failure between enqueueing and recording the replay can still cause
+a duplicate run on retry.
 
 ### Wait with optional progress
 

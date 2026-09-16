@@ -794,11 +794,13 @@ describe('MCP waiting', () => {
 	it.each(
 		(['get_job_run', 'run_job'] as const).flatMap((tool) =>
 			[1, 3].flatMap((waitSeconds) =>
-				(['membership', 'notebook-labels', 'notebook-deletion'] as const).map((change) => ({
-					tool,
-					waitSeconds,
-					change,
-				})),
+				(['membership', 'notebook-labels', 'notebook-deletion', 'job-deletion'] as const).map(
+					(change) => ({
+						tool,
+						waitSeconds,
+						change,
+					}),
+				),
 			),
 		),
 	)(
@@ -825,26 +827,42 @@ describe('MCP waiting', () => {
 			}
 			if (change === 'notebook-deletion')
 				await deps.services.notebooks.deleteNotebook(pid, nid, USER.id);
+			if (change === 'job-deletion') {
+				await deps.services.jobs.beginDelete(pid, nid, job.id, USER.id);
+				await deps.services.jobs.finishDelete(pid, nid, job.id);
+			}
 			await vi.advanceTimersByTimeAsync(1000);
 			const response = await pending;
-			expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+			expect(response).toMatchObject({
+				isError: true,
+				structuredContent: {
+					code: tool === 'run_job' && change === 'membership' ? 'FORBIDDEN' : 'NOT_FOUND',
+				},
+			});
 			expect(response.structuredContent).not.toHaveProperty('run');
 			expect(response.structuredContent).not.toHaveProperty('links');
 		},
 	);
 
-	it.each(['timeout', 'abort'] as const)(
-		'stops a stalled final authorization check on %s without exposing the run',
-		async (end) => {
+	it.each(
+		(['timeout', 'abort'] as const).flatMap((end) =>
+			(['notebook', 'job'] as const).map((resource) => ({ end, resource })),
+		),
+	)(
+		'stops a stalled final $resource check on $end without exposing the run',
+		async ({ end, resource }) => {
 			const run = await enqueue();
 			const controller = new AbortController();
 			client = await connectMcpClient(deps, USER, { ...requestContext, signal: controller.signal });
 			vi.useFakeTimers();
 			const pending = call('get_job_run', { run_id: run.run_id, wait: true, wait_seconds: 1 });
 			await vi.advanceTimersByTimeAsync(1);
-			const read = vi
-				.spyOn(deps.services.notebooks, 'getNotebook')
-				.mockImplementation(() => new Promise(() => {}));
+			const read =
+				resource === 'notebook'
+					? vi
+							.spyOn(deps.services.notebooks, 'getNotebook')
+							.mockImplementation(() => new Promise(() => {}))
+					: vi.spyOn(deps.services.jobs, 'getJob').mockImplementation(() => new Promise(() => {}));
 			await vi.advanceTimersByTimeAsync(1000);
 			expect(read).toHaveBeenCalledOnce();
 			if (end === 'abort') controller.abort();

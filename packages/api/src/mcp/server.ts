@@ -27,7 +27,6 @@ import {
 import { registerJobTools } from './jobs';
 import { deleteNotebookAndRetire } from '../routes/notebookDelete';
 import {
-	assertProjectActionOn,
 	assertSessionControl,
 	assertSessionNotebookVisible,
 	loadAuthorizedNotebook,
@@ -157,8 +156,7 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, launch, ...notebookInput }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef);
-				await assertProjectActionOn(project, principal, 'notebook.write', deps);
+				const project = await resolveProject(deps, principal, projectRef, 'notebook.write');
 				if (launch) await authorizeSessionStart(project, principal, 'edit', deps);
 				const notebook = await deps.services.notebooks.createNotebook(
 					project.id,
@@ -352,7 +350,13 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, mode, wait_seconds }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef, mode === 'app');
+				const project = await resolveProject(
+					deps,
+					principal,
+					projectRef,
+					'project.read',
+					mode === 'app',
+				);
 				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
 				return result(
 					await startMcpSession({

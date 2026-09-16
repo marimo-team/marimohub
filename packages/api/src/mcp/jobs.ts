@@ -199,23 +199,30 @@ export function registerJobTools(
 		async (input, context) => {
 			const { target, signal } = context;
 			const job = await resolveJob(deps, target, input.job);
-			const runId = await idempotentOperation(
+			const run = await triggerJobRun(
 				deps,
-				`${principal.id}:mcp:run_job:${target.project.id}:${target.notebook.meta.id}:${job.id}`,
-				input.idempotency_key,
-				async () =>
-					(
-						await triggerJobRun(
-							deps,
-							target,
-							job,
-							{ parameters: input.parameters },
-							request,
-							signal,
-						)
-					).run_id,
+				target,
+				job,
+				{ parameters: input.parameters },
+				request,
+				signal,
+				{
+					scope: `${principal.id}:mcp:run_job:${target.project.id}:${target.notebook.meta.id}:${job.id}`,
+					key: input.idempotency_key,
+				},
 			);
-			return result(await observeJobRun({ deps, ...context, job, runId, input, request }));
+			const runId = run.run_id;
+			return result(
+				await observeJobRun({
+					deps,
+					...context,
+					job,
+					runId,
+					input,
+					request,
+					action: 'notebook.write',
+				}),
+			);
 		},
 	);
 
@@ -227,7 +234,15 @@ export function registerJobTools(
 		async (input, context) => {
 			const job = await resolveJob(deps, context.target, input.job);
 			return result(
-				await observeJobRun({ deps, ...context, job, runId: input.run_id, input, request }),
+				await observeJobRun({
+					deps,
+					...context,
+					job,
+					runId: input.run_id,
+					input,
+					request,
+					action: 'project.read',
+				}),
 			);
 		},
 	);

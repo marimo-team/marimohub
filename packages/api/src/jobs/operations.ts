@@ -6,16 +6,19 @@ import {
 	NotFoundError,
 	ResourceExhaustedError,
 	toPublicJobDefinition,
+	withAbortSignal,
 } from '@marimo-hub/core';
 import type {
 	AuthenticatedPrincipal,
 	JobDefinition,
+	JobRun,
 	NotebookId,
 	ProjectId,
 	RunId,
 } from '@marimo-hub/core';
 import type { z } from 'zod';
 import type { ApiDeps, JobsConfig } from '../context';
+import { idempotentOperation } from '../idempotency';
 import { appendAudit } from '../log';
 import { decodeCursor, DEFAULT_PAGE_SIZE, encodeCursor, MAX_PAGE_SIZE } from '../pagination';
 import { assertProjectRole, loadAuthorizedNotebook, loadVisibleProject } from '../shared';
@@ -119,46 +122,58 @@ export async function triggerJobRun(
 	body: z.infer<typeof TriggerRunBody> | undefined,
 	request: { requestId?: string; method: string; path: string },
 	signal?: AbortSignal,
+	replay?: { scope: string; key?: string },
 ) {
 	const { project, notebook, user } = target;
-	const run = await deps.services.jobRuns.withJobMutation(job, async () => {
+	return deps.services.jobRuns.withJobMutation(job, async () => {
 		if (await deps.services.jobs.isDeleting(job))
 			throw new NotFoundError(`Job ${job.id} not found`);
-		const current = await deps.services.jobs.getJob(project.id, notebook.meta.id, job.id);
-		const queued = (await deps.services.jobRuns.listActive()).filter(
-			({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
-		);
-		if (queued.length >= MAX_QUEUED_RUNS_PER_JOB) {
-			throw new ResourceExhaustedError(
-				`Too many queued runs for this job (${MAX_QUEUED_RUNS_PER_JOB}); wait for the queue to drain.`,
-			);
-		}
-		const config = requireJobs(deps);
-		const requestedMs =
-			current.timeout_seconds !== undefined
-				? current.timeout_seconds * 1000
-				: config.defaultTimeoutMs;
 		signal?.throwIfAborted();
-		return deps.services.jobRuns.enqueue({
-			job: current,
-			trigger: 'manual',
-			triggeredBy: user.id,
-			parameters: body?.parameters ?? current.parameters,
-			sourceVersionId: notebook.source.current_version_id ?? undefined,
-			timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
+		const enqueue = async () => {
+			const current = await deps.services.jobs.getJob(project.id, notebook.meta.id, job.id);
+			const queued = (await deps.services.jobRuns.listActive()).filter(
+				({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
+			);
+			if (queued.length >= MAX_QUEUED_RUNS_PER_JOB) {
+				throw new ResourceExhaustedError(
+					`Too many queued runs for this job (${MAX_QUEUED_RUNS_PER_JOB}); wait for the queue to drain.`,
+				);
+			}
+			const config = requireJobs(deps);
+			const requestedMs =
+				current.timeout_seconds !== undefined
+					? current.timeout_seconds * 1000
+					: config.defaultTimeoutMs;
+			signal?.throwIfAborted();
+			const run = await deps.services.jobRuns.enqueue({
+				job: current,
+				trigger: 'manual',
+				triggeredBy: user.id,
+				parameters: body?.parameters ?? current.parameters,
+				sourceVersionId: notebook.source.current_version_id ?? undefined,
+				timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
+			});
+			await appendAudit({ ...request, userId: user.id }, 'job.run.trigger', () =>
+				deps.services.events.append({
+					event: 'job.run.trigger',
+					actor: user.id,
+					project_id: project.id,
+					notebook_id: notebook.meta.id,
+					job_id: job.id,
+					run_id: run.run_id,
+				}),
+			);
+			return run;
+		};
+		if (!replay?.key) return enqueue();
+		// Keep lookup, enqueue, and recording under the same distributed job claim.
+		let created: JobRun | undefined;
+		const runId = await idempotentOperation(deps, replay.scope, replay.key, async () => {
+			created = await enqueue();
+			return created.run_id;
 		});
+		return created ?? withAbortSignal(loadJobRun(deps, job, runId), signal);
 	});
-	await appendAudit({ ...request, userId: user.id }, 'job.run.trigger', () =>
-		deps.services.events.append({
-			event: 'job.run.trigger',
-			actor: user.id,
-			project_id: project.id,
-			notebook_id: notebook.meta.id,
-			job_id: job.id,
-			run_id: run.run_id,
-		}),
-	);
-	return run;
 }
 
 export async function loadJobRun(deps: ApiDeps, job: JobDefinition, rid: RunId) {

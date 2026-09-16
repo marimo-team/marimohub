@@ -9,8 +9,9 @@ import {
 	ProjectId,
 	UserId,
 } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, JobDefinition, Project } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, JobDefinition, Project, TokenGrant } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import { localResourceSecurity } from '@marimo-hub/core/testing';
 import { CallToolResultSchema, JSONRPCMessageSchema } from '@modelcontextprotocol/sdk/types.js';
 import { makeTestDeps } from '../testing';
 import { createApi } from '../createApi';
@@ -40,7 +41,10 @@ beforeEach(async () => {
 	project = await createProject('Analytics');
 	notebookId = (await createNotebook('Report')).id;
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.useRealTimers();
+});
 
 function createProject(name: string, owner = USER.id) {
 	return deps.services.projects.createProject({ name, description: '' }, owner);
@@ -63,6 +67,16 @@ async function readRun(job: JobDefinition, reference: string) {
 		triggeredBy: USER.id,
 		timeoutSeconds: 60,
 	});
+	return callTool('get_job_run', {
+		project: project.id,
+		notebook: notebookId,
+		job: reference,
+		run_id: run.run_id,
+	});
+}
+
+async function callTool(name: string, args: Record<string, unknown>, principal = USER) {
+	deps.authenticator = { authenticate: async () => principal };
 	const response = await createApi(deps).request('/mcp', {
 		method: 'POST',
 		headers: {
@@ -74,15 +88,7 @@ async function readRun(job: JobDefinition, reference: string) {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/call',
-			params: {
-				name: 'get_job_run',
-				arguments: {
-					project: project.id,
-					notebook: notebookId,
-					job: reference,
-					run_id: run.run_id,
-				},
-			},
+			params: { name, arguments: args },
 		}),
 	});
 	const messages = (await response.text())
@@ -212,5 +218,160 @@ describe('ID-shaped job names over HTTP', () => {
 			structuredContent: { code },
 		});
 		expect(list).not.toHaveBeenCalled();
+	});
+});
+
+function writeOnlyPrincipal(projects: TokenGrant['projects'] = '*'): AuthenticatedPrincipal {
+	return {
+		...USER,
+		credential: {
+			...USER.credential,
+			kind: 'personal-access-token',
+			id: 'write-only-token',
+			grant: { actions: ['notebook.write'], projects },
+		},
+	};
+}
+
+describe('write-only notebook grants over HTTP', () => {
+	it.each(['ID', 'name'])('allows notebook and job writes selected by %s', async (selector) => {
+		const principal = writeOnlyPrincipal([project.id]);
+		const job = await createJob('Nightly');
+		const target = {
+			project: selector === 'ID' ? project.id : project.name.toUpperCase(),
+			notebook: selector === 'ID' ? notebookId : 'REPORT',
+		};
+		const requests = [
+			{ name: 'create_notebook', args: { project: target.project, title: 'New', code: '' } },
+			{ name: 'update_notebook', args: { ...target, description: 'Updated' } },
+			{ name: 'create_job', args: { ...target, name: 'New job' } },
+			{
+				name: 'schedule_job',
+				args: { ...target, job: job.id, enabled: false, expected_updated_at: job.updated_at },
+			},
+			{ name: 'run_job', args: { ...target, job: job.id } },
+			{ name: 'delete_notebook', args: target },
+		];
+		for (const { name, args } of requests) {
+			const response = await callTool(name, args, principal);
+			expect(response, name).not.toHaveProperty('isError', true);
+		}
+		expect((await deps.services.notebooks.getNotebook(project.id, notebookId)).meta.status).toBe(
+			'deleted',
+		);
+	});
+
+	it.each([1, 3])('allows run_job observation for %i seconds', async (waitSeconds) => {
+		vi.useFakeTimers();
+		const job = await createJob('Nightly');
+		const read = vi.spyOn(deps.services.jobRuns, 'getRun');
+		const pending = callTool(
+			'run_job',
+			{
+				project: project.id,
+				notebook: notebookId,
+				job: job.id,
+				wait: true,
+				wait_seconds: waitSeconds,
+			},
+			writeOnlyPrincipal(),
+		);
+		await vi.waitFor(() => expect(read).toHaveBeenCalled());
+		await vi.advanceTimersByTimeAsync(waitSeconds * 1000);
+		expect(await pending).toMatchObject({
+			structuredContent: { run: { status: 'queued' }, wait_expired: true },
+		});
+		expect(read).toHaveBeenCalledTimes(waitSeconds === 1 ? 1 : 2);
+	});
+
+	it.each(['ID', 'name'])('does not permit read tools selected by %s', async (selector) => {
+		const target = {
+			project: selector === 'ID' ? project.id : project.name,
+			notebook: selector === 'ID' ? notebookId : 'Report',
+		};
+		for (const name of ['get_notebook', 'list_jobs']) {
+			expect(await callTool(name, target, writeOnlyPrincipal())).toMatchObject({
+				isError: true,
+				structuredContent: { code: 'FORBIDDEN' },
+			});
+		}
+	});
+
+	it.each(['ID', 'name'])('preserves token project scope for %s selectors', async (selector) => {
+		const response = await callTool(
+			'create_job',
+			{
+				project: selector === 'ID' ? project.id : project.name,
+				notebook: notebookId,
+				name: 'Denied',
+			},
+			writeOnlyPrincipal([ProjectId.create()]),
+		);
+		expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+		expect(await deps.services.jobs.listJobs(project.id, notebookId)).toEqual([]);
+	});
+
+	it('does not include inaccessible matching names in ambiguity errors', async () => {
+		await createProject(project.name, UserId.parse('other-owner'));
+		const response = await callTool(
+			'create_job',
+			{ project: project.name, notebook: notebookId, name: 'Allowed' },
+			writeOnlyPrincipal(),
+		);
+		expect(response).not.toHaveProperty('isError', true);
+		expect(await deps.services.jobs.listJobs(project.id, notebookId)).toHaveLength(1);
+	});
+
+	it('requires an ID when writable project names are ambiguous', async () => {
+		await createProject(project.name.toUpperCase());
+		expect(
+			await callTool(
+				'create_job',
+				{ project: project.name, notebook: notebookId, name: 'Ambiguous' },
+				writeOnlyPrincipal(),
+			),
+		).toMatchObject({ isError: true, structuredContent: { code: 'BAD_REQUEST' } });
+	});
+
+	it('falls back to an ID-shaped name with a write-only grant', async () => {
+		const name = ProjectId.create();
+		await deps.services.projects.updateProject(project.id, { name }, USER.id);
+		expect(
+			await callTool(
+				'create_job',
+				{ project: name, notebook: notebookId, name: 'Allowed' },
+				writeOnlyPrincipal(),
+			),
+		).not.toHaveProperty('isError', true);
+	});
+
+	it('falls back to an accessible write target when the ID is hidden', async () => {
+		const hidden = await createProject('Hidden', UserId.parse('other-owner'));
+		await deps.services.projects.updateProject(project.id, { name: hidden.id }, USER.id);
+		expect(
+			await callTool(
+				'create_job',
+				{ project: hidden.id, notebook: notebookId, name: 'Allowed' },
+				writeOnlyPrincipal(),
+			),
+		).not.toHaveProperty('isError', true);
+	});
+
+	it('preserves REST notebook override authorization', async () => {
+		deps.resourceSecurity = localResourceSecurity(['UNCLASSIFIED']);
+		await deps.services.notebooks.setSecurityLabels(
+			project.id,
+			notebookId,
+			{ classification: 'UNCLASSIFIED', compartments: [] },
+			USER.id,
+		);
+		expect(
+			await callTool(
+				'create_job',
+				{ project: project.id, notebook: notebookId, name: 'Denied' },
+				writeOnlyPrincipal(),
+			),
+		).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+		expect(await deps.services.jobs.listJobs(project.id, notebookId)).toEqual([]);
 	});
 });
