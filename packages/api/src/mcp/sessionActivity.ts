@@ -3,14 +3,17 @@ import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core'
 import type { ApiDeps } from '../context';
 import { assertSessionAccess, assertSessionNotebookVisible, loadVisibleProject } from '../shared';
 
-function activeDeadline(
+function assertAuthorizationDeadline(deadline: number): void {
+	if (Number.isNaN(deadline) || Date.now() >= deadline) {
+		throw new BadRequestError('Session authorization has expired');
+	}
+}
+
+export function sessionAuthorizationDeadline(
 	session: Session,
 	principal: AuthenticatedPrincipal,
 	subjectContextExpiresAt?: string,
 ): number {
-	if (session.status !== 'running' && session.status !== 'starting') {
-		throw new BadRequestError('Session is no longer running');
-	}
 	const expirations = [
 		session.authorization_expires_at,
 		principal.credential.expiresAt,
@@ -20,10 +23,19 @@ function activeDeadline(
 	const deadline = Math.min(
 		...expirations.map((value) => (value === undefined ? Infinity : Date.parse(value))),
 	);
-	if (Number.isNaN(deadline) || Date.now() >= deadline) {
-		throw new BadRequestError('Session authorization has expired');
-	}
+	assertAuthorizationDeadline(deadline);
 	return deadline;
+}
+
+function activeDeadline(
+	session: Session,
+	principal: AuthenticatedPrincipal,
+	subjectContextExpiresAt?: string,
+): number {
+	if (session.status !== 'running' && session.status !== 'starting') {
+		throw new BadRequestError('Session is no longer running');
+	}
+	return sessionAuthorizationDeadline(session, principal, subjectContextExpiresAt);
 }
 
 export async function authorizeMcpSession(
@@ -59,6 +71,7 @@ export async function withMcpSessionActivity<T>(
 	let deadline = activeDeadline(session, principal);
 
 	const armExpiry = () => {
+		assertAuthorizationDeadline(deadline);
 		if (expiryTimer !== undefined) clearTimeout(expiryTimer);
 		if (!Number.isFinite(deadline)) return;
 		expiryTimer = setTimeout(

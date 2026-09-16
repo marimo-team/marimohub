@@ -2,7 +2,6 @@ import { spawn, exec as nodeExec } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SandboxInstance } from '../../ports/sandbox';
@@ -20,14 +19,6 @@ afterEach(async () => {
 async function runtime(autoRun: boolean, prefix = '', fault?: 'fail' | 'delay') {
 	const root = await mkdtemp(join(tmpdir(), 'mhub-bootstrap-'));
 	cleanup.push(() => rm(root, { recursive: true, force: true }));
-	const port = await new Promise<number>((resolve) => {
-		const server = createServer();
-		server.listen(0, '127.0.0.1', () => {
-			const address = server.address();
-			if (!address || typeof address === 'string') throw new Error('No port');
-			server.close(() => resolve(address.port));
-		});
-	});
 	const token = createKernelAuthToken();
 	const tokenFile = join(root, 'token');
 	await writeFile(tokenFile, token, { mode: 0o600 });
@@ -47,28 +38,44 @@ if __name__ == "__main__":
     app.run()
 `,
 	);
-	const serverMain = fault
-		? String.raw`
-from marimo._session.session import SessionImpl as Session
-from marimo._cli.cli import main
-original = Session.instantiate
-def faulty(self, *args, **kwargs):
-    Session.instantiate = original
-    if ${fault === 'fail' ? 'True' : 'False'}:
-        raise RuntimeError("private initialization error")
-    original(self, *args, **kwargs)
-    import time
-    time.sleep(2)
-Session.instantiate = faulty
+	const serverMain = String.raw`
+import os, socket, sys
+
 if __name__ == "__main__":
+    # Keep the same bound socket across exec; --port remains visible to discovery.
+    fd = os.environ.pop("MARIMO_TEST_SOCKET_FD", None)
+    if fd is None:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.set_inheritable(True)
+        os.environ["MARIMO_TEST_SOCKET_FD"] = str(listener.fileno())
+        os.execv(sys.executable, [sys.executable, *sys.argv, "--port", str(listener.getsockname()[1])])
+    listener = socket.socket(fileno=int(fd))
+    print(listener.getsockname()[1], flush=True)
+
+    import uvicorn
+    original_run = uvicorn.Server.run
+    uvicorn.Server.run = lambda self: original_run(self, sockets=[listener])
+    if ${fault ? 'True' : 'False'}:
+        from marimo._session.session import SessionImpl as Session
+        original = Session.instantiate
+        def faulty(self, *args, **kwargs):
+            Session.instantiate = original
+            if ${fault === 'fail' ? 'True' : 'False'}:
+                raise RuntimeError("private initialization error")
+            original(self, *args, **kwargs)
+            import time
+            time.sleep(2)
+        Session.instantiate = faulty
+    from marimo._cli.cli import main
     main(prog_name="marimo")
-`
-		: undefined;
-	if (serverMain) await writeFile(join(root, 'faulty-server.py'), serverMain);
+`;
+	await writeFile(join(root, 'server.py'), serverMain);
 	const child = spawn(
 		python!,
 		[
-			...(serverMain ? [join(root, 'faulty-server.py')] : ['-m', 'marimo']),
+			join(root, 'server.py'),
 			'--quiet',
 			'edit',
 			'notebook.py',
@@ -78,13 +85,11 @@ if __name__ == "__main__":
 			tokenFile,
 			'--host',
 			'127.0.0.1',
-			'--port',
-			String(port),
 			...(prefix ? [`--base-url=${prefix}`] : []),
 		],
 		{
 			cwd: root,
-			stdio: 'ignore',
+			stdio: ['ignore', 'pipe', 'pipe'],
 			detached: true,
 		},
 	);
@@ -95,13 +100,36 @@ if __name__ == "__main__":
 			await exited;
 		}
 	});
+	let output = '';
+	let stderr = '';
+	child.stdout.on('data', (value: Buffer) => {
+		output += value.toString();
+	});
+	child.stderr.on('data', (value: Buffer) => {
+		stderr += value.toString();
+	});
+	await expect
+		.poll(
+			() => {
+				if (child.exitCode !== null) throw new Error(`marimo exited: ${stderr}`);
+				return output.includes('\n');
+			},
+			{ timeout: 15_000 },
+		)
+		.toBe(true);
+	const port = Number(output.split('\n')[0]);
+	expect(port).toBeGreaterThan(0);
 	const base = `http://127.0.0.1:${port}${prefix}`;
 	await expect
 		.poll(
 			async () => {
 				try {
-					return (await fetch(`${base}/`, { headers: { Authorization: `Bearer ${token}` } }))
-						.status;
+					return (
+						await fetch(`${base}/`, {
+							headers: { Authorization: `Bearer ${token}` },
+							signal: AbortSignal.timeout(1_000),
+						})
+					).status;
 				} catch {
 					return 0;
 				}

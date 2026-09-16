@@ -24,6 +24,17 @@ describe('bootstrapKernel', () => {
 		expect(await bootstrapKernel(instance, { timeoutMs: 0 })).toEqual({ status: 'initializing' });
 		expect(calls.exec).toEqual([]);
 	});
+	it.each([0, -1])(
+		'propagates cancellation without a remaining budget (%ims)',
+		async (timeoutMs) => {
+			const { instance, calls } = makeFakeSandbox();
+			const reason = new Error('authorization expired');
+			await expect(
+				bootstrapKernel(instance, { timeoutMs, signal: AbortSignal.abort(reason) }),
+			).rejects.toBe(reason);
+			expect(calls.exec).toEqual([]);
+		},
+	);
 	it('bounds adapters that never settle', async () => {
 		vi.useFakeTimers();
 		const { instance } = makeFakeSandbox();

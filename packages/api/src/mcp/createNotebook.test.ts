@@ -572,6 +572,118 @@ describe('MCP session execution readiness', () => {
 		}
 	});
 
+	async function pendingSession(mode: 'edit' | 'app', expiresAt?: string) {
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+			USER_ID,
+		);
+		const session = await deps.services.sessions.createSession({
+			project_id: project.id,
+			notebook_id: notebook.id,
+			user_id: USER_ID,
+			sandbox_id: SandboxId.create(),
+			mode,
+			authorization_expires_at: expiresAt,
+		});
+		if (mode === 'app')
+			await deps.services.sessions.claimApp(project.id, notebook.id, session.session_id);
+		return { deps, project, notebook };
+	}
+
+	it.each(['edit', 'app'] as const)(
+		'bounds a stalled %s startup poll by wait_seconds',
+		async (mode) => {
+			const { deps, project, notebook } = await pendingSession(mode);
+			const client = await connect(deps);
+			vi.useFakeTimers();
+			try {
+				const pending = client.callTool({
+					name: 'start_session',
+					arguments: { project: project.id, notebook: notebook.id, mode, wait_seconds: 5 },
+				});
+				await vi.advanceTimersByTimeAsync(1);
+				const read = vi
+					.spyOn(deps.services.sessions, 'getSession')
+					.mockImplementation(() => new Promise(() => {}));
+				await vi.advanceTimersByTimeAsync(4_999);
+				expect(await pending).toMatchObject({
+					structuredContent: {
+						status: 'starting',
+						execution: { status: mode === 'app' ? 'app_mode' : 'starting', ready: false },
+					},
+				});
+				expect(read).toHaveBeenCalledOnce();
+				expect(bootstrapKernel).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it('does not read the session after the last poll sleep consumes the wait budget', async () => {
+		const { deps, project, notebook } = await pendingSession('edit');
+		const client = await connect(deps);
+		vi.useFakeTimers();
+		try {
+			const pending = client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, wait_seconds: 1 },
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const read = vi.spyOn(deps.services.sessions, 'getSession');
+			await vi.advanceTimersByTimeAsync(999);
+			expect(await pending).toMatchObject({ structuredContent: { status: 'starting' } });
+			expect(read).not.toHaveBeenCalled();
+			expect(bootstrapKernel).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		{ mode: 'app' as const, expiry: 'session' },
+		{ mode: 'app' as const, expiry: 'credential' },
+		{ mode: 'edit' as const, expiry: 'credential' },
+	])('aborts a stalled $mode poll at $expiry expiry', async ({ mode, expiry }) => {
+		const expiresAt = new Date(Date.now() + 2_500).toISOString();
+		const { deps, project, notebook } = await pendingSession(
+			mode,
+			expiry === 'session' ? expiresAt : undefined,
+		);
+		const client = await connect(
+			deps,
+			expiry === 'credential'
+				? { ...PRINCIPAL, credential: { ...PRINCIPAL.credential, expiresAt } }
+				: PRINCIPAL,
+		);
+		vi.useFakeTimers();
+		try {
+			const pending = client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, mode, wait_seconds: 5 },
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const read = vi
+				.spyOn(deps.services.sessions, 'getSession')
+				.mockImplementation(() => new Promise(() => {}));
+			await vi.advanceTimersByTimeAsync(2_499);
+			expect(await pending).toMatchObject({
+				isError: true,
+				structuredContent: {
+					code: 'BAD_REQUEST',
+					message: 'Session authorization has expired',
+				},
+			});
+			expect(read).toHaveBeenCalledOnce();
+			expect(bootstrapKernel).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it.each(['starting', 'forbidden'] as const)(
 		'does not probe execution readiness when %s',
 		async (status) => {

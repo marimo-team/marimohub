@@ -9,6 +9,29 @@ async function python(assertions: string) {
 }
 
 describe('sandbox bootstrap protocol', () => {
+	it('normalizes session maps, arrays, and envelopes without accepting missing identifiers', async () => {
+		await python(String.raw`
+from unittest.mock import Mock
+client = object.__new__(MarimoClient)
+sessions = [{"id": "first", "filename": "notebook.py"}, {"session_id": "second"}]
+expected = {"first": sessions[0], "second": sessions[1]}
+for response in (expected, sessions, {"sessions": sessions}):
+    client.request = Mock(return_value=json.dumps(response))
+    assert client.sessions() == expected
+    client.request.assert_called_once_with("/api/sessions")
+for response in ({}, [], {"sessions": []}):
+    client.request = Mock(return_value=json.dumps(response))
+    assert client.sessions() == {}
+for response in (None, "invalid", [None], [{}], [{"id": ""}], [{"id": 1}],
+                 {"first": None}, {"": {}}, {"sessions": [{}]}):
+    client.request = Mock(return_value=json.dumps(response))
+    try:
+        client.sessions()
+        raise AssertionError("accepted malformed sessions")
+    except Incompatible:
+        pass
+`);
+	});
 	it('reads escaped editor settings and rejects missing or malformed settings', async () => {
 		await python(String.raw`
 from html import escape
@@ -98,9 +121,13 @@ try:
     raise AssertionError("accepted a stopped kernel")
 except RuntimeError:
     pass
-client.request = Mock(side_effect=['{"success":true}', '{"state":"running"}'])
-client.initialize("live")
-assert client.request.call_args_list[0].args[1]["autoRun"] is False
+for auto_run in (True, False):
+    client.auto_run = auto_run
+    client.request = Mock(side_effect=['{"success":true}', '{"state":"running"}'])
+    client.initialize("live")
+    assert client.request.call_args_list[0].args == (
+        "/api/kernel/instantiate", {"objectIds": [], "values": [], "autoRun": auto_run}, "live")
+    assert client.request.call_args_list[0].args[1]["autoRun"] is auto_run
 `);
 	});
 });

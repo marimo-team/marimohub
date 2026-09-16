@@ -54,6 +54,18 @@ class MarimoClient:
 
     def sessions(self):
         sessions = json.loads(self.request("/api/sessions"))
+        if isinstance(sessions, dict) and isinstance(sessions.get("sessions"), list):
+            sessions = sessions["sessions"]
+        if isinstance(sessions, list):
+            normalized = {}
+            for session in sessions:
+                if not isinstance(session, dict):
+                    raise Incompatible()
+                session_id = session.get("id") or session.get("session_id")
+                if not isinstance(session_id, str) or not session_id:
+                    raise Incompatible()
+                normalized[session_id] = session
+            sessions = normalized
         if not isinstance(sessions, dict) or any(
             not key or not isinstance(value, dict) for key, value in sessions.items()
         ):

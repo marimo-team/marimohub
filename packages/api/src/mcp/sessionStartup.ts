@@ -1,11 +1,13 @@
 import {
 	bootstrapKernel,
+	BadRequestError,
 	DomainError,
 	SessionId,
 	sessionMode,
 	sessionOwner,
 	sleep,
 	withAbortSignal,
+	withDeadline,
 } from '@marimo-hub/core';
 import type {
 	AuthenticatedPrincipal,
@@ -18,7 +20,7 @@ import type { ApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
 import { assertSessionNotebookVisible, sessionGrantsFor } from '../shared';
 import { startNotebookSession, toSessionResponse } from '../routes/sessionStart';
-import { withMcpSessionActivity } from './sessionActivity';
+import { sessionAuthorizationDeadline, withMcpSessionActivity } from './sessionActivity';
 import type { StartRequestContext } from './server';
 
 type ExecutionReadiness = { ready: boolean; status: string; next_step: string };
@@ -49,17 +51,51 @@ function bootstrapReadiness(
 	return { ready: status === 'ready', status, next_step: nextSteps[status] };
 }
 
+class SessionWaitTimeoutError extends Error {
+	constructor() {
+		super('Session startup wait timed out');
+		this.name = 'SessionWaitTimeoutError';
+	}
+}
+
 async function waitForSession(
 	deps: ApiDeps,
+	principal: AuthenticatedPrincipal,
 	session: Session,
 	deadline: number,
 	signal?: AbortSignal,
 ): Promise<Session> {
 	let current = session;
-	while (current.status === 'starting' && Date.now() < deadline) {
-		await withAbortSignal(sleep(Math.max(0, Math.min(2_000, deadline - Date.now()))), signal);
-		current = await deps.services.sessions.getSession(current.project_id, current.session_id);
+	while (current.status === 'starting') {
+		signal?.throwIfAborted();
+		const authorizationDeadline = sessionAuthorizationDeadline(current, principal);
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) break;
+		try {
+			current = await withDeadline(
+				async (pollSignal) => {
+					await withAbortSignal(sleep(Math.min(2_000, remaining)), pollSignal);
+					pollSignal.throwIfAborted();
+					sessionAuthorizationDeadline(current, principal);
+					if (Date.now() >= deadline) return current;
+					return deps.services.sessions.getSession(current.project_id, current.session_id);
+				},
+				{
+					timeoutMs: Math.max(0, Math.min(remaining, authorizationDeadline - Date.now())),
+					timeoutError: () =>
+						authorizationDeadline <= deadline
+							? new BadRequestError('Session authorization has expired')
+							: new SessionWaitTimeoutError(),
+					signal,
+				},
+			);
+		} catch (error) {
+			if (!(error instanceof SessionWaitTimeoutError)) throw error;
+			break;
+		}
 	}
+	signal?.throwIfAborted();
+	sessionAuthorizationDeadline(current, principal);
 	return current;
 }
 
@@ -92,7 +128,7 @@ export async function startMcpSession(input: {
 	let execution = lifecycleReadiness(session);
 
 	if (sessionMode(session) !== 'edit') {
-		session = await waitForSession(deps, session, deadline);
+		session = await waitForSession(deps, principal, session, deadline);
 		execution = {
 			ready: false,
 			status: 'app_mode',
@@ -114,7 +150,7 @@ export async function startMcpSession(input: {
 				project,
 				session,
 				async (signal, authorizationDeadline, refreshAuthorization) => {
-					session = await waitForSession(deps, session, deadline, signal);
+					session = await waitForSession(deps, principal, session, deadline, signal);
 					if (session.status !== 'running') return lifecycleReadiness(session);
 					const accessDeadline = Math.min(authorizationDeadline, await refreshAuthorization());
 					signal.throwIfAborted();

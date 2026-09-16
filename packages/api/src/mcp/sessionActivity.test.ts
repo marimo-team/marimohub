@@ -96,6 +96,29 @@ describe('MCP session activity', () => {
 		},
 	);
 
+	it('rejects a heartbeat that completes after context expiry before the timer fires', async () => {
+		vi.useFakeTimers();
+		const expiresAt = new Date(Date.now() + 100).toISOString();
+		const { deps, project, session } = await createMcpSession(undefined, {
+			resourceSecurity: localResourceSecurity(['SECRET'], makeSubjectContext({ expiresAt })),
+		});
+		await deps.services.projects.setSecurityLabels(
+			project.id,
+			{ classification: 'SECRET', compartments: [] },
+			principal.id,
+		);
+		vi.spyOn(deps.services.sessions, 'heartbeat').mockImplementation(async () => {
+			vi.setSystemTime(Date.parse(expiresAt));
+			return session;
+		});
+		const work = vi.fn();
+		await expect(withMcpSessionActivity(deps, principal, project, session, work)).rejects.toThrow(
+			'authorization has expired',
+		);
+		expect(work).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it('shortens the activity deadline when an explicit authorization refresh returns an earlier context expiry', async () => {
 		vi.useFakeTimers();
 		const security = localResourceSecurity(['SECRET'], makeSubjectContext());

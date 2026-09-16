@@ -19,6 +19,7 @@ export async function bootstrapKernel(
 	sandbox: SandboxInstance,
 	options: { timeoutMs: number; inspectOnly?: boolean; signal?: AbortSignal },
 ): Promise<KernelBootstrapResult> {
+	options.signal?.throwIfAborted();
 	if (options.timeoutMs <= 0) return { status: 'initializing' };
 	try {
 		const executed = await withDeadline(
