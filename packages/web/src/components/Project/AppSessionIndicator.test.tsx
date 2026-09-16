@@ -26,7 +26,6 @@ function renderIndicator(
 	session: Session,
 	{
 		canControl = true,
-		canOpen = false,
 		editActive = false,
 		headVersion = 'ver-2',
 		sourceType = 'local',
@@ -37,7 +36,6 @@ function renderIndicator(
 		notebookError = false,
 	}: {
 		canControl?: boolean;
-		canOpen?: boolean;
 		editActive?: boolean;
 		/** A function to model a head that moves between popover opens. */
 		headVersion?: string | (() => string);
@@ -89,7 +87,6 @@ function renderIndicator(
 		<AppSessionIndicator
 			session={session}
 			canControl={canControl}
-			canOpen={canOpen}
 			editActive={editActive}
 			profiles={profiles}
 			allowComputeOverride={allowComputeOverride}
@@ -145,20 +142,9 @@ describe('AppSessionIndicator', () => {
 		expect(screen.getByText('Stop')).toBeInTheDocument();
 	});
 
-	it('hides the controls for viewers (apps not granted → editor-only copy)', async () => {
-		renderIndicator(makeAppSession(), { canControl: false });
+	it('describes control permissions without implying an unassigned viewer cannot open the app', async () => {
+		renderIndicator(makeAppSession({ can: { attach: false, stop: false } }), { canControl: false });
 		await userEvent.click(screen.getByRole('button'));
-
-		expect(await screen.findByText('App running')).toBeInTheDocument();
-		expect(screen.queryByText('Restart')).toBeNull();
-		expect(screen.queryByText('Stop')).toBeNull();
-		expect(screen.getByText(/editor-only/)).toBeInTheDocument();
-	});
-
-	it('viewer who may open the app sees stop/restart-only copy instead', async () => {
-		renderIndicator(makeAppSession(), { canControl: false, canOpen: true });
-		await userEvent.click(screen.getByRole('button'));
-
 		expect(await screen.findByText('App running')).toBeInTheDocument();
 		expect(screen.queryByText('Restart')).toBeNull();
 		expect(screen.queryByText('Stop')).toBeNull();
@@ -174,7 +160,7 @@ describe('AppSessionIndicator', () => {
 		await userEvent.click(screen.getByRole('button'));
 
 		expect(await screen.findByText('App running')).toBeInTheDocument();
-		expect(screen.queryByText(/Restart to update/)).toBeNull();
+		expect(screen.queryByText(/New users receive the latest version/)).toBeNull();
 	});
 
 	it('shows the stale hint when the app trails the notebook head', async () => {
@@ -183,7 +169,7 @@ describe('AppSessionIndicator', () => {
 		});
 		await userEvent.click(screen.getByRole('button'));
 
-		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+		expect(await screen.findByText(/New users receive the latest version/)).toBeInTheDocument();
 	});
 
 	it('does not suppress the stale hint during editing on a git-synced notebook', async () => {
@@ -194,7 +180,7 @@ describe('AppSessionIndicator', () => {
 		});
 		await userEvent.click(screen.getByRole('button'));
 
-		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+		expect(await screen.findByText(/New users receive the latest version/)).toBeInTheDocument();
 	});
 
 	it('uses the shared compute drift presentation', async () => {
@@ -252,7 +238,7 @@ describe('AppSessionIndicator', () => {
 
 		await userEvent.click(trigger);
 		expect(await screen.findByRole('button', { name: 'Restart' })).toBeInTheDocument();
-		expect(screen.queryByText(/Restart to update/)).toBeNull();
+		expect(screen.queryByText(/New users receive the latest version/)).toBeNull();
 
 		await userEvent.keyboard('{Escape}');
 		await waitFor(() =>
@@ -262,6 +248,6 @@ describe('AppSessionIndicator', () => {
 		head = 'ver-3';
 		await userEvent.click(trigger);
 
-		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+		expect(await screen.findByText(/New users receive the latest version/)).toBeInTheDocument();
 	});
 });

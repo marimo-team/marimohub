@@ -461,24 +461,42 @@ describe('useStartSession', () => {
 	});
 });
 
-describe.each([
-	{
-		label: 'app',
-		useRestart: () => {
-			const mutation = useRestartApp(PID, NID);
-			return () => mutation.mutateAsync('sess-1');
-		},
-		expectedBody: '{"mode":"app"}',
-	},
-	{
-		label: 'edit',
-		useRestart: () => {
-			const mutation = useRestartSession(PID);
-			return () => mutation.mutateAsync({ notebookId: NID, sessionId: 'sess-1' });
-		},
-		expectedBody: '',
-	},
-])('$label session restart', ({ useRestart, expectedBody }) => {
+describe('app session replacement', () => {
+	it('sends the selected sandbox ID in one replacement request and refreshes the list', async () => {
+		const timeout = vi.spyOn(AbortSignal, 'timeout');
+		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-2', mode: 'app' }));
+		const { result, client } = renderHookWithClient(() => useRestartApp(PID, NID), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+		await act(async () => {
+			await result.current.mutateAsync('sess-1');
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const request = requestOf(fetchMock);
+		expect(request.method).toBe('POST');
+		expect(await request.clone().json()).toEqual({ mode: 'app', replace_app_session_id: 'sess-1' });
+		expect(timeout).toHaveBeenCalledWith(150_000);
+		expect(invalidatedKeys(spy)).toEqual([sessionKeys.listByProject(PID)]);
+	});
+
+	it('reports replacement failure without falling back to ordinary admission', async () => {
+		const fetchMock = stubFetch(async () => jsonError('INTERNAL_ERROR', 'teardown failed', 500));
+		const { result } = renderHookWithClient(() => useRestartApp(PID, NID), { toaster: false });
+		await act(async () => {
+			await expect(result.current.mutateAsync('sess-1')).rejects.toThrow('teardown failed');
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('edit session restart', () => {
+	const useRestart = () => {
+		const mutation = useRestartSession(PID);
+		return () => mutation.mutateAsync({ notebookId: NID, sessionId: 'sess-1' });
+	};
+	const expectedBody = '';
+
 	const sessionsPath = `/api/v1/projects/${PID}/notebooks/${NID}/sessions`;
 
 	function restartFetch(stop: () => Promise<Response>) {

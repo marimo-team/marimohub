@@ -36,8 +36,9 @@ describe('NotebookPage app variant', () => {
 		});
 		renderPage('app');
 
-		await waitFor(() => expect(screen.getByText(/serving an older version/)).toBeInTheDocument());
-		expect(screen.getByText('Restart to update')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText(/serves an older version/)).toBeInTheDocument());
+		expect(screen.getByText(/New users receive the latest version/)).toBeInTheDocument();
+		expect(screen.queryByText('Restart to update')).toBeNull();
 	});
 
 	it('suppresses the staleness banner while the notebook is being edited', async () => {
@@ -50,7 +51,7 @@ describe('NotebookPage app variant', () => {
 		const { container } = renderPage('app');
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		await waitFor(() => expect(screen.queryByText(/serving an older version/)).toBeNull());
+		await waitFor(() => expect(screen.queryByText(/serves an older version/)).toBeNull());
 	});
 
 	it('does not suppress the staleness banner for a temporary editor', async () => {
@@ -62,7 +63,7 @@ describe('NotebookPage app variant', () => {
 		});
 		renderPage('app');
 
-		await waitFor(() => expect(screen.getByText(/serving an older version/)).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/serves an older version/)).toBeInTheDocument());
 	});
 
 	it('does not suppress the banner during editing on a git-synced notebook', async () => {
@@ -75,7 +76,7 @@ describe('NotebookPage app variant', () => {
 		});
 		renderPage('app');
 
-		await waitFor(() => expect(screen.getByText(/serving an older version/)).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/serves an older version/)).toBeInTheDocument());
 	});
 
 	it('shows no staleness banner when the app serves the head version', async () => {
@@ -85,7 +86,7 @@ describe('NotebookPage app variant', () => {
 		})();
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		expect(screen.queryByText(/serving an older version/)).toBeNull();
+		expect(screen.queryByText(/serves an older version/)).toBeNull();
 	});
 
 	it('shows no staleness banner when notebook detail trails the app version', async () => {
@@ -99,7 +100,7 @@ describe('NotebookPage app variant', () => {
 		})();
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		expect(screen.queryByText(/serving an older version/)).toBeNull();
+		expect(screen.queryByText(/serves an older version/)).toBeNull();
 	});
 
 	it('viewer + applications: uses the app but gets no Stop/Restart controls', async () => {
@@ -130,9 +131,7 @@ describe('NotebookPage app variant', () => {
 		});
 		renderPage('app');
 
-		await waitFor(() => expect(screen.getByText(/serving an older version/)).toBeInTheDocument());
-		// Restarting the shared app is editor-only; a viewer clicking through
-		// would 403 on the stop half.
+		await waitFor(() => expect(screen.getByText(/serves an older version/)).toBeInTheDocument());
 		expect(screen.queryByText('Restart to update')).toBeNull();
 	});
 
@@ -146,15 +145,17 @@ describe('NotebookPage app variant', () => {
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 
 		await user.click(screen.getByText('Restart'));
-		// The dialog, not a teardown, is what a click produces.
-		expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+		expect(sessionPosts(impl)).toHaveLength(1);
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByText(/About 3 people are connected/)).toBeInTheDocument();
 
 		await user.click(within(dialog).getByRole('button', { name: 'Restart' }));
-		await waitFor(() =>
-			expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
-		);
+		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(3));
+		expect(JSON.parse(String(sessionPosts(impl)[1][1]?.body))).toEqual({
+			mode: 'app',
+			replace_app_session_id: appSession().session_id,
+		});
+		expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
 	});
 
 	it('Stop confirms too; cancel leaves the app untouched', async () => {
@@ -174,7 +175,10 @@ describe('NotebookPage app variant', () => {
 
 	// `sandbox_url` is withheld from a caller the kernel gates would reject.
 	it('a running app the caller cannot reach renders the access-ended panel', async () => {
-		makeFetch({ role: 'viewer', session: appSession({ sandbox_url: undefined }) });
+		makeFetch({
+			role: 'viewer',
+			session: appSession({ sandbox_url: undefined, can: { attach: false, stop: false } }),
+		});
 		const { container } = renderPage('app');
 
 		await waitFor(() => expect(screen.getByText('Access ended')).toBeInTheDocument());
@@ -229,6 +233,19 @@ describe('NotebookPage app variant', () => {
 		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
 	});
 
+	it.each(['App is busy. Retry shortly.', 'Project app sandbox limit reached.'])(
+		'renders capacity errors without changing their meaning: %s',
+		async (message) => {
+			makeFetch({
+				role: 'viewer',
+				createError: { code: 'RESOURCE_EXHAUSTED', message, status: 429 },
+			});
+			renderPage('app');
+			expect(await screen.findByText(message)).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+		},
+	);
+
 	it('offers a one-shot Retry with Default without replacing the stored profile', async () => {
 		const user = userEvent.setup();
 		const impl = makeFetch({
@@ -247,7 +264,7 @@ describe('NotebookPage app variant', () => {
 		});
 		renderPage();
 
-		expect(await screen.findByText('No nodes can schedule this profile')).toBeInTheDocument();
+		expect(await screen.findByText(/No nodes can schedule this profile/)).toBeInTheDocument();
 		expect(screen.queryByText(/a larger profile may be needed/)).not.toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Retry with Default' }));
 

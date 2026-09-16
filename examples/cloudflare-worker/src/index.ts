@@ -5,7 +5,13 @@
  * and Access auth. This is also the one context where the Cloudflare compute
  * adapter works, since it needs the Workers runtime + DO binding.
  */
-import { createApi, DEFAULT_JOBS_CONFIG, resolveJobSandboxEnv } from '@marimo-hub/api';
+import { parseAppPoolPolicy } from '@marimo-hub/config/app-pool';
+import {
+	createApi,
+	DEFAULT_JOBS_CONFIG,
+	resolveJobSandboxEnv,
+	sweepAppPools,
+} from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
 	AesGcmSecretCodec,
@@ -205,6 +211,7 @@ export function buildDeps(
 		// Documented on/off toggle; the Node tuning knobs keep their defaults here.
 		jobs: parseJobsToggle(env.MARIMOHUB_JOBS) ? DEFAULT_JOBS_CONFIG : undefined,
 		policy: {
+			appPool: parseAppPoolPolicy(env),
 			editorSandboxSharing: parseEditorSandboxSharing(env.MARIMOHUB_EDITOR_SANDBOX_SHARING),
 			// Fallback role for logged-in non-members; defaults to `editor` so any
 			// logged-in user can edit notebooks. Set DEFAULT_ROLE=none to keep writes
@@ -255,6 +262,18 @@ export default {
 		const lock = new MaintenanceLock(bucket);
 		if (await lock.acquire('cloudflare-scheduled')) {
 			try {
+				await sweepAppPools({
+					bucket,
+					compute,
+					services: createServices(bucket),
+					policy: {
+						appPool: parseAppPoolPolicy(env),
+					},
+					sandbox: {
+						workdir: env.SANDBOX_WORKDIR ?? '/workspace',
+						persistWorkspace: env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
+					},
+				});
 				await sessions.expireStale();
 				// Reconcile records against the provider. The Cloudflare adapter omits
 				// listActive(), so this cleanly no-ops until that backend can enumerate.

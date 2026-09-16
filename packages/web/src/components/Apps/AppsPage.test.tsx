@@ -273,6 +273,15 @@ describe('stakeholder apps', () => {
 		}
 	});
 
+	it('shows app capacity rejection with an explicit retry', async () => {
+		const { existing } = setup(app.url, [app], {
+			createError: { code: 'RESOURCE_EXHAUSTED', message: 'App is busy', status: 429 },
+		});
+		expect(await screen.findByRole('alert')).toHaveTextContent('App is busy. Try again shortly.');
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() => expect(sessionPosts(existing)).toHaveLength(2));
+	});
+
 	it('fails closed when account classification is unavailable', async () => {
 		const { fetch, existing, container } = setup(app.url, [app], {
 			role: 'editor',

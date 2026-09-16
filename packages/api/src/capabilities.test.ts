@@ -19,6 +19,14 @@ const stubWif = {
 } as unknown as NonNullable<Parameters<typeof makeTestDeps>[1]>['wif'];
 
 describe('GET /api/v1/capabilities', () => {
+	it('exposes app heartbeat cadence without internal presence or retirement timers', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		const data = await expectOk<{ app_pool: unknown }>(
+			await createApi(deps).request('/api/v1/capabilities'),
+		);
+		expect(data.app_pool).toEqual({ heartbeat_interval_seconds: 30 });
+	});
+
 	it('reports federation available when WIF is configured', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed, wif: stubWif });
 		const res = await createApi(deps).request('/api/v1/capabilities');

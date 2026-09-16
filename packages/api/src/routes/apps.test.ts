@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	AppPoolService,
 	createServices,
 	VIEWER_MODES,
 	createProjectId,
@@ -775,7 +776,18 @@ describe('app session credential boundaries', () => {
 							actions: ['app.read', 'session.start', 'session.attach'],
 						});
 			const { source } = await services.notebooks.getNotebook(pid, nid);
+			const pool = new AppPoolService(api.bucket, services.sessions);
+			const admission = await pool.admit({
+				projectId: pid,
+				notebookId: nid,
+				userId: ACTOR,
+				versionId: source.current_version_id!,
+				startupMs: 900_000,
+			});
 			const session = await services.sessions.createSession({
+				session_id: admission.member.session_id,
+				sandbox_id: admission.member.sandbox_id,
+				app_pool: true,
 				project_id: pid,
 				notebook_id: nid,
 				user_id: ACTOR,
@@ -792,7 +804,7 @@ describe('app session credential boundaries', () => {
 				false,
 				'https://internal.example.com/',
 			);
-			await services.sessions.claimApp(pid, nid, session.session_id);
+			await pool.complete(pid, nid, session.session_id, admission.member.operation_token);
 			const author = await expectOk(
 				await owner.request('GET', `${base}/sessions/${session.session_id}`),
 			);

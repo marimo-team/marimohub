@@ -25,7 +25,6 @@ function AppSessionDetails({
 	session,
 	label,
 	canControl,
-	canOpen,
 	editActive,
 	onStop,
 	onRestart,
@@ -36,7 +35,6 @@ function AppSessionDetails({
 	session: Session;
 	label: string;
 	canControl: boolean;
-	canOpen: boolean;
 	editActive: boolean;
 	onStop: () => void;
 	onRestart: () => void;
@@ -94,6 +92,29 @@ function AppSessionDetails({
 						</dd>
 					</>
 				)}
+				{session.app_pool && (
+					<>
+						<dt>Pool state</dt>
+						<dd className="text-foreground">{session.app_pool.state}</dd>
+						<dt>Users</dt>
+						<dd className="text-foreground">
+							{session.app_pool.users}
+							{session.app_pool.max_users === null ? '' : ` / ${session.app_pool.max_users}`}
+						</dd>
+					</>
+				)}
+				{session.source_version_id && (
+					<>
+						<dt>Version</dt>
+						<dd className="max-w-48 truncate text-foreground" title={session.source_version_id}>
+							{session.source_version_id}
+						</dd>
+					</>
+				)}
+				<dt>Sandbox session</dt>
+				<dd className="max-w-48 truncate text-foreground" title={session.session_id}>
+					{session.session_id}
+				</dd>
 				{typeof connections === 'number' && (
 					<>
 						<dt>Connected</dt>
@@ -121,15 +142,11 @@ function AppSessionDetails({
 			)}
 			{stale && (
 				<p className="text-amber-600 dark:text-amber-500">
-					The notebook has changed since this app started. Restart to update.
+					This sandbox serves an older version. New users receive the latest version.
 				</p>
 			)}
 			{!canControl && (
-				<p className="text-muted-foreground">
-					{canOpen
-						? 'Only editors can stop or restart this app.'
-						: 'Apps are editor-only for now — ask an editor for access.'}
-				</p>
+				<p className="text-muted-foreground">Only editors can stop or restart this app.</p>
 			)}
 			{canControl && (
 				<div className="flex gap-1.5 pt-0.5">
@@ -151,16 +168,9 @@ function AppSessionDetails({
 	);
 }
 
-/**
- * The shared-app indicator on a notebook row: an AppWindow glyph colored by the
- * app session's status, with a popover carrying attribution, an approximate
- * connection count, the stale hint, and (for editors) Stop/Restart. Renders
- * nothing once the session is terminal.
- */
 export function AppSessionIndicator({
 	session,
 	canControl,
-	canOpen = false,
 	editActive = false,
 	onStop,
 	onRestart,
@@ -171,8 +181,6 @@ export function AppSessionIndicator({
 	session: Session;
 	/** Editors may stop/restart the shared app; viewers only see its state. */
 	canControl: boolean;
-	/** The caller may open the app (viewers, when the viewer mode grants apps). */
-	canOpen?: boolean;
 	/** An edit session is live on the notebook — suppresses the stale hint (local sources only). */
 	editActive?: boolean;
 	onStop: () => void;
@@ -193,18 +201,25 @@ export function AppSessionIndicator({
 			}
 			triggerClassName="cursor-pointer rounded"
 		>
-			<AppSessionDetails
-				session={session}
-				label={status.label}
-				canControl={canControl}
-				canOpen={canOpen}
-				editActive={editActive}
-				onStop={onStop}
-				onRestart={onRestart}
-				profiles={profiles}
-				allowComputeOverride={allowComputeOverride}
-				selectedProfileName={selectedProfileName}
-			/>
+			{({ close }) => (
+				<AppSessionDetails
+					session={session}
+					label={status.label}
+					canControl={canControl}
+					editActive={editActive}
+					onStop={() => {
+						close();
+						onStop();
+					}}
+					onRestart={() => {
+						close();
+						onRestart();
+					}}
+					profiles={profiles}
+					allowComputeOverride={allowComputeOverride}
+					selectedProfileName={selectedProfileName}
+				/>
+			)}
 		</Popover>
 	);
 }

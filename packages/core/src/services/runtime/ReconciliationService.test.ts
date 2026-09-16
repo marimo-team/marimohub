@@ -14,6 +14,7 @@ import {
 } from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
+import { AppPoolService } from './AppPoolService';
 import { ReconciliationService } from './ReconciliationService';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { SessionService } from './SessionService';
@@ -406,6 +407,41 @@ describe('ReconciliationService', () => {
 		expect(result.markedDead).toBe(0);
 		const stored = await sessions.getSession(projectId, session.session_id);
 		expect(stored.status).toBe('starting');
+	});
+
+	it('Rule 2: respects a pool startup lease longer than the generic grace', async () => {
+		const pool = new AppPoolService(bucket, sessions);
+		const versionId = createVersionId();
+		await bucket.put(
+			paths.project(projectId).notebook(notebookId).source,
+			JSON.stringify({
+				schema_version: 1,
+				type: 'local',
+				current_version_id: versionId,
+			}),
+		);
+		const admission = await pool.admit({
+			projectId,
+			notebookId,
+			userId: ACTOR,
+			versionId,
+			startupMs: 3_600_000,
+		});
+		const session = await putSession({
+			session_id: admission.member.session_id,
+			sandbox_id: admission.member.sandbox_id,
+			mode: 'app',
+			app_pool: true,
+			status: 'starting',
+			started_at: iso(-20 * 60_000),
+			last_heartbeat: iso(-20 * 60_000),
+		});
+		compute.active = [];
+		expect(await sessions.expireStale()).toBe(0);
+		expect((await reconciler.reconcile()).markedDead).toBe(0);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('starting');
+		await bucket.delete(paths.appPool(projectId, notebookId));
+		expect(await sessions.expireStale()).toBe(1);
 	});
 
 	it('Rule 2: fails a starting record once past the provision grace', async () => {

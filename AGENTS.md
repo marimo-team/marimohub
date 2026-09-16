@@ -139,7 +139,9 @@ These CAS-managed records also have one writer each:
   `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
-- `SessionService.claimApp`/`releaseApp` owns each app claim at
+- `AppPoolStore` owns each app pool at `_system/app-pools/{pid}/{nid}.json`,
+  including reservations, account assignments, visit leases, and retained deletion tombstones.
+- `SessionService.claimApp`/`releaseApp` owns each legacy app claim at
   `_system/apps/{pid}/{nid}.json`.
 - `SessionService` owns each monotonic version-prune cutoff at
   `_system/version-prune-cutoffs/{pid}/{nid}.json`.
@@ -173,7 +175,8 @@ its `integrations/_names/{name}.json` uniqueness claim. Version writes use
 create-if-absent. Name claims use the same pattern as app claims.
 
 Deleting a notebook or project can delete its subordinate claims and objects as
-cleanup. Everything else is immutable, append-only, or an operational record,
+cleanup, except app pool records: retain their deletion tombstones and members awaiting reclamation.
+Everything else is immutable, append-only, or an operational record,
 such as a session, identity, token, or secret. Do not bypass the owners listed
 above.
 See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).

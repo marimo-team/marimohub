@@ -81,8 +81,8 @@ export interface SessionModePolicy {
 	workspaceLoad: 'source-policy' | 'copy-only';
 	/** App sessions skip this because `marimo run` has no editor surface. */
 	injectEditorConfig: boolean;
-	/** Anchored by the per-notebook claim object (`claimApp`/`releaseApp`). */
-	singleton: boolean;
+	/** App sandboxes share account assignments through the notebook pool. */
+	sharedApp: boolean;
 	/**
 	 * What a viewer-admitted session of this mode is (`VIEWER_SESSION_MODES`
 	 * says whether one is admitted at all): `ephemeral` — their own throwaway,
@@ -105,22 +105,18 @@ export const MODE_POLICY: Record<SessionMode, SessionModePolicy> = {
 		persistsEdits: true,
 		workspaceLoad: 'source-policy',
 		injectEditorConfig: true,
-		singleton: false,
+		sharedApp: false,
 		viewerSession: 'ephemeral',
 	},
-	// The shared app: one sandbox per notebook, owned by no one, never written
-	// back. Copy-only because a mounted workspace would let app code write
-	// through to the mirror the edit session owns. Viewer admission is the
-	// deployment's call (MARIMOHUB_VIEWER_MODE=applications and up): a
-	// viewer-reachable app holding WIF credentials or integration secrets can be
-	// prompted (via app inputs) to exfiltrate them, so it stays off by default.
+	// App replicas never write back. Copy-only loading prevents app code from
+	// mutating the workspace mirror owned by the editor.
 	app: {
 		reuseScope: 'per-notebook',
 		capScope: 'project',
 		persistsEdits: false,
 		workspaceLoad: 'copy-only',
 		injectEditorConfig: false,
-		singleton: true,
+		sharedApp: true,
 		viewerSession: 'shared',
 	},
 };

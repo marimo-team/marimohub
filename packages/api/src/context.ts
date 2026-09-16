@@ -1,6 +1,7 @@
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
+	AppPoolPolicy,
 	ResourceSecurityPolicy,
 	AuthenticatedPrincipal,
 	Authenticator,
@@ -287,6 +288,7 @@ export interface PolicyConfig {
 	 * attaching to a running app never trips it. Unset/undefined = unlimited.
 	 */
 	maxAppsPerProject?: number;
+	appPool?: AppPoolPolicy;
 	/**
 	 * Deployment super admins (config: MARIMOHUB_SUPER_ADMINS): entries granted
 	 * implicit `admin` on every project and visibility of all projects. An

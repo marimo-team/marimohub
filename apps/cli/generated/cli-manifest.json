@@ -4606,7 +4606,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions",
 			"summary": "Create a session and provision a sandbox",
-			"description": "Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App-session reuse is shared per notebook.",
+			"description": "Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App sessions use sticky account assignments in a version-aware pool.",
 			"parameters": [
 				{
 					"name": "idempotency-key",
@@ -4638,6 +4638,13 @@
 				"required": false,
 				"properties": [
 					{
+						"name": "app_visit_id",
+						"cli_name": "app-visit-id",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "compute_profile",
 						"cli_name": "compute-profile",
 						"required": false,
@@ -4655,6 +4662,14 @@
 						"name": "mode",
 						"cli_name": "mode",
 						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "replace_app_session_id",
+						"cli_name": "replace-app-session-id",
+						"required": false,
+						"description": "Replace the selected app sandbox without joining it. Requires permission to stop that sandbox.",
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -4836,6 +4851,82 @@
 					"repeatable": false
 				}
 			],
+			"body": {
+				"required": false,
+				"properties": [
+					{
+						"name": "generation",
+						"cli_name": "generation",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "visit_id",
+						"cli_name": "visit-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "sessions.leaveApp",
+			"command": ["sessions", "leaveApp"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/leave",
+			"summary": "Release this app visit",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "generation",
+						"cli_name": "generation",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "visit_id",
+						"cli_name": "visit-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",

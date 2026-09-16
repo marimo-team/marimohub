@@ -172,7 +172,11 @@ describe('notebook URL mirroring', () => {
 			renderPage('app', { search: '?id=123', controls: <Controls /> });
 			await screen.findByTitle('Forecast');
 			const connection = connections.at(-1)!;
-			options.session = runningSession({ mode: 'app', sandbox_url: undefined });
+			options.session = runningSession({
+				mode: 'app',
+				sandbox_url: undefined,
+				can: { attach: false, stop: false },
+			});
 			await act(() => vi.advanceTimersByTimeAsync(30_000));
 			expect(screen.getByText('Access ended')).toBeInTheDocument();
 			expect(connection.dispose).toHaveBeenCalledOnce();
@@ -213,7 +217,7 @@ describe('notebook URL mirroring', () => {
 			false,
 		);
 	});
-	it('uses mirrored parameters with fresh credentials when the sandbox is replaced', async () => {
+	it('preserves mirrored parameters when the user re-enters through app admission', async () => {
 		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 		try {
 			const options: Parameters<typeof makeFetch>[0] = {
@@ -223,7 +227,7 @@ describe('notebook URL mirroring', () => {
 					sandbox_url: 'https://old.example/?access_token=old&provider=old',
 				}),
 			};
-			makeFetch(options);
+			const impl = makeFetch(options);
 			renderPage('app', { search: '?id=123', controls: <Controls /> });
 			const initial = await screen.findByTitle('Forecast');
 			const connection = connections.at(-1)!;
@@ -245,12 +249,23 @@ describe('notebook URL mirroring', () => {
 			options.projectSessions = [
 				runningSession({
 					mode: 'app',
-					session_id: 'new-session',
-					sandbox_url: 'https://new.example/?access_token=new&provider=new',
+					session_id: 'other-session',
+					sandbox_url: 'https://other.example/?access_token=other',
 				}),
 			];
 			await act(() => vi.advanceTimersByTimeAsync(30_000));
-			const replacement = screen.getByTitle('Forecast');
+			expect(screen.getByText('App stopped')).toBeInTheDocument();
+			expect(screen.queryByTitle('Forecast')).not.toBeInTheDocument();
+			expect(sessionPosts(impl)).toHaveLength(1);
+			expect(connection.dispose).toHaveBeenCalledOnce();
+			options.session = runningSession({
+				mode: 'app',
+				session_id: 'new-session',
+				sandbox_url: 'https://new.example/?access_token=new&provider=new',
+			});
+			fireEvent.click(screen.getByRole('button', { name: 'Restart app' }));
+			const replacement = await screen.findByTitle('Forecast');
+			expect(sessionPosts(impl)).toHaveLength(2);
 			expect(replacement).not.toBe(initial);
 			const url = new URL(replacement.getAttribute('src')!);
 			expect(url.origin).toBe('https://new.example');

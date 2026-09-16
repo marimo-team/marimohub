@@ -23,7 +23,7 @@ import {
 	PreconditionFailedError,
 	ValidationError,
 } from '../../errors';
-import { createProjectId, SYSTEM_ACTOR } from '../../ids';
+import { createProjectId, NotebookId, SYSTEM_ACTOR } from '../../ids';
 import type { ProjectId, SnapshotId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -43,7 +43,8 @@ import type {
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
-import { deleteByPrefix } from '../catalog/storage';
+import { deleteByPrefix, listAllKeys, listAllPrefixes } from '../catalog/storage';
+import { AppPoolStore } from '../runtime/AppPoolStore';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
 import { DeepLinkService } from './DeepLinkService';
 import { createListFilter } from './listFilters';
@@ -818,27 +819,42 @@ export class ProjectService {
 				);
 			}
 		};
-		if (!written) {
-			await retireThumbnails();
-			return null;
-		}
+		const snapshot = written
+			? await this.catalog.updateProjectEntry(
+					'project.delete',
+					actor,
+					id,
+					async (entry) =>
+						(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
+						projectCatalogPatch(updated, entry),
+				)
+			: null;
 
-		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
-		// the GC sweep can find and purge it later, but mark it deleted so it drops
-		// out of listProjects immediately.
-		const snapshot = await this.catalog.updateProjectEntry(
-			'project.delete',
-			actor,
-			id,
-			async (entry) =>
-				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
-				projectCatalogPatch(updated, entry),
-		);
+		await this.retireAppPoolsForDeletion(id);
 		await retireThumbnails();
 		await this.deepLinks.releaseProject(id).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
 		});
-		return { project: updated, mutationId: snapshot.snapshot_id };
+		return snapshot ? { project: updated, mutationId: snapshot.snapshot_id } : null;
+	}
+
+	private async retireAppPoolsForDeletion(projectId: ProjectId): Promise<void> {
+		const notebooksPrefix = `projects/${projectId}/notebooks/`;
+		const poolPrefix = paths.appPoolsForProject(projectId);
+		const [notebooks, pools] = await Promise.all([
+			listAllPrefixes(this.bucket, notebooksPrefix),
+			listAllKeys(this.bucket, poolPrefix),
+		]);
+		const notebookIds = new Set(
+			[
+				...notebooks.map((key) => key.slice(notebooksPrefix.length, -1)),
+				...pools.map((key) => key.slice(poolPrefix.length).replace(/\.json$/, '')),
+			].filter(NotebookId.is),
+		);
+		const store = new AppPoolStore(this.bucket, this.metrics);
+		await mapWithConcurrency([...notebookIds], BUCKET_SCAN_CONCURRENCY, (notebookId) =>
+			store.retireForDeletion(projectId, notebookId),
+		);
 	}
 
 	/**
@@ -858,6 +874,7 @@ export class ProjectService {
 			);
 		}
 
+		await this.retireAppPoolsForDeletion(id);
 		await this.deepLinks.releaseProject(id);
 		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.editorClaimsForProject(id));

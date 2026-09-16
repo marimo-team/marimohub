@@ -46,6 +46,7 @@ import {
 	sessionPersistsEdits,
 } from './sessionState';
 import { listAllObjects } from '../catalog/storage';
+import { AppPoolStore } from './AppPoolStore';
 
 export interface CreateSessionInput {
 	notebook_id: NotebookId;
@@ -60,7 +61,7 @@ export interface CreateSessionInput {
 	compute_from_snapshot?: boolean;
 	/** Discard-only session whose edits are never persisted (see SessionSchema). */
 	ephemeral?: boolean;
-	/** `edit` (default) or `app` (the shared singleton; see SessionSchema). */
+	/** `edit` (default) or `app` (a shared pool member; see SessionSchema). */
 	mode?: SessionMode;
 	/** Immutable notebook version used to start this session. */
 	source_version_id?: VersionId;
@@ -68,6 +69,7 @@ export interface CreateSessionInput {
 	/** Non-extendable expiry of the entitlement credential that authorized the session. */
 	authorization_expires_at?: string;
 	session_id?: SessionId;
+	app_pool?: true;
 }
 
 export const SURFACE_START_LEASE_MS = Millis.minutes(3);
@@ -159,6 +161,7 @@ export class SessionService {
 			started_at: now,
 			last_heartbeat: now,
 			...(input.ephemeral ? { ephemeral: true } : {}),
+			...(input.app_pool ? { app_pool: true as const } : {}),
 			...(input.mode && input.mode !== 'edit' ? { mode: input.mode } : {}),
 			...(input.source_version_id ? { source_version_id: input.source_version_id } : {}),
 			...(input.editor_sandbox_sharing
@@ -716,31 +719,19 @@ export class SessionService {
 		notebookId: NotebookId,
 	): Promise<ReadonlySet<VersionId>> {
 		const sessions = await this.listActiveByProject(projectId);
-		return new Set(
-			sessions
+		const pool = await new AppPoolStore(this.bucket).read(projectId, notebookId);
+		return new Set([
+			...sessions
 				.filter((session) => session.notebook_id === notebookId && session.source_version_id)
 				.map((session) => session.source_version_id as VersionId),
-		);
+			// Reservations protect source before a session exists; retiring members protect it until reclamation.
+			...(pool?.members.flatMap((member) =>
+				member.source_version_id ? [member.source_version_id] : [],
+			) ?? []),
+		]);
 	}
 
-	/**
-	 * Find a session the caller can REUSE for this notebook so a refresh during
-	 * start doesn't pile up sandboxes: a `running` session with a `sandbox_url`
-	 * (reconnect to the live kernel), OR an in-flight `starting` session still
-	 * within the provision window (attach to the one already provisioning — the
-	 * client polls it to `running`). Stale `starting` records are ignored so a
-	 * wedged provision isn't reused forever. Returns the most recently
-	 * heartbeated match.
-	 *
-	 * Reuse is keyed per the mode's `reuseScope`: `per-user` matches only
-	 * the caller's own session; `per-notebook` is user-blind —
-	 * ANY editor's request attaches. That user-blind reuse IS the singleton, so
-	 * for a singleton mode the CLAIM, not the heartbeat order, decides which
-	 * candidate is handed out.
-	 *
-	 * Persistent editor sessions use `findReusableEditor` instead. Their claim
-	 * applies the deployment's shared or exclusive policy.
-	 */
+	/** Legacy app-claim lookup. New app admissions go through AppPoolService. */
 	async findReusable(
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -760,7 +751,7 @@ export class SessionService {
 				((s.status === 'running' && !!s.sandbox_url) ||
 					(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
 		);
-		if (policy.singleton) return this.claimHolderAmong(projectId, notebookId, candidates);
+		if (policy.sharedApp) return this.claimHolderAmong(projectId, notebookId, candidates);
 		return candidates.sort(
 			(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
 		)[0];
@@ -902,19 +893,14 @@ export class SessionService {
 			.filter(
 				(s) =>
 					s.user_id === userId &&
-					active.includes(s.status) &&
+					(active.includes(s.status) ||
+						(capScope === 'project' && !!s.sandbox_id && !s.sandbox_reclaimed_at)) &&
 					sessionModePolicy(s).capScope === capScope,
 			)
 			.sort(byCapOrder);
 	}
 
-	/**
-	 * Count a project's active app sessions, for the per-project app cap
-	 * (`MARIMOHUB_MAX_APPS_PER_PROJECT`). The user-blind reuse in `findReusable`
-	 * keeps an attach from ever tripping it. `terminating` is excluded (matching
-	 * the user cap): a stop frees the slot while teardown finishes, so the live
-	 * sandbox count can briefly exceed the cap.
-	 */
+	/** App capacity remains occupied until sandbox reclamation is confirmed. */
 	async countActiveAppsForProject(projectId: ProjectId): Promise<number> {
 		return (await this.listActiveAppsForProject(projectId)).length;
 	}
@@ -924,7 +910,11 @@ export class SessionService {
 		const active = ACTIVE_STATUSES as readonly Session['status'][];
 		const sessions = await this.scanProject(projectId, (session) => session);
 		return sessions
-			.filter((s) => active.includes(s.status) && sessionModePolicy(s).capScope === 'project')
+			.filter(
+				(s) =>
+					(active.includes(s.status) || (!!s.sandbox_id && !s.sandbox_reclaimed_at)) &&
+					sessionModePolicy(s).capScope === 'project',
+			)
 			.sort(byCapOrder);
 	}
 
@@ -1546,7 +1536,7 @@ export class SessionService {
 	): Promise<boolean> {
 		try {
 			const session = await this.getSession(projectId, holder);
-			if (session.notebook_id !== notebookId || !sessionModePolicy(session).singleton) {
+			if (session.notebook_id !== notebookId || !sessionModePolicy(session).sharedApp) {
 				return false;
 			}
 			return (
@@ -1581,18 +1571,25 @@ export class SessionService {
 	async releaseAppFor(
 		session: Pick<Session, 'mode' | 'project_id' | 'notebook_id' | 'session_id'>,
 	): Promise<void> {
-		if (!sessionModePolicy(session).singleton) return;
+		if (!sessionModePolicy(session).sharedApp) return;
 		await this.releaseApp(session.project_id, session.notebook_id, session.session_id);
 	}
 
 	async expireStale(): Promise<number> {
 		const now = Date.now();
+		const readPool = new AppPoolStore(this.bucket).reader();
 
 		// Scan + expire in bounded-parallel: reads and the per-session conditional
 		// PUTs are independent (each keyed by its own ETag), so the reaper pass no
 		// longer scales linearly with the session count.
 		const results = await this.scanSessions(async (session, obj, etag) => {
 			if (isTerminal(session.status)) return { expired: 0, live: 0 };
+			// Pool reconciliation owns idle and startup expiry for managed apps.
+			if (sessionMode(session) === 'app' && session.status !== 'terminating') {
+				const pool = await readPool(session.project_id, session.notebook_id);
+				if (pool?.members.some((member) => member.session_id === session.session_id))
+					return { expired: 0, live: 1 };
+			}
 
 			const stale = now - new Date(session.last_heartbeat).getTime() > HEARTBEAT_TTL_MS;
 			if (!stale) {

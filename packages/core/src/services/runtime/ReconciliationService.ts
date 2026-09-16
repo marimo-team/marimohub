@@ -11,6 +11,7 @@ import type { RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { isTerminalRunStatus } from '../jobs/runState';
 import { SessionRetirer } from './SessionRetirer';
+import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
 import { sessionPersistsEdits } from './sessionState';
@@ -123,6 +124,7 @@ export class ReconciliationService {
 		// an orphan.
 		const active = await this.compute.listActive();
 		const sessions = await this.sessions.listSessions();
+		const readPool = new AppPoolStore(this.bucket).reader();
 		const diagnosticSandboxIds = await this.diagnosticLeases.activeSandboxIds(now);
 
 		const activeIds = new Set<string>(active.map((s) => s.id));
@@ -238,6 +240,18 @@ export class ReconciliationService {
 					now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
 				) {
 					continue;
+				}
+				if (session.app_pool && session.status === 'starting') {
+					const pool = await readPool(session.project_id, session.notebook_id);
+					if (
+						pool?.members.some(
+							(member) =>
+								member.session_id === session.session_id &&
+								member.state === 'starting' &&
+								member.operation_expires_at > now,
+						)
+					)
+						continue;
 				}
 				try {
 					const failed = await this.sessions.markFailedWithOutcome(

@@ -376,6 +376,99 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 	});
 
+	it.each(['editor', 'viewer'] as const)(
+		'lets an unassigned %s open an app through admission',
+		async (role) => {
+			const user = userEvent.setup();
+			makeFetch({
+				role,
+				capabilities: { viewer_session_modes: ['app'] },
+				sessions: [
+					{
+						...runningSession(),
+						mode: 'app',
+						sandbox_url: undefined,
+						can: { attach: false, stop: role === 'editor' },
+					},
+				],
+			});
+			await renderProject();
+			await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
+			expect(await screen.findByRole('menuitem', { name: 'Open app' })).toBeVisible();
+		},
+	);
+
+	it('shows multiple app sandboxes and stops only the selected one', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			sessions: ['sess-app-a', 'sess-app-b'].map(
+				(session_id) =>
+					({
+						...runningSession(),
+						session_id,
+						mode: 'app',
+						can: { attach: true, stop: true },
+						app_pool: { state: 'ready', users: 3, max_users: 4 },
+					}) as Session,
+			),
+		});
+		await renderProject();
+		const indicators = await screen.findAllByRole('button', { name: 'App running — details' });
+		expect(indicators).toHaveLength(2);
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
+		expect(screen.queryByRole('menuitem', { name: 'Stop app' })).toBeNull();
+		await user.keyboard('{Escape}');
+		await user.click(indicators[1]);
+		expect(await screen.findByText('sess-app-b')).toBeInTheDocument();
+		expect(screen.getByText('3 / 4')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Stop' }));
+		const dialog = await screen.findByRole('dialog');
+		expect(screen.queryByText('sess-app-b')).toBeNull();
+		expect(within(dialog).getByText(/Stop this app sandbox/)).toBeInTheDocument();
+		await user.click(within(dialog).getByRole('button', { name: 'Stop App' }));
+		await waitFor(() =>
+			expect(
+				calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-app-b')),
+			).toBe(true),
+		);
+		expect(
+			calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-app-a')),
+		).toBe(false);
+	});
+
+	it('requests explicit replacement of the selected app after impact confirmation', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			sessions: ['sess-app-a', 'sess-app-b'].map(
+				(session_id) =>
+					({
+						...runningSession(),
+						session_id,
+						mode: 'app',
+						can: { attach: true, stop: true },
+					}) as Session,
+			),
+		});
+		await renderProject();
+		const indicators = await screen.findAllByRole('button', { name: 'App running — details' });
+		await user.click(indicators[1]);
+		await user.click(screen.getByRole('button', { name: 'Restart' }));
+		const dialog = await screen.findByRole('dialog');
+		expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/sessions'))).toBe(
+			false,
+		);
+		await user.click(within(dialog).getByRole('button', { name: 'Restart' }));
+		await waitFor(() => {
+			const request = calls.find(
+				(call) => call.method === 'POST' && call.url.endsWith('/sessions'),
+			);
+			expect(request?.body).toEqual({ mode: 'app', replace_app_session_id: 'sess-app-b' });
+		});
+		expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
+	});
+
 	it('keeps the app stale hint visible when only a temporary editor is running', async () => {
 		const user = userEvent.setup();
 		makeFetch({
@@ -400,7 +493,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		await renderProject();
 
 		await user.click(await screen.findByRole('button', { name: 'App running — details' }));
-		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+		expect(await screen.findByText(/New users receive the latest version/)).toBeInTheDocument();
 	});
 
 	it('surfaces an edit-session restart failure from the compute toast', async () => {

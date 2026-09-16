@@ -24,3 +24,5 @@ export {
 	UNSAFE_RESPONSE_HEADERS,
 } from './sandboxProxy';
 export type { ProxyDecision } from './sandboxProxy';
+
+export { sweepAppPools } from './appPools';

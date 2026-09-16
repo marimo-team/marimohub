@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { resolveJobSandboxEnv, scheduleProjectAlert } from '@marimo-hub/api';
+import { resolveJobSandboxEnv, scheduleProjectAlert, sweepAppPools } from '@marimo-hub/api';
 import type { ApiDeps, JobsConfig } from '@marimo-hub/api';
 import {
 	MaintenanceLock,
@@ -32,7 +32,7 @@ async function scheduleUnavailableAppAlerts(
 	sessions: Awaited<ReturnType<ReconciliationService['reconcile']>>['markedDeadSessions'],
 ): Promise<void> {
 	await mapWithConcurrency(sessions, APP_ALERT_CONTEXT_CONCURRENCY, async (session) => {
-		if (session.status !== 'running' || !sessionModePolicy(session).singleton) return;
+		if (session.status !== 'running' || !sessionModePolicy(session).sharedApp) return;
 		try {
 			const [project, notebook] = await Promise.all([
 				retryMetadataRead(() => deps.services.projects.getProject(session.project_id)),
@@ -137,6 +137,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 				return;
 			}
 			try {
+				await sweepAppPools(deps);
 				const sessionsExpired = await sessions.expireStale();
 				const reconcile = await reconciler.reconcile();
 				await scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions);
@@ -242,6 +243,7 @@ export function startSessionLifecycle(deps: ApiDeps): (() => void) | undefined {
 		try {
 			if (!(await lock.acquire(holder).catch(() => false))) return; // not leader
 			try {
+				await sweepAppPools(deps);
 				const r = await svc.sweep();
 				if (Object.values(r).some((n) => n > 0)) {
 					logEvent({ level: 'info', event: 'session_lifecycle_sweep', holder, ...r });

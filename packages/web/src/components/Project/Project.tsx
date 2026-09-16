@@ -417,8 +417,8 @@ function useProjectContent() {
 	const computeLive = computeTarget ? sessionByNotebook.get(computeTarget.id) : undefined;
 	const computeRestartSession = computeLive?.edit?.can?.stop
 		? computeLive.edit
-		: computeLive?.app?.can?.stop
-			? computeLive.app
+		: computeLive?.apps?.length === 1 && computeLive.apps[0].can?.stop
+			? computeLive.apps[0]
 			: undefined;
 
 	// Resolve every author (and session starter) shown on the page in one batch,
@@ -566,7 +566,8 @@ function useProjectContent() {
 				state: { title: nb.title },
 			});
 		else if (key === 'stop-app') {
-			const app = sessionByNotebook.get(nb.id)?.app;
+			const apps = sessionByNotebook.get(nb.id)?.apps;
+			const app = apps?.length === 1 ? apps[0] : undefined;
 			if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
 		} else if (key === 'view-snapshot')
 			void navigate(`/projects/${pid}/notebooks/${nb.id}/snapshot`, {
@@ -606,10 +607,10 @@ function useProjectContent() {
 					? [{ id: 'run-app', label: 'Run as app', icon: <Play className="size-4" /> }]
 					: []
 				: [
-						...(app.can?.attach
+						...(canStartApps
 							? [{ id: 'open-app', label: 'Open app', icon: <AppWindow className="size-4" /> }]
 							: []),
-						...(app.can?.stop
+						...(live?.apps?.length === 1 && app.can?.stop
 							? [
 									{
 										id: 'stop-app',
@@ -864,23 +865,23 @@ function useProjectContent() {
 										title={nb.title}
 									/>
 									<div className="flex shrink-0 items-center gap-3">
-										{live?.app && (
+										{live?.apps?.map((appSession) => (
 											<AppSessionIndicator
-												session={live.app}
-												canControl={!!live.app.can?.stop}
-												canOpen={!!live.app.can?.attach}
+												key={appSession.session_id}
+												session={appSession}
+												canControl={!!appSession.can?.stop}
 												editActive={!!live.persistentEdit}
 												profiles={computeProfiles}
 												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
 												selectedProfileName={nb.compute_profile}
 												onStop={() =>
-													appModal.open({ action: 'stop', notebook: nb, session: live.app! })
+													appModal.open({ action: 'stop', notebook: nb, session: appSession })
 												}
 												onRestart={() =>
-													appModal.open({ action: 'restart', notebook: nb, session: live.app! })
+													appModal.open({ action: 'restart', notebook: nb, session: appSession })
 												}
 											/>
-										)}
+										))}
 										<SessionStatusDot
 											session={live?.edit}
 											loading={sessionsLoading}
@@ -1124,8 +1125,8 @@ function useProjectContent() {
 				title={appModal.target?.action === 'restart' ? 'Restart App' : 'Stop App'}
 				description={
 					appModal.target?.action === 'restart'
-						? `Restart the app for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(appModal.target.session)}`
-						: `Stop the app for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${sessionConnectionHint(appModal.target?.session)}`
+						? `Restart this app sandbox for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(appModal.target.session)}`
+						: `Stop this app sandbox for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${sessionConnectionHint(appModal.target?.session)}`
 				}
 				confirmLabel={appModal.target?.action === 'restart' ? 'Restart' : 'Stop App'}
 				pendingLabel={appModal.target?.action === 'restart' ? 'Restarting...' : 'Stopping...'}

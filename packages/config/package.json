@@ -9,6 +9,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./app-pool": "./src/appPool.ts",
 		"./compute-profiles": "./src/computeProfiles.ts",
 		"./sandbox-auth": "./src/sandboxAuth.ts",
 		"./spec": "./src/spec.ts",

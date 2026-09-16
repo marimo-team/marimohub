@@ -2007,10 +2007,11 @@ function startSessionRequest(
 	mode: 'edit' | 'app',
 	computeProfile?: 'default',
 	editIntent?: 'temporary',
+	appVisitId?: string,
 ) {
 	const params = { path: { pid: projectId, nid: notebookId } };
 	const body = {
-		...(mode === 'app' ? { mode } : {}),
+		...(mode === 'app' ? { mode, ...(appVisitId ? { app_visit_id: appVisitId } : {}) } : {}),
 		...(computeProfile ? { compute_profile: computeProfile } : {}),
 		...(editIntent ? { edit_intent: editIntent } : {}),
 	};
@@ -2047,7 +2048,15 @@ function useStartSessionRequest(
 	editIntent?: 'temporary',
 ) {
 	return useApiMutation(
-		() => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
+		(visitId: string | void) =>
+			startSessionRequest(
+				projectId,
+				notebookId,
+				mode,
+				computeProfile,
+				editIntent,
+				visitId ?? undefined,
+			),
 		() => [sessionKeys.listByProject(projectId)],
 		{ suppressErrorToast: true },
 	);
@@ -2071,11 +2080,10 @@ export function useStartSessionWithDefault(
 	return useStartSessionRequest(projectId, notebookId, mode, 'default', editIntent);
 }
 
-async function restartSessionRequest(
+async function restartEditorSessionRequest(
 	projectId: string,
 	notebookId: string,
 	sessionId: string,
-	mode: 'edit' | 'app',
 ) {
 	try {
 		await stopSessionRequest(projectId, notebookId, sessionId);
@@ -2083,20 +2091,32 @@ async function restartSessionRequest(
 		// A reaped session is already stopped, so the requested restart can continue.
 		if (!isNotFoundError(err)) throw err;
 	}
-	return startSessionRequest(projectId, notebookId, mode);
+	return startSessionRequest(projectId, notebookId, 'edit');
 }
 
-export function useRestartApp(projectId: string, notebookId: string) {
+export function useRestartApp(
+	projectId: string,
+	notebookId: string,
+	opts?: { suppressErrorToast?: boolean },
+) {
 	return useApiMutation(
-		(sessionId: string) => restartSessionRequest(projectId, notebookId, sessionId, 'app'),
+		(sessionId: string) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body: { mode: 'app', replace_app_session_id: sessionId },
+					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+				}),
+			),
 		() => [sessionKeys.listByProject(projectId)],
+		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
 }
 
 export function useRestartSession(projectId: string) {
 	return useApiMutation(
 		({ notebookId, sessionId }: { notebookId: string; sessionId: string }) =>
-			restartSessionRequest(projectId, notebookId, sessionId, 'edit'),
+			restartEditorSessionRequest(projectId, notebookId, sessionId),
 		() => [sessionKeys.listByProject(projectId)],
 	);
 }

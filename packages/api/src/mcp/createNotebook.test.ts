@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	AppPoolService,
 	CatalogService,
 	BadRequestError,
 	ForbiddenError,
@@ -740,16 +741,27 @@ describe('MCP session execution readiness', () => {
 			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
 			USER_ID,
 		);
-		const session = await deps.services.sessions.createSession({
+		const source = (await deps.services.notebooks.getNotebook(project.id, notebook.id)).source;
+		const admission =
+			mode === 'app'
+				? await new AppPoolService(deps.bucket, deps.services.sessions).admit({
+						projectId: project.id,
+						notebookId: notebook.id,
+						userId: USER_ID,
+						versionId: source.current_version_id!,
+						startupMs: 900_000,
+					})
+				: undefined;
+		await deps.services.sessions.createSession({
+			...(admission ? { session_id: admission.member.session_id, app_pool: true as const } : {}),
 			project_id: project.id,
 			notebook_id: notebook.id,
 			user_id: USER_ID,
-			sandbox_id: SandboxId.create(),
+			sandbox_id: admission?.member.sandbox_id ?? SandboxId.create(),
 			mode,
 			authorization_expires_at: expiresAt,
 		});
-		if (mode === 'app')
-			await deps.services.sessions.claimApp(project.id, notebook.id, session.session_id);
+
 		return { deps, project, notebook };
 	}
 

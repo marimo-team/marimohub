@@ -71,7 +71,7 @@ describe('NotebookPage query parameters', () => {
 		expect(sessionPosts(impl)).toHaveLength(1);
 	});
 
-	it('preserves the deep link when a stopped app is replaced, without carrying over old credentials', async () => {
+	it('preserves the deep link after readmission, without carrying over old credentials', async () => {
 		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 		const options: Parameters<typeof makeFetch>[0] = {
 			role: 'editor',
@@ -92,13 +92,16 @@ describe('NotebookPage query parameters', () => {
 			}),
 		];
 		await act(() => vi.advanceTimersByTimeAsync(30_000));
-		const frame = screen.getByTitle('Forecast');
+		expect(screen.queryByTitle('Forecast')).toBeNull();
+		options.session = options.projectSessions[0];
+		fireEvent.click(screen.getByRole('button', { name: 'Restart app' }));
+		const frame = await screen.findByTitle('Forecast');
 		expect(frame).not.toBe(initial);
 		expect(frame).toHaveAttribute(
 			'src',
 			'https://new.example/?access_token=new&id=123&theme=light&show-code=false',
 		);
-		expect(sessionPosts(impl)).toHaveLength(1);
+		expect(sessionPosts(impl)).toHaveLength(2);
 	});
 
 	it('removes the live frame when access is revoked and query changes cannot restore it', async () => {
@@ -113,7 +116,11 @@ describe('NotebookPage query parameters', () => {
 			controls: <NavigationControls />,
 		});
 		await screen.findByTitle('Forecast');
-		options.session = runningSession({ mode: 'app', sandbox_url: undefined });
+		options.session = runningSession({
+			mode: 'app',
+			sandbox_url: undefined,
+			can: { attach: false, stop: false, surfaces: { vscode: false, opencode: false } },
+		});
 		await act(() => vi.advanceTimersByTimeAsync(30_000));
 		expect(screen.getByText('Access ended')).toBeInTheDocument();
 		fireEvent.click(screen.getByText('Change query'));
@@ -225,7 +232,7 @@ describe('NotebookPage query parameters', () => {
 		},
 	);
 
-	it('keeps the frame mounted through reserved query changes, theme changes, and session polling', async () => {
+	it('keeps the frame mounted through reserved query changes, theme changes, and heartbeats', async () => {
 		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 		const impl = makeFetch({ role: 'editor', session: runningSession({ mode: 'app' }) });
 		renderPage('app', { search: '?id=123', controls: <NavigationControls /> });
@@ -237,7 +244,9 @@ describe('NotebookPage query parameters', () => {
 		const before = impl.mock.calls.length;
 		await act(() => vi.advanceTimersByTimeAsync(30_000));
 		expect(
-			impl.mock.calls.slice(before).some(([url]) => String(url).endsWith('/sessions/sess-1')),
+			impl.mock.calls
+				.slice(before)
+				.some(([url]) => String(url).endsWith('/sessions/sess-1/heartbeat')),
 		).toBe(true);
 		expect(screen.getByTitle('Forecast')).toBe(initial);
 		expect(new URL(initial.getAttribute('src')!).searchParams.get('theme')).toBe('light');

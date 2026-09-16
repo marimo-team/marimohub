@@ -1276,6 +1276,7 @@ describe('createFromEnv session lifetime', () => {
 			...baseEnv,
 			MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS: '600',
 		});
+		expect(inherited.policy.appPool?.idleMs).toBe(600_000);
 		expect(inherited.sandbox.sessionLifetime?.idleTimeoutMsByMode).toEqual({
 			edit: 600 * 1000,
 			app: 600 * 1000,
@@ -1286,6 +1287,7 @@ describe('createFromEnv session lifetime', () => {
 			MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS: '600',
 			MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS: '7200',
 		});
+		expect(deps.policy.appPool?.idleMs).toBe(7_200_000);
 		expect(deps.sandbox.sessionLifetime?.idleTimeoutMsByMode).toEqual({
 			edit: 600 * 1000,
 			app: 7200 * 1000,

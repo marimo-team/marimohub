@@ -11,7 +11,14 @@
  * the Node relay uses to close an established socket.
  */
 import type { MiddlewareHandler } from 'hono';
-import { NotFoundError, ProxyExposure, UnavailableError, verifyProxyToken } from '@marimo-hub/core';
+import {
+	AppPoolService,
+	sessionMode,
+	NotFoundError,
+	ProxyExposure,
+	UnavailableError,
+	verifyProxyToken,
+} from '@marimo-hub/core';
 import type { ResourceSecurityLabels } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
@@ -214,6 +221,32 @@ export async function authorizeProxyRequest(
 				? 'Not authorized to use this session surface'
 				: 'Not authorized to attach this session',
 		};
+	}
+
+	if (sessionMode(session) === 'app') {
+		try {
+			const allowed = await new AppPoolService(
+				deps.bucket,
+				deps.services.sessions,
+				deps.policy.appPool,
+				deps.metrics,
+			).canAccess(projectId, session.notebook_id, user.id, sessionId, !session.app_pool);
+			if (!allowed) {
+				return {
+					kind: 'reject',
+					status: 410,
+					code: 'GONE',
+					message: 'The app assignment expired. Open the app again.',
+				};
+			}
+		} catch {
+			return {
+				kind: 'reject',
+				status: 503,
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'Session authorization could not be verified',
+			};
+		}
 	}
 	// The CURRENT context expiry can be earlier than the deadline stamped at
 	// session start — an established socket must not outlive either.

@@ -1252,6 +1252,14 @@ export function toComputeResourcesResponse(
 
 export const SessionResponseSchema = z
 	.object({
+		app_assignment: z.object({ visit_id: z.string(), generation: z.string() }).optional(),
+		app_pool: z
+			.object({
+				state: z.enum(['starting', 'ready', 'draining', 'retiring']),
+				users: z.number(),
+				max_users: z.number().nullable(),
+			})
+			.optional(),
 		session_id: z.string(),
 		notebook_id: z.string(),
 		project_id: z.string(),
@@ -1522,6 +1530,7 @@ export const CapabilitiesResponseSchema = z
 		 * clients render from it instead of re-deriving policy from `viewer_mode`.
 		 */
 		viewer_session_modes: z.array(z.enum(SESSION_MODES)),
+		app_pool: z.object({ heartbeat_interval_seconds: z.number().positive() }).optional(),
 		editor_sandbox_sharing: z.enum(EDITOR_SANDBOX_SHARING_VALUES),
 		/**
 		 * Role granted to an authenticated non-member (MARIMOHUB_DEFAULT_ROLE);

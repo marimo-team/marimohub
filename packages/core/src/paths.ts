@@ -283,6 +283,9 @@ export const paths = {
 	 */
 	appClaim: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/apps/${projectId}/${notebookId}.json`,
+	appPool: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/app-pools/${projectId}/${notebookId}.json`,
+	appPoolsForProject: (projectId: ProjectId) => `_system/app-pools/${projectId}/`,
 	appClaimsForProject: (projectId: ProjectId) => `_system/apps/${projectId}/`,
 	editorClaim: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/editors/${projectId}/${notebookId}.json`,

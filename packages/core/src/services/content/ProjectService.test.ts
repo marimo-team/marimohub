@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
-import { createJobId, createRunId, createVersionId, UserId } from '../../ids';
+import { createJobId, createNotebookId, createRunId, createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -12,6 +12,11 @@ import type { NotebookService } from './NotebookService';
 import { EventService } from '../catalog/EventService';
 import { claimInviteRows, ProjectService } from './ProjectService';
 import { listAllKeys } from '../catalog/storage';
+import { AppPoolStore } from '../runtime/AppPoolStore';
+import { AppPoolService } from '../runtime/AppPoolService';
+import { DEFAULT_APP_POOL_POLICY } from '../runtime/AppPoolRouter';
+import { SessionService } from '../runtime/SessionService';
+import { DeepLinkService } from './DeepLinkService';
 
 describe('ProjectService', () => {
 	let bucket: MemoryBucket;
@@ -932,6 +937,48 @@ describe('ProjectService', () => {
 	});
 
 	describe('deleteProject (soft-delete)', () => {
+		it('retries interrupted pool cleanup and releases deep links without another catalog commit', async () => {
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			const service = new ProjectService(bucket, catalog, metrics);
+			const project = await service.createProject({ name: 'App project', description: '' }, ACTOR);
+			const notebook = await notebooks.createNotebook(
+				project.id,
+				{ title: 'App', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const target = { kind: 'app' as const, project_id: project.id, notebook_id: notebook.id };
+			const links = new DeepLinkService(bucket);
+			await links.register('deleted-project-app', target, ACTOR);
+			const fence = vi
+				.spyOn(AppPoolStore.prototype, 'retireForDeletion')
+				.mockRejectedValueOnce(new Error('pool unavailable'));
+			try {
+				await expect(service.deleteProject(project.id, ACTOR)).rejects.toThrow('pool unavailable');
+				const committed = await catalog.getCurrentSnapshot();
+				expect(committed.projects.find((p) => p.id === project.id)?.status).toBe('deleted');
+				expect(await links.list(target)).toHaveLength(1);
+
+				const originalPut = bucket.put.bind(bucket);
+				let conflict = true;
+				vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
+					if (key === paths.appPool(project.id, notebook.id) && conflict) {
+						conflict = false;
+						throw new PreconditionFailedError('concurrent pool update');
+					}
+					return originalPut(key, ...args);
+				});
+				await expect(service.deleteProjectWithMutation(project.id, ACTOR)).resolves.toBeNull();
+				expect(await links.list(target)).toEqual([]);
+				expect(await catalog.getCurrentSnapshot()).toEqual(committed);
+				expect((await new AppPoolStore(bucket).read(project.id, notebook.id))?.deleted_at).toEqual(
+					expect.any(Number),
+				);
+				expect(metrics.increment).toHaveBeenCalledWith('app_pool.cas.conflicts');
+			} finally {
+				fence.mockRestore();
+			}
+		});
+
 		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
 			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
 			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
@@ -997,6 +1044,76 @@ describe('ProjectService', () => {
 	});
 
 	describe('hardDeleteProject', () => {
+		it('preserves retiring sandboxes and deletion fences after their project files are purged', async () => {
+			const project = await projects.createProject({ name: 'App project', description: '' }, ACTOR);
+			const notebook = await notebooks.createNotebook(
+				project.id,
+				{ title: 'App', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const emptyNotebook = await notebooks.createNotebook(
+				project.id,
+				{ title: 'Not yet started', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const [version] = await notebooks.listVersions(project.id, notebook.id);
+			const sessions = new SessionService(bucket);
+			const pool = new AppPoolService(bucket, sessions, DEFAULT_APP_POOL_POLICY);
+			const store = new AppPoolStore(bucket);
+			const admission = await pool.admit({
+				projectId: project.id,
+				notebookId: notebook.id,
+				userId: ACTOR,
+				versionId: version.version_id,
+				startupMs: 900_000,
+			});
+			await sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: ACTOR,
+				mode: 'app',
+				session_id: admission.member.session_id,
+				sandbox_id: admission.member.sandbox_id,
+				app_pool: true,
+			});
+			await sessions.setRunning(project.id, admission.member.session_id, 'https://sandbox.example');
+			await pool.complete(
+				project.id,
+				notebook.id,
+				admission.member.session_id,
+				admission.member.operation_token,
+			);
+			const orphanNotebook = createNotebookId();
+			await store.mutate(project.id, orphanNotebook, (record) => {
+				record.latest_version_id = version.version_id;
+				return { pool: record, value: undefined };
+			});
+			await projects.deleteProject(project.id, ACTOR);
+			await projects.hardDeleteProject(project.id);
+			expect(await listAllKeys(bucket, `projects/${project.id}/`)).toEqual([]);
+			expect((await sessions.getSession(project.id, admission.member.session_id)).status).toBe(
+				'running',
+			);
+			for (const notebookId of [notebook.id, emptyNotebook.id, orphanNotebook]) {
+				expect((await store.read(project.id, notebookId))?.deleted_at).toEqual(expect.any(Number));
+			}
+			const effects = { probe: vi.fn(async () => 10), retire: vi.fn(async () => false) };
+			await pool.reconcile(project.id, notebook.id, effects);
+			expect(effects.probe).not.toHaveBeenCalled();
+			expect(effects.retire).toHaveBeenCalledWith(
+				expect.objectContaining({ session_id: admission.member.session_id, state: 'retiring' }),
+				expect.objectContaining({ status: 'running' }),
+			);
+			expect((await store.read(project.id, notebook.id))?.members).toHaveLength(1);
+			effects.retire.mockResolvedValue(true);
+			await pool.reconcile(project.id, notebook.id, effects);
+			expect(await store.read(project.id, notebook.id)).toMatchObject({
+				deleted_at: expect.any(Number),
+				members: [],
+				assignments: [],
+			});
+		});
+
 		it('refuses to hard-delete a project that is not soft-deleted', async () => {
 			const live = await projects.createProject({ name: 'Live', description: 'D' }, ACTOR);
 			await expect(projects.hardDeleteProject(live.id)).rejects.toThrow(/status is "active"/);

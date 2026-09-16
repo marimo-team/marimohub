@@ -19,6 +19,9 @@ import type {
 	UserId,
 } from '@marimo-hub/core';
 import {
+	AppPoolService,
+	AppVisitSchema,
+	sleep,
 	BadRequestError,
 	ConflictError,
 	createKernelAuthToken,
@@ -45,7 +48,6 @@ import {
 	SESSION_MODES,
 	SessionId,
 	sessionMode,
-	sessionModePolicy,
 	sessionOwner,
 	SubdomainExposure,
 	UnavailableError,
@@ -119,6 +121,7 @@ function effectiveEditorSharing(
 // owned, or temporary session from a freshly provisioned one.
 export const SessionCreateResponseSchema = SessionResponseSchema.extend({
 	reused: z.boolean(),
+	app_assignment: AppVisitSchema.optional(),
 	editor_session: z
 		.object({
 			sharing: z.enum(['shared', 'exclusive']),
@@ -158,6 +161,14 @@ export const SessionCreateBodySchema = z
 		 * MARIMOHUB_VIEWER_MODE.
 		 */
 		mode: z.enum(SESSION_MODES).optional(),
+		app_visit_id: z.string().min(1).max(128).optional(),
+		replace_app_session_id: z
+			.string()
+			.refine(SessionId.is)
+			.optional()
+			.describe(
+				'Replace the selected app sandbox without joining it. Requires permission to stop that sandbox.',
+			),
 		/** One-shot edit-session override that does not change notebook metadata. */
 		compute_profile: z.string().min(1).optional(),
 		/** Request a discard-only editor sandbox. Valid only with exclusive sharing. */
@@ -181,10 +192,10 @@ const createSession = createRoute({
 	summary: 'Create a session and provision a sandbox',
 	// `Idempotency-Key` is accepted and documented, but this route is already
 	// idempotent through session reuse. Edit reuse follows the configured sharing
-	// policy; app reuse is per notebook. A retry returns the same live session.
+	// policy; app reuse follows the account assignment.
 	description:
 		'Create or reuse a notebook sandbox. Edit-session reuse follows the configured ' +
-		'editor sandbox-sharing policy. App-session reuse is shared per notebook.',
+		'editor sandbox-sharing policy. App sessions use sticky account assignments in a version-aware pool.',
 	request: {
 		params: NotebookIdParam,
 		headers: IdempotencyKeyHeader,
@@ -241,14 +252,34 @@ const heartbeatSession = createRoute({
 	operationId: 'sessions.heartbeat',
 	tags: ['Sessions'],
 	summary: 'Update session heartbeat',
-	request: { params: SessionIdParam },
+	request: {
+		params: SessionIdParam,
+		body: { content: { 'application/json': { schema: AppVisitSchema } }, required: false },
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: SessionResponseSchema }),
 			'Heartbeat updated',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(400, 403, 404, 409),
+	},
+});
+
+const leaveAppVisit = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/leave',
+	operationId: 'sessions.leaveApp',
+	tags: ['Sessions'],
+	summary: 'Release this app visit',
+	request: {
+		params: SessionIdParam,
+		body: { content: { 'application/json': { schema: AppVisitSchema } }, required: true },
+	},
+	responses: {
+		200: jsonContent(SuccessResponseSchema, 'Visit released'),
+		...commonErrors(),
+		...errorResponses(400, 403, 404),
 	},
 });
 
@@ -503,18 +534,6 @@ function toSessionError(err: unknown): { code: string; message: string } {
 	return { code: 'PROVISION_FAILED', message: `Failed to provision the sandbox (${e.name})` };
 }
 
-/**
- * Internal sentinel: another concurrent "Run as app" won the app claim. Carries
- * the winner's session id so the losing create can attach to it (returned as
- * `reused: true`) instead of surfacing an error.
- */
-class AppClaimLostError extends Error {
-	constructor(readonly holder: SessionId) {
-		super('app claim lost');
-		this.name = 'AppClaimLostError';
-	}
-}
-
 class EditorClaimLostError extends Error {
 	constructor(readonly holder: SessionId) {
 		super('editor claim lost');
@@ -526,7 +545,7 @@ class EditorClaimLostError extends Error {
  * The start gate — the `session.start` decision as a thrower, plus the session
  * classification: a viewer's admitted session is what
  * `MODE_POLICY[mode].viewerSession` says — their own ephemeral throwaway for
- * `edit`, the shared singleton for `app` (identical to an editor-started one,
+ * `edit`, a shared pool member for `app` (identical to an editor-started one,
  * with WIF credentials and integration secrets).
  */
 export async function authorizeSessionStart(
@@ -742,6 +761,64 @@ async function admittedSessionNotebooks(
 	return admitted;
 }
 
+async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<void> {
+	const { sessions } = deps.services;
+	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
+	// Only the winner of the terminating transition performs teardown.
+	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
+	try {
+		if (sessionMode(session) === 'app')
+			await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
+				pid,
+				nid,
+				sid,
+			);
+	} finally {
+		// Reconciliation can recover the pool from the terminal session if invalidation fails.
+		await sessionRetirer(deps).retire(session, { teardown: transitioned });
+	}
+}
+
+function withoutConnectionUrls(response: ReturnType<typeof toSessionResponse>) {
+	return {
+		...response,
+		can: { ...response.can, attach: false },
+		sandbox_url: undefined,
+		surfaces:
+			response.surfaces &&
+			Object.fromEntries(
+				Object.entries(response.surfaces).map(([id, surface]) => [
+					id,
+					{ ...surface, url: undefined },
+				]),
+			),
+	};
+}
+
+async function presentSession(
+	deps: ApiDeps,
+	user: AuthUser,
+	session: Session,
+	grants: Awaited<ReturnType<typeof sessionGrantsFor>>,
+	poolView?: Promise<Awaited<ReturnType<AppPoolService['view']>>>,
+) {
+	const response = toSessionResponse(session, grants);
+	if (sessionMode(session) !== 'app') return response;
+	const view = await (poolView ??
+		new AppPoolService(deps.bucket, deps.services.sessions, deps.policy.appPool, deps.metrics).view(
+			session.project_id,
+			session.notebook_id,
+		));
+	const access = view.canAccess(user.id, session.session_id, !session.app_pool);
+	const member = view.members.get(session.session_id);
+	return {
+		...(access ? response : withoutConnectionUrls(response)),
+		...(member && !grants.appReadOnly
+			? { app_pool: { state: member.state, users: member.users, max_users: member.max_users } }
+			: {}),
+	};
+}
+
 app.openapi(listSessions, async (c) => {
 	const deps = c.get('deps');
 	const { sessions, projects } = deps.services;
@@ -760,9 +837,22 @@ app.openapi(listSessions, async (c) => {
 		active.map((s) => s.notebook_id),
 	);
 	const visible = active.filter((s) => admitted.has(s.notebook_id));
+	const pools = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
+	const poolViews = new Map<NotebookId, ReturnType<AppPoolService['view']>>();
+	const viewFor = (session: Session) => {
+		if (sessionMode(session) !== 'app') return;
+		let view = poolViews.get(session.notebook_id);
+		if (!view) {
+			view = pools.view(pid, session.notebook_id);
+			poolViews.set(session.notebook_id, view);
+		}
+		return view;
+	};
 	const responses = await Promise.all(
 		visible.map(async (session) =>
-			toSessionResponse(
+			presentSession(
+				deps,
+				user,
 				session,
 				await sessionGrantsFor(
 					project,
@@ -771,6 +861,7 @@ app.openapi(listSessions, async (c) => {
 					deps,
 					admitted.get(session.notebook_id) ?? null,
 				),
+				viewFor(session),
 			),
 		),
 	);
@@ -798,7 +889,9 @@ app.openapi(getSession, async (c) => {
 	return c.json(
 		{
 			success: true,
-			data: toSessionResponse(
+			data: await presentSession(
+				deps,
+				user,
 				session,
 				await sessionGrantsFor(project, user, session, deps, labels),
 			),
@@ -1098,6 +1191,11 @@ export async function startNotebookSession(input: {
 	const { deps, user, pid, nid, body, request } = input;
 	const { sessions, projects, notebooks } = deps.services;
 	const mode: SessionMode = body?.mode ?? 'edit';
+	if ((body?.app_visit_id || body?.replace_app_session_id) && mode !== 'app')
+		throw new BadRequestError('App visit and replacement options are only valid for app sessions');
+
+	if (body?.replace_app_session_id && body.app_visit_id)
+		throw new BadRequestError('Replacement does not admit a visit. Open the app separately.');
 
 	// Starting a session runs code — see authorizeSessionStart for the matrix.
 	// The loaded project is reused below (federation opt-in), not re-fetched.
@@ -1124,7 +1222,7 @@ export async function startNotebookSession(input: {
 	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook
 	// id. A soft-deleted notebook is treated as missing: getNotebook still
 	// serves it (the delete/GC paths need that), but starting a session on it
-	// would serve deleted content — and, for `app`, recreate the singleton
+	// would serve deleted content — and, for `app`, recreate the pool
 	// claim that deleteNotebook just cleaned up, permanently (its cleanup never
 	// runs again).
 	const notebook = await notebooks.getNotebook(pid, nid);
@@ -1266,10 +1364,6 @@ export async function startNotebookSession(input: {
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
-	// Reuse follows the session class: the claimed editor sandbox, the caller's
-	// temporary editor, or the notebook app. Check before the cap and before any
-	// compute call. A `starting` reuse has no URL yet; the client polls
-	// `GET …/sessions/{sid}` until it is `running`.
 	const editorReuse =
 		mode === 'edit'
 			? await sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral)
@@ -1280,8 +1374,50 @@ export async function startNotebookSession(input: {
 			`Editing is currently owned by ${editorReuse.ownedByOther.user_id}`,
 		);
 	}
-	const reusableCandidate =
-		mode === 'edit' ? editorReuse?.session : await sessions.findReusable(pid, nid, user.id, mode);
+	const appPool = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
+	if (mode === 'app' && !sourceVersionId)
+		throw new ConflictError('The app has no committed version');
+
+	let replacementTarget: Session | undefined;
+	if (body?.replace_app_session_id) {
+		const target = await sessions.getSession(pid, body.replace_app_session_id);
+		if (target.notebook_id !== nid || sessionMode(target) !== 'app')
+			throw new NotFoundError('App session not found');
+		await assertSessionControl(project, target, user, deps, notebook.meta.security_labels ?? null);
+		replacementTarget = target;
+	}
+	const admissionInput = {
+		projectId: pid,
+		notebookId: nid,
+		userId: user.id,
+		versionId: sourceVersionId!,
+		startupMs: Math.max(sandbox.startupTimeoutMs ?? 900_000, 900_000),
+	};
+	const admission =
+		mode !== 'app'
+			? undefined
+			: body?.replace_app_session_id
+				? await appPool.replace({
+						...admissionInput,
+						replacesSessionId: body.replace_app_session_id,
+					})
+				: await appPool.admit({ ...admissionInput, visitId: body?.app_visit_id });
+	const appAssignment = admission?.assignment
+		? { visit_id: body?.app_visit_id ?? 'api', generation: admission.assignment.generation }
+		: undefined;
+	const reusableApp = async () => {
+		if (admission?.kind !== 'reuse') return;
+		for (let attempt = 0; attempt < 20; attempt++) {
+			try {
+				return await sessions.getSession(pid, admission.member.session_id);
+			} catch (error) {
+				if (!(error instanceof NotFoundError)) throw error;
+			}
+			await sleep(50);
+		}
+		throw new ConflictError('The app is starting. Retry shortly.');
+	};
+	const reusableCandidate = mode === 'edit' ? editorReuse?.session : await reusableApp();
 	if (reusableCandidate) {
 		let reusable = await tightenAuthorizationDeadline(reusableCandidate);
 		const authorizationExpired =
@@ -1292,9 +1428,8 @@ export async function startNotebookSession(input: {
 		// edits must stop being discarded). A stale-class session is retired below
 		// like a dead kernel instead of reused.
 		const classMismatch = !!reusable.ephemeral !== ephemeral;
-		// Retirement is a stop operation in every mode. In particular, findReusable
-		// is user-blind for the shared app, so skipping this check could let a viewer
-		// tear down another caller's app after a probe false-negative.
+		// Reuse does not grant control: a failed probe must not let a viewer
+		// tear down another caller's app.
 		const reusableGrants = await grants(reusable);
 		const mayRetire = reusableGrants.stop;
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
@@ -1319,8 +1454,11 @@ export async function startNotebookSession(input: {
 				});
 			}
 			return {
-				...toSessionResponse(reusable, reusableGrants),
+				...(body?.replace_app_session_id
+					? withoutConnectionUrls(toSessionResponse(reusable, reusableGrants))
+					: toSessionResponse(reusable, reusableGrants)),
 				reused: true,
+				...(appAssignment ? { app_assignment: appAssignment } : {}),
 				...(mode === 'edit'
 					? {
 							editor_session: {
@@ -1336,44 +1474,21 @@ export async function startNotebookSession(input: {
 			};
 		}
 
-		// Sandbox alive but marimo exited (e.g. shut down from the notebook UI), so a
-		// reconnect would 502. Retire it the way an explicit stop does — teardown reads
-		// the notebook back from the still-live container and cuts a version the fresh
-		// sandbox restores — then fall through to provision a new one. Best-effort, so a
-		// concurrent refresh that also saw `dead` does no harm.
 		if (!mayRetire) {
 			throw new ForbiddenError('Not permitted to stop the reusable session');
 		}
-		const claimed = await sessions.beginTerminating(reusable.project_id, reusable.session_id);
-		// Skip the sandbox work unless this call won the terminating transition —
-		// a concurrent stop that won owns the teardown.
-		await sessionRetirer(deps).retire(reusable, { teardown: claimed.transitioned });
+		await retireSelectedSession(deps, reusable);
+		if (mode === 'app') {
+			throw new ConflictError('The app session ended. Retry shortly.');
+		}
 	}
 
 	const temporaryToRetire = replacingAfterTakeover
 		? (await sessions.findReusableEditor(pid, nid, user.id, 'exclusive', true)).session
 		: undefined;
-	await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
 
-	const sandboxId = createSandboxId();
+	const sandboxId = admission?.member.sandbox_id ?? createSandboxId();
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
-
-	const restoreFilesystemSnapshot =
-		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
-			? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
-					sharing: mode === 'edit' ? sharing : 'shared',
-					userId: user.id,
-				})
-			: undefined;
-	const appliedComputeProfile = restoreFilesystemSnapshot
-		? {
-				name: restoreFilesystemSnapshot.compute_profile,
-				resources: restoreFilesystemSnapshot.compute_resources,
-			}
-		: {
-				name: requestedComputeProfile.name,
-				resources: toComputeResourcesResponse(requestedComputeProfile.resources),
-			};
 
 	// Provision as a saga: if a later step fails, completed steps compensate in
 	// reverse — the session record is terminated (so it does not linger in
@@ -1381,6 +1496,7 @@ export async function startNotebookSession(input: {
 	// destroyed. A failure *inside* provisioning self-cleans (see
 	// SandboxProvisioner.provision); the saga handles failures after it.
 	let session: Session | undefined;
+	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {
 		if (session) {
@@ -1399,17 +1515,47 @@ export async function startNotebookSession(input: {
 		event: 'session_provision',
 		sandbox_id: sandboxId,
 		image,
-		compute_profile: appliedComputeProfile.name,
+		compute_profile: requestedComputeProfile.name,
 		project_id: pid,
 		notebook_id: nid,
 		user_id: user.id,
 		mode,
 	});
 	try {
+		if (replacementTarget) {
+			await retireSelectedSession(deps, replacementTarget);
+			const retired = await sessions.getSession(pid, replacementTarget.session_id);
+			if (!retired.sandbox_reclaimed_at)
+				throw new ConflictError('The selected app is still stopping. Retry shortly.');
+		}
+		const restoreFilesystemSnapshot =
+			!ephemeral && workspacePolicy.restoreFilesystemSnapshot
+				? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
+						sharing: mode === 'edit' ? sharing : 'shared',
+						userId: user.id,
+					})
+				: undefined;
+		const appliedComputeProfile = restoreFilesystemSnapshot
+			? {
+					name: restoreFilesystemSnapshot.compute_profile,
+					resources: restoreFilesystemSnapshot.compute_resources,
+				}
+			: {
+					name: requestedComputeProfile.name,
+					resources: toComputeResourcesResponse(requestedComputeProfile.resources),
+				};
+		observer.tag('compute_profile', appliedComputeProfile.name);
 		await saga(observer)
+			.step('capacity', () =>
+				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
+			)
 			.step('session_record', async () => {
-				const create = () =>
-					sessions.createSession({
+				const create = () => {
+					sessionRecordAttempted = true;
+					return sessions.createSession({
+						...(admission
+							? { session_id: admission.member.session_id, app_pool: true as const }
+							: {}),
 						notebook_id: nid,
 						project_id: pid,
 						user_id: user.id,
@@ -1424,6 +1570,7 @@ export async function startNotebookSession(input: {
 						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
 						authorization_expires_at: authorizationExpiresAt,
 					});
+				};
 				// Publish the starting record under the source-mutation lease. Once visible,
 				// the session itself blocks source replacement through sandbox reclamation.
 				session =
@@ -1448,19 +1595,6 @@ export async function startNotebookSession(input: {
 					temporaryToRetire?.session_id,
 				),
 			)
-			// The app singleton: exactly one concurrent "Run as app" wins the
-			// per-notebook claim; a loser aborts before provisioning (no second
-			// sandbox) and attaches to the winner in the catch below.
-			.step('app_claim', {
-				do: async () => {
-					if (!MODE_POLICY[mode].singleton) return;
-					const claim = await sessions.claimApp(pid, nid, session!.session_id);
-					if (!claim.claimed) throw new AppClaimLostError(claim.holder);
-				},
-				compensate: async () => {
-					if (session) await sessions.releaseAppFor(session);
-				},
-			})
 			.step('editor_claim', {
 				do: async () => {
 					if (mode !== 'edit' || ephemeral) return;
@@ -1646,6 +1780,20 @@ export async function startNotebookSession(input: {
 								workspacePrefix,
 								gitPrefix,
 								workspaceArchive,
+								...(mode === 'app' && notebook.source.type === 'local' && sourceVersionId
+									? {
+											workspaceOverlay: [
+												{
+													path: 'notebook.py',
+													key: paths.project(pid).notebook(nid).version(sourceVersionId).code,
+												},
+												{
+													path: 'pyproject.toml',
+													key: paths.project(pid).notebook(nid).version(sourceVersionId).deps,
+												},
+											],
+										}
+									: {}),
 							});
 						},
 					});
@@ -1689,19 +1837,6 @@ export async function startNotebookSession(input: {
 					integrationAttachments,
 				);
 			})
-			// A slow provision looks like a wedged holder once the `starting` record
-			// ages past the liveness window, so a second "Run as app" may steal the
-			// claim mid-provision. Re-assert it AFTER the record is `running` (a
-			// running holder is never treated as stale, so no later steal is
-			// possible): if it was stolen, this saga compensates — the sandbox is
-			// destroyed, the record terminated — and the caller attaches to the
-			// thief. Without this, both provisions would finish `running` and the
-			// per-notebook singleton would be two apps.
-			.step('app_claim_recheck', async () => {
-				if (!MODE_POLICY[mode].singleton) return;
-				const claim = await sessions.claimApp(pid, nid, session!.session_id);
-				if (!claim.claimed) throw new AppClaimLostError(claim.holder);
-			})
 			.step('editor_claim_recheck', async () => {
 				if (mode !== 'edit' || ephemeral) return;
 				if (replacingAfterTakeover && existingEditorClaim?.transfer) {
@@ -1718,13 +1853,8 @@ export async function startNotebookSession(input: {
 					throw new EditorClaimLostError(result.claim.session_id);
 				}
 			})
-			// A delete only retires sessions that are already `running`, so one that
-			// lands mid-provision leaves this kernel serving deleted content — and,
-			// for an app, the recheck above just re-created the claim `deleteNotebook`
-			// cleaned up. Abort so the saga destroys the sandbox and drops the claim.
-			// Past this step the record is `running`, so a later delete catches it —
-			// and a delete writes the status before it lists sessions to retire, so
-			// nothing falls between the two.
+			// A delete during provisioning can miss the starting sandbox. Recheck after
+			// publishing running so either the deletion path or saga compensation retires it.
 			.step('notebook_recheck', async () => {
 				const current = await notebooks.getNotebook(pid, nid).catch(() => null);
 				if (!current || current.meta.status === 'deleted') {
@@ -1740,8 +1870,28 @@ export async function startNotebookSession(input: {
 					throw new NotFoundError(`Project ${pid} not found`);
 				}
 			})
+			.step('app_pool_complete', async () => {
+				if (admission) {
+					if (updated?.status !== 'running')
+						throw new ConflictError('The app session ended during startup');
+					await appPool.complete(pid, nid, session!.session_id, admission.member.operation_token);
+				}
+			})
 			.run();
 	} catch (err) {
+		if (admission?.kind === 'reserve') {
+			// A failed session PUT may have committed; only release when it was never attempted.
+			await (
+				sessionRecordAttempted
+					? appPool.invalidate(pid, nid, admission.member.session_id)
+					: appPool.releaseReservation(
+							pid,
+							nid,
+							admission.member.session_id,
+							admission.member.operation_token,
+						)
+			).catch(() => {});
+		}
 		if (!sandboxMayExist) await recordSandboxCleanup().catch(() => {});
 
 		if (err instanceof EditorClaimLostError) {
@@ -1770,29 +1920,6 @@ export async function startNotebookSession(input: {
 			}
 			throw new ConflictError('The editor session changed. Retry shortly.');
 		}
-		if (err instanceof AppClaimLostError) {
-			// Lost the app singleton — at the initial claim (nothing provisioned yet)
-			// or at the post-provision recheck (the saga compensation just destroyed
-			// our sandbox). Either way: retire our record and attach to the winner
-			// exactly as the reuse path would have.
-			observer.tag('app_claim_lost', true);
-			if (session) {
-				await sessions.markTerminated(pid, session.session_id).catch(() => {});
-			}
-			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
-			if (winnerCandidate?.notebook_id === nid && sessionModePolicy(winnerCandidate).singleton) {
-				const winner = await tightenAuthorizationDeadline(winnerCandidate);
-				if (
-					winner.authorization_expires_at &&
-					Date.now() >= Date.parse(winner.authorization_expires_at)
-				) {
-					throw new ConflictError('The app session authorization expired. Retry shortly.');
-				}
-				return { ...toSessionResponse(winner, await grants(winner)), reused: true };
-			}
-			// The winner vanished between claim and read — rare; the client retries.
-			throw new ConflictError('The app is being started by another user. Retry shortly.');
-		}
 		// Record WHY the session failed so the client polling `GET …/sessions/{sid}`
 		// sees a reason, not a bare `failed`. Best-effort (never mask the original
 		// error): a marking failure just leaves the record for the stale reaper, and
@@ -1803,7 +1930,7 @@ export async function startNotebookSession(input: {
 			const failed = await sessions
 				.markFailedWithOutcome(pid, session.session_id, safeError)
 				.catch(() => null);
-			if (MODE_POLICY[mode].singleton && failed?.transitioned) {
+			if (MODE_POLICY[mode].sharedApp && failed?.transitioned) {
 				scheduleProjectAlert(
 					deps,
 					pid,
@@ -1825,6 +1952,7 @@ export async function startNotebookSession(input: {
 		}
 		if (
 			!(err instanceof NotFoundError) &&
+			!(err instanceof ResourceExhaustedError) &&
 			(appUser ||
 				(mode === 'app' &&
 					!authorizationService(deps).credentialAllowsAction(user, 'project.read')))
@@ -1863,7 +1991,7 @@ export async function startNotebookSession(input: {
 	// An app start can put integration secrets and WIF credentials in front of the
 	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
-	if (MODE_POLICY[mode].singleton) {
+	if (MODE_POLICY[mode].sharedApp) {
 		await appendAudit({ ...request, userId: user.id }, 'app.start', () =>
 			deps.services.events.append({
 				event: 'app.start',
@@ -1876,8 +2004,11 @@ export async function startNotebookSession(input: {
 	}
 
 	return {
-		...toSessionResponse(updated!, await grants(updated!)),
+		...(body?.replace_app_session_id
+			? withoutConnectionUrls(toSessionResponse(updated!, await grants(updated!)))
+			: toSessionResponse(updated!, await grants(updated!))),
 		reused: false,
+		...(appAssignment ? { app_assignment: appAssignment } : {}),
 		...(mode === 'edit'
 			? {
 					editor_session: {
@@ -1937,14 +2068,7 @@ app.openapi(deleteSession, async (c) => {
 	// their own ephemeral session (role re-checked; see assertSessionControl).
 	await assertSessionControl(project, existing, user, deps, labels);
 
-	// Mark `terminating` first (atomic): pollers immediately see `Stopping…` while
-	// the retire below runs, instead of a stale `running`. The CAS in the service
-	// makes this stick even against an in-flight heartbeat. Only the caller that
-	// won the transition runs the teardown — a concurrent stop's loser must not
-	// save-and-destroy the same sandbox twice.
-	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
-
-	await sessionRetirer(deps).retire(session, { teardown: transitioned });
+	await retireSelectedSession(deps, existing);
 
 	return c.json({ success: true }, 200);
 });
@@ -1971,18 +2095,48 @@ app.openapi(heartbeatSession, async (c) => {
 	// must keep it alive too (see assertSessionAccess).
 	await assertSessionAccess(project, existing, user, deps, labels);
 
-	const updated = await sessions.heartbeat(pid, sid);
+	if (
+		sessionMode(existing) === 'app' &&
+		(existing.status === 'running' || existing.status === 'starting')
+	) {
+		const pool = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
+		if (!existing.app_pool) await pool.synchronize(pid, nid, [existing]);
+		const visit = c.req.valid('json');
+		if (!(await pool.heartbeat(pid, nid, user.id, sid, visit?.visit_id ? visit : undefined))) {
+			throw new ConflictError('The app assignment expired. Open the app again.');
+		}
+	}
 
+	const updated = await sessions.heartbeat(pid, sid);
+	const response = toSessionResponse(
+		updated,
+		await sessionGrantsFor(project, user, updated, deps, labels),
+	);
+	const terminalApp =
+		sessionMode(updated) === 'app' && updated.status !== 'running' && updated.status !== 'starting';
 	return c.json(
-		{
-			success: true,
-			data: toSessionResponse(
-				updated,
-				await sessionGrantsFor(project, user, updated, deps, labels),
-			),
-		},
+		{ success: true, data: terminalApp ? withoutConnectionUrls(response) : response },
 		200,
 	);
+});
+
+app.openapi(leaveAppVisit, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid, sid } = c.req.valid('param');
+	const user = c.get('user');
+	const project = await loadSessionProject(deps.services.projects, pid, user, deps);
+	const session = await deps.services.sessions.getSession(pid, sid);
+	if (session.notebook_id !== nid || sessionMode(session) !== 'app')
+		throw new NotFoundError('App session not found');
+	const labels = await assertSessionNotebookVisible(deps, project, session, user);
+	await assertSessionAccess(project, session, user, deps, labels);
+	await new AppPoolService(
+		deps.bucket,
+		deps.services.sessions,
+		deps.policy.appPool,
+		deps.metrics,
+	).leave(pid, nid, user.id, sid, c.req.valid('json'));
+	return c.json({ success: true as const }, 200);
 });
 
 app.openapi(ensureSurfaceRoute, async (c) => {

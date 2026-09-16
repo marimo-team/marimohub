@@ -140,6 +140,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		// `takeover_capture_completed_at`) stays internal until the UI surfaces the
 		// deadline.
 		const internalSessionFields = [
+			'app_pool',
 			'runtime',
 			'sandbox_id',
 			'kernel_auth_token',
@@ -153,7 +154,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		];
 		// `can` is response-only: the caller's evaluated grants, computed per
 		// request — never stored on the record.
-		const responseOnlyFields = ['can'];
+		const responseOnlyFields = ['app_assignment', 'app_pool', 'can'];
 		const coreKeys = shapeKeys(CoreSessionSchema);
 		const apiKeys = shapeKeys(SessionResponseSchema);
 		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(

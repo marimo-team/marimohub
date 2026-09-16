@@ -5,32 +5,30 @@ Serve a notebook as a read-only **application**. An app runs the notebook with
 elements (sliders, forms, buttons), never the code or the editor. The editing
 workflow is untouched: an app runs alongside edit sessions, in its own sandbox.
 App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
+See [App pools](./app-pools.md) for capacity settings, sticky routing, and coordinated rollout requirements.
 
 ## How it works
 
-- **One shared app sandbox, with a separate view for each user.** "Run as app"
-  provisions a single app sandbox for that notebook. Every browser uses that
-  sandbox's files, credentials, and compute capacity, but gets its own marimo
-  session and UI state. One user's inputs and outputs are not mirrored to other
-  users. The project page shows who started the shared sandbox, how long it has
-  been up, and an approximate count of connected users.
+- **Shared sandboxes, with a separate view for each user.** "Run as app" assigns
+  an account to a sandbox in the notebook's pool. Tabs and devices for that account
+  share one capacity slot. Browsers on a sandbox share files, credentials, and
+  compute capacity, but each gets its own marimo session and UI state.
+  The project page shows each sandbox's starter, version, occupancy, and pool state.
 - **Apps serve a point-in-time copy.** The app loads the notebook's saved state
   at start and never writes anything back — no version, no snapshot, no
   workspace change. Interacting with an app cannot modify the notebook. One
-  caveat: while an edit session is live, "saved state" includes whatever the
-  editor has autosaved since the last version, so an app started mid-edit can
-  serve work in progress. Start apps against idle notebooks to get exactly the
-  latest version.
-- **Editing does not update a running app.** When the notebook changes after
-  the app started, the hub marks the app **stale** and offers **Restart**.
-  Restarting replaces the sandbox with one serving the current saved state and
-  disconnects everyone currently using the app — in-progress input state is
-  lost, so the hub asks for confirmation and never restarts automatically.
+  caveat: local auxiliary files retain their mutable workspace semantics.
+  Code and dependencies come from the selected committed version.
+- **New accounts receive the latest committed version.** Periodic editor saves
+  also create eligible versions. Active accounts remain on their assigned
+  sandbox while older versions drain. An explicit restart replaces the selected
+  sandbox and disconnects its users, so the hub asks for confirmation.
 - **Apps stay up while in use.** Open app tabs keep the session alive. After
   everyone leaves, `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` controls idle
-  reaping. This value inherits `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` when unset.
-  Active connections extend the session deadline. Thus, an open dashboard can
-  keep the app and its credentials active, so stop apps that you no longer need.
+  retirement after the last assignment expires, including reconnect grace.
+  This value inherits `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` when unset.
+  Fresh account leases and active connections protect against idle retirement.
+  Credential expiry and provider lifetime limits still apply.
 
   The [maintenance worker](./operations.md) handles hub-managed idle reaping and
   the "~N connected" count. Without this worker, the hub does not reap idle apps.
@@ -38,13 +36,13 @@ App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
   app stops under an open tab, the page shows the reason.
 
 - **Resource model.** `marimo run` starts one kernel per connected browser
-  inside the single app sandbox, so memory scales with concurrent users of that
-  app. Size the sandbox for the audience you expect.
+  inside each app sandbox, so memory scales with its concurrent users.
+  Set the account limit per sandbox to distribute users across additional sandboxes.
 
 Start an app from the notebook's actions menu ("Run as app"), or via the API:
 `POST /api/v1/projects/{pid}/notebooks/{nid}/sessions` with body
-`{"mode": "app"}`. The call is create-or-reuse: if the app is already running,
-any admitted caller attaches to it.
+`{"mode": "app"}`. The router reuses the account's assignment or reserves
+capacity on the latest committed version.
 
 ## Authenticated app links
 
@@ -55,7 +53,7 @@ digits, or hyphens, and start and end with a letter or digit.
 
 Links inherit the notebook's permissions. Recipients must sign in and have
 permission to run the app. Several names can point to one notebook, and each
-uses its existing shared app sandbox.
+uses the same notebook pool and account assignments.
 
 Removing a link releases its name immediately. Old shared URLs can then open
 another notebook that registers the same name. Removal does not stop running
@@ -190,11 +188,13 @@ CI runs this check with the Chromium end-to-end job.
 
 ## Configuration
 
-| Variable                          | Effect on apps                                                                                                         |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `MARIMOHUB_VIEWER_MODE`           | `applications` or `ephemeral-sandbox` enables viewer app access. Default `static` denies it. App users are unaffected. |
-| `MARIMOHUB_MAX_APPS_PER_PROJECT`  | Concurrent apps per project (default `5`, `0` = unlimited).                                                            |
-| `MARIMOHUB_MAX_SESSIONS_PER_USER` | Also bounds the apps a single user may have _started_, across all projects.                                            |
+| Variable                                 | Effect on apps                                                                                                         |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_VIEWER_MODE`                  | `applications` or `ephemeral-sandbox` enables viewer app access. Default `static` denies it. App users are unaffected. |
+| `MARIMOHUB_APP_MAX_USERS_PER_SESSION`    | Accounts per sandbox; unset means unlimited.                                                                           |
+| `MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION` | Unexpired starting reservations and ready sandboxes per notebook's current version; unset means unlimited.             |
+| `MARIMOHUB_MAX_APPS_PER_PROJECT`         | Physical app sandboxes per project, including draining versions (default `5`, `0` = unlimited).                        |
+| `MARIMOHUB_MAX_SESSIONS_PER_USER`        | Also bounds the apps a single user may have _started_, across all projects.                                            |
 
 > **Legacy upgrade note.** Releases introducing app mode also grant app access to existing `ephemeral-sandbox` viewers.
 > There is no mode that grants ephemeral editors without shared apps.

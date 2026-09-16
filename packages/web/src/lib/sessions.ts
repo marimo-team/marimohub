@@ -14,11 +14,12 @@ export function rankSession(status: string | undefined): number {
 }
 
 /** A notebook's live runtime, split by mode: the caller's-view edit kernel and
- * the shared app singleton. Either side may be absent. */
+ * the app pool. Either side may be absent. */
 export interface NotebookSessions {
 	edit?: Session;
 	persistentEdit?: Session;
 	app?: Session;
+	apps?: Session[];
 }
 
 /**
@@ -66,6 +67,7 @@ export function sessionsByNotebook(
 	for (const s of sessions ?? []) {
 		const entry = map.get(s.notebook_id) ?? {};
 		const key = s.mode === 'app' ? 'app' : 'edit';
+		if (key === 'app' && rankSession(s.status) > 0) (entry.apps ??= []).push(s);
 		const current = entry[key];
 		const sameRankPersistent =
 			key === 'edit' &&
