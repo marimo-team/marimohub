@@ -1,32 +1,41 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ACTOR } from '@marimo-hub/core/testing';
-import { createMcpServer } from '../mcp/server';
+import { connectMcpClient } from '../testing/mcp';
 import { assertNotificationMutationAllowed } from '../notifications';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { deleteNotebookAndRetire } from './notebookDelete';
+
+async function setupAlerts() {
+	const deliver = vi.fn(async () => 'delivered' as const);
+	const deferred: Promise<unknown>[] = [];
+	const api = createTestApi({
+		bucket: await createInitializedBucket(),
+		deps: {
+			projectAlerts: {
+				store: {} as never,
+				dispatcher: { deliver, test: vi.fn() },
+				maxDestinations: 10,
+			},
+			backgroundTasks: { defer: (task) => deferred.push(task) },
+		},
+	});
+	const { notebooks, projects } = api.deps.services;
+	const project = await projects.createProject({ name: 'Project', description: '' }, ACTOR);
+	const create = () =>
+		notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+	return { api, project, notebooks, create, deliver, deferred };
+}
 
 describe('notebook deletion notification budget', () => {
 	it.each(['API', 'MCP'])(
 		'limits %s deletion before deleting or broadcasting',
 		async (transport) => {
-			const deliver = vi.fn(async () => 'delivered' as const);
-			const deferred: Promise<unknown>[] = [];
-			const api = createTestApi({
-				bucket: await createInitializedBucket(),
-				deps: {
-					projectAlerts: {
-						store: {} as never,
-						dispatcher: { deliver, test: vi.fn() },
-						maxDestinations: 10,
-					},
-					backgroundTasks: { defer: (task) => deferred.push(task) },
-				},
-			});
-			const { notebooks, projects } = api.deps.services;
-			const project = await projects.createProject({ name: 'Project', description: '' }, ACTOR);
-			const server = createMcpServer(
+			const { api, project, notebooks, create, deliver, deferred } = await setupAlerts();
+			const client = await connectMcpClient(
 				api.deps,
 				{ id: ACTOR, email: `${ACTOR}@example.com`, credential: { kind: 'development' } },
 				{
@@ -37,61 +46,66 @@ describe('notebook deletion notification budget', () => {
 					appBaseUrl: 'http://localhost',
 				},
 			);
-			const client = new Client({ name: 'test', version: '1' });
-			const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-			await server.connect(serverTransport);
-			await client.connect(clientTransport);
 			const remove = (notebook: string) =>
 				client.callTool({
 					name: 'delete_notebook',
 					arguments: { project: project.id, notebook },
 				});
-			const create = () =>
-				notebooks.createNotebook(
-					project.id,
-					{ title: 'Notebook', description: '', code: 'import marimo' },
-					ACTOR,
-				);
 
-			try {
-				for (let i = 0; i < 20; i++) {
-					const notebook = await create();
-					if (transport === 'API') {
-						await expectOk(
-							await api.request('DELETE', `/projects/${project.id}/notebooks/${notebook.id}`),
-						);
-					} else {
-						expect(await remove(notebook.id)).toMatchObject({
-							structuredContent: { status: 'deleted' },
-						});
-					}
-				}
-				await Promise.all(deferred);
-				expect(deliver).toHaveBeenCalledTimes(20);
+			for (let i = 0; i < 20; i++) {
 				const notebook = await create();
 				if (transport === 'API') {
-					await expectError(
+					await expectOk(
 						await api.request('DELETE', `/projects/${project.id}/notebooks/${notebook.id}`),
-						429,
-						'RESOURCE_EXHAUSTED',
 					);
 				} else {
 					expect(await remove(notebook.id)).toMatchObject({
-						isError: true,
-						structuredContent: { code: 'RESOURCE_EXHAUSTED' },
+						structuredContent: { status: 'deleted' },
 					});
 				}
-				expect(await notebooks.getNotebook(project.id, notebook.id)).toMatchObject({
-					meta: { status: 'active' },
-				});
-				expect(deferred).toHaveLength(20);
-				expect(deliver).toHaveBeenCalledTimes(20);
-			} finally {
-				await client.close();
-				await server.close();
 			}
+			await Promise.all(deferred);
+			expect(deliver).toHaveBeenCalledTimes(20);
+			const notebook = await create();
+			if (transport === 'API') {
+				await expectError(
+					await api.request('DELETE', `/projects/${project.id}/notebooks/${notebook.id}`),
+					429,
+					'RESOURCE_EXHAUSTED',
+				);
+			} else {
+				expect(await remove(notebook.id)).toMatchObject({
+					isError: true,
+					structuredContent: { code: 'RESOURCE_EXHAUSTED' },
+				});
+			}
+			expect(await notebooks.getNotebook(project.id, notebook.id)).toMatchObject({
+				meta: { status: 'active' },
+			});
+			expect(deferred).toHaveLength(20);
+			expect(deliver).toHaveBeenCalledTimes(20);
 		},
 	);
+
+	it('does not rebroadcast an already-deleted notebook', async () => {
+		const { api, project, create, deliver, deferred } = await setupAlerts();
+		const notebook = await create();
+		const user = {
+			id: ACTOR,
+			email: `${ACTOR}@example.com`,
+			credential: { kind: 'development' as const },
+		};
+		await deleteNotebookAndRetire(api.deps, project, notebook.id, user);
+		await deleteNotebookAndRetire(api.deps, project, notebook.id, user);
+		await Promise.all(deferred);
+		expect(deliver).toHaveBeenCalledOnce();
+		expect(deliver).toHaveBeenCalledWith(
+			project.id,
+			'notebook.deleted',
+			expect.objectContaining({ kind: 'notebook.deleted' }),
+		);
+		expect(deferred).toHaveLength(1);
+	});
 
 	it('allows deletion when only personal notifications have exhausted the budget', async () => {
 		const deliver = vi.fn(async () => 'delivered' as const);

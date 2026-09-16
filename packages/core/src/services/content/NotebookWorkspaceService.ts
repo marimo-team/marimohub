@@ -595,17 +595,18 @@ export class NotebookWorkspaceService {
 				const renewalTimer = setInterval(() => {
 					void heartbeat().catch(() => {});
 				}, WORKSPACE_MUTATION_LEASE_MS / 3);
+				let result: T;
 				try {
 					await options.assertMutable?.();
 					await heartbeat();
-					const result = await mutation({ heartbeat });
-					if (leaseLost) throw new MutationLeaseLostError();
-					return result;
+					result = await mutation({ heartbeat });
 				} finally {
 					clearInterval(renewalTimer);
 					await renewalInFlight?.catch(() => {});
 					await releaseSingletonClaim(claim, holder);
 				}
+				if (leaseLost) throw new MutationLeaseLostError();
+				return result;
 			}
 			await sleep(WORKSPACE_MUTATION_RETRY_MS);
 		}

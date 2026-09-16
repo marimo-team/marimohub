@@ -263,7 +263,7 @@ async function startMcpSession(input: {
 		execution,
 		reused: started.reused,
 		mode: sessionMode(session),
-		notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebookId}`,
+		notebook_url: notebookUrl,
 		...(projected.sandbox_url ? { sandbox_url: projected.sandbox_url } : {}),
 		...(session.error ? { error: session.error } : {}),
 	};
@@ -277,6 +277,20 @@ export function createMcpServer(
 	const server = new McpServer({ name: 'marimohub', version: deps.version?.version ?? 'dev' });
 	const errorResult = (tool: string, error: unknown) =>
 		toolError(error, { ...request, userId: principal.id, tool });
+
+	async function resolveAuthorizedNotebook(
+		projectRef: string,
+		notebookRef: string,
+		action: 'project.read' | 'notebook.write',
+	) {
+		const project = await resolveProject(deps, principal, projectRef);
+		if (action === 'notebook.write') {
+			await assertProjectActionOn(project, principal, action, deps);
+		}
+		const notebook = await resolveNotebook(deps, principal, project, notebookRef);
+		const detail = await loadAuthorizedNotebook(deps, project, notebook.id, principal, action);
+		return { project, notebook, detail };
+	}
 
 	server.registerTool(
 		'list_catalog',
@@ -420,13 +434,9 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef);
-				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-				const detail = await loadAuthorizedNotebook(
-					deps,
-					project,
-					notebook.id,
-					principal,
+				const { project, notebook, detail } = await resolveAuthorizedNotebook(
+					projectRef,
+					notebookRef,
 					'project.read',
 				);
 				const code = await deps.services.notebooks.getNotebookContent(project.id, notebook.id);
@@ -464,14 +474,9 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, expected_updated_at, ...input }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef);
-				await assertProjectActionOn(project, principal, 'notebook.write', deps);
-				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-				const detail = await loadAuthorizedNotebook(
-					deps,
-					project,
-					notebook.id,
-					principal,
+				const { project, notebook, detail } = await resolveAuthorizedNotebook(
+					projectRef,
+					notebookRef,
 					'notebook.write',
 				);
 				if (
@@ -515,10 +520,11 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, expected_updated_at }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef);
-				await assertProjectActionOn(project, principal, 'notebook.write', deps);
-				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-				await loadAuthorizedNotebook(deps, project, notebook.id, principal, 'notebook.write');
+				const { project, notebook } = await resolveAuthorizedNotebook(
+					projectRef,
+					notebookRef,
+					'notebook.write',
+				);
 				await deleteNotebookAndRetire(deps, project, notebook.id, principal, expected_updated_at);
 				return result({ project_id: project.id, notebook_id: notebook.id, status: 'deleted' });
 			} catch (error) {

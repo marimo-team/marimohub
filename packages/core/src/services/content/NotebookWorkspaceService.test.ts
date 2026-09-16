@@ -430,6 +430,63 @@ describe('NotebookWorkspaceService', () => {
 		}
 	});
 
+	it('shares a pending heartbeat and refuses further renewals after it fails', async () => {
+		await expect(
+			service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async (lease) => {
+				const renewal = Promise.withResolvers<never>();
+				const put = vi.spyOn(bucket, 'put').mockImplementationOnce(() => renewal.promise);
+				try {
+					const first = lease.heartbeat();
+					const second = lease.heartbeat();
+					const outcomes = Promise.allSettled([first, second]);
+					renewal.reject(new Error('renewal failed'));
+					expect(await outcomes).toEqual([
+						{ status: 'rejected', reason: expect.objectContaining({ message: 'renewal failed' }) },
+						{ status: 'rejected', reason: expect.objectContaining({ message: 'renewal failed' }) },
+					]);
+					await expect(lease.heartbeat()).rejects.toThrow('Workspace mutation lease was lost');
+					expect(put).toHaveBeenCalledOnce();
+				} finally {
+					put.mockRestore();
+				}
+			}),
+		).rejects.toThrow('Workspace mutation lease was lost');
+		expect(await readClaim(bucket)).toEqual({ holder: null, expires_at: null });
+	});
+
+	it('reports a renewal failure that arrives while the completed mutation is cleaning up', async () => {
+		vi.useFakeTimers();
+		const entered = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<void>();
+		const renewal = Promise.withResolvers<never>();
+		const work = service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async () => {
+			entered.resolve();
+			await finish.promise;
+			return 'completed';
+		});
+		const rejected = expect(work).rejects.toThrow('Workspace mutation lease was lost');
+		await entered.promise;
+		const put = vi.spyOn(bucket, 'put').mockImplementationOnce(() => renewal.promise);
+		try {
+			await vi.advanceTimersByTimeAsync(40_000);
+			expect(put).toHaveBeenCalledOnce();
+			finish.resolve();
+			await vi.advanceTimersByTimeAsync(0);
+			renewal.reject(new Error('renewal write failed'));
+			await rejected;
+			expect(await readClaim(bucket)).toEqual({ holder: null, expires_at: null });
+			expect(vi.getTimerCount()).toBe(0);
+			await expect(
+				service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async () => 'retry'),
+			).resolves.toBe('retry');
+		} finally {
+			finish.resolve();
+			renewal.reject(new Error('test cleanup'));
+			put.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
 	it('does not run a mutation after its session check outlives a stolen lease', async () => {
 		vi.useFakeTimers();
 		try {

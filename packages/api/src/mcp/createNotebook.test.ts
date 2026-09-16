@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CatalogService, NotebookId, SessionId, UserId } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
 import {
@@ -10,7 +8,7 @@ import {
 	localResourceSecurity,
 } from '@marimo-hub/core/testing';
 import { makeTestDeps } from '../testing';
-import { createMcpServer } from './server';
+import { connectMcpClient } from '../testing/mcp';
 
 const USER_ID = UserId.parse('oauth-user');
 const PRINCIPAL: AuthenticatedPrincipal = {
@@ -41,18 +39,7 @@ async function connect(
 	deps: ReturnType<typeof makeTestDeps>,
 	principal: AuthenticatedPrincipal = PRINCIPAL,
 ) {
-	const server = createMcpServer(deps, principal, {
-		requestId: 'request-123',
-		method: 'POST',
-		path: '/mcp',
-		hostname: 'hub.example.com',
-		appBaseUrl: 'https://hub.example.com',
-	});
-	const client = new Client({ name: 'test', version: '1' });
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	await server.connect(serverTransport);
-	await client.connect(clientTransport);
-	return { client, server };
+	return connectMcpClient(deps, principal);
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -60,11 +47,9 @@ afterEach(() => vi.restoreAllMocks());
 describe('create_notebook MCP tool', () => {
 	it('does not advertise dependency metadata as an input', async () => {
 		const { deps } = await setup();
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 
 		const tools = await client.listTools();
-		await client.close();
-		await server.close();
 
 		const createNotebook = tools.tools.find((tool) => tool.name === 'create_notebook');
 		expect(createNotebook?.inputSchema.properties).not.toHaveProperty('deps');
@@ -72,7 +57,7 @@ describe('create_notebook MCP tool', () => {
 
 	it('creates a notebook without a session when launch is omitted', async () => {
 		const { deps, project } = await setup();
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 
 		const response = await client.callTool({
 			name: 'create_notebook',
@@ -83,8 +68,6 @@ describe('create_notebook MCP tool', () => {
 				tags: ['mcp'],
 			},
 		});
-		await client.close();
-		await server.close();
 
 		expect(response).toMatchObject({
 			structuredContent: {
@@ -109,7 +92,7 @@ describe('create_notebook MCP tool', () => {
 			compute: { ...fakeComputeFrom(instance), proxy: async () => Response.json([]) },
 		});
 		deps.sandbox = { ...deps.sandbox, hostname: 'sandboxes.example.com' };
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 
 		const response = await client.callTool({
 			name: 'create_notebook',
@@ -121,8 +104,6 @@ describe('create_notebook MCP tool', () => {
 				launch: true,
 			},
 		});
-		await client.close();
-		await server.close();
 
 		expect(response).toMatchObject({
 			structuredContent: {
@@ -147,14 +128,12 @@ describe('create_notebook MCP tool', () => {
 	it('rejects creation when the token does not permit notebook writes', async () => {
 		const { deps, project } = await setup();
 		const principal = principalWithGrant({ actions: ['project.read'], projects: '*' });
-		const { client, server } = await connect(deps, principal);
+		const client = await connect(deps, principal);
 
 		const response = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: 'Denied', code: '' },
 		});
-		await client.close();
-		await server.close();
 
 		expect(response).toMatchObject({
 			isError: true,
@@ -169,14 +148,12 @@ describe('create_notebook MCP tool', () => {
 			actions: ['project.read', 'notebook.write'],
 			projects: '*',
 		});
-		const { client, server } = await connect(deps, principal);
+		const client = await connect(deps, principal);
 
 		const response = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: 'No partial create', code: '', launch: true },
 		});
-		await client.close();
-		await server.close();
 
 		expect(response).toMatchObject({
 			isError: true,
@@ -187,14 +164,12 @@ describe('create_notebook MCP tool', () => {
 
 	it('rejects an empty title before it creates a notebook', async () => {
 		const { deps, project } = await setup();
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 
 		const response = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: '', code: '' },
 		});
-		await client.close();
-		await server.close();
 
 		expect(response).toMatchObject({ isError: true });
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toEqual([]);
@@ -212,7 +187,7 @@ describe('session MCP tools', () => {
 			{ title: 'Notebook', description: '', code: 'import marimo as mo' },
 			USER_ID,
 		);
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 
 		const started = await client.callTool({
 			name: 'start_session',
@@ -240,8 +215,6 @@ describe('session MCP tools', () => {
 			name: 'stop_session',
 			arguments: { project: project.id, session_id: sessionId },
 		});
-		await client.close();
-		await server.close();
 
 		expect(stoppedAgain).toMatchObject({
 			structuredContent: { session_id: sessionId, status: 'terminated' },
@@ -260,27 +233,23 @@ describe('session MCP tools', () => {
 			USER_ID,
 		);
 		const unrestricted = await connect(deps);
-		const started = await unrestricted.client.callTool({
+		const started = await unrestricted.callTool({
 			name: 'start_session',
 			arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
 		});
 		const sessionId = SessionId.parse(
 			(started.structuredContent as { session_id: string }).session_id,
 		);
-		await unrestricted.client.close();
-		await unrestricted.server.close();
 
 		const principal = principalWithGrant({
 			actions: ['project.read', 'session.attach'],
 			projects: '*',
 		});
 		const restricted = await connect(deps, principal);
-		const response = await restricted.client.callTool({
+		const response = await restricted.callTool({
 			name: 'stop_session',
 			arguments: { project: project.id, session_id: sessionId },
 		});
-		await restricted.client.close();
-		await restricted.server.close();
 
 		expect(response).toMatchObject({
 			isError: true,
@@ -310,7 +279,7 @@ describe('stored notebook MCP tools', () => {
 	it('creates, reads, replaces, and deletes source without a kernel', async () => {
 		const { deps, project } = await setup();
 		const createSandbox = vi.spyOn(deps.compute, 'create');
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const created = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: 'Round trip', code: NOTEBOOK_CODE, tags: ['keep'] },
@@ -358,8 +327,6 @@ describe('stored notebook MCP tools', () => {
 		expect(missing).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toEqual([]);
 		expect(createSandbox).not.toHaveBeenCalled();
-		await client.close();
-		await server.close();
 	});
 
 	it.each(['update_notebook', 'delete_notebook'])(
@@ -371,7 +338,7 @@ describe('stored notebook MCP tools', () => {
 				{ title: 'Protected', description: '', code: NOTEBOOK_CODE },
 				USER_ID,
 			);
-			const { client, server } = await connect(
+			const client = await connect(
 				deps,
 				principalWithGrant({ actions: ['project.read'], projects: '*' }),
 			);
@@ -390,8 +357,6 @@ describe('stored notebook MCP tools', () => {
 			expect((await deps.services.notebooks.getNotebook(project.id, notebook.id)).meta.status).toBe(
 				'active',
 			);
-			await client.close();
-			await server.close();
 		},
 	);
 
@@ -404,7 +369,7 @@ describe('stored notebook MCP tools', () => {
 				{ title: 'Protected', description: '', code: NOTEBOOK_CODE },
 				USER_ID,
 			);
-			const { client, server } = await connect(deps);
+			const client = await connect(deps);
 			const response = await client.callTool({
 				name,
 				arguments: {
@@ -424,8 +389,6 @@ describe('stored notebook MCP tools', () => {
 			expect((await deps.services.notebooks.getNotebook(project.id, notebook.id)).meta.status).toBe(
 				'active',
 			);
-			await client.close();
-			await server.close();
 		},
 	);
 
@@ -441,7 +404,7 @@ describe('stored notebook MCP tools', () => {
 			notebook_id: notebook.id,
 			user_id: USER_ID,
 		});
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'update_notebook',
 			arguments: { project: project.id, notebook: notebook.id, code: '' },
@@ -458,8 +421,6 @@ describe('stored notebook MCP tools', () => {
 			arguments: { project: project.id, notebook: notebook.id, title: 'Renamed' },
 		});
 		expect(metadata).toMatchObject({ structuredContent: { title: 'Renamed' } });
-		await client.close();
-		await server.close();
 	});
 
 	it.each(['get_notebook', 'update_notebook', 'delete_notebook'])(
@@ -472,7 +433,7 @@ describe('stored notebook MCP tools', () => {
 					{ title: 'Duplicate', description: '', code: '' },
 					USER_ID,
 				);
-			const { client, server } = await connect(deps);
+			const client = await connect(deps);
 			const response = await client.callTool({
 				name,
 				arguments: {
@@ -486,8 +447,6 @@ describe('stored notebook MCP tools', () => {
 				structuredContent: { code: 'BAD_REQUEST', message: expect.stringContaining('ambiguous') },
 			});
 			expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(2);
-			await client.close();
-			await server.close();
 		},
 	);
 });
@@ -505,7 +464,7 @@ describe('MCP session execution readiness', () => {
 			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
 			USER_ID,
 		);
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'start_session',
 			arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
@@ -542,9 +501,48 @@ describe('MCP session execution readiness', () => {
 				},
 			});
 		}
-		await client.close();
-		await server.close();
 	});
+
+	it.each(['starting', 'forbidden'] as const)(
+		'does not probe execution readiness when %s',
+		async (status) => {
+			const { instance } = makeFakeSandbox();
+			const proxy = vi.fn(async () => Response.json([{ id: 'kernel-1' }]));
+			const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+				USER_ID,
+			);
+			const session = await deps.services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: USER_ID,
+			});
+			if (status === 'forbidden')
+				await deps.services.sessions.setRunning(
+					project.id,
+					session.session_id,
+					'https://kernel.example',
+				);
+			const client = await connect(
+				deps,
+				principalWithGrant({ actions: ['project.read', 'session.start'], projects: '*' }),
+			);
+			const response = await client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
+			});
+			expect(response).toMatchObject({
+				structuredContent: {
+					session_id: session.session_id,
+					reused: true,
+					execution: { ready: false, status },
+				},
+			});
+			expect(proxy).not.toHaveBeenCalled();
+		},
+	);
 
 	it('returns created notebook and session details when the readiness probe fails', async () => {
 		const { instance } = makeFakeSandbox();
@@ -557,7 +555,7 @@ describe('MCP session execution readiness', () => {
 			},
 		});
 		vi.spyOn(console, 'log').mockImplementation(() => {});
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: 'Created', code: NOTEBOOK_CODE, launch: true },
@@ -571,8 +569,6 @@ describe('MCP session execution readiness', () => {
 		});
 		expect(JSON.stringify(response)).not.toContain('secret kernel URL');
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
-		await client.close();
-		await server.close();
 	});
 
 	it('does not probe app sessions for scratchpad execution', async () => {
@@ -584,7 +580,7 @@ describe('MCP session execution readiness', () => {
 			{ title: 'App', description: '', code: NOTEBOOK_CODE },
 			USER_ID,
 		);
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'start_session',
 			arguments: { project: project.id, notebook: notebook.id, mode: 'app', wait_seconds: 0 },
@@ -593,8 +589,6 @@ describe('MCP session execution readiness', () => {
 			structuredContent: { execution: { ready: false, status: 'app_mode' } },
 		});
 		expect(proxy).not.toHaveBeenCalled();
-		await client.close();
-		await server.close();
 	});
 });
 
@@ -616,7 +610,7 @@ describe('stored notebook access boundaries', () => {
 				{ classification: 'SECRET', compartments: ['restricted'] },
 				USER_ID,
 			);
-			const { client, server } = await connect(deps);
+			const client = await connect(deps);
 			const response = await client.callTool({
 				name,
 				arguments: {
@@ -633,8 +627,6 @@ describe('stored notebook access boundaries', () => {
 			expect((await deps.services.notebooks.getNotebook(project.id, notebook.id)).meta.status).toBe(
 				'active',
 			);
-			await client.close();
-			await server.close();
 		},
 	);
 
@@ -651,7 +643,7 @@ describe('stored notebook access boundaries', () => {
 			},
 			USER_ID,
 		);
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'update_notebook',
 			arguments: { project: project.id, notebook: meta.id, title: 'Changed', code: NOTEBOOK_CODE },
@@ -660,26 +652,26 @@ describe('stored notebook access boundaries', () => {
 		expect((await deps.services.notebooks.getNotebook(project.id, meta.id)).meta.title).toBe(
 			'Remote',
 		);
-		await client.close();
-		await server.close();
 	});
 
-	it('rejects an empty update without creating a version', async () => {
+	it.each([
+		{},
+		{ message: 'No source supplied' },
+		{ expected_updated_at: '2000-01-01T00:00:00.000Z' },
+	])('rejects an update without changed fields: %j', async (input) => {
 		const { deps, project } = await setup();
 		const notebook = await deps.services.notebooks.createNotebook(
 			project.id,
 			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
 			USER_ID,
 		);
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'update_notebook',
-			arguments: { project: project.id, notebook: notebook.id },
+			arguments: { project: project.id, notebook: notebook.id, ...input },
 		});
 		expect(response).toMatchObject({ isError: true, structuredContent: { code: 'BAD_REQUEST' } });
 		expect(await deps.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(1);
-		await client.close();
-		await server.close();
 	});
 
 	it('bounds readiness discovery and preserves the started session', async () => {
@@ -696,7 +688,7 @@ describe('stored notebook access boundaries', () => {
 			USER_ID,
 		);
 		vi.spyOn(console, 'log').mockImplementation(() => {});
-		const { client, server } = await connect(deps);
+		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'start_session',
 			arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
@@ -710,7 +702,5 @@ describe('stored notebook access boundaries', () => {
 		});
 		expect(discoverySignal?.aborted).toBe(true);
 		expect(await deps.services.sessions.listActiveByProject(project.id)).toHaveLength(1);
-		await client.close();
-		await server.close();
 	}, 10_000);
 });

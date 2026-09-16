@@ -54,8 +54,8 @@ describe('NotebookService', () => {
 	});
 
 	describe('source updates during sessions', () => {
-		it.each(['restore', 'notebook.py', 'pyproject.toml'] as const)(
-			'blocks %s while a persistent editor can save',
+		it.each(['update', 'restore', 'notebook.py', 'pyproject.toml'] as const)(
+			'blocks %s during editing and permits retry after the editor fails without a sandbox',
 			async (operation) => {
 				const notebook = await notebooks.createNotebook(
 					projectId,
@@ -68,21 +68,97 @@ describe('NotebookService', () => {
 					notebook_id: notebook.id,
 					user_id: ACTOR,
 				});
-				const update =
-					operation === 'restore'
-						? notebooks.restoreVersion(projectId, notebook.id, version.version_id, ACTOR)
-						: notebooks.workspace.write(
-								projectId,
-								notebook.id,
-								operation,
-								enc('replacement'),
-								ACTOR,
-							);
-				await expect(update).rejects.toThrow(session.session_id);
+				const update = () => {
+					if (operation === 'update')
+						return notebooks.updateNotebook(projectId, notebook.id, { code: '' }, ACTOR);
+					if (operation === 'restore')
+						return notebooks.restoreVersion(projectId, notebook.id, version.version_id, ACTOR);
+					return notebooks.workspace.write(
+						projectId,
+						notebook.id,
+						operation,
+						enc('replacement'),
+						ACTOR,
+					);
+				};
+				await expect(update()).rejects.toThrow(session.session_id);
+				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
 				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+				await sessions.markFailed(projectId, session.session_id);
+				await update();
+				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(2);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe(
+					operation === 'update' ? '' : operation === 'notebook.py' ? 'replacement' : 'original',
+				);
 			},
 		);
+
+		it('allows editor saves while external replacements report every blocking session', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: '', code: 'original' },
+				ACTOR,
+			);
+			const editors = await Promise.all(
+				[0, 1].map(() =>
+					sessions.createSession({
+						project_id: projectId,
+						notebook_id: notebook.id,
+						user_id: ACTOR,
+					}),
+				),
+			);
+			await expect(
+				notebooks.commitSession(projectId, notebook.id, { code: 'saved by editor' }, ACTOR),
+			).resolves.toMatchObject({ newVersion: true });
+			const replacement = notebooks.updateNotebook(
+				projectId,
+				notebook.id,
+				{ code: 'external' },
+				ACTOR,
+			);
+			for (const editor of editors) await expect(replacement).rejects.toThrow(editor.session_id);
+			expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('saved by editor');
+			expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(2);
+		});
+
+		it('fails closed on session lookup errors without blocking metadata updates', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: '', code: 'original', readme: 'original readme' },
+				ACTOR,
+			);
+			const before = await notebooks.getNotebook(projectId, notebook.id);
+			const lookup = vi
+				.spyOn(sessions, 'listEditorsBlockingSourceUpdate')
+				.mockRejectedValue(new Error('session storage unavailable'));
+			try {
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ code: 'replacement', title: 'Blocked', readme: 'Blocked' },
+						ACTOR,
+					),
+				).rejects.toThrow('session storage unavailable');
+				expect(await notebooks.getNotebook(projectId, notebook.id)).toEqual(before);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+				await notebooks.updateNotebook(
+					projectId,
+					notebook.id,
+					{ title: 'Renamed', readme: '' },
+					ACTOR,
+				);
+				expect(await notebooks.getNotebook(projectId, notebook.id)).toMatchObject({
+					meta: { title: 'Renamed' },
+					readme: '',
+				});
+			} finally {
+				lookup.mockRestore();
+			}
+		});
 	});
 
 	describe('createNotebook', () => {

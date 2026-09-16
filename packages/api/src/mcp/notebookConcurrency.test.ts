@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { CatalogService, SandboxId, UserId, paths } from '@marimo-hub/core';
+import { CatalogService, UserId, paths } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { fakeComputeFrom, makeFakeSandbox } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { startNotebookSession } from '../routes/sessionStart';
 import { makeTestDeps } from '../testing';
-import { createMcpServer } from './server';
+import { connectMcpClient } from '../testing/mcp';
 
 const principal: AuthenticatedPrincipal = {
 	id: UserId.parse('mcp-editor'),
@@ -41,11 +39,7 @@ async function setup() {
 		{ title: 'Notebook', description: '', code: 'original' },
 		principal.id,
 	);
-	const server = createMcpServer(writer, principal, request);
-	const client = new Client({ name: 'test', version: '1' });
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	await server.connect(serverTransport);
-	await client.connect(clientTransport);
+	const client = await connectMcpClient(writer, principal, request);
 	return {
 		bucket,
 		writer,
@@ -68,10 +62,6 @@ async function setup() {
 				body: { mode: 'edit' },
 				request,
 			}),
-		close: async () => {
-			await client.close();
-			await server.close();
-		},
 	};
 }
 
@@ -116,7 +106,6 @@ describe('MCP source replacement and editor admission', () => {
 		expect((await writing).isError).toBeFalsy();
 		expect((await starting).status).toBe('running');
 		expect(codeAtAdmission).toBe('replacement');
-		await fixture.close();
 	});
 
 	it('rejects a racing replacement after another replica publishes its starting session', async () => {
@@ -151,7 +140,6 @@ describe('MCP source replacement and editor admission', () => {
 			'original',
 		);
 		expect(await writer.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(1);
-		await fixture.close();
 	});
 
 	it.each([{ mode: 'app' }, { mode: 'edit', ephemeral: true }] as const)(
@@ -169,7 +157,6 @@ describe('MCP source replacement and editor admission', () => {
 			expect(await writer.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
 				'replacement',
 			);
-			await fixture.close();
 		},
 	);
 
@@ -178,7 +165,6 @@ describe('MCP source replacement and editor admission', () => {
 		const started = await fixture.start();
 		expect((await fixture.stop(started.session_id)).isError).toBeFalsy();
 		expect((await fixture.update()).isError).toBeFalsy();
-		await fixture.close();
 	});
 
 	it('does not commit source after losing its lease during dependency loading', async () => {
@@ -210,49 +196,5 @@ describe('MCP source replacement and editor admission', () => {
 			'original',
 		);
 		expect(await writer.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(1);
-		await fixture.close();
 	});
-
-	it.each(['starting', 'running', 'terminating', 'failed', 'terminated', 'expired'] as const)(
-		'blocks an unreclaimed %s editor',
-		async (status) => {
-			const fixture = await setup();
-			const { writer, project, notebook } = fixture;
-			const sessions = writer.services.sessions;
-			const session = await sessions.createSession({
-				project_id: project.id,
-				notebook_id: notebook.id,
-				user_id: principal.id,
-				sandbox_id: SandboxId.create(),
-			});
-			if (status === 'running')
-				await sessions.setRunning(project.id, session.session_id, 'https://kernel.example');
-			if (status === 'terminating' || status === 'terminated')
-				await sessions.beginTerminating(project.id, session.session_id);
-			if (status === 'terminated') await sessions.markTerminated(project.id, session.session_id);
-			if (status === 'failed') await sessions.markFailed(project.id, session.session_id);
-			if (status === 'expired') {
-				const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60_000);
-				await sessions.expireStale();
-				clock.mockRestore();
-			}
-			expect((await sessions.getSession(project.id, session.session_id)).status).toBe(status);
-			expect(await fixture.update()).toMatchObject({
-				isError: true,
-				structuredContent: { code: 'CONFLICT' },
-			});
-			expect(await writer.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
-				'original',
-			);
-			if (status === 'terminated' || status === 'failed' || status === 'expired') {
-				await sessions.markSandboxReclaimed(
-					project.id,
-					session.session_id,
-					new Date().toISOString(),
-				);
-				expect((await fixture.update()).isError).toBeFalsy();
-			}
-			await fixture.close();
-		},
-	);
 });
