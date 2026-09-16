@@ -39,7 +39,7 @@ For Claude.ai, add a custom connector and enter the MCP server URL. For Cursor,
 add a remote HTTP MCP server. The client discovers the authorization server.
 
 By default, the client registers with the Hub and opens the marimohub consent page.
-With external authorization, the client uses the issuer described in the next section.
+With [external authorization](#external-authorization), the client uses the configured issuer.
 
 For the default Hub authorization flow, use the following consent checklist.
 Check the client name and redirect URL before approval.
@@ -47,6 +47,83 @@ The default grant permits notebook editing and execution. Use the smallest pract
 actions and projects. The token lifetime defaults to 7 days and cannot exceed
 90 days. Revoke a token from the API tokens dialog. Marimohub does not issue
 refresh tokens. Expiry or revocation requires a new authorization.
+
+## Work with notebooks
+
+Use `list_catalog` to find accessible projects, notebooks, and active sessions.
+Project and notebook selectors accept IDs or exact names, case-insensitively.
+Use IDs when names are duplicated and for subsequent calls.
+
+| Tool              | Purpose                                                                           |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `list_catalog`    | Discover notebooks. Filter by project, status, tag, or text.                      |
+| `get_notebook`    | Read notebook metadata and stored source.                                         |
+| `create_notebook` | Create a local notebook. Optional `launch` starts an edit session.                |
+| `update_notebook` | Replace supplied metadata fields or the complete local source.                    |
+| `delete_notebook` | Soft-delete a notebook, retire live apps, and cancel job runs.                    |
+| `start_session`   | Start or reuse an edit or app session.                                            |
+| `execute_code`    | Run Python in an edit session's live scratchpad.                                  |
+| `stop_session`    | Stop a session and destroy its sandbox, with a save attempt for persistent edits. |
+
+### Edit stored source
+
+Notebook reads, updates, and deletions work without a session. `get_notebook`
+returns stored source, which can differ from unsaved edits in a live session.
+
+1. Read the notebook with `get_notebook`.
+2. Pass the changed fields to `update_notebook`, using `expected_updated_at` from the read.
+
+Omitted fields remain unchanged. Supplied fields replace their previous values.
+A code update creates a version. Remote source changes go through sync.
+`delete_notebook` also accepts `expected_updated_at`.
+
+If the precondition fails, read the latest notebook before retrying.
+A persistent edit session blocks stored code replacement until its sandbox is cleaned up.
+Edit in the live session, or stop it and call `get_notebook` to include its saved changes before retrying.
+Metadata updates, app sessions, and temporary sessions do not have this restriction.
+
+### Source format
+
+The `code` parameter for `create_notebook` and `update_notebook` contains a
+complete marimo Python notebook. For example:
+
+```python
+import marimo
+
+app = marimo.App()
+
+
+@app.cell
+def _():
+    import marimo as mo
+    mo.md("Hello from MCP")
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+The Hub stores source verbatim, without syntax validation or script conversion.
+Local notebook dependencies come from the workspace `pyproject.toml`.
+PEP 723 headers remain in the source but do not install dependencies for local notebooks.
+
+### Work in a live session
+
+1. Call `start_session` with `mode: "edit"`.
+2. Read `execution.ready`. If it is false, follow `execution.next_step`.
+3. Call `execute_code` with the returned project and session IDs.
+4. When finished, call `stop_session` for sessions you no longer need.
+
+The first start can take about two minutes. Session `status` describes the
+sandbox lifecycle. `execution` reports whether a kernel is available for code
+execution. When its status is `awaiting_client`, open `notebook_url` in a browser.
+The browser connection creates the kernel. Readiness can change between calls.
+
+`execute_code` takes Python statements and shares the notebook's live variables.
+Scratchpad execution does not save notebook cells. For persistent cell edits,
+inspect marimo's code-mode API with `import marimo._code_mode as cm; help(cm)`.
+App sessions serve the notebook and do not support scratchpad execution.
 
 ## External authorization
 
@@ -80,44 +157,6 @@ The Hub cannot revoke or refresh them.
 A gateway needs an access token for the Hub with the required audience and scopes.
 A shared issuer alone does not guarantee one authorization step.
 Test discovery, client registration, resource requests, and scope requests with your gateway before deployment.
-
-## Tools
-
-### `list_catalog`
-
-Lists accessible projects and notebooks. Filters by project, notebook status,
-tag, or text. Includes active sessions by default.
-
-### `create_notebook`
-
-Creates a local notebook from Python source. Set `launch` to `true` to start an
-edit session and return its session details.
-
-### `start_session`
-
-Starts or reuses an edit or app session. The first start can take about two
-minutes. Later calls reuse an eligible session.
-
-### `stop_session`
-
-Stops a session and destroys its sandbox. The stop process attempts to save
-changes from persistent edit sessions.
-
-### `execute_code`
-
-Runs code in the scratchpad of a live edit session. Open the notebook URL in a
-browser before you call this tool. The kernel remains available while a tab is
-connected and during marimo's short grace period. If no tab is connected, the
-tool returns the URL to open. Pass the project and session ID returned by
-`start_session`. The tool automatically uses the first connected kernel.
-
-The scratchpad shares the notebook's live variables. For durable cell changes,
-first inspect marimo code mode:
-
-```python
-import marimo._code_mode as cm
-help(cm)
-```
 
 ## OAuth and security
 

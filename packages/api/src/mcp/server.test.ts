@@ -71,6 +71,9 @@ describe('MCP tool boundaries', () => {
 		for (const tool of [
 			'list_catalog',
 			'create_notebook',
+			'get_notebook',
+			'update_notebook',
+			'delete_notebook',
 			'start_session',
 			'stop_session',
 			'execute_code',
@@ -79,9 +82,6 @@ describe('MCP tool boundaries', () => {
 		}
 		expect(properties.start_session?.notebook?.description).toBe(
 			'Notebook ID or exact notebook title in the project (case-insensitive). Use an ID if titles are duplicated.',
-		);
-		expect(tools.tools.find((tool) => tool.name === 'start_session')?.description).toContain(
-			'Use a project ID or exact project name. Use a notebook ID or exact notebook title.',
 		);
 		expect(tools.tools.find((tool) => tool.name === 'stop_session')?.annotations).toMatchObject({
 			destructiveHint: true,

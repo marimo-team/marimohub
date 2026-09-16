@@ -1360,6 +1360,12 @@ export async function startNotebookSession(input: {
 	// destroyed. A failure *inside* provisioning self-cleans (see
 	// SandboxProvisioner.provision); the saga handles failures after it.
 	let session: Session | undefined;
+	let sandboxMayExist = false;
+	const recordSandboxCleanup = async () => {
+		if (session) {
+			await sessions.markSandboxReclaimed(pid, session.session_id, new Date().toISOString());
+		}
+	};
 	let updated: Session | undefined;
 	let url = '';
 	let usedFallback = false;
@@ -1381,21 +1387,32 @@ export async function startNotebookSession(input: {
 	try {
 		await saga(observer)
 			.step('session_record', async () => {
-				session = await sessions.createSession({
-					notebook_id: nid,
-					project_id: pid,
-					user_id: user.id,
-					sandbox_id: sandboxId,
-					kernel_auth_token: kernelAuthToken,
-					compute_profile: appliedComputeProfile.name,
-					compute_resources: appliedComputeProfile.resources,
-					compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
-					ephemeral,
-					mode,
-					source_version_id: sourceVersionId,
-					editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
-					authorization_expires_at: authorizationExpiresAt,
-				});
+				const create = () =>
+					sessions.createSession({
+						notebook_id: nid,
+						project_id: pid,
+						user_id: user.id,
+						sandbox_id: sandboxId,
+						kernel_auth_token: kernelAuthToken,
+						compute_profile: appliedComputeProfile.name,
+						compute_resources: appliedComputeProfile.resources,
+						compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
+						ephemeral,
+						mode,
+						source_version_id: sourceVersionId,
+						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
+						authorization_expires_at: authorizationExpiresAt,
+					});
+				// Publish the starting record under the source-mutation lease. Once visible,
+				// the session itself blocks source replacement through sandbox reclamation.
+				session =
+					mode === 'edit' && !ephemeral
+						? await notebooks.workspace.withMutation(pid, nid, {}, async (lease) => {
+								session = await create();
+								await lease.heartbeat();
+								return session;
+							})
+						: await create();
 				observer.tag('session_id', session.session_id);
 			})
 			// The pre-flight cap check alone is raceable; re-rank now that this
@@ -1565,7 +1582,11 @@ export async function startNotebookSession(input: {
 						async provision() {
 							const { baseUrl } = await this.$.exposure;
 							const launchStrategy = await this.$.launchStrategy;
+							// A failed sibling may already have retired the record while these dependencies resolved.
+							if (this.$signal.aborted) throw this.$signal.reason;
+							sandboxMayExist = true;
 							return provisioner.provision({
+								onSandboxDestroyed: recordSandboxCleanup,
 								sandboxId,
 								projectId: pid,
 								userId: user.id,
@@ -1620,8 +1641,10 @@ export async function startNotebookSession(input: {
 					observer.tag('provision_used_fallback', usedFallback);
 					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
-				compensate: () =>
-					compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy(),
+				compensate: async () => {
+					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
+					await recordSandboxCleanup();
+				},
 			})
 			.step('mark_running', async () => {
 				if (
@@ -1696,6 +1719,8 @@ export async function startNotebookSession(input: {
 			})
 			.run();
 	} catch (err) {
+		if (!sandboxMayExist) await recordSandboxCleanup().catch(() => {});
+
 		if (err instanceof EditorClaimLostError) {
 			observer.tag('editor_claim_lost', true);
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});

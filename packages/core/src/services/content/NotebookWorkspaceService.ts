@@ -69,6 +69,7 @@ interface WorkspaceServiceOwner {
 		path: 'notebook.py' | 'pyproject.toml',
 		content: string,
 		actor: UserId,
+		assertWritable: () => Promise<void>,
 	): Promise<void>;
 }
 
@@ -292,8 +293,8 @@ export class NotebookWorkspaceService {
 		createOnly = false,
 		options: WorkspaceMutationOptions = {},
 	): Promise<WorkspaceFileItem> {
-		return this.withMutation(projectId, notebookId, options, () =>
-			this.writeUnlocked(projectId, notebookId, path, bytes, actor, createOnly),
+		return this.withMutation(projectId, notebookId, options, (lease) =>
+			this.writeUnlocked(projectId, notebookId, path, bytes, actor, createOnly, lease),
 		);
 	}
 
@@ -304,6 +305,7 @@ export class NotebookWorkspaceService {
 		bytes: Uint8Array,
 		actor: UserId,
 		createOnly: boolean,
+		lease: MutationLease,
 	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'write', path);
 		const relative = normalizeWorkspacePathInput(path);
@@ -329,6 +331,7 @@ export class NotebookWorkspaceService {
 				relative,
 				assertTextSource(relative, bytes),
 				actor,
+				lease.heartbeat,
 			);
 		} else {
 			try {
@@ -539,7 +542,8 @@ export class NotebookWorkspaceService {
 		}
 	}
 
-	private async withMutation<T>(
+	/** Serialize source mutations and editor admission across API replicas. */
+	async withMutation<T>(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		options: WorkspaceMutationOptions,
@@ -573,12 +577,36 @@ export class NotebookWorkspaceService {
 		const holder = VersionId.create();
 		for (let attempt = 0; attempt < WORKSPACE_MUTATION_WAIT_ATTEMPTS; attempt++) {
 			if ((await acquireSingletonClaim(claim, holder)).acquired) {
+				let renewalInFlight: Promise<void> | undefined;
+				let leaseLost = false;
+				const heartbeat = (): Promise<void> => {
+					if (leaseLost) return Promise.reject(new MutationLeaseLostError());
+					if (renewalInFlight) return renewalInFlight;
+					renewalInFlight = this.renewClaim(key, holder)
+						.catch((error) => {
+							leaseLost = true;
+							throw error;
+						})
+						.finally(() => {
+							renewalInFlight = undefined;
+						});
+					return renewalInFlight;
+				};
+				const renewalTimer = setInterval(() => {
+					void heartbeat().catch(() => {});
+				}, WORKSPACE_MUTATION_LEASE_MS / 3);
+				let result: T;
 				try {
 					await options.assertMutable?.();
-					return await mutation({ heartbeat: () => this.renewClaim(key, holder) });
+					await heartbeat();
+					result = await mutation({ heartbeat });
 				} finally {
+					clearInterval(renewalTimer);
+					await renewalInFlight?.catch(() => {});
 					await releaseSingletonClaim(claim, holder);
 				}
+				if (leaseLost) throw new MutationLeaseLostError();
+				return result;
 			}
 			await sleep(WORKSPACE_MUTATION_RETRY_MS);
 		}

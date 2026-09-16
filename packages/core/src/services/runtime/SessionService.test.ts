@@ -9,7 +9,7 @@ import {
 	uid,
 } from '../../testing';
 import { ConflictError, PreconditionFailedError } from '../../errors';
-import { createNotebookId, createProjectId, createVersionId } from '../../ids';
+import { createNotebookId, createProjectId, createVersionId, SandboxId } from '../../ids';
 import type { SessionId } from '../../ids';
 import { paths } from '../../paths';
 import { SessionService } from './SessionService';
@@ -24,6 +24,92 @@ describe('SessionService', () => {
 	beforeEach(() => {
 		bucket = new MemoryBucket();
 		sessions = new SessionService(bucket);
+	});
+
+	describe('listEditorsBlockingSourceUpdate', () => {
+		const states = [
+			'starting',
+			'running',
+			'terminating',
+			'failed',
+			'terminated',
+			'expired',
+		] as const;
+		const sandboxes = ['none', 'live', 'reclaimed'] as const;
+		it.each(states.flatMap((status) => sandboxes.map((sandbox) => ({ status, sandbox }))))(
+			'checks a $status editor with a $sandbox sandbox',
+			async ({ status, sandbox }) => {
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebookId,
+					user_id: ACTOR,
+					...(sandbox === 'none' ? {} : { sandbox_id: SandboxId.create() }),
+				});
+				if (status === 'running')
+					await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
+				if (status === 'terminating' || status === 'terminated')
+					await sessions.beginTerminating(projectId, session.session_id);
+				if (status === 'terminated') await sessions.markTerminated(projectId, session.session_id);
+				if (status === 'failed') await sessions.markFailed(projectId, session.session_id);
+				if (status === 'expired') {
+					const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60_000);
+					try {
+						await sessions.expireStale();
+					} finally {
+						clock.mockRestore();
+					}
+				}
+				if (sandbox === 'reclaimed')
+					await sessions.markSandboxReclaimed(
+						projectId,
+						session.session_id,
+						new Date().toISOString(),
+					);
+				expect((await sessions.getSession(projectId, session.session_id)).status).toBe(status);
+				const blocks =
+					['starting', 'running', 'terminating'].includes(status) || sandbox === 'live';
+				expect(
+					(await sessions.listEditorsBlockingSourceUpdate(projectId, notebookId)).map(
+						(s) => s.session_id,
+					),
+				).toEqual(blocks ? [session.session_id] : []);
+			},
+		);
+
+		it.each(['{invalid json', JSON.stringify({ status: 'unknown' })])(
+			'fails closed on malformed safety-scan records: %s',
+			async (record) => {
+				await bucket.put(`${paths.sessionsForProject(projectId)}corrupt.json`, record);
+				await expect(
+					sessions.listEditorsBlockingSourceUpdate(projectId, notebookId),
+				).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+				expect(await sessions.listActiveByProject(projectId)).toEqual([]);
+				expect(
+					await sessions.listEditorsBlockingSourceUpdate(createProjectId(), notebookId),
+				).toEqual([]);
+			},
+		);
+
+		it('includes every persistent editor and excludes other notebooks and discard-only sessions', async () => {
+			const create = (input: Partial<Parameters<SessionService['createSession']>[0]> = {}) =>
+				sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebookId,
+					user_id: ACTOR,
+					...input,
+				});
+			const first = await create();
+			const second = await create({ user_id: uid('other-editor') });
+			await create({ notebook_id: createNotebookId() });
+			await create({ project_id: createProjectId() });
+			await create({ mode: 'app', sandbox_id: SandboxId.create() });
+			await create({ mode: 'edit', ephemeral: true, sandbox_id: SandboxId.create() });
+			expect(
+				(await sessions.listEditorsBlockingSourceUpdate(projectId, notebookId))
+					.map((s) => s.session_id)
+					.sort(),
+			).toEqual([first.session_id, second.session_id].sort());
+		});
 	});
 
 	describe('createSession', () => {

@@ -92,6 +92,43 @@ describe('SessionRetirer', () => {
 		});
 	}
 
+	it('marks a destroyed editor as reclaimed before releasing its claim', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+		const releaseEditor = sessions.releaseEditorFor.bind(sessions);
+		vi.spyOn(sessions, 'releaseEditorFor').mockImplementation(async (retired) => {
+			expect(await sessions.getSession(projectId, session.session_id)).toMatchObject({
+				status: 'terminated',
+				sandbox_reclaimed_at: expect.any(String),
+			});
+			return releaseEditor(retired);
+		});
+
+		await retirer(fakeComputeFrom(instance)).retire(session);
+
+		expect(calls.destroy).toBe(1);
+		expect(sessions.releaseEditorFor).toHaveBeenCalledOnce();
+		expect(await sessions.listEditorsBlockingSourceUpdate(projectId, notebookId)).toEqual([]);
+	});
+
+	it('does not mark the sandbox reclaimed while another stop owns its teardown', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+
+		await retirer(fakeComputeFrom(instance)).retire(session, { teardown: false });
+
+		expect(calls.destroy).toBe(0);
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+		expect(await sessions.listEditorsBlockingSourceUpdate(projectId, notebookId)).toHaveLength(1);
+		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
+			session_id: session.session_id,
+		});
+	});
+
 	it('retains the editor claim until a failed destroy is later confirmed', async () => {
 		const { instance } = makeFakeSandbox();
 		let destroyFails = true;
@@ -106,6 +143,7 @@ describe('SessionRetirer', () => {
 
 		const terminated = await sessions.getSession(projectId, session.session_id);
 		expect(terminated.status).toBe('terminated');
+		expect(terminated.sandbox_reclaimed_at).toBeUndefined();
 		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
 			session_id: session.session_id,
 		});
@@ -129,7 +167,10 @@ describe('SessionRetirer', () => {
 		expect(calls.destroy).toBe(1);
 		expect(notebooks.getNotebook).not.toHaveBeenCalled();
 		expect(notebooks.commitSession).not.toHaveBeenCalled();
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+		expect(await sessions.getSession(projectId, session.session_id)).toMatchObject({
+			status: 'terminated',
+			sandbox_reclaimed_at: expect.any(String),
+		});
 		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
 			session_id: null,
 		});

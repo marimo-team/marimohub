@@ -53,6 +53,175 @@ describe('NotebookService', () => {
 		projectId = project.id;
 	});
 
+	describe('source updates during sessions', () => {
+		it.each(['update', 'restore', 'notebook.py', 'pyproject.toml'] as const)(
+			'blocks %s during editing and permits retry after the editor fails without a sandbox',
+			async (operation) => {
+				const notebook = await notebooks.createNotebook(
+					projectId,
+					{ title: 'NB', description: '', code: 'original' },
+					ACTOR,
+				);
+				const [version] = await notebooks.listVersions(projectId, notebook.id);
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebook.id,
+					user_id: ACTOR,
+				});
+				const update = () => {
+					if (operation === 'update')
+						return notebooks.updateNotebook(projectId, notebook.id, { code: '' }, ACTOR);
+					if (operation === 'restore')
+						return notebooks.restoreVersion(projectId, notebook.id, version.version_id, ACTOR);
+					return notebooks.workspace.write(
+						projectId,
+						notebook.id,
+						operation,
+						enc('replacement'),
+						ACTOR,
+					);
+				};
+				await expect(update()).rejects.toThrow(session.session_id);
+				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+				await sessions.markFailed(projectId, session.session_id);
+				await update();
+				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(2);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe(
+					operation === 'update' ? '' : operation === 'notebook.py' ? 'replacement' : 'original',
+				);
+			},
+		);
+
+		it('allows editor saves while external replacements report every blocking session', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: '', code: 'original' },
+				ACTOR,
+			);
+			const editors = await Promise.all(
+				[0, 1].map(() =>
+					sessions.createSession({
+						project_id: projectId,
+						notebook_id: notebook.id,
+						user_id: ACTOR,
+					}),
+				),
+			);
+			await expect(
+				notebooks.commitSession(projectId, notebook.id, { code: 'saved by editor' }, ACTOR),
+			).resolves.toMatchObject({ newVersion: true });
+			const replacement = notebooks.updateNotebook(
+				projectId,
+				notebook.id,
+				{ code: 'external' },
+				ACTOR,
+			);
+			for (const editor of editors) await expect(replacement).rejects.toThrow(editor.session_id);
+			expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('saved by editor');
+			expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(2);
+		});
+
+		it('rejects stale source tokens even when updates and editor saves share a millisecond', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			try {
+				const notebook = await notebooks.createNotebook(
+					projectId,
+					{ title: 'NB', description: '', code: 'original' },
+					ACTOR,
+				);
+				const updated = await notebooks.updateNotebook(
+					projectId,
+					notebook.id,
+					{ code: 'updated' },
+					ACTOR,
+					notebook.updated_at,
+				);
+				expect(updated.updated_at).not.toBe(notebook.updated_at);
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ code: 'stale' },
+						ACTOR,
+						notebook.updated_at,
+					),
+				).rejects.toThrow(PreconditionFailedError);
+				await notebooks.commitSession(projectId, notebook.id, { code: 'saved by editor' }, ACTOR);
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ code: 'stale' },
+						ACTOR,
+						updated.updated_at,
+					),
+				).rejects.toThrow(PreconditionFailedError);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('saved by editor');
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not mutate source or metadata when a session record is corrupt', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: '', code: 'original' },
+				ACTOR,
+			);
+			await bucket.put(`${paths.sessionsForProject(projectId)}corrupt.json`, '{invalid json');
+			await expect(
+				notebooks.updateNotebook(
+					projectId,
+					notebook.id,
+					{ code: 'replacement', title: 'Blocked' },
+					ACTOR,
+				),
+			).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+			expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
+			expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+			expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+		});
+
+		it('fails closed on session lookup errors without blocking metadata updates', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: '', code: 'original', readme: 'original readme' },
+				ACTOR,
+			);
+			const before = await notebooks.getNotebook(projectId, notebook.id);
+			const lookup = vi
+				.spyOn(sessions, 'listEditorsBlockingSourceUpdate')
+				.mockRejectedValue(new Error('session storage unavailable'));
+			try {
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ code: 'replacement', title: 'Blocked', readme: 'Blocked' },
+						ACTOR,
+					),
+				).rejects.toThrow('session storage unavailable');
+				expect(await notebooks.getNotebook(projectId, notebook.id)).toEqual(before);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+				await notebooks.updateNotebook(
+					projectId,
+					notebook.id,
+					{ title: 'Renamed', readme: '' },
+					ACTOR,
+				);
+				expect(await notebooks.getNotebook(projectId, notebook.id)).toMatchObject({
+					meta: { title: 'Renamed' },
+					readme: '',
+				});
+			} finally {
+				lookup.mockRestore();
+			}
+		});
+	});
+
 	describe('createNotebook', () => {
 		it('creates a notebook with all content files', async () => {
 			const meta = await notebooks.createNotebook(
@@ -1052,6 +1221,7 @@ describe('NotebookService', () => {
 				notebook_id: created.id,
 				user_id: ACTOR,
 				source_version_id: oldestVersionId,
+				mode: 'app',
 			});
 
 			for (let i = 1; i <= MAX_VERSIONS + 2; i++) {
@@ -1124,14 +1294,12 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 
-			// Make pruning fail: `pruneVersions` lists the versions folder first, so
-			// throwing from `list` reliably exercises the swallow-and-continue path
-			// regardless of how many versions exist. `updateNotebook`'s own writes use
-			// `put`/`get`, not `list`, so the save itself is unaffected. The save must
-			// still succeed despite the prune failure.
 			const originalList = bucket.list.bind(bucket);
-			bucket.list = async () => {
-				throw new Error('simulated prune list failure');
+			bucket.list = async (options) => {
+				if (options?.prefix === `${paths.project(projectId).notebook(created.id).base}/versions/`) {
+					throw new Error('simulated prune list failure');
+				}
+				return originalList(options);
 			};
 			try {
 				const updated = await notebooks.updateNotebook(

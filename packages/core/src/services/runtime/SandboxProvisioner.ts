@@ -175,6 +175,8 @@ export interface SessionEnv {
 }
 
 export interface ProvisionOptions {
+	/** Called when failure leaves no handle or sandbox destruction succeeds. */
+	onSandboxDestroyed?: () => void | Promise<void>;
 	sandboxId: SandboxId;
 	projectId: ProjectId;
 	notebookId: NotebookId;
@@ -606,23 +608,24 @@ export class SandboxProvisioner {
 		// A restored sandbox boots from the snapshot image; the workspace load below
 		// still refreshes the code from the bucket cache.
 		const createStart = Date.now();
-		const sandbox = createOrRestoreSandbox(
-			this.provider,
-			options.sandboxId,
-			options.restoreFilesystemSnapshotId,
-			{
-				image: options.image,
-				resources: options.resources,
-				userHome: options.userHome,
-				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
-				owner: {
-					projectId: options.projectId,
-					...(options.userId ? { userId: options.userId } : {}),
-				},
-			},
-		);
-		const createMs = Date.now() - createStart;
+		let sandbox: SandboxInstance | undefined;
 		try {
+			sandbox = createOrRestoreSandbox(
+				this.provider,
+				options.sandboxId,
+				options.restoreFilesystemSnapshotId,
+				{
+					image: options.image,
+					resources: options.resources,
+					userHome: options.userHome,
+					sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+					owner: {
+						projectId: options.projectId,
+						...(options.userId ? { userId: options.userId } : {}),
+					},
+				},
+			);
+			const createMs = Date.now() - createStart;
 			const result = await this.provisionInto(sandbox, options);
 			// Constructing the (usually lazy) handle, NOT the backend's create — that
 			// lands in `reachable_create` once the adapter resolves it.
@@ -630,14 +633,13 @@ export class SandboxProvisioner {
 			result.timings.total = Date.now() - provisionStart;
 			return result;
 		} catch (err) {
-			// Provisioning failed partway — destroy any partial sandbox before
-			// rethrowing so a half-started kernel/mount doesn't linger and bill. The
-			// caller's saga never compensates the step that threw, so cleanup of the
-			// resource this method created is this method's responsibility.
+			// The saga does not compensate the step that throws. A failed handle
+			// constructor leaves nothing to destroy but still needs a cleanup marker.
 			try {
-				await sandbox.destroy();
+				await sandbox?.destroy();
+				await options.onSandboxDestroyed?.();
 			} catch {
-				// Best-effort: the sandbox may not have been created.
+				// Preserve the original failure if destruction or its marker fails.
 			}
 			throw err;
 		}
@@ -651,23 +653,24 @@ export class SandboxProvisioner {
 	async prepare(options: ProvisionOptions): Promise<PreparedSandbox> {
 		const prepareStart = Date.now();
 		const createStart = Date.now();
-		const sandbox = createOrRestoreSandbox(
-			this.provider,
-			options.sandboxId,
-			options.restoreFilesystemSnapshotId,
-			{
-				image: options.image,
-				resources: options.resources,
-				userHome: options.userHome,
-				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
-				owner: {
-					projectId: options.projectId,
-					...(options.userId ? { userId: options.userId } : {}),
-				},
-			},
-		);
-		const createMs = Date.now() - createStart;
+		let sandbox: SandboxInstance | undefined;
 		try {
+			sandbox = createOrRestoreSandbox(
+				this.provider,
+				options.sandboxId,
+				options.restoreFilesystemSnapshotId,
+				{
+					image: options.image,
+					resources: options.resources,
+					userHome: options.userHome,
+					sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+					owner: {
+						projectId: options.projectId,
+						...(options.userId ? { userId: options.userId } : {}),
+					},
+				},
+			);
+			const createMs = Date.now() - createStart;
 			const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options);
 			const counters = loadCounters(load);
 			Object.assign(counters, sandbox.drainCounters?.() ?? {});
@@ -683,9 +686,10 @@ export class SandboxProvisioner {
 			};
 		} catch (err) {
 			try {
-				await sandbox.destroy();
+				await sandbox?.destroy();
+				await options.onSandboxDestroyed?.();
 			} catch {
-				// Best-effort: the sandbox may not have been created.
+				// Preserve the original failure if destruction or its marker fails.
 			}
 			throw err;
 		}
