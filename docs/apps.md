@@ -65,8 +65,16 @@ For these links, `mo.query_params()["id"]` returns `"123"`.
 - **App tabs:** Each app tab receives its own parameters. Static outputs and secondary tools receive none.
 - **Values:** The iframe URL preserves repeated parameters, empty values, and encoded characters.
   Marimo determines how repeated parameters reach Python.
-- **Updates:** Changed forwarded values reload the iframe and reset its browser state, while reusing the sandbox.
-  Theme changes and stripped parameters do not trigger reloads. Query changes inside the notebook do not update the outer URL.
+- **Updates:** `mo.query_params()` changes mirror into the Hub URL without reloading the notebook.
+  Copy URL and app links use the current parameters. Explicit Hub query navigation still reloads the iframe while reusing the sandbox.
+  Theme changes and stripped parameters do not trigger reloads.
+
+The bridge installs automatically when an app or editor session starts. Existing sessions need a restart.
+It supports marimo 0.23.10 and 0.24.2 without proxy exposure or an image rebuild.
+Unsupported runtimes continue without synchronization. Static outputs and scheduled jobs receive no bridge configuration.
+A fresh app initializes from its query parameters. An editor reconnect can retain existing Python state.
+The bridge does not provide full two-way Python history restoration.
+See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md) for runtime and protocol details.
 
 ### Reserved parameters
 

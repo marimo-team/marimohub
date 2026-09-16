@@ -42,3 +42,6 @@ deployment/
 
 # Vercel CLI link metadata (docs deploy to the marimohub-docs Vercel project)
 .vercel
+
+packages/notebook-bridge/test-results/
+packages/notebook-bridge/playwright-report/

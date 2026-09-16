@@ -20,6 +20,7 @@
 		"@marimo-hub/compute-e2b": "workspace:*",
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/notebook-bridge": "workspace:*",
 		"@marimo-hub/storage-r2": "workspace:*",
 		"e2b": "2.35.0"
 	},

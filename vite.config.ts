@@ -344,6 +344,8 @@ export default defineConfig({
 								'@marimo-hub/source-control-*',
 								'@marimo-hub/duckdb-wasm-runtime',
 								'@marimo-hub/postgres-runtime',
+								'@marimo-hub/notebook-bridge',
+								'@marimo-hub/notebook-bridge/*',
 							],
 						},
 					],

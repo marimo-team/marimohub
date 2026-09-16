@@ -59,7 +59,8 @@
 		"./timing": "./src/timing.ts",
 		"./token-grants": "./src/tokenGrants.ts",
 		"./url": "./src/url.ts",
-		"./workspace-archive": "./src/integrations/workspaceArchive.ts"
+		"./workspace-archive": "./src/integrations/workspaceArchive.ts",
+		"./ports/notebook-bridge": "./src/ports/notebookBridge.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

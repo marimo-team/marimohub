@@ -79,6 +79,13 @@ jobs:
         if: matrix.browser == 'chromium'
         run: uv run scripts/test-app-source.py
 
+      - name: Notebook bridge browser conformance
+        run: pnpm --filter @marimo-hub/notebook-bridge test:browser --project=${{ matrix.browser }}
+
+      - name: Notebook bridge marimo compatibility
+        if: matrix.browser == 'chromium'
+        run: pnpm --filter @marimo-hub/notebook-bridge test:browser --project=runtime
+
       - run: pnpm e2e
         env:
           E2E_BROWSER: ${{ matrix.browser }}
@@ -91,6 +98,7 @@ jobs:
           path: |
             apps/e2e/playwright-report/
             apps/e2e/test-results/
+            packages/notebook-bridge/test-results/
           retention-days: 7
           if-no-files-found: ignore
 

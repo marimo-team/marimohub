@@ -86,6 +86,55 @@ test.describe('session lifecycle', () => {
 		await expectNoProjectSessions(page, projectId);
 	});
 
+	for (const mode of ['edit', 'app']) {
+		test(`mirrors Python query changes in the Hub ${mode} URL without reloading`, async ({
+			page,
+		}) => {
+			await createAndOpenProject(page, uniqueName('bridge'));
+			const projectId = projectIdFromUrl(page.url())!;
+			const response = await page.request.post(`/api/v1/projects/${projectId}/notebooks`, {
+				data: {
+					title: 'URL bridge',
+					description: '',
+					code: `import marimo
+app = marimo.App()
+@app.cell
+def _():
+    import marimo as mo
+    return (mo,)
+@app.cell
+def _(mo):
+    params = mo.query_params()
+    return (params,)
+@app.cell
+def _(mo, params):
+    button = mo.ui.button(label="Update Hub URL", on_click=lambda _: params.set("id", "456"))
+    button
+    return (button,)
+if __name__ == "__main__":
+    app.run()
+`,
+				},
+			});
+			expect(response.ok()).toBe(true);
+			const { data } = (await response.json()) as { data: { id: string } };
+			const path = `/projects/${projectId}/notebooks/${data.id}${mode === 'app' ? '/app' : ''}`;
+			await page.goto(`${path}?id=123#anchor`);
+			const iframe = page.locator('iframe');
+			await expect(iframe).toBeVisible({ timeout: 120_000 });
+			const src = await iframe.getAttribute('src');
+			const frame = page.frameLocator('iframe');
+			await frame
+				.getByRole('button', { name: 'Update Hub URL', exact: true })
+				.click({ timeout: 120_000 });
+			await expect(page).toHaveURL(new RegExp(`${path}\\?id=456#anchor$`));
+			await expect(iframe).toHaveAttribute('src', src!);
+			await expect(
+				frame.getByRole('button', { name: 'Update Hub URL', exact: true }),
+			).toBeVisible();
+		});
+	}
+
 	test('starts a session, sends a heartbeat, and stops the kernel', async ({ page }) => {
 		const project = uniqueName('proj');
 		const notebook = uniqueName('nb');
