@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: marimo-team/setup-marimohub-cli@15f7152034cdf6728c02be77d39526360ce60ec2 # v1.0.1
         with:
-          version: '0.4.4'
+          version: '0.4.5'
 
       - name: Sync notebook
         run: >-
