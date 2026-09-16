@@ -64,10 +64,26 @@ jobs:
 
       - name: Test marimo kernel startup and isolated thumbnail rendering
         if: matrix.suite == 'backend'
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/thumbnail-browsers
         run: |
           python3 -m venv "$RUNNER_TEMP/thumbnail-python"
           "$RUNNER_TEMP/thumbnail-python/bin/pip" install marimo==0.24.2 playwright==1.58.0
           "$RUNNER_TEMP/thumbnail-python/bin/python" -m playwright install --with-deps chromium
+          # Ubuntu restricts user namespaces for downloaded browsers; allow only these test binaries.
+          sudo tee /etc/apparmor.d/marimohub-thumbnail-tests >/dev/null <<EOF
+          abi <abi/4.0>,
+          profile marimohub-thumbnail-tests "$PLAYWRIGHT_BROWSERS_PATH/**/chrome{,-headless-shell}" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo apparmor_parser --replace /etc/apparmor.d/marimohub-thumbnail-tests
+          "$RUNNER_TEMP/thumbnail-python/bin/python" - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as playwright:
+              with playwright.chromium.launch(chromium_sandbox=True) as browser:
+                  print(f"Sandboxed Chromium {browser.version} started")
+          PY
           MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts --configLoader=runner --pool=threads
           MARIMOHUB_THUMBNAIL_TEST_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/thumbnailProgram.live.test.ts --configLoader=runner --pool=threads
 
