@@ -50,7 +50,7 @@ marimo + the base libraries are pre-installed into `/opt/venv`
 starts instantly for a notebook that only uses them:
 
 ```sh
-uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build   # add the notebook's deps, keep the base
+uv sync --inexact --no-install-package marimo --no-compile-bytecode   # add the notebook's deps, keep the base
 uv run --no-sync marimo edit notebook.py …
 ```
 
@@ -61,3 +61,6 @@ uv run --no-sync marimo edit notebook.py …
 - **Sizing** — `cpuCount` / `memoryMB` are passed to `Template.build` in
   `build.prod.mjs`; E2B bills per sandbox-second.
 - **System packages** — add to the `.aptInstall([...])` call.
+- **Source builds** — allowed by default. To disable them, add
+  `export UV_NO_BUILD="${UV_NO_BUILD:-true}"` to `files/marimo.sh` and rebuild the
+  template. See [overrides](../../docs/sandbox-image.md#configure-source-builds).

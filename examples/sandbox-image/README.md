@@ -37,7 +37,7 @@ deliberate, manual step, never automatic.
 The provisioner runs in `/workspace`:
 
 ```sh
-uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build   # add the notebook's deps, keep the pre-installed base
+uv sync --inexact --no-install-package marimo --no-compile-bytecode   # add the notebook's deps, keep the pre-installed base
 uv run --no-sync marimo edit notebook.py …
 ```
 
@@ -51,6 +51,8 @@ install. The notebook's `pyproject.toml` lists only its own extra libraries.
   `MARIMO_VERSION`).
 - **System packages** — add `apt-get install` lines.
 - **Python version** — change the base image tag (and the `py3.13` in your image tag).
+- **Source builds** — allowed by default. Add `ENV UV_NO_BUILD=true` after dependency
+  installation to disable them. See [overrides](../../docs/sandbox-image.md#configure-source-builds).
 
 ## Test it
 

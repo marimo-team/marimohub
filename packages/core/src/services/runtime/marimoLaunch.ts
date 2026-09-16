@@ -112,12 +112,11 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 // Sync only when the notebook declares real deps; an empty one just gets a
 // `[project]` table (so `uv add` works) and runs from the pre-installed
 // image environment via `--no-sync`. --no-compile-bytecode skips ~5s of compiling
-// freshly-added deps on the launch path (lazy-compiled on import instead);
-// --no-build keeps it to wheels so a source build can't run arbitrary code /
-// stall the launch. The image must NOT set UV_COMPILE_BYTECODE (it would
+// freshly-added deps on the launch path (lazy-compiled on import instead).
+// The image must NOT set UV_COMPILE_BYTECODE (it would
 // conflict with --no-compile-bytecode). A failure is fatal: the provisioner
 // reports it as PYTHON_ENV_SETUP_FAILED before starting the kernel.
-const PYPROJECT_LAYER_SETUP = `{ status=0; python3 -c "import pathlib,sys,tomllib;path=pathlib.Path('pyproject.toml');data=tomllib.loads(path.read_text()) if path.exists() else {};sys.exit(0 if data.get('project',{}).get('dependencies') else 2)" || status=$?; if [ "$status" -eq 0 ]; then uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build; elif [ "$status" -eq 2 ]; then if ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; fi; else exit "$status"; fi; }`;
+const PYPROJECT_LAYER_SETUP = `{ status=0; python3 -c "import pathlib,sys,tomllib;path=pathlib.Path('pyproject.toml');data=tomllib.loads(path.read_text()) if path.exists() else {};sys.exit(0 if data.get('project',{}).get('dependencies') else 2)" || status=$?; if [ "$status" -eq 0 ]; then uv sync --inexact --no-install-package marimo --no-compile-bytecode; elif [ "$status" -eq 2 ]; then if ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; fi; else exit "$status"; fi; }`;
 
 // The env the kernel's `uv run --no-sync` will use — uv resolves the project
 // env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately
@@ -134,6 +133,17 @@ const PIN_ENV = `"${PIN_ENV_EXPANSION}"`;
 // each other. Also keeps it out of workspace capture and away from a synced
 // repo's own requirements.txt.
 const SCRIPT_REQUIREMENTS = `"${PIN_ENV_EXPANSION}/marimohub-script-requirements.txt"`;
+
+// uv 0.10.9's pip interface ignores UV_NO_BUILD, unlike uv sync/export.
+// Keep the positional arguments local to this setup step.
+const SCRIPT_PIN_INSTALL = [
+	'(set --; case "${UV_NO_BUILD-}" in',
+	'1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) set -- --no-build ;;',
+	"''|0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]) ;;",
+	'*) printf "%s\\n" "UV_NO_BUILD must be a boolean" >&2; exit 2 ;;',
+	'esac;',
+	`uv pip install --python ${PIN_ENV} "$@" -r ${SCRIPT_REQUIREMENTS})`,
+].join(' ');
 
 export const MARIMO_LAUNCH_STRATEGIES = {
 	// marimohub's default. The sandbox image pre-installs marimo (pinned) plus
@@ -163,7 +173,7 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 			},
 			{
 				name: 'install_script_pins',
-				command: `uv pip install --python ${PIN_ENV} --no-build -r ${SCRIPT_REQUIREMENTS}`,
+				command: SCRIPT_PIN_INSTALL,
 			},
 		],
 		start: `uv run --no-sync ${marimoCommand(p)}`,

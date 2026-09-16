@@ -140,7 +140,7 @@ launch_kernel() { # $1 = container id
 	docker exec "$1" sh -lc "printf '%s' '$KERNEL_TOKEN' > '$KERNEL_TOKEN_FILE'"
 	docker exec "$1" sh -lc '
 		cd /workspace
-		[ ! -s pyproject.toml ] || uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build
+		[ ! -s pyproject.toml ] || uv sync --inexact --no-install-package marimo --no-compile-bytecode
 	'
 	docker exec -d "$1" sh -lc '
 		cd /workspace
@@ -209,11 +209,11 @@ provision_python314_notebook "$cid" "$mv"
 docker exec "$cid" sh -lc '
 	set -e
 	cd /workspace
-	uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build
+	uv sync --inexact --no-install-package marimo --no-compile-bytecode
 	[ -d "$UV_PROJECT_ENVIRONMENT" ] || uv venv "$UV_PROJECT_ENVIRONMENT"
 	uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo \
 		-o "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
-	uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
+	uv pip install --python "$UV_PROJECT_ENVIRONMENT" \
 		-r "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
 	uv run --no-sync python -c \
 		"import click,requests,sys; assert sys.version_info[:2] >= (3,14)"

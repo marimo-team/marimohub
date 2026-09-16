@@ -185,7 +185,7 @@ describe('buildMarimoLaunch', () => {
 			// The env `uv run --no-sync` resolves — never VIRTUAL_ENV, which uv run
 			// ignores and would leave the pins invisible to the kernel.
 			expect(installCmd).toContain('--python "${UV_PROJECT_ENVIRONMENT:-.venv}"');
-			expect(installCmd).toContain('--no-build');
+			expect(pyproject).not.toContain('--no-build');
 			expect(plan.start).toMatch(/^uv run --no-sync marimo /);
 		});
 

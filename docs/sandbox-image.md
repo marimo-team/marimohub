@@ -67,7 +67,7 @@ marimohub copies the notebook into the image and launches the kernel itself,
 reusing the image's pre-installed environment. With cwd `/workspace`:
 
 ```sh
-uv sync --inexact --no-install-package marimo --no-compile-bytecode --no-build   # add the notebook's deps (skipped when it declares none)
+uv sync --inexact --no-install-package marimo --no-compile-bytecode   # add the notebook's deps (skipped when it declares none)
 uv run --no-sync marimo --quiet edit notebook.py --headless --token --token-password-file /tmp/.marimohub-kernel-token --host 0.0.0.0 --port 2718
 ```
 
@@ -77,8 +77,7 @@ capture it. Custom images must use a marimo version that supports
 `--token-password-file`. The supported 0.23.10 and 0.24.x images provide it.
 
 During the sync, `--no-install-package marimo` keeps the image's pinned marimo
-version even if the notebook declares another version. `--no-build` permits only
-wheels, so a source build cannot run arbitrary code or delay startup.
+version even if the notebook declares another version.
 
 If a git-synced notebook's entry file contains
 [PEP 723](https://peps.python.org/pep-0723/) inline metadata, marimohub runs three
@@ -88,7 +87,7 @@ inline dependencies into the base environment:
 ```sh
 [ -d "${UV_PROJECT_ENVIRONMENT:-.venv}" ] || uv venv "${UV_PROJECT_ENVIRONMENT:-.venv}"
 uv export --script notebook.py --format requirements-txt --no-hashes --prune marimo -o "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
-uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
+uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
 ```
 
 A setup failure stops the session with `PYTHON_ENV_SETUP_FAILED` before the kernel
@@ -127,6 +126,39 @@ printf 'http://127.0.0.1:2718/?access_token=%s\n' "$token"
 > startup sync passes `--no-compile-bytecode` to skip the ~5s of compiling freshly
 > added deps on the launch path — and uv errors if both the env var and the flag
 > are set.
+
+## Configure source builds
+
+Source builds are allowed by default. `UV_NO_BUILD` controls both project sync
+and inline dependency installation.
+
+To disable source builds, add this line after dependency installation in your
+sandbox Dockerfile:
+
+```dockerfile
+ENV UV_NO_BUILD=true
+```
+
+Use `ENV UV_NO_BUILD=false` in a derived image to remove this restriction.
+False or unset values leave the decision to the notebook's uv configuration.
+
+For the example E2B template, add this line to `files/marimo.sh` and rebuild the
+template:
+
+```sh
+export UV_NO_BUILD="${UV_NO_BUILD:-true}"
+```
+
+This defaults to `true` and preserves an explicit `false` in the shell environment.
+The template's `.setEnvs()` affects build steps only.
+
+Set the variable in the **sandbox environment** before dependency setup starts.
+The hub server's environment does not configure remote sandboxes. Image changes
+apply to new sandboxes, subject to the snapshot behavior described above.
+
+Build exceptions depend on the uv version and command. See
+[`UV_NO_BUILD`](https://docs.astral.sh/uv/reference/environment/#uv_no_build).
+This setting does not isolate notebook code or protect session credentials.
 
 ## Why pre-install (not just cache)
 

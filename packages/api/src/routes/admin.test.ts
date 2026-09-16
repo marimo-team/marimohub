@@ -394,7 +394,7 @@ describe('Admin routes', () => {
 			);
 			expect(instance.exec).toHaveBeenNthCalledWith(
 				6,
-				expect.stringContaining('uv sync --frozen --inexact --no-compile-bytecode --no-build -v'),
+				expect.stringContaining('uv sync --frozen --inexact --no-compile-bytecode -v'),
 				{ timeout: 300_000 },
 			);
 			expect(report).toMatchObject({
