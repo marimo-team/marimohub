@@ -78,8 +78,9 @@ A code update creates a version. Remote source changes go through sync.
 `delete_notebook` also accepts `expected_updated_at`.
 
 If the precondition fails, read the latest notebook before retrying.
-If an edit session is active, use live cell edits or stop the session before replacing stored code.
-After stopping, read the notebook again to include the session's saved changes.
+A persistent edit session blocks stored code replacement until its sandbox is cleaned up.
+Edit in the live session, or stop it and call `get_notebook` to include its saved changes before retrying.
+Metadata updates, app sessions, and temporary sessions do not have this restriction.
 
 ### Source format
 

@@ -1400,7 +1400,7 @@ export async function startNotebookSession(input: {
 				// Publish the starting record under the source-mutation lease. Once visible,
 				// the session itself blocks source replacement through sandbox reclamation.
 				session =
-					mode === 'edit'
+					mode === 'edit' && !ephemeral
 						? await notebooks.workspace.withMutation(pid, nid, {}, async (lease) => {
 								session = await create();
 								await lease.heartbeat();

@@ -76,11 +76,7 @@ export type {
 	PruneExpiredProposalPayloadsOptions,
 	PublishProposalChangeRequestInput,
 } from './content/NotebookProposalService';
-export type {
-	CreateNotebookInput,
-	NotebookDetail,
-	NotebookVersionProtector,
-} from './content/NotebookService';
+export type { CreateNotebookInput, NotebookDetail } from './content/NotebookService';
 export {
 	applyGitSourceUpdate,
 	assertSyncedSource,

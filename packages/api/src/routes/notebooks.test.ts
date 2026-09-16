@@ -69,6 +69,31 @@ describe('Notebook routes', () => {
 		expect(await expectPage(await request('GET', nb('')))).toEqual([]);
 	});
 
+	it('blocks REST source replacement during a persistent editor but allows metadata updates', async () => {
+		const created = await services.notebooks.createNotebook(
+			projectId,
+			{ title: 'NB', description: '', code: 'original' },
+			ACTOR,
+		);
+		const session = await services.sessions.createSession({
+			project_id: projectId,
+			notebook_id: created.id,
+			user_id: ACTOR,
+		});
+		const response = await expectError(
+			await request('PATCH', nb(`/${created.id}`), { code: 'replacement', title: 'Blocked' }),
+			409,
+			'CONFLICT',
+		);
+		expect(response.message).toContain(session.session_id);
+		expect((await services.notebooks.getNotebook(projectId, created.id)).meta.title).toBe('NB');
+		expect(await services.notebooks.getNotebookContent(projectId, created.id)).toBe('original');
+		await expectOk(await request('PATCH', nb(`/${created.id}`), { title: 'Renamed' }));
+		expect((await services.notebooks.getNotebook(projectId, created.id)).meta.title).toBe(
+			'Renamed',
+		);
+	});
+
 	describe('list filters', () => {
 		const create = (title: string, description: string, tags: string[]) =>
 			request('POST', nb(''), { title, description, tags, code: 'import marimo' });
@@ -1084,10 +1109,10 @@ describe('Notebook routes', () => {
 			);
 			const workspace = nb(`/${created.id}/workspace`);
 			const sessions = services.sessions;
-			const listActive = sessions.listActiveByProject.bind(sessions);
+			const listActive = sessions.listEditorsBlockingSourceUpdate.bind(sessions);
 			let raced = false;
-			vi.spyOn(sessions, 'listActiveByProject').mockImplementation(async (pid) => {
-				const active = await listActive(pid);
+			vi.spyOn(sessions, 'listEditorsBlockingSourceUpdate').mockImplementation(async (pid, nid) => {
+				const active = await listActive(pid, nid);
 				if (!raced) {
 					raced = true;
 					await sessions.createSession({

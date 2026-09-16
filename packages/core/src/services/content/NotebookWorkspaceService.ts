@@ -69,6 +69,7 @@ interface WorkspaceServiceOwner {
 		path: 'notebook.py' | 'pyproject.toml',
 		content: string,
 		actor: UserId,
+		assertWritable: () => Promise<void>,
 	): Promise<void>;
 }
 
@@ -292,8 +293,8 @@ export class NotebookWorkspaceService {
 		createOnly = false,
 		options: WorkspaceMutationOptions = {},
 	): Promise<WorkspaceFileItem> {
-		return this.withMutation(projectId, notebookId, options, () =>
-			this.writeUnlocked(projectId, notebookId, path, bytes, actor, createOnly),
+		return this.withMutation(projectId, notebookId, options, (lease) =>
+			this.writeUnlocked(projectId, notebookId, path, bytes, actor, createOnly, lease),
 		);
 	}
 
@@ -304,6 +305,7 @@ export class NotebookWorkspaceService {
 		bytes: Uint8Array,
 		actor: UserId,
 		createOnly: boolean,
+		lease: MutationLease,
 	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'write', path);
 		const relative = normalizeWorkspacePathInput(path);
@@ -329,6 +331,7 @@ export class NotebookWorkspaceService {
 				relative,
 				assertTextSource(relative, bytes),
 				actor,
+				lease.heartbeat,
 			);
 		} else {
 			try {

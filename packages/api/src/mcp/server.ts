@@ -3,7 +3,6 @@ import { all } from 'better-all';
 import { z } from 'zod';
 import {
 	BadRequestError,
-	ConflictError,
 	DomainError,
 	executeInKernel,
 	foldCase,
@@ -449,7 +448,7 @@ export function createMcpServer(
 		'update_notebook',
 		{
 			description:
-				'Update stored notebook fields without a session. Omitted fields stay unchanged. Replacing code creates a version and requires a local notebook with no active edit session. Use execute_code for live cell edits.',
+				'Update stored notebook fields without a session. Omitted fields stay unchanged. Replacing code creates a version and requires a local notebook with no persistent edit session that can still save. Use execute_code for live cell edits.',
 			annotations: { destructiveHint: true },
 			inputSchema: z.object({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
@@ -484,36 +483,13 @@ export function createMcpServer(
 						'Supply at least one of title, description, code, tags, or readme.',
 					);
 				}
-				const update = (assertWritable?: () => Promise<void>) =>
-					deps.services.notebooks.updateNotebook(
-						project.id,
-						notebook.id,
-						input,
-						principal.id,
-						expected_updated_at ?? detail.meta.updated_at,
-						assertWritable,
-					);
-				const meta =
-					input.code === undefined
-						? await update()
-						: await deps.services.notebooks.workspace.withMutation(
-								project.id,
-								notebook.id,
-								{
-									assertMutable: async () => {
-										const editors = await deps.services.sessions.listEditorsBlockingSourceUpdate(
-											project.id,
-											notebook.id,
-										);
-										if (editors.length > 0) {
-											throw new ConflictError(
-												`Stop edit sessions and wait for sandbox cleanup before replacing stored code: ${editors.map((session) => session.session_id).join(', ')}. Then call get_notebook and retry update_notebook.`,
-											);
-										}
-									},
-								},
-								(lease) => update(lease.heartbeat),
-							);
+				const meta = await deps.services.notebooks.updateNotebook(
+					project.id,
+					notebook.id,
+					input,
+					principal.id,
+					expected_updated_at ?? detail.meta.updated_at,
+				);
 
 				return result({
 					notebook_id: notebook.id,

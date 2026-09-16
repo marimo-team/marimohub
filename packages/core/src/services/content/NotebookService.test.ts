@@ -53,6 +53,38 @@ describe('NotebookService', () => {
 		projectId = project.id;
 	});
 
+	describe('source updates during sessions', () => {
+		it.each(['restore', 'notebook.py', 'pyproject.toml'] as const)(
+			'blocks %s while a persistent editor can save',
+			async (operation) => {
+				const notebook = await notebooks.createNotebook(
+					projectId,
+					{ title: 'NB', description: '', code: 'original' },
+					ACTOR,
+				);
+				const [version] = await notebooks.listVersions(projectId, notebook.id);
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebook.id,
+					user_id: ACTOR,
+				});
+				const update =
+					operation === 'restore'
+						? notebooks.restoreVersion(projectId, notebook.id, version.version_id, ACTOR)
+						: notebooks.workspace.write(
+								projectId,
+								notebook.id,
+								operation,
+								enc('replacement'),
+								ACTOR,
+							);
+				await expect(update).rejects.toThrow(session.session_id);
+				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+			},
+		);
+	});
+
 	describe('createNotebook', () => {
 		it('creates a notebook with all content files', async () => {
 			const meta = await notebooks.createNotebook(
@@ -1052,6 +1084,7 @@ describe('NotebookService', () => {
 				notebook_id: created.id,
 				user_id: ACTOR,
 				source_version_id: oldestVersionId,
+				mode: 'app',
 			});
 
 			for (let i = 1; i <= MAX_VERSIONS + 2; i++) {
@@ -1124,14 +1157,12 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 
-			// Make pruning fail: `pruneVersions` lists the versions folder first, so
-			// throwing from `list` reliably exercises the swallow-and-continue path
-			// regardless of how many versions exist. `updateNotebook`'s own writes use
-			// `put`/`get`, not `list`, so the save itself is unaffected. The save must
-			// still succeed despite the prune failure.
 			const originalList = bucket.list.bind(bucket);
-			bucket.list = async () => {
-				throw new Error('simulated prune list failure');
+			bucket.list = async (options) => {
+				if (options?.prefix === `${paths.project(projectId).notebook(created.id).base}/versions/`) {
+					throw new Error('simulated prune list failure');
+				}
+				return originalList(options);
 			};
 			try {
 				const updated = await notebooks.updateNotebook(

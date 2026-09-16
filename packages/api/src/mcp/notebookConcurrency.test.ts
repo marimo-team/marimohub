@@ -78,14 +78,18 @@ async function setup() {
 describe('MCP source replacement and editor admission', () => {
 	it('keeps a second replica from admitting an editor during the source write', async () => {
 		const fixture = await setup();
-		const { writer, starter, project, notebook } = fixture;
+		const { bucket, starter, project, notebook } = fixture;
 		const enteredWrite = Promise.withResolvers<void>();
 		const releaseWrite = Promise.withResolvers<void>();
-		const update = writer.services.notebooks.updateNotebook.bind(writer.services.notebooks);
-		vi.spyOn(writer.services.notebooks, 'updateNotebook').mockImplementation(async (...args) => {
-			enteredWrite.resolve();
-			await releaseWrite.promise;
-			return update(...args);
+		const get = bucket.get.bind(bucket);
+		let paused = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key === paths.project(project.id).notebook(notebook.id).deps && !paused) {
+				paused = true;
+				enteredWrite.resolve();
+				await releaseWrite.promise;
+			}
+			return get(key);
 		});
 		const admission = vi.spyOn(starter.services.notebooks.workspace, 'withMutation');
 		const create = starter.services.sessions.createSession.bind(starter.services.sessions);
@@ -127,13 +131,14 @@ describe('MCP source replacement and editor admission', () => {
 			return create(input);
 		});
 		const mutation = vi.spyOn(writer.services.notebooks.workspace, 'withMutation');
-		const updateNotebook = vi.spyOn(writer.services.notebooks, 'updateNotebook');
 		const starting = fixture.start();
 		await enteredCreate.promise;
 		const writing = fixture.update();
 		try {
 			await vi.waitFor(() => expect(mutation).toHaveBeenCalledOnce());
-			expect(updateNotebook).not.toHaveBeenCalled();
+			expect(await writer.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
+				'original',
+			);
 		} finally {
 			releaseCreate.resolve();
 		}
@@ -148,6 +153,25 @@ describe('MCP source replacement and editor admission', () => {
 		expect(await writer.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(1);
 		await fixture.close();
 	});
+
+	it.each([{ mode: 'app' }, { mode: 'edit', ephemeral: true }] as const)(
+		'allows source replacement with a discard-only session: %j',
+		async (sessionOptions) => {
+			const fixture = await setup();
+			const { writer, project, notebook } = fixture;
+			await writer.services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: principal.id,
+				...sessionOptions,
+			});
+			expect((await fixture.update()).isError).toBeFalsy();
+			expect(await writer.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
+				'replacement',
+			);
+			await fixture.close();
+		},
+	);
 
 	it('allows source replacement immediately after stop_session finishes', async () => {
 		const fixture = await setup();

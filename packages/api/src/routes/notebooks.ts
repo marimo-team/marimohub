@@ -14,7 +14,6 @@ import {
 	NotFoundError,
 	MAX_WORKSPACE_FILE_BYTES,
 	ProjectId,
-	sessionMode,
 	sourceDrift,
 	isMonotonicRestrictionIncrease,
 	toPublicNotebookMeta,
@@ -834,8 +833,7 @@ async function editSessionActive(
 	pid: ProjectId,
 	nid: NotebookId,
 ): Promise<boolean> {
-	const active = await sessions.listActiveByProject(pid);
-	return active.some((session) => session.notebook_id === nid && sessionMode(session) === 'edit');
+	return (await sessions.listEditorsBlockingSourceUpdate(pid, nid)).length > 0;
 }
 
 async function assertNoEditSession(
@@ -844,7 +842,9 @@ async function assertNoEditSession(
 	nid: NotebookId,
 ): Promise<void> {
 	if (await editSessionActive(sessions, pid, nid)) {
-		throw new ConflictError('Workspace files cannot be changed while an edit session is active');
+		throw new ConflictError(
+			'Workspace files cannot be changed while a persistent edit session can still save',
+		);
 	}
 }
 
@@ -884,7 +884,9 @@ async function workspaceState(
 				? ('active_session' as const)
 				: null;
 	if (mutation && editorActive) {
-		throw new ConflictError('Workspace files cannot be changed while an edit session is active');
+		throw new ConflictError(
+			'Workspace files cannot be changed while a persistent edit session can still save',
+		);
 	}
 	return {
 		writable: readOnlyReason === null,

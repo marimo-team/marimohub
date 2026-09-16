@@ -43,6 +43,7 @@ import {
 	MODE_POLICY,
 	sessionMode,
 	sessionModePolicy,
+	sessionPersistsEdits,
 } from './sessionState';
 import { listAllObjects } from '../catalog/storage';
 
@@ -694,7 +695,7 @@ export class SessionService {
 		return sessions.filter(
 			(session) =>
 				session.notebook_id === notebookId &&
-				sessionMode(session) === 'edit' &&
+				sessionPersistsEdits(session) &&
 				(!isTerminal(session.status) || (!!session.sandbox_id && !session.sandbox_reclaimed_at)),
 		);
 	}

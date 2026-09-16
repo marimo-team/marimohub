@@ -65,6 +65,7 @@ import { createListFilter } from './listFilters';
 import type { ListFilters } from './listFilters';
 import { NotebookWorkspaceService } from './NotebookWorkspaceService';
 import { DeepLinkService } from './DeepLinkService';
+import { SessionService } from '../runtime/SessionService';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -108,18 +109,6 @@ export interface NotebookDeleteMutationResult {
 	mutationId: Snapshot['snapshot_id'];
 }
 
-export interface NotebookVersionProtector {
-	advanceVersionPruneCutoff(
-		projectId: ProjectId,
-		notebookId: NotebookId,
-		cutoff: VersionId,
-	): Promise<void>;
-	listProtectedVersionIds(
-		projectId: ProjectId,
-		notebookId: NotebookId,
-	): Promise<ReadonlySet<VersionId>>;
-}
-
 export interface NotebookDetail {
 	meta: NotebookMeta;
 	readme: string | null;
@@ -156,7 +145,7 @@ export class NotebookService {
 		private bucket: Bucket,
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
-		private versionProtector?: NotebookVersionProtector,
+		private sessions = new SessionService(bucket, metrics),
 		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
@@ -166,8 +155,8 @@ export class NotebookService {
 		});
 		this.workspace = new NotebookWorkspaceService(bucket, {
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
-			saveSourceFile: (projectId, notebookId, path, content, actor) =>
-				this.saveWorkspaceSourceFile(projectId, notebookId, path, content, actor),
+			saveSourceFile: (projectId, notebookId, path, content, actor, assertWritable) =>
+				this.saveWorkspaceSourceFile(projectId, notebookId, path, content, actor, assertWritable),
 		});
 	}
 
@@ -177,6 +166,7 @@ export class NotebookService {
 		path: 'notebook.py' | 'pyproject.toml',
 		content: string,
 		actor: UserId,
+		assertWritable: () => Promise<void>,
 	): Promise<void> {
 		const detail = await this.getNotebook(projectId, notebookId);
 		const nb = paths.project(projectId).notebook(notebookId);
@@ -195,6 +185,7 @@ export class NotebookService {
 			{ code, deps, message: `Edit ${path}` },
 			actor,
 			detail.meta.updated_at,
+			assertWritable,
 		);
 	}
 
@@ -601,18 +592,30 @@ export class NotebookService {
 		input: UpdateNotebookInput,
 		actor: UserId,
 		expectedVersion?: string,
-		assertWritable?: () => Promise<void>,
 	): Promise<NotebookMeta> {
-		const detail = await this.getNotebook(projectId, notebookId);
-		return this.updateNotebookFrom(
-			detail,
-			projectId,
-			notebookId,
-			input,
-			actor,
-			expectedVersion,
-			assertWritable,
+		const update = async (assertWritable?: () => Promise<void>) =>
+			this.updateNotebookFrom(
+				await this.getNotebook(projectId, notebookId),
+				projectId,
+				notebookId,
+				input,
+				actor,
+				expectedVersion,
+				assertWritable,
+			);
+		if (input.code === undefined) return update();
+		return this.workspace.withMutation(projectId, notebookId, {}, (lease) =>
+			update(lease.heartbeat),
 		);
+	}
+
+	private async assertSourceUpdateAllowed(projectId: ProjectId, notebookId: NotebookId) {
+		const editors = await this.sessions.listEditorsBlockingSourceUpdate(projectId, notebookId);
+		if (editors.length > 0) {
+			throw new ConflictError(
+				`Stored code cannot be replaced while persistent edit sessions can save: ${editors.map((session) => session.session_id).join(', ')}. Edit in the live session, or stop it and wait for sandbox cleanup. Then reread the notebook and retry.`,
+			);
+		}
 	}
 
 	private async updateNotebookFrom(
@@ -631,6 +634,7 @@ export class NotebookService {
 		if (source.type !== 'local' && (input.code !== undefined || input.deps !== undefined)) {
 			throw new ConflictError('Remote-backed notebook source is updated only by sync');
 		}
+		if (input.code !== undefined) await this.assertSourceUpdateAllowed(projectId, notebookId);
 
 		const nb = paths.project(projectId).notebook(notebookId);
 		await assertWritable?.();
@@ -744,12 +748,12 @@ export class NotebookService {
 
 		const code = codeObj ? await codeObj.text() : '';
 		const deps = depsObj ? await depsObj.text() : undefined;
-		return this.updateNotebookFrom(
-			detail,
+		return this.updateNotebook(
 			projectId,
 			notebookId,
 			{ code, deps, message: `Restore version ${versionId}` },
 			actor,
+			detail.meta.updated_at,
 		);
 	}
 
@@ -1136,9 +1140,9 @@ export class NotebookService {
 			// Keep the newest `max`; the rest are prune candidates.
 			const prunable = versionPrefixes.slice(0, versionPrefixes.length - max);
 			const cutoff = VersionId.parse(prunable.at(-1)!.slice(versionsRoot.length, -1));
-			await this.versionProtector?.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
+			await this.sessions.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
 			const protectedVersionIds = new Set(
-				await this.versionProtector?.listProtectedVersionIds(projectId, notebookId),
+				await this.sessions.listProtectedVersionIds(projectId, notebookId),
 			);
 			protectedVersionIds.add(keep);
 			const protectedPrefixes = new Set(
