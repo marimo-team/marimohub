@@ -40,7 +40,15 @@ test('reconnects after reload and ignores stale ports and unrelated frames', asy
 	await expect.poll(() => page.evaluate(() => window.bridge.status)).toBe('connected');
 	await frame.evaluate(() => history.replaceState({}, '', '?after=reload'));
 	await expect(page).toHaveURL(`${server.hostOrigin}/?after=reload`);
-	await page.evaluate(() => {
+	await page.evaluate(async () => {
+		const delivered = new Promise<void>((resolve) => {
+			const onMessage = (event: MessageEvent) => {
+				if (event.data?.documentId !== 'spoof') return;
+				removeEventListener('message', onMessage);
+				setTimeout(resolve, 0);
+			};
+			addEventListener('message', onMessage);
+		});
 		window.postMessage(
 			{
 				namespace: 'marimohub.notebook-bridge',
@@ -51,13 +59,41 @@ test('reconnects after reload and ignores stale ports and unrelated frames', asy
 			},
 			location.origin,
 		);
+		await delivered;
+	});
+	expect(await page.evaluate(() => window.bridge.status)).toBe('connected');
+	await frame.evaluate(() => history.replaceState({}, '', '?after=spoof'));
+	await expect(page).toHaveURL(`${server.hostOrigin}/?after=spoof`);
+	await page.evaluate(() => {
 		window.bridge.dispose();
 		window.bridge.dispose();
 	});
 	await frame.evaluate(() => history.replaceState({}, '', '?late=ignored'));
 	await page.waitForTimeout(200);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?after=reload`);
+	await expect(page).toHaveURL(`${server.hostOrigin}/?after=spoof`);
 	expect(await page.evaluate(() => window.bridge.status)).toBe('disposed');
+});
+
+test('preserves Hub and provider query values when notebook parameters change or clear', async ({
+	page,
+}) => {
+	await page.goto(
+		`${server.hostOrigin}/prefix?theme=light&theme=system&provider=trusted&obsolete=1#anchor`,
+	);
+	await expect(page).toHaveURL(
+		`${server.hostOrigin}/prefix?theme=light&theme=system&provider=trusted&early=observed#anchor`,
+	);
+	const frame = page.frames().find((f) => f.parentFrame())!;
+	await frame.evaluate(() =>
+		history.replaceState({}, '', '?theme=dark&provider=untrusted&tag=one&tag=two&empty='),
+	);
+	await expect(page).toHaveURL(
+		`${server.hostOrigin}/prefix?theme=light&theme=system&provider=trusted&tag=one&tag=two&empty=#anchor`,
+	);
+	await frame.evaluate(() => history.replaceState({}, '', location.pathname));
+	await expect(page).toHaveURL(
+		`${server.hostOrigin}/prefix?theme=light&theme=system&provider=trusted#anchor`,
+	);
 });
 
 test('rejects oversized snapshots, preserves History exceptions, and restores methods', async ({

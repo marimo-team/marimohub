@@ -7,6 +7,7 @@ declare global {
 	interface Window {
 		bridge: BridgeHandle;
 		connect: () => void;
+		navigateNotebook: (query: string) => void;
 		updates: number;
 		loads: number;
 	}
@@ -40,9 +41,10 @@ async function listen(server: Server): Promise<string> {
 }
 
 export async function harness() {
-	const [hostScript, notebookScript] = await Promise.all([
+	const [hostScript, notebookScript, queryScript] = await Promise.all([
 		bundle('../src/host.ts'),
 		bundle('../src/notebook.ts'),
+		bundle('../src/query.ts'),
 	]);
 	let hostOrigin = '';
 	const child = createServer((req, res) => {
@@ -69,9 +71,11 @@ export async function harness() {
 	});
 	const childOrigin = await listen(child);
 	const host = createServer((req, res) => {
-		res.setHeader('Content-Type', req.url === '/host.js' ? 'application/javascript' : 'text/html');
-		if (req.url === '/host.js') {
-			res.end(hostScript);
+		const script =
+			req.url === '/host.js' ? hostScript : req.url === '/query.js' ? queryScript : undefined;
+		res.setHeader('Content-Type', script ? 'application/javascript' : 'text/html');
+		if (script) {
+			res.end(script);
 			return;
 		}
 		const params = new URL(req.url!, 'http://localhost').searchParams;
@@ -80,14 +84,23 @@ export async function harness() {
 		res.end(`<iframe id="frame" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
   <script type="module">
    import { createHostBridge } from '/host.js';
+   import { mergeNotebookQuery } from '/query.js';
    const frame = document.querySelector('iframe');
+   const excludedKeys = ['provider'];
    window.updates = 0; window.loads = 0;
    frame.addEventListener('load', () => window.loads++);
-   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys:['provider'], onQuery({entries}) {
-    window.updates++; const query = new URLSearchParams(entries).toString();
-    history.replaceState(history.state, '', location.pathname + (query ? '?' + query : '') + location.hash);
+   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys, onQuery({entries}) {
+    window.updates++; const query = mergeNotebookQuery(location.search, entries, excludedKeys);
+    history.replaceState(history.state, '', location.pathname + query + location.hash);
     return true;
    }}); };
+   window.navigateNotebook = (query) => {
+    window.bridge.dispose();
+    history.pushState(history.state, '', location.pathname + query + location.hash);
+    const next = new URL(frame.src); next.search = query;
+    frame.src = next.href;
+    window.connect();
+   };
    frame.src = ${JSON.stringify(source)};
    setTimeout(window.connect, ${params.get('delay') === '1' ? 500 : 0});
   </script>`);

@@ -56,6 +56,7 @@ function fixture() {
 	const negotiate = async (connectionId = 'fresh') => {
 		const { peer: port } = connect({ connectionId, excludedKeys: ['provider'] });
 		const peer = wirePeer(port, connectionId);
+		cleanups.push(peer.dispose);
 		await expect(peer.call('connected')).resolves.toEqual({ ready: true });
 		return peer;
 	};

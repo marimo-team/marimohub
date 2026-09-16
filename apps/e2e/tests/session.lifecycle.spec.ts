@@ -124,14 +124,28 @@ if __name__ == "__main__":
 			await expect(iframe).toBeVisible({ timeout: 120_000 });
 			const src = await iframe.getAttribute('src');
 			const frame = page.frameLocator('iframe');
-			await frame
-				.getByRole('button', { name: 'Update Hub URL', exact: true })
-				.click({ timeout: 120_000 });
+			const button = frame.getByRole('button', { name: 'Update Hub URL', exact: true });
+			await expect(button).toBeVisible({ timeout: 120_000 });
+			const mountedFrame = await iframe.elementHandle();
+			const runtimeFrame = await mountedFrame!.contentFrame();
+			let navigationRequests = 0;
+			page.on('request', (request) => {
+				if (request.isNavigationRequest() && request.frame() === runtimeFrame) navigationRequests++;
+			});
+			const loads = await iframe.evaluateHandle((element) => {
+				const activity = { count: 0 };
+				element.addEventListener('load', () => activity.count++);
+				return activity;
+			});
+			await button.click();
 			await expect(page).toHaveURL(new RegExp(`${path}\\?id=456#anchor$`));
 			await expect(iframe).toHaveAttribute('src', src!);
-			await expect(
-				frame.getByRole('button', { name: 'Update Hub URL', exact: true }),
-			).toBeVisible();
+			await expect(button).toBeVisible();
+			expect(navigationRequests).toBe(0);
+			expect(await loads.evaluate((activity) => activity.count)).toBe(0);
+			expect(await iframe.evaluate((element, original) => element === original, mountedFrame)).toBe(
+				true,
+			);
 		});
 	}
 

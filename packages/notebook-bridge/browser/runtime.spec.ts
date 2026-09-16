@@ -126,12 +126,22 @@ for (const version of versions) {
 				await expect(page).toHaveURL(`${host.hostOrigin}/`);
 				expect(await page.evaluate(() => window.loads)).toBe(loads);
 				expect(logs).not.toContain('notebook_bridge_unavailable');
+				await page.evaluate(() => window.navigateNotebook('?id=789'));
+				await expect.poll(() => page.evaluate(() => window.loads)).toBe(loads + 1);
+				await expect(page).toHaveURL(`${host.hostOrigin}/?id=789`);
+				await expect(page.locator('iframe')).toHaveAttribute('src', `${url}?id=789`);
+				await expect.poll(() => page.evaluate(() => window.bridge.status)).toBe('connected');
 				if (mode === 'run') {
-					await page.goto(`${host.hostOrigin}/?child=${encodeURIComponent(`${url}?id=456`)}`);
-					await expect(
-						page.frameLocator('iframe').getByText('Current id: 456', { exact: true }),
-					).toBeVisible({ timeout: 30_000 });
+					await expect(frame.getByText('Current id: 789', { exact: true })).toBeVisible({
+						timeout: 30_000,
+					});
+					await frame.getByRole('button', { name: 'Set query', exact: true }).click();
+				} else {
+					// Editors reconnect their kernel; verify the new document's bridge without requiring Python state restoration.
+					await frame.locator('html').evaluate(() => history.replaceState({}, '', '?id=456'));
 				}
+				await expect(page).toHaveURL(`${host.hostOrigin}/?id=456`);
+				expect(await page.evaluate(() => window.loads)).toBe(loads + 1);
 			} finally {
 				if (child.pid && child.exitCode === null) {
 					const exited = new Promise<void>((resolve) => {

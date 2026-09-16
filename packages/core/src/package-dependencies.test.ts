@@ -17,6 +17,7 @@ const DEPENDENCY_FIELDS = [
 it('recognizes adapter implementations', () => {
 	expect(ADAPTER_PATTERN.test('@marimo-hub/source-control-github')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/database-browser-bigquery')).toBe(true);
+	expect(ADAPTER_PATTERN.test('@marimo-hub/notebook-bridge')).toBe(true);
 });
 
 it('declares no adapter packages in any dependency field', () => {

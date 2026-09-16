@@ -12,10 +12,11 @@ import { startNotebookBridge } from '@marimo-hub/notebook-bridge/notebook';
 import { mergeNotebookQuery } from '@marimo-hub/notebook-bridge/query';
 
 // In the parent document:
-const excludedKeys = [...new URL(sandboxUrl).searchParams.keys()];
+const notebookUrl = new URL(sandboxUrl, location.origin);
+const excludedKeys = [...notebookUrl.searchParams.keys()];
 const host = createHostBridge({
 	iframe,
-	origin: new URL(sandboxUrl).origin,
+	origin: notebookUrl.origin,
 	excludedKeys,
 	onQuery(snapshot) {
 		const search = mergeNotebookQuery(location.search, snapshot.entries, excludedKeys);

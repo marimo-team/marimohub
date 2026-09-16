@@ -8,6 +8,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 	vi.useRealTimers();
+	vi.unstubAllGlobals();
 });
 
 function fixture() {
@@ -54,6 +55,7 @@ function fixture() {
 		const port = ports[0] as MessagePort;
 		cleanups.push(() => port.close());
 		const remote = wirePeer(port, connect.connectionId);
+		cleanups.push(remote.dispose);
 		const request = await remote.nextRequest();
 		remote.reply(request, { ready: true });
 		await connected;
@@ -217,18 +219,47 @@ describe('host lifecycle and frozen v1 peer', () => {
 		expect(onQuery).toHaveBeenCalledTimes(2);
 		expect(onQuery).toHaveBeenLastCalledWith({ revision: 1, entries: [['id', 'one']] });
 	});
-	it('ignores an old handshake acknowledgement after a document replacement', async () => {
-		const { ready, peer, negotiate, frame, bridge } = fixture();
+	it('ignores a queued handshake acknowledgement after a document replacement', async () => {
+		const NativeMessageChannel = globalThis.MessageChannel;
+		const channels: MessageChannel[] = [];
+		vi.stubGlobal(
+			'MessageChannel',
+			class extends NativeMessageChannel {
+				constructor() {
+					super();
+					channels.push(this);
+				}
+			},
+		);
+		const { ready, peer, frame, bridge, onStatus } = fixture();
 		ready();
 		const [connect, , ports] = peer.postMessage.mock.calls.at(-1)!;
 		const port = ports[0] as MessagePort;
-		cleanups.push(() => port.close());
 		const old = wirePeer(port, connect.connectionId);
+		cleanups.push(old.dispose);
 		const pending = await old.nextRequest();
-		frame.dispatchEvent(new Event('load'));
-		await negotiate('next-document');
+		const replaced = new Promise<ReturnType<typeof wirePeer>>((resolve) => {
+			// Run after RPC receives the reply, before its promise continuation can connect.
+			channels[0].port1.addEventListener(
+				'message',
+				() => {
+					frame.dispatchEvent(new Event('load'));
+					ready({ documentId: 'next-document' });
+					const [next, , nextPorts] = peer.postMessage.mock.calls.at(-1)!;
+					const replacement = wirePeer(nextPorts[0], next.connectionId);
+					cleanups.push(replacement.dispose);
+					resolve(replacement);
+				},
+				{ once: true },
+			);
+		});
 		old.reply(pending, { ready: true });
-		expect(bridge.status).toBe('connected');
+		const replacement = await replaced;
+		const acknowledgement = await replacement.nextRequest();
+		expect(bridge.status).toBe('connecting');
+		expect(onStatus).not.toHaveBeenCalledWith('connected');
+		replacement.reply(acknowledgement, { ready: true });
+		await vi.waitFor(() => expect(bridge.status).toBe('connected'));
 		expect(peer.postMessage.mock.calls.filter(([data]) => data.kind === 'connect')).toHaveLength(2);
 	});
 	it('does not open another channel for repeated ready messages', async () => {

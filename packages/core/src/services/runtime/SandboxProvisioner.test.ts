@@ -174,10 +174,12 @@ describe('SandboxProvisioner', () => {
 		});
 		it('does not activate an installed extension for jobs', async () => {
 			const { instance, calls } = makeFakeSandbox();
-			await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+			const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
 				...options,
 				launchMode: 'job',
 			});
+			expect(prepared.launch.start).toContain('uv run --no-sync marimo export html ');
+			expect(prepared.launch.start).not.toContain('marimo-bridge.py');
 			expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
 				false,
 			);

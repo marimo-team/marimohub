@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { HostApi, NotebookApi } from './protocol';
+import { REQUEST_TIMEOUT_MS } from './protocol';
 import { wirePeer } from './testing-peer';
 import { createChannelRpc } from './transport';
+
+// birpc captures timer functions at import time.
+vi.hoisted(() => vi.useFakeTimers());
+afterAll(() => vi.useRealTimers());
 
 const disposals: (() => void)[] = [];
 afterEach(() => {
@@ -126,21 +131,25 @@ describe('frozen v1 wire peers', () => {
 	});
 	it('times out requests when responses are malformed', async () => {
 		const { host, peer } = fixture();
-		peer.onmessage = (event) => {
-			const request = JSON.parse(event.data) as { packet: { i: string } };
-			peer.postMessage(
-				JSON.stringify({
-					namespace: 'marimohub.notebook-bridge',
-					connectionId: 'connection-v1',
-					packet: { t: 's', i: request.packet.i, r: { ready: false } },
-				}),
-			);
-		};
-		await expect(host.rpc.connected()).rejects.toThrow('timeout');
-	}, 10_000);
+		const remote = wirePeer(peer, 'connection-v1');
+		disposals.push(remote.dispose);
+		const settled = vi.fn();
+		const pending = host.rpc.connected();
+		void pending.then(settled, settled);
+		const rejected = expect(pending).rejects.toThrow('timeout');
+		remote.reply(await remote.nextRequest(), { ready: false });
+		const barrier = host.rpc.connected();
+		remote.reply(await remote.nextRequest(), { ready: true });
+		await barrier;
+		await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1);
+		expect(settled).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await rejected;
+	});
 	it('cannot settle a request with a mismatched ID, stale connection or malformed response', async () => {
 		const { host, peer: port } = fixture();
 		const remote = wirePeer(port, 'connection-v1');
+		disposals.push(remote.dispose);
 		const settled = vi.fn();
 		const first = host.rpc.connected().then(settled);
 		const request = await remote.nextRequest();
