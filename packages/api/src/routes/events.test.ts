@@ -38,6 +38,7 @@ describe('Event routes', () => {
 
 	it('lists deployment events for super admins, newest first with opaque metadata', async () => {
 		const { request: adminRequest, deps } = superAdminApi();
+		await expectOk(await adminRequest('GET', '/me'));
 		await deps.services.events.append({
 			event: 'token.create',
 			actor: ACTOR,
@@ -55,7 +56,11 @@ describe('Event routes', () => {
 			next_cursor: string | null;
 		}>(await adminRequest('GET', '/events?limit=10'));
 		expect(page.next_cursor).toBeNull();
-		expect(page.items.map((event) => event.event)).toEqual(['project.update', 'token.create']);
+		expect(page.items.map((event) => event.event)).toEqual([
+			'project.update',
+			'token.create',
+			'project.create',
+		]);
 		expect(page.items[1]).toMatchObject({
 			id: expect.any(String),
 			schema_version: 1,

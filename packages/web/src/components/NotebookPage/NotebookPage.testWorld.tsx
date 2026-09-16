@@ -38,6 +38,8 @@ export function runningSession(overrides: Partial<Session> = {}): Session {
 
 interface FetchOptions {
 	role: NonNullable<ProjectDetail['your_role']>;
+	canRun?: boolean;
+	appOnly?: boolean;
 	viewerMode?: 'static' | 'applications' | 'ephemeral-sandbox';
 	/** Body of GET .../html; null = 404 (no snapshot captured yet). */
 	html?: string | null;
@@ -228,6 +230,17 @@ export function makeFetch(opts: FetchOptions) {
 				},
 			});
 		}
+		if (url.endsWith(`/notebooks/${NID}/app`)) {
+			return ok({
+				project_id: PID,
+				project_name: 'Project',
+				notebook_id: NID,
+				title: 'Forecast',
+				url: `/projects/${PID}/notebooks/${NID}/app`,
+				your_role: opts.role ?? 'editor',
+				can: { run: opts.canRun ?? true },
+			});
+		}
 		if (url.endsWith(`/notebooks/${NID}`)) {
 			await opts.notebookPromise;
 			return ok({
@@ -314,7 +327,13 @@ export function makeFetch(opts: FetchOptions) {
 			return ok(
 				opts.mePromise
 					? await opts.mePromise
-					: { id: 'me', email: 'me@example.com', logout_url: null, is_super_admin: false },
+					: {
+							id: 'me',
+							email: 'me@example.com',
+							logout_url: null,
+							is_super_admin: false,
+							app_only: opts.appOnly ?? opts.role === 'app-user',
+						},
 			);
 		}
 		if (url.endsWith(`/notebooks/${NID}/editor-session`)) {

@@ -180,6 +180,82 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "apps.get",
+			"command": ["apps", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/app",
+			"summary": "Get notebook app details",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "apps.list",
+			"command": ["apps", "list"],
+			"method": "GET",
+			"path": "/api/v1/apps",
+			"summary": "List accessible notebook apps",
+			"parameters": [
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "project_id",
+					"cli_name": "project-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "q",
+					"cli_name": "q",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "audit.list",
 			"command": ["audit", "list"],
 			"method": "GET",

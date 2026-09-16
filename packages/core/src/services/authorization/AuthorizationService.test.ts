@@ -22,6 +22,7 @@ const OWNER = subject('user_owner');
 const MANAGER = subject('user_manager');
 const EDITOR = subject('user_editor');
 const VIEWER = subject('user_viewer');
+const APP_USER = subject('user_stakeholder');
 const STRANGER = subject('user_stranger');
 
 function pat(who: AuthSubject, grant: TokenGrant): AuthenticatedPrincipal {
@@ -34,6 +35,7 @@ const project = makeProject({
 		{ user_id: MANAGER.id, role: 'manager' },
 		{ user_id: EDITOR.id, role: 'editor' },
 		{ user_id: VIEWER.id, role: 'viewer' },
+		{ user_id: APP_USER.id, role: 'app-user' },
 	],
 });
 const deletedProject = makeProject({ owner: OWNER.id, members: [], status: 'deleted' });
@@ -147,6 +149,7 @@ describe('AuthorizationService: project actions', () => {
 			[MANAGER, 'manager'],
 			[EDITOR, 'editor'],
 			[VIEWER, 'viewer'],
+			[APP_USER, 'app-user'],
 		];
 		for (const action of PROJECT_ACTIONS) {
 			const rule = ACTION_RULES[action];
@@ -162,13 +165,35 @@ describe('AuthorizationService: project actions', () => {
 					});
 					continue;
 				}
-				const rank = { viewer: 1, editor: 2, manager: 3, admin: 4 } as const;
+				const rank = { 'app-user': 0, viewer: 1, editor: 2, manager: 3, admin: 4 } as const;
 				const expected = rank[role as keyof typeof rank] >= rank[rule.min];
 				expect(decision.allowed, `${action} for ${role}`).toBe(expected);
 				expect(decision.role).toBe(role);
 			}
 		}
 	});
+
+	it.each(PROJECT_ACTIONS)(
+		'does not let broad tokens or a manager default override explicit app-user membership for %s',
+		async (action) => {
+			const authz = service({ defaultRole: 'manager' });
+			const principal = pat(APP_USER, { actions: [...AUTHORIZATION_ACTIONS], projects: '*' });
+			const decision = await authz.authorize(principal, action, onProject());
+			expect(decision.allowed).toBe(action === 'app.read');
+			expect(decision.role).toBe('app-user');
+		},
+	);
+
+	it.each(PROJECT_ACTIONS)(
+		'bounds an app-user default with broad token grants for %s',
+		async (action) => {
+			const authz = service({ defaultRole: 'app-user' });
+			const principal = pat(STRANGER, { actions: [...AUTHORIZATION_ACTIONS], projects: '*' });
+			const decision = await authz.authorize(principal, action, onProject());
+			expect(decision.allowed).toBe(action === 'app.read');
+			expect(decision.role).toBe('app-user');
+		},
+	);
 
 	it('masks read denials as visibility and write denials as role', async () => {
 		const read = await service().authorize(STRANGER, 'project.read', onProject());
@@ -232,10 +257,42 @@ describe('AuthorizationService: deployment actions', () => {
 		}
 	});
 
-	it('gates project creation only under a restricted deployment', async () => {
+	it('requires a creation grant for app-only standing and accepts a mixed-role override', async () => {
+		const authz = service({ defaultRole: 'app-user' });
+		expect(
+			(await authz.authorize(STRANGER, 'project.create', { kind: 'deployment' })).allowed,
+		).toBe(false);
+		expect(
+			(await authz.authorize(STRANGER, 'project.create', { kind: 'deployment', appOnly: false }))
+				.allowed,
+		).toBe(true);
+		expect(
+			(await service().authorize(STRANGER, 'project.create', { kind: 'deployment', appOnly: true }))
+				.allowed,
+		).toBe(false);
+	});
+
+	it.each([undefined, 'app-user', 'viewer', 'manager'] as const)(
+		'requires resolved app-only standing even with default role %s',
+		async (defaultRole) => {
+			const authz = service({ defaultRole });
+			await expect(
+				authz.authorize(APP_USER, 'project.create', { kind: 'deployment' }),
+			).resolves.toEqual({ allowed: false, category: 'standing', role: null });
+			for (const entitlement of ['project-creator', 'super-admin'] as const) {
+				await expect(
+					authz.authorize({ ...APP_USER, entitlements: [entitlement] }, 'project.create', {
+						kind: 'deployment',
+					}),
+				).resolves.toEqual({ allowed: true, role: null });
+			}
+		},
+	);
+
+	it('gates resolved non-app users on the deployment creation policy', async () => {
 		const open = service();
 		await expect(
-			open.authorize(STRANGER, 'project.create', { kind: 'deployment' }),
+			open.authorize(STRANGER, 'project.create', { kind: 'deployment', appOnly: false }),
 		).resolves.toEqual({ allowed: true, role: null });
 		const restricted = service({ projectCreationRestricted: true });
 		await expect(
@@ -542,6 +599,7 @@ describe('AuthorizationService: identity-matching edge cases', () => {
 			owner: OWNER.id,
 			members: [
 				{ user_id: VIEWER.id, role: 'viewer' },
+				{ user_id: APP_USER.id, role: 'app-user' },
 				{ email: VIEWER.email, role: 'manager' },
 			],
 		});
@@ -586,7 +644,7 @@ describe('AuthorizationService: identity-matching edge cases', () => {
 			role: null,
 		});
 		await expect(
-			bare.authorize(STRANGER, 'project.create', { kind: 'deployment' }),
+			bare.authorize(STRANGER, 'project.create', { kind: 'deployment', appOnly: false }),
 		).resolves.toEqual({ allowed: true, role: null });
 	});
 });
@@ -632,6 +690,7 @@ describe('AuthorizationService: session edge cases', () => {
 			owner: OWNER.id,
 			members: [
 				{ user_id: VIEWER.id, role: 'viewer' },
+				{ user_id: APP_USER.id, role: 'app-user' },
 				{ user_id: otherViewer.id, role: 'viewer' },
 			],
 		});

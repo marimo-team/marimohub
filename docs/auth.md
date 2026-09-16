@@ -65,44 +65,31 @@ After deployment:
 
 ## Authorization roles
 
-Authentication decides who you are. Authorization decides what you may do on a
-project. Each project has an owner, who is implicitly `admin`, and a member list.
-Roles are ordered `viewer` < `editor` < `manager` < `admin`; each role includes
-the capabilities below it. Manager is the highest role that can be assigned to
-a member. Admin is reserved for project owners, deployment super admins, and
-legacy member rows. One deployment-wide exception sits above this per-project
-model: a [super admin](#super-admins-marimohub_super_admins) is treated as
-`admin` on every project.
+Roles apply per project and rank `app-user` < `viewer` < `editor` < `manager` < `admin`.
+Project owners and [super admins](#super-admins-marimohub_super_admins) are `admin`.
+Members can receive any role up to `manager`; existing admin memberships remain valid.
 
-| Role      | Description                                                                                          |
-| --------- | ---------------------------------------------------------------------------------------------------- |
-| `viewer`  | Read projects, notebooks, code, and version history. Cannot change state.                            |
-| `editor`  | Viewer access, plus create, update, and delete notebooks, restore versions, and run kernel sessions. |
-| `manager` | Editor access, plus update or delete the project and manage members.                                 |
-| `admin`   | Reserved authority with all Manager capabilities.                                                    |
+| Capability                                                | `app-user` | `viewer` | `editor` | `manager` | `admin` |
+| --------------------------------------------------------- | :--------: | :------: | :------: | :-------: | :-----: |
+| Discover app titles and project names                     |     x      |    x     |    x     |     x     |    x    |
+| Start and use live apps                                   |     x      |    \*    |    x     |     x     |    x    |
+| Read notebook source, versions, and saved outputs         |            |    x     |    x     |     x     |    x    |
+| Create notebooks; edit content and restore versions       |            |          |    x     |     x     |    x    |
+| Run persistent editors; stop or restart shared apps       |            |          |    x     |     x     |    x    |
+| Delete notebooks; manage projects, members, and app links |            |          |          |     x     |    x    |
 
-| Capability                                                      | `viewer` | `editor` | `manager` | `admin` |
-| --------------------------------------------------------------- | :------: | :------: | :-------: | :-----: |
-| See projects and notebooks, read versions and code              |    x     |    x     |     x     |    x    |
-| Create, update, and delete notebooks; save and restore versions |          |    x     |     x     |    x    |
-| Start and stop kernel sessions                                  |          |    x     |     x     |    x    |
-| Start, open, and use [notebook apps](./apps.md)                 |    \*    |    x     |     x     |    x    |
-| Stop or restart the shared notebook app                         |          |    x     |     x     |    x    |
-| Update or delete projects; manage members                       |          |          |     x     |    x    |
+\* Viewer runtime access depends on [`MARIMOHUB_VIEWER_MODE`](#what-viewers-see-marimohub_viewer_mode).
+App users can always use apps but cannot open editors, including ephemeral sandboxes.
+See [App user permissions and rollout](./apps.md#stakeholders-the-app-user-role) for assignment and stakeholder navigation.
 
-\* Viewers get app access only when the deployment sets
-`MARIMOHUB_VIEWER_MODE=applications` (or `ephemeral-sandbox`) — see
-[What viewers see](#what-viewers-see-marimohub_viewer_mode) and
-[Notebook apps](./apps.md#who-can-do-what).
+The server enforces permissions; insufficient write access returns `403 FORBIDDEN`.
+[Security labels](./security.md#applying-labels) and credential scopes can further restrict access.
 
-Enforcement is server-side. A write with an insufficient role returns
-`403 FORBIDDEN`. By default any authenticated user can create a project; the
-creator becomes the project owner. Set `MARIMOHUB_PROJECT_CREATION=restricted`
-to limit creation to super admins and holders of the `project-creator`
-entitlement, granted by an [OIDC group mapping](#groups-and-roles) or
-[login-policy module](#login-policy-module). Projects and
-notebooks can also carry [security labels](./security.md#applying-labels),
-which only remove access on top of the role.
+Project creation is open by default, except for users with only app-user access.
+App-only users need super-admin status or the `project-creator` entitlement, even when creation is open.
+`MARIMOHUB_PROJECT_CREATION=restricted` requires those grants for everyone.
+An [OIDC group mapping](#groups-and-roles) or [login-policy module](#login-policy-module) can grant `project-creator`.
+The creator becomes the project owner.
 
 ### Members: user ids and email invites
 
@@ -131,9 +118,8 @@ Invite emails are PII of people who never signed in: the members list and
 project detail show them only to project managers (and to the invitee themself).
 The add-member picker searches the user directory
 (`GET /api/v1/users/search` — email, name, or id substring; everyone who has
-signed in at least once). Under `MARIMOHUB_DEFAULT_ROLE=none` the caller must
-own or belong to at least one project to search; with a default role set — or as
-a super admin — any authenticated user may.
+signed in at least once). Search requires a viewer-or-higher default role,
+super-admin status, or membership in at least one active project (including ownership).
 
 **Rollout note:** code older than this feature cannot parse a `project.json`
 containing an email invite row. Finish rolling out a release with this feature
@@ -146,7 +132,7 @@ What a viewer gets depends on `MARIMOHUB_VIEWER_MODE`. The modes are ordered:
 each tier includes everything the previous one grants.
 
 - `static` (default): opening a notebook shows the last captured HTML snapshot.
-  No compute, no code execution. Apps stay editor-only.
+  Viewers cannot start compute or use apps.
 - `applications`: additionally, viewers can use
   [notebook apps](./apps.md) — start one, open it, and keep it alive while they
   have it open. The app is the same shared, per-notebook session editors use
@@ -175,6 +161,7 @@ A logged-in user who is not the owner or a member falls back to
 - `manager`: every logged-in user can manage every project. Use only in a fully
   trusted deployment.
 - `viewer`: every logged-in user can read any project.
+- `app-user`: every logged-in user can use apps without source access.
 - `none`: non-members cannot see projects they do not own or belong to.
 
 ### Super admins: `MARIMOHUB_SUPER_ADMINS`

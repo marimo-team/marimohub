@@ -1337,6 +1337,31 @@ describe('OIDC routes', () => {
 		expect(user?.entitlements).toEqual(['default-role:manager']);
 	});
 
+	it('maps a app-user-only group without granting super-admin', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			groups: ['hub-users', 'hub-managers'],
+		});
+		const { authenticator, routes } = makeOidc({
+			groups: {
+				claim: '/groups',
+				allowed: ['hub-users'],
+				defaultRoles: { 'app-user': ['hub-managers'] },
+			},
+		});
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		const sessionCookie = cookiePair(res, SESSION_COOKIE);
+		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
+
+		expect(user?.entitlements).toEqual(['default-role:app-user']);
+	});
+
 	it('retains the group-authorization expiry when the policy maps no role', async () => {
 		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
 			sub: 'user-1',

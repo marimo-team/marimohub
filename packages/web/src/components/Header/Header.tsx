@@ -25,7 +25,7 @@ export function Header() {
 	return (
 		<header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
 			<Link
-				to="/"
+				to={user?.app_only ? '/apps' : '/'}
 				aria-label="marimohub home"
 				className="rounded-lg outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
@@ -33,6 +33,16 @@ export function Header() {
 			</Link>
 
 			<div className="ml-auto flex items-center gap-2">
+				{!user?.app_only ? (
+					<Link to="/apps" className="text-sm">
+						Apps
+					</Link>
+				) : null}
+				{user?.app_only && user.can_create_projects ? (
+					<Link to="/projects" className="text-sm">
+						Create a project
+					</Link>
+				) : null}
 				<Button
 					onPress={toggleTheme}
 					aria-label="Toggle theme"
@@ -88,14 +98,16 @@ export function Header() {
 									<Copy className="size-3.5" />
 									Copy user id
 								</MenuItem>
-								<MenuItem
-									id="api-tokens"
-									className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors focus:bg-muted max-md:min-h-11"
-								>
-									<KeyRound className="size-3.5" />
-									API tokens
-								</MenuItem>
-								{capabilities?.mcp?.available && capabilities.mcp.url ? (
+								{!user.app_only && (
+									<MenuItem
+										id="api-tokens"
+										className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors focus:bg-muted max-md:min-h-11"
+									>
+										<KeyRound className="size-3.5" />
+										API tokens
+									</MenuItem>
+								)}
+								{!user.app_only && capabilities?.mcp?.available && capabilities.mcp.url ? (
 									<MenuItem
 										id="mcp"
 										className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors focus:bg-muted max-md:min-h-11"

@@ -46,6 +46,7 @@ MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM=/groups
 MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS=hub-users
 MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS=hub-platform-admins
 MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS=hub-project-creators
+MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS=hub-app-users
 MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS=hub-viewers
 MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS=hub-editors
 MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
@@ -61,7 +62,7 @@ fails at startup. Unset it to disable the login group restriction.
 
 `PROJECT_CREATION_GROUPS` controls who can create projects:
 
-- If the variable is not set, all authenticated users can create projects.
+- If unset, [project creation policy](/auth#authorization-roles) applies, including the app-only exception.
 - If the value is empty, only super admins can create projects.
 - If the value contains group IDs, super admins and matching users can create projects.
 
@@ -115,11 +116,10 @@ verification, and the email-domain allowlist. The module runs after that
 validation and before session signing. It receives the validated ID-token and
 UserInfo claims as separate read-only objects and returns one bounded result: an
 allow or deny decision, plus the built-in entitlements (`super-admin`,
-`project-creator`, `default-role:viewer`, `default-role:editor`,
-`default-role:manager`). `project-creator` is only meaningful when
-`MARIMOHUB_PROJECT_CREATION=restricted`; without it every authenticated user can
-create projects. `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=none` (or unset)
-disables the module.
+`project-creator`, `default-role:app-user`, `default-role:viewer`,
+`default-role:editor`, `default-role:manager`).
+`project-creator` permits creation on restricted deployments and for app-only users.
+`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=none` (or unset) disables the module.
 
 Login-policy configuration is mutually exclusive with the group variables
 above. A module can reproduce any group rule in code. The module applies to

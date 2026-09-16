@@ -155,7 +155,7 @@ describe('CliLoginPage', () => {
 				expires_in_days: 30,
 				requested_grant: requested,
 				grant: {
-					actions: ['project.read', 'integration.read'],
+					actions: ['app.read', 'project.read', 'integration.read'],
 					projects: '*',
 				},
 			},
@@ -167,7 +167,7 @@ describe('CliLoginPage', () => {
 			{},
 			'',
 			loginPath(CALLBACK, {
-				actions: ['project.read', 'integration.read'],
+				actions: ['app.read', 'project.read', 'integration.read'],
 				projects: ['proj-0000000000000001'],
 			}),
 		);

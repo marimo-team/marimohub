@@ -70,8 +70,86 @@ describe('policy analyzer routes', () => {
 		}>(await request('GET', '/admin/policy-analyzer/metadata'));
 		expect(data.classification_order).toEqual(['LEVEL_1', 'LEVEL_2']);
 		expect(data.entitlements).toContain('super-admin');
+		expect(data.entitlements).toContain('default-role:app-user');
+		expect(data.actions).toContainEqual(
+			expect.objectContaining({ action: 'app.read', minimum_role: 'app-user' }),
+		);
 		expect(data.actions).toContainEqual(expect.objectContaining({ action: 'project.read' }));
 	});
+
+	it.each([true, false, undefined])(
+		'evaluates project creation for app_only=%s',
+		async (appOnly) => {
+			const { request } = createTestApi({
+				deps: { policy: { superAdmins: [ACTOR], defaultRole: 'manager' } },
+			});
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						authorizationCase({
+							subject: {
+								id: 'stakeholder',
+								email: 'stakeholder@example.com',
+								entitlement_source: 'explicit',
+								entitlements: [],
+							},
+							action: 'project.create',
+							resource: { source: 'synthetic', kind: 'deployment', app_only: appOnly },
+							expected: { allowed: appOnly === false },
+						}),
+					],
+				}),
+			);
+			expect(data.valid).toBe(true);
+			expect(data.cases[0].authorization.decision).toMatchObject({ allowed: appOnly === false });
+		},
+	);
+
+	it('round-trips app-user membership and app-read decisions', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					authorizationCase({
+						subject: {
+							id: 'stakeholder',
+							email: 'stakeholder@example.com',
+							entitlement_source: 'explicit',
+							entitlements: [],
+						},
+						action: 'app.read',
+						resource: {
+							source: 'synthetic',
+							kind: 'project',
+							project: { owner: ACTOR, members: [{ user_id: 'stakeholder', role: 'app-user' }] },
+						},
+					}),
+				],
+			}),
+		);
+		expect(data.valid).toBe(true);
+		expect(data.cases[0].authorization.decision).toMatchObject({ allowed: true, role: 'app-user' });
+	});
+
+	it.each(['project', 'session', 'session-start'])(
+		'rejects app_only on %s resources',
+		async (kind) => {
+			const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+			for (const source of ['synthetic', 'stored']) {
+				for (const appOnly of [true, false]) {
+					await expectError(
+						await request('POST', '/admin/policy-analyzer/evaluate', {
+							schema_version: 1,
+							cases: [authorizationCase({ resource: { source, kind, app_only: appOnly } })],
+						}),
+						422,
+					);
+				}
+			}
+		},
+	);
 
 	it('evaluates a synthetic authorization case and returns a bounded trace', async () => {
 		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });

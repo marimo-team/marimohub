@@ -12,8 +12,14 @@ import {
 	PreconditionFailedError,
 	UnavailableError,
 } from '@marimo-hub/core';
-import { ACTOR } from '@marimo-hub/core/testing';
-import { createInitializedBucket, createTestApi, expectError, expectPage } from './testing';
+import { ACTOR, uid } from '@marimo-hub/core/testing';
+import {
+	createInitializedBucket,
+	createTestApi,
+	expectError,
+	expectOk,
+	expectPage,
+} from './testing';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -257,6 +263,71 @@ describe('createApi rejected request observability', () => {
 	});
 });
 
+describe('default project bootstrap authorization', () => {
+	it.each([
+		{ defaultRole: undefined, projectCreationRestricted: true },
+		{ defaultRole: 'viewer', projectCreationRestricted: true },
+		{ defaultRole: 'app-user', projectCreationRestricted: false },
+	] as const)(
+		'leaves an empty catalog for an unentitled user under $defaultRole',
+		async (policy) => {
+			const first = createTestApi({ deps: { policy } });
+			for (let attempt = 0; attempt < 2; attempt++) {
+				expect(await expectOk(await first.request('GET', '/me'))).toMatchObject({
+					can_create_projects: false,
+				});
+			}
+			expect((await first.deps.services.catalog.getCurrentSnapshot()).projects).toEqual([]);
+			await expectError(
+				await first.request('POST', '/projects', { name: 'Denied', description: '' }),
+				403,
+			);
+
+			const creatorId = uid('authorized_creator');
+			const creator = createTestApi({
+				bucket: first.bucket,
+				deps: {
+					policy,
+					authenticator: {
+						authenticate: async () => ({
+							id: creatorId,
+							email: 'creator@example.com',
+							credential: { kind: 'development' },
+							entitlements: ['project-creator'],
+						}),
+					},
+				},
+			});
+			await expectOk(await creator.request('GET', '/me'));
+			await expectOk(await creator.request('GET', '/me'));
+			expect((await creator.deps.services.catalog.getCurrentSnapshot()).projects).toEqual([
+				expect.objectContaining({ name: 'My Projects', owner: creatorId }),
+			]);
+		},
+	);
+
+	it('does not seed or create projects for an explicit app-user under a permissive default', async () => {
+		const bucket = await createInitializedBucket();
+		const services = createServices(bucket);
+		const owner = uid('project_owner');
+		const project = await services.projects.createProject({ name: 'Apps', description: '' }, owner);
+		await services.projects.addMember(project.id, { user_id: ACTOR }, 'app-user', owner);
+		const user = createTestApi({ bucket, deps: { policy: { defaultRole: 'manager' } } });
+
+		expect(await expectOk(await user.request('GET', '/me'))).toMatchObject({
+			app_only: true,
+			can_create_projects: false,
+		});
+		await expectError(
+			await user.request('POST', '/projects', { name: 'Denied', description: '' }),
+			403,
+		);
+		expect((await services.catalog.getCurrentSnapshot()).projects.map((p) => p.id)).toEqual([
+			project.id,
+		]);
+	});
+});
+
 describe('createApi identity refresh is best-effort', () => {
 	it('serves an authenticated request even when identities.upsert throws', async () => {
 		const bucket = await createInitializedBucket();
@@ -266,7 +337,9 @@ describe('createApi identity refresh is best-effort', () => {
 
 		const { request } = createTestApi({ bucket, deps: { services } });
 		const res = await request('GET', '/projects');
-		expect(await expectPage(res)).toEqual([]);
+		expect(await expectPage(res)).toEqual([
+			expect.objectContaining({ name: 'My Projects', owner: ACTOR }),
+		]);
 	});
 });
 

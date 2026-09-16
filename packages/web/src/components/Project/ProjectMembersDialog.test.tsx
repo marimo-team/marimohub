@@ -335,9 +335,10 @@ describe('ProjectMembersDialog — admin', () => {
 			name: 'New member role',
 		}) as HTMLSelectElement;
 		expect([...newRole.options].map((option) => option.value)).toEqual([
-			'manager',
-			'editor',
+			'app-user',
 			'viewer',
+			'editor',
+			'manager',
 		]);
 		expect(screen.queryByRole('option', { name: /^Admin$/ })).not.toBeInTheDocument();
 	});

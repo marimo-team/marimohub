@@ -13,6 +13,7 @@ import type { TokenGrant } from '../tokenGrants';
 export const AUTH_ENTITLEMENTS = [
 	'super-admin',
 	'project-creator',
+	'default-role:app-user',
 	'default-role:viewer',
 	'default-role:editor',
 	'default-role:manager',

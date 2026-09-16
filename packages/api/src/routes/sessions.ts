@@ -83,6 +83,7 @@ import {
 	jsonContent,
 	loadAuthorizedNotebook,
 	loadVisibleProject,
+	loadSessionProject,
 	NotebookIdParam,
 	ProjectIdParam,
 	resolvePublicBaseUrl,
@@ -446,15 +447,13 @@ function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) 
  * users who can list the project's sessions. Internal infrastructure fields
  * (`sandbox_id`, `used_fallback`) stay private.
  */
-export function toSessionResponse(
-	s: Session,
-	can: { attach: boolean; stop: boolean; surface: boolean },
-) {
+export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof sessionGrantsFor>>) {
+	const { appReadOnly } = can;
 	return {
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
 		project_id: s.project_id,
-		user_id: s.user_id,
+		user_id: appReadOnly ? undefined : s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
 		can: {
@@ -462,26 +461,31 @@ export function toSessionResponse(
 			stop: can.stop,
 			surfaces: surfaceGrants(can.surface),
 		},
-		surfaces: publicSurfaces(s, can),
+		surfaces: appReadOnly ? undefined : publicSurfaces(s, can),
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
-		ephemeral: s.ephemeral,
-		editor_sandbox_sharing: s.editor_sandbox_sharing,
-		ended_reason: s.ended_reason,
-		ended_by_user_id: s.ended_by_user_id,
+		ephemeral: appReadOnly ? undefined : s.ephemeral,
+		editor_sandbox_sharing: appReadOnly ? undefined : s.editor_sandbox_sharing,
+		ended_reason: appReadOnly ? undefined : s.ended_reason,
+		ended_by_user_id: appReadOnly ? undefined : s.ended_by_user_id,
 		// Defaulted in the projection so clients never see `undefined` (stored
 		// records predating the field omit it).
 		mode: sessionMode(s),
-		source_version_id: s.source_version_id,
-		active_connections: s.active_connections,
-		connections_checked_at: s.connections_checked_at,
-		compute_profile: s.compute_profile,
-		compute_resources: s.compute_resources,
-		compute_from_snapshot: s.compute_from_snapshot,
-		integrations: s.integrations,
+		source_version_id: appReadOnly ? undefined : s.source_version_id,
+		active_connections: appReadOnly ? undefined : s.active_connections,
+		connections_checked_at: appReadOnly ? undefined : s.connections_checked_at,
+		compute_profile: appReadOnly ? undefined : s.compute_profile,
+		compute_resources: appReadOnly ? undefined : s.compute_resources,
+		compute_from_snapshot: appReadOnly ? undefined : s.compute_from_snapshot,
+		integrations: appReadOnly ? undefined : s.integrations,
 		// A provision failure's message can name the sandbox host — the very thing
 		// withholding `sandbox_url` protects — so it rides the same grant.
-		error: can.attach ? s.error : undefined,
+		error:
+			can.attach && s.error
+				? appReadOnly
+					? { code: 'APP_FAILED', message: 'The app could not start. Contact its owner.' }
+					: s.error
+				: undefined,
 	};
 }
 
@@ -781,15 +785,15 @@ app.openapi(getSession, async (c) => {
 	const { sessions, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid, sid } = c.req.valid('param');
-	// Read-only, project-scoped (matches listSessions). The project-scoped key 404s
-	// a cross-project id; the notebook check keeps a same-project/other-notebook id
-	// out of scope.
-	const project = await loadVisibleProject(projects, pid, user, deps);
+	// The project-scoped key masks cross-project IDs; also reject other notebooks.
+	const project = await loadSessionProject(projects, pid, user, deps);
 	const session = await sessions.getSession(pid, sid);
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
+	const appUser = authorizationService(deps).role(user, project) === 'app-user';
 	const labels = await assertSessionNotebookVisible(deps, project, session, user);
+	if (appUser) await assertSessionAccess(project, session, user, deps, labels);
 	return c.json(
 		{
 			success: true,
@@ -1106,6 +1110,15 @@ export async function startNotebookSession(input: {
 	// canonical 403 even for a bogus or deleted notebook id — only admitted
 	// callers learn whether the notebook exists.
 	let authorization = await authorizeSessionStart(project, user, mode, deps);
+	const appUser = authorization.role === 'app-user';
+	if (
+		appUser &&
+		(body?.compute_profile !== undefined ||
+			body?.edit_intent !== undefined ||
+			(body?.surfaces?.length ?? 0) > 0)
+	) {
+		throw new ForbiddenError('App users cannot customize sessions');
+	}
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
 	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook
 	// id. A soft-deleted notebook is treated as missing: getNotebook still
@@ -1800,6 +1813,14 @@ export async function startNotebookSession(input: {
 				);
 			}
 		}
+		if (
+			!(err instanceof NotFoundError) &&
+			(appUser ||
+				(mode === 'app' &&
+					!authorizationService(deps).credentialAllowsAction(user, 'project.read')))
+		) {
+			throw new UnavailableError('The app could not start. Contact its owner.');
+		}
 		throw err;
 	} finally {
 		observer.flush();
@@ -1925,7 +1946,7 @@ app.openapi(heartbeatSession, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 
 	// Project visibility FIRST (404 when hidden) — see the delete route.
-	const project = await loadVisibleProject(projects, pid, user, deps);
+	const project = await loadSessionProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.

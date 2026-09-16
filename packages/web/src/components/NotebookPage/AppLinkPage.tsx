@@ -2,7 +2,7 @@ import { useParams } from 'react-router-dom';
 import { useDeepLinkQuery } from '@/api/deepLinks';
 import { isNotFoundError } from '@/api/request';
 import { Button } from '@/components/ui';
-import { NotebookPage } from './NotebookPage';
+import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 
 export function AppLinkPage() {
 	const { slug = '' } = useParams<{ slug: string }>();
@@ -34,7 +34,7 @@ export function AppLinkPage() {
 	}
 	const { target } = query.data;
 	return (
-		<NotebookPage
+		<AppEntryPage
 			key={`${target.project_id}/${target.notebook_id}`}
 			variant="app"
 			target={{ projectId: target.project_id, notebookId: target.notebook_id }}

@@ -1,5 +1,5 @@
 import { EXTERNAL_TOKEN_SCOPE_PRESETS } from '@marimo-hub/core/token-grants';
-import { ensureInitialized } from '@marimo-hub/core';
+import { initializeForSubject } from '../shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { mcpAuthRouter, StreamableHTTPTransport } from '@hono/mcp';
@@ -124,7 +124,7 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 	app.all('/mcp', async (c) => {
 		const authenticated = await authenticateMcpRequest(c, deps);
 		if (authenticated instanceof Response) return authenticated;
-		await ensureInitialized(deps.bucket, authenticated.id);
+		await initializeForSubject(deps, authenticated);
 		const server = createMcpServer(deps, authenticated, {
 			requestId: c.get('requestId'),
 			method: c.req.method,

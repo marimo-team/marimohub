@@ -90,7 +90,7 @@ export interface NotebookLabelOverride {
 }
 
 export type AuthorizationResource =
-	| { kind: 'deployment' }
+	| { kind: 'deployment'; appOnly?: boolean }
 	| ({ kind: 'project'; project: Project } & NotebookLabelOverride)
 	| ({ kind: 'session'; project: Project; session: SessionAdmissionRecord } & NotebookLabelOverride)
 	| ({ kind: 'session-start'; project: Project; mode: SessionMode } & NotebookLabelOverride);
@@ -557,7 +557,7 @@ export class AuthorizationService {
 			return { decision: this.decideCredential(subject, action, resource, null), labelSets: [] };
 		}
 		if (resource.kind === 'deployment') {
-			const decision = this.decideDeployment(subject, action as DeploymentAction);
+			const decision = this.decideDeployment(subject, action as DeploymentAction, resource.appOnly);
 			trace?.push({
 				stage: 'standing',
 				status: decision.allowed ? 'passed' : 'failed',
@@ -652,6 +652,15 @@ export class AuthorizationService {
 		return resolveEffectiveRole(project, subject, this.policy).role;
 	}
 
+	/** Prefer explicit app grants; legacy viewer tokens retain project.read. */
+	appReadAction(subject: AuthorizationSubject, project: Project): 'app.read' | 'project.read' {
+		const grant = 'credential' in subject ? subject.credential.grant : undefined;
+		return this.role(subject, project) === 'app-user' ||
+			(grant !== undefined && tokenGrantAllowsAction(grant, 'app.read'))
+			? 'app.read'
+			: 'project.read';
+	}
+
 	isSuperAdmin(subject: AuthSubject): boolean {
 		return isSuperAdmin(subject, this.policy?.superAdmins);
 	}
@@ -669,7 +678,7 @@ export class AuthorizationService {
 			return false;
 		}
 		return (
-			subjectDefaultRole(subject, this.policy) != null ||
+			roleAtLeast(subjectDefaultRole(subject, this.policy), 'viewer') ||
 			isSuperAdmin(subject, this.policy?.superAdmins)
 		);
 	}
@@ -744,11 +753,19 @@ export class AuthorizationService {
 			: { allowed: false, category: 'credential-action', role };
 	}
 
-	private decideDeployment(subject: AuthSubject, action: DeploymentAction): AuthorizationDecision {
+	private decideDeployment(
+		subject: AuthSubject,
+		action: DeploymentAction,
+		appOnly?: boolean,
+	): AuthorizationDecision {
 		const allowed = ((): boolean => {
 			switch (action) {
 				case 'project.create':
-					return canCreateProject(subject, this.policy);
+					return canCreateProject(subject, {
+						...this.policy,
+						// Defaults cannot establish whether explicit memberships make this user app-only.
+						projectCreationRestricted: this.policy?.projectCreationRestricted || appOnly !== false,
+					});
 				case 'directory.search':
 					return this.listsAllProjects(subject);
 				case 'admin.access':
@@ -771,13 +788,14 @@ export class AuthorizationService {
 	async projectLabelConstraints(
 		subject: AuthorizationSubject,
 		labelStates: readonly (ResourceSecurityLabels | null)[],
+		action: ProjectAction = 'project.read',
 	): Promise<boolean[]> {
 		if (labelStates.every((labels) => labels === null)) {
 			return labelStates.map(() => true);
 		}
 		const security = this.security;
 		if (!security) {
-			this.emitSecurityEvent(SECURITY_EVENTS.constraintUnwired, 'project.read');
+			this.emitSecurityEvent(SECURITY_EVENTS.constraintUnwired, action);
 			return labelStates.map((labels) => labels === null);
 		}
 		const context = await this.contextResolver(subject)();
@@ -791,7 +809,7 @@ export class AuthorizationService {
 				Promise.resolve(
 					security.constraints.evaluateMany(
 						context,
-						'project.read',
+						action,
 						labelStates.map((labels) => ({ labels })),
 						signal,
 					),
@@ -799,7 +817,7 @@ export class AuthorizationService {
 			);
 			if (decisions.length !== labelStates.length) {
 				// A miscounting adapter cannot be trusted for any entry.
-				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, 'project.read');
+				this.emitSecurityEvent(SECURITY_EVENTS.constraintMiscount, action);
 				return labelStates.map((labels) => labels === null);
 			}
 			let invalidEvidence = false;
@@ -809,11 +827,11 @@ export class AuthorizationService {
 				return labelStates[index] === null || parsed?.decision.satisfied === true;
 			});
 			if (invalidEvidence) {
-				this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, 'project.read');
+				this.emitSecurityEvent(SECURITY_EVENTS.constraintInvalid, action);
 			}
 			return allowed;
 		} catch (error) {
-			this.emitConstraintFailure(error, 'project.read');
+			this.emitConstraintFailure(error, action);
 			return labelStates.map((labels) => labels === null);
 		}
 	}

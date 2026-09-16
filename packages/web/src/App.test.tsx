@@ -11,6 +11,38 @@ afterEach(() => {
 });
 
 describe('App routes', () => {
+	it.each([true, false])('selects the landing page from app_only=%s', async (appOnly) => {
+		installMatchMedia(false);
+		const requests: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				requests.push(url);
+				if (url === '/api/v1/me')
+					return jsonOk({
+						id: 'stakeholder',
+						email: 'stakeholder@example.com',
+						is_super_admin: false,
+						logout_url: null,
+						app_only: appOnly,
+						can_create_projects: !appOnly,
+					});
+				if (url.startsWith('/api/v1/apps') || url === '/api/v1/projects')
+					return jsonOk({ items: [], next_cursor: null });
+				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		renderWithClient(<App />, { toaster: false });
+		expect(
+			await screen.findByRole('heading', { name: appOnly ? 'Apps' : 'Projects' }),
+		).toBeVisible();
+		expect(window.location.pathname).toBe(appOnly ? '/apps' : '/');
+		if (appOnly) expect(requests).not.toContain('/api/v1/projects');
+		else expect(screen.getByRole('link', { name: 'Apps' })).toHaveAttribute('href', '/apps');
+	});
+
 	it.each([
 		'/admin/audit-logs',
 		'/admin/users',

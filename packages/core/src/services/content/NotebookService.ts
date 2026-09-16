@@ -196,6 +196,7 @@ export class NotebookService {
 			subject?: AuthSubject;
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
+			action?: 'project.read' | 'app.read';
 		},
 	): Promise<PublicNotebookEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
@@ -217,10 +218,17 @@ export class NotebookService {
 		// the authoritative notebook record, failing closed when unreadable.
 		const authz = new AuthorizationService(filter.policy, filter.resourceSecurity);
 		return (
-			await filterByLabelConstraints(authz, filter.subject, matching, (entry) =>
-				// Meta-only read: an unavailable readme/source blob must not hide a
-				// notebook whose label state is perfectly resolvable.
-				this.getSecurityLabels(projectId, entry.id),
+			await filterByLabelConstraints(
+				authz,
+				filter.subject,
+				matching,
+				(entry) =>
+					// Meta-only read: an unavailable readme/source blob must not hide a
+					// notebook whose label state is perfectly resolvable.
+					this.getSecurityLabels(projectId, entry.id, {
+						includeDeleted: filter.status === 'deleted',
+					}),
+				filter.action,
 			)
 		).map(toPublicNotebookEntry);
 	}
@@ -247,12 +255,13 @@ export class NotebookService {
 	/**
 	 * The notebook's security-label override from `meta` alone — one object read
 	 * for the hot session/proxy gates, which must apply overrides without paying
-	 * a full `getNotebook`. `null` = unlabeled. Deleted notebooks still return
-	 * their labels; lifecycle is the caller's rule.
+	 * a full `getNotebook`. `null` = unlabeled. Only trash listings opt into
+	 * deleted notebooks; session and proxy gates must reject them.
 	 */
 	async getSecurityLabels(
 		projectId: ProjectId,
 		notebookId: NotebookId,
+		options: { includeDeleted?: boolean } = {},
 	): Promise<ResourceSecurityLabels | null> {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const metaObj = await this.bucket.get(nb.meta);
@@ -260,6 +269,9 @@ export class NotebookService {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
 		const meta = await readStored(NotebookMetaSchema, metaObj, nb.meta);
+		if (meta.status === 'deleted' && !options.includeDeleted) {
+			throw new NotFoundError(`Notebook ${notebookId} not found`);
+		}
 		return meta.security_labels ?? null;
 	}
 

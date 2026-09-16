@@ -1,5 +1,7 @@
+import { projectActionMinRole } from '../authorization/actions';
+import { tokenGrantAllowsProject } from '../../tokenGrants';
 import type { Bucket } from '../../ports/bucket';
-import { roleAtLeast } from '../../authz';
+import { effectiveRole, isSuperAdmin, roleAtLeast, subjectDefaultRole } from '../../authz';
 import { AuthorizationService } from '../authorization/AuthorizationService';
 import { filterByLabelConstraints } from '../authorization/labelFilter';
 import type {
@@ -215,28 +217,31 @@ export class ProjectService {
 		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {}
 
-	/**
-	 * List projects, newest-first paging applied by the caller. Soft-deleted
-	 * projects are hidden unless explicitly requested by status. When `filter` is
-	 * passed with a null/undefined `policy.defaultRole` (deployment
-	 * `MARIMOHUB_DEFAULT_ROLE=none`), the list
-	 * is restricted to projects the caller can see (owner or member); with a
-	 * `defaultRole` set — or when the caller is a super admin — every project
-	 * is visible, so nothing is hidden.
-	 */
+	/** Apply role, token, and label restrictions before the caller paginates. */
 	async listProjects(
 		filter?: ListFilters<Project['status']> & {
 			subject: AuthorizationSubject;
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
+			action?: 'project.read' | 'app.read';
 		},
 	): Promise<PublicProjectEntry[]> {
 		const authz = filter
 			? new AuthorizationService(filter.policy, filter.resourceSecurity)
 			: undefined;
-		if (filter && authz && !authz.credentialAllowsAction(filter.subject, 'project.read')) {
+		const action = filter?.action ?? 'project.read';
+		if (filter && authz && !authz.credentialAllowsAction(filter.subject, action)) {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
+		const loaded = new Map<ProjectId, Promise<Project>>();
+		const loadProject = (id: ProjectId): Promise<Project> => {
+			let project = loaded.get(id);
+			if (!project) {
+				project = this.getProject(id);
+				loaded.set(id, project);
+			}
+			return project;
+		};
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		let matching = snapshot.projects.filter(
 			createListFilter<SnapshotProjectEntry>(
@@ -251,63 +256,71 @@ export class ProjectService {
 				matching,
 				BUCKET_SCAN_CONCURRENCY,
 				async (project) =>
-					project.tags?.includes(tag) ?? (await this.getProject(project.id)).tags.includes(tag),
+					project.tags?.includes(tag) ?? (await loadProject(project.id)).tags.includes(tag),
 			);
 			matching = matching.filter((_, index) => tagMatches[index]);
 		}
 		if (!filter || !authz) return matching.map(toPublicProjectEntry);
-		// Visibility routes through the authorization service so listings and
-		// direct reads cannot drift. Both filters run BEFORE pagination (the
-		// caller pages the returned entries), so a hidden project never leaks
-		// through page counts or cursors.
-		let visible = matching;
-		if (!authz.listsAllProjects(filter.subject)) {
-			const visibility = await mapWithConcurrency(
-				matching,
-				BUCKET_SCAN_CONCURRENCY,
-				async (entry) => {
-					const seen = authz.projectEntryVisibility(filter.subject, entry);
-					// `null` = the entry predates `member_ids`, so visibility can't be decided
-					// from the snapshot alone; fall back to the authoritative project.json.
-					return seen ?? (await this.canSeeProject(authz, entry.id, filter.subject));
-				},
-			);
-			visible = matching.filter((_, i) => visibility[i]);
-		}
+		// Filter before pagination so hidden projects cannot affect counts or cursors.
+		const admitted = await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+			const grant = 'credential' in filter.subject ? filter.subject.credential.grant : undefined;
+			if (!tokenGrantAllowsProject(grant, entry.id)) return false;
+			const role = await this.entryRole(entry, { ...filter, loadProject });
+			return roleAtLeast(role, projectActionMinRole(action));
+		});
+		const visible = matching.filter((_, index) => admitted[index]);
 		return (
 			await filterByLabelConstraints(
 				authz,
 				filter.subject,
 				visible,
-				async (entry) => (await this.getProject(entry.id)).security_labels ?? null,
+				async (entry) => (await loadProject(entry.id)).security_labels ?? null,
+				action,
 			)
 		).map(toPublicProjectEntry);
 	}
 
-	// Only reached when the fast path above didn't return, i.e. the caller is
-	// neither a super admin nor covered by a defaultRole. Membership alone
-	// decides — NOT a `project.read` decision, whose lifecycle rule would hide a
-	// legacy (indeterminate) entry from an explicit `status: 'deleted'` listing
-	// while current snapshot entries still appear. Lifecycle filtering already
-	// happened in the status filter above, identically for both paths.
-	private async canSeeProject(
-		authz: AuthorizationService,
-		id: ProjectId,
-		subject: AuthorizationSubject,
-	): Promise<boolean> {
-		const project = await this.getProject(id);
-		return (
-			authz.projectEntryVisibility(subject, {
-				id,
-				owner: project.owner,
-				member_ids: project.members.flatMap((member) =>
-					member.user_id === undefined ? [] : [member.user_id],
-				),
-				member_emails: project.members.flatMap((member) =>
-					member.email === undefined ? [] : [normalizeEmail(member.email)],
-				),
-			}) === true
-		);
+	private async entryRole(
+		entry: SnapshotProjectEntry,
+		{
+			subject,
+			policy,
+			loadProject = (id: ProjectId) => this.getProject(id),
+		}: {
+			subject: AuthorizationSubject;
+			policy?: AuthorizationPolicy;
+			loadProject?: (id: ProjectId) => Promise<Project>;
+		},
+	): Promise<Role | null> {
+		if (isSuperAdmin(subject, policy?.superAdmins) || entry.owner === subject.id) return 'admin';
+		// A roster projection can lag a committed membership change. Even a miss
+		// cannot prove that a more restrictive explicit membership is absent.
+		try {
+			return effectiveRole(await loadProject(entry.id), subject, policy);
+		} catch (error) {
+			if (error instanceof NotFoundError) return null;
+			throw error;
+		}
+	}
+
+	async isAppOnly(subject: AuthorizationSubject, policy?: AuthorizationPolicy): Promise<boolean> {
+		if (isSuperAdmin(subject, policy?.superAdmins)) return false;
+		const fallback = subjectDefaultRole(subject, policy);
+		if (!(await this.bucket.head(paths.catalog))) return fallback === 'app-user';
+		const snapshot = await this.catalog.getCurrentSnapshot();
+		const active = snapshot.projects.filter((entry) => entry.status !== 'deleted');
+		if (active.some((entry) => entry.owner === subject.id)) return false;
+		let hasAppRole = fallback === 'app-user';
+		for (let offset = 0; offset < active.length; offset += BUCKET_SCAN_CONCURRENCY) {
+			const roles = await mapWithConcurrency(
+				active.slice(offset, offset + BUCKET_SCAN_CONCURRENCY),
+				BUCKET_SCAN_CONCURRENCY,
+				(entry) => this.entryRole(entry, { subject, policy }),
+			);
+			if (roles.some((role) => roleAtLeast(role, 'viewer'))) return false;
+			hasAppRole ||= roles.includes('app-user');
+		}
+		return hasAppRole;
 	}
 
 	async getProject(id: ProjectId): Promise<Project> {

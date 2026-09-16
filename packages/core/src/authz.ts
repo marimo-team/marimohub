@@ -24,8 +24,9 @@ import { anyRefMatchesSubject, emailsEqual, memberRefMatchesSubject } from './id
 import type { IdentitySubject } from './identityMatch';
 import type { Project } from './schema';
 
-const RANK: Record<Role, number> = { viewer: 1, editor: 2, manager: 3, admin: 4 };
+const RANK: Record<Role, number> = { 'app-user': 0, viewer: 1, editor: 2, manager: 3, admin: 4 };
 const ENTITLEMENT_ROLE: Partial<Record<string, AssignableRole>> = {
+	'default-role:app-user': 'app-user',
 	'default-role:viewer': 'viewer',
 	'default-role:editor': 'editor',
 	'default-role:manager': 'manager',

@@ -1322,51 +1322,56 @@ Identity is resolved per request and controlled by the `AUTH_MODE` setting:
 
 A request that fails authentication receives `401 UNAUTHORIZED`. The verified user is attached to the request context and used as the `actor` recorded in snapshots and events.
 
-### Authorization (AuthZ) — single-tenant / trusted-org, with opt-in read isolation
+### Authorization (AuthZ)
 
-**Reads are gated at `viewer`; writes are gated by the role matrix.** The deployment-wide `MARIMOHUB_DEFAULT_ROLE` is the fallback role for a logged-in caller who is neither the `owner` (implicitly `admin`) nor an explicit member:
+All routes use the same `effectiveRole` calculation:
 
-- With it **set** (`manager`/`editor`/`viewer` — the default is `editor`), every authenticated user is at least a viewer, so reads stay open and "list everything" stays 2 GETs (§7.1) — there is no per-caller filtering to do.
-- With it **`none`**, non-members have no role: reads are membership-gated. A non-member cannot see a project at all — `GET` returns **`404`** (existence is not leaked) and the project is omitted from the list.
+- Project ownership and super-admin status grant `admin`.
+- Explicit membership overrides defaults; multiple matching memberships resolve to the highest role.
+- Non-members receive the highest deployment or login-derived default role. `none` grants no fallback access.
 
-**Writes** are always checked against the target project. The service loads
-`project.json`, resolves the caller's effective role, and rejects an
-insufficient role with `403 FORBIDDEN`.
+`project.read` requires `viewer`; `app.read` admits `app-user` to minimal app metadata.
+Notebook content changes require `editor`; notebook administration and project changes require `manager`.
+See the [role matrix](../docs/auth.md#authorization-roles) and [app restrictions](../docs/apps.md#stakeholders-the-app-user-role).
+Normal reads mask inaccessible or soft-deleted resources as `404`; insufficient write permissions return `403 FORBIDDEN`.
+Security labels and credential scopes can further restrict access.
 
-**Super admins.** `MARIMOHUB_SUPER_ADMINS` grants `admin` on every project. This status overrides membership and `MARIMOHUB_DEFAULT_ROLE`. A super admin can list all projects, including deployments configured with `none`. The operator can also manage notebooks, secrets, sessions, and the audit trail.
+Catalog entries carry `member_ids` and `member_emails`, but no roles.
+These projections can lag committed membership changes.
+Listings resolve membership from `project.json`; a stale roster cannot prove that a restrictive membership is absent.
+Each listing reuses project reads across role, tag, and label checks.
+Roles, credential scopes, and labels are filtered before pagination and totals.
+This preserves the catalog snapshot model (§7.1) without a separate per-user index.
 
-An entry that contains `@` matches the login email without case sensitivity. Other entries match the user ID (`sub`) exactly. The ID and email namespaces do not overlap. See `isSuperAdmin` in `packages/core/src/authz.ts`.
+`MARIMOHUB_SUPER_ADMINS` entries containing `@` match login emails case-insensitively; other entries match user IDs exactly.
+Static super-admin status applies to PATs; OIDC group-derived status belongs only to the browser session.
+Super admins cannot demote or remove project owners. Role elevation does not bypass lifecycle checks or token scopes.
 
-All routes use the same `effectiveRole` calculation. Project owners still cannot be demoted or removed. Soft-deleted projects still return `404`. Static super-admin status applies to PATs. OIDC group-derived status applies only to the browser session and does not transfer to PATs.
+Project creation follows `MARIMOHUB_PROJECT_CREATION`.
+App-only users always need super-admin status or `project-creator`, including on open deployments.
+The server resolves app-only status from current defaults and effective memberships on each request.
+Creators become project owners with the reserved admin role.
 
-Read-side isolation under `none` keeps the read model intact (§7.1). Filtering `GET /projects` would otherwise cost a membership check per project, so each catalog snapshot project entry carries a denormalized **`member_ids`** array (owner + members), refreshed in the same CAS as every membership edit. The list filters in-memory over data already fetched — still 2 GETs. Single-project reads (`GET /projects/{id}`, notebook & session reads) load `project.json` and check `viewer` only when `defaultRole` is `none`; with a default role set they short-circuit with no extra load.
+`app-user`, `viewer`, `editor`, and `manager` are assignable; existing non-owner `admin` memberships remain valid.
+Upgrade every replica before assigning a role that older versions cannot parse.
+Rollback requires removing or explicitly remapping unsupported assignments and configuration.
+Never silently map app-user to viewer, which grants source access.
 
-### Role → permission matrix
+### Session permissions
 
-The read row is open to any authenticated user when a default role is set; under `MARIMOHUB_DEFAULT_ROLE=none` it is restricted to the owner and explicit members (non-members get `404`) — plus any super admin, who is `admin` on every project regardless.
+App users can start, attach to, and heartbeat shared apps regardless of `MARIMOHUB_VIEWER_MODE`.
+They cannot use editor sessions, secondary surfaces, or stop/restart controls.
+Viewer runtime access depends on `MARIMOHUB_VIEWER_MODE`:
 
-| Capability                                                                                 | `viewer` | `editor` | `manager` | `admin` |
-| ------------------------------------------------------------------------------------------ | :------: | :------: | :-------: | :-----: |
-| See & read projects & notebooks; read versions; open & read notebook code                  |    ✓     |    ✓     |     ✓     |    ✓    |
-| View a notebook's outputs (HTML snapshot / ephemeral session, per `MARIMOHUB_VIEWER_MODE`) |    ✓     |    ✓     |     ✓     |    ✓    |
-| Create/update/delete notebooks; save versions; create sessions (run)                       |          |    ✓     |     ✓     |    ✓    |
-| Update/delete projects; manage members                                                     |          |          |     ✓     |    ✓    |
+- `static` serves saved HTML through `GET …/notebooks/{nid}/html`, with the same authorization as other content reads.
+- `applications` also permits shared app start, attach, and heartbeat.
+- `ephemeral-sandbox` also permits private editor sessions, accessible only to their owner.
 
-Notebook changes and session creation require **editor** or higher. Project
-changes require **manager** or higher. Reads require **viewer** unless the deployment gives
-authenticated users a default role. Any authenticated user can create a
-project. Its creator becomes the owner and has the reserved admin role. The API enforces
-these rules. The client does not enforce them.
-
-`manager`, `editor`, and `viewer` are assignable through the membership API.
-Existing non-owner `admin` rows remain valid but new ones cannot be created.
-Because old replicas cannot parse `manager`, deployments must stop all old
-replicas before allowing the new role to be assigned. Rolling back afterward
-requires converting every manager row to a role understood by the old version.
-
-> Session `heartbeat`/`terminate` also require **editor+** (they keep a kernel alive / tear it down). Hard-delete (the deferred GC pass, §7.4) remains the outstanding authorization work; per-notebook ACLs and per-user index objects are out of scope (they would break the 2-GET read model — see `rfc.md` §8).
-
-**What a viewer sees** is set deployment-wide by `MARIMOHUB_VIEWER_MODE`. `static` (the default) serves the newest version's `notebook.html` snapshot via `GET …/notebooks/{nid}/html` — read-only, no compute, gated like any read. `ephemeral-sandbox` admits viewers to session create/heartbeat/terminate (and the kernel proxy) **for their own sessions only**; such sessions are stamped `ephemeral: true` and every teardown path (explicit stop, idle/lifetime reaper, periodic snapshotter, reconciliation) skips the write-back — no version, HTML/session snapshot, workspace mirror, or FS snapshot is ever cut from a viewer's sandbox, and WIF credentials are never injected into one.
+Viewer sandboxes are stamped `ephemeral: true` and never receive WIF credentials.
+Every capture or teardown path skips write-back: no versions, HTML/session snapshots, workspace mirrors, or filesystem snapshots.
+These paths include explicit stop, idle/lifetime reaping, periodic capture, and reconciliation.
+An app-user downgrade blocks access to existing editor sessions, including previously owned ephemeral sessions.
+See [source protection and revocation](../docs/apps.md#source-protection-and-revocation) for direct sandbox URL limitations.
 
 ---
 

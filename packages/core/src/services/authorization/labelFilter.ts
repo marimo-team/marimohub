@@ -1,3 +1,4 @@
+import type { ProjectAction } from './actions';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { ResourceSecurityLabels } from '../../securityLabels';
@@ -22,6 +23,7 @@ export async function filterByLabelConstraints<T extends LabelProjectedEntry>(
 	subject: AuthorizationSubject,
 	entries: T[],
 	resolveLabels: (entry: T) => Promise<ResourceSecurityLabels | null>,
+	action: ProjectAction = 'project.read',
 ): Promise<T[]> {
 	if (entries.every((entry) => entry.security_labels === null)) return entries;
 	const states = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
@@ -34,6 +36,6 @@ export async function filterByLabelConstraints<T extends LabelProjectedEntry>(
 	});
 	const readable = entries.filter((_, i) => states[i] !== null);
 	const labelStates = states.flatMap((state) => (state === null ? [] : [state.labels]));
-	const satisfied = await authz.projectLabelConstraints(subject, labelStates);
+	const satisfied = await authz.projectLabelConstraints(subject, labelStates, action);
 	return readable.filter((_, i) => satisfied[i]);
 }

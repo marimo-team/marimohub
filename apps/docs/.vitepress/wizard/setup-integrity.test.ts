@@ -56,6 +56,17 @@ describe('setup snippet integrity', () => {
 		expect([...unknown]).toEqual([]);
 	});
 
+	it.each(
+		[...CONFIG_DOCUMENTED_IDS].filter((id) =>
+			/^MARIMOHUB_AUTH_OIDC_DEFAULT_[A-Z_]+_GROUPS$/.test(id),
+		),
+	)('includes the configured default-role group variable %s in the OIDC setup example', (id) => {
+		const groups = getSetup('auth', 'oidc')!
+			.markdown.split('### Groups and roles')[1]
+			.split('### Login-policy module')[0];
+		expect(groups).toContain(`${id}=`);
+	});
+
 	it('every wizard "Full docs" deep link points at a real heading', () => {
 		for (const group of SELECTABLE_GROUPS) {
 			for (const backend of group.backends) {

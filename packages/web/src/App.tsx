@@ -6,8 +6,8 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { Header } from '@/components/Header/Header';
 import { Footer } from '@/components/Footer/Footer';
 import { ProjectList } from '@/components/ProjectList/ProjectList';
-import { Project } from '@/components/Project/Project';
-import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
+import { AppsPage, ProjectEntryPage } from '@/components/Apps/AppsPage';
+import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
 import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
 import { JobsPage } from '@/components/Jobs/JobsPage';
@@ -124,6 +124,7 @@ function PageFallback() {
 }
 
 function StandardLayout() {
+	const { user } = useAuth();
 	// h-dvh (not min-h-dvh): pages scroll inside <main>, never the document,
 	// which keeps the header and footer pinned.
 	return (
@@ -133,8 +134,22 @@ function StandardLayout() {
 				<AppErrorBoundary>
 					<Suspense fallback={<PageFallback />}>
 						<Routes>
-							<Route path="/" element={<ProjectList />} />
-							<Route path="/projects/:pid" element={<Project />} />
+							<Route
+								path="/"
+								element={user?.app_only ? <Navigate to="/apps" replace /> : <ProjectList />}
+							/>
+							<Route path="/apps" element={<AppsPage />} />
+							<Route
+								path="/projects"
+								element={
+									user?.app_only && !user.can_create_projects ? (
+										<Navigate to="/apps" replace />
+									) : (
+										<ProjectList />
+									)
+								}
+							/>
+							<Route path="/projects/:pid" element={<ProjectEntryPage />} />
 							<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
 							<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
 							<Route path="/admin" element={<AdminLayout />}>
@@ -165,12 +180,9 @@ function AppContent() {
 						<Route path="/cli/login" element={<CliLoginPage />} />
 						<Route path="/cli/device" element={<CliDeviceLoginPage />} />
 						<Route path="/oauth/consent" element={<OAuthConsentPage />} />
-						<Route path="/projects/:pid/notebooks/:nid" element={<NotebookPage />} />
+						<Route path="/projects/:pid/notebooks/:nid" element={<AppEntryPage variant="edit" />} />
 						{/* The shared app, full-screen like the editor (outside StandardLayout). */}
-						<Route
-							path="/projects/:pid/notebooks/:nid/app"
-							element={<NotebookPage variant="app" />}
-						/>
+						<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
 						{/* The last HTML snapshot, sandbox-free (no session is ever started). */}
 						<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<SnapshotPage />} />
 						{/* Scheduled + on-demand headless runs and their history (no session). */}

@@ -40,11 +40,14 @@ function listCatalog() {
 		}),
 	});
 }
-async function expectDefaultProject(response: Response) {
+async function expectCatalog(
+	response: Response,
+	projects: { name: string; notebooks: never[] }[] = [],
+) {
 	expect(response.status).toBe(200);
 	const text = await response.text();
 	expect(JSON.parse(/^data: (.+)$/m.exec(text)?.[1] ?? text)).toMatchObject({
-		result: { structuredContent: { projects: [{ name: 'My Projects', notebooks: [] }] } },
+		result: { structuredContent: { projects } },
 	});
 }
 
@@ -60,23 +63,41 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('MCP as the first Hub interaction', () => {
-	it('initializes the catalog and records a user who can then be suspended', async () => {
+	it('initializes an empty catalog for a read-only token and records a suspendable user', async () => {
 		expect(await bucket.head(paths.catalog)).toBeNull();
 		expect(await deps.services.identities.list()).toEqual([]);
 
-		await expectDefaultProject(await listCatalog());
+		await expectCatalog(await listCatalog());
 		const snapshot = await deps.services.catalog.getCurrentSnapshot();
-		expect(snapshot.projects).toHaveLength(1);
+		expect(snapshot.projects).toEqual([]);
 		expect(await deps.services.identities.list()).toMatchObject([
 			{ id: user.id, email: user.email, name: user.name },
 		]);
 
-		await expectDefaultProject(await listCatalog());
+		await expectCatalog(await listCatalog());
 		expect((await deps.services.catalog.getCurrentSnapshot()).projects).toEqual(snapshot.projects);
 		await deps.services.identities.setSuspension(user.id, true);
 		expect((await listCatalog()).status).toBe(401);
 		await deps.services.identities.setSuspension(user.id, false);
-		await expectDefaultProject(await listCatalog());
+		await expectCatalog(await listCatalog());
+	});
+
+	it('allows a later token with project creation access to seed the empty catalog', async () => {
+		await expectCatalog(await listCatalog());
+		const fullScopes = ['mcp:tools', 'marimohub:full'];
+		caller = {
+			...user,
+			credential: {
+				...user.credential,
+				grant: externalTokenGrant(fullScopes)!,
+				oauth: { ...user.credential.oauth!, scopes: fullScopes },
+			},
+		};
+		await expectCatalog(await listCatalog(), [{ name: 'My Projects', notebooks: [] }]);
+		await expectCatalog(await listCatalog(), [{ name: 'My Projects', notebooks: [] }]);
+		expect((await deps.services.catalog.getCurrentSnapshot()).projects).toEqual([
+			expect.objectContaining({ owner: user.id, name: 'My Projects' }),
+		]);
 	});
 
 	it('does not initialize storage or record a user during discovery', async () => {
@@ -129,12 +150,12 @@ describe('MCP as the first Hub interaction', () => {
 			.spyOn(deps.services.identities, 'upsert')
 			.mockRejectedValueOnce(new Error('private-identity-details'));
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-		await expectDefaultProject(await listCatalog());
+		await expectCatalog(await listCatalog());
 		expect(await deps.services.identities.get(user.id)).toBeNull();
 		const logs = JSON.stringify(log.mock.calls);
 		expect(logs).toContain('identity_upsert_failed');
 		expect(logs).not.toContain('private-identity-details');
-		await expectDefaultProject(await listCatalog());
+		await expectCatalog(await listCatalog());
 		expect(await deps.services.identities.get(user.id)).toMatchObject({ id: user.id });
 		expect(upsert).toHaveBeenCalledTimes(2);
 	});
@@ -143,6 +164,6 @@ describe('MCP as the first Hub interaction', () => {
 		vi.spyOn(bucket, 'head').mockRejectedValueOnce(new UnavailableError('Storage unavailable'));
 		expect((await listCatalog()).status).toBe(503);
 		expect(await bucket.head(paths.catalog)).toBeNull();
-		await expectDefaultProject(await listCatalog());
+		await expectCatalog(await listCatalog());
 	});
 });

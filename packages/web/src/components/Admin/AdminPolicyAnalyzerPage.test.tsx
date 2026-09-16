@@ -129,6 +129,25 @@ describe('AdminPolicyAnalyzerPage', () => {
 		expect(screen.queryByText('Deterministic')).not.toBeInTheDocument();
 		expect(screen.queryByText('Read-Only')).not.toBeInTheDocument();
 		expect(screen.queryByText('Versioned')).not.toBeInTheDocument();
+		await user.selectOptions(
+			screen.getByRole('combobox', { name: 'Project Relationship' }),
+			'member',
+		);
+		const rolePicker = screen.getByRole('combobox', { name: 'Member Role' });
+		expect([...rolePicker.querySelectorAll('option')].map((option) => option.value)).toEqual([
+			'app-user',
+			'viewer',
+			'editor',
+			'manager',
+			'admin',
+		]);
+		await user.selectOptions(rolePicker, 'app-user');
+		expect(rolePicker).toHaveValue('app-user');
+		await user.selectOptions(
+			screen.getByRole('combobox', { name: 'Project Relationship' }),
+			'owner',
+		);
+
 		expect(screen.queryByRole('textbox', { name: 'Subject ID' })).not.toBeInTheDocument();
 		const userSelect = screen.getByRole('combobox', { name: 'User' });
 		await user.selectOptions(userSelect, '');

@@ -300,6 +300,36 @@ describe('authorizeProxyRequest', () => {
 			}
 		});
 
+		it('admits app users only to apps under every viewer mode', async () => {
+			for (const viewerMode of ['static', 'applications', 'ephemeral-sandbox'] as const) {
+				const appDeps = {
+					...deps(STRANGER),
+					policy: { defaultRole: 'app-user' as const, viewerMode },
+				};
+				expect((await authorizeProxyRequest(req(`/proxy/${appToken}/`), appDeps)).kind).toBe(
+					'forward',
+				);
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), appDeps)).toMatchObject({
+					kind: 'reject',
+					status: 403,
+				});
+			}
+		});
+
+		it.each(['app-user', 'viewer', 'editor'] as const)(
+			'masks deleted notebook kernels for %s',
+			async (defaultRole) => {
+				const services = createServices(bucket);
+				const [notebook] = await services.notebooks.listNotebooks(pid);
+				await services.notebooks.deleteNotebook(pid, notebook.id, ACTOR);
+				const decision = await authorizeProxyRequest(req(`/proxy/${appToken}/`), {
+					...deps(STRANGER),
+					policy: { defaultRole, viewerMode: 'applications' },
+				});
+				expect(decision).toMatchObject({ kind: 'reject', status: 404 });
+			},
+		);
+
 		it('rejects a viewer from the app kernel under `static` (and when unset)', async () => {
 			for (const dep of [viewerDeps('static'), viewerDeps()]) {
 				const d = await authorizeProxyRequest(req(`/proxy/${appToken}/`), dep);

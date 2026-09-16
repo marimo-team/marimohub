@@ -57,7 +57,7 @@ function isCurrentUser(member: ProjectMember, user: User): boolean {
 }
 
 function roleLabel(role: ProjectRole): string {
-	return role[0].toUpperCase() + role.slice(1);
+	return role === 'app-user' ? 'App user' : role[0].toUpperCase() + role.slice(1);
 }
 
 interface RoleBadgeProps {
