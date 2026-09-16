@@ -757,24 +757,6 @@ function useProjectContent() {
 				</div>
 			</PageHeader>
 
-			<fieldset className="flex justify-end gap-1" aria-label="Notebook view">
-				{(['List', 'Gallery'] as const).map((view) => (
-					<Button
-						key={view}
-						size="sm"
-						variant={gallery === (view === 'Gallery') ? 'default' : 'ghost'}
-						aria-pressed={gallery === (view === 'Gallery')}
-						onPress={() => {
-							setGallery(view === 'Gallery');
-							try {
-								localStorage.setItem('notebook-view', view.toLowerCase());
-							} catch {}
-						}}
-					>
-						{view}
-					</Button>
-				))}
-			</fieldset>
 			{thumbnailModal.target && (
 				<ThumbnailDialog
 					projectId={pid!}
@@ -793,6 +775,26 @@ function useProjectContent() {
 				isLoading={notebooksLoading}
 				isFetching={notebooksFetching}
 				onChange={setFilters}
+				actions={
+					<fieldset className="flex gap-1" aria-label="Notebook view">
+						{(['List', 'Gallery'] as const).map((view) => (
+							<Button
+								key={view}
+								size="sm"
+								variant={gallery === (view === 'Gallery') ? 'default' : 'ghost'}
+								aria-pressed={gallery === (view === 'Gallery')}
+								onPress={() => {
+									setGallery(view === 'Gallery');
+									try {
+										localStorage.setItem('notebook-view', view.toLowerCase());
+									} catch {}
+								}}
+							>
+								{view}
+							</Button>
+						))}
+					</fieldset>
+				}
 			/>
 
 			<ListResults
@@ -846,7 +848,7 @@ function useProjectContent() {
 							to={`/projects/${pid}/notebooks/${nb.id}`}
 							state={{ title: nb.title }}
 							label={nb.title}
-							contentClassName="items-center justify-between gap-3 py-3.5"
+							contentClassName={gallery ? undefined : 'items-center justify-between gap-3 py-3.5'}
 							trailing={
 								<>
 									<NotebookTags
@@ -941,7 +943,7 @@ function useProjectContent() {
 							}
 						>
 							<div className="flex min-w-0 flex-1 items-center gap-3">
-								{nb.source_type !== 'git' && (
+								{!gallery && nb.source_type !== 'git' && (
 									<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
 										<FileText className="size-4" />
 									</span>
