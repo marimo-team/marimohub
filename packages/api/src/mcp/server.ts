@@ -3,33 +3,32 @@ import { all } from 'better-all';
 import { z } from 'zod';
 import {
 	BadRequestError,
-	DomainError,
-	foldCase,
 	NOTEBOOK_STATUSES,
 	NotFoundError,
-	NotebookId,
-	ProjectId,
 	SessionId,
 	sessionMode,
+	toPublicJobDefinition,
 	toPublicNotebookMeta,
 	toPublicSource,
 } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, Project } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { withMcpSessionActivity } from './sessionActivity';
 import { startMcpSession } from './sessionStartup';
 import { executeMcpCode } from './kernelExecution';
-import { failureResult, result } from './results';
-import type { ToolResult } from './results';
-import { errorMetadataChain, logEvent } from '../log';
+import { result, toolError } from './results';
+import {
+	resolveProject,
+	resolveAuthorizedNotebook,
+	resolveNotebook,
+	PROJECT_REFERENCE_DESCRIPTION,
+	NOTEBOOK_REFERENCE_DESCRIPTION,
+} from './selectors';
+import { registerJobTools } from './jobs';
 import { deleteNotebookAndRetire } from '../routes/notebookDelete';
 import {
-	assertProjectActionOn,
-	authorizationService,
-	loadSessionProject,
 	assertSessionControl,
 	assertSessionNotebookVisible,
-	loadVisibleProject,
 	loadAuthorizedNotebook,
 	sessionRetirer,
 } from '../shared';
@@ -41,98 +40,15 @@ export interface StartRequestContext {
 	path: string;
 	hostname: string;
 	appBaseUrl: string;
+	signal?: AbortSignal;
 }
 
 export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
-
-const PROJECT_REFERENCE_DESCRIPTION =
-	'Project ID or exact project name (case-insensitive). Use an ID if names are duplicated.';
-const NOTEBOOK_REFERENCE_DESCRIPTION =
-	'Notebook ID or exact notebook title in the project (case-insensitive). Use an ID if titles are duplicated.';
 
 const NOTEBOOK_CODE_DESCRIPTION =
 	'Complete marimo Python notebook source (marimo.App and @app.cell definitions), stored verbatim. Local dependencies come from pyproject.toml; PEP 723 headers are preserved but do not install dependencies.';
 const EXPECTED_UPDATED_AT_DESCRIPTION =
 	'updated_at returned by get_notebook. Rejects the change if notebook metadata changed since that read.';
-
-function toolError(
-	error: unknown,
-	context: StartRequestContext & { userId: string; tool: string },
-): ToolResult {
-	if (!(error instanceof DomainError)) {
-		logEvent({
-			level: 'error',
-			event: 'mcp_tool_error',
-			request_id: context.requestId ?? null,
-			method: context.method,
-			path: context.path,
-			user: context.userId,
-			tool: context.tool,
-			error: errorMetadataChain(error),
-		});
-	}
-	const data =
-		error instanceof DomainError
-			? { code: error.code, message: error.message }
-			: { code: 'INTERNAL_ERROR', message: 'Internal error' };
-	return failureResult(data);
-}
-
-async function resolveProject(
-	deps: ApiDeps,
-	principal: AuthenticatedPrincipal,
-	value: string,
-	appAccess = false,
-): Promise<Project> {
-	const load = appAccess ? loadSessionProject : loadVisibleProject;
-	if (ProjectId.is(value)) {
-		return load(deps.services.projects, value, principal, deps);
-	}
-	const projects = await deps.services.projects.listProjects({
-		action:
-			appAccess && authorizationService(deps).credentialAllowsAction(principal, 'app.read')
-				? 'app.read'
-				: 'project.read',
-		subject: principal,
-		policy: deps.policy,
-		resourceSecurity: deps.resourceSecurity,
-	});
-	const matches = projects.filter((project) => foldCase(project.name) === foldCase(value));
-	if (matches.length === 0) throw new NotFoundError(`Project '${value}' not found`);
-	if (matches.length > 1) {
-		throw new BadRequestError(
-			`Project name '${value}' is ambiguous; use one of: ${matches.map((item) => item.id).join(', ')}`,
-		);
-	}
-	return load(deps.services.projects, matches[0].id, principal, deps);
-}
-
-async function resolveNotebook(
-	deps: ApiDeps,
-	principal: AuthenticatedPrincipal,
-	project: Project,
-	value: string,
-) {
-	const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
-		action: authorizationService(deps).appReadAction(principal, project),
-		subject: principal,
-		policy: deps.policy,
-		resourceSecurity: deps.resourceSecurity,
-	});
-	if (NotebookId.is(value)) {
-		const match = notebooks.find((notebook) => notebook.id === value);
-		if (!match) throw new NotFoundError(`Notebook ${value} not found`);
-		return match;
-	}
-	const matches = notebooks.filter((notebook) => foldCase(notebook.title) === foldCase(value));
-	if (matches.length === 0) throw new NotFoundError(`Notebook '${value}' not found`);
-	if (matches.length > 1) {
-		throw new BadRequestError(
-			`Notebook title '${value}' is ambiguous; use one of: ${matches.map((item) => item.id).join(', ')}`,
-		);
-	}
-	return matches[0];
-}
 
 export function createMcpServer(
 	deps: ApiDeps,
@@ -142,20 +58,6 @@ export function createMcpServer(
 	const server = new McpServer({ name: 'marimohub', version: deps.version?.version ?? 'dev' });
 	const errorResult = (tool: string, error: unknown) =>
 		toolError(error, { ...request, userId: principal.id, tool });
-
-	async function resolveWritableNotebook(projectRef: string, notebookRef: string) {
-		const project = await resolveProject(deps, principal, projectRef);
-		await assertProjectActionOn(project, principal, 'notebook.write', deps);
-		const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-		const detail = await loadAuthorizedNotebook(
-			deps,
-			project,
-			notebook.id,
-			principal,
-			'notebook.write',
-		);
-		return { project, notebook, detail };
-	}
 
 	server.registerTool(
 		'list_catalog',
@@ -254,8 +156,7 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, launch, ...notebookInput }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef);
-				await assertProjectActionOn(project, principal, 'notebook.write', deps);
+				const project = await resolveProject(deps, principal, projectRef, 'notebook.write');
 				if (launch) await authorizeSessionStart(project, principal, 'edit', deps);
 				const notebook = await deps.services.notebooks.createNotebook(
 					project.id,
@@ -290,7 +191,7 @@ export function createMcpServer(
 		'get_notebook',
 		{
 			description:
-				'Read notebook metadata and stored source without a session. Excludes unsaved session edits. Returns updated_at for conditional updates and deletions.',
+				'Read notebook metadata and stored source without a session. Excludes unsaved session edits. Returns updated_at for conditional updates and deletions. Includes saved jobs and their schedules when jobs are enabled.',
 			annotations: { readOnlyHint: true },
 			inputSchema: z.object({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
@@ -314,7 +215,15 @@ export function createMcpServer(
 							principal,
 							'project.read',
 						);
-						const code = await deps.services.notebooks.getNotebookContent(project.id, notebook.id);
+						const { code, jobs } = await all({
+							code: async () => deps.services.notebooks.getNotebookContent(project.id, notebook.id),
+							jobs: async () =>
+								deps.jobs
+									? (await deps.services.jobs.listJobs(project.id, notebook.id)).map(
+											toPublicJobDefinition,
+										)
+									: undefined,
+						});
 						await lease.heartbeat();
 						return result({
 							notebook_id: notebook.id,
@@ -322,6 +231,7 @@ export function createMcpServer(
 							readme: detail.readme,
 							source: toPublicSource(detail.source),
 							code,
+							...(jobs !== undefined ? { jobs } : {}),
 							notebook_url: `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebook.id}`,
 						});
 					},
@@ -352,9 +262,12 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, expected_updated_at, ...input }) => {
 			try {
-				const { project, notebook, detail } = await resolveWritableNotebook(
+				const { project, notebook, detail } = await resolveAuthorizedNotebook(
+					deps,
+					principal,
 					projectRef,
 					notebookRef,
+					'notebook.write',
 				);
 				if (
 					[input.title, input.description, input.code, input.tags, input.readme].every(
@@ -397,7 +310,13 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, expected_updated_at }) => {
 			try {
-				const { project, notebook } = await resolveWritableNotebook(projectRef, notebookRef);
+				const { project, notebook } = await resolveAuthorizedNotebook(
+					deps,
+					principal,
+					projectRef,
+					notebookRef,
+					'notebook.write',
+				);
 				await deleteNotebookAndRetire(deps, project, notebook.id, principal, expected_updated_at);
 				return result({ project_id: project.id, notebook_id: notebook.id, status: 'deleted' });
 			} catch (error) {
@@ -431,7 +350,13 @@ export function createMcpServer(
 		},
 		async ({ project: projectRef, notebook: notebookRef, mode, wait_seconds }) => {
 			try {
-				const project = await resolveProject(deps, principal, projectRef, mode === 'app');
+				const project = await resolveProject(
+					deps,
+					principal,
+					projectRef,
+					'project.read',
+					mode === 'app',
+				);
 				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
 				return result(
 					await startMcpSession({
@@ -537,5 +462,6 @@ export function createMcpServer(
 		},
 	);
 
+	if (deps.jobs) registerJobTools(server, deps, principal, request);
 	return server;
 }

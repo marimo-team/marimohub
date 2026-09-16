@@ -125,16 +125,38 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 		const authenticated = await authenticateMcpRequest(c, deps);
 		if (authenticated instanceof Response) return authenticated;
 		await initializeForSubject(deps, authenticated);
+		const disconnected = new AbortController();
 		const server = createMcpServer(deps, authenticated, {
 			requestId: c.get('requestId'),
 			method: c.req.method,
 			path: c.req.path,
 			hostname: new URL(c.req.url).hostname,
 			appBaseUrl: publicBaseUrl,
+			signal: AbortSignal.any([c.req.raw.signal, disconnected.signal]),
 		});
 		const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
 		await server.connect(transport);
-		return transport.handleRequest(c);
+		const response = await transport.handleRequest(c);
+		if (!response?.body) return response;
+		const reader = response.body.getReader();
+		// The stateless transport does not forward SSE reader cancellation to tool handlers.
+		const body = new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				try {
+					const chunk = await reader.read();
+					if (chunk.done) controller.close();
+					else controller.enqueue(chunk.value);
+				} catch (error) {
+					disconnected.abort();
+					controller.error(error);
+				}
+			},
+			async cancel(reason) {
+				disconnected.abort();
+				await reader.cancel(reason);
+			},
+		});
+		return new Response(body, response);
 	});
 
 	return app;

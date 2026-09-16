@@ -150,6 +150,95 @@ App sessions do not support scratchpad execution.
 Authorized MCP requests keep sessions active until completion, authorization expiry,
 or session termination. When MCP requests and browser activity stop, idle cleanup applies.
 
+## Run and schedule jobs
+
+Set `MARIMOHUB_JOBS=on` and restart the deployment to register these tools.
+When disabled, they are absent from `tools/list` and direct calls return an unknown-tool error.
+
+| Tool           | Purpose                                                          |
+| -------------- | ---------------------------------------------------------------- |
+| `list_jobs`    | List saved jobs with cursor pagination.                          |
+| `create_job`   | Save a manual or scheduled job without starting a run.           |
+| `schedule_job` | Change or remove a schedule, or pause and resume scheduled runs. |
+| `run_job`      | Queue a saved job for headless execution.                        |
+| `get_job_run`  | Read or wait for an existing run attempt.                        |
+
+All tools require `project` and `notebook`. These selectors and `job` accept IDs
+or exact, case-insensitive names. Duplicate names require an ID.
+
+With jobs enabled, `get_notebook` returns a `jobs` array with IDs, schedules,
+enabled state, parameters, and `updated_at`. The array is empty for notebooks
+without jobs. Disabled deployments omit it.
+
+`create_job` accepts the [job API](./jobs.md#api) fields: name, parameters,
+schedule, timeout, retry policy, concurrency policy, notifications, and enabled state.
+Omitting the schedule creates a manual-only job. Parameters are strings available
+through `mo.cli_args()` and visible to project readers.
+
+`schedule_job` requires `expected_updated_at` from `list_jobs`, `get_notebook`, or
+a previous job mutation. At least one change is required:
+
+| Argument                           | Effect                                     |
+| ---------------------------------- | ------------------------------------------ |
+| `schedule: { cron, timezone }`     | Set a cron schedule with an IANA timezone. |
+| `schedule: null`                   | Remove the schedule.                       |
+| `enabled: false` / `enabled: true` | Pause / resume scheduled runs.             |
+
+Omitted fields remain unchanged.
+
+### Start and poll a run
+
+Call `run_job` with a saved job:
+
+```json
+{
+	"project": "Analytics",
+	"notebook": "Report",
+	"job": "Nightly",
+	"parameters": { "region": "eu" },
+	"idempotency_key": "report-eu-2026-09-15",
+	"wait": false
+}
+```
+
+Supplied parameters replace the stored map for this run. An empty map clears them.
+The [maintenance scheduler](./jobs.md#how-it-works) must be active to start queued runs.
+
+Results contain `run`, `completed`, `wait_expired`, and `links` to the browser run
+page and REST status endpoint. Available artifacts add HTML and log links, not
+their contents. All links require Hub authentication. Logs require editor access.
+
+Active results include `poll` with `tool: "get_job_run"`, its `arguments`, and
+`interval_seconds: 2`. Use those arguments to poll. Another `run_job` call can
+start another run.
+
+`create_job` and `run_job` accept `idempotency_key`. After a lost response, reuse
+the key and inputs. Replay records last 24 hours. Concurrent `run_job` calls
+with the same key, caller, and job reuse one run. `create_job` and REST retain
+best-effort replay: concurrent first requests can create duplicates. A crash
+or storage failure between enqueueing and recording the replay can still cause
+a duplicate run on retry.
+
+### Wait with optional progress
+
+Both run tools default to `wait: false`. With `wait: true`, they check status
+every two seconds for up to `wait_seconds` (default 60, range 1–120).
+Expiry returns the latest status, `wait_expired: true`, and polling details.
+The run continues under its separate execution timeout.
+
+For progress, send `_meta.progressToken` in the MCP request parameters, outside
+the tool arguments. Streamable HTTP delivers an initial notification and observed
+status changes over SSE. The counter increases without a completion percentage.
+Without a token, the call returns only the final result.
+
+Cancellation or disconnection stops observation. The run continues.
+Each poll checks current project membership and notebook visibility.
+To cancel execution, use the job UI or REST cancellation endpoint.
+
+Each call tracks one attempt. Automatic retries have separate run IDs linked by
+`retry_of`. Failed, timed-out, cancelled, and skipped attempts return normal status
+data. Tool errors indicate invalid input, denied access, or another request failure.
+
 ## External authorization
 
 With [external OIDC access tokens](./auth.md#external-access-tokens)

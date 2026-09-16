@@ -28,6 +28,7 @@ interface SchemaNode {
 	description?: string;
 	default?: unknown;
 	maxProperties?: number;
+	uniqueItems?: boolean;
 	propertyNames?: SchemaNode;
 	minimum?: number;
 	exclusiveMinimum?: number;
@@ -141,6 +142,13 @@ describe('OpenAPI spec', () => {
 
 		expect(parameterNames('get')).not.toContain('header:if-match');
 		expect(parameterNames('delete')).toContain('header:if-match');
+	});
+
+	it('requires unique notification events for job creation and updates', () => {
+		const schemas = (doc as { components: { schemas: Record<string, SchemaNode> } }).components
+			.schemas;
+		expect(property(schemas.JobNotifications, 'on').uniqueItems).toBe(true);
+		expect(property(property(schemas.JobUpdateBody, 'notifications'), 'on').uniqueItems).toBe(true);
 	});
 
 	it('publishes typed response vocabularies with an unknown fallback', () => {
