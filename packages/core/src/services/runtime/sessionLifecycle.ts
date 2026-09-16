@@ -1,3 +1,5 @@
+import { AppPoolStore } from './AppPoolStore';
+import { expireAppPresence, appOccupancy } from './AppPoolRouter';
 import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
@@ -148,6 +150,7 @@ export class SessionLifecycleService {
 	async sweep(now = Date.now()): Promise<SweepResult> {
 		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
 		const sessions = await this.sessions.listSessions();
+		const readPool = new AppPoolStore(this.bucket).reader();
 		// Candidates: `running` sessions, plus any terminal record still holding a
 		// sandbox_id that has not been confirmed destroyed. The `expired` ones are
 		// the stale-heartbeat reaper's leak (record flipped, sandbox never touched);
@@ -186,7 +189,12 @@ export class SessionLifecycleService {
 		await mapWithConcurrency(candidates, SESSION_SWEEP_CONCURRENCY, async (s) => {
 			const sandbox = this.compute.create(s.sandbox_id!, { owner: sessionOwner(s) });
 
+			const pool = sessionMode(s) === 'app' ? await readPool(s.project_id, s.notebook_id) : null;
+			if (pool) expireAppPresence(pool, now);
+			const poolMember = pool?.members.find((member) => member.session_id === s.session_id);
+			const hasAppUsers = pool !== null && appOccupancy(pool, s.session_id) > 0;
 			const heartbeatStale =
+				!hasAppUsers &&
 				now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMsByMode[sessionMode(s)];
 			const pastDeadline = !!s.expires_at && now >= Date.parse(s.expires_at);
 			const pastAuthorizationDeadline =
@@ -203,7 +211,7 @@ export class SessionLifecycleService {
 				(s.status === 'running' && (pastDeadline || pastAuthorizationDeadline || heartbeatStale));
 			const connectionCountCheck =
 				s.status === 'running' &&
-				(sessionModePolicy(s).singleton ||
+				(sessionModePolicy(s).sharedApp ||
 					(sessionPersistsEdits(s) && (s.editor_sandbox_sharing ?? 'shared') === 'shared'));
 			const connectionCountDue =
 				this.cfg.connectionAware &&
@@ -264,14 +272,16 @@ export class SessionLifecycleService {
 				// probe hiccup. Idle reaping already requires the stale heartbeat as
 				// corroboration that the kernel is really gone.
 				const mayHaveEditors =
-					hasEditors || (this.cfg.connectionAware && active === null && !heartbeatStale);
+					hasEditors ||
+					hasAppUsers ||
+					(this.cfg.connectionAware && active === null && !heartbeatStale);
 
 				if (pastAuthorizationDeadline) {
 					if (await this.gracefulTeardown(s, false, thumbnailDeadlineAt)) result.reapedExpired++;
 					return;
 				}
 
-				if (heartbeatStale && !hasEditors) {
+				if (!poolMember && heartbeatStale && !hasEditors) {
 					if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt)) result.reapedIdle++;
 					return;
 				}
@@ -287,7 +297,8 @@ export class SessionLifecycleService {
 							)
 							.catch(() => {});
 						result.extended++;
-					} else {
+					} else if (!poolMember) {
+						// Pool retirement must CAS-fence admission before teardown.
 						if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt)) result.reapedExpired++;
 						return;
 					}

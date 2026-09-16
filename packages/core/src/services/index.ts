@@ -629,3 +629,22 @@ export {
 	ThumbnailMetadataSchema,
 } from './content/ThumbnailService';
 export { THUMBNAIL_MAX_BYTES, validateThumbnailPng } from './content/thumbnailPng';
+
+export { AppPoolService } from './runtime/AppPoolService';
+export { AppPoolStore } from './runtime/AppPoolStore';
+export {
+	routeApp,
+	routeAppRetirement,
+	AppPoolSchema,
+	AppVisitSchema,
+	DEFAULT_APP_POOL_POLICY,
+} from './runtime/AppPoolRouter';
+export type {
+	AppPool,
+	AppPoolMember,
+	AppPoolPolicy,
+	AppVisit,
+	AppAdmission,
+	AppPoolDecision,
+	AppRetirementDecision,
+} from './runtime/AppPoolRouter';

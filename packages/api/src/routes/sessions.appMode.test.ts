@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createServices, paths } from '@marimo-hub/core';
+import { AppPoolService, createServices, paths } from '@marimo-hub/core';
 import type { NotebookId, ProjectAlertDispatcher, ProjectId } from '@marimo-hub/core';
 import {
 	ACTOR,
-	appClaimHolder,
 	fakeComputeFrom,
 	makeFakeCompute,
 	makeFakeSandbox,
@@ -107,12 +106,17 @@ describe('Session routes (app mode)', () => {
 		expect(edit.source_version_id).toBeUndefined();
 	});
 
-	it('writes the app claim at create and releases it on delete', async () => {
+	it('reserves pool membership and marks it retiring on delete', async () => {
 		const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
-		expect(await appClaimHolder(bucket, pid, nid)).toBe(app.session_id);
+		const pool = new AppPoolService(bucket, createServices(bucket).sessions);
+		expect(await pool.inspect(pid, nid)).toEqual([
+			expect.objectContaining({ session_id: app.session_id, state: 'ready', users: 1 }),
+		]);
 
 		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)));
-		expect(await appClaimHolder(bucket, pid, nid)).toBeNull();
+		expect(await pool.inspect(pid, nid)).toEqual([
+			expect.objectContaining({ state: 'retiring', users: 0 }),
+		]);
 	});
 
 	it('repeat app create reuses; a different editor attaches to the same app', async () => {
@@ -186,7 +190,7 @@ describe('Session routes (app mode)', () => {
 		).toBe(attachingDeadline);
 	});
 
-	it('a create that loses the app claim attaches to the claim holder', async () => {
+	it('new arrivals do not attach to a legacy singleton', async () => {
 		// The holder is live for claim purposes (running) but invisible to reuse
 		// (no sandbox_url) — the shape a true concurrent-start race produces.
 		const winner = makeSession({
@@ -204,15 +208,15 @@ describe('Session routes (app mode)', () => {
 		);
 
 		const attached = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
-		expect(attached.session_id).toBe(winner.session_id);
-		expect(attached.reused).toBe(true);
+		expect(attached.session_id).not.toBe(winner.session_id);
+		expect(attached.reused).toBe(false);
 
-		// The loser's own record was retired, and no second app is left active.
+		// The legacy sandbox drains independently of the new pool member.
 		const services = createServices(bucket);
-		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(1);
+		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(2);
 	});
 
-	it('an app-claim race applies the attaching credential deadline to the winner', async () => {
+	it('a new pool member retains its starter credential deadline', async () => {
 		const winner = makeSession({
 			project_id: pid,
 			notebook_id: nid,
@@ -248,56 +252,29 @@ describe('Session routes (app mode)', () => {
 			await groupEditor('POST', sessionsPath(), { mode: 'app' }),
 		);
 
-		expect(attached.session_id).toBe(winner.session_id);
-		expect(attached.reused).toBe(true);
+		expect(attached.session_id).not.toBe(winner.session_id);
+		expect(attached.reused).toBe(false);
 		expect(
-			(await createServices(bucket).sessions.getSession(pid, winner.session_id))
+			(await createServices(bucket).sessions.getSession(pid, attached.session_id))
 				.authorization_expires_at,
 		).toBe(deadline);
 	});
 
-	it('a claim stolen mid-provision destroys the loser sandbox and attaches to the thief', async () => {
-		// A slow provision looks like a wedged holder to a second "Run as app",
-		// which CAS-replaces the claim. Simulated by swapping the claim (and
-		// seeding the thief's running record) inside the provision phase — after
-		// the saga's app_claim step, before its post-provision recheck.
-		const thief = makeSession({
-			project_id: pid,
-			notebook_id: nid,
-			user_id: OTHER_EDITOR,
-			status: 'running',
-			mode: 'app',
-			sandbox_url: undefined,
-		});
+	it('a fenced provision destroys its sandbox instead of publishing readiness', async () => {
 		const fake = makeFakeSandbox();
-		let stolen = false;
+		const pool = new AppPoolService(bucket, createServices(bucket).sessions);
 		const instance = {
 			...fake.instance,
 			startProcess: (async (...args: Parameters<typeof fake.instance.startProcess>) => {
-				if (!stolen) {
-					stolen = true;
-					await bucket.put(paths.session(pid, thief.session_id), JSON.stringify(thief));
-					await bucket.put(
-						paths.appClaim(pid, nid),
-						JSON.stringify({ session_id: thief.session_id, claimed_at: thief.started_at }),
-					);
-				}
+				const [member] = await pool.inspect(pid, nid);
+				await pool.invalidate(pid, nid, member.session_id);
 				return fake.instance.startProcess(...args);
 			}) as typeof fake.instance.startProcess,
 		};
 		const api = createTestApi({ bucket, userId: ACTOR, compute: fakeComputeFrom(instance) });
-
-		const res = await expectOk<any>(await api.request('POST', sessionsPath(), { mode: 'app' }));
-		expect(res.session_id).toBe(thief.session_id);
-		expect(res.reused).toBe(true);
-
-		// The loser's sandbox was destroyed (saga compensation) and its record
-		// retired — the thief's app is the only active one, still holding the claim.
+		await expectError(await api.request('POST', sessionsPath(), { mode: 'app' }), 409, 'CONFLICT');
 		expect(fake.calls.destroy).toBe(1);
-		const services = createServices(bucket);
-		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(1);
-		const claim = await bucket.get(paths.appClaim(pid, nid));
-		expect(await claim!.json()).toMatchObject({ session_id: thief.session_id });
+		expect(await createServices(bucket).sessions.countActiveAppsForProject(pid)).toBe(0);
 	});
 
 	it('an app session never mounts the bucket and launches marimo run', async () => {
@@ -406,6 +383,7 @@ describe('Session routes (app mode)', () => {
 		it('a viewer may heartbeat the shared app under `applications`, not under `static`', async () => {
 			const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
 			const beat = sessionsPath(`/${app.session_id}/heartbeat`);
+			await expectOk(await viewerApi('applications')('POST', sessionsPath(), { mode: 'app' }));
 			await expectOk(await viewerApi('applications')('POST', beat));
 			await expectError(await viewerApi('static')('POST', beat), 403, 'FORBIDDEN');
 		});
@@ -441,6 +419,8 @@ describe('Session routes (app mode)', () => {
 			expect(staticUrls.get(app.session_id)).toBeUndefined();
 			expect(staticUrls.get(edit.session_id)).toBeUndefined();
 
+			expect((await urlsFor(viewerApi('applications'))).get(app.session_id)).toBeUndefined();
+			await expectOk(await viewerApi('applications')('POST', sessionsPath(), { mode: 'app' }));
 			const appsUrls = await urlsFor(viewerApi('applications'));
 			expect(appsUrls.get(app.session_id)).toBeTruthy();
 			expect(appsUrls.get(edit.session_id)).toBeUndefined();
@@ -567,12 +547,12 @@ describe('Session routes (app mode)', () => {
 		await expectError(res, 400, 'BAD_REQUEST');
 	});
 
-	it('deleting the notebook drops the app claim (no permanently-orphaned pointer)', async () => {
+	it('deleting the notebook removes its pool record', async () => {
 		await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
-		expect(await bucket.get(paths.appClaim(pid, nid))).not.toBeNull();
+		expect(await bucket.get(paths.appPool(pid, nid))).not.toBeNull();
 
 		await expectOk(await owner('DELETE', `/projects/${pid}/notebooks/${nid}`));
-		expect(await bucket.get(paths.appClaim(pid, nid))).toBeNull();
+		expect(await bucket.get(paths.appPool(pid, nid))).toBeNull();
 	});
 
 	it('deleting the notebook retires its running app', async () => {
@@ -624,6 +604,7 @@ describe('Session routes (app mode)', () => {
 				},
 			}).request;
 
+			await expectError(await editor('POST', sessionsPath(), { mode: 'app' }), 409, 'CONFLICT');
 			const fresh = await expectOk<any>(await editor('POST', sessionsPath(), { mode: 'app' }));
 			expect(fresh.session_id).not.toBe(app.session_id);
 			expect(fresh.reused).toBe(false);

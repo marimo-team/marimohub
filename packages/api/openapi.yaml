@@ -317,6 +317,14 @@ components:
             enum:
               - edit
               - app
+        app_pool:
+          type: object
+          properties:
+            heartbeat_interval_seconds:
+              type: number
+              exclusiveMinimum: 0
+          required:
+            - heartbeat_interval_seconds
         editor_sandbox_sharing:
           type: string
           enum:
@@ -2609,6 +2617,36 @@ components:
     Session:
       type: object
       properties:
+        app_assignment:
+          type: object
+          properties:
+            visit_id:
+              type: string
+            generation:
+              type: string
+          required:
+            - visit_id
+            - generation
+        app_pool:
+          type: object
+          properties:
+            state:
+              type: string
+              enum:
+                - starting
+                - ready
+                - draining
+                - retiring
+            users:
+              type: number
+            max_users:
+              type:
+                - number
+                - 'null'
+          required:
+            - state
+            - users
+            - max_users
         session_id:
           type: string
         notebook_id:
@@ -2859,6 +2897,20 @@ components:
         - $ref: '#/components/schemas/Session'
         - type: object
           properties:
+            app_assignment:
+              type: object
+              properties:
+                visit_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                generation:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+              required:
+                - visit_id
+                - generation
             reused:
               type: boolean
             editor_session:
@@ -2888,6 +2940,14 @@ components:
           enum:
             - edit
             - app
+        app_visit_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        replace_app_session_id:
+          type: string
+          description: Replace the selected app sandbox without joining it. Requires
+            permission to stop that sandbox.
         compute_profile:
           type: string
           minLength: 1
@@ -12551,8 +12611,8 @@ paths:
         - Sessions
       summary: Create a session and provision a sandbox
       description: Create or reuse a notebook sandbox. Edit-session reuse follows the
-        configured editor sandbox-sharing policy. App-session reuse is shared
-        per notebook.
+        configured editor sandbox-sharing policy. App sessions use sticky
+        account assignments in a version-aware pool.
       parameters:
         - schema:
             type: string
@@ -12707,6 +12767,24 @@ paths:
           required: true
           name: sid
           in: path
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visit_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                generation:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+              required:
+                - visit_id
+                - generation
       responses:
         '200':
           description: Heartbeat updated
@@ -12724,6 +12802,127 @@ paths:
                 required:
                   - success
                   - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/leave:
+    post:
+      operationId: sessions.leaveApp
+      tags:
+        - Sessions
+      summary: Release this app visit
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visit_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                generation:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+              required:
+                - visit_id
+                - generation
+      responses:
+        '200':
+          description: Visit released
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
           content:

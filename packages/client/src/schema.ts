@@ -1101,7 +1101,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a session and provision a sandbox
-		 * @description Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App-session reuse is shared per notebook.
+		 * @description Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App sessions use sticky account assignments in a version-aware pool.
 		 */
 		post: operations['sessions.create'];
 		delete?: never;
@@ -1121,6 +1121,23 @@ export interface paths {
 		put?: never;
 		/** Update session heartbeat */
 		post: operations['sessions.heartbeat'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/leave': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Release this app visit */
+		post: operations['sessions.leaveApp'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2142,6 +2159,9 @@ export interface components {
 			/** @enum {string} */
 			viewer_mode: 'static' | 'applications' | 'ephemeral-sandbox';
 			viewer_session_modes: ('edit' | 'app')[];
+			app_pool?: {
+				heartbeat_interval_seconds: number;
+			};
 			/** @enum {string} */
 			editor_sandbox_sharing: 'shared' | 'exclusive';
 			/** @enum {string|null} */
@@ -3149,6 +3169,16 @@ export interface components {
 			next_cursor: string | null;
 		};
 		Session: {
+			app_assignment?: {
+				visit_id: string;
+				generation: string;
+			};
+			app_pool?: {
+				/** @enum {string} */
+				state: 'starting' | 'ready' | 'draining' | 'retiring';
+				users: number;
+				max_users: number | null;
+			};
 			session_id: string;
 			notebook_id: string;
 			project_id: string;
@@ -3254,6 +3284,10 @@ export interface components {
 			acknowledge_disruption: true;
 		};
 		SessionCreateResult: components['schemas']['Session'] & {
+			app_assignment?: {
+				visit_id: string;
+				generation: string;
+			};
 			reused: boolean;
 			editor_session?: {
 				/** @enum {string} */
@@ -3265,6 +3299,9 @@ export interface components {
 		SessionCreateBody: {
 			/** @enum {string} */
 			mode?: 'edit' | 'app';
+			app_visit_id?: string;
+			/** @description Replace the selected app sandbox without joining it. Requires permission to stop that sandbox. */
+			replace_app_session_id?: string;
 			compute_profile?: string;
 			/** @enum {string} */
 			edit_intent?: 'temporary';
@@ -11959,7 +11996,14 @@ export interface operations {
 			};
 			cookie?: never;
 		};
-		requestBody?: never;
+		requestBody?: {
+			content: {
+				'application/json': {
+					visit_id: string;
+					generation: string;
+				};
+			};
+		};
 		responses: {
 			/** @description Heartbeat updated */
 			200: {
@@ -11972,6 +12016,129 @@ export interface operations {
 						success: true;
 						data: components['schemas']['Session'];
 					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.leaveApp': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					visit_id: string;
+					generation: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Visit released */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
 			/** @description Authentication required */

@@ -210,7 +210,10 @@ export function makeFetch(opts: FetchOptions) {
 			publications.set(proposalId, changeRequest);
 			return ok({ proposal_id: proposalId, change_request: changeRequest });
 		}
-		if (url.endsWith(`/sessions/${(opts.session ?? runningSession()).session_id}`)) {
+		if (
+			url.endsWith(`/sessions/${(opts.session ?? runningSession()).session_id}`) ||
+			(method === 'POST' && url.endsWith('/heartbeat'))
+		) {
 			return ok(opts.session ?? runningSession());
 		}
 		if (url.endsWith(`/projects/${PID}/sessions`)) {

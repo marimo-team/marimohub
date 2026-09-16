@@ -94,6 +94,29 @@ function AppSessionDetails({
 						</dd>
 					</>
 				)}
+				{session.app_pool && (
+					<>
+						<dt>Pool state</dt>
+						<dd className="text-foreground">{session.app_pool.state}</dd>
+						<dt>Users</dt>
+						<dd className="text-foreground">
+							{session.app_pool.users}
+							{session.app_pool.max_users === null ? '' : ` / ${session.app_pool.max_users}`}
+						</dd>
+					</>
+				)}
+				{session.source_version_id && (
+					<>
+						<dt>Version</dt>
+						<dd className="max-w-48 truncate text-foreground" title={session.source_version_id}>
+							{session.source_version_id}
+						</dd>
+					</>
+				)}
+				<dt>Sandbox session</dt>
+				<dd className="max-w-48 truncate text-foreground" title={session.session_id}>
+					{session.session_id}
+				</dd>
 				{typeof connections === 'number' && (
 					<>
 						<dt>Connected</dt>
@@ -121,7 +144,7 @@ function AppSessionDetails({
 			)}
 			{stale && (
 				<p className="text-amber-600 dark:text-amber-500">
-					The notebook has changed since this app started. Restart to update.
+					This sandbox serves an older version. New users receive the latest version.
 				</p>
 			)}
 			{!canControl && (
@@ -151,12 +174,6 @@ function AppSessionDetails({
 	);
 }
 
-/**
- * The shared-app indicator on a notebook row: an AppWindow glyph colored by the
- * app session's status, with a popover carrying attribution, an approximate
- * connection count, the stale hint, and (for editors) Stop/Restart. Renders
- * nothing once the session is terminal.
- */
 export function AppSessionIndicator({
 	session,
 	canControl,

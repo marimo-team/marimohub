@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	APP_HEARTBEAT_INTERVAL_MS,
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	isSuperAdmin,
 	MAX_REQUEST_BYTES,
@@ -152,6 +153,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		// direct callers (mirrors the sandbox.exposure pattern).
 		viewer_mode: deps.policy.viewerMode ?? 'static',
 		viewer_session_modes: [...viewerSessionModes(deps.policy.viewerMode)],
+		app_pool: { heartbeat_interval_seconds: APP_HEARTBEAT_INTERVAL_MS / 1000 },
 		editor_sandbox_sharing: deps.policy.editorSandboxSharing ?? 'shared',
 		default_role: subjectDefaultRole(c.get('user'), deps.policy),
 		limits: {

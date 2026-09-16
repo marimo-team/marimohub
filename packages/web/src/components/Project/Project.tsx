@@ -864,23 +864,24 @@ function useProjectContent() {
 										title={nb.title}
 									/>
 									<div className="flex shrink-0 items-center gap-3">
-										{live?.app && (
+										{live?.apps?.map((appSession) => (
 											<AppSessionIndicator
-												session={live.app}
-												canControl={!!live.app.can?.stop}
-												canOpen={!!live.app.can?.attach}
+												key={appSession.session_id}
+												session={appSession}
+												canControl={!!appSession.can?.stop}
+												canOpen={!!appSession.can?.attach}
 												editActive={!!live.persistentEdit}
 												profiles={computeProfiles}
 												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
 												selectedProfileName={nb.compute_profile}
 												onStop={() =>
-													appModal.open({ action: 'stop', notebook: nb, session: live.app! })
+													appModal.open({ action: 'stop', notebook: nb, session: appSession })
 												}
 												onRestart={() =>
-													appModal.open({ action: 'restart', notebook: nb, session: live.app! })
+													appModal.open({ action: 'restart', notebook: nb, session: appSession })
 												}
 											/>
-										)}
+										))}
 										<SessionStatusDot
 											session={live?.edit}
 											loading={sessionsLoading}
@@ -1124,8 +1125,8 @@ function useProjectContent() {
 				title={appModal.target?.action === 'restart' ? 'Restart App' : 'Stop App'}
 				description={
 					appModal.target?.action === 'restart'
-						? `Restart the app for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(appModal.target.session)}`
-						: `Stop the app for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${sessionConnectionHint(appModal.target?.session)}`
+						? `Restart this app sandbox for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(appModal.target.session)}`
+						: `Stop this app sandbox for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${sessionConnectionHint(appModal.target?.session)}`
 				}
 				confirmLabel={appModal.target?.action === 'restart' ? 'Restart' : 'Stop App'}
 				pendingLabel={appModal.target?.action === 'restart' ? 'Restarting...' : 'Stopping...'}

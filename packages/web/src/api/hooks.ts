@@ -2007,10 +2007,11 @@ function startSessionRequest(
 	mode: 'edit' | 'app',
 	computeProfile?: 'default',
 	editIntent?: 'temporary',
+	appVisitId?: string,
 ) {
 	const params = { path: { pid: projectId, nid: notebookId } };
 	const body = {
-		...(mode === 'app' ? { mode } : {}),
+		...(mode === 'app' ? { mode, ...(appVisitId ? { app_visit_id: appVisitId } : {}) } : {}),
 		...(computeProfile ? { compute_profile: computeProfile } : {}),
 		...(editIntent ? { edit_intent: editIntent } : {}),
 	};
@@ -2045,9 +2046,10 @@ function useStartSessionRequest(
 	mode: 'edit' | 'app',
 	computeProfile?: 'default',
 	editIntent?: 'temporary',
+	appVisitId?: string,
 ) {
 	return useApiMutation(
-		() => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
+		() => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent, appVisitId),
 		() => [sessionKeys.listByProject(projectId)],
 		{ suppressErrorToast: true },
 	);
@@ -2058,8 +2060,9 @@ export function useStartSession(
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
 	editIntent?: 'temporary',
+	appVisitId?: string,
 ) {
-	return useStartSessionRequest(projectId, notebookId, mode, undefined, editIntent);
+	return useStartSessionRequest(projectId, notebookId, mode, undefined, editIntent, appVisitId);
 }
 
 export function useStartSessionWithDefault(
@@ -2067,15 +2070,15 @@ export function useStartSessionWithDefault(
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
 	editIntent?: 'temporary',
+	appVisitId?: string,
 ) {
-	return useStartSessionRequest(projectId, notebookId, mode, 'default', editIntent);
+	return useStartSessionRequest(projectId, notebookId, mode, 'default', editIntent, appVisitId);
 }
 
-async function restartSessionRequest(
+async function restartEditorSessionRequest(
 	projectId: string,
 	notebookId: string,
 	sessionId: string,
-	mode: 'edit' | 'app',
 ) {
 	try {
 		await stopSessionRequest(projectId, notebookId, sessionId);
@@ -2083,12 +2086,18 @@ async function restartSessionRequest(
 		// A reaped session is already stopped, so the requested restart can continue.
 		if (!isNotFoundError(err)) throw err;
 	}
-	return startSessionRequest(projectId, notebookId, mode);
+	return startSessionRequest(projectId, notebookId, 'edit');
 }
 
 export function useRestartApp(projectId: string, notebookId: string) {
 	return useApiMutation(
-		(sessionId: string) => restartSessionRequest(projectId, notebookId, sessionId, 'app'),
+		(sessionId: string) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body: { mode: 'app', replace_app_session_id: sessionId },
+				}),
+			),
 		() => [sessionKeys.listByProject(projectId)],
 	);
 }
@@ -2096,7 +2105,7 @@ export function useRestartApp(projectId: string, notebookId: string) {
 export function useRestartSession(projectId: string) {
 	return useApiMutation(
 		({ notebookId, sessionId }: { notebookId: string; sessionId: string }) =>
-			restartSessionRequest(projectId, notebookId, sessionId, 'edit'),
+			restartEditorSessionRequest(projectId, notebookId, sessionId),
 		() => [sessionKeys.listByProject(projectId)],
 	);
 }

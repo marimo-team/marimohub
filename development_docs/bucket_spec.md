@@ -1512,3 +1512,15 @@ Under the same notebook prefix:
 Soft deletion retains thumbnail objects during the recovery grace period.
 Hard deletion or garbage collection removes them. Images require notebook
 authorization and have no public bucket URLs.
+
+## App pool records
+
+`_system/app-pools/{pid}/{nid}.json` is a versioned CAS record owned by `AppPoolStore`.
+It stores sandbox reservations, account assignments, and per-visit leases together.
+`AppPoolService` applies the pure router decisions and coordinates session provisioning and retirement.
+Compute operations run outside CAS retries. Operation tokens fence late provisioning completions.
+Retiring members remain recorded until sandbox reclamation succeeds.
+Notebook and project deletion can remove subordinate pool records.
+
+The legacy `_system/apps/{pid}/{nid}.json` claim remains owned by `SessionService` during migration.
+New pool members do not acquire that singleton claim. See [App pools](../docs/app-pools.md) for rollout and presence semantics.

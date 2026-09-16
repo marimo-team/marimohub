@@ -139,7 +139,9 @@ These CAS-managed records also have one writer each:
   `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
-- `SessionService.claimApp`/`releaseApp` owns each app claim at
+- `AppPoolStore` owns each app pool at `_system/app-pools/{pid}/{nid}.json`,
+  including reservations, account assignments, and visit leases.
+- `SessionService.claimApp`/`releaseApp` owns each legacy app claim at
   `_system/apps/{pid}/{nid}.json`.
 - `SessionService` owns each monotonic version-prune cutoff at
   `_system/version-prune-cutoffs/{pid}/{nid}.json`.

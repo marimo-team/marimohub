@@ -1036,6 +1036,47 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/app-pools/{pid}/{nid}.json:
+    summary: App sandbox reservations, account assignments, and visit leases.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: AppPoolStore
+    get:
+      operationId: read_system_app_pools_json
+      summary: Read AppPool
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppPool'
+    put:
+      operationId: write_system_app_pools_json
+      summary: Write AppPool
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppPool'
+      responses:
+        '204':
+          description: Stored.
   /_system/apps/{pid}/{nid}.json:
     summary: Per-notebook app-sandbox singleton claim.
     parameters:
@@ -3258,6 +3299,9 @@ components:
             - app
         source_version_id:
           type: string
+        app_pool:
+          type: boolean
+          const: true
         active_connections:
           type: integer
           minimum: 0
@@ -3402,6 +3446,88 @@ components:
           type: string
       required:
         - cutoff_version_id
+    AppPool:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        latest_version_id:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              session_id:
+                type: string
+              sandbox_id:
+                type: string
+              user_id:
+                type: string
+              source_version_id:
+                type: string
+              state:
+                type: string
+                enum:
+                  - starting
+                  - ready
+                  - draining
+                  - retiring
+              created_at:
+                type: number
+              operation_token:
+                type: string
+              operation_expires_at:
+                type: number
+              idle_since:
+                type: number
+              legacy:
+                type: boolean
+              replaces_session_id:
+                type: string
+            required:
+              - session_id
+              - sandbox_id
+              - user_id
+              - state
+              - created_at
+              - operation_token
+              - operation_expires_at
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id:
+                type: string
+              session_id:
+                type: string
+              generation:
+                type: string
+              visits:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    visit_id:
+                      type: string
+                    expires_at:
+                      type: number
+                  required:
+                    - visit_id
+                    - expires_at
+              grace_until:
+                type: number
+            required:
+              - user_id
+              - session_id
+              - generation
+              - visits
+      required:
+        - schema_version
+        - members
+        - assignments
     AppClaim:
       type: object
       properties:

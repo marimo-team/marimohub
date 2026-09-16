@@ -1,3 +1,4 @@
+import { parseAppPoolPolicy } from './appPool';
 /**
  * Configuration composition root.
  *
@@ -78,7 +79,7 @@ import { makeSourceControl } from './sourceControl';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { loadAdapterLibraries } from './library';
 import type { LoadedAdapterLibraries } from './library';
-import { DEFAULT_SESSION_IDLE_TIMEOUT_S, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
+import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseOnOff, parseSecondsEnv } from './env';
@@ -448,19 +449,13 @@ const DEFAULT_SESSION_SWEEP_INTERVAL_S = 60;
 function parseSessionLifetime(env: Env): SessionLifetimeConfig {
 	const seconds = (key: string, dflt: number, opts?: { allowZero?: boolean }) =>
 		parseSecondsEnv(env, key, { dflt, ...opts });
-	const idleTimeoutMs = seconds(
-		'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
-		DEFAULT_SESSION_IDLE_TIMEOUT_S,
-	);
+
 	return {
 		maxLifetimeMs: seconds(
 			'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
 			DEFAULT_SESSION_MAX_LIFETIME_S,
 		),
-		idleTimeoutMsByMode: {
-			edit: idleTimeoutMs,
-			app: seconds('MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS', Millis.toSeconds(idleTimeoutMs)),
-		},
+		idleTimeoutMsByMode: parseSessionIdleTimeouts(env),
 		snapshotIntervalMs: seconds(
 			'MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS',
 			DEFAULT_SESSION_SNAPSHOT_INTERVAL_S,
@@ -735,6 +730,7 @@ export function createFromEnv(
 		jobs: parseJobsConfig(env),
 		mcp,
 		policy: {
+			appPool: parseAppPoolPolicy(env),
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),
 			editorSandboxSharing,

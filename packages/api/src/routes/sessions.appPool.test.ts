@@ -1,0 +1,406 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	createServices,
+	DEFAULT_APP_POOL_POLICY,
+	paths,
+	ProxyExposure,
+	AppPoolService,
+} from '@marimo-hub/core';
+import type { NotebookId, ProjectId, SessionId } from '@marimo-hub/core';
+import {
+	ACTOR,
+	fakeComputeFrom,
+	makeFakeCompute,
+	makeFakeSandbox,
+	uid,
+} from '@marimo-hub/core/testing';
+import type { MemoryBucket } from '@marimo-hub/core/testing';
+import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import { authorizeProxyRequest } from '../sandboxProxy';
+import { sweepAppPools } from '../appPools';
+
+describe('app pool HTTP integration', () => {
+	let bucket: MemoryBucket;
+	let pid: ProjectId;
+	let nid: NotebookId;
+	const policy = { ...DEFAULT_APP_POOL_POLICY, maxUsersPerSession: 4, maxSessionsPerVersion: 2 };
+	beforeEach(async () => {
+		bucket = await createInitializedBucket();
+		const services = createServices(bucket);
+		pid = (await services.projects.createProject({ name: 'P', description: '' }, ACTOR)).id;
+		nid = (
+			await services.notebooks.createNotebook(
+				pid,
+				{ title: 'App', description: '', code: 'original' },
+				ACTOR,
+			)
+		).id;
+	});
+	const api = (user = 'alice', maxAppsPerProject?: number) =>
+		createTestApi({
+			bucket,
+			userId: uid(user),
+			compute: makeFakeCompute(),
+			deps: { policy: { defaultRole: 'editor', appPool: policy, maxAppsPerProject } },
+		});
+	const path = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
+	const start = async (user = 'alice', visitId = 'tab') =>
+		expectOk<any>(await api(user).request('POST', path(), { mode: 'app', app_visit_id: visitId }));
+
+	it('packs accounts, scales, and sends only new accounts to a new committed version', async () => {
+		const first = await start();
+		for (const name of ['bob', 'charlie', 'dan'])
+			expect((await start(name)).session_id).toBe(first.session_id);
+		const second = await start('eve');
+		expect(second.session_id).not.toBe(first.session_id);
+		await createServices(bucket).notebooks.commitSession(pid, nid, { code: 'updated' }, ACTOR);
+		const latest = await start('frank');
+		expect(latest.source_version_id).not.toBe(first.source_version_id);
+		expect((await start('alice', 'phone')).session_id).toBe(first.session_id);
+		const old = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
+		expect(old.app_pool).toMatchObject({ state: 'draining', users: 4, max_users: 4 });
+	});
+
+	it('reads a pool once per session listing regardless of its sandbox count', async () => {
+		await start();
+		for (const user of ['bob', 'charlie', 'dan', 'eve']) await start(user);
+		const get = vi.spyOn(bucket, 'get');
+		const response = await expectOk<any>(await api().request('GET', `/projects/${pid}/sessions`));
+		expect(response.items).toHaveLength(2);
+		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(1);
+		expect(response.items.map((item: any) => item.app_pool.users).sort()).toEqual([1, 4]);
+	});
+
+	it('returns terminal app status through the heartbeat without renewing presence', async () => {
+		const first = await start();
+		await api().request('DELETE', path(`/${first.session_id}`));
+		const put = vi.spyOn(bucket, 'put');
+		const response = await expectOk<any>(
+			await api().request('POST', path(`/${first.session_id}/heartbeat`), first.app_assignment),
+		);
+		expect(response.status).toBe('terminated');
+		expect(response.sandbox_url).toBeUndefined();
+		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(0);
+	});
+
+	it('replaces the selected sandbox without changing the operator assignment', async () => {
+		const assigned = await start('alice');
+		await createServices(bucket).notebooks.commitSession(pid, nid, { code: 'version two' }, ACTOR);
+		const selected = await start('bob');
+		const body = { mode: 'app', replace_app_session_id: selected.session_id };
+		const replacement = await expectOk<any>(await api('alice').request('POST', path(), body));
+		expect(replacement.session_id).not.toBe(selected.session_id);
+		expect(replacement.session_id).not.toBe(assigned.session_id);
+		expect(replacement.source_version_id).toBe(selected.source_version_id);
+		expect(replacement.app_assignment).toBeUndefined();
+		expect(replacement.sandbox_url).toBeUndefined();
+		expect(replacement.surfaces?.marimo?.url).toBeUndefined();
+		expect((await start('alice', 'phone')).session_id).toBe(assigned.session_id);
+		expect((await start('carol')).session_id).toBe(replacement.session_id);
+		const retry = await expectOk<any>(await api('alice').request('POST', path(), body));
+		expect(retry.session_id).toBe(replacement.session_id);
+		expect(retry.reused).toBe(true);
+		const stopped = await createServices(bucket).sessions.getSession(pid, selected.session_id);
+		expect(stopped.sandbox_reclaimed_at).toBeTruthy();
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, replacement.session_id)).user_id,
+		).toBe(uid('alice'));
+	});
+
+	it('does not reserve a replacement until destruction is confirmed, then recovers after cleanup', async () => {
+		const selected = await start();
+		const fake = makeFakeSandbox();
+		const destroy = vi
+			.spyOn(fake.instance, 'destroy')
+			.mockRejectedValue(new Error('provider unavailable'));
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+			deps: { policy: { defaultRole: 'editor', appPool: policy } },
+		});
+		const body = { mode: 'app', replace_app_session_id: selected.session_id };
+		await expectError(await client.request('POST', path(), body), 409, 'CONFLICT');
+		expect(fake.calls.startProcess).toHaveLength(0);
+		const services = createServices(bucket);
+		const stored = await services.sessions.getSession(pid, selected.session_id);
+		expect(stored.sandbox_reclaimed_at).toBeUndefined();
+		const pool = new AppPoolService(bucket, services.sessions, policy);
+		expect((await pool.store.read(pid, nid))?.members).toHaveLength(1);
+		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(1);
+		destroy.mockResolvedValue();
+		await sweepAppPools(client.deps);
+		const replacement = await expectOk<any>(await client.request('POST', path(), body));
+		expect(replacement.session_id).not.toBe(selected.session_id);
+		expect(replacement.status).toBe('running');
+	});
+
+	it('reclaims a failed replacement startup and permits a subsequent retry', async () => {
+		const selected = await start();
+		const fake = makeFakeSandbox({ failWaitForPort: new Error('kernel failed to start') });
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+			deps: { policy: { defaultRole: 'editor', appPool: policy } },
+		});
+		const body = { mode: 'app', replace_app_session_id: selected.session_id };
+		await expectError(await client.request('POST', path(), body), 503, 'SERVICE_UNAVAILABLE');
+		const services = createServices(bucket);
+		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(0);
+		const pool = await new AppPoolService(bucket, services.sessions, policy).store.read(pid, nid);
+		const failed = pool!.members.find(
+			(member) => member.replaces_session_id === selected.session_id,
+		)!;
+		expect(failed.state).toBe('retiring');
+		expect(fake.calls.destroy).toBeGreaterThan(0);
+		const replacement = await expectOk<any>(await api().request('POST', path(), body));
+		expect(replacement.status).toBe('running');
+		expect(replacement.session_id).not.toBe(failed.session_id);
+		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(1);
+	});
+
+	it.each(['edit target', 'another notebook', 'another project'] as const)(
+		'rejects replacement of an %s before any teardown',
+		async (kind) => {
+			const services = createServices(bucket);
+			let targetPid = pid;
+			let targetNid = nid;
+			if (kind === 'another project')
+				targetPid = (
+					await services.projects.createProject({ name: 'Other', description: '' }, ACTOR)
+				).id;
+			if (kind !== 'edit target')
+				targetNid = (
+					await services.notebooks.createNotebook(
+						targetPid,
+						{ title: 'Other', description: '', code: 'other' },
+						ACTOR,
+					)
+				).id;
+			const target = await expectOk<any>(
+				await api().request('POST', `/projects/${targetPid}/notebooks/${targetNid}/sessions`, {
+					mode: kind === 'edit target' ? 'edit' : 'app',
+				}),
+			);
+			await expectError(
+				await api().request('POST', path(), {
+					mode: 'app',
+					replace_app_session_id: target.session_id,
+				}),
+				404,
+				'NOT_FOUND',
+			);
+			expect(
+				(await services.sessions.getSession(targetPid, target.session_id as SessionId)).status,
+			).toBe('running');
+		},
+	);
+
+	it.each([
+		{ mode: 'edit', replace_app_session_id: 'target' },
+		{ mode: 'app', app_visit_id: 'tab', replace_app_session_id: 'target' },
+	])('rejects incompatible restart options before stopping a sandbox: $mode', async (options) => {
+		const selected = await start();
+		await expectError(
+			await api().request('POST', path(), {
+				...options,
+				replace_app_session_id: selected.session_id,
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, selected.session_id)).status,
+		).toBe('running');
+	});
+
+	it('requires stop permission for replacement before touching the selected sandbox', async () => {
+		const selected = await start();
+		const viewer = createTestApi({
+			bucket,
+			userId: uid('viewer'),
+			compute: makeFakeCompute(),
+			deps: { policy: { defaultRole: 'viewer', viewerMode: 'applications', appPool: policy } },
+		});
+		await expectError(
+			await viewer.request('POST', path(), {
+				mode: 'app',
+				replace_app_session_id: selected.session_id,
+			}),
+			403,
+			'FORBIDDEN',
+		);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, selected.session_id)).status,
+		).toBe('running');
+	});
+
+	it('redacts both direct URLs in GET and list until the account is assigned', async () => {
+		const selected = await start();
+		expect(selected.surfaces.marimo.url).toBe(selected.sandbox_url);
+		const unassigned = api('bob');
+		const get = await expectOk<any>(
+			await unassigned.request('GET', path(`/${selected.session_id}`)),
+		);
+		const list = await expectOk<any>(await unassigned.request('GET', `/projects/${pid}/sessions`));
+		for (const response of [get, ...list.items]) {
+			expect(response.sandbox_url).toBeUndefined();
+			expect(response.surfaces.marimo.url).toBeUndefined();
+		}
+		await start('bob');
+		const admitted = await expectOk<any>(
+			await unassigned.request('GET', path(`/${selected.session_id}`)),
+		);
+		expect(admitted.surfaces.marimo.url).toBe(selected.sandbox_url);
+	});
+
+	it('admits the actual committed head when saves publish in reverse ID order', async () => {
+		const notebooks = createServices(bucket).notebooks;
+		const sourceKey = paths.project(pid).notebook(nid).source;
+		const put = bucket.put.bind(bucket);
+		let release!: () => void;
+		let entered!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const writing = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let held = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === sourceKey && !held) {
+				held = true;
+				entered();
+				await gate;
+			}
+			return put(key, value, options);
+		});
+		const slow = notebooks.commitSession(pid, nid, { code: 'slow save A' }, ACTOR);
+		await writing;
+		await notebooks.commitSession(pid, nid, { code: 'fast save B' }, ACTOR);
+		const first = await start();
+		release();
+		await slow;
+		const head = (await notebooks.getNotebook(pid, nid)).source.current_version_id!;
+		expect(head < first.source_version_id).toBe(true);
+		const next = await start('bob');
+		expect(next.source_version_id).toBe(head);
+		expect((await start('alice')).session_id).toBe(first.session_id);
+	});
+
+	it('retains project compute caps during rollover and returns a retry header', async () => {
+		await start();
+		await createServices(bucket).notebooks.commitSession(pid, nid, { code: 'updated' }, ACTOR);
+		const response = await api('bob', 1).request('POST', path(), { mode: 'app' });
+		expect(response.headers.get('Retry-After')).toBe('5');
+		await expectError(response, 429, 'RESOURCE_EXHAUSTED');
+		expect((await start()).status).toBe('running');
+	});
+
+	it('releases the last visit after grace and fences late heartbeats', async () => {
+		const first = await start();
+		await start('alice', 'phone');
+		await expectOk(
+			await api().request('POST', path(`/${first.session_id}/leave`), first.app_assignment),
+		);
+		await expectError(
+			await api().request('POST', path(`/${first.session_id}/heartbeat`), first.app_assignment),
+			409,
+			'CONFLICT',
+		);
+		const current = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
+		expect(current.app_pool.users).toBe(1);
+	});
+
+	it('requires admission before heartbeat or direct URL discovery', async () => {
+		const first = await start();
+		await expectError(
+			await api('bob').request('POST', path(`/${first.session_id}/heartbeat`)),
+			409,
+			'CONFLICT',
+		);
+		const unassigned = await expectOk<any>(
+			await api('bob').request('GET', path(`/${first.session_id}`)),
+		);
+		expect(unassigned.sandbox_url).toBeUndefined();
+		expect((await start('bob')).sandbox_url).toBeTruthy();
+	});
+
+	it('checks the same pool assignment for HTTP and WebSocket proxy admission', async () => {
+		const exposure = new ProxyExposure('test-secret');
+		const owner = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: {
+				sandbox: {
+					...api().deps.sandbox,
+					hostname: 'test.local',
+					persistWorkspace: 'source',
+					exposure,
+					appBaseUrl: 'https://hub.test',
+				},
+			},
+		});
+		const first = await expectOk<any>(
+			await owner.request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
+		);
+		const other = api('bob');
+		other.deps.sandbox = owner.deps.sandbox;
+		for (const headers of [new Headers(), new Headers({ Upgrade: 'websocket' })]) {
+			expect(
+				await authorizeProxyRequest(new Request(first.sandbox_url, { headers }), other.deps),
+			).toMatchObject({ kind: 'reject', status: 410 });
+			expect(
+				await authorizeProxyRequest(new Request(first.sandbox_url, { headers }), owner.deps),
+			).toMatchObject({ kind: 'forward' });
+		}
+	});
+
+	it('overlays the committed local source instead of serving uncommitted edits', async () => {
+		await bucket.put(paths.project(pid).notebook(nid).code, 'uncommitted');
+		const fake = makeFakeSandbox();
+		const owner = createTestApi({ bucket, userId: ACTOR, compute: fakeComputeFrom(fake.instance) });
+		await expectOk(await owner.request('POST', path(), { mode: 'app' }));
+		const writes = fake.calls.writeFile.filter((file) => file.path.endsWith('/notebook.py'));
+		expect(new TextDecoder().decode(writes.at(-1)!.content as Uint8Array)).toBe('original');
+	});
+
+	it('missing immutable source fails startup and compensates the sandbox', async () => {
+		const notebook = await createServices(bucket).notebooks.getNotebook(pid, nid);
+		await bucket.delete(
+			paths.project(pid).notebook(nid).version(notebook.source.current_version_id!).code,
+		);
+		const fake = makeFakeSandbox();
+		const owner = createTestApi({ bucket, userId: ACTOR, compute: fakeComputeFrom(fake.instance) });
+		expect((await owner.request('POST', path(), { mode: 'app' })).status).toBeGreaterThanOrEqual(
+			400,
+		);
+		expect(fake.calls.destroy).toBeGreaterThan(0);
+		expect(await createServices(bucket).sessions.countActiveAppsForProject(pid)).toBe(0);
+	});
+
+	it('maintenance reclaims an interrupted reservation with no session record', async () => {
+		const owner = api();
+		const sessions = createServices(bucket).sessions;
+		let now = Date.now();
+		const pool = new AppPoolService(bucket, sessions, policy, undefined, () => now);
+		const notebook = await createServices(bucket).notebooks.getNotebook(pid, nid);
+		await pool.admit({
+			projectId: pid,
+			notebookId: nid,
+			userId: ACTOR,
+			versionId: notebook.source.current_version_id!,
+			startupMs: 1,
+		});
+		now += 2;
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+		try {
+			await sweepAppPools(owner.deps);
+			expect(await pool.inspect(pid, nid)).toEqual([]);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+});

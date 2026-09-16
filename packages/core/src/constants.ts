@@ -141,3 +141,8 @@ export const BUCKET_SCAN_CONCURRENCY = 16;
  * `compensableWrite`.
  */
 export const BUCKET_WRITE_CONCURRENCY = 16;
+
+export const APP_HEARTBEAT_INTERVAL_MS = 30_000;
+export const APP_USER_LEASE_MS = 120_000;
+export const APP_PRESENCE_PERSIST_INTERVAL_MS = 60_000;
+export const APP_RECONNECT_GRACE_MS = 15_000;

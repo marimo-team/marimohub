@@ -1358,8 +1358,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_MAX_APPS_PER_PROJECT',
 						name: 'Max apps per project',
 						description:
-							'Concurrent app (`mode: app`) sessions per project (`0` = unlimited). Apps are shared per-notebook singletons, so this caps how many notebooks in a project can be served as apps at once.',
+							'Concurrent app (`mode: app`) sessions per project (`0` = unlimited). Counts physical sandboxes, including replicas and draining versions.',
 						default: '5',
+					},
+					{
+						id: 'MARIMOHUB_APP_MAX_USERS_PER_SESSION',
+						name: 'Max users per app session',
+						description:
+							'Distinct accounts per sandbox. Unset means unlimited users in one current-version sandbox.',
+					},
+					{
+						id: 'MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION',
+						name: 'Max app sessions per version',
+						description:
+							'Maximum current-version sandboxes per notebook. Draining versions do not count. Project and starter-user caps still apply.',
 					},
 					{
 						id: 'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
@@ -1379,7 +1391,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS',
 						name: 'App session idle timeout (seconds)',
 						description:
-							'Idle-timeout override for Run as app sessions. The general timeout applies when this value is unset. The session maximum lifetime can stop an app before its idle timeout.',
+							'Time an app sandbox remains empty after its last account assignment expires, including reconnect grace, subject to connection protection. Falls back to MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS (1800 seconds by default). Credential and provider lifetime limits still apply.',
 					},
 					{
 						id: 'MARIMOHUB_AUTOMATIC_THUMBNAILS',

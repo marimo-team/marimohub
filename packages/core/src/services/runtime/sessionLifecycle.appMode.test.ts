@@ -1,5 +1,6 @@
+import { AppPoolService } from './AppPoolService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -84,6 +85,74 @@ describe('SessionLifecycleService (app sessions)', () => {
 	}
 
 	const getStored = (s: Session) => sessions.getSession(s.project_id, s.session_id);
+
+	it('a fresh account lease protects an app from a shorter session idle timeout', async () => {
+		const template = makeSession();
+		const pool = new AppPoolService(bucket, sessions, undefined, undefined, () => now);
+		const versionId = createVersionId();
+		await bucket.put(
+			paths.project(projectId).notebook(notebookId).source,
+			JSON.stringify({
+				schema_version: 1,
+				type: 'local',
+				current_version_id: versionId,
+			}),
+		);
+		const admission = await pool.admit({
+			projectId,
+			notebookId,
+			userId: template.user_id,
+			versionId,
+			startupMs: 900_000,
+		});
+		const session = await putSession({
+			session_id: admission.member.session_id,
+			app_pool: true,
+			last_heartbeat: iso(-120_000),
+			expires_at: iso(-1),
+		});
+		await pool.complete(
+			projectId,
+			notebookId,
+			session.session_id,
+			admission.member.operation_token,
+		);
+		const result = await makeService({ idleTimeoutMsByMode: { edit: 1000, app: 1000 } }).sweep(now);
+		expect(result.reapedIdle).toBe(0);
+		expect(result.extended).toBe(1);
+		expect(sandboxCalls.destroy).toBe(0);
+		expect((await getStored(session)).status).toBe('running');
+	});
+
+	it('leaves empty pool members to admission-fenced pool retirement', async () => {
+		const session = await putSession({
+			last_heartbeat: iso(-CFG.idleTimeoutMsByMode.app - 1000),
+			expires_at: iso(-1),
+		});
+		const pool = new AppPoolService(bucket, sessions, undefined, undefined, () => now);
+		await pool.synchronize(projectId, notebookId);
+		const result = await makeService().sweep(now);
+		expect(result.reapedIdle).toBe(0);
+		expect(result.reapedExpired).toBe(0);
+		expect(sandboxCalls.destroy).toBe(0);
+		expect((await getStored(session)).status).toBe('running');
+	});
+
+	it('reads one pool snapshot per notebook during each generic maintenance pass', async () => {
+		const first = await putSession();
+		await putSession();
+		const pool = new AppPoolService(bucket, sessions, undefined, undefined, () => now);
+		await pool.synchronize(projectId, notebookId);
+		const get = vi.spyOn(bucket, 'get');
+		const poolReads = () =>
+			get.mock.calls.filter(([key]) => key === paths.appPool(projectId, notebookId));
+		await makeService().sweep(now);
+		expect(poolReads()).toHaveLength(1);
+		get.mockClear();
+		await sessions.expireStale();
+		expect(poolReads()).toHaveLength(1);
+		expect((await getStored(first)).status).toBe('running');
+	});
 
 	it('reaps an idle app with persistence skipped and releases the claim', async () => {
 		const s = await putSession({ last_heartbeat: iso(-CFG.idleTimeoutMsByMode.app - 1000) });

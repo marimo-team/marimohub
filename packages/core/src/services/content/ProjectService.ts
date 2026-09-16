@@ -860,6 +860,7 @@ export class ProjectService {
 
 		await this.deepLinks.releaseProject(id);
 		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));
+		await deleteByPrefix(this.bucket, paths.appPoolsForProject(id));
 		await deleteByPrefix(this.bucket, paths.editorClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.versionPruneCutoffsForProject(id));
 		await deleteByPrefix(this.bucket, paths.jobRunMarkersForProject(id));

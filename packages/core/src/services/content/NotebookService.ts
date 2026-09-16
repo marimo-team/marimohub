@@ -1020,6 +1020,7 @@ export class NotebookService {
 		// Cleanup of an orphaned pointer, not a claim write — the claim's write
 		// discipline (claimApp/releaseApp) still holds for live notebooks.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
+		await this.bucket.delete(paths.appPool(projectId, notebookId)).catch(() => {});
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
 		await this.deepLinks.releaseNotebook(projectId, notebookId).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseNotebook' }, error);
@@ -1300,6 +1301,7 @@ export class NotebookService {
 		const matchingMarkers = notebookMarkerKeys.filter((key): key is string => key !== null);
 		if (matchingMarkers.length > 0) await this.bucket.delete(matchingMarkers);
 		await this.bucket.delete(paths.appClaim(projectId, notebookId));
+		await this.bucket.delete(paths.appPool(projectId, notebookId));
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId));
 		await this.bucket.delete(paths.versionPruneCutoff(projectId, notebookId));
 		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForNotebook(projectId, notebookId));

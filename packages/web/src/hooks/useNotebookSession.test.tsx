@@ -51,6 +51,29 @@ describe('useNotebookSession', () => {
 		expect(init?.method).toBe('POST');
 	});
 
+	it('releases an admission that completes after the page unmounts', async () => {
+		let complete!: (response: Response) => void;
+		const pending = new Promise<Response>((resolve) => {
+			complete = resolve;
+		});
+		const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+			String(input).endsWith('/leave') ? jsonOk({}) : pending,
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		const { unmount } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		unmount();
+		await act(async () =>
+			complete(
+				jsonOk(makeSession({ app_assignment: { visit_id: 'tab', generation: 'generation' } })),
+			),
+		);
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		expect(String(fetchMock.mock.calls[1][0])).toContain('/sess-1/leave');
+	});
+
 	it('reaches running under StrictMode (mount effect fires twice)', async () => {
 		const fetchMock = vi.fn(async () => jsonOk(makeSession()));
 		vi.stubGlobal('fetch', fetchMock);
@@ -463,63 +486,89 @@ describe('useNotebookSession', () => {
 		expect(result.current.isRunning).toBe(true);
 	});
 
-	it('arms the startup clock for a starting app adopted as a replacement', async () => {
+	it('uses one heartbeat/status request per interval for running apps', async () => {
 		vi.useFakeTimers();
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				const path = String(url);
-				if (init?.method === 'POST') return jsonOk(makeSession());
-				// The watched app ends underneath the page…
-				if (path.endsWith('/sessions/sess-1')) {
-					return jsonOk(makeSession({ status: 'terminated', sandbox_url: undefined }));
-				}
-				// …and the replacement scan finds someone else's restart, still starting.
-				if (path.endsWith(`/projects/${PID}/sessions`)) {
-					return jsonOk({
-						items: [
-							makeSession({
-								session_id: 'sess-2',
-								status: 'starting',
-								sandbox_url: undefined,
-								mode: 'app',
-							}),
-						],
-					});
-				}
-				if (path.endsWith('/sessions/sess-2')) {
-					return jsonOk(
-						makeSession({ session_id: 'sess-2', status: 'starting', sandbox_url: undefined }),
-					);
-				}
-				throw new Error(`unexpected fetch: ${path}`);
-			}),
-		);
-
-		const { result } = renderHookWithClient(
-			() => useNotebookSession(PID, NID, { mode: 'app', startupTimeoutSeconds: 1 }),
-			{ toaster: false },
-		);
+		const fetchMock = vi.fn(async () => jsonOk(makeSession({ mode: 'app' })));
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
 		await settleHook();
-		expect(result.current.isRunning).toBe(true);
-
-		// Run-watch tick adopts the starting replacement.
+		fetchMock.mockClear();
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(30_000);
 		});
-		await settleHook();
-		expect(result.current.session?.session_id).toBe('sess-2');
-		expect(result.current.session?.status).toBe('starting');
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(30_000);
+		});
+		expect(result.current.isRunning).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		for (const [url, init] of vi.mocked(fetch).mock.calls) {
+			expect(String(url)).toContain('/heartbeat');
+			expect(init?.method).toBe('POST');
+		}
+	});
 
-		// The adopted watch gets its own full timeout window — then fails.
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(2_000);
+	it.each([403, 409])('ends an app on heartbeat rejection %s', async (status) => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL) =>
+				String(url).endsWith('/heartbeat')
+					? jsonError(status === 403 ? 'FORBIDDEN' : 'CONFLICT', 'assignment unavailable', status)
+					: jsonOk(makeSession({ mode: 'app' })),
+			),
+		);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
 		});
-		expect(result.current.error).toBeNull();
+		await settleHook();
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(31_000);
+			await vi.advanceTimersByTimeAsync(30_000);
 		});
-		expect(result.current.error?.code).toBe('STARTUP_TIMEOUT');
+		expect(result.current.session).toBeNull();
+		expect(result.current.ended).toBe(status === 403 ? 'access_lost' : 'expired');
+	});
+
+	it('sends fenced app presence during startup and releases the visit on departure', async () => {
+		vi.useFakeTimers();
+		let visitId = '';
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (String(url).endsWith('/sessions') && init?.method === 'POST') {
+				const body = JSON.parse(init.body as string) as { app_visit_id: string };
+				visitId = body.app_visit_id;
+				return jsonOk(
+					makeSession({
+						mode: 'app',
+						status: 'starting',
+						sandbox_url: undefined,
+						app_assignment: { visit_id: visitId, generation: 'generation-1' },
+					}),
+				);
+			}
+			return jsonOk(makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined }));
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const { unmount } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(30_000);
+		});
+		const heartbeat = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/heartbeat'));
+		expect(JSON.parse(heartbeat![1]!.body as string)).toEqual({
+			visit_id: visitId,
+			generation: 'generation-1',
+		});
+		unmount();
+		await settleHook();
+		const leave = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/leave'));
+		expect(JSON.parse(leave![1]!.body as string)).toEqual({
+			visit_id: visitId,
+			generation: 'generation-1',
+		});
+		expect(leave![1]!.keepalive).toBe(true);
 	});
 
 	it('a late poll response cannot resurrect a session after the startup timeout', async () => {
@@ -646,11 +695,11 @@ describe('useNotebookSession (app mode)', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions'))
+					return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
 					return jsonOk(makeSession({ mode: 'app', status: stopped ? 'terminated' : 'running' }));
 				}
-				// The replacement check: no other app is running.
 				if (String(url).endsWith(`/projects/${PID}/sessions`)) return jsonOk({ items: [] });
 				throw new Error(`unexpected fetch: ${String(url)}`);
 			}),
@@ -678,8 +727,9 @@ describe('useNotebookSession (app mode)', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions'))
+					return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
 					if (reaped) return jsonError('NOT_FOUND', 'gone', 404);
 					return jsonOk(makeSession({ mode: 'app' }));
 				}
@@ -704,14 +754,15 @@ describe('useNotebookSession (app mode)', () => {
 	});
 
 	// Left unhandled this state renders nothing: not running, not provisioning.
-	it('flips to access_lost when a poll withholds sandbox_url on a running app', async () => {
+	it('flips to access_lost when a heartbeat withholds sandbox_url on a running app', async () => {
 		vi.useFakeTimers();
 		let revoked = false;
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions'))
+					return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
 					return jsonOk(
 						makeSession({ mode: 'app', ...(revoked ? { sandbox_url: undefined } : {}) }),
 					);
@@ -745,8 +796,9 @@ describe('useNotebookSession (app mode)', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions'))
+					return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
 					return swapped
 						? jsonError('NOT_FOUND', 'gone', 404)
 						: jsonOk(makeSession({ mode: 'app' }));
@@ -809,14 +861,15 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.isProvisioning).toBe(false);
 	});
 
-	it("adopts the replacement app when another user's restart swapped the session", async () => {
+	it("requires readmission when another user's restart ends the assigned session", async () => {
 		vi.useFakeTimers();
 		let swapped = false;
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions'))
+					return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
 					return swapped
 						? jsonError('NOT_FOUND', 'gone', 404)
 						: jsonOk(makeSession({ mode: 'app' }));
@@ -842,9 +895,13 @@ describe('useNotebookSession (app mode)', () => {
 		});
 		await settleHook();
 
-		// Anyone else's restart must not strand this page on "App stopped".
-		expect(result.current.session?.session_id).toBe('sess-9');
-		expect(result.current.ended).toBeNull();
+		expect(result.current.session).toBeNull();
+		expect(result.current.ended).toBe('gone');
+		expect(
+			vi
+				.mocked(fetch)
+				.mock.calls.some(([url]) => String(url).endsWith(`/projects/${PID}/sessions`)),
+		).toBe(false);
 	});
 
 	it('a session that vanishes mid-start surfaces an error, not an endless spinner', async () => {
@@ -970,7 +1027,50 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.isProvisioning).toBe(false);
 	});
 
-	it('a watch poll that lands after a restart does not resurrect the old session', async () => {
+	it.each(['app', 'edit'] as const)(
+		'ignores a late running response after a %s session ends',
+		async (mode) => {
+			vi.useFakeTimers();
+			let release!: (response: Response) => void;
+			const pending = new Promise<Response>((resolve) => {
+				release = resolve;
+			});
+			let watches = 0;
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (url: RequestInfo | URL) => {
+					if (String(url).endsWith('/sessions')) return jsonOk(makeSession({ mode }));
+					watches++;
+					if (watches === 1) return pending;
+					return jsonOk(
+						makeSession({
+							mode,
+							status: 'terminated',
+							...(mode === 'edit'
+								? { ended_reason: 'takeover', ended_by_user_id: 'new-owner' }
+								: {}),
+						}),
+					);
+				}),
+			);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode }), {
+				toaster: false,
+			});
+			await settleHook();
+			await act(async () => vi.advanceTimersByTimeAsync(60_000));
+			await settleHook();
+			expect(watches).toBe(2);
+			expect(result.current.ended).toBe(mode === 'edit' ? 'takeover' : 'terminated');
+			expect(result.current.endedByUserId).toBe(mode === 'edit' ? 'new-owner' : null);
+			expect(result.current.session).toBeNull();
+			await act(async () => release(jsonOk(makeSession({ mode }))));
+			await settleHook();
+			expect(result.current.session).toBeNull();
+			expect(result.current.isRunning).toBe(false);
+		},
+	);
+
+	it('a heartbeat that lands after a restart does not resurrect the old session', async () => {
 		vi.useFakeTimers();
 		let releaseWatch!: () => void;
 		const watchGate = new Promise<void>((resolve) => {
@@ -981,18 +1081,15 @@ describe('useNotebookSession (app mode)', () => {
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
 				const method = init?.method ?? 'GET';
-				if (String(url).endsWith('/heartbeat')) return jsonOk(undefined);
+				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
+					await watchGate;
+					return jsonOk(makeSession({ session_id: 'sess-1', mode: 'app' }));
+				}
 				if (method === 'POST') {
 					creates += 1;
 					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'app' }));
 				}
 				if (method === 'DELETE') return jsonOk(undefined);
-				if (String(url).endsWith('/sessions/sess-1')) {
-					// Held open across the restart below, then answered with the stale
-					// (still `running`) view of the session the restart replaced.
-					await watchGate;
-					return jsonOk(makeSession({ session_id: 'sess-1', mode: 'app' }));
-				}
 				return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
 			}),
 		);

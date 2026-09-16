@@ -91,6 +91,7 @@ function StakeholderApp({
 		enabled: canRun,
 		mode: 'app',
 		startupTimeoutSeconds: capabilities?.sandbox_startup_timeout_seconds,
+		appHeartbeatIntervalSeconds: capabilities?.app_pool?.heartbeat_interval_seconds,
 	});
 	const { theme } = useTheme();
 	const location = useLocation();
@@ -123,9 +124,15 @@ function StakeholderApp({
 			) : error || ended ? (
 				<div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
 					<p>
-						{error ? 'The app could not start. Contact its owner.' : 'This app session has ended.'}
+						{error?.code === 'RESOURCE_EXHAUSTED'
+							? 'App is busy. Try again shortly.'
+							: error
+								? 'The app could not start. Contact its owner.'
+								: 'This app session has ended.'}
 					</p>
-					{ended !== 'access_lost' ? <Button onPress={start}>Open app</Button> : null}
+					{ended !== 'access_lost' ? (
+						<Button onPress={start}>{error ? 'Retry' : 'Open app'}</Button>
+					) : null}
 				</div>
 			) : isProvisioning || !src ? (
 				<output className="p-6">Starting app…</output>

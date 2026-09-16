@@ -1,3 +1,4 @@
+import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import { useStartSession, useStartSessionWithDefault, useStopSession } from '@/api/hooks';
@@ -8,6 +9,7 @@ import type { Session } from '@/types';
 
 /** How often a running notebook pings the heartbeat endpoint, in ms. */
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+const DEFAULT_APP_HEARTBEAT_INTERVAL_SECONDS = APP_HEARTBEAT_INTERVAL_MS / 1000;
 
 /** How often to poll a still-`starting` session until it is running, in ms. */
 const START_POLL_INTERVAL_MS = 2_000;
@@ -23,10 +25,7 @@ const DEFAULT_STARTUP_TIMEOUT_S = 120;
  */
 const STARTUP_TIMEOUT_GRACE_MS = 30_000;
 
-/**
- * How often a running page re-checks its session. This surfaces app stops and
- * exclusive-editor takeovers as terminal UI instead of leaving a dead iframe.
- */
+/** Editor takeovers need status checks more often than editor heartbeats. */
 const RUN_WATCH_INTERVAL_MS = 30_000;
 
 export interface SessionError {
@@ -43,6 +42,17 @@ function toSessionError(err: Error): SessionError {
 		code: err instanceof ApiRequestError ? err.code : undefined,
 		kind: 'request',
 	};
+}
+
+function leaveAppVisit(projectId: string, notebookId: string, session: Session | null) {
+	if (!session?.app_assignment) return;
+	void apiClient
+		.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/leave', {
+			params: { path: { pid: projectId, nid: notebookId, sid: session.session_id } },
+			body: session.app_assignment,
+			keepalive: true,
+		})
+		.catch(() => {});
 }
 
 /** Why a watched session stopped being renderable — see `ended` below. */
@@ -73,27 +83,11 @@ export interface NotebookSession {
 	defaultRetryAttempted: boolean;
 	/** Stop the current session (saves files, tears down the sandbox). */
 	stop: () => void;
-	/** Stop (if live) then start fresh — the staleness banner's "Restart app". */
+	/** Stop the selected session, then re-enter through admission. */
 	restart: () => void;
 }
 
-/**
- * Own the full runtime lifecycle of a single notebook page: start-on-mount
- * (guarded against React strict-mode double-fire), a heartbeat while running,
- * explicit stop, and retry-after-error. Leaving the page deliberately does NOT
- * stop the session — heartbeats simply cease and the server reaps it on TTL — so
- * re-opening the notebook resumes the live kernel. Extracted from NotebookPage so
- * the component stays presentational and the lifecycle is reusable/inspectable.
- *
- * `enabled: false` holds the auto-start (and everything downstream) — the
- * viewer-mode branch: a viewer must not fire a doomed (static mode) or
- * premature (capabilities still loading) session request. The start fires once,
- * on the first render where `enabled` is true.
- *
- * `mode: 'app'` drives the app page: the create request starts (or attaches to)
- * the notebook's shared app singleton, and a watch poll surfaces the session
- * ending underneath the page (see `ended`).
- */
+/** Synchronize a notebook page with session startup, presence, and termination. */
 export function useNotebookSession(
 	projectId: string,
 	notebookId: string,
@@ -102,6 +96,7 @@ export function useNotebookSession(
 		mode = 'edit',
 		editIntent,
 		startupTimeoutSeconds,
+		appHeartbeatIntervalSeconds = DEFAULT_APP_HEARTBEAT_INTERVAL_SECONDS,
 	}: {
 		enabled?: boolean;
 		mode?: 'edit' | 'app';
@@ -112,11 +107,25 @@ export function useNotebookSession(
 		 * session older than this (plus grace) is failed instead of polled forever.
 		 */
 		startupTimeoutSeconds?: number;
+		appHeartbeatIntervalSeconds?: number;
 	} = {},
 ): NotebookSession {
-	const startSession = useStartSession(projectId, notebookId, mode, editIntent);
-	const startPersistentSession = useStartSession(projectId, notebookId, mode);
-	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode, editIntent);
+	const [appVisitId] = useState(() => crypto.randomUUID());
+	const startSession = useStartSession(projectId, notebookId, mode, editIntent, appVisitId);
+	const startPersistentSession = useStartSession(
+		projectId,
+		notebookId,
+		mode,
+		undefined,
+		appVisitId,
+	);
+	const startDefaultSession = useStartSessionWithDefault(
+		projectId,
+		notebookId,
+		mode,
+		editIntent,
+		appVisitId,
+	);
 	// Stop/restart failures render inline (session panel), never as a toast.
 	const stopSession = useStopSession(projectId, notebookId, { suppressErrorToast: true });
 
@@ -133,6 +142,7 @@ export function useNotebookSession(
 	// session, no error, and neither mutation pending yet.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
+	const mountedRef = useRef(true);
 	const startedRef = useRef(false);
 	// Bumped by every start/stop/restart: a poll issued before one still lands
 	// afterwards, re-arming the dying session or failing the fresh one.
@@ -145,10 +155,7 @@ export function useNotebookSession(
 	// under an older render read, so a `setSession` without it re-arms a session
 	// the user has already left behind.
 	const commitSession = useCallback((next: Session | null) => {
-		// The startup clock follows whichever `starting` session is committed —
-		// this is the only commit point, so a start AND an adopted replacement app
-		// both arm it. Kept across re-commits of the same session, cleared
-		// otherwise so a stale timestamp can't instantly fail the next watch.
+		// Polls for the same startup must not reset its timeout.
 		if (next?.status !== 'starting') {
 			startingSinceRef.current = null;
 		} else if (
@@ -157,24 +164,29 @@ export function useNotebookSession(
 		) {
 			startingSinceRef.current = Date.now();
 		}
-		sessionRef.current = next;
-		setSession(next);
+		const committed =
+			next && next.session_id === sessionRef.current?.session_id && !next.app_assignment
+				? { ...next, app_assignment: sessionRef.current.app_assignment }
+				: next;
+		sessionRef.current = committed;
+		setSession(committed);
 	}, []);
 
-	// The server withholds `sandbox_url` from a caller who may no longer reach the
-	// kernel, so a `running` session without one means access was revoked. That
-	// shape satisfies neither `isRunning` nor `isProvisioning` — keeping it would
-	// leave the page rendering nothing at all.
-	const concludeAccessLost = useCallback(() => {
-		commitSession(null);
-		if (mode === 'app') setEnded('access_lost');
-		else
-			setError({
-				message: 'You no longer have access to this session.',
-				code: 'FORBIDDEN',
-				kind: 'access',
-			});
-	}, [mode, commitSession]);
+	// A missing URL can mean revoked access or an expired pool assignment.
+	const concludeAccessLost = useCallback(
+		(admitted = false) => {
+			generation.bump();
+			commitSession(null);
+			if (mode === 'app') setEnded(admitted ? 'expired' : 'access_lost');
+			else
+				setError({
+					message: 'You no longer have access to this session.',
+					code: 'FORBIDDEN',
+					kind: 'access',
+				});
+		},
+		[mode, commitSession, generation],
+	);
 
 	const startWithMutation = useCallback(
 		(mutation: typeof startSession) => {
@@ -185,10 +197,14 @@ export function useNotebookSession(
 			setStarting(true);
 			void mutation.mutateAsync().then(
 				(data) => {
+					if (!mountedRef.current) {
+						leaveAppVisit(projectId, notebookId, data);
+						return;
+					}
 					if (!generation.isCurrent(gen)) return;
 					setStarting(false);
 					if (data.status === 'running' && !data.sandbox_url) {
-						concludeAccessLost();
+						concludeAccessLost(data.can?.attach ?? false);
 						return;
 					}
 					commitSession(data);
@@ -200,7 +216,7 @@ export function useNotebookSession(
 				},
 			);
 		},
-		[concludeAccessLost, commitSession, generation],
+		[concludeAccessLost, commitSession, generation, projectId, notebookId],
 	);
 	const start = useCallback(() => {
 		startWithMutation(startSession);
@@ -351,7 +367,7 @@ export function useNotebookSession(
 				session.session_id,
 				(next) => {
 					if (next.status === 'running' && !next.sandbox_url) {
-						concludeAccessLost();
+						concludeAccessLost(next.can?.attach ?? false);
 					} else if (next.status === 'running') {
 						commitSession(next);
 					} else if (next.status !== 'starting' && next.status !== 'terminating') {
@@ -365,87 +381,52 @@ export function useNotebookSession(
 		session?.status === 'starting' ? START_POLL_INTERVAL_MS : null,
 	);
 
-	// The watched session ended — but someone else's restart terminates THIS
-	// session id while a fresh app is already serving. Adopt the replacement
-	// instead of asserting "App stopped" under a running app. Read-only on
-	// purpose: a create here would auto-start a stopped app.
-	const adoptReplacementOr = useCallback(
-		(fallback: Session['status'] | 'gone') => {
-			// Re-taken here: this runs a second async hop, and the caller's guard
-			// says nothing about a start/stop/restart landing during THIS request.
-			const gen = generation.current();
-			const conclude = (next: Session | undefined) => {
-				if (!generation.isCurrent(gen)) return;
-				commitSession(next ?? null);
-				if (!next) setEnded(fallback);
-			};
-			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/sessions', {
-					params: { path: { pid: projectId } },
-				}),
-			)
-				.then((page) =>
-					conclude(
-						page.items.find(
-							(s) =>
-								s.notebook_id === notebookId &&
-								s.mode === 'app' &&
-								// A running app this caller cannot reach (no `sandbox_url`) is
-								// no more adoptable than a stopped one.
-								(s.status === 'starting' || (s.status === 'running' && !!s.sandbox_url)),
-						),
-					),
-				)
-				.catch(() => conclude(undefined));
+	const concludeSession = useCallback(
+		(status: SessionEnded, endedBy: string | null = null) => {
+			generation.bump();
+			commitSession(null);
+			setEnded(status);
+			setEndedByUserId(endedBy);
 		},
-		[projectId, notebookId, commitSession, generation],
+		[commitSession, generation],
 	);
 
-	// Watch the running session so a stop or takeover underneath an open page
-	// lifetime expiry, or a kernel failure lands on the terminal panel (via the
-	// replacement check above). A 404 (record already reaped, or the notebook
-	// deleted) is `gone`, not an error.
+	const updateRunningSession = useCallback(
+		(next: Session) => {
+			if (next.status === 'running') {
+				if (next.sandbox_url) commitSession(next);
+				else concludeAccessLost(next.can?.attach ?? false);
+			} else if (next.status !== 'starting') {
+				concludeSession(
+					next.ended_reason === 'takeover' ? 'takeover' : next.status,
+					next.ended_by_user_id ?? null,
+				);
+			}
+		},
+		[commitSession, concludeAccessLost, concludeSession],
+	);
+
 	useInterval(
 		() => {
 			const sid = session?.session_id;
 			if (!sid) return;
-			pollSession(
-				sid,
-				(next) => {
-					if (next.status === 'running' && !next.sandbox_url) {
-						// The app runs on — this caller just lost their seat, so adopting a
-						// "replacement" would only find the same unreachable session.
-						concludeAccessLost();
-					} else if (next.status === 'running') {
-						// Keep connection-count/staleness fields fresh for the banner.
-						commitSession(next);
-					} else if (next.status !== 'starting') {
-						if (mode === 'app') adoptReplacementOr(next.status);
-						else {
-							commitSession(null);
-							setEndedByUserId(next.ended_by_user_id ?? null);
-							setEnded(next.ended_reason === 'takeover' ? 'takeover' : next.status);
-						}
-					}
-				},
-				() => {
-					if (mode === 'app') adoptReplacementOr('gone');
-					else {
-						commitSession(null);
-						setEnded('gone');
-					}
-				},
-			);
+			pollSession(sid, updateRunningSession, () => concludeSession('gone'));
 		},
-		session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
+		mode !== 'app' && session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
 	);
 
-	// Heartbeats are best-effort; the server's TTL handles missed requests.
+	// App heartbeats also return status, avoiding a separate running-session poll.
 	useInterval(
 		() => {
-			if (session?.status !== 'running') return;
+			if (
+				!session ||
+				(session.status !== 'running' && !(mode === 'app' && session.status === 'starting'))
+			)
+				return;
+			const gen = generation.current();
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat', {
+					...(mode === 'app' && session.app_assignment ? { body: session.app_assignment } : {}),
 					params: {
 						path: {
 							pid: projectId,
@@ -454,10 +435,39 @@ export function useNotebookSession(
 						},
 					},
 				}),
-			).catch(() => {});
+			)
+				.then((next) => {
+					if (mode !== 'app' || !generation.isCurrent(gen) || session.status !== 'running') return;
+					updateRunningSession(next);
+				})
+				.catch((error: unknown) => {
+					if (mode !== 'app' || !generation.isCurrent(gen)) return;
+					if (isNotFoundError(error)) concludeSession('gone');
+					else if (error instanceof ApiRequestError) {
+						if (error.status === 409) concludeSession('expired');
+						else if (error.status === 403) concludeAccessLost();
+					}
+				});
 		},
-		session?.status === 'running' ? HEARTBEAT_INTERVAL_MS : null,
+		session && (session.status === 'running' || (mode === 'app' && session.status === 'starting'))
+			? mode === 'app'
+				? appHeartbeatIntervalSeconds * 1000
+				: HEARTBEAT_INTERVAL_MS
+			: null,
 	);
+
+	useEffect(() => {
+		mountedRef.current = true;
+		const leave = () => {
+			if (mode === 'app') leaveAppVisit(projectId, notebookId, sessionRef.current);
+		};
+		window.addEventListener('pagehide', leave);
+		return () => {
+			mountedRef.current = false;
+			window.removeEventListener('pagehide', leave);
+			leave();
+		};
+	}, [mode, projectId, notebookId]);
 
 	const isProvisioning = restarting || starting || session?.status === 'starting';
 	const isRunning = session?.status === 'running' && !!session.sandbox_url;

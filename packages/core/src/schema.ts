@@ -835,6 +835,7 @@ export const SessionSchema = z.looseObject({
 	 * it with the current head for staleness; edit sessions use it as save provenance.
 	 */
 	source_version_id: VersionIdSchema.optional(),
+	app_pool: z.literal(true).optional(),
 	/**
 	 * Connection count for shared app/editor sessions from the lifecycle sweep's
 	 * last kernel probe — approximate by design.
@@ -893,16 +894,9 @@ export type VersionPruneCutoff = z.infer<typeof VersionPruneCutoffSchema>;
 
 // --- App claim ---
 //
-// Per-notebook pointer anchoring the "one app sandbox per notebook" singleton:
-// `_system/apps/{pid}/{nid}.json` names the `run` session that owns the app.
-// Written create-if-absent by the create saga's `app_claim` step (exactly one
-// concurrent "Run as app" wins; losers attach to the winner via reuse) and
-// replaced via ETag CAS when it points at a dead session. Beside the catalog
-// pointer, this is the second CAS-managed mutable object in the store — all
-// writes go through `SessionService.claimApp`/`releaseApp`.
-//
-// `session_id: null` is the free marker a release CAS-writes in place of a
-// delete, so a release racing a re-acquire cannot drop the new holder's claim.
+// Legacy singleton claim, retained during pool migration. Release through
+// SessionService; a CAS-written null holder prevents racing cleanup from
+// deleting another holder's claim.
 export const AppClaimSchema = z.object({
 	session_id: SessionIdSchema.nullable(),
 	claimed_at: z.iso.datetime(),

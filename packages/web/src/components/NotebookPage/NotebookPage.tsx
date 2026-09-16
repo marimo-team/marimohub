@@ -202,6 +202,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		mode: isApp ? 'app' : 'edit',
 		editIntent,
 		startupTimeoutSeconds: capabilities?.sandbox_startup_timeout_seconds,
+		appHeartbeatIntervalSeconds: capabilities?.app_pool?.heartbeat_interval_seconds,
 	});
 
 	// Freeze the theme when the URL is first established, not on every toggle:
@@ -862,18 +863,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						>
 							<AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
 							<span>
-								The notebook has changed since this app started — it's serving an older version.
+								This sandbox serves an older version. New users receive the latest version.
 							</span>
-							{/* Whoever may stop the app may restart it; others get only the hint. */}
-							{session?.can?.stop && (
-								<Button
-									variant="unstyled"
-									className="ml-1 shrink-0 rounded text-xs font-medium text-primary underline-offset-2 hover:underline"
-									onPress={() => confirmAppAction.open('restart')}
-								>
-									Restart to update
-								</Button>
-							)}
 						</div>
 					)}
 					{editStale && (
@@ -950,7 +941,11 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 
 			{error && !ended && (
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-					<p className="max-w-md text-sm text-destructive">{error.message}</p>
+					<p className="max-w-md text-sm text-destructive">
+						{isApp && error.code === 'RESOURCE_EXHAUSTED'
+							? `App is busy. ${error.message}`
+							: error.message}
+					</p>
 					{showProfileSizeHint && (
 						<p className="max-w-md text-xs text-muted-foreground">
 							This notebook uses profile {selectedComputeProfile?.name} — a larger profile may be
@@ -1036,8 +1031,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					title={confirmAppAction.target === 'restart' ? 'Restart App' : 'Stop App'}
 					description={
 						confirmAppAction.target === 'restart'
-							? `Restart the app for "${title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(session ?? undefined)}`
-							: `Stop the app for "${title}"? Anyone using it will be disconnected.${sessionConnectionHint(session ?? undefined)}`
+							? `Restart this app sandbox for "${title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(session ?? undefined)}`
+							: `Stop this app sandbox for "${title}"? Anyone using it will be disconnected.${sessionConnectionHint(session ?? undefined)}`
 					}
 					confirmLabel={confirmAppAction.target === 'restart' ? 'Restart' : 'Stop App'}
 					onConfirm={() => {
