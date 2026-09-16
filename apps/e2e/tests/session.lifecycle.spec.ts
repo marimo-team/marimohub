@@ -86,6 +86,81 @@ test.describe('session lifecycle', () => {
 		await expectNoProjectSessions(page, projectId);
 	});
 
+	for (const mode of ['edit', 'app']) {
+		test(`mirrors Python query changes in the Hub ${mode} URL without reloading`, async ({
+			page,
+		}) => {
+			await createAndOpenProject(page, uniqueName('bridge'));
+			const projectId = projectIdFromUrl(page.url())!;
+			const response = await page.request.post(`/api/v1/projects/${projectId}/notebooks`, {
+				data: {
+					title: 'URL bridge',
+					description: '',
+					code: `import marimo
+app = marimo.App()
+@app.cell
+def _():
+    import marimo as mo
+    return (mo,)
+@app.cell
+def _(mo):
+    params = mo.query_params()
+    return (params,)
+@app.cell
+def _(mo, params):
+    button = mo.ui.button(label="Update Hub URL", on_click=lambda _: params.set("id", "456"))
+    button
+    return (button,)
+if __name__ == "__main__":
+    app.run()
+`,
+				},
+			});
+			expect(response.ok()).toBe(true);
+			const { data } = (await response.json()) as { data: { id: string } };
+			const config = await page.request.put(
+				`/api/v1/projects/${projectId}/notebooks/${data.id}/workspace/files?path=.marimo.toml&create=true`,
+				{
+					headers: { 'Content-Type': 'application/octet-stream' },
+					data: '[runtime]\nauto_instantiate = true\n',
+				},
+			);
+			expect(config.ok()).toBe(true);
+			const path = `/projects/${projectId}/notebooks/${data.id}${mode === 'app' ? '/app' : ''}`;
+			await page.goto(`${path}?id=123#anchor`);
+			const iframe = page.locator('iframe');
+			await expect(iframe).toBeVisible({ timeout: 120_000 });
+			const src = await iframe.getAttribute('src');
+			const frame = page.frameLocator('iframe');
+			const runtimeConfig = JSON.parse(
+				(await frame.locator('marimo-user-config').getAttribute('data-config')) ?? '{}',
+			) as { runtime?: { auto_instantiate?: boolean } };
+			expect(runtimeConfig.runtime?.auto_instantiate).toBe(true);
+			const button = frame.getByRole('button', { name: 'Update Hub URL', exact: true });
+			await expect(button).toBeVisible({ timeout: 120_000 });
+			const mountedFrame = await iframe.elementHandle();
+			const runtimeFrame = await mountedFrame!.contentFrame();
+			let navigationRequests = 0;
+			page.on('request', (request) => {
+				if (request.isNavigationRequest() && request.frame() === runtimeFrame) navigationRequests++;
+			});
+			const loads = await iframe.evaluateHandle((element) => {
+				const activity = { count: 0 };
+				element.addEventListener('load', () => activity.count++);
+				return activity;
+			});
+			await button.click();
+			await expect(page).toHaveURL(new RegExp(`${path}\\?id=456#anchor$`));
+			await expect(iframe).toHaveAttribute('src', src!);
+			await expect(button).toBeVisible();
+			expect(navigationRequests).toBe(0);
+			expect(await loads.evaluate((activity) => activity.count)).toBe(0);
+			expect(await iframe.evaluate((element, original) => element === original, mountedFrame)).toBe(
+				true,
+			);
+		});
+	}
+
 	test('starts a session, sends a heartbeat, and stops the kernel', async ({ page }) => {
 		const project = uniqueName('proj');
 		const notebook = uniqueName('nb');

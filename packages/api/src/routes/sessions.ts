@@ -1617,6 +1617,8 @@ export async function startNotebookSession(input: {
 								bucketHandle,
 								workdir: sandbox.workdir,
 								assetUrl: sandbox.assetUrl,
+								notebookBridge: sandbox.notebookBridge,
+								bridgeParentOrigin: new URL(appBaseUrl).origin,
 								startupTimeoutMs: sandbox.startupTimeoutMs,
 								baseUrl,
 								kernelAuthToken,

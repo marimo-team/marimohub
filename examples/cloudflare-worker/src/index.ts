@@ -33,6 +33,7 @@ import {
 } from '@marimo-hub/config/compute-profiles';
 import { R2BucketAdapter } from '@marimo-hub/storage-r2';
 import { parseSandboxAuth } from '@marimo-hub/config/sandbox-auth';
+import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 
 // Re-export the Sandbox Durable Object so wrangler can discover it, and
 // ContainerProxy so the sandbox can mount R2 by binding name without credentials.
@@ -40,6 +41,7 @@ export { Sandbox, ContainerProxy };
 
 // Worker R2 binding (wrangler.jsonc `r2_buckets`) the sandbox mounts credential-less.
 const R2_BINDING = 'NOTEBOOKS_BUCKET';
+const notebookBridge = notebookBridgeRuntime();
 let warnedAboutComputeProfiles = false;
 
 /**
@@ -191,6 +193,7 @@ export function buildDeps(
 			hostname: sandboxHostname ?? '',
 			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			workdir: env.SANDBOX_WORKDIR || '/workspace',
+			notebookBridge,
 			computeProfiles: [],
 			computeProfileOverride: 'none',
 			automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false',

@@ -51,7 +51,7 @@ import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
-import { notebookFrameUrl } from '@/lib/notebookUrls';
+import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
 import { canManageProject } from '@/lib/roles';
 import { SurfaceMenu } from './SurfaceMenu';
 import type { SecondarySurfaceFrame } from './SurfaceMenu';
@@ -204,15 +204,12 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		startupTimeoutSeconds: capabilities?.sandbox_startup_timeout_seconds,
 	});
 
-	// Freeze the theme when the URL is first established, not on every toggle:
-	// marimo reads `?theme=` only on load, so re-deriving it live would reload
-	// (and reset) the running app. Restart mints a fresh URL and re-reads it.
 	const { theme } = useTheme();
-	const [iframeLocation, setIframeLocation] = useState(() => ({ sandboxUrl, theme }));
-	if (iframeLocation.sandboxUrl !== sandboxUrl) setIframeLocation({ sandboxUrl, theme });
-	const iframeSrc = iframeLocation.sandboxUrl
-		? notebookFrameUrl(iframeLocation.sandboxUrl, location.search, iframeLocation.theme, isApp)
-		: undefined;
+	const { iframeSrc, frameKey, latestSrc, onQuery } = useNotebookFrameLocation(
+		sandboxUrl,
+		theme,
+		isApp,
+	);
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
@@ -311,8 +308,17 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 				id: 'notebook',
 				label: 'Notebook',
 				icon: <FileCode2 />,
-				panel: <NotebookFrame src={iframeSrc} title={title} />,
-				...(iframeSrc ? { browserUrl: iframeSrc } : {}),
+				panel: (
+					<NotebookFrame
+						key={frameKey}
+						src={iframeSrc}
+						retrySrc={latestSrc}
+						sandboxUrl={sandboxUrl}
+						onQuery={onQuery}
+						title={title}
+					/>
+				),
+				...(latestSrc ? { browserUrl: latestSrc } : {}),
 			},
 			...activeSecondaryFrames.map((frame) => {
 				const SurfaceIcon = SURFACE_TAB_ICONS[frame.surfaceId];
@@ -339,7 +345,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 				};
 			}),
 		],
-		[activeSecondaryFrames, iframeSrc, title],
+		[activeSecondaryFrames, iframeSrc, frameKey, latestSrc, sandboxUrl, onQuery, title],
 	);
 
 	const backToProject = () => {
@@ -461,6 +467,10 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		handleStop,
 		holderName,
 		iframeSrc,
+		frameKey,
+		latestSrc,
+		sandboxUrl,
+		onQuery,
 		isApp,
 		isProvisioning,
 		isRunning,
@@ -503,6 +513,13 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 }
 
 export function NotebookPage(props: NotebookPageProps) {
+	const params = useParams();
+	const pid = props.target?.projectId ?? params.pid;
+	const nid = props.target?.notebookId ?? params.nid;
+	return <NotebookPageContent key={`${pid}/${nid}/${props.variant ?? 'edit'}`} {...props} />;
+}
+
+function NotebookPageContent(props: NotebookPageProps) {
 	return renderNotebookPage(useNotebookPageModel(props));
 }
 
@@ -534,6 +551,10 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		handleStop,
 		holderName,
 		iframeSrc,
+		frameKey,
+		latestSrc,
+		sandboxUrl,
+		onQuery,
 		isApp,
 		isProvisioning,
 		isRunning,
@@ -902,7 +923,14 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						aria-hidden={takeover.isPending || undefined}
 					>
 						{isApp ? (
-							<NotebookFrame src={iframeSrc} title={title} />
+							<NotebookFrame
+								key={frameKey}
+								src={iframeSrc}
+								retrySrc={latestSrc}
+								sandboxUrl={sandboxUrl}
+								onQuery={onQuery}
+								title={title}
+							/>
 						) : (
 							<ApplicationTabs
 								ariaLabel="Notebook applications"

@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
@@ -9,7 +8,8 @@ import { Button } from '@/components/ui';
 import { useTheme } from '@/context/ThemeContext';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
-import { notebookFrameUrl, notebookQueryParams } from '@/lib/notebookUrls';
+import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
+import { notebookQueryParams } from '@/lib/notebookUrls';
 import { withBasePath } from '@/lib/basePath';
 import { AppAccessError } from './AppsPage';
 
@@ -95,11 +95,12 @@ function StakeholderApp({
 	const { theme } = useTheme();
 	const location = useLocation();
 	const { copy } = useCopyToClipboard();
-	const [frame, setFrame] = useState({ sandboxUrl, theme });
-	if (frame.sandboxUrl !== sandboxUrl) setFrame({ sandboxUrl, theme });
-	const src = frame.sandboxUrl
-		? notebookFrameUrl(frame.sandboxUrl, location.search, frame.theme, true)
-		: undefined;
+	const {
+		iframeSrc: src,
+		frameKey,
+		latestSrc,
+		onQuery,
+	} = useNotebookFrameLocation(sandboxUrl, theme, true);
 	return (
 		<div className="flex h-dvh flex-col">
 			<title>{title} · marimohub</title>
@@ -131,7 +132,14 @@ function StakeholderApp({
 				<output className="p-6">Starting app…</output>
 			) : (
 				<div className="min-h-0 flex-1">
-					<NotebookFrame src={src} title={title} />
+					<NotebookFrame
+						key={frameKey}
+						src={src}
+						retrySrc={latestSrc}
+						sandboxUrl={sandboxUrl}
+						onQuery={onQuery}
+						title={title}
+					/>
 				</div>
 			)}
 		</div>

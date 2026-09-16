@@ -39,6 +39,7 @@
 		"@marimo-hub/credentials-coreweave": "workspace:*",
 		"@marimo-hub/database-browser-bigquery": "workspace:*",
 		"@marimo-hub/duckdb-wasm-runtime": "workspace:*",
+		"@marimo-hub/notebook-bridge": "workspace:*",
 		"@marimo-hub/notify-slack": "workspace:*",
 		"@marimo-hub/notify-smtp": "workspace:*",
 		"@marimo-hub/notify-webhook": "workspace:*",

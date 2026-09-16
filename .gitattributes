@@ -3,3 +3,5 @@
 # but marked generated so GitHub collapses them in PR diffs.
 docs/partials/integrations/*.md   linguist-generated=true
 internal/schemas/integrations.yml linguist-generated=true
+
+packages/notebook-bridge/src/runtime.generated.ts linguist-generated=true
