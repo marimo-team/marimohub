@@ -1,11 +1,8 @@
 import { z } from 'zod';
 import { NotebookIdSchema, ProjectIdSchema, UserIdSchema } from './schema';
+import { DeepLinkSlugSchema } from './deepLinkSlug';
+export { DeepLinkSlugSchema } from './deepLinkSlug';
 
-export const DeepLinkSlugSchema = z
-	.string()
-	.min(1)
-	.max(63)
-	.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])/);
 export const DeepLinkTargetSchema = z.strictObject({
 	kind: z.literal('app'),
 	project_id: ProjectIdSchema,

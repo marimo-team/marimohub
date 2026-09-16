@@ -28,7 +28,7 @@ export class DeepLinkService {
 		const result = DeepLinkSlugSchema.safeParse(value);
 		if (!result.success)
 			throw new ValidationError(
-				'Use 1–63 lowercase letters, digits, or hyphens, starting and ending with a letter or digit.',
+				'Use 1–63 characters: lowercase letters, digits, or hyphens in slash-separated segments. Start and end each segment with a letter or digit.',
 			);
 		return result.data;
 	}

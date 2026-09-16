@@ -32,6 +32,41 @@ function makeRoot(): string {
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
 
 describe('FsStorage', () => {
+	it('stores parent and nested app-link records independently and lists all index depths', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		const registry = '_system/deep-links/';
+		const index = 'projects/project/notebooks/notebook/deep-links/';
+		const slugs = ['team', 'team/overview', 'team/overview/details'];
+		for (const slug of slugs) {
+			await bucket.put(`${index}${slug}.json`, '', { onlyIfNotExists: true });
+			await bucket.put(`${registry}${slug}.json`, JSON.stringify({ slug }), {
+				onlyIfNotExists: true,
+			});
+		}
+		const keys: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await bucket.list({ prefix: index, limit: 1, cursor });
+			keys.push(...page.objects.map((object) => object.key));
+			cursor = page.truncated ? page.cursor : undefined;
+		} while (cursor);
+		expect(keys.map((key) => key.slice(index.length).replace(/\.json$/, ''))).toEqual(slugs);
+		const childKey = `${registry}team/overview.json`;
+		const child = (await bucket.get(childKey))!;
+		await bucket.put(childKey, JSON.stringify({ released: true }), {
+			onlyIfEtagMatches: child.etag,
+		});
+		await expect(
+			bucket.put(childKey, 'stale', { onlyIfEtagMatches: child.etag }),
+		).rejects.toBeInstanceOf(PreconditionFailedError);
+		for (const slug of ['team', 'team/overview/details']) {
+			expect(await (await bucket.get(`${registry}${slug}.json`))!.json()).toEqual({ slug });
+		}
+		await bucket.delete(keys);
+		expect((await bucket.list({ prefix: index })).objects).toEqual([]);
+		expect((await bucket.list({ prefix: registry })).objects).toHaveLength(3);
+	});
+
 	it('round-trips empty workspace directories through portable marker objects', async () => {
 		const bucket = new FsStorage({ root: makeRoot() });
 		const projectId = createProjectId();

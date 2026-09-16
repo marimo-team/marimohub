@@ -34,7 +34,7 @@ function renderLink(
 					{controls}
 					<Suspense fallback={<p>Loading…</p>}>
 						<Routes>
-							<Route path="/app/:slug" element={<AppLinkPage />} />
+							<Route path="/app/*" element={<AppLinkPage />} />
 						</Routes>
 						<LocationProbe />
 					</Suspense>
@@ -82,38 +82,51 @@ function linkFetch(
 }
 
 describe('AppLinkPage', () => {
-	it('forwards filtered slug parameters and copies the slug URL under a deployment prefix', async () => {
-		const user = userEvent.setup();
-		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
-		const { existing, fetch } = linkFetch();
-		const base = document.createElement('base');
-		base.href = `${window.location.origin}/hub/`;
-		document.head.append(base);
-		try {
-			renderLink(
-				'/hub/app/sales?id=123&tag=one&tag=two&empty=&%61ccess_token=evil&session_id=evil&file=other.py',
-				'/hub',
-			);
-			const frame = await screen.findByTitle('Forecast');
-			expect(frame).toHaveAttribute(
-				'src',
-				'https://sandbox.example/kernel?id=123&tag=one&tag=two&empty=&theme=light&show-code=false',
-			);
-			await user.click(screen.getByRole('button', { name: 'Share notebook' }));
-			await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
-			expect(writeText).toHaveBeenCalledWith(
-				`${window.location.origin}/hub/app/sales?id=123&tag=one&tag=two&empty=`,
-			);
-			expect(
-				fetch.mock.calls
-					.filter(([input]) => String(input).includes('/api/v1/deep-links/'))
-					.map(([input]) => String(input)),
-			).toEqual(['/api/v1/deep-links/sales']);
-			expect(sessionPosts(existing)).toHaveLength(1);
-		} finally {
-			base.remove();
-		}
+	it('does not start a session when a nested alias is missing', async () => {
+		const { existing, fetch } = linkFetch({ missing: true });
+		renderLink('/app/team/missing');
+		expect(await screen.findByRole('alert')).toHaveTextContent('App link not found');
+		expect(sessionPosts(existing)).toHaveLength(0);
+		expect(
+			fetch.mock.calls.some(([input]) => String(input) === '/api/v1/deep-links/team%2Fmissing'),
+		).toBe(true);
 	});
+
+	it.each(['sales', 'team/overview', 'team/overview/details'])(
+		'forwards parameters and copies %s under a deployment prefix',
+		async (slug) => {
+			const user = userEvent.setup();
+			const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+			const { existing, fetch } = linkFetch();
+			const base = document.createElement('base');
+			base.href = `${window.location.origin}/hub/`;
+			document.head.append(base);
+			try {
+				renderLink(
+					`/hub/app/${slug}?id=123&tag=one&tag=two&empty=&%61ccess_token=evil&session_id=evil&file=other.py`,
+					'/hub',
+				);
+				const frame = await screen.findByTitle('Forecast');
+				expect(frame).toHaveAttribute(
+					'src',
+					'https://sandbox.example/kernel?id=123&tag=one&tag=two&empty=&theme=light&show-code=false',
+				);
+				await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+				await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+				expect(writeText).toHaveBeenCalledWith(
+					`${window.location.origin}/hub/app/${slug}?id=123&tag=one&tag=two&empty=`,
+				);
+				expect(
+					fetch.mock.calls
+						.filter(([input]) => String(input).includes('/api/v1/deep-links/'))
+						.map(([input]) => String(input)),
+				).toEqual([`/api/v1/deep-links/${encodeURIComponent(slug)}`]);
+				expect(sessionPosts(existing)).toHaveLength(1);
+			} finally {
+				base.remove();
+			}
+		},
+	);
 
 	it('reloads only the notebook frame when a slug query changes', async () => {
 		function Controls() {
@@ -137,17 +150,18 @@ describe('AppLinkPage', () => {
 		).toHaveLength(resolves);
 	});
 
-	it.each(['/app/sales?filter=2026#chart', '/app/revenue?filter=2026#chart'])(
-		'opens the shared app and preserves %s',
-		async (path) => {
-			const { existing } = linkFetch();
-			renderLink(path);
-			const frame = await screen.findByTitle('Forecast');
-			expect(new URL(frame.getAttribute('src')!).searchParams.get('filter')).toBe('2026');
-			expect(screen.getByTestId('location')).toHaveTextContent(path);
-			expect(sessionPosts(existing)).toHaveLength(1);
-		},
-	);
+	it.each([
+		'/app/sales?filter=2026#chart',
+		'/app/revenue?filter=2026#chart',
+		'/app/team/overview?filter=2026#chart',
+	])('opens the shared app and preserves %s', async (path) => {
+		const { existing } = linkFetch();
+		renderLink(path);
+		const frame = await screen.findByTitle('Forecast');
+		expect(new URL(frame.getAttribute('src')!).searchParams.get('filter')).toBe('2026');
+		expect(screen.getByTestId('location')).toHaveTextContent(path);
+		expect(sessionPosts(existing)).toHaveLength(1);
+	});
 
 	it('supports deployment base paths and resolves again on remount', async () => {
 		const { fetch } = linkFetch();

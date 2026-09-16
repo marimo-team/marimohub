@@ -5,7 +5,7 @@ import { Button } from '@/components/ui';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 
 export function AppLinkPage() {
-	const { slug = '' } = useParams<{ slug: string }>();
+	const { '*': slug = '' } = useParams<'*'>();
 	const query = useDeepLinkQuery(slug);
 	if (query.isError) {
 		return (

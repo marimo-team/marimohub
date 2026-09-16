@@ -86,7 +86,10 @@ const release = createRoute({
 });
 
 const app = createApp();
-app.openapi(resolve, async (c) => {
+// Proxies can decode %2F before routing; OpenAPI still describes one slug parameter.
+app.openAPIRegistry.registerPath(resolve);
+app.openAPIRegistry.registerPath(release);
+app.openapi({ ...resolve, path: '/deep-links/:slug{[\\s\\S]+}', hide: true }, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const link = await deps.services.deepLinks.resolve(c.req.valid('param').slug);
@@ -138,7 +141,7 @@ app.openapi(register, async (c) => {
 	);
 	return c.json({ success: true as const, data: link }, 200);
 });
-app.openapi(release, async (c) => {
+app.openapi({ ...release, path: `${notebookPath}/:slug{[\\s\\S]+}`, hide: true }, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid, slug } = c.req.valid('param');

@@ -2437,7 +2437,7 @@ components:
           type: string
           minLength: 1
           maxLength: 63
-          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
         target:
           type: object
           properties:
@@ -11312,7 +11312,7 @@ paths:
             type: string
             minLength: 1
             maxLength: 63
-            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
           required: true
           name: slug
           in: path
@@ -11516,7 +11516,7 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 63
-                  pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+                  pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
                 kind:
                   type: string
                   enum:
@@ -11639,7 +11639,7 @@ paths:
             type: string
             minLength: 1
             maxLength: 63
-            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\s\S])
+            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
           required: true
           name: slug
           in: path

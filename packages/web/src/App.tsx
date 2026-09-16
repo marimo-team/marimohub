@@ -176,7 +176,7 @@ function AppContent() {
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
-						<Route path="/app/:slug" element={<AppLinkPage />} />
+						<Route path="/app/*" element={<AppLinkPage />} />
 						<Route path="/cli/login" element={<CliLoginPage />} />
 						<Route path="/cli/device" element={<CliDeviceLoginPage />} />
 						<Route path="/oauth/consent" element={<OAuthConsentPage />} />
