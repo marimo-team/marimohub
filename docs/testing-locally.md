@@ -185,7 +185,7 @@ Use the Python environment from the kernel integration tests:
 
 ```bash
 uv pip install --python .context/marimo-test/bin/python 'playwright==1.58.0'
-.context/marimo-test/bin/python -m playwright install chromium
+.context/marimo-test/bin/python -m playwright install --with-deps chromium
 MARIMOHUB_THUMBNAIL_TEST_PYTHON="$PWD/.context/marimo-test/bin/python" \
   pnpm --filter @marimo-hub/core test src/services/runtime/thumbnailProgram.live.test.ts
 ```

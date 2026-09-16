@@ -23,7 +23,10 @@ export function toolError(
 	error: unknown,
 	context: StartRequestContext & { userId: string; tool: string },
 ): ToolResult {
-	if (context.signal?.aborted) {
+	if (
+		context.signal?.aborted &&
+		(error === context.signal.reason || (error instanceof Error && error.name === 'AbortError'))
+	) {
 		return failureResult({
 			code: 'REQUEST_CANCELLED',
 			message: 'Request cancelled. Any work already dispatched may continue.',

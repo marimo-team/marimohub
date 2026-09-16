@@ -198,12 +198,16 @@ describe('create_notebook MCP tool', () => {
 });
 
 describe('session MCP tools', () => {
-	it.each(['start_session', 'create_notebook'])(
-		'cancels the %s response while sandbox readiness is pending',
-		async (name) => {
+	it.each([
+		{ name: 'start_session', mode: 'edit' },
+		{ name: 'start_session', mode: 'app' },
+		{ name: 'create_notebook', mode: 'edit' },
+	])(
+		'cancels the $name response while preserving $mode startup for reuse',
+		async ({ name, mode }) => {
 			const controller = new AbortController();
 			const portReady = Promise.withResolvers<void>();
-			const { instance } = makeFakeSandbox();
+			const { instance, calls } = makeFakeSandbox();
 			const waitForPort = vi.fn(() => portReady.promise);
 			const startProcess = instance.startProcess;
 			vi.spyOn(instance, 'startProcess').mockImplementation(async (...args) => ({
@@ -224,8 +228,10 @@ describe('session MCP tools', () => {
 				appBaseUrl: 'https://hub.example.com',
 				signal: controller.signal,
 			});
+			const otherClient = await connect(deps);
 			vi.useFakeTimers();
 			let response: unknown;
+			let sessionId: SessionId | undefined;
 			const pending = client
 				.callTool({
 					name,
@@ -235,6 +241,7 @@ describe('session MCP tools', () => {
 						title: 'Launched',
 						code: '',
 						launch: true,
+						...(name === 'start_session' ? { mode } : {}),
 					},
 				})
 				.then((result) => {
@@ -243,11 +250,34 @@ describe('session MCP tools', () => {
 			try {
 				await vi.advanceTimersByTimeAsync(0);
 				expect(waitForPort).toHaveBeenCalledOnce();
+				const starting = await deps.services.sessions.listSessions();
+				expect(starting).toHaveLength(1);
+				expect(starting[0]).toMatchObject({ status: 'starting', sandbox_id: expect.any(String) });
+				sessionId = starting[0].session_id;
+				if (mode === 'app') {
+					expect(
+						await otherClient.callTool({
+							name: 'start_session',
+							arguments: {
+								project: project.id,
+								notebook: notebook.id,
+								mode,
+								wait_seconds: 0,
+							},
+						}),
+					).toMatchObject({
+						structuredContent: { session_id: sessionId, status: 'starting', reused: true },
+					});
+				}
 				controller.abort();
 				await vi.advanceTimersByTimeAsync(0);
 				expect(response).toMatchObject({
 					isError: true,
 					structuredContent: { code: 'REQUEST_CANCELLED' },
+				});
+				expect(await deps.services.sessions.getSession(project.id, sessionId)).toMatchObject({
+					status: 'starting',
+					sandbox_id: starting[0].sandbox_id,
 				});
 			} finally {
 				portReady.resolve();
@@ -257,6 +287,25 @@ describe('session MCP tools', () => {
 			}
 			expect(bootstrapKernel).not.toHaveBeenCalled();
 			expect(heartbeat).not.toHaveBeenCalled();
+			const running = await deps.services.sessions.getSession(project.id, sessionId);
+			expect(running.status).toBe('running');
+			expect(calls.destroy).toBe(0);
+			vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
+			expect(
+				await otherClient.callTool({
+					name: 'start_session',
+					arguments: {
+						project: project.id,
+						notebook: running.notebook_id,
+						mode,
+						wait_seconds: 0,
+					},
+				}),
+			).toMatchObject({
+				structuredContent: { session_id: sessionId, status: 'running', reused: true },
+			});
+			expect(waitForPort).toHaveBeenCalledOnce();
+			expect(await deps.services.sessions.listSessions()).toHaveLength(1);
 		},
 	);
 

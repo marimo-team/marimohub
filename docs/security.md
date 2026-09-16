@@ -73,7 +73,8 @@ orphaned.
 
 Note the interaction with [notebook apps](/apps): the same-origin risk you
 acknowledge is that notebook-authored JS can script the control plane as
-whoever opens the kernel. App-user assignments and `MARIMOHUB_VIEWER_MODE=applications`
+whoever opens the kernel. App-user assignments and either
+`MARIMOHUB_VIEWER_MODE=applications` or `MARIMOHUB_VIEWER_MODE=ephemeral-sandbox`
 extend this risk to people who use apps that other authors wrote.
 If you combine proxy mode with app access, trust every notebook author in the deployment.
 
