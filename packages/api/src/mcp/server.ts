@@ -436,7 +436,7 @@ export function createMcpServer(
 			try {
 				const project = await resolveProject(deps, principal, projectRef);
 				const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-				// Updates publish the token before code; hold their lease across both reads.
+				// Updates publish the token before content; hold their lease across the reads.
 				return await deps.services.notebooks.workspace.withMutation(
 					project.id,
 					notebook.id,

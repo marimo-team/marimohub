@@ -604,7 +604,8 @@ export class NotebookService {
 				expectedVersion,
 				assertWritable,
 			);
-		if (input.code === undefined) return update();
+		// Blob writes must share the read lease so content matches its update token.
+		if (input.code === undefined && input.readme === undefined) return update();
 		return this.workspace.withMutation(projectId, notebookId, {}, (lease) =>
 			update(lease.heartbeat),
 		);

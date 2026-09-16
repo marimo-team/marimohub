@@ -87,6 +87,42 @@ describe('SandboxProvisioner', () => {
 	const notebookId = createNotebookId();
 	const sandboxId = createSandboxId();
 
+	describe.each(['provision', 'prepare'] as const)('%s handle creation', (operation) => {
+		it.each([
+			{ restore: false, markerFails: false },
+			{ restore: true, markerFails: false },
+			{ restore: false, markerFails: true },
+			{ restore: true, markerFails: true },
+		])(
+			'records no sandbox on synchronous failure (restore: $restore, marker fails: $markerFails)',
+			async ({ restore, markerFails }) => {
+				const { instance, calls } = makeFakeSandbox();
+				const provider = makeSnapshotCompute(instance);
+				const error = new Error('provider handle creation failed');
+				vi.spyOn(provider, restore ? 'createFromSnapshot' : 'create').mockImplementation(() => {
+					throw error;
+				});
+				const onSandboxDestroyed = vi.fn(async () => {
+					if (markerFails) throw new Error('marker storage unavailable');
+				});
+				const provisioner = new SandboxProvisioner(provider);
+				await expect(
+					provisioner[operation]({
+						sandboxId,
+						projectId,
+						notebookId,
+						hostname: 'localhost',
+						bucket: bucketConfig,
+						restoreFilesystemSnapshotId: restore ? 'snapshot' : undefined,
+						onSandboxDestroyed,
+					}),
+				).rejects.toBe(error);
+				expect(onSandboxDestroyed).toHaveBeenCalledOnce();
+				expect(calls.destroy).toBe(0);
+			},
+		);
+	});
+
 	describe('provision', () => {
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();
