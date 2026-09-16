@@ -27,18 +27,19 @@ function FrameAttempt({
 	title: string;
 	onRetry: () => void;
 }) {
+	const [loaded, setLoaded] = useState(false);
 	const [showRecovery, setShowRecovery] = useState(false);
 
-	// Browsers fire load even for blocked cross-origin frames, so use a delayed prompt.
-	useTimeout(() => setShowRecovery(true), RECOVERY_DELAY_MS);
+	// Cross-origin failures can also fire load; only offer help while loading is stalled.
+	useTimeout(() => setShowRecovery(true), loaded ? null : RECOVERY_DELAY_MS);
 
 	return (
 		<div className="flex size-full min-h-0 flex-col">
-			{showRecovery ? (
+			{showRecovery && !loaded ? (
 				<output className="flex flex-wrap items-center gap-3 border-b bg-muted/50 px-4 py-2 text-sm">
 					<span className="min-w-0 flex-1">
-						<span className="font-medium">Notebook not visible?</span> Your browser may block
-						embedded content. Try opening it in a new window.
+						<span className="font-medium">Notebook not visible?</span> The notebook did not finish
+						loading. Retry or open it in a new window.
 					</span>
 					<Button size="sm" onPress={onRetry}>
 						Retry
@@ -55,6 +56,7 @@ function FrameAttempt({
 			<iframe
 				className="min-h-0 w-full flex-1 border-0"
 				src={src}
+				onLoad={() => setLoaded(true)}
 				sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
 				referrerPolicy="no-referrer"
 				allow="clipboard-read; clipboard-write"

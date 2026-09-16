@@ -17,13 +17,37 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('NotebookFrame recovery', () => {
-	it('offers recovery after a blocked frame fires load, preserving the original token URL', async () => {
+	it('does not offer recovery after the iframe loads', async () => {
+		const { rerender } = render(frame(SRC));
+		const iframe = screen.getByTitle('Forecast');
+		await advance(10_000);
+		fireEvent.load(iframe);
+		rerender(frame(SRC, 'Renamed notebook'));
+		await advance(30_000);
+		expect(screen.queryByRole('status')).not.toBeInTheDocument();
+		expect(screen.getByTitle('Renamed notebook')).toBe(iframe);
+	});
+
+	it('hides recovery when a slow iframe finishes loading', async () => {
 		render(frame(SRC));
 		const iframe = screen.getByTitle('Forecast');
+		await advance();
+		expect(screen.getByRole('status')).toBeInTheDocument();
 		fireEvent.load(iframe);
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		await advance();
-		expect(screen.getByRole('status')).toHaveTextContent('Notebook not visible?');
+		expect(screen.queryByRole('status')).not.toBeInTheDocument();
+		expect(screen.getByTitle('Forecast')).toBe(iframe);
+	});
+
+	it('offers recovery when loading stalls, preserving the original token URL', async () => {
+		render(frame(SRC));
+		const iframe = screen.getByTitle('Forecast');
+		expect(screen.queryByRole('status')).not.toBeInTheDocument();
+		await advance();
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'Notebook not visible? The notebook did not finish loading. Retry or open it in a new window.',
+		);
 		const link = screen.getByRole('link', { name: 'Open in new window' });
 		expect(link).toHaveAttribute('href', SRC);
 		expect(link).toHaveAttribute('target', '_blank');
@@ -37,7 +61,6 @@ describe('NotebookFrame recovery', () => {
 		await advance();
 		fireEvent.click(screen.getByRole('button', { name: 'Dismiss notebook help' }));
 		rerender(frame(SRC));
-		fireEvent.load(iframe);
 		await advance();
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		expect(screen.getByTitle('Forecast')).toBe(iframe);
@@ -50,6 +73,20 @@ describe('NotebookFrame recovery', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 		expect(screen.getByTitle('Forecast')).not.toBe(iframe);
 		expect(screen.getByTitle('Forecast')).toHaveAttribute('src', SRC);
+		expect(screen.queryByRole('status')).not.toBeInTheDocument();
+		await advance();
+		expect(screen.getByRole('status')).toBeInTheDocument();
+		fireEvent.load(screen.getByTitle('Forecast'));
+		await advance();
+		expect(screen.queryByRole('status')).not.toBeInTheDocument();
+	});
+
+	it('tracks loading again when a loaded session URL changes', async () => {
+		const { rerender } = render(frame(SRC));
+		const iframe = screen.getByTitle('Forecast');
+		fireEvent.load(iframe);
+		rerender(frame('https://another-kernel.example/'));
+		expect(screen.getByTitle('Forecast')).not.toBe(iframe);
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		await advance();
 		expect(screen.getByRole('status')).toBeInTheDocument();
