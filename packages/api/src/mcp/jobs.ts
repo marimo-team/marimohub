@@ -54,7 +54,13 @@ interface ToolContext {
 async function resolveJob(deps: ApiDeps, target: AuthorizedNotebook, value: string) {
 	const pid = target.project.id;
 	const nid = target.notebook.meta.id;
-	if (JobId.is(value)) return deps.services.jobs.getJob(pid, nid, value);
+	if (JobId.is(value)) {
+		try {
+			return await deps.services.jobs.getJob(pid, nid, value);
+		} catch (error) {
+			if (!(error instanceof NotFoundError)) throw error;
+		}
+	}
 	const jobs = await deps.services.jobs.listJobs(pid, nid);
 	const matches = jobs.filter((job) => foldCase(job.name) === foldCase(value));
 	if (matches.length === 0) throw new NotFoundError(`Job '${value}' not found`);

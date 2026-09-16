@@ -152,15 +152,14 @@ export async function observeJobRun({
 	request: StartRequestContext;
 }) {
 	let authorized = target;
+	const authorize = () =>
+		authorizeJobNotebook(deps, target.user, job.project_id, job.notebook_id, 'project.read');
 	const initial = await withAbortSignal(loadJobRun(deps, job, runId), signal);
 	const { run, waitExpired } = await waitForRun(
 		initial,
 		async (waitSignal) => {
 			// Membership and notebook visibility can change while a call waits.
-			const current = await withAbortSignal(
-				authorizeJobNotebook(deps, target.user, job.project_id, job.notebook_id, 'project.read'),
-				waitSignal,
-			);
+			const current = await withAbortSignal(authorize(), waitSignal);
 			await withAbortSignal(
 				deps.services.jobs.getJob(job.project_id, job.notebook_id, job.id),
 				waitSignal,
@@ -175,6 +174,14 @@ export async function observeJobRun({
 		signal,
 	);
 	signal.throwIfAborted();
+	if (waitExpired) {
+		// Expiry can occur before the next poll. Do not return data under stale access.
+		authorized = await withDeadline(authorize, {
+			timeoutMs: 5_000,
+			timeoutError: () => new Error('Job observation authorization timed out'),
+			signal,
+		});
+	}
 	const logs =
 		run.output?.logs_bytes !== undefined &&
 		(

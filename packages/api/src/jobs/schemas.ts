@@ -56,7 +56,8 @@ const JobNotificationsShape = z.object({
 		.min(1)
 		.refine((events) => new Set(events).size === events.length, {
 			message: 'Notification events must be unique',
-		}),
+		})
+		.meta({ uniqueItems: true }),
 });
 const JobNotificationsSchema = JobNotificationsShape.openapi('JobNotifications', {
 	description:

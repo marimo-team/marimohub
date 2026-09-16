@@ -22,7 +22,11 @@ export async function resolveProject(
 ): Promise<Project> {
 	const load = appAccess ? loadSessionProject : loadVisibleProject;
 	if (ProjectId.is(value)) {
-		return load(deps.services.projects, value, principal, deps);
+		try {
+			return await load(deps.services.projects, value, principal, deps);
+		} catch (error) {
+			if (!(error instanceof NotFoundError)) throw error;
+		}
 	}
 	const projects = await deps.services.projects.listProjects({
 		action:
@@ -57,8 +61,7 @@ export async function resolveNotebook(
 	});
 	if (NotebookId.is(value)) {
 		const match = notebooks.find((notebook) => notebook.id === value);
-		if (!match) throw new NotFoundError(`Notebook ${value} not found`);
-		return match;
+		if (match) return match;
 	}
 	const matches = notebooks.filter((notebook) => foldCase(notebook.title) === foldCase(value));
 	if (matches.length === 0) throw new NotFoundError(`Notebook '${value}' not found`);

@@ -482,20 +482,18 @@ describe('MCP run execution and authorization', () => {
 			{ classification: 'SECRET', compartments: ['restricted'] },
 			USER.id,
 		);
-		for (const name of TOOL_NAMES) {
-			const args = {
-				project: pid,
-				notebook: nid,
-				...(name === 'create_job'
-					? { name: 'Hidden' }
-					: {
-							job: job.id,
-							enabled: false,
-							expected_updated_at: job.updated_at,
-							run_id: (await enqueue()).run_id,
-						}),
-			};
-			expect(await client.callTool({ name, arguments: args })).toMatchObject({
+		const run = await enqueue();
+		const toolArguments = {
+			list_jobs: {},
+			create_job: { name: 'Hidden' },
+			schedule_job: { job: job.id, enabled: false, expected_updated_at: job.updated_at },
+			run_job: { job: job.id },
+			get_job_run: { job: job.id, run_id: run.run_id },
+		};
+		for (const [name, args] of Object.entries(toolArguments)) {
+			expect(
+				await client.callTool({ name, arguments: { project: pid, notebook: nid, ...args } }),
+			).toMatchObject({
 				isError: true,
 				structuredContent: { code: 'NOT_FOUND' },
 			});
@@ -790,6 +788,74 @@ describe('MCP waiting', () => {
 			const response = await pending;
 			expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
 			expect(response.structuredContent).not.toHaveProperty('run');
+		},
+	);
+
+	it.each(
+		(['get_job_run', 'run_job'] as const).flatMap((tool) =>
+			[1, 3].flatMap((waitSeconds) =>
+				(['membership', 'notebook-labels', 'notebook-deletion'] as const).map((change) => ({
+					tool,
+					waitSeconds,
+					change,
+				})),
+			),
+		),
+	)(
+		'rechecks $change before returning an expired $tool wait of $waitSeconds seconds',
+		async ({ tool, waitSeconds, change }) => {
+			await deps.services.projects.updateMemberRole(pid, VIEWER.id, 'editor', USER.id);
+			client = await connectMcpClient(deps, VIEWER, requestContext);
+			const args = tool === 'get_job_run' ? { run_id: (await enqueue()).run_id } : {};
+			const read = vi.spyOn(deps.services.jobRuns, 'getRun');
+			vi.useFakeTimers();
+			const pending = call(tool, { ...args, wait: true, wait_seconds: waitSeconds });
+			await vi.advanceTimersByTimeAsync((waitSeconds - 1) * 1000 + 1);
+			expect(read).toHaveBeenCalledTimes(waitSeconds === 1 ? 1 : 2);
+			if (change === 'membership')
+				await deps.services.projects.removeMember(pid, VIEWER.id, USER.id);
+			if (change === 'notebook-labels') {
+				deps.resourceSecurity = localResourceSecurity(['UNCLASSIFIED', 'SECRET']);
+				await deps.services.notebooks.setSecurityLabels(
+					pid,
+					nid,
+					{ classification: 'SECRET', compartments: ['restricted'] },
+					USER.id,
+				);
+			}
+			if (change === 'notebook-deletion')
+				await deps.services.notebooks.deleteNotebook(pid, nid, USER.id);
+			await vi.advanceTimersByTimeAsync(1000);
+			const response = await pending;
+			expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+			expect(response.structuredContent).not.toHaveProperty('run');
+			expect(response.structuredContent).not.toHaveProperty('links');
+		},
+	);
+
+	it.each(['timeout', 'abort'] as const)(
+		'stops a stalled final authorization check on %s without exposing the run',
+		async (end) => {
+			const run = await enqueue();
+			const controller = new AbortController();
+			client = await connectMcpClient(deps, USER, { ...requestContext, signal: controller.signal });
+			vi.useFakeTimers();
+			const pending = call('get_job_run', { run_id: run.run_id, wait: true, wait_seconds: 1 });
+			await vi.advanceTimersByTimeAsync(1);
+			const read = vi
+				.spyOn(deps.services.notebooks, 'getNotebook')
+				.mockImplementation(() => new Promise(() => {}));
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(read).toHaveBeenCalledOnce();
+			if (end === 'abort') controller.abort();
+			else await vi.advanceTimersByTimeAsync(5000);
+			const response = await pending;
+			expect(response).toMatchObject({
+				isError: true,
+				structuredContent: { code: end === 'abort' ? 'REQUEST_CANCELLED' : 'INTERNAL_ERROR' },
+			});
+			expect(response.structuredContent).not.toHaveProperty('run');
+			expect(response.structuredContent).not.toHaveProperty('links');
 		},
 	);
 
