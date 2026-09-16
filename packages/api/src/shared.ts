@@ -34,6 +34,7 @@ import {
 } from '@marimo-hub/core';
 import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type {
+	AuthorizationDecision,
 	AuthorizationPolicy,
 	AuthorizationSubject,
 	AuthSubject,
@@ -342,7 +343,7 @@ async function assertSession(
 	subject: AuthSubject,
 	deps: AuthzDeps,
 	notebookLabels: ResourceSecurityLabels | null = null,
-): Promise<void> {
+): Promise<Extract<AuthorizationDecision, { allowed: true }>> {
 	const decision = await authorizationService(deps).authorize(subject, action, {
 		kind: 'session',
 		project,
@@ -357,6 +358,7 @@ async function assertSession(
 		}
 		throw error();
 	}
+	return decision;
 }
 
 /**
@@ -394,8 +396,8 @@ export async function assertSessionAccess(
 	subject: AuthSubject,
 	deps: AuthzDeps,
 	notebookLabels: ResourceSecurityLabels | null = null,
-): Promise<void> {
-	await assertSession(
+): Promise<Extract<AuthorizationDecision, { allowed: true }>> {
+	return assertSession(
 		'session.attach',
 		() => new ForbiddenError('Not authorized to attach this session'),
 		project,

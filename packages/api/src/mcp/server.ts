@@ -4,41 +4,34 @@ import { z } from 'zod';
 import {
 	BadRequestError,
 	DomainError,
-	executeInKernel,
 	foldCase,
-	kernelBaseUrl,
-	listKernelSessions,
 	NOTEBOOK_STATUSES,
 	NotFoundError,
 	NotebookId,
 	ProjectId,
 	SessionId,
 	sessionMode,
-	sleep,
-	withAbortSignal,
-	withDeadline,
 	toPublicNotebookMeta,
 	toPublicSource,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { withMcpSessionActivity } from './sessionActivity';
+import { startMcpSession } from './sessionStartup';
+import { executeMcpCode } from './kernelExecution';
+import { failureResult, result } from './results';
+import type { ToolResult } from './results';
 import { errorMetadataChain, logEvent } from '../log';
 import { deleteNotebookAndRetire } from '../routes/notebookDelete';
 import {
 	assertProjectActionOn,
-	assertSessionAccess,
 	assertSessionControl,
 	assertSessionNotebookVisible,
 	loadVisibleProject,
 	loadAuthorizedNotebook,
-	sessionGrantsFor,
 	sessionRetirer,
 } from '../shared';
-import {
-	authorizeSessionStart,
-	startNotebookSession,
-	toSessionResponse,
-} from '../routes/sessionStart';
+import { authorizeSessionStart } from '../routes/sessionStart';
 
 export interface StartRequestContext {
 	requestId?: string;
@@ -47,12 +40,6 @@ export interface StartRequestContext {
 	hostname: string;
 	appBaseUrl: string;
 }
-
-type ToolResult = {
-	content: { type: 'text'; text: string }[];
-	structuredContent?: Record<string, unknown>;
-	isError?: boolean;
-};
 
 export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
 
@@ -65,17 +52,6 @@ const NOTEBOOK_CODE_DESCRIPTION =
 	'Complete marimo Python notebook source (marimo.App and @app.cell definitions), stored verbatim. Local dependencies come from pyproject.toml; PEP 723 headers are preserved but do not install dependencies.';
 const EXPECTED_UPDATED_AT_DESCRIPTION =
 	'updated_at returned by get_notebook. Rejects the change if notebook metadata changed since that read.';
-
-class KernelDiscoveryTimeoutError extends Error {
-	constructor() {
-		super('Kernel session discovery timed out');
-		this.name = 'KernelDiscoveryTimeoutError';
-	}
-}
-
-function result(data: Record<string, unknown>, text = JSON.stringify(data, null, 2)): ToolResult {
-	return { content: [{ type: 'text', text }], structuredContent: data };
-}
 
 function toolError(
 	error: unknown,
@@ -97,7 +73,7 @@ function toolError(
 		error instanceof DomainError
 			? { code: error.code, message: error.message }
 			: { code: 'INTERNAL_ERROR', message: 'Internal error' };
-	return { ...result(data), isError: true };
+	return failureResult(data);
 }
 
 async function resolveProject(
@@ -147,126 +123,6 @@ async function resolveNotebook(
 		);
 	}
 	return matches[0];
-}
-
-function kernelFetch(deps: ApiDeps): typeof fetch {
-	return async (input, init) => {
-		const request = new Request(input, init);
-		const response = await withAbortSignal(deps.compute.proxy(request), request.signal);
-		return response ?? globalThis.fetch(request);
-	};
-}
-
-function kernelDiscoveryTimeout(seconds: number): ToolResult {
-	return {
-		...result({
-			code: 'KERNEL_DISCOVERY_TIMEOUT',
-			message: `Kernel session discovery exceeded ${seconds} seconds`,
-			timedOut: true,
-		}),
-		isError: true,
-	};
-}
-
-async function startMcpSession(input: {
-	deps: ApiDeps;
-	principal: AuthenticatedPrincipal;
-	request: StartRequestContext;
-	project: Project;
-	notebookId: ReturnType<typeof NotebookId.parse>;
-	mode: 'edit' | 'app';
-	waitSeconds: number;
-}): Promise<Record<string, unknown>> {
-	const { deps, principal, request, project, notebookId, mode, waitSeconds } = input;
-	const started = await startNotebookSession({
-		deps,
-		user: principal,
-		pid: project.id,
-		nid: notebookId,
-		body: { mode },
-		request,
-	});
-	let session = await deps.services.sessions.getSession(
-		project.id,
-		SessionId.parse(started.session_id),
-	);
-	const deadline = Date.now() + waitSeconds * 1000;
-	while (session.status === 'starting' && Date.now() < deadline) {
-		await sleep(Math.min(2_000, Math.max(0, deadline - Date.now())));
-		session = await deps.services.sessions.getSession(project.id, session.session_id);
-	}
-	const labels = await assertSessionNotebookVisible(deps, project, session, principal);
-	const projected = toSessionResponse(
-		session,
-		await sessionGrantsFor(project, principal, session, deps, labels),
-	);
-	const notebookUrl = `${request.appBaseUrl}/projects/${project.id}/notebooks/${notebookId}`;
-	let execution: { ready: boolean; status: string; next_step: string };
-	if (sessionMode(session) !== 'edit') {
-		execution = {
-			ready: false,
-			status: 'app_mode',
-			next_step: 'Use start_session with mode="edit" to execute code.',
-		};
-	} else if (session.status !== 'running') {
-		execution = {
-			ready: false,
-			status: session.status,
-			next_step:
-				session.status === 'starting'
-					? 'Call start_session again to check startup progress.'
-					: 'Check the session error before retrying start_session.',
-		};
-	} else if (!projected.can.attach) {
-		execution = {
-			ready: false,
-			status: 'forbidden',
-			next_step: 'Authorize session.attach access before executing code.',
-		};
-	} else {
-		try {
-			const kernels = await withDeadline(
-				(signal) =>
-					listKernelSessions(kernelBaseUrl(session), {
-						fetchImpl: kernelFetch(deps),
-						kernelAuthToken: session.kernel_auth_token,
-						signal,
-					}),
-				{ timeoutMs: 5_000, timeoutError: () => new KernelDiscoveryTimeoutError() },
-			);
-			execution =
-				kernels.length > 0
-					? {
-							ready: true,
-							status: 'ready',
-							next_step: 'Call execute_code with this project_id and session_id.',
-						}
-					: {
-							ready: false,
-							status: 'awaiting_client',
-							next_step: `Open ${notebookUrl} in a browser to connect a kernel, then retry start_session.`,
-						};
-		} catch (error) {
-			toolError(error, { ...request, userId: principal.id, tool: 'start_session' });
-			execution = {
-				ready: false,
-				status: 'unavailable',
-				next_step: 'Kernel readiness could not be checked. Retry start_session for this notebook.',
-			};
-		}
-	}
-	return {
-		project_id: project.id,
-		notebook_id: notebookId,
-		session_id: session.session_id,
-		status: session.status,
-		execution,
-		reused: started.reused,
-		mode: sessionMode(session),
-		notebook_url: notebookUrl,
-		...(projected.sandbox_url ? { sandbox_url: projected.sandbox_url } : {}),
-		...(session.error ? { error: session.error } : {}),
-	};
 }
 
 export function createMcpServer(
@@ -383,7 +239,7 @@ export function createMcpServer(
 					.boolean()
 					.default(false)
 					.describe(
-						'Start an edit session after creation and return its execution readiness. A browser connection is required for execution.',
+						'Start an edit session after creation and initialize its kernel automatically, following notebook automatic-execution settings.',
 					),
 			}),
 		},
@@ -545,7 +401,7 @@ export function createMcpServer(
 		'start_session',
 		{
 			description:
-				'Start or reuse a notebook session. Returns session_id, notebook_url, and execution readiness. Check execution.ready before execute_code and follow execution.next_step when false. The first start can take about two minutes.',
+				'Start or reuse a notebook session and automatically initialize edit kernels without a browser. Returns session_id, notebook_url, and execution readiness. Check execution.ready before execute_code and follow execution.next_step when false. The first start can take about two minutes.',
 			inputSchema: z.object({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
 				notebook: z.string().describe(NOTEBOOK_REFERENCE_DESCRIPTION),
@@ -553,7 +409,15 @@ export function createMcpServer(
 					.enum(['edit', 'app'])
 					.default('edit')
 					.describe('edit supports scratchpad execution and cell edits; app serves the notebook.'),
-				wait_seconds: z.number().int().min(0).max(120).default(60),
+				wait_seconds: z
+					.number()
+					.int()
+					.min(0)
+					.max(120)
+					.default(60)
+					.describe(
+						'Seconds to wait for sandbox readiness and kernel initialization after startup. Zero only inspects readiness.',
+					),
 			}),
 		},
 		async ({ project: projectRef, notebook: notebookRef, mode, wait_seconds }) => {
@@ -617,7 +481,7 @@ export function createMcpServer(
 		'execute_code',
 		{
 			description:
-				'Run Python in a live edit session with a connected browser kernel. Variables stay live; scratchpad execution does not save notebook cells. For persistent cell edits, inspect `import marimo._code_mode as cm; help(cm)`.',
+				'Run Python in a live edit kernel initialized by start_session or a browser. Notebook variables stay live; scratchpad execution does not save notebook cells. For persistent cell edits, inspect `import marimo._code_mode as cm; help(cm)`.',
 			inputSchema: z.object({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
 				session_id: z
@@ -644,83 +508,20 @@ export function createMcpServer(
 				if (sessionMode(session) !== 'edit') {
 					throw new BadRequestError('Code execution requires an edit session');
 				}
-				if (
-					session.authorization_expires_at &&
-					Date.now() >= Date.parse(session.authorization_expires_at)
-				) {
-					throw new BadRequestError('Session authorization has expired');
-				}
-				const labels = await assertSessionNotebookVisible(deps, project, session, principal);
-				await assertSessionAccess(project, session, principal, deps, labels);
-				const baseUrl = kernelBaseUrl(session);
-				const kernelRequest = {
-					fetchImpl: kernelFetch(deps),
-					kernelAuthToken: session.kernel_auth_token,
-				};
-				const discoveryTimeoutMs = deadlineAt - Date.now();
-				if (discoveryTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
-				let kernelSessions;
-				try {
-					kernelSessions = await withDeadline(
-						(signal) => listKernelSessions(baseUrl, { ...kernelRequest, signal }),
-						{
-							timeoutMs: discoveryTimeoutMs,
-							timeoutError: () => new KernelDiscoveryTimeoutError(),
-						},
-					);
-				} catch (error) {
-					if (error instanceof KernelDiscoveryTimeoutError) {
-						return kernelDiscoveryTimeout(input.timeout_seconds);
-					}
-					throw error;
-				}
-				if (kernelSessions.length === 0) {
-					const notebookUrl = `${request.appBaseUrl}/projects/${project.id}/notebooks/${session.notebook_id}`;
-					return {
-						...result({
-							code: 'NO_KERNEL_SESSION',
-							message: `No kernel is connected. Open ${notebookUrl} in a browser, then retry execute_code.`,
-							notebook_url: notebookUrl,
+				return await withMcpSessionActivity(
+					deps,
+					principal,
+					project,
+					session,
+					(signal, authorizationDeadline) =>
+						executeMcpCode(deps, session, input.code, {
+							deadlineAt: Math.min(deadlineAt, authorizationDeadline),
+							signal,
+							timeoutSeconds: input.timeout_seconds,
+							startedAt,
+							appBaseUrl: request.appBaseUrl,
 						}),
-						isError: true,
-					};
-				}
-				const kernelSession = kernelSessions[0];
-				const executionTimeoutMs = deadlineAt - Date.now();
-				if (executionTimeoutMs <= 0) return kernelDiscoveryTimeout(input.timeout_seconds);
-				const executed = await executeInKernel(
-					baseUrl,
-					{
-						sessionId: kernelSession.id,
-						code: input.code,
-						maxStdoutBytes: 256 * 1024,
-						maxStderrBytes: 256 * 1024,
-						maxOutputBytes: 1024 * 1024,
-					},
-					{ ...kernelRequest, timeoutMs: executionTimeoutMs },
 				);
-				const data = {
-					project_id: project.id,
-					notebook_id: session.notebook_id,
-					session_id: session.session_id,
-					kernel_session_id: kernelSession.id,
-					...executed,
-					duration_ms: Date.now() - startedAt,
-				};
-				const text = [
-					executed.stdout,
-					executed.stderr ? `stderr:\n${executed.stderr}` : '',
-					executed.output
-						? `${executed.output.mimetype}:\n${typeof executed.output.data === 'string' ? executed.output.data : JSON.stringify(executed.output.data)}`
-						: '',
-					executed.timedOut ? 'TIMED OUT' : executed.success ? 'success' : 'FAILED',
-				]
-					.filter(Boolean)
-					.join('\n\n');
-				return {
-					...result(data, text),
-					...(!executed.completed || !executed.success ? { isError: true } : {}),
-				};
 			} catch (error) {
 				return errorResult('execute_code', error);
 			}

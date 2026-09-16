@@ -320,6 +320,27 @@ describe('SessionService', () => {
 			putSpy.mockRestore();
 		});
 
+		it('does not refresh a running session after authorization expires', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				authorization_expires_at: new Date(Date.now() + 30_000).toISOString(),
+			});
+			const running = await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'https://sandbox.example',
+			);
+			advanceTime(61_000);
+			try {
+				const result = await sessions.heartbeat(projectId, created.session_id);
+				expect(result.last_heartbeat).toBe(running.last_heartbeat);
+			} finally {
+				restoreClock();
+			}
+		});
+
 		it('does not revive a terminated session (stays terminated, no write)', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,

@@ -325,6 +325,9 @@ export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';
 export type { ResolvedLaunchStrategy } from './runtime/launchStrategy';
 export { buildMarimoLaunch } from './runtime/marimoLaunch';
 export type { MarimoLaunchMode, MarimoLaunchStrategyName } from './runtime/marimoLaunch';
+export { executeInActiveKernel, KernelDiscoveryTimeoutError } from './runtime/activeKernel';
+export { bootstrapKernel } from './runtime/kernelBootstrap';
+export type { KernelBootstrapResult } from './runtime/kernelBootstrap';
 export { probeKernelLiveness } from './runtime/kernelProbe';
 export type { KernelLiveness, KernelProbe, KernelProbeOptions } from './runtime/kernelProbe';
 export {

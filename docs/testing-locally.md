@@ -161,6 +161,23 @@ Projects disappear after restart when you use the default memory storage. That
 is expected. Set `MARIMOHUB_DEV_PERSIST=true` for durable local state. Use a
 production storage configuration in a deployed environment.
 
+## MCP kernel integration tests
+
+These tests use a real marimo server to check headless startup, failure recovery,
+and state preservation after browser attachment.
+
+From the repository root:
+
+```bash
+uv venv .context/marimo-test
+uv pip install --python .context/marimo-test/bin/python 'marimo==0.24.2'
+MARIMO_INTEGRATION_PYTHON="$PWD/.context/marimo-test/bin/python" \
+  pnpm --filter @marimo-hub/core test src/services/runtime/kernelBootstrap.integration.test.ts
+```
+
+For another runtime, replace the marimo version. Without `MARIMO_INTEGRATION_PYTHON`,
+the normal test suite skips these tests.
+
 ## Next
 
 When you are ready to deploy, go to [Getting started](./getting-started.md) to

@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CatalogService, NotebookId, SessionId, UserId } from '@marimo-hub/core';
+import {
+	CatalogService,
+	BadRequestError,
+	ForbiddenError,
+	NotFoundError,
+	NotebookId,
+	SessionId,
+	SandboxId,
+	UserId,
+	bootstrapKernel,
+} from '@marimo-hub/core';
+import type * as Core from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
 import {
 	fakeComputeFrom,
@@ -9,6 +20,11 @@ import {
 } from '@marimo-hub/core/testing';
 import { makeTestDeps } from '../testing';
 import { connectMcpClient } from '../testing/mcp';
+
+vi.mock('@marimo-hub/core', async (importOriginal) => ({
+	...(await importOriginal<typeof Core>()),
+	bootstrapKernel: vi.fn(),
+}));
 
 const USER_ID = UserId.parse('oauth-user');
 const PRINCIPAL: AuthenticatedPrincipal = {
@@ -42,7 +58,10 @@ async function connect(
 	return connectMcpClient(deps, principal);
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.mocked(bootstrapKernel).mockReset();
+});
 
 describe('create_notebook MCP tool', () => {
 	it('does not advertise dependency metadata as an input', async () => {
@@ -87,6 +106,7 @@ describe('create_notebook MCP tool', () => {
 	});
 
 	it('creates and launches an edit session when launch is true', async () => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
 		const { instance } = makeFakeSandbox();
 		const { deps, project } = await setup({
 			compute: { ...fakeComputeFrom(instance), proxy: async () => Response.json([]) },
@@ -114,6 +134,7 @@ describe('create_notebook MCP tool', () => {
 					project_id: project.id,
 					status: 'running',
 					mode: 'edit',
+					execution: { ready: true, status: 'ready' },
 					sandbox_url: expect.any(String),
 				},
 			},
@@ -453,11 +474,14 @@ describe('stored notebook MCP tools', () => {
 
 describe('MCP session execution readiness', () => {
 	it.each([
-		{ kernels: [], ready: false, status: 'awaiting_client' },
-		{ kernels: [{ id: 'kernel-1' }], ready: true, status: 'ready' },
-	])('reports $status independently of sandbox status', async ({ kernels, ready, status }) => {
+		{ ready: false, status: 'initializing' as const },
+		{ ready: false, status: 'awaiting_client' as const },
+		{ ready: false, status: 'unavailable' as const },
+		{ ready: true, status: 'ready' as const },
+	])('reports $status independently of sandbox status', async ({ ready, status }) => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status });
 		const { instance } = makeFakeSandbox();
-		const proxy = vi.fn(async () => Response.json(kernels));
+		const proxy = vi.fn(async () => Response.json([]));
 		const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
 		const notebook = await deps.services.notebooks.createNotebook(
 			project.id,
@@ -475,7 +499,11 @@ describe('MCP session execution readiness', () => {
 				execution: { ready, status, next_step: expect.any(String) },
 			},
 		});
-		expect(proxy).toHaveBeenCalledOnce();
+		expect(bootstrapKernel).toHaveBeenCalledWith(
+			instance,
+			expect.objectContaining({ inspectOnly: true }),
+		);
+		expect(proxy).not.toHaveBeenCalled();
 		const data = response.structuredContent as {
 			execution: unknown;
 			notebook_url: string;
@@ -483,7 +511,9 @@ describe('MCP session execution readiness', () => {
 		};
 		if (!ready) {
 			expect(data.execution).toMatchObject({
-				next_step: expect.stringContaining(data.notebook_url),
+				next_step: expect.stringContaining(
+					status === 'awaiting_client' ? data.notebook_url : 'start_session',
+				),
 			});
 			const execution = await client.callTool({
 				name: 'execute_code',
@@ -500,6 +530,157 @@ describe('MCP session execution readiness', () => {
 					notebook_url: data.notebook_url,
 				},
 			});
+		}
+	});
+
+	it('shares the wait deadline between polling and bootstrap', async () => {
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+			USER_ID,
+		);
+		const session = await deps.services.sessions.createSession({
+			project_id: project.id,
+			notebook_id: notebook.id,
+			user_id: USER_ID,
+			sandbox_id: SandboxId.create(),
+		});
+		const client = await connect(deps);
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
+		vi.useFakeTimers();
+		try {
+			const pending = client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, wait_seconds: 5 },
+			});
+			await vi.advanceTimersByTimeAsync(2_500);
+			await deps.services.sessions.setRunning(
+				project.id,
+				session.session_id,
+				'https://kernel.example',
+			);
+			await vi.advanceTimersByTimeAsync(1_500);
+			expect(await pending).toMatchObject({ structuredContent: { execution: { ready: true } } });
+			expect(bootstrapKernel).toHaveBeenCalledWith(
+				instance,
+				expect.objectContaining({ timeoutMs: 1_000, inspectOnly: false }),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	async function pendingSession(mode: 'edit' | 'app', expiresAt?: string) {
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+			USER_ID,
+		);
+		const session = await deps.services.sessions.createSession({
+			project_id: project.id,
+			notebook_id: notebook.id,
+			user_id: USER_ID,
+			sandbox_id: SandboxId.create(),
+			mode,
+			authorization_expires_at: expiresAt,
+		});
+		if (mode === 'app')
+			await deps.services.sessions.claimApp(project.id, notebook.id, session.session_id);
+		return { deps, project, notebook };
+	}
+
+	it.each(['edit', 'app'] as const)(
+		'bounds a stalled %s startup poll by wait_seconds',
+		async (mode) => {
+			const { deps, project, notebook } = await pendingSession(mode);
+			const client = await connect(deps);
+			vi.useFakeTimers();
+			try {
+				const pending = client.callTool({
+					name: 'start_session',
+					arguments: { project: project.id, notebook: notebook.id, mode, wait_seconds: 5 },
+				});
+				await vi.advanceTimersByTimeAsync(1);
+				const read = vi
+					.spyOn(deps.services.sessions, 'getSession')
+					.mockImplementation(() => new Promise(() => {}));
+				await vi.advanceTimersByTimeAsync(4_999);
+				expect(await pending).toMatchObject({
+					structuredContent: {
+						status: 'starting',
+						execution: { status: mode === 'app' ? 'app_mode' : 'starting', ready: false },
+					},
+				});
+				expect(read).toHaveBeenCalledOnce();
+				expect(bootstrapKernel).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it('does not read the session after the last poll sleep consumes the wait budget', async () => {
+		const { deps, project, notebook } = await pendingSession('edit');
+		const client = await connect(deps);
+		vi.useFakeTimers();
+		try {
+			const pending = client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, wait_seconds: 1 },
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const read = vi.spyOn(deps.services.sessions, 'getSession');
+			await vi.advanceTimersByTimeAsync(999);
+			expect(await pending).toMatchObject({ structuredContent: { status: 'starting' } });
+			expect(read).not.toHaveBeenCalled();
+			expect(bootstrapKernel).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		{ mode: 'app' as const, expiry: 'session' },
+		{ mode: 'app' as const, expiry: 'credential' },
+		{ mode: 'edit' as const, expiry: 'credential' },
+	])('aborts a stalled $mode poll at $expiry expiry', async ({ mode, expiry }) => {
+		const expiresAt = new Date(Date.now() + 2_500).toISOString();
+		const { deps, project, notebook } = await pendingSession(
+			mode,
+			expiry === 'session' ? expiresAt : undefined,
+		);
+		const client = await connect(
+			deps,
+			expiry === 'credential'
+				? { ...PRINCIPAL, credential: { ...PRINCIPAL.credential, expiresAt } }
+				: PRINCIPAL,
+		);
+		vi.useFakeTimers();
+		try {
+			const pending = client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, mode, wait_seconds: 5 },
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const read = vi
+				.spyOn(deps.services.sessions, 'getSession')
+				.mockImplementation(() => new Promise(() => {}));
+			await vi.advanceTimersByTimeAsync(2_499);
+			expect(await pending).toMatchObject({
+				isError: true,
+				structuredContent: {
+					code: 'BAD_REQUEST',
+					message: 'Session authorization has expired',
+				},
+			});
+			expect(read).toHaveBeenCalledOnce();
+			expect(bootstrapKernel).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
 		}
 	});
 
@@ -541,35 +722,110 @@ describe('MCP session execution readiness', () => {
 				},
 			});
 			expect(proxy).not.toHaveBeenCalled();
+			expect(bootstrapKernel).not.toHaveBeenCalled();
 		},
 	);
 
-	it('returns created notebook and session details when the readiness probe fails', async () => {
-		const { instance } = makeFakeSandbox();
-		const { deps, project } = await setup({
-			compute: {
-				...fakeComputeFrom(instance),
-				proxy: async () => {
-					throw new Error('secret kernel URL');
+	it.each(['waiting', 'bootstrapping'] as const)(
+		'returns an authorization error when credentials expire while %s',
+		async (phase) => {
+			const { instance } = makeFakeSandbox();
+			const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+				USER_ID,
+			);
+			const session = await deps.services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: USER_ID,
+				sandbox_id: SandboxId.create(),
+			});
+			if (phase === 'bootstrapping') {
+				await deps.services.sessions.setRunning(
+					project.id,
+					session.session_id,
+					'https://kernel.example',
+				);
+				vi.mocked(bootstrapKernel).mockImplementation(() => new Promise(() => {}));
+			}
+			const client = await connect(deps, {
+				...PRINCIPAL,
+				credential: {
+					...PRINCIPAL.credential,
+					expiresAt: new Date(Date.now() + 1_000).toISOString(),
 				},
-			},
-		});
-		vi.spyOn(console, 'log').mockImplementation(() => {});
+			});
+			vi.useFakeTimers();
+			try {
+				const pending = client.callTool({
+					name: 'start_session',
+					arguments: { project: project.id, notebook: notebook.id, wait_seconds: 5 },
+				});
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(await pending).toMatchObject({
+					isError: true,
+					structuredContent: { code: 'BAD_REQUEST', message: 'Session authorization has expired' },
+				});
+				expect(bootstrapKernel).toHaveBeenCalledTimes(phase === 'waiting' ? 0 : 1);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each([
+		new ForbiddenError('Not authorized'),
+		new NotFoundError('Session not found'),
+		new BadRequestError('Session authorization has expired'),
+	])('propagates authorization failures during bootstrap: $code', async (error) => {
+		vi.mocked(bootstrapKernel).mockRejectedValue(error);
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
 		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: 'Created', code: NOTEBOOK_CODE, launch: true },
 		});
 		expect(response).toMatchObject({
-			structuredContent: {
-				notebook_id: expect.any(String),
-				launched: true,
-				session: { status: 'running', execution: { ready: false, status: 'unavailable' } },
-			},
+			isError: true,
+			structuredContent: { code: error.code, message: error.message },
 		});
-		expect(JSON.stringify(response)).not.toContain('secret kernel URL');
-		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
 	});
+
+	it.each(['reported', 'thrown'])(
+		'returns notebook and session details for a %s bootstrap failure',
+		async (failure) => {
+			if (failure === 'reported')
+				vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'unavailable' });
+			else vi.mocked(bootstrapKernel).mockRejectedValue(new Error('secret kernel URL'));
+			const { instance } = makeFakeSandbox();
+			const { deps, project } = await setup({
+				compute: {
+					...fakeComputeFrom(instance),
+					proxy: async () => {
+						throw new Error('secret kernel URL');
+					},
+				},
+			});
+			vi.spyOn(console, 'log').mockImplementation(() => {});
+			const client = await connect(deps);
+			const response = await client.callTool({
+				name: 'create_notebook',
+				arguments: { project: project.id, title: 'Created', code: NOTEBOOK_CODE, launch: true },
+			});
+			expect(response).toMatchObject({
+				structuredContent: {
+					notebook_id: expect.any(String),
+					launched: true,
+					session: { status: 'running', execution: { ready: false, status: 'unavailable' } },
+				},
+			});
+			expect(JSON.stringify(response)).not.toContain('secret kernel URL');
+			expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
+		},
+	);
 
 	it('does not probe app sessions for scratchpad execution', async () => {
 		const { instance } = makeFakeSandbox();
@@ -674,7 +930,8 @@ describe('stored notebook access boundaries', () => {
 		expect(await deps.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(1);
 	});
 
-	it('bounds readiness discovery and preserves the started session', async () => {
+	it('preserves the started session when bootstrap times out', async () => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'initializing' });
 		const { instance } = makeFakeSandbox();
 		let discoverySignal: AbortSignal | undefined;
 		const proxy = vi.fn(async (request: Request) => {
@@ -697,10 +954,10 @@ describe('stored notebook access boundaries', () => {
 			structuredContent: {
 				session_id: expect.any(String),
 				status: 'running',
-				execution: { ready: false, status: 'unavailable' },
+				execution: { ready: false, status: 'initializing' },
 			},
 		});
-		expect(discoverySignal?.aborted).toBe(true);
+		expect(discoverySignal).toBeUndefined();
 		expect(await deps.services.sessions.listActiveByProject(project.id)).toHaveLength(1);
 	}, 10_000);
 });
