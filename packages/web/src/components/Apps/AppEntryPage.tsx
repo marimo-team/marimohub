@@ -95,7 +95,12 @@ function StakeholderApp({
 	const { theme } = useTheme();
 	const location = useLocation();
 	const { copy } = useCopyToClipboard();
-	const { iframeSrc: src, latestSrc, onQuery } = useNotebookFrameLocation(sandboxUrl, theme, true);
+	const {
+		iframeSrc: src,
+		frameKey,
+		latestSrc,
+		onQuery,
+	} = useNotebookFrameLocation(sandboxUrl, theme, true);
 	return (
 		<div className="flex h-dvh flex-col">
 			<title>{title} · marimohub</title>
@@ -128,6 +133,7 @@ function StakeholderApp({
 			) : (
 				<div className="min-h-0 flex-1">
 					<NotebookFrame
+						key={frameKey}
 						src={src}
 						retrySrc={latestSrc}
 						sandboxUrl={sandboxUrl}

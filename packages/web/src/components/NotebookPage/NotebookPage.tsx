@@ -205,7 +205,11 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	});
 
 	const { theme } = useTheme();
-	const { iframeSrc, latestSrc, onQuery } = useNotebookFrameLocation(sandboxUrl, theme, isApp);
+	const { iframeSrc, frameKey, latestSrc, onQuery } = useNotebookFrameLocation(
+		sandboxUrl,
+		theme,
+		isApp,
+	);
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
@@ -306,6 +310,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 				icon: <FileCode2 />,
 				panel: (
 					<NotebookFrame
+						key={frameKey}
 						src={iframeSrc}
 						retrySrc={latestSrc}
 						sandboxUrl={sandboxUrl}
@@ -340,7 +345,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 				};
 			}),
 		],
-		[activeSecondaryFrames, iframeSrc, latestSrc, sandboxUrl, onQuery, title],
+		[activeSecondaryFrames, iframeSrc, frameKey, latestSrc, sandboxUrl, onQuery, title],
 	);
 
 	const backToProject = () => {
@@ -462,6 +467,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		handleStop,
 		holderName,
 		iframeSrc,
+		frameKey,
 		latestSrc,
 		sandboxUrl,
 		onQuery,
@@ -545,6 +551,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		handleStop,
 		holderName,
 		iframeSrc,
+		frameKey,
 		latestSrc,
 		sandboxUrl,
 		onQuery,
@@ -917,6 +924,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					>
 						{isApp ? (
 							<NotebookFrame
+								key={frameKey}
 								src={iframeSrc}
 								retrySrc={latestSrc}
 								sandboxUrl={sandboxUrl}

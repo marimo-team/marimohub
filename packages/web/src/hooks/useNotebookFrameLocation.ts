@@ -18,20 +18,38 @@ export function useNotebookFrameLocation(
 		sandboxUrl,
 		theme,
 		search: location.search,
+		currentSearch: location.search,
 		locationKey: location.key,
+		frameKey: location.key,
 		echo: '',
 	}));
 	if (frame.sandboxUrl !== sandboxUrl) {
-		setFrame({ sandboxUrl, theme, search: location.search, locationKey: location.key, echo: '' });
+		setFrame({
+			sandboxUrl,
+			theme,
+			search: location.search,
+			currentSearch: location.search,
+			locationKey: location.key,
+			frameKey: location.key,
+			echo: '',
+		});
 	} else if (frame.locationKey !== location.key) {
-		// Only our own router replacement may retain the existing iframe URL.
+		// Consume each bridge echo once so history navigation cannot reuse it.
 		const mirrored =
 			frame.echo !== '' &&
 			(location.state as { notebookBridgeEcho?: string } | null)?.notebookBridgeEcho === frame.echo;
+		const queryNavigation =
+			!mirrored &&
+			sandboxUrl !== undefined &&
+			notebookFrameUrl(sandboxUrl, frame.currentSearch, frame.theme, isApp) !==
+				notebookFrameUrl(sandboxUrl, location.search, frame.theme, isApp);
 		setFrame({
 			...frame,
 			locationKey: location.key,
-			search: mirrored ? frame.search : location.search,
+			currentSearch: location.search,
+			// An explicit navigation can return to the unchanged launch URL after mirroring.
+			frameKey: queryNavigation ? location.key : frame.frameKey,
+			search: queryNavigation ? location.search : frame.search,
 			echo: '',
 		});
 	}
@@ -58,6 +76,7 @@ export function useNotebookFrameLocation(
 		[location, navigate, sandboxUrl],
 	);
 	return {
+		frameKey: frame.frameKey,
 		iframeSrc: frame.sandboxUrl
 			? notebookFrameUrl(frame.sandboxUrl, frame.search, frame.theme, isApp)
 			: undefined,

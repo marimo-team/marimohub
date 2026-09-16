@@ -29,6 +29,7 @@ function Controls() {
 				{location.hash}
 			</output>
 			<button onClick={() => void navigate('?id=external')}>External query</button>
+			<button onClick={() => void navigate('?id=123')}>Original query</button>
 			<button onClick={() => void navigate(-1)}>Go back</button>
 			<button onClick={() => void navigate(1)}>Go forward</button>
 			<button
@@ -47,6 +48,36 @@ function Controls() {
 }
 
 describe('notebook URL mirroring', () => {
+	it.each(['app', 'edit'] as const)(
+		'reloads the %s iframe when explicit navigation returns to its original launch query',
+		async (variant) => {
+			const impl = makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
+			renderPage(variant, { search: '?id=123', controls: <Controls /> });
+			let initial = await screen.findByTitle('Forecast');
+			const launchSrc = initial.getAttribute('src');
+			for (const value of ['456', '789']) {
+				const connection = connections.at(-1)!;
+				act(() => {
+					connection.options.onQuery({ revision: 1, entries: [['id', value]] });
+				});
+				expect(screen.getByTestId('url')).toHaveTextContent(`?id=${value}`);
+				expect(screen.getByTitle('Forecast')).toBe(initial);
+				fireEvent.click(screen.getByText('Set Hub state'));
+				expect(screen.getByTitle('Forecast')).toBe(initial);
+				fireEvent.click(screen.getByText('Original query'));
+				const replacement = screen.getByTitle('Forecast');
+				expect(replacement).not.toBe(initial);
+				expect(replacement.getAttribute('src')).toBe(launchSrc);
+				expect(screen.getByTestId('url')).toHaveTextContent('?id=123');
+				expect(connection.dispose).toHaveBeenCalledOnce();
+				expect(connection.options.onQuery({ revision: 2, entries: [['late', 'ignored']] })).toBe(
+					false,
+				);
+				initial = replacement;
+			}
+			expect(sessionPosts(impl)).toHaveLength(1);
+		},
+	);
 	it.each(['app', 'edit'] as const)(
 		'updates sharing and router state without reconnecting the %s iframe',
 		async (variant) => {
