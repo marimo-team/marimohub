@@ -129,11 +129,8 @@ printf 'http://127.0.0.1:2718/?access_token=%s\n' "$token"
 
 ## Configure source builds
 
-The example images allow source builds by default. marimohub uses uv's native
-`UV_NO_BUILD` setting for dependency setup. This setting applies to project sync
-and inline dependency installation. For inline dependencies, marimohub translates
-`UV_NO_BUILD=true` into `uv pip install --no-build`. uv `0.10.9` ignores the
-environment variable for that command.
+Source builds are allowed by default. `UV_NO_BUILD` controls both project sync
+and inline dependency installation.
 
 To disable source builds, add this line after dependency installation in your
 sandbox Dockerfile:
@@ -142,15 +139,8 @@ sandbox Dockerfile:
 ENV UV_NO_BUILD=true
 ```
 
-To allow source builds in a derived image, override the setting:
-
-```dockerfile
-ENV UV_NO_BUILD=false
-```
-
-Set the variable in the **sandbox environment** before dependency setup starts.
-Setting it only on the hub server does not configure remote sandboxes. Image
-changes apply to new sandboxes, subject to the snapshot behavior described above.
+Use `ENV UV_NO_BUILD=false` in a derived image to remove this restriction.
+False or unset values leave the decision to the notebook's uv configuration.
 
 For the example E2B template, add this line to `files/marimo.sh` and rebuild the
 template:
@@ -159,17 +149,16 @@ template:
 export UV_NO_BUILD="${UV_NO_BUILD:-true}"
 ```
 
-This supplies a restrictive default and preserves an explicit `UV_NO_BUILD=false`
-in the shell environment. The template's `.setEnvs()` configures build steps only.
+This defaults to `true` and preserves an explicit `false` in the shell environment.
+The template's `.setEnvs()` affects build steps only.
 
-`UV_NO_BUILD=false` removes the environment restriction. A notebook's uv
-configuration can still disable source builds. An unset variable leaves the
-decision to uv configuration. See [uv configuration](https://docs.astral.sh/uv/configuration/files/) and
+Set the variable in the **sandbox environment** before dependency setup starts.
+The hub server's environment does not configure remote sandboxes. Image changes
+apply to new sandboxes, subject to the snapshot behavior described above.
+
+Build exceptions depend on the uv version and command. See
 [`UV_NO_BUILD`](https://docs.astral.sh/uv/reference/environment/#uv_no_build).
-
-This setting controls uv source builds. It does not isolate notebook code or
-prevent access to session credentials. Exact build exceptions depend on the uv
-version and command. The example images pin uv to `0.10.9`.
+This setting does not isolate notebook code or protect session credentials.
 
 ## Why pre-install (not just cache)
 

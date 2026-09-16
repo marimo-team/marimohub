@@ -141,9 +141,8 @@ inline metadata, marimohub installs its dependencies at session start. If uv
 cannot resolve these dependencies, the session fails. Fix the versions in the
 repository, and then push again.
 
-If uv reports that source builds are disabled, inspect `UV_NO_BUILD` in the
-sandbox environment. Use a dependency version with a compatible wheel, or allow
-source builds through the [sandbox image configuration](/sandbox-image#configure-source-builds).
+If uv reports disabled source builds, use a dependency version with a compatible
+wheel or adjust [`UV_NO_BUILD` in the sandbox environment](/sandbox-image#configure-source-builds).
 
 ### Git-synced session with heavy inline dependencies times out
 

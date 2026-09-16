@@ -52,8 +52,7 @@ install. The notebook's `pyproject.toml` lists only its own extra libraries.
 - **System packages** — add `apt-get install` lines.
 - **Python version** — change the base image tag (and the `py3.13` in your image tag).
 - **Source builds** — allowed by default. Add `ENV UV_NO_BUILD=true` after dependency
-  installation to disable them. A derived image can set `UV_NO_BUILD=false` to
-  allow them. See [Configure source builds](../../docs/sandbox-image.md#configure-source-builds).
+  installation to disable them. See [overrides](../../docs/sandbox-image.md#configure-source-builds).
 
 ## Test it
 

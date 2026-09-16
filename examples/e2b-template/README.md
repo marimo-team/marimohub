@@ -61,7 +61,6 @@ uv run --no-sync marimo edit notebook.py …
 - **Sizing** — `cpuCount` / `memoryMB` are passed to `Template.build` in
   `build.prod.mjs`; E2B bills per sandbox-second.
 - **System packages** — add to the `.aptInstall([...])` call.
-- **Source builds** — allowed by default. To disable them by default, add
+- **Source builds** — allowed by default. To disable them, add
   `export UV_NO_BUILD="${UV_NO_BUILD:-true}"` to `files/marimo.sh` and rebuild the
-  template. This preserves an explicit `UV_NO_BUILD=false` in the shell environment.
-  See [Configure source builds](../../docs/sandbox-image.md#configure-source-builds).
+  template. See [overrides](../../docs/sandbox-image.md#configure-source-builds).
