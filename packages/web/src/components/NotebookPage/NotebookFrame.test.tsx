@@ -45,7 +45,9 @@ describe('NotebookFrame recovery', () => {
 		const iframe = screen.getByTitle('Forecast');
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		await advance();
-		expect(screen.getByRole('status')).toHaveTextContent('Notebook not visible?');
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'Notebook not visible? The notebook did not finish loading. Retry or open it in a new window.',
+		);
 		const link = screen.getByRole('link', { name: 'Open in new window' });
 		expect(link).toHaveAttribute('href', SRC);
 		expect(link).toHaveAttribute('target', '_blank');

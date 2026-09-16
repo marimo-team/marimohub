@@ -38,8 +38,8 @@ function FrameAttempt({
 			{showRecovery && !loaded ? (
 				<output className="flex flex-wrap items-center gap-3 border-b bg-muted/50 px-4 py-2 text-sm">
 					<span className="min-w-0 flex-1">
-						<span className="font-medium">Notebook not visible?</span> Your browser may block
-						embedded content. Try opening it in a new window.
+						<span className="font-medium">Notebook not visible?</span> The notebook did not finish
+						loading. Retry or open it in a new window.
 					</span>
 					<Button size="sm" onPress={onRetry}>
 						Retry
