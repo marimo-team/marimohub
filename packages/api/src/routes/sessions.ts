@@ -61,6 +61,7 @@ import {
 	SurfaceForbiddenError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
+import { checkComputeProfile } from '../computeProfile';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
 import {
@@ -157,8 +158,8 @@ export const SessionCreateBodySchema = z
 		 * MARIMOHUB_VIEWER_MODE.
 		 */
 		mode: z.enum(SESSION_MODES).optional(),
-		/** One-shot fallback that does not change notebook metadata. */
-		compute_profile: z.literal('default').optional(),
+		/** One-shot edit-session override that does not change notebook metadata. */
+		compute_profile: z.string().min(1).optional(),
 		/** Request a discard-only editor sandbox. Valid only with exclusive sharing. */
 		edit_intent: z.literal('temporary').optional(),
 		/** Secondary editor surfaces to start with this edit session. */
@@ -1250,9 +1251,16 @@ export async function startNotebookSession(input: {
 		logStoredConfigFallback('base_image'),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
+	let selectedComputeProfile = notebook.meta.compute_profile;
+	if (body?.compute_profile !== undefined && body.compute_profile !== 'default') {
+		if (mode !== 'edit' || !profileOverrideEligible) {
+			throw new ForbiddenError('Compute profile selection requires a persistent edit session');
+		}
+		selectedComputeProfile = checkComputeProfile(sandbox, body.compute_profile) ?? undefined;
+	}
 	const requestedComputeProfile = resolveComputeProfile(
 		sandbox,
-		retryWithDefault ? undefined : notebook.meta.compute_profile,
+		retryWithDefault ? undefined : selectedComputeProfile,
 		sandbox.computeProfileOverride === 'editors' && profileOverrideEligible,
 		() => logStoredConfigFallback('compute_profile'),
 	);

@@ -8,7 +8,6 @@ import {
 	ConflictError,
 	createGitSource,
 	DomainError,
-	ForbiddenError,
 	joinUrlPath,
 	NotebookId,
 	NotFoundError,
@@ -56,11 +55,12 @@ import {
 	SuccessResponseSchema,
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
+import { checkComputeProfile } from '../computeProfile';
 import { appendAudit } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
 import { safeObjectContentType } from './objectBrowse';
 import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
-import type { HonoEnv, SandboxConfig } from '../context';
+import type { HonoEnv } from '../context';
 import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
 import { deleteNotebookAndRetire } from './notebookDelete';
 
@@ -210,31 +210,6 @@ function checkBaseImage(
 			images?.length
 				? `Unknown base image "${value}"; valid options: default, ${images.join(', ')}`
 				: 'This deployment does not offer base image selection',
-		);
-	}
-	return value;
-}
-
-function checkComputeProfile(
-	sandbox: SandboxConfig,
-	value: string | null | undefined,
-): string | null | undefined {
-	if (value === undefined) return value;
-	const profiles = sandbox.computeProfiles ?? [];
-	if (sandbox.computeProfileOverride !== 'editors') {
-		throw new ForbiddenError('This deployment does not allow compute profile selection');
-	}
-	if (value === null) return value;
-	const known = profiles.some((profile) => profile.name === value);
-	// Selecting the default clears the stored choice. `default` is the sentinel for
-	// "deployment default"; it only clears when no configured profile is literally
-	// named `default`, so such a profile stays selectable in its own right.
-	if (value === profiles[0]?.name || (value === 'default' && !known)) return null;
-	if (!known) {
-		throw new BadRequestError(
-			profiles.length > 0
-				? `Unknown compute profile "${value}"; valid options: default, ${profiles.map((profile) => profile.name).join(', ')}`
-				: 'This deployment does not offer compute profile selection',
 		);
 	}
 	return value;

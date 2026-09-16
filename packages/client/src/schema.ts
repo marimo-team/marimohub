@@ -3265,8 +3265,7 @@ export interface components {
 		SessionCreateBody: {
 			/** @enum {string} */
 			mode?: 'edit' | 'app';
-			/** @enum {string} */
-			compute_profile?: 'default';
+			compute_profile?: string;
 			/** @enum {string} */
 			edit_intent?: 'temporary';
 			surfaces?: ('vscode' | 'opencode')[];

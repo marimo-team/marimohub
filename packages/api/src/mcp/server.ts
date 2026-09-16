@@ -12,6 +12,7 @@ import {
 	toPublicSource,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
+import { checkComputeProfile } from '../computeProfile';
 import type { ApiDeps } from '../context';
 import { withMcpSessionActivity } from './sessionActivity';
 import { startMcpSession } from './sessionStartup';
@@ -146,6 +147,13 @@ export function createMcpServer(
 				code: z.string().describe(NOTEBOOK_CODE_DESCRIPTION),
 				tags: z.array(z.string()).optional(),
 				readme: z.string().optional(),
+				compute_profile: z
+					.string()
+					.min(1)
+					.optional()
+					.describe(
+						'Saved notebook compute profile. Omit for the deployment default. Requires profile selection to be enabled.',
+					),
 				launch: z
 					.boolean()
 					.default(false)
@@ -160,7 +168,11 @@ export function createMcpServer(
 				if (launch) await authorizeSessionStart(project, principal, 'edit', deps);
 				const notebook = await deps.services.notebooks.createNotebook(
 					project.id,
-					notebookInput,
+					{
+						...notebookInput,
+						compute_profile:
+							checkComputeProfile(deps.sandbox, notebookInput.compute_profile) ?? undefined,
+					},
 					principal.id,
 				);
 				const notebookData = {
@@ -337,6 +349,13 @@ export function createMcpServer(
 					.enum(['edit', 'app'])
 					.default('edit')
 					.describe('edit supports scratchpad execution and cell edits; app serves the notebook.'),
+				compute_profile: z
+					.string()
+					.min(1)
+					.optional()
+					.describe(
+						'Profile for a new persistent edit session. Leaves the saved profile unchanged. Omit for the saved profile, or pass "default" for the deployment default. Reused sessions and restored filesystem snapshots retain their profile.',
+					),
 				wait_seconds: z
 					.number()
 					.int()
@@ -348,7 +367,7 @@ export function createMcpServer(
 					),
 			}),
 		},
-		async ({ project: projectRef, notebook: notebookRef, mode, wait_seconds }) => {
+		async ({ project: projectRef, notebook: notebookRef, mode, compute_profile, wait_seconds }) => {
 			try {
 				const project = await resolveProject(
 					deps,
@@ -367,6 +386,7 @@ export function createMcpServer(
 						notebookId: notebook.id,
 						mode,
 						waitSeconds: wait_seconds,
+						computeProfile: compute_profile,
 					}),
 				);
 			} catch (error) {
