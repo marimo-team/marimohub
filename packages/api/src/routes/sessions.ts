@@ -1494,23 +1494,6 @@ export async function startNotebookSession(input: {
 	const sandboxId = admission?.member.sandbox_id ?? createSandboxId();
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
-	const restoreFilesystemSnapshot =
-		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
-			? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
-					sharing: mode === 'edit' ? sharing : 'shared',
-					userId: user.id,
-				})
-			: undefined;
-	const appliedComputeProfile = restoreFilesystemSnapshot
-		? {
-				name: restoreFilesystemSnapshot.compute_profile,
-				resources: restoreFilesystemSnapshot.compute_resources,
-			}
-		: {
-				name: requestedComputeProfile.name,
-				resources: toComputeResourcesResponse(requestedComputeProfile.resources),
-			};
-
 	// Provision as a saga: if a later step fails, completed steps compensate in
 	// reverse — the session record is terminated (so it does not linger in
 	// `starting` and the reaper collects it) and a provisioned sandbox is
@@ -1535,13 +1518,30 @@ export async function startNotebookSession(input: {
 		event: 'session_provision',
 		sandbox_id: sandboxId,
 		image,
-		compute_profile: appliedComputeProfile.name,
+		compute_profile: requestedComputeProfile.name,
 		project_id: pid,
 		notebook_id: nid,
 		user_id: user.id,
 		mode,
 	});
 	try {
+		const restoreFilesystemSnapshot =
+			!ephemeral && workspacePolicy.restoreFilesystemSnapshot
+				? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
+						sharing: mode === 'edit' ? sharing : 'shared',
+						userId: user.id,
+					})
+				: undefined;
+		const appliedComputeProfile = restoreFilesystemSnapshot
+			? {
+					name: restoreFilesystemSnapshot.compute_profile,
+					resources: restoreFilesystemSnapshot.compute_resources,
+				}
+			: {
+					name: requestedComputeProfile.name,
+					resources: toComputeResourcesResponse(requestedComputeProfile.resources),
+				};
+		observer.tag('compute_profile', appliedComputeProfile.name);
 		await saga(observer)
 			.step('capacity', () =>
 				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
@@ -1874,7 +1874,8 @@ export async function startNotebookSession(input: {
 			})
 			.run();
 	} catch (err) {
-		if (admission) await appPool.invalidate(pid, nid, admission.member.session_id).catch(() => {});
+		if (admission?.kind === 'reserve')
+			await appPool.invalidate(pid, nid, admission.member.session_id).catch(() => {});
 		if (!sandboxMayExist) await recordSandboxCleanup().catch(() => {});
 
 		if (err instanceof EditorClaimLostError) {

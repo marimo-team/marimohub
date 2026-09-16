@@ -191,6 +191,59 @@ describe('app pool HTTP integration', () => {
 		},
 	);
 
+	it.each([false, true])(
+		'releases admission after snapshot lookup fails before session creation (replacement: %s)',
+		async (replacement) => {
+			const selected = replacement ? await start() : undefined;
+			const fake = makeFakeSandbox();
+			const compute = {
+				...fakeComputeFrom(fake.instance),
+				filesystemSnapshotsEnabled: true,
+				createFromSnapshot: () => fake.instance,
+				captureSnapshot: async () => ({ snapshotId: 'unused' }),
+				deleteSnapshot: async () => {},
+			};
+			const client = createTestApi({
+				bucket,
+				userId: uid('alice'),
+				compute,
+				deps: {
+					policy: { defaultRole: 'editor', appPool: { ...policy, maxSessionsPerVersion: 1 } },
+				},
+			});
+			const body = {
+				mode: 'app',
+				...(selected ? { replace_app_session_id: selected.session_id } : { app_visit_id: 'tab' }),
+			};
+			const get = bucket.get.bind(bucket);
+			const failure = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === paths.project(pid).notebook(nid).fsSnapshot)
+					throw new Error('snapshot storage unavailable');
+				return get(key);
+			});
+			try {
+				expect((await client.request('POST', path(), body)).status).toBe(500);
+			} finally {
+				failure.mockRestore();
+			}
+			const pool = new AppPoolService(bucket, client.deps.services.sessions, policy);
+			const stored = await pool.store.read(pid, nid);
+			const abandoned = stored!.members.find(
+				(member) => member.session_id !== selected?.session_id,
+			)!;
+			expect(abandoned.state).toBe('retiring');
+			expect(stored!.assignments).toEqual([]);
+			await expect(
+				client.deps.services.sessions.getSession(pid, abandoned.session_id),
+			).rejects.toThrow('not found');
+			expect(fake.calls.startProcess).toHaveLength(0);
+			expect(fake.calls.destroy).toBe(replacement ? 1 : 0);
+			const retry = await expectOk<any>(await client.request('POST', path(), body));
+			expect(retry.status).toBe('running');
+			expect(retry.session_id).not.toBe(abandoned.session_id);
+		},
+	);
+
 	it('reclaims a failed replacement startup and permits a subsequent retry', async () => {
 		const selected = await start();
 		const fake = makeFakeSandbox({ failWaitForPort: new Error('kernel failed to start') });
