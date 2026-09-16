@@ -8,10 +8,10 @@ Periodic editor saves also create eligible versions. A version starts a sandbox 
 
 Configuration applies to every app in the deployment.
 
-| Environment variable                     | Default | Purpose                                                                 |
-| ---------------------------------------- | ------- | ----------------------------------------------------------------------- |
-| `MARIMOHUB_APP_MAX_USERS_PER_SESSION`    | Unset   | Maximum distinct accounts in one sandbox. Unset means unlimited.        |
-| `MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION` | Unset   | Maximum starting or ready sandboxes for one notebook's current version. |
+| Environment variable                     | Default | Purpose                                                                                         |
+| ---------------------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_APP_MAX_USERS_PER_SESSION`    | Unset   | Maximum distinct accounts in one sandbox. Unset means unlimited.                                |
+| `MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION` | Unset   | Maximum unexpired starting reservations and ready sandboxes for one notebook's current version. |
 
 Both capacity settings accept positive integers.
 For example, set `MARIMOHUB_APP_MAX_USERS_PER_SESSION=4` to expand after four accounts join a sandbox.
@@ -25,6 +25,7 @@ The router fills available sandboxes before it starts more. Starting sandboxes r
 There is no minimum warm pool. An unused app can scale to zero.
 
 Older versions drain and do not count toward `MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION`.
+Expired starting reservations also stop counting while maintenance reclaims their sandboxes.
 Repeated releases can keep several older versions alive.
 `MARIMOHUB_MAX_APPS_PER_PROJECT` and `MARIMOHUB_MAX_SESSIONS_PER_USER` still count physical app sandboxes, including draining versions.
 These safeguards can prevent a new version from starting. The API then returns HTTP 429 with `Retry-After`.

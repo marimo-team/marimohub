@@ -778,6 +778,7 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 function withoutConnectionUrls(response: ReturnType<typeof toSessionResponse>) {
 	return {
 		...response,
+		can: { ...response.can, attach: false },
 		sandbox_url: undefined,
 		surfaces:
 			response.surfaces &&

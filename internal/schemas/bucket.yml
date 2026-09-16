@@ -3452,6 +3452,8 @@ components:
         schema_version:
           type: number
           const: 1
+        deleted_at:
+          type: number
         latest_version_id:
           type: string
         members:

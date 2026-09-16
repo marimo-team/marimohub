@@ -67,6 +67,7 @@ import type { ListFilters } from './listFilters';
 import { NotebookWorkspaceService } from './NotebookWorkspaceService';
 import { DeepLinkService } from './DeepLinkService';
 import { SessionService } from '../runtime/SessionService';
+import { AppPoolStore } from '../runtime/AppPoolStore';
 import { nextIsoTimestamp } from '../../utcDate';
 
 /**
@@ -994,6 +995,7 @@ export class NotebookService {
 			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 		);
 		if (!written) {
+			await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
 			await this.thumbnails.retire(projectId, notebookId);
 			return null;
 		}
@@ -1012,6 +1014,7 @@ export class NotebookService {
 			}),
 		);
 
+		await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
 		await this.thumbnails.retire(projectId, notebookId);
 
 		// Drop the app-singleton claim: a deleted notebook's id never recurs, so
@@ -1020,7 +1023,6 @@ export class NotebookService {
 		// Cleanup of an orphaned pointer, not a claim write — the claim's write
 		// discipline (claimApp/releaseApp) still holds for live notebooks.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
-		await this.bucket.delete(paths.appPool(projectId, notebookId)).catch(() => {});
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
 		await this.deepLinks.releaseNotebook(projectId, notebookId).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseNotebook' }, error);
@@ -1276,6 +1278,7 @@ export class NotebookService {
 				`Refusing to hard-delete notebook ${notebookId}: status is "${meta.status}", expected "deleted"`,
 			);
 		}
+		await new AppPoolStore(this.bucket).retireForDeletion(projectId, notebookId);
 
 		await this.deepLinks.releaseNotebook(projectId, notebookId);
 		const markerKeys = await listAllKeys(this.bucket, paths.jobRunMarkersForProject(projectId));
@@ -1301,7 +1304,6 @@ export class NotebookService {
 		const matchingMarkers = notebookMarkerKeys.filter((key): key is string => key !== null);
 		if (matchingMarkers.length > 0) await this.bucket.delete(matchingMarkers);
 		await this.bucket.delete(paths.appClaim(projectId, notebookId));
-		await this.bucket.delete(paths.appPool(projectId, notebookId));
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId));
 		await this.bucket.delete(paths.versionPruneCutoff(projectId, notebookId));
 		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForNotebook(projectId, notebookId));

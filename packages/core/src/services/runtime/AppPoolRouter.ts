@@ -45,6 +45,7 @@ export const AppPoolAssignmentSchema = z.object({
 
 export const AppPoolSchema = z.object({
 	schema_version: z.literal(1),
+	deleted_at: z.number().optional(),
 	latest_version_id: z.string().refine(VersionId.is).optional(),
 	members: z.array(AppPoolMemberSchema),
 	assignments: z.array(AppPoolAssignmentSchema),

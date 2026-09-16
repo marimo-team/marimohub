@@ -5,6 +5,8 @@ import {
 	paths,
 	ProxyExposure,
 	AppPoolService,
+	createSandboxId,
+	signProxyToken,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId, SessionId } from '@marimo-hub/core';
 import {
@@ -93,6 +95,7 @@ describe('app pool HTTP integration', () => {
 		expect(replacement.session_id).not.toBe(assigned.session_id);
 		expect(replacement.source_version_id).toBe(selected.source_version_id);
 		expect(replacement.app_assignment).toBeUndefined();
+		expect(replacement.can.attach).toBe(false);
 		expect(replacement.sandbox_url).toBeUndefined();
 		expect(replacement.surfaces?.marimo?.url).toBeUndefined();
 		expect((await start('alice', 'phone')).session_id).toBe(assigned.session_id);
@@ -246,6 +249,7 @@ describe('app pool HTTP integration', () => {
 		const list = await expectOk<any>(await unassigned.request('GET', `/projects/${pid}/sessions`));
 		for (const response of [get, ...list.items]) {
 			expect(response.sandbox_url).toBeUndefined();
+			expect(response.can.attach).toBe(false);
 			expect(response.surfaces.marimo.url).toBeUndefined();
 		}
 		await start('bob');
@@ -253,6 +257,7 @@ describe('app pool HTTP integration', () => {
 			await unassigned.request('GET', path(`/${selected.session_id}`)),
 		);
 		expect(admitted.surfaces.marimo.url).toBe(selected.sandbox_url);
+		expect(admitted.can.attach).toBe(true);
 	});
 
 	it('admits the actual committed head when saves publish in reverse ID order', async () => {
@@ -355,6 +360,226 @@ describe('app pool HTTP integration', () => {
 			expect(
 				await authorizeProxyRequest(new Request(first.sandbox_url, { headers }), owner.deps),
 			).toMatchObject({ kind: 'forward' });
+		}
+	});
+
+	it('returns service unavailable for failed pool reads on HTTP and WebSocket admission', async () => {
+		const selected = await start();
+		const client = api();
+		const secret = 'proxy-secret';
+		client.deps.sandbox.exposure = new ProxyExposure(secret);
+		const sessions = client.deps.services.sessions;
+		await sessions.setRunning(pid, selected.session_id, '/proxy/app/', false, 'http://kernel:2718');
+		const token = await signProxyToken(pid, selected.session_id, secret);
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key === paths.appPool(pid, nid)) throw new Error('storage unavailable');
+			return get(key);
+		});
+		for (const headers of [new Headers(), new Headers({ Upgrade: 'websocket' })]) {
+			expect(
+				await authorizeProxyRequest(
+					new Request(`https://hub.test/proxy/${token}/`, { headers }),
+					client.deps,
+				),
+			).toMatchObject({ kind: 'reject', status: 503, code: 'SERVICE_UNAVAILABLE' });
+		}
+	});
+
+	it('keeps a late legacy app reachable until heartbeat adoption completes', async () => {
+		await start();
+		const client = api('bob');
+		const secret = 'proxy-secret';
+		client.deps.sandbox.exposure = new ProxyExposure(secret);
+		const sessions = client.deps.services.sessions;
+		const legacy = await sessions.createSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: uid('bob'),
+			mode: 'app',
+			sandbox_id: createSandboxId(),
+		});
+		await sessions.setRunning(pid, legacy.session_id, '/proxy/app/', false, 'http://kernel:2718');
+		const token = await signProxyToken(pid, legacy.session_id, secret);
+		const request = new Request(`https://hub.test/proxy/${token}/`);
+		const pool = new AppPoolService(bucket, sessions, policy);
+		expect(
+			(await pool.inspect(pid, nid)).some((member) => member.session_id === legacy.session_id),
+		).toBe(false);
+		expect(await authorizeProxyRequest(request, client.deps)).toMatchObject({ kind: 'forward' });
+		await expectOk(await client.request('POST', path(`/${legacy.session_id}/heartbeat`)));
+		expect(
+			(await pool.inspect(pid, nid)).find((member) => member.session_id === legacy.session_id),
+		).toMatchObject({ state: 'draining' });
+		expect(await authorizeProxyRequest(request, client.deps)).toMatchObject({ kind: 'forward' });
+		await pool.invalidate(pid, nid, legacy.session_id);
+		expect(await authorizeProxyRequest(request, client.deps)).toMatchObject({
+			kind: 'reject',
+			status: 410,
+		});
+	});
+
+	it.each([false, true])(
+		'does not invalidate a delayed startup reservation (replacement: %s)',
+		async (replacement) => {
+			const selected = replacement ? await start() : undefined;
+			const fake = makeFakeSandbox();
+			const client = createTestApi({
+				bucket,
+				userId: uid('alice'),
+				compute: fakeComputeFrom(fake.instance),
+				deps: { policy: { defaultRole: 'editor', appPool: policy } },
+			});
+			const sessions = client.deps.services.sessions;
+			const create = sessions.createSession.bind(sessions);
+			let release!: () => void;
+			let entered!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const creating = new Promise<void>((resolve) => {
+				entered = resolve;
+			});
+			vi.spyOn(sessions, 'createSession').mockImplementation(async (input) => {
+				entered();
+				await gate;
+				return create(input);
+			});
+			const starting = client.request('POST', path(), {
+				mode: 'app',
+				...(selected ? { replace_app_session_id: selected.session_id } : {}),
+			});
+			await creating;
+			try {
+				await expectError(
+					await api('bob').request('POST', path(), { mode: 'app' }),
+					409,
+					'CONFLICT',
+				);
+				const pool = await new AppPoolService(bucket, sessions, policy).store.read(pid, nid);
+				const member = pool!.members.find((item) => item.state === 'starting')!;
+				expect(member.user_id).toBe(uid('alice'));
+				expect(pool!.assignments.find((item) => item.user_id === uid('bob'))?.session_id).toBe(
+					member.session_id,
+				);
+				expect(fake.calls.startProcess).toHaveLength(0);
+			} finally {
+				release();
+			}
+			const running = await expectOk<any>(await starting);
+			const joined = await start('bob');
+			expect(joined.session_id).toBe(running.session_id);
+			expect(joined.reused).toBe(true);
+			expect((await sessions.getSession(pid, running.session_id)).user_id).toBe(uid('alice'));
+			expect(sessions.createSession).toHaveBeenCalledTimes(1);
+			expect(fake.calls.startProcess).toHaveLength(1);
+		},
+	);
+
+	it('leaves a concurrent stop in control of sandbox teardown', async () => {
+		const selected = await start();
+		const fake = makeFakeSandbox();
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+			deps: { policy: { defaultRole: 'editor', appPool: policy } },
+		});
+		let release!: () => void;
+		let entered!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const destroying = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const destroy = vi.spyOn(fake.instance, 'destroy').mockImplementation(async () => {
+			entered();
+			await gate;
+		});
+		const stopping = client.request('DELETE', path(`/${selected.session_id}`));
+		await destroying;
+		try {
+			await sweepAppPools(client.deps);
+			await sweepAppPools(client.deps);
+			expect(destroy).toHaveBeenCalledTimes(1);
+			expect(
+				(await client.deps.services.sessions.getSession(pid, selected.session_id)).status,
+			).toBe('terminating');
+		} finally {
+			release();
+		}
+		await expectOk(await stopping);
+		await sweepAppPools(client.deps);
+		expect(destroy).toHaveBeenCalledTimes(1);
+		expect(
+			await new AppPoolService(bucket, client.deps.services.sessions, policy).inspect(pid, nid),
+		).toEqual([]);
+	});
+
+	it('retries app reclamation after project GC without removing its deletion fence', async () => {
+		const fake = makeFakeSandbox();
+		const client = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(fake.instance),
+		});
+		const selected = await expectOk<any>(await client.request('POST', path(), { mode: 'app' }));
+		const { projects, sessions } = client.deps.services;
+		const pool = new AppPoolService(bucket, sessions, policy);
+		await projects.deleteProject(pid, ACTOR);
+		await projects.hardDeleteProject(pid);
+		expect(await bucket.get(paths.project(pid).meta)).toBeNull();
+		expect((await sessions.getSession(pid, selected.session_id)).status).toBe('running');
+		const deleted = (await pool.store.read(pid, nid))!;
+		expect(deleted.deleted_at).toBeTypeOf('number');
+		expect(deleted.assignments).toEqual([]);
+		expect(deleted.members).toMatchObject([{ session_id: selected.session_id, state: 'retiring' }]);
+
+		const destroy = vi
+			.spyOn(fake.instance, 'destroy')
+			.mockRejectedValueOnce(new Error('provider unavailable'));
+		await sweepAppPools(client.deps);
+		expect(destroy).toHaveBeenCalledTimes(1);
+		expect(
+			(await sessions.getSession(pid, selected.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+		expect((await pool.store.read(pid, nid))!.members).toHaveLength(1);
+
+		await sweepAppPools(client.deps);
+		expect(destroy).toHaveBeenCalledTimes(2);
+		expect((await sessions.getSession(pid, selected.session_id)).sandbox_reclaimed_at).toBeTruthy();
+		expect(await pool.store.read(pid, nid)).toMatchObject({
+			deleted_at: deleted.deleted_at,
+			members: [],
+			assignments: [],
+		});
+		await sweepAppPools(client.deps);
+		expect(destroy).toHaveBeenCalledTimes(2);
+	});
+
+	it('recovers interrupted teardown after generic stale-session expiry', async () => {
+		const selected = await start();
+		const fake = makeFakeSandbox();
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+		});
+		const sessions = client.deps.services.sessions;
+		await sessions.beginTerminating(pid, selected.session_id);
+		await sweepAppPools(client.deps);
+		expect(fake.calls.destroy).toBe(0);
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60_000);
+		try {
+			expect(await sessions.expireStale()).toBe(1);
+			await sweepAppPools(client.deps);
+			expect(fake.calls.destroy).toBe(1);
+			expect(
+				(await sessions.getSession(pid, selected.session_id)).sandbox_reclaimed_at,
+			).toBeTruthy();
+		} finally {
+			clock.mockRestore();
 		}
 	});
 

@@ -126,7 +126,7 @@ export default defineConfig({
 			{ text: 'Deploy', link: '/deploying/', activeMatch: '^/deploying/' },
 			{
 				text: 'Operate',
-				activeMatch: '^/(security|operations|troubleshooting)',
+				activeMatch: '^/(security|operations|app-pools|troubleshooting)',
 				items: [
 					{ text: 'Security', link: '/security' },
 					{ text: 'Operations', link: '/operations' },

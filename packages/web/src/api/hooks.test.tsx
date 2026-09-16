@@ -463,6 +463,7 @@ describe('useStartSession', () => {
 
 describe('app session replacement', () => {
 	it('sends the selected sandbox ID in one replacement request and refreshes the list', async () => {
+		const timeout = vi.spyOn(AbortSignal, 'timeout');
 		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-2', mode: 'app' }));
 		const { result, client } = renderHookWithClient(() => useRestartApp(PID, NID), {
 			toaster: false,
@@ -475,6 +476,7 @@ describe('app session replacement', () => {
 		const request = requestOf(fetchMock);
 		expect(request.method).toBe('POST');
 		expect(await request.clone().json()).toEqual({ mode: 'app', replace_app_session_id: 'sess-1' });
+		expect(timeout).toHaveBeenCalledWith(150_000);
 		expect(invalidatedKeys(spy)).toEqual([sessionKeys.listByProject(PID)]);
 	});
 

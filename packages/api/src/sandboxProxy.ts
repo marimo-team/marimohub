@@ -223,21 +223,30 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	if (
-		sessionMode(session) === 'app' &&
-		!(await new AppPoolService(
-			deps.bucket,
-			deps.services.sessions,
-			deps.policy.appPool,
-			deps.metrics,
-		).canAccess(projectId, session.notebook_id, user.id, sessionId, !session.app_pool))
-	) {
-		return {
-			kind: 'reject',
-			status: 410,
-			code: 'GONE',
-			message: 'The app assignment expired. Open the app again.',
-		};
+	if (sessionMode(session) === 'app') {
+		try {
+			const allowed = await new AppPoolService(
+				deps.bucket,
+				deps.services.sessions,
+				deps.policy.appPool,
+				deps.metrics,
+			).canAccess(projectId, session.notebook_id, user.id, sessionId, !session.app_pool);
+			if (!allowed) {
+				return {
+					kind: 'reject',
+					status: 410,
+					code: 'GONE',
+					message: 'The app assignment expired. Open the app again.',
+				};
+			}
+		} catch {
+			return {
+				kind: 'reject',
+				status: 503,
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'Session authorization could not be verified',
+			};
+		}
 	}
 	// The CURRENT context expiry can be earlier than the deadline stamped at
 	// session start — an established socket must not outlive either.

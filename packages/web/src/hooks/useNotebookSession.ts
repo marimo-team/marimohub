@@ -461,10 +461,13 @@ export function useNotebookSession(
 		const leave = () => {
 			if (mode === 'app') leaveAppVisit(projectId, notebookId, sessionRef.current);
 		};
-		window.addEventListener('pagehide', leave);
+		const onPageHide = (event: PageTransitionEvent) => {
+			if (!event.persisted) leave();
+		};
+		window.addEventListener('pagehide', onPageHide);
 		return () => {
 			mountedRef.current = false;
-			window.removeEventListener('pagehide', leave);
+			window.removeEventListener('pagehide', onPageHide);
 			leave();
 		};
 	}, [mode, projectId, notebookId]);

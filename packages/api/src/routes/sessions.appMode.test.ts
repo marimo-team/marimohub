@@ -547,12 +547,17 @@ describe('Session routes (app mode)', () => {
 		await expectError(res, 400, 'BAD_REQUEST');
 	});
 
-	it('deleting the notebook removes its pool record', async () => {
+	it('deleting the notebook preserves its pool deletion fence', async () => {
 		await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
 		expect(await bucket.get(paths.appPool(pid, nid))).not.toBeNull();
 
 		await expectOk(await owner('DELETE', `/projects/${pid}/notebooks/${nid}`));
-		expect(await bucket.get(paths.appPool(pid, nid))).toBeNull();
+		const pool = new AppPoolService(bucket, createServices(bucket).sessions);
+		expect(await pool.store.read(pid, nid)).toMatchObject({
+			deleted_at: expect.any(Number),
+			assignments: [],
+			members: [expect.objectContaining({ state: 'retiring' })],
+		});
 	});
 
 	it('deleting the notebook retires its running app', async () => {

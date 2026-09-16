@@ -92,6 +92,7 @@ export class AppPoolService {
 			operation_expires_at: now + input.startupMs,
 		};
 		const decision = await this.store.mutate(input.projectId, input.notebookId, async (pool) => {
+			if (pool.deleted_at !== undefined) throw new NotFoundError('App pool was deleted');
 			// Reading the head after the pool snapshot fences stale requests on CAS retries.
 			await this.assertCommittedVersion(input);
 			const routed = decide(pool, reservation, this.now());
@@ -282,7 +283,12 @@ export class AppPoolService {
 		return {
 			members,
 			canAccess: (userId: UserId, sessionId: SessionId, legacy = false) =>
-				pool ? legacyMembers.has(sessionId) || assignments.get(userId) === sessionId : legacy,
+				pool
+					? pool.deleted_at === undefined &&
+						(legacyMembers.has(sessionId) ||
+							assignments.get(userId) === sessionId ||
+							(legacy && !members.has(sessionId)))
+					: legacy,
 		};
 	}
 
@@ -292,6 +298,13 @@ export class AppPoolService {
 		observedSessions?: readonly Session[],
 	) {
 		const snapshot = await this.store.read(projectId, notebookId);
+		if (
+			snapshot?.deleted_at !== undefined &&
+			snapshot.members.length === 0 &&
+			(observedSessions?.length ?? 0) === 0
+		)
+			return snapshot;
+		const missing = new Set<SessionId>();
 		// Legacy writers are stopped before rollout, so discovery is needed only before a pool exists.
 		const candidates =
 			observedSessions ??
@@ -300,7 +313,11 @@ export class AppPoolService {
 						try {
 							return await this.sessions.getSession(projectId, member.session_id);
 						} catch (error) {
-							if (error instanceof NotFoundError) return null;
+							if (error instanceof NotFoundError) {
+								// A live reservation may precede its session record; readiness may not.
+								if (member.state !== 'starting') missing.add(member.session_id);
+								return null;
+							}
 							throw error;
 						}
 					})
@@ -313,6 +330,13 @@ export class AppPoolService {
 				sessionMode(session) === 'app',
 		);
 		return this.store.mutate(projectId, notebookId, (pool) => {
+			for (const member of pool.members) {
+				if (
+					missing.has(member.session_id) ||
+					(member.state === 'starting' && member.operation_expires_at <= this.now())
+				)
+					member.state = 'retiring';
+			}
 			for (const session of sessions) {
 				const member = pool.members.find((item) => item.session_id === session.session_id);
 				if (member) {
@@ -333,7 +357,7 @@ export class AppPoolService {
 						sandbox_id: session.sandbox_id,
 						user_id: session.user_id,
 						source_version_id: session.source_version_id,
-						state: 'draining',
+						state: pool.deleted_at === undefined ? 'draining' : 'retiring',
 						legacy: true,
 						created_at: Date.parse(session.started_at),
 						operation_token: 'legacy',

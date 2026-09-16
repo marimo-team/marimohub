@@ -16,6 +16,9 @@ import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
 import type { SessionService } from '../runtime/SessionService';
+import { AppPoolStore } from '../runtime/AppPoolStore';
+import { AppPoolService } from '../runtime/AppPoolService';
+import { DEFAULT_APP_POOL_POLICY } from '../runtime/AppPoolRouter';
 import { listAllKeys, listAllPrefixes } from '../catalog/storage';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -1422,6 +1425,65 @@ describe('NotebookService', () => {
 	});
 
 	describe('deleteNotebook', () => {
+		it.each([false, true])(
+			'fences app startup across deletion (existing pool: %s)',
+			async (existing) => {
+				const notebook = await notebooks.createNotebook(
+					projectId,
+					{ title: 'App', description: '', code: 'v1' },
+					ACTOR,
+				);
+				const [version] = await notebooks.listVersions(projectId, notebook.id);
+				const pool = new AppPoolService(bucket, sessions, DEFAULT_APP_POOL_POLICY);
+				const input = {
+					projectId,
+					notebookId: notebook.id,
+					userId: ACTOR,
+					versionId: version.version_id,
+					startupMs: 900_000,
+				};
+				const admission = existing ? await pool.admit(input) : undefined;
+				await notebooks.deleteNotebook(projectId, notebook.id, ACTOR);
+				await expect(pool.admit(input)).rejects.toMatchObject({ status: 404 });
+				if (admission) {
+					await expect(
+						pool.complete(
+							projectId,
+							notebook.id,
+							admission.member.session_id,
+							admission.member.operation_token,
+						),
+					).rejects.toMatchObject({ status: 409 });
+				}
+				await notebooks.deleteNotebook(projectId, notebook.id, ACTOR);
+				await notebooks.hardDeleteNotebook(projectId, notebook.id);
+				const record = await new AppPoolStore(bucket).read(projectId, notebook.id);
+				expect(record?.deleted_at).toEqual(expect.any(Number));
+				expect(record?.assignments).toEqual([]);
+				expect(record?.members).toHaveLength(existing ? 1 : 0);
+				expect(record?.members.every((member) => member.state === 'retiring')).toBe(true);
+			},
+		);
+
+		it('propagates a failed deletion fence and repairs it when deletion is retried', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'App', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const fence = vi
+				.spyOn(AppPoolStore.prototype, 'retireForDeletion')
+				.mockRejectedValueOnce(new Error('pool unavailable'));
+			await expect(notebooks.deleteNotebook(projectId, notebook.id, ACTOR)).rejects.toThrow(
+				'pool unavailable',
+			);
+			await notebooks.deleteNotebook(projectId, notebook.id, ACTOR);
+			expect((await new AppPoolStore(bucket).read(projectId, notebook.id))?.deleted_at).toEqual(
+				expect.any(Number),
+			);
+			expect(fence).toHaveBeenCalledTimes(2);
+			fence.mockRestore();
+		});
 		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

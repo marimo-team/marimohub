@@ -6,6 +6,7 @@ import { SessionService } from './SessionService';
 import { AppPoolService } from './AppPoolService';
 import { makeLocalSource } from '../../testing/fixtures';
 import { paths } from '../../paths';
+import { NotFoundError } from '../../errors';
 import { DEFAULT_APP_POOL_POLICY } from './AppPoolRouter';
 import type { AppPoolPolicy } from './AppPoolRouter';
 
@@ -45,7 +46,22 @@ describe('app pool admission and lifecycle', () => {
 			startupMs: 900_000,
 		});
 	};
-	const ready = async (admission: Awaited<ReturnType<typeof admit>>) => {
+	const ready = async (
+		admission: Awaited<ReturnType<typeof admit>>,
+		authorizationExpiresAt?: string,
+	) => {
+		await sessions.createSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: admission.member.user_id,
+			mode: 'app',
+			app_pool: true,
+			session_id: admission.member.session_id,
+			sandbox_id: admission.member.sandbox_id,
+			source_version_id: admission.member.source_version_id,
+			authorization_expires_at: authorizationExpiresAt,
+		});
+		await sessions.setRunning(pid, admission.member.session_id, 'https://sandbox.example');
 		await pool.complete(pid, nid, admission.member.session_id, admission.member.operation_token);
 		return admission;
 	};
@@ -54,6 +70,84 @@ describe('app pool admission and lifecycle', () => {
 		generation: admission.assignment.generation,
 	});
 	const effects = () => ({ probe: vi.fn(async () => 0), retire: vi.fn(async () => true) });
+
+	it('checks an empty deletion tombstone with one read and no writes', async () => {
+		await pool.store.retireForDeletion(pid, nid);
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
+		const list = vi.spyOn(bucket, 'list');
+		const cleanup = effects();
+		await pool.reconcile(pid, nid, cleanup);
+		expect(get.mock.calls).toEqual([[paths.appPool(pid, nid)]]);
+		expect(put).not.toHaveBeenCalled();
+		expect(list).not.toHaveBeenCalled();
+		expect(cleanup.probe).not.toHaveBeenCalled();
+		expect(cleanup.retire).not.toHaveBeenCalled();
+	});
+
+	it.each(['ready', 'draining'] as const)(
+		'retires a missing %s session before re-admission',
+		async (state) => {
+			const first = await ready(await admit());
+			if (state === 'draining') await ready(await admit('bob', v2));
+			await bucket.delete(paths.session(pid, first.member.session_id));
+			const next = await admit('alice', state === 'draining' ? v2 : v1);
+			expect(next.member.session_id).not.toBe(first.member.session_id);
+			expect(next.assignment.generation).not.toBe(first.assignment.generation);
+			expect(
+				(await pool.inspect(pid, nid)).find(
+					(member) => member.session_id === first.member.session_id,
+				),
+			).toMatchObject({ state: 'retiring', users: 0 });
+			expect(
+				await pool.heartbeat(
+					pid,
+					nid,
+					UserId.parse('alice'),
+					first.member.session_id,
+					visit(first),
+				),
+			).toBe(false);
+			const cleanup = effects();
+			await pool.reconcile(pid, nid, cleanup);
+			expect(cleanup.retire).toHaveBeenCalledWith(
+				expect.objectContaining({ session_id: first.member.session_id }),
+				null,
+			);
+		},
+	);
+
+	it('retains a live recordless startup until the reservation deadline', async () => {
+		const first = await admit();
+		const second = await admit('bob');
+		expect(second.kind).toBe('reuse');
+		expect(second.member.session_id).toBe(first.member.session_id);
+		now = first.member.operation_expires_at;
+		await pool.synchronize(pid, nid);
+		expect((await pool.inspect(pid, nid))[0]).toMatchObject({ state: 'retiring', users: 0 });
+	});
+
+	it('does not infer missing records from a partial legacy adoption snapshot', async () => {
+		const first = await ready(await admit());
+		await pool.synchronize(pid, nid, []);
+		expect((await pool.inspect(pid, nid))[0]).toMatchObject({
+			session_id: first.member.session_id,
+			state: 'ready',
+		});
+	});
+
+	it('does not retire a startup published while its missing record is being read', async () => {
+		const first = await admit();
+		vi.spyOn(sessions, 'getSession').mockImplementationOnce(async () => {
+			now = first.member.operation_expires_at - 1;
+			await pool.heartbeat(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first));
+			await ready(first);
+			now++;
+			throw new NotFoundError('not yet published');
+		});
+		await pool.synchronize(pid, nid);
+		expect((await pool.inspect(pid, nid))[0]).toMatchObject({ state: 'ready', users: 1 });
+	});
 
 	it('bounds steady admission and maintenance reads to pool members without bucket scans', async () => {
 		const first = await ready(await admit());
@@ -446,18 +540,7 @@ describe('app pool admission and lifecycle', () => {
 	it.each(['running', 'terminating', 'failed', 'authorization boundary'] as const)(
 		'reconciles a %s session without letting presence override mandatory retirement',
 		async (state) => {
-			const first = await ready(await admit());
-			await sessions.createSession({
-				project_id: pid,
-				notebook_id: nid,
-				user_id: UserId.parse('alice'),
-				mode: 'app',
-				session_id: first.member.session_id,
-				sandbox_id: first.member.sandbox_id,
-				app_pool: true,
-				authorization_expires_at: new Date(now + 1).toISOString(),
-			});
-			await sessions.setRunning(pid, first.member.session_id, 'https://sandbox.example');
+			const first = await ready(await admit(), new Date(now + 1).toISOString());
 			if (state === 'terminating') await sessions.beginTerminating(pid, first.member.session_id);
 			if (state === 'failed') await sessions.markFailed(pid, first.member.session_id);
 			if (state === 'authorization boundary') now++;
@@ -521,7 +604,9 @@ describe('app pool admission and lifecycle', () => {
 	it('rejects expired startup completion and reclaims a recordless reservation', async () => {
 		const first = await admit();
 		now += 900_001;
-		await expect(ready(first)).rejects.toMatchObject({ status: 409 });
+		await expect(
+			pool.complete(pid, nid, first.member.session_id, first.member.operation_token),
+		).rejects.toMatchObject({ status: 409 });
 		const cleanup = effects();
 		await pool.reconcile(pid, nid, cleanup);
 		expect(cleanup.retire).toHaveBeenCalledWith(
@@ -598,7 +683,7 @@ describe('app pool admission and lifecycle', () => {
 		await pool.reconcile(pid, nid, cleanup);
 		expect(cleanup.retire).toHaveBeenCalledWith(
 			expect.objectContaining({ session_id: first.member.session_id, idle_since: lastVisitExpiry }),
-			null,
+			expect.objectContaining({ session_id: first.member.session_id }),
 		);
 	});
 
@@ -693,5 +778,32 @@ describe('app pool admission and lifecycle', () => {
 		expect(
 			(await pool.inspect(pid, nid)).find((item) => item.session_id === legacy.session_id)?.state,
 		).toBe('draining');
+	});
+
+	it('fences legacy fallback and late adoption after deletion', async () => {
+		const admission = await ready(await admit());
+		const legacy = await sessions.createSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: UserId.parse('alice'),
+			mode: 'app',
+			sandbox_id: admission.member.sandbox_id,
+		});
+		expect(await pool.canAccess(pid, nid, UserId.parse('legacy'), legacy.session_id, true)).toBe(
+			true,
+		);
+		await pool.store.retireForDeletion(pid, nid);
+		expect(await pool.canAccess(pid, nid, UserId.parse('legacy'), legacy.session_id, true)).toBe(
+			false,
+		);
+		await pool.synchronize(pid, nid, [legacy]);
+		expect(
+			(await pool.inspect(pid, nid)).find((member) => member.session_id === legacy.session_id),
+		).toMatchObject({ state: 'retiring', users: 0 });
+		expect(await pool.heartbeat(pid, nid, UserId.parse('legacy'), legacy.session_id)).toBe(false);
+		await expect(admit()).rejects.toMatchObject({ status: 404 });
+		await expect(
+			pool.complete(pid, nid, admission.member.session_id, admission.member.operation_token),
+		).rejects.toMatchObject({ status: 409 });
 	});
 });

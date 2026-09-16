@@ -83,6 +83,28 @@ describe('pure app routing', () => {
 		expect(arrive(pool).decision.kind).toBe('reserve');
 	});
 
+	it('joins a starting replacement without transferring provisioning ownership', () => {
+		const replacement = member({ state: 'starting', replaces_session_id: createSessionId() });
+		const result = routeApp(
+			{ ...emptyAppPool(), members: [replacement] },
+			{ ...policy, maxSessionsPerVersion: 1 },
+			{
+				userId: UserId.parse('arrival'),
+				visitId: 'tab',
+				versionId: version,
+				generation: 'joined',
+				reservation: member({ state: 'starting' }),
+				now,
+			},
+		);
+		expect(result.decision).toMatchObject({
+			kind: 'reuse',
+			member: { ...replacement },
+			assignment: { user_id: 'arrival', session_id: replacement.session_id },
+		});
+		expect(result.pool.members).toEqual([replacement]);
+	});
+
 	it.each(['admission', 'replacement'] as const)(
 		'%s excludes expired startup reservations at the exact deadline',
 		(operation) => {

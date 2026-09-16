@@ -571,6 +571,51 @@ describe('useNotebookSession', () => {
 		expect(leave![1]!.keepalive).toBe(true);
 	});
 
+	it('preserves the visit across back-forward cache restoration', async () => {
+		vi.useFakeTimers();
+		const session = makeSession({
+			mode: 'app',
+			app_assignment: { visit_id: 'tab', generation: 'generation-1' },
+		});
+		const fetchMock = vi.fn(async (..._args: Parameters<typeof fetch>) => jsonOk(session));
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		await act(async () => {
+			window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+			window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+			await vi.advanceTimersByTimeAsync(30_000);
+		});
+		expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+			`/api/v1/projects/${PID}/notebooks/${NID}/sessions`,
+			`/api/v1/projects/${PID}/notebooks/${NID}/sessions/sess-1/heartbeat`,
+		]);
+		expect(result.current.isRunning).toBe(true);
+		expect(result.current.ended).toBeNull();
+	});
+
+	it('releases the visit when the page is discarded', async () => {
+		const assignment = { visit_id: 'tab', generation: 'generation-1' };
+		const fetchMock = vi.fn(async (..._args: Parameters<typeof fetch>) =>
+			jsonOk(makeSession({ mode: 'app', app_assignment: assignment })),
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+		await act(async () => {
+			window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+		});
+		const leave = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/sess-1/leave'));
+		expect(leave).toBeDefined();
+		const init = leave![1];
+		expect(init?.keepalive).toBe(true);
+		expect(JSON.parse(init!.body as string)).toEqual(assignment);
+	});
+
 	it('a late poll response cannot resurrect a session after the startup timeout', async () => {
 		vi.useFakeTimers();
 		let releasePoll!: (response: Response) => void;

@@ -2,6 +2,7 @@ import type { NotebookId, ProjectId } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
+import { NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import { readStored } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
@@ -46,7 +47,16 @@ export class AppPoolStore {
 				const object = await this.bucket.get(key);
 				const pool = object ? await readStored(AppPoolSchema, object, key) : emptyAppPool();
 				const before = JSON.stringify(pool);
+				const deletedAt = pool.deleted_at;
 				const { pool: next, value } = await update(pool);
+				if (
+					deletedAt !== undefined &&
+					(next.deleted_at !== deletedAt ||
+						next.assignments.length > 0 ||
+						next.members.some((member) => member.state !== 'retiring'))
+				) {
+					throw new NotFoundError('The app notebook was deleted');
+				}
 				const serialized = JSON.stringify(next);
 				if (serialized === before) return value;
 				await writer.put(
@@ -62,5 +72,15 @@ export class AppPoolStore {
 				onExhausted: () => this.metrics.increment('app_pool.cas.exhausted'),
 			},
 		);
+	}
+
+	async retireForDeletion(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
+		await this.mutate(projectId, notebookId, (pool) => {
+			// Keep the tombstone after reclamation so delayed admissions cannot recreate the pool.
+			pool.deleted_at ??= Date.now();
+			for (const member of pool.members) member.state = 'retiring';
+			pool.assignments = [];
+			return { pool, value: undefined };
+		});
 	}
 }

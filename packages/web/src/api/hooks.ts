@@ -2096,6 +2096,7 @@ export function useRestartApp(projectId: string, notebookId: string) {
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
 					params: { path: { pid: projectId, nid: notebookId } },
 					body: { mode: 'app', replace_app_session_id: sessionId },
+					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
 				}),
 			),
 		() => [sessionKeys.listByProject(projectId)],

@@ -941,11 +941,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 
 			{error && !ended && (
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-					<p className="max-w-md text-sm text-destructive">
-						{isApp && error.code === 'RESOURCE_EXHAUSTED'
-							? `App is busy. ${error.message}`
-							: error.message}
-					</p>
+					<p className="max-w-md text-sm text-destructive">{error.message}</p>
 					{showProfileSizeHint && (
 						<p className="max-w-md text-xs text-muted-foreground">
 							This notebook uses profile {selectedComputeProfile?.name} — a larger profile may be

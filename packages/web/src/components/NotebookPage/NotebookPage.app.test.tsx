@@ -228,10 +228,23 @@ describe('NotebookPage app variant', () => {
 		});
 		renderPage('app');
 
-		expect(await screen.findByText(/No nodes can schedule this profile/)).toBeInTheDocument();
+		expect(await screen.findByText('No nodes can schedule this profile')).toBeInTheDocument();
 		expect(screen.queryByText('Retry with Default')).toBeNull();
 		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
 	});
+
+	it.each(['App is busy. Retry shortly.', 'Project app sandbox limit reached.'])(
+		'renders capacity errors without changing their meaning: %s',
+		async (message) => {
+			makeFetch({
+				role: 'viewer',
+				createError: { code: 'RESOURCE_EXHAUSTED', message, status: 429 },
+			});
+			renderPage('app');
+			expect(await screen.findByText(message)).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+		},
+	);
 
 	it('offers a one-shot Retry with Default without replacing the stored profile', async () => {
 		const user = userEvent.setup();

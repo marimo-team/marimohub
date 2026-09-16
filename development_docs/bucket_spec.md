@@ -1520,7 +1520,9 @@ It stores sandbox reservations, account assignments, and per-visit leases togeth
 `AppPoolService` applies the pure router decisions and coordinates session provisioning and retirement.
 Compute operations run outside CAS retries. Operation tokens fence late provisioning completions.
 Retiring members remain recorded until sandbox reclamation succeeds.
-Notebook and project deletion can remove subordinate pool records.
+Notebook and project deletion CAS-mark their pools with `deleted_at`, retire all members, and clear assignments.
+Maintenance retains each member until reclamation succeeds, even after the notebook or project files are removed.
+The empty deletion tombstone remains to prevent delayed admissions from recreating the pool.
 
 The legacy `_system/apps/{pid}/{nid}.json` claim remains owned by `SessionService` during migration.
 New pool members do not acquire that singleton claim. See [App pools](../docs/app-pools.md) for rollout and presence semantics.

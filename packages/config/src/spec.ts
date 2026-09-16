@@ -1371,7 +1371,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION',
 						name: 'Max app sessions per version',
 						description:
-							'Maximum current-version sandboxes per notebook. Draining versions do not count. Project and starter-user caps still apply.',
+							'Maximum unexpired starting reservations and ready sandboxes for one notebook’s current version. Draining versions and expired reservations awaiting cleanup do not count. Project and starter-user caps still apply to physical sandboxes.',
 					},
 					{
 						id: 'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',

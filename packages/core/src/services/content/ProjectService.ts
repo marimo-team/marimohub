@@ -23,7 +23,7 @@ import {
 	PreconditionFailedError,
 	ValidationError,
 } from '../../errors';
-import { createProjectId, SYSTEM_ACTOR } from '../../ids';
+import { createProjectId, NotebookId, SYSTEM_ACTOR } from '../../ids';
 import type { ProjectId, SnapshotId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -43,7 +43,8 @@ import type {
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
-import { deleteByPrefix } from '../catalog/storage';
+import { deleteByPrefix, listAllKeys, listAllPrefixes } from '../catalog/storage';
+import { AppPoolStore } from '../runtime/AppPoolStore';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
 import { DeepLinkService } from './DeepLinkService';
 import { createListFilter } from './listFilters';
@@ -819,6 +820,7 @@ export class ProjectService {
 			}
 		};
 		if (!written) {
+			await this.retireAppPoolsForDeletion(id);
 			await retireThumbnails();
 			return null;
 		}
@@ -834,11 +836,31 @@ export class ProjectService {
 				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
 				projectCatalogPatch(updated, entry),
 		);
+		await this.retireAppPoolsForDeletion(id);
 		await retireThumbnails();
 		await this.deepLinks.releaseProject(id).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
 		});
 		return { project: updated, mutationId: snapshot.snapshot_id };
+	}
+
+	private async retireAppPoolsForDeletion(projectId: ProjectId): Promise<void> {
+		const notebooksPrefix = `projects/${projectId}/notebooks/`;
+		const poolPrefix = paths.appPoolsForProject(projectId);
+		const [notebooks, pools] = await Promise.all([
+			listAllPrefixes(this.bucket, notebooksPrefix),
+			listAllKeys(this.bucket, poolPrefix),
+		]);
+		const notebookIds = new Set(
+			[
+				...notebooks.map((key) => key.slice(notebooksPrefix.length, -1)),
+				...pools.map((key) => key.slice(poolPrefix.length).replace(/\.json$/, '')),
+			].filter(NotebookId.is),
+		);
+		const store = new AppPoolStore(this.bucket);
+		await mapWithConcurrency([...notebookIds], BUCKET_SCAN_CONCURRENCY, (notebookId) =>
+			store.retireForDeletion(projectId, notebookId),
+		);
 	}
 
 	/**
@@ -858,9 +880,9 @@ export class ProjectService {
 			);
 		}
 
+		await this.retireAppPoolsForDeletion(id);
 		await this.deepLinks.releaseProject(id);
 		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));
-		await deleteByPrefix(this.bucket, paths.appPoolsForProject(id));
 		await deleteByPrefix(this.bucket, paths.editorClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.versionPruneCutoffsForProject(id));
 		await deleteByPrefix(this.bucket, paths.jobRunMarkersForProject(id));

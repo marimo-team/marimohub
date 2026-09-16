@@ -1,12 +1,40 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PreconditionFailedError } from '../../errors';
 import { paths } from '../../paths';
-import { createNotebookId, createProjectId, createVersionId } from '../../ids';
+import {
+	createNotebookId,
+	createProjectId,
+	createVersionId,
+	createSessionId,
+	createSandboxId,
+	UserId,
+} from '../../ids';
 import { MemoryBucket } from '../../testing/MemoryBucket';
 import type { AppPool } from './AppPoolRouter';
 import { AppPoolStore } from './AppPoolStore';
 
 describe('app pool snapshot reads', () => {
+	it.each([false, true])(
+		'returns a no-op value without writing (existing=%s)',
+		async (existing) => {
+			const bucket = new MemoryBucket();
+			const store = new AppPoolStore(bucket);
+			const pid = createProjectId();
+			const nid = createNotebookId();
+			if (existing)
+				await store.mutate(pid, nid, (pool) => ({
+					pool: { ...pool, latest_version_id: createVersionId() },
+					value: undefined,
+				}));
+			const before = await store.read(pid, nid);
+			const put = vi.spyOn(bucket, 'put');
+			const result = await store.mutate(pid, nid, (pool) => ({ pool, value: 'unchanged' }));
+			expect(result).toBe('unchanged');
+			expect(put).not.toHaveBeenCalled();
+			expect(await store.read(pid, nid)).toEqual(before);
+		},
+	);
+
 	it('shares concurrent reads within a request but observes changes on the next request', async () => {
 		const bucket = new MemoryBucket();
 		const store = new AppPoolStore(bucket);
@@ -103,5 +131,93 @@ describe('app pool storage failures', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('app pool deletion fences', () => {
+	const pid = createProjectId();
+	const nid = createNotebookId();
+	const reservation = () => ({
+		session_id: createSessionId(),
+		sandbox_id: createSandboxId(),
+		user_id: UserId.parse('alice'),
+		state: 'starting' as const,
+		created_at: 100,
+		operation_token: 'operation',
+		operation_expires_at: 1000,
+	});
+
+	it.each([false, true])(
+		'fences an admission that read the pool before deletion (existing: %s)',
+		async (existing) => {
+			const bucket = new MemoryBucket();
+			const store = new AppPoolStore(bucket);
+			const member = reservation();
+			if (existing) {
+				await store.mutate(pid, nid, (pool) => {
+					pool.members.push(member);
+					return { pool, value: undefined };
+				});
+			}
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const admission = store.mutate(pid, nid, async (pool) => {
+				entered.resolve();
+				await release.promise;
+				pool.members.push(reservation());
+				return { pool, value: 'reserved' };
+			});
+			await entered.promise;
+			await store.retireForDeletion(pid, nid);
+			release.resolve();
+			await expect(admission).rejects.toMatchObject({ status: 404 });
+			const deleted = await store.read(pid, nid);
+			expect(deleted?.deleted_at).toEqual(expect.any(Number));
+			expect(deleted?.members).toEqual(existing ? [{ ...member, state: 'retiring' }] : []);
+			expect(deleted?.assignments).toEqual([]);
+		},
+	);
+
+	it('retains a stable deletion fence after reclamation and rejects resurrection', async () => {
+		const bucket = new MemoryBucket();
+		const store = new AppPoolStore(bucket);
+		const member = reservation();
+		await store.mutate(pid, nid, (pool) => {
+			pool.members.push(member);
+			pool.assignments.push({
+				user_id: member.user_id,
+				session_id: member.session_id,
+				generation: 'generation',
+				visits: [{ visit_id: 'tab', expires_at: 1000 }],
+			});
+			return { pool, value: undefined };
+		});
+		await store.retireForDeletion(pid, nid);
+		const tombstone = (await store.read(pid, nid))!.deleted_at;
+		await store.mutate(pid, nid, (pool) => {
+			pool.members = [];
+			return { pool, value: undefined };
+		});
+		const put = vi.spyOn(bucket, 'put');
+		await store.retireForDeletion(pid, nid);
+		expect(put).not.toHaveBeenCalled();
+		expect(await store.read(pid, nid)).toMatchObject({ deleted_at: tombstone, members: [] });
+		await expect(
+			store.mutate(pid, nid, (pool) => {
+				delete pool.deleted_at;
+				return { pool, value: undefined };
+			}),
+		).rejects.toMatchObject({ status: 404 });
+		await expect(
+			store.mutate(pid, nid, (pool) => {
+				pool.assignments.push({
+					user_id: member.user_id,
+					session_id: member.session_id,
+					generation: 'stale',
+					visits: [{ visit_id: 'tab', expires_at: 1000 }],
+				});
+				return { pool, value: undefined };
+			}),
+		).rejects.toMatchObject({ status: 404 });
 	});
 });
