@@ -85,7 +85,9 @@ Missing, malformed, or oversized group data cannot satisfy the login policy.
 marimohub accepts at most 200 group IDs. It does not resolve group-overage
 references from the provider. Configure the IdP to emit only the groups that
 marimohub needs.
-Group-derived roles and project-creation access apply only to the browser session. They do not transfer to personal access tokens.
+Group-derived roles and project-creation access apply to browser sessions and
+enabled [external access tokens](#external-access-tokens). They do not transfer
+to personal access tokens.
 
 After you enable project-creation groups, matching users must sign in again. Existing sessions do not contain the new entitlement.
 
@@ -317,6 +319,7 @@ checks deny authentication, even with a valid browser cookie in the same request
 
 The Hub does not store, revoke, or refresh external tokens. It does not query
 the issuer for revocation status. Issuer-side revocation generally takes effect
-at token expiry. Hub user suspension blocks API and MCP access immediately.
+at token expiry. Hub user suspension blocks API and MCP access, with a cache
+delay of up to 30 seconds across server instances.
 
 For client discovery and gateway behavior, see [MCP external authorization](/mcp#external-authorization).

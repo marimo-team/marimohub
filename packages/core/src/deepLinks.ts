@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { NotebookIdSchema, ProjectIdSchema, UserIdSchema } from './schema';
 
-// An absolute end assertion rejects trailing newlines, which `$` accepts.
 export const DeepLinkSlugSchema = z
 	.string()
 	.min(1)

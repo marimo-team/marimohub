@@ -484,7 +484,7 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 
 `sandbox_id` / `sandbox_url` link the record to the live kernel runtime (a separate container/compute service); `compute_profile` records the configured profile name used at launch and is absent when profiles are unset; `used_fallback` records whether a fallback runtime was used. The optional field is forward-compatible with existing records and requires no migration.
 
-`authorization_expires_at` exists only for sessions authorized by an OIDC group policy. It copies the signed browser session's JWT `exp` value. The lifecycle never extends this deadline. At expiry, it destroys direct subdomain kernels. HTTP proxy requests fail closed, and the Node proxy closes established WebSockets. This teardown skips the final capture so that the kernel stops promptly. Periodic snapshots limit potential data loss. The session API does not return this internal field.
+`authorization_expires_at` records the earliest applicable entitlement or subject-security-context deadline. OIDC group entitlements expire with the browser session or external access token that supplied them. Login-policy entitlements expire with the browser session. Session reuse can shorten this deadline, but the lifecycle never extends it. At expiry, it destroys direct subdomain kernels. HTTP proxy requests fail closed, and the Node proxy closes established WebSockets. This teardown skips the final capture so that the kernel stops promptly. Periodic snapshots limit potential data loss. The session API does not return this internal field.
 
 **Session lifecycle:**
 
@@ -1344,7 +1344,7 @@ Roles, credential scopes, and labels are filtered before pagination and totals.
 This preserves the catalog snapshot model (§7.1) without a separate per-user index.
 
 `MARIMOHUB_SUPER_ADMINS` entries containing `@` match login emails case-insensitively; other entries match user IDs exactly.
-Static super-admin status applies to PATs; OIDC group-derived status belongs only to the browser session.
+Static super-admin status applies to PATs. OIDC group-derived status applies to browser sessions and enabled external access tokens, but does not transfer to PATs.
 Super admins cannot demote or remove project owners. Role elevation does not bypass lifecycle checks or token scopes.
 
 Project creation follows `MARIMOHUB_PROJECT_CREATION`.
