@@ -158,6 +158,11 @@ App sessions do not support scratchpad execution.
 Authorized MCP requests keep sessions active until completion, authorization expiry,
 or session termination. When MCP requests and browser activity stop, idle cleanup applies.
 
+Cancellation or disconnection stops the call's wait and heartbeats.
+It does not stop an existing session or undo work already sent to the runtime.
+A sandbox already provisioning can finish startup and remains subject to normal idle cleanup.
+Use `stop_session` to stop a session explicitly.
+
 ## Run and schedule jobs
 
 Set `MARIMOHUB_JOBS=on` and restart the deployment to register these tools.

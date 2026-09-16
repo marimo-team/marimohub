@@ -29,11 +29,17 @@ shutdown. It skips unchanged HTML and custom thumbnails, and never runs notebook
 code. Periodic saves and gallery visits never generate previews.
 
 Capture requires preinstalled Python Playwright and Chromium in the Linux or
-macOS sandbox. It takes at most 10 seconds, within the shutdown budget.
+macOS sandbox. The environment must support Chromium's sandbox.
+On Linux, Chromium needs a non-root user and compatible user-namespace and seccomp policies.
+If Chromium cannot start with its sandbox, capture fails without a fallback to unsandboxed rendering.
+Capture takes at most 10 seconds, within the shutdown budget.
 Missing dependencies, missing HTML, or failures preserve the previous image or
 placeholder without preventing shutdown.
 
 External images and embeds can be absent from previews. For exact app views or
 Git-backed notebooks, use a custom screenshot.
+
+The renderer serves installed marimo assets locally and blocks external HTTP,
+WebSocket, DNS, and WebRTC connections.
 
 `MARIMOHUB_AUTOMATIC_THUMBNAILS=false` disables automatic capture.

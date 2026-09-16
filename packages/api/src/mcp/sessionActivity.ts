@@ -63,8 +63,13 @@ export async function withMcpSessionActivity<T>(
 		authorizationDeadline: number,
 		refreshAuthorization: () => Promise<number>,
 	) => Promise<T>,
+	requestSignal?: AbortSignal,
 ): Promise<T> {
+	requestSignal?.throwIfAborted();
 	const controller = new AbortController();
+	const signal = requestSignal
+		? AbortSignal.any([controller.signal, requestSignal])
+		: controller.signal;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let expiryTimer: ReturnType<typeof setTimeout> | undefined;
 	let finished = false;
@@ -91,7 +96,7 @@ export async function withMcpSessionActivity<T>(
 			activeDeadline(current, principal, decision.subjectContextExpiresAt),
 		);
 		armExpiry();
-		controller.signal.throwIfAborted();
+		signal.throwIfAborted();
 		const heartbeated = await deps.services.sessions.heartbeat(project.id, current.session_id);
 		if (finished) return deadline;
 		deadline = Math.min(deadline, activeDeadline(heartbeated, principal));
@@ -103,16 +108,16 @@ export async function withMcpSessionActivity<T>(
 			void refresh()
 				.catch((error: unknown) => controller.abort(error))
 				.finally(() => {
-					if (!finished && !controller.signal.aborted) schedule();
+					if (!finished && !signal.aborted) schedule();
 				});
 		}, 30_000);
 	};
 	try {
 		armExpiry();
-		await withAbortSignal(refresh(), controller.signal);
-		controller.signal.throwIfAborted();
+		await withAbortSignal(refresh(), signal);
+		signal.throwIfAborted();
 		schedule();
-		return await withAbortSignal(work(controller.signal, deadline, refresh), controller.signal);
+		return await withAbortSignal(work(signal, deadline, refresh), signal);
 	} finally {
 		finished = true;
 		if (timer !== undefined) clearTimeout(timer);

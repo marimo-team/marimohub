@@ -588,6 +588,8 @@ export function createServices(
 	};
 }
 
+const populatedCatalogEtags = new WeakMap<Bucket, string>();
+
 export async function ensureInitialized(
 	bucket: Bucket,
 	actor: UserId,
@@ -595,6 +597,8 @@ export async function ensureInitialized(
 ): Promise<void> {
 	const exists = await bucket.head(paths.catalog);
 	if (exists && options.createDefaultProject === false) return;
+	if (exists && populatedCatalogEtags.get(bucket) === exists.etag) return;
+	if (!exists) populatedCatalogEtags.delete(bucket);
 
 	const services = createServices(bucket);
 	// initialize() is atomic (create-if-absent on catalog.json), so concurrent
@@ -603,6 +607,8 @@ export async function ensureInitialized(
 	if (options.createDefaultProject === false) return;
 
 	const snapshot = await services.catalog.getCurrentSnapshot();
+	// Empty catalogs must retry authorization for a later caller with project creation access.
+	if (snapshot.projects.length > 0 && exists) populatedCatalogEtags.set(bucket, exists.etag);
 	if (snapshot.projects.length === 0) {
 		if (
 			typeof options.createDefaultProject === 'function' &&

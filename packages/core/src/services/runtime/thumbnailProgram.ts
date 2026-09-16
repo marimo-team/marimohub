@@ -6,7 +6,7 @@ from pathlib import Path
 input_path = Path(sys.argv[1])
 deadline = float(sys.argv[2])
 worker = r'''
-import asyncio, base64, importlib.util, json, mimetypes, os, sys
+import asyncio, base64, importlib.util, json, mimetypes, os, socket, sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -24,41 +24,49 @@ async def render():
     async with async_playwright() as pw:
         if not Path(pw.chromium.executable_path).is_file():
             print(json.dumps({"status": "missing_chromium"})); return
-        browser = await pw.chromium.launch(env={"PATH": os.defpath, "HOME": os.environ.get("HOME", "/tmp")})
-        try:
-            context = await browser.new_context(viewport={"width": 960, "height": 540}, device_scale_factor=1, color_scheme="light", reduced_motion="reduce", service_workers="block")
-            missing_assets = set()
-            async def route(request):
-                url = request.request.url
-                path = unquote(urlparse(url).path)
-                if url.startswith(origin + "/snapshot.html") and request.request.resource_type == "document":
-                    await request.fulfill(status=200, content_type="text/html", body=html)
-                    return
-                # Fulfill installed assets from disk; never proxy an arbitrary URL.
-                suffix = path.split("/assets/", 1)[1] if "/assets/" in path else None
-                if suffix and request.request.method == "GET":
-                    asset = (static / "assets" / suffix).resolve()
-                    if asset.is_relative_to(static / "assets") and asset.is_file() and asset.stat().st_size < 20_000_000:
-                        await request.fulfill(status=200, content_type=mimetypes.guess_type(str(asset))[0] or "application/octet-stream", body=asset.read_bytes())
+        # Routing cannot intercept WebRTC. Reserve a non-listening proxy port and deny direct UDP/DNS.
+        with socket.socket() as proxy_socket:
+            proxy_socket.bind(("127.0.0.1", 0))
+            browser = await pw.chromium.launch(
+                chromium_sandbox=True,
+                proxy={"server": f"http://127.0.0.1:{proxy_socket.getsockname()[1]}", "bypass": "<-loopback>"},
+                args=["--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--host-resolver-rules=MAP * ~NOTFOUND"],
+                env={"PATH": os.defpath, "HOME": os.environ.get("HOME", "/tmp")},
+            )
+            try:
+                context = await browser.new_context(viewport={"width": 960, "height": 540}, device_scale_factor=1, color_scheme="light", reduced_motion="reduce", service_workers="block")
+                missing_assets = set()
+                async def route(request):
+                    url = request.request.url
+                    path = unquote(urlparse(url).path)
+                    if url.startswith(origin + "/snapshot.html") and request.request.resource_type == "document":
+                        await request.fulfill(status=200, content_type="text/html", body=html)
                         return
-                    missing_assets.add(path)
-                await request.abort()
-            await context.route("**/*", route)
-            await context.route_web_socket("**/*", lambda ws: ws.close())
-            page = await context.new_page()
-            await page.goto(origin + "/snapshot.html?show-code=false", wait_until="load", timeout=5000)
-            await page.locator('[id^="output-"]').first.wait_for(state="visible", timeout=3000)
-            await page.add_style_tag(content=".cm-editor, .marimo-code, .print\\:hidden { display: none !important; } body { background: white !important; }")
-            await page.evaluate("document.fonts.ready")
-            await page.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
-            if missing_assets:
-                raise RuntimeError("Snapshot assets do not match installed marimo")
-            image = await page.screenshot(type="png", animations="disabled", timeout=1500)
-            if missing_assets:
-                raise RuntimeError("Snapshot asset failed during capture")
-            print(json.dumps({"status": "ok", "png": base64.b64encode(image).decode()}))
-        finally:
-            await browser.close()
+                    # Fulfill installed assets from disk; never proxy an arbitrary URL.
+                    suffix = path.split("/assets/", 1)[1] if "/assets/" in path else None
+                    if suffix and request.request.method == "GET":
+                        asset = (static / "assets" / suffix).resolve()
+                        if asset.is_relative_to(static / "assets") and asset.is_file() and asset.stat().st_size < 20_000_000:
+                            await request.fulfill(status=200, content_type=mimetypes.guess_type(str(asset))[0] or "application/octet-stream", body=asset.read_bytes())
+                            return
+                        missing_assets.add(path)
+                    await request.abort()
+                await context.route("**/*", route)
+                await context.route_web_socket("**/*", lambda ws: ws.close())
+                page = await context.new_page()
+                await page.goto(origin + "/snapshot.html?show-code=false", wait_until="load", timeout=5000)
+                await page.locator('[id^="output-"]').first.wait_for(state="visible", timeout=3000)
+                await page.add_style_tag(content=".cm-editor, .marimo-code, .print\\:hidden { display: none !important; } body { background: white !important; }")
+                await page.evaluate("document.fonts.ready")
+                await page.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                if missing_assets:
+                    raise RuntimeError("Snapshot assets do not match installed marimo")
+                image = await page.screenshot(type="png", animations="disabled", timeout=1500)
+                if missing_assets:
+                    raise RuntimeError("Snapshot asset failed during capture")
+                print(json.dumps({"status": "ok", "png": base64.b64encode(image).decode()}))
+            finally:
+                await browser.close()
 try:
     asyncio.run(render())
 except Exception:

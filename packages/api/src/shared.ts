@@ -255,17 +255,18 @@ export async function assertSessionNotebookVisible(
 	if (role === 'app-user' && !sessionCan('attach', { role, userId: subject.id }, session)) {
 		throw new NotFoundError('Session not found');
 	}
+	const readAction =
+		session.mode === 'app' ? authz.appReadAction(subject, project) : 'project.read';
+	if (session.mode !== 'app') {
+		await assertProjectActionOn(project, subject, readAction, deps);
+	}
 	const labels = await deps.services.notebooks.getSecurityLabels(project.id, session.notebook_id);
 	if (labels !== null) {
-		const decision = await authorizationService(deps).authorize(
-			subject,
-			authz.appReadAction(subject, project),
-			{
-				kind: 'project',
-				project,
-				notebookLabels: labels,
-			},
-		);
+		const decision = await authorizationService(deps).authorize(subject, readAction, {
+			kind: 'project',
+			project,
+			notebookLabels: labels,
+		});
 		if (!decision.allowed) {
 			throw new NotFoundError('Session not found');
 		}
