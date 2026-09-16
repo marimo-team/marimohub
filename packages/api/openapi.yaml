@@ -2890,8 +2890,7 @@ components:
             - app
         compute_profile:
           type: string
-          enum:
-            - default
+          minLength: 1
         edit_intent:
           type: string
           enum:

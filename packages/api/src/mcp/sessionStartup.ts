@@ -107,14 +107,16 @@ export async function startMcpSession(input: {
 	notebookId: NotebookId;
 	mode: 'edit' | 'app';
 	waitSeconds: number;
+	computeProfile?: string;
 }): Promise<Record<string, unknown>> {
-	const { deps, principal, request, project, notebookId, mode, waitSeconds } = input;
+	const { deps, principal, request, project, notebookId, mode, waitSeconds, computeProfile } =
+		input;
 	const started = await startNotebookSession({
 		deps,
 		user: principal,
 		pid: project.id,
 		nid: notebookId,
-		body: { mode },
+		body: { mode, compute_profile: computeProfile },
 		request,
 	});
 	let session = await deps.services.sessions.getSession(

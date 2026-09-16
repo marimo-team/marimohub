@@ -961,3 +961,193 @@ describe('stored notebook access boundaries', () => {
 		expect(await deps.services.sessions.listActiveByProject(project.id)).toHaveLength(1);
 	}, 10_000);
 });
+
+describe('MCP compute profiles', () => {
+	async function profileSetup(override: 'editors' | 'none' = 'editors') {
+		const { instance } = makeFakeSandbox();
+		const env = await setup({
+			compute: { ...fakeComputeFrom(instance), proxy: async () => Response.json([]) },
+		});
+		env.deps.sandbox = {
+			...env.deps.sandbox,
+			computeProfiles: [
+				{ name: 'small', resources: { cpu: 1 } },
+				{ name: 'large', resources: { cpu: 8 } },
+			],
+			computeProfileOverride: override,
+		};
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
+		return { ...env, client: await connect(env.deps) };
+	}
+
+	it.each([false, true])('saves the profile when creating with launch=%s', async (launch) => {
+		const { deps, project, client } = await profileSetup();
+		const response = await client.callTool({
+			name: 'create_notebook',
+			arguments: {
+				project: project.id,
+				title: 'Large',
+				code: '',
+				compute_profile: 'large',
+				launch,
+			},
+		});
+		expect(response.isError).not.toBe(true);
+		const data = response.structuredContent as {
+			notebook_id: string;
+			session: { session_id: string };
+		};
+		const notebook = await deps.services.notebooks.getNotebook(
+			project.id,
+			NotebookId.parse(data.notebook_id),
+		);
+		expect(notebook.meta.compute_profile).toBe('large');
+		if (launch) {
+			const session = await deps.services.sessions.getSession(
+				project.id,
+				SessionId.parse(data.session.session_id),
+			);
+			expect(session.compute_profile).toBe('large');
+			expect(session.compute_resources).toMatchObject({ cpu: 8 });
+		} else {
+			expect(await deps.services.sessions.listActiveByProject(project.id)).toEqual([]);
+		}
+	});
+
+	it.each(['small', 'default'])('normalizes %s on creation', async (compute_profile) => {
+		const { deps, project, client } = await profileSetup();
+		const response = await client.callTool({
+			name: 'create_notebook',
+			arguments: { project: project.id, title: 'Default', code: '', compute_profile },
+		});
+		expect(response.isError).not.toBe(true);
+		const data = response.structuredContent as { notebook_id: string };
+		const notebook = await deps.services.notebooks.getNotebook(
+			project.id,
+			NotebookId.parse(data.notebook_id),
+		);
+		expect(notebook.meta.compute_profile).toBeUndefined();
+	});
+
+	it.each([
+		{ compute_profile: undefined, stored: 'large', expected: 'large', cpu: 8 },
+		{ compute_profile: 'small', stored: 'large', expected: 'small', cpu: 1 },
+		{ compute_profile: 'default', stored: 'large', expected: 'small', cpu: 1 },
+		{ compute_profile: 'large', stored: 'small', expected: 'large', cpu: 8 },
+	])(
+		'starts with $compute_profile without changing notebook metadata',
+		async ({ compute_profile, stored, expected, cpu }) => {
+			const { deps, project, client } = await profileSetup();
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{
+					title: 'Notebook',
+					description: '',
+					code: '',
+					compute_profile: stored,
+				},
+				USER_ID,
+			);
+			const response = await client.callTool({
+				name: 'start_session',
+				arguments: { project: project.id, notebook: notebook.id, compute_profile, wait_seconds: 0 },
+			});
+			expect(response.isError).not.toBe(true);
+			const data = response.structuredContent as { session_id: string };
+			const session = await deps.services.sessions.getSession(
+				project.id,
+				SessionId.parse(data.session_id),
+			);
+			expect(session.compute_profile).toBe(expected);
+			expect(session.compute_resources).toMatchObject({ cpu });
+			expect(
+				(await deps.services.notebooks.getNotebook(project.id, notebook.id)).meta.compute_profile,
+			).toBe(stored);
+			const reused = await client.callTool({
+				name: 'start_session',
+				arguments: {
+					project: project.id,
+					notebook: notebook.id,
+					compute_profile: 'large',
+					wait_seconds: 0,
+				},
+			});
+			expect(reused).toMatchObject({
+				structuredContent: { session_id: session.session_id, reused: true },
+			});
+			expect(
+				(await deps.services.sessions.getSession(project.id, session.session_id)).compute_profile,
+			).toBe(expected);
+		},
+	);
+
+	it.each([
+		{ tool: 'create_notebook', override: 'editors', profile: 'missing', code: 'BAD_REQUEST' },
+		{ tool: 'create_notebook', override: 'none', profile: 'large', code: 'FORBIDDEN' },
+		{ tool: 'start_session', override: 'editors', profile: 'missing', code: 'BAD_REQUEST' },
+		{ tool: 'start_session', override: 'none', profile: 'large', code: 'FORBIDDEN' },
+	] as const)(
+		'rejects $tool with $profile and override=$override',
+		async ({ tool, override, profile, code }) => {
+			const { deps, project, client } = await profileSetup(override);
+			const notebook =
+				tool === 'start_session'
+					? await deps.services.notebooks.createNotebook(
+							project.id,
+							{
+								title: 'Notebook',
+								description: '',
+								code: '',
+							},
+							USER_ID,
+						)
+					: undefined;
+			const response = await client.callTool({
+				name: tool,
+				arguments:
+					tool === 'create_notebook'
+						? {
+								project: project.id,
+								title: 'Invalid',
+								code: '',
+								compute_profile: profile,
+								launch: true,
+							}
+						: {
+								project: project.id,
+								notebook: notebook?.id,
+								compute_profile: profile,
+								wait_seconds: 0,
+							},
+			});
+			expect(response).toMatchObject({ isError: true, structuredContent: { code } });
+			expect(await deps.services.sessions.listActiveByProject(project.id)).toEqual([]);
+			if (!notebook) expect(await deps.services.notebooks.listNotebooks(project.id)).toEqual([]);
+		},
+	);
+
+	it('rejects named overrides for shared apps', async () => {
+		const { deps, project, client } = await profileSetup();
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{
+				title: 'Notebook',
+				description: '',
+				code: '',
+			},
+			USER_ID,
+		);
+		const response = await client.callTool({
+			name: 'start_session',
+			arguments: {
+				project: project.id,
+				notebook: notebook.id,
+				mode: 'app',
+				compute_profile: 'large',
+				wait_seconds: 0,
+			},
+		});
+		expect(response).toMatchObject({ isError: true, structuredContent: { code: 'FORBIDDEN' } });
+		expect(await deps.services.sessions.listActiveByProject(project.id)).toEqual([]);
+	});
+});

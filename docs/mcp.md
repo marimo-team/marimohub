@@ -65,6 +65,14 @@ Use IDs when names are duplicated and for subsequent calls.
 | `execute_code`    | Run Python in an edit session's live scratchpad.                                  |
 | `stop_session`    | Stop a session and destroy its sandbox, with a save attempt for persistent edits. |
 
+When profile selection is enabled, both tools accept an optional `compute_profile`:
+
+- `create_notebook` saves the profile and uses it with `launch: true`. Omission uses the deployment default.
+- `start_session` overrides the profile for a new persistent edit session without changing the saved choice. Omission uses the saved profile.
+
+Reused sessions and restored filesystem snapshots retain their profile.
+`"default"` selects the deployment default, except during creation when a configured profile is named `default`.
+
 ### Edit stored source
 
 Notebook reads, updates, and deletions work without a session. `get_notebook`
