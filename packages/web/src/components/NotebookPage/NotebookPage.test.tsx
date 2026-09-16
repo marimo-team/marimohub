@@ -20,7 +20,7 @@ async function chooseSurfaceAction(
 }
 
 describe('NotebookPage viewer modes', () => {
-	it.each(['edit', 'app'] as const)('offers recovery for the %s kernel', async (variant) => {
+	it.each(['edit', 'app'] as const)('offers recovery for a stalled %s kernel', async (variant) => {
 		const setTimeout = globalThis.setTimeout;
 		vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) =>
 			setTimeout(callback, delay === 15_000 ? 0 : delay, ...args),
@@ -35,7 +35,6 @@ describe('NotebookPage viewer modes', () => {
 		const { unmount } = renderPage(variant);
 		try {
 			const iframe = await screen.findByTitle('Forecast');
-			fireEvent.load(iframe);
 			const link = await screen.findByRole('link', { name: 'Open in new window' });
 			expect(link).toHaveAttribute('href', iframe.getAttribute('src'));
 			expect(link).toHaveAttribute('href', expect.stringContaining('access_token=kernel-secret'));
