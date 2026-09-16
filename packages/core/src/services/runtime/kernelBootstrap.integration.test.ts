@@ -142,6 +142,53 @@ if __name__ == "__main__":
 	};
 }
 
+async function attachBrowser(rt: Awaited<ReturnType<typeof runtime>>, autoRun?: boolean) {
+	const browser = String.raw`
+import json, sys
+from html.parser import HTMLParser
+from urllib.request import Request, urlopen
+from websockets.sync.client import connect
+cfg = json.loads(sys.stdin.readline())
+auth = {"Authorization": "Bearer " + cfg["token"]}
+with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-session", additional_headers=auth) as ws:
+    while True:
+        event = json.loads(ws.recv(timeout=15))
+        if event.get("op") == "kernel-ready":
+            break
+    if "autoRun" in cfg:
+        class Token(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                if tag == "marimo-server-token":
+                    self.value = dict(attrs)["data-token"]
+        token = Token()
+        with urlopen(Request(cfg["base"] + "/", headers=auth), timeout=15) as response:
+            token.feed(response.read().decode())
+        headers = {**auth, "Marimo-Server-Token": token.value,
+                   "Marimo-Session-Id": "browser-session", "Content-Type": "application/json"}
+        body = json.dumps({"objectIds": [], "values": [], "autoRun": cfg["autoRun"]}).encode()
+        with urlopen(Request(cfg["base"] + "/api/kernel/instantiate", data=body, headers=headers), timeout=15) as response:
+            assert json.load(response)["success"] is True
+    print(json.dumps(event["data"]), flush=True)
+    sys.stdin.readline()
+`;
+	const browserProcess = spawn(python!, ['-c', browser], { stdio: 'pipe' });
+	browserProcess.stdin.write(`${JSON.stringify({ base: rt.base, token: rt.token, autoRun })}\n`);
+	cleanup.push(async () => {
+		browserProcess.kill();
+	});
+	let output = '';
+	browserProcess.stdout.on('data', (value: Buffer) => {
+		output += value.toString();
+	});
+	await expect.poll(() => output.includes('\n'), { timeout: 15_000 }).toBe(true);
+	const ready = JSON.parse(output.split('\n')[0]) as {
+		resumed: boolean;
+		codes: string[];
+		cell_ids: string[];
+	};
+	return { browserProcess, ready };
+}
+
 describe.skipIf(!python)('real marimo headless bootstrap', () => {
 	it.each([true, false])(
 		'initializes with auto execution %s, serializes starts, and preserves state',
@@ -207,6 +254,29 @@ async with cm.get_context() as ctx:
 		30_000,
 	);
 
+	it.each([true, false])(
+		'inspects a browser-created kernel with auto execution %s',
+		async (autoRun) => {
+			const rt = await runtime(autoRun, '/browser/prefix');
+			const { browserProcess } = await attachBrowser(rt, autoRun);
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+				status: 'ready',
+			});
+			expect((await listKernelSessions(rt.base, rt.request))[0].id).toBe('browser-session');
+			expect(browserProcess.exitCode).toBeNull();
+			expect(await rt.execute('print(globals().get("initial_value", "disabled"))')).toMatchObject({
+				success: true,
+				stdout: autoRun ? '41\n' : 'disabled\n',
+			});
+			expect(
+				await rt.execute(
+					'from pathlib import Path; print(Path("runs.txt").read_text() if Path("runs.txt").exists() else "disabled")',
+				),
+			).toMatchObject({ stdout: autoRun ? 'x\n' : 'disabled\n' });
+		},
+		30_000,
+	);
+
 	it('a browser resumes variables and editable cells under a new session ID', async () => {
 		const rt = await runtime(true);
 		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
@@ -219,34 +289,15 @@ async with cm.get_context() as ctx:
 		).toMatchObject({ success: true });
 		expect(await rt.execute('live_values.append(73)')).toMatchObject({ success: true });
 		const oldId = (await listKernelSessions(rt.base, rt.request))[0].id;
-		const browser = String.raw`
-import json, sys
-from websockets.sync.client import connect
-cfg = json.loads(sys.stdin.readline())
-with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-session", additional_headers={"Authorization": "Bearer " + cfg["token"]}) as ws:
-    while True:
-        event = json.loads(ws.recv(timeout=15))
-        if event.get("op") == "kernel-ready":
-            print(json.dumps(event["data"]), flush=True)
-            break
-    sys.stdin.readline()
-`;
-		const browserProcess = spawn(python!, ['-c', browser], { stdio: 'pipe' });
-		browserProcess.stdin.write(`${JSON.stringify({ base: rt.base, token: rt.token })}\n`);
-		cleanup.push(async () => {
-			browserProcess.kill();
-		});
-		let output = '';
-		browserProcess.stdout.on('data', (value: Buffer) => {
-			output += value.toString();
-		});
-		await expect.poll(() => output, { timeout: 15_000 }).not.toBe('');
-		const ready = JSON.parse(output) as { resumed: boolean; codes: string[]; cell_ids: string[] };
+		const { browserProcess, ready } = await attachBrowser(rt);
 		expect(ready.resumed).toBe(true);
 		expect(ready.codes).toContain('edited_value = 17; live_values = []');
 		const newId = (await listKernelSessions(rt.base, rt.request))[0].id;
 		expect(newId).toBe('browser-session');
 		expect(newId).not.toBe(oldId);
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+			status: 'ready',
+		});
 		expect(await rt.execute('print(live_values[0], initial_value)')).toMatchObject({
 			success: true,
 			stdout: '73 41\n',

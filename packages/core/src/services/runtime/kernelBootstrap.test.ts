@@ -16,7 +16,7 @@ describe('bootstrapKernel', () => {
 				stderr: 'private',
 			});
 			expect(await bootstrapKernel(instance, { timeoutMs: 5_000 })).toEqual({ status });
-			expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 5_000 });
+			expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 6_000 });
 		},
 	);
 	it('does no work without remaining time', async () => {
@@ -33,6 +33,28 @@ describe('bootstrapKernel', () => {
 		expect(await pending).toEqual({ status: 'initializing' });
 		expect(vi.getTimerCount()).toBe(0);
 	});
+	it.each([100, 1_000])(
+		'keeps adapter termination beyond a %ims request deadline',
+		async (timeoutMs) => {
+			vi.useFakeTimers();
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(instance, 'exec').mockImplementation(async (_command, options) => {
+				const timeout = options!.timeout!;
+				await new Promise((resolve) => setTimeout(resolve, timeout - Math.min(100, timeout / 10)));
+				return {
+					success: false,
+					stdout: '',
+					stderr: 'command timed out',
+					error: { code: 'COMMAND_FAILED' },
+				};
+			});
+			const pending = bootstrapKernel(instance, { timeoutMs });
+			await vi.advanceTimersByTimeAsync(timeoutMs);
+			expect(await pending).toEqual({ status: 'initializing' });
+			await vi.runAllTimersAsync();
+			expect(vi.getTimerCount()).toBe(0);
+		},
+	);
 	it.each(['invalid json', '{"status":"secret"}'])(
 		'sanitizes invalid output: %s',
 		async (stdout) => {

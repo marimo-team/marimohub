@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectMcpClient, createMcpSession, mcpPrincipal as principal } from '../testing/mcp';
+import { executeMcpCode } from './kernelExecution';
 
 const completed = () =>
 	new Response('event: stdout\ndata: {"data":"42\\n"}\n\nevent: done\ndata: {"success":true}\n\n', {
@@ -15,6 +16,8 @@ async function setup(proxy: (request: Request) => Promise<Response>, expiresAt?:
 	const client = await connectMcpClient(deps, principal);
 	return {
 		create,
+		deps,
+		session,
 		run: () =>
 			client.callTool({
 				name: 'execute_code',
@@ -24,6 +27,44 @@ async function setup(proxy: (request: Request) => Promise<Response>, expiresAt?:
 }
 
 describe('MCP execution kernel discovery', () => {
+	it('reports a timeout as an error after a successful done event without stream closure', async () => {
+		const cancel = vi.fn();
+		const proxy = vi.fn(async (request: Request) => {
+			if (request.method === 'GET') return Response.json({ kernel: {} });
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('event: done\ndata: {"success":true}\n\n'));
+					},
+					cancel,
+				}),
+				{ headers: { 'content-type': 'text/event-stream' } },
+			);
+		});
+		const { deps, session, create } = await setup(proxy);
+		vi.useFakeTimers();
+		try {
+			const response = executeMcpCode(deps, session, 'print(42)', {
+				deadlineAt: Date.now() + 1_000,
+				signal: new AbortController().signal,
+				timeoutSeconds: 1,
+				startedAt: Date.now(),
+				appBaseUrl: 'https://hub.example.com',
+			});
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(await response).toMatchObject({
+				isError: true,
+				structuredContent: { completed: true, success: true, timedOut: true },
+				content: [{ type: 'text', text: 'TIMED OUT' }],
+			});
+			expect(proxy).toHaveBeenCalledTimes(2);
+			expect(create).not.toHaveBeenCalled();
+			expect(cancel).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it('rediscovers on every call and retries only the rejected stale session ID', async () => {
 		const requests: Request[] = [];
 		let id = 'headless';

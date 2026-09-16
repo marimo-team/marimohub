@@ -31,17 +31,24 @@ for html in ("", '<marimo-server-token data-token=""></marimo-server-token>', '<
         pass
 `);
 	});
-	it('treats corrupt, stale, and wrongly typed readiness records as uninitialized', async () => {
+	it('inspects live browser sessions without initializing or connecting to them', async () => {
 		await python(String.raw`
-from io import StringIO
-for value in ("", "invalid", "null", "[]", "1", '{}', '{"server":"old","session":"live"}', '{"server":"current","session":[]}'):
-    assert was_initialized(StringIO(value), "current", {"live": {}}) is None
-lock = StringIO()
-record_initialized(lock, "current", "live")
-assert was_initialized(lock, "current", {"live": {}}) == "live"
-assert was_initialized(lock, "current", {"browser": {}}) is None
-record_initialized(lock, "current", "browser")
-assert was_initialized(lock, "current", {"browser": {}}) == "browser"
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+with TemporaryDirectory() as directory:
+    cfg = {"token_file": directory + "/token", "inspect": True}
+    for sessions, states, expected in (({}, [], "initializing"), ({"browser": {}}, [False], "initializing"),
+                                      ({"browser": {}}, [True], "ready"),
+                                      ({"stopped": {}, "browser": {}}, [False, True], "ready")):
+        client = Mock()
+        client.sessions.return_value = sessions
+        client.is_live.side_effect = states
+        with patch.dict(globals(), {"MarimoClient": lambda *_: client}):
+            assert bootstrap(cfg, lambda: 1) == expected
+        client.configure.assert_not_called()
+        client.session.assert_not_called()
+        client.initialize.assert_not_called()
+        assert Path(cfg["token_file"] + ".bootstrap.lock").read_text() == ""
 `);
 	});
 	it('does not wait for a busy bootstrap lock during read-only inspection', async () => {

@@ -3,7 +3,11 @@ import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core'
 import type { ApiDeps } from '../context';
 import { assertSessionAccess, assertSessionNotebookVisible, loadVisibleProject } from '../shared';
 
-function activeDeadline(session: Session, principal: AuthenticatedPrincipal): number {
+function activeDeadline(
+	session: Session,
+	principal: AuthenticatedPrincipal,
+	subjectContextExpiresAt?: string,
+): number {
 	if (session.status !== 'running' && session.status !== 'starting') {
 		throw new BadRequestError('Session is no longer running');
 	}
@@ -11,6 +15,7 @@ function activeDeadline(session: Session, principal: AuthenticatedPrincipal): nu
 		session.authorization_expires_at,
 		principal.credential.expiresAt,
 		principal.entitlementsExpiresAt,
+		subjectContextExpiresAt,
 	];
 	const deadline = Math.min(
 		...expirations.map((value) => (value === undefined ? Infinity : Date.parse(value))),
@@ -25,7 +30,7 @@ export async function authorizeMcpSession(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	session: Session,
-): Promise<void> {
+) {
 	const project = await loadVisibleProject(
 		deps.services.projects,
 		session.project_id,
@@ -33,7 +38,7 @@ export async function authorizeMcpSession(
 		deps,
 	);
 	const labels = await assertSessionNotebookVisible(deps, project, session, principal);
-	await assertSessionAccess(project, session, principal, deps, labels);
+	return assertSessionAccess(project, session, principal, deps, labels);
 }
 
 export async function withMcpSessionActivity<T>(
@@ -41,7 +46,11 @@ export async function withMcpSessionActivity<T>(
 	principal: AuthenticatedPrincipal,
 	project: Project,
 	session: Session,
-	work: (signal: AbortSignal, authorizationDeadline: number) => Promise<T>,
+	work: (
+		signal: AbortSignal,
+		authorizationDeadline: number,
+		refreshAuthorization: () => Promise<number>,
+	) => Promise<T>,
 ): Promise<T> {
 	const controller = new AbortController();
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -59,16 +68,22 @@ export async function withMcpSessionActivity<T>(
 	};
 	const refresh = async () => {
 		const current = await deps.services.sessions.getSession(project.id, session.session_id);
-		if (finished) return;
-		deadline = activeDeadline(current, principal);
+		if (finished) return deadline;
+		deadline = Math.min(deadline, activeDeadline(current, principal));
 		armExpiry();
-		await authorizeMcpSession(deps, principal, current);
-		if (finished) return;
+		const decision = await authorizeMcpSession(deps, principal, current);
+		if (finished) return deadline;
+		deadline = Math.min(
+			deadline,
+			activeDeadline(current, principal, decision.subjectContextExpiresAt),
+		);
+		armExpiry();
 		controller.signal.throwIfAborted();
 		const heartbeated = await deps.services.sessions.heartbeat(project.id, current.session_id);
-		if (finished) return;
+		if (finished) return deadline;
 		deadline = Math.min(deadline, activeDeadline(heartbeated, principal));
 		armExpiry();
+		return deadline;
 	};
 	const schedule = () => {
 		timer = setTimeout(() => {
@@ -84,7 +99,7 @@ export async function withMcpSessionActivity<T>(
 		await withAbortSignal(refresh(), controller.signal);
 		controller.signal.throwIfAborted();
 		schedule();
-		return await withAbortSignal(work(controller.signal, deadline), controller.signal);
+		return await withAbortSignal(work(controller.signal, deadline, refresh), controller.signal);
 	} finally {
 		finished = true;
 		if (timer !== undefined) clearTimeout(timer);

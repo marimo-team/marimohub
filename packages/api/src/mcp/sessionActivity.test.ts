@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMcpSession, mcpPrincipal as principal } from '../testing/mcp';
+import { localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import { withMcpSessionActivity } from './sessionActivity';
 
 afterEach(() => {
@@ -54,6 +55,78 @@ describe('MCP session activity', () => {
 		expect(signal?.aborted).toBe(true);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+	it.each(['work', 'heartbeat', 'reauthorization'] as const)(
+		'aborts at the subject context deadline while %s is pending',
+		async (pendingStep) => {
+			vi.useFakeTimers();
+			const lifetime = pendingStep === 'reauthorization' ? 31_000 : 45_000;
+			const expiresAt = new Date(Date.now() + lifetime).toISOString();
+			const security = localResourceSecurity(['SECRET'], makeSubjectContext({ expiresAt }));
+			const { deps, project, session } = await createMcpSession(undefined, {
+				resourceSecurity: security,
+			});
+			await deps.services.projects.setSecurityLabels(
+				project.id,
+				{ classification: 'SECRET', compartments: [] },
+				principal.id,
+			);
+			const heartbeat = vi.spyOn(deps.services.sessions, 'heartbeat');
+			if (pendingStep === 'heartbeat') heartbeat.mockImplementation(() => new Promise(() => {}));
+			let signal: AbortSignal | undefined;
+			const work = vi.fn(async (value: AbortSignal, deadline: number) => {
+				signal = value;
+				expect(deadline).toBe(Date.parse(expiresAt));
+				if (pendingStep === 'reauthorization') {
+					vi.spyOn(deps.services.projects, 'getProject').mockImplementation(
+						() => new Promise(() => {}),
+					);
+				}
+				return new Promise(() => {});
+			});
+			const pending = withMcpSessionActivity(deps, principal, project, session, work);
+			const assertion = expect(pending).rejects.toThrow('authorization has expired');
+			await vi.advanceTimersByTimeAsync(lifetime);
+			await assertion;
+			if (pendingStep === 'heartbeat') expect(work).not.toHaveBeenCalled();
+			else expect(signal?.aborted).toBe(true);
+			expect(vi.getTimerCount()).toBe(0);
+			const calls = heartbeat.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(heartbeat).toHaveBeenCalledTimes(calls);
+		},
+	);
+
+	it('shortens the activity deadline when an explicit authorization refresh returns an earlier context expiry', async () => {
+		vi.useFakeTimers();
+		const security = localResourceSecurity(['SECRET'], makeSubjectContext());
+		const { deps, project, session } = await createMcpSession(undefined, {
+			resourceSecurity: security,
+		});
+		await deps.services.projects.setSecurityLabels(
+			project.id,
+			{ classification: 'SECRET', compartments: [] },
+			principal.id,
+		);
+		const expiresAt = new Date(Date.now() + 100).toISOString();
+		const pending = withMcpSessionActivity(
+			deps,
+			principal,
+			project,
+			session,
+			async (_signal, _deadline, refresh) => {
+				vi.spyOn(security.subjectContext!, 'resolve').mockResolvedValue(
+					makeSubjectContext({ expiresAt }),
+				);
+				expect(await refresh()).toBe(Date.parse(expiresAt));
+				return new Promise(() => {});
+			},
+		);
+		const assertion = expect(pending).rejects.toThrow('authorization has expired');
+		await vi.advanceTimersByTimeAsync(100);
+		await assertion;
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it('does not revive a session stopped during execution', async () => {
 		vi.useFakeTimers();
 		const { deps, project, session } = await createMcpSession();

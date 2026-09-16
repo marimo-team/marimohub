@@ -1,5 +1,5 @@
 export const KERNEL_BOOTSTRAP_CLIENT = String.raw`
-import fcntl, hashlib, json, signal, sys, time, uuid
+import fcntl, json, signal, sys, time, uuid
 from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
@@ -63,7 +63,6 @@ class MarimoClient:
     def configure(self):
         token, self.auto_run = EditorData.read(self.request("/"))
         self.headers["Marimo-Server-Token"] = token
-        return hashlib.sha256(token.encode()).hexdigest()
 
     def is_live(self, session_id):
         state = json.loads(self.request("/api/kernel/status", session_id=session_id))
@@ -113,34 +112,15 @@ def bootstrap_lock(token_file, inspect, remaining):
                 time.sleep(min(0.05, remaining()))
         yield lock
 
-def was_initialized(lock, identity, sessions):
-    lock.seek(0)
-    try:
-        accepted = json.load(lock)
-    except ValueError:
-        return None
-    if not isinstance(accepted, dict) or accepted.get("server") != identity:
-        return None
-    session_id = accepted.get("session")
-    return session_id if isinstance(session_id, str) and session_id in sessions else None
-
-def record_initialized(lock, identity, session_id):
-    lock.seek(0)
-    lock.truncate()
-    json.dump({"server": identity, "session": session_id}, lock)
-    lock.flush()
-
 def bootstrap(cfg, remaining):
     client = MarimoClient(cfg, remaining)
-    with bootstrap_lock(cfg["token_file"], cfg["inspect"], remaining) as lock:
+    with bootstrap_lock(cfg["token_file"], cfg["inspect"], remaining):
         sessions = client.sessions()
-        identity = client.configure()
         if cfg["inspect"]:
-            session_id = was_initialized(lock, identity, sessions)
-            return "ready" if session_id and client.is_live(session_id) else "initializing"
+            return "ready" if any(client.is_live(session_id) for session_id in sessions) else "initializing"
+        client.configure()
         with client.session(sessions) as session_id:
             client.initialize(session_id)
-            record_initialized(lock, identity, session_id)
         return "ready"
 
 def run_client(cfg):

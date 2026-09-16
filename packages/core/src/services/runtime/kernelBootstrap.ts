@@ -29,7 +29,8 @@ export async function bootstrapKernel(
 						options.inspectOnly,
 					),
 					{
-						timeout: options.timeoutMs,
+						// The request deadline must win over adapter process termination.
+						timeout: options.timeoutMs + 1_000,
 					},
 				),
 			{

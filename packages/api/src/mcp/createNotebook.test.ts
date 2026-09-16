@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	CatalogService,
+	BadRequestError,
+	ForbiddenError,
+	NotFoundError,
 	NotebookId,
 	SessionId,
 	SandboxId,
@@ -471,14 +474,14 @@ describe('stored notebook MCP tools', () => {
 
 describe('MCP session execution readiness', () => {
 	it.each([
-		{ kernels: [], ready: false, status: 'initializing' as const },
-		{ kernels: [], ready: false, status: 'awaiting_client' as const },
-		{ kernels: [], ready: false, status: 'unavailable' as const },
-		{ kernels: [{ id: 'kernel-1' }], ready: true, status: 'ready' as const },
-	])('reports $status independently of sandbox status', async ({ kernels, ready, status }) => {
+		{ ready: false, status: 'initializing' as const },
+		{ ready: false, status: 'awaiting_client' as const },
+		{ ready: false, status: 'unavailable' as const },
+		{ ready: true, status: 'ready' as const },
+	])('reports $status independently of sandbox status', async ({ ready, status }) => {
 		vi.mocked(bootstrapKernel).mockResolvedValue({ status });
 		const { instance } = makeFakeSandbox();
-		const proxy = vi.fn(async () => Response.json(kernels));
+		const proxy = vi.fn(async () => Response.json([]));
 		const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
 		const notebook = await deps.services.notebooks.createNotebook(
 			project.id,
@@ -611,33 +614,106 @@ describe('MCP session execution readiness', () => {
 		},
 	);
 
-	it('returns created notebook and session details when bootstrap fails', async () => {
-		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'unavailable' });
-		const { instance } = makeFakeSandbox();
-		const { deps, project } = await setup({
-			compute: {
-				...fakeComputeFrom(instance),
-				proxy: async () => {
-					throw new Error('secret kernel URL');
+	it.each(['waiting', 'bootstrapping'] as const)(
+		'returns an authorization error when credentials expire while %s',
+		async (phase) => {
+			const { instance } = makeFakeSandbox();
+			const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
+			const notebook = await deps.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
+				USER_ID,
+			);
+			const session = await deps.services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: USER_ID,
+				sandbox_id: SandboxId.create(),
+			});
+			if (phase === 'bootstrapping') {
+				await deps.services.sessions.setRunning(
+					project.id,
+					session.session_id,
+					'https://kernel.example',
+				);
+				vi.mocked(bootstrapKernel).mockImplementation(() => new Promise(() => {}));
+			}
+			const client = await connect(deps, {
+				...PRINCIPAL,
+				credential: {
+					...PRINCIPAL.credential,
+					expiresAt: new Date(Date.now() + 1_000).toISOString(),
 				},
-			},
-		});
-		vi.spyOn(console, 'log').mockImplementation(() => {});
+			});
+			vi.useFakeTimers();
+			try {
+				const pending = client.callTool({
+					name: 'start_session',
+					arguments: { project: project.id, notebook: notebook.id, wait_seconds: 5 },
+				});
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(await pending).toMatchObject({
+					isError: true,
+					structuredContent: { code: 'BAD_REQUEST', message: 'Session authorization has expired' },
+				});
+				expect(bootstrapKernel).toHaveBeenCalledTimes(phase === 'waiting' ? 0 : 1);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each([
+		new ForbiddenError('Not authorized'),
+		new NotFoundError('Session not found'),
+		new BadRequestError('Session authorization has expired'),
+	])('propagates authorization failures during bootstrap: $code', async (error) => {
+		vi.mocked(bootstrapKernel).mockRejectedValue(error);
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({ compute: fakeComputeFrom(instance) });
 		const client = await connect(deps);
 		const response = await client.callTool({
 			name: 'create_notebook',
 			arguments: { project: project.id, title: 'Created', code: NOTEBOOK_CODE, launch: true },
 		});
 		expect(response).toMatchObject({
-			structuredContent: {
-				notebook_id: expect.any(String),
-				launched: true,
-				session: { status: 'running', execution: { ready: false, status: 'unavailable' } },
-			},
+			isError: true,
+			structuredContent: { code: error.code, message: error.message },
 		});
-		expect(JSON.stringify(response)).not.toContain('secret kernel URL');
-		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
 	});
+
+	it.each(['reported', 'thrown'])(
+		'returns notebook and session details for a %s bootstrap failure',
+		async (failure) => {
+			if (failure === 'reported')
+				vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'unavailable' });
+			else vi.mocked(bootstrapKernel).mockRejectedValue(new Error('secret kernel URL'));
+			const { instance } = makeFakeSandbox();
+			const { deps, project } = await setup({
+				compute: {
+					...fakeComputeFrom(instance),
+					proxy: async () => {
+						throw new Error('secret kernel URL');
+					},
+				},
+			});
+			vi.spyOn(console, 'log').mockImplementation(() => {});
+			const client = await connect(deps);
+			const response = await client.callTool({
+				name: 'create_notebook',
+				arguments: { project: project.id, title: 'Created', code: NOTEBOOK_CODE, launch: true },
+			});
+			expect(response).toMatchObject({
+				structuredContent: {
+					notebook_id: expect.any(String),
+					launched: true,
+					session: { status: 'running', execution: { ready: false, status: 'unavailable' } },
+				},
+			});
+			expect(JSON.stringify(response)).not.toContain('secret kernel URL');
+			expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
+		},
+	);
 
 	it('does not probe app sessions for scratchpad execution', async () => {
 		const { instance } = makeFakeSandbox();

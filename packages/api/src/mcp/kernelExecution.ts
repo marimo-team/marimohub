@@ -75,7 +75,7 @@ export async function executeMcpCode(
 				},
 				executionText(executed),
 			),
-			...(!executed.completed || !executed.success ? { isError: true } : {}),
+			...(executed.timedOut || !executed.completed || !executed.success ? { isError: true } : {}),
 		};
 	} catch (error) {
 		if (!(error instanceof KernelDiscoveryTimeoutError)) throw error;

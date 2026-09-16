@@ -1,5 +1,6 @@
 import {
 	bootstrapKernel,
+	DomainError,
 	SessionId,
 	sessionMode,
 	sessionOwner,
@@ -17,7 +18,7 @@ import type { ApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
 import { assertSessionNotebookVisible, sessionGrantsFor } from '../shared';
 import { startNotebookSession, toSessionResponse } from '../routes/sessionStart';
-import { authorizeMcpSession, withMcpSessionActivity } from './sessionActivity';
+import { withMcpSessionActivity } from './sessionActivity';
 import type { StartRequestContext } from './server';
 
 type ExecutionReadiness = { ready: boolean; status: string; next_step: string };
@@ -112,34 +113,37 @@ export async function startMcpSession(input: {
 				principal,
 				project,
 				session,
-				async (signal, authorizationDeadline) => {
+				async (signal, authorizationDeadline, refreshAuthorization) => {
 					session = await waitForSession(deps, session, deadline, signal);
 					if (session.status !== 'running') return lifecycleReadiness(session);
-					await authorizeMcpSession(deps, principal, session);
+					const accessDeadline = Math.min(authorizationDeadline, await refreshAuthorization());
 					signal.throwIfAborted();
 					const timeoutMs = Math.max(
 						0,
 						Math.min(
 							waitSeconds === 0 ? 5_000 : deadline - Date.now(),
-							authorizationDeadline - Date.now(),
+							accessDeadline - Date.now(),
 						),
 					);
-					const outcome = session.sandbox_id
-						? await bootstrapKernel(
-								deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
-								{ timeoutMs, inspectOnly: waitSeconds === 0, signal },
-							)
-						: { status: 'unavailable' as const };
-					return bootstrapReadiness(outcome.status, notebookUrl);
+					try {
+						const outcome = session.sandbox_id
+							? await bootstrapKernel(
+									deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
+									{ timeoutMs, inspectOnly: waitSeconds === 0, signal },
+								)
+							: { status: 'unavailable' as const };
+						return bootstrapReadiness(outcome.status, notebookUrl);
+					} catch (error) {
+						signal.throwIfAborted();
+						if (error instanceof DomainError) throw error;
+						failure = error;
+						return bootstrapReadiness('unavailable', notebookUrl);
+					}
 				},
 			);
 		} catch (error) {
 			failure = error;
-			execution = {
-				ready: false,
-				status: 'unavailable',
-				next_step: 'Check session access and status, then retry start_session.',
-			};
+			throw error;
 		} finally {
 			logEvent({
 				level: failure ? 'error' : 'info',
@@ -147,7 +151,7 @@ export async function startMcpSession(input: {
 				request_id: request.requestId ?? null,
 				project_id: project.id,
 				session_id: session.session_id,
-				outcome: execution.status,
+				outcome: failure ? 'failed' : execution.status,
 				duration_ms: Date.now() - startedAt,
 				...(failure ? { error: errorMetadataChain(failure) } : {}),
 			});

@@ -122,15 +122,19 @@ about two minutes.
 
 Session `status` describes the sandbox lifecycle. `execution.status` reports kernel readiness:
 
-| Status            | Next step                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| `ready`           | Call `execute_code`. Execution queues behind any running cells.                                     |
-| `initializing`    | Retry `start_session` with a positive `wait_seconds`.                                               |
-| `awaiting_client` | Open `notebook_url` in a browser. This runtime requires browser initialization.                     |
-| `unavailable`     | Retry `start_session`. If it fails again, check the session logs or open the notebook in a browser. |
+| Status                                           | Next step                                                                                                   |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `ready`                                          | Call `execute_code`. Execution queues behind any running cells.                                             |
+| `starting`                                       | Retry `start_session` to check sandbox startup. If authorization is required, follow `execution.next_step`. |
+| `initializing`                                   | Retry `start_session` with a positive `wait_seconds`.                                                       |
+| `awaiting_client`                                | Open `notebook_url` in a browser. This runtime requires browser initialization.                             |
+| `unavailable`                                    | Retry `start_session`. If it fails again, check the session logs or open the notebook in a browser.         |
+| `forbidden`                                      | Obtain `session.attach` access before executing code.                                                       |
+| `app_mode`                                       | Call `start_session` with `mode: "edit"` to execute code.                                                   |
+| `terminating`, `terminated`, `failed`, `expired` | Check the session status and error before retrying `start_session`.                                         |
 
 `wait_seconds` bounds polling and initialization after sandbox startup. Zero only
-inspects readiness and can report `initializing` until a normal start confirms it.
+inspects existing kernels, including browser sessions, without creating a kernel or running cells.
 Custom images need compatible marimo and WebSocket support. MCP does not install
 or upgrade packages during requests.
 
