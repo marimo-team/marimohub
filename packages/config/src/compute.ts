@@ -15,6 +15,7 @@ import {
 	portRoutingCollision,
 	resolveIngressTlsMode,
 	validateIngressHostnameTemplate,
+	validateLabels,
 } from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
@@ -247,6 +248,45 @@ function rejectUnsupportedCoreWeaveVars(env: Env): void {
 			);
 		}
 	}
+}
+
+/** `k=v,k2=v2` -> label map. Empty/unset yields undefined (no labels added). */
+function parseLabels(env: Env, key: string): Record<string, string> | undefined {
+	const out: Record<string, string> = {};
+	for (const pair of parseList(env[key]) ?? []) {
+		const eq = pair.indexOf('=');
+		const name = eq === -1 ? '' : pair.slice(0, eq).trim();
+		if (!name)
+			throw new ConfigError(`Invalid ${key} entry: ${pair} (expected key=value)`, {
+				variable: key,
+			});
+		out[name] = pair.slice(eq + 1).trim();
+	}
+	if (Object.keys(out).length === 0) return undefined;
+	try {
+		validateLabels(out);
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid labels';
+		throw new ConfigError(`Invalid ${key} (${detail})`, {
+			variable: key,
+			docs: 'docs/setup/compute/kubernetes.md',
+		});
+	}
+	return out;
+}
+
+// Linux uids are unsigned 32-bit; Kubernetes rejects negatives at admission.
+const MAX_UID = 0xffff_ffff;
+
+function parseRunAsUser(env: Env, key: string): number | undefined {
+	const uid = parseIntEnv(env, key);
+	if (uid === undefined) return undefined;
+	if (uid < 0 || uid > MAX_UID)
+		throw new ConfigError(`Invalid ${key}: ${uid} (expected a uid between 0 and ${MAX_UID})`, {
+			variable: key,
+			docs: 'docs/setup/compute/kubernetes.md',
+		});
+	return uid;
 }
 
 function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
@@ -522,6 +562,8 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				imagePullSecret: env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET,
 				imagePullPolicy: pullPolicy as 'Always' | 'IfNotPresent' | 'Never' | undefined,
 				resources: hasResources ? resources : undefined,
+				extraLabels: parseLabels(env, 'MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS'),
+				runAsUser: parseRunAsUser(env, 'MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER'),
 				podReadyTimeout:
 					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),
 			});

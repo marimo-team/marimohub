@@ -258,6 +258,8 @@ Native Kubernetes creates one keep-alive Pod and Service per session through `@k
 | `MARIMOHUB_COMPUTE_KUBERNETES_CPU` | CPU requested for each kernel Pod (Kubernetes quantity). | — | — | `2` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_MEMORY` | Memory requested for each kernel Pod (Kubernetes quantity). | — | — | `4Gi` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_GPU` | GPU count, mapped to the `nvidia.com/gpu` limit. | — | — | `1` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS` | Comma-separated `key=value` labels added to each kernel Pod, Service, and Ingress. Use for ownership labels that cluster admission policies require on every object. | — | — | `team=data,app.kubernetes.io/part-of=marimohub` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER` | `runAsUser` for the kernel Pod `securityContext`, with `runAsNonRoot` (unless `0`) and a matching `fsGroup`. Set when the cluster admission policy rejects Pods that do not pin a uid. The Pod mounts no volumes, so the image workdir must already be writable by this uid; `fsGroup` only affects mounted volumes. Unset leaves the securityContext off. | — | — | `1000` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS` | How long to wait for the kernel Pod to reach `Running`. | — | `120` | — |
 
 ### Local (dev only)

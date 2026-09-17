@@ -45,3 +45,6 @@ deployment/
 
 packages/notebook-bridge/test-results/
 packages/notebook-bridge/playwright-report/
+
+# Python bytecode caches
+__pycache__/

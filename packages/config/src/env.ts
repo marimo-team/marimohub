@@ -63,8 +63,9 @@ export function parseOnOff(
 
 /** An integer env value; undefined if unset/empty. Throws on a non-integer. */
 export function parseIntEnv(env: Env, key: string): number | undefined {
-	const raw = env[key];
+	const raw = env[key]?.trim();
 	if (raw === undefined || raw === '') return undefined;
+	// Number('') and Number(' ') are 0, so the empty check above must come first.
 	const n = Number(raw);
 	if (!Number.isInteger(n))
 		throw new ConfigError(`Invalid ${key}: ${raw} (expected an integer)`, { variable: key });

@@ -46,6 +46,8 @@ const configOf = (provider: unknown) =>
 				hostnameTemplate?: string;
 				ingressClassName?: string;
 				surfacePorts?: readonly number[];
+				extraLabels?: Record<string, string>;
+				runAsUser?: number;
 			};
 		}
 	).config;
@@ -360,6 +362,88 @@ describe('makeCompute fail-fast', () => {
 			}),
 		).toThrow(/MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY/);
 	});
+
+	it('parses kubernetes pod labels and leaves them unset when empty', () => {
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS:
+						' team = data , app.kubernetes.io/part-of=marimohub, flag= ',
+				}),
+			).extraLabels,
+		).toEqual({ team: 'data', 'app.kubernetes.io/part-of': 'marimohub', flag: '' });
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS: ' ',
+				}),
+			).extraLabels,
+		).toBeUndefined();
+	});
+
+	it.each(['team', '=owner', ' =owner', 'team=data,=x'])(
+		'rejects a kubernetes pod label without a key: %j',
+		(labels) => {
+			const error = getConfigError(() =>
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS: labels,
+				}),
+			);
+			expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS');
+			expect(error.message).toMatch(/expected key=value/);
+		},
+	);
+
+	it.each([
+		['team name=data', /label name/],
+		['team=data=prod', /label value/],
+		['team=da ta', /label value/],
+		[`team=${'x'.repeat(64)}`, /label value/],
+		['a/b/c=1', /label key/],
+		['-team=data', /label name/],
+		['Team.Example.com/owner=x', /DNS prefix/],
+	])('rejects a kubernetes pod label Kubernetes would refuse: %j', (labels, detail) => {
+		const error = getConfigError(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS: labels,
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS');
+		expect(error.message).toMatch(detail);
+	});
+
+	it('forwards a kubernetes run-as uid, including root', () => {
+		const k8s = (uid?: string) =>
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER: uid,
+				}),
+			).runAsUser;
+		expect(k8s(undefined)).toBeUndefined();
+		// Whitespace must not become uid 0 (root) via Number(' ') === 0.
+		expect(k8s(' ')).toBeUndefined();
+		expect(k8s('1000')).toBe(1000);
+		expect(k8s('0')).toBe(0);
+		expect(k8s('4294967295')).toBe(4294967295);
+	});
+
+	it.each(['-1', '4294967296', '1.5', 'nobody'])(
+		'rejects an invalid kubernetes run-as uid: %s',
+		(uid) => {
+			const error = getConfigError(() =>
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER: uid,
+				}),
+			);
+			expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER');
+		},
+	);
 
 	it('forwards kubernetes ingress annotations and default-certificate TLS mode', () => {
 		expect(

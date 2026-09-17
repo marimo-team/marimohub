@@ -58,6 +58,21 @@ export function validateIngressAnnotations(value: unknown): Record<string, strin
 	return entries.length === 0 ? undefined : Object.fromEntries(entries);
 }
 
+// Label values share the annotation name grammar (63 chars max) but may be empty.
+export function validateLabels(labels: Record<string, string>): void {
+	for (const [key, value] of Object.entries(labels)) {
+		try {
+			validateAnnotationKey(key);
+		} catch (cause) {
+			const detail = cause instanceof Error ? cause.message : String(cause);
+			throw new Error(detail.replaceAll('annotation', 'label'));
+		}
+		if (value !== '' && (value.length > 63 || !ANNOTATION_NAME.test(value))) {
+			throw new Error(`invalid label value "${value}" for key "${key}"`);
+		}
+	}
+}
+
 export function parseIngressAnnotations(
 	raw: string | undefined,
 ): Record<string, string> | undefined {
@@ -191,6 +206,18 @@ export interface KubernetesConfig {
 	imagePullPolicy?: ImagePullPolicy;
 	/** CPU/memory/GPU requested for each kernel Pod. */
 	resources?: KubernetesResources;
+	/**
+	 * Extra labels applied to the kernel Pod/Service/Ingress. Clusters with
+	 * admission policies often require ownership labels on every object.
+	 */
+	extraLabels?: Record<string, string>;
+	/**
+	 * `runAsUser` for the kernel Pod's securityContext (with `runAsNonRoot` and a
+	 * matching `fsGroup`). Required by clusters whose admission policy rejects Pods
+	 * that do not pin a uid. The Pod mounts no volumes, so `fsGroup` does not make
+	 * the workdir writable: the image must already grant this uid write access.
+	 */
+	runAsUser?: number;
 	/** How long to wait for the Pod to reach `Running`. Default 2 minutes. */
 	podReadyTimeout?: Millis;
 }
@@ -224,6 +251,10 @@ export interface EnsureSandboxOptions {
 	imagePullSecret?: string;
 	imagePullPolicy?: ImagePullPolicy;
 	resources?: KubernetesResources;
+	/** Extra labels for the Pod/Service/Ingress (admission-policy ownership tags). */
+	extraLabels?: Record<string, string>;
+	/** `runAsUser` for the Pod securityContext; omit to leave it unset. */
+	runAsUser?: number;
 }
 
 /**
