@@ -323,6 +323,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			imagePullSecret: this.config.imagePullSecret,
 			imagePullPolicy: this.config.imagePullPolicy,
 			resources: this.config.resources,
+			extraLabels: this.config.extraLabels,
+			runAsUser: this.config.runAsUser,
 		});
 		const t1 = Date.now();
 		await this.waitForRunning();

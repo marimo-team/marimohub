@@ -191,6 +191,17 @@ export interface KubernetesConfig {
 	imagePullPolicy?: ImagePullPolicy;
 	/** CPU/memory/GPU requested for each kernel Pod. */
 	resources?: KubernetesResources;
+	/**
+	 * Extra labels applied to the kernel Pod/Service/Ingress. Clusters with
+	 * admission policies often require ownership labels on every object.
+	 */
+	extraLabels?: Record<string, string>;
+	/**
+	 * `runAsUser` for the kernel Pod's securityContext (with `runAsNonRoot` and a
+	 * matching `fsGroup`). Required by clusters whose admission policy rejects Pods
+	 * that do not pin a uid. Must match a user that can write the image's workdir.
+	 */
+	runAsUser?: number;
 	/** How long to wait for the Pod to reach `Running`. Default 2 minutes. */
 	podReadyTimeout?: Millis;
 }
@@ -224,6 +235,10 @@ export interface EnsureSandboxOptions {
 	imagePullSecret?: string;
 	imagePullPolicy?: ImagePullPolicy;
 	resources?: KubernetesResources;
+	/** Extra labels for the Pod/Service/Ingress (admission-policy ownership tags). */
+	extraLabels?: Record<string, string>;
+	/** `runAsUser` for the Pod securityContext; omit to leave it unset. */
+	runAsUser?: number;
 }
 
 /**

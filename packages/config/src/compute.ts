@@ -249,6 +249,20 @@ function rejectUnsupportedCoreWeaveVars(env: Env): void {
 	}
 }
 
+/** `k=v,k2=v2` -> label map. Empty/unset yields undefined (no labels added). */
+function parseLabels(env: Env, key: string): Record<string, string> | undefined {
+	const out: Record<string, string> = {};
+	for (const pair of parseList(env[key]) ?? []) {
+		const eq = pair.indexOf('=');
+		if (eq < 1)
+			throw new ConfigError(`Invalid ${key} entry: ${pair} (expected key=value)`, {
+				variable: key,
+			});
+		out[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
 	const raw = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION;
 	if (raw === undefined || raw === 'read' || raw === 'read-write') return raw;
@@ -522,6 +536,8 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				imagePullSecret: env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET,
 				imagePullPolicy: pullPolicy as 'Always' | 'IfNotPresent' | 'Never' | undefined,
 				resources: hasResources ? resources : undefined,
+				extraLabels: parseLabels(env, 'MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS'),
+				runAsUser: parseIntEnv(env, 'MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER'),
 				podReadyTimeout:
 					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),
 			});

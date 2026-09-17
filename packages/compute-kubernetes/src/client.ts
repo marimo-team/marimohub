@@ -107,11 +107,22 @@ function podManifest(o: EnsureSandboxOptions): V1Pod {
 		metadata: {
 			name: o.name,
 			namespace: o.namespace,
-			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE, [SANDBOX_NAME_LABEL]: o.name },
+			labels: {
+				...o.extraLabels,
+				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
+				[SANDBOX_NAME_LABEL]: o.name,
+			},
 			annotations: { [SANDBOX_ID_ANNOTATION]: String(o.sandboxId) },
 		},
 		spec: {
 			restartPolicy: 'Never',
+			// Pinned uid when configured: some clusters' admission policies reject a
+			// Pod that leaves runAsUser unset. fsGroup matches so the workdir volume
+			// (and anything the kernel writes) stays writable.
+			securityContext:
+				o.runAsUser === undefined
+					? undefined
+					: { runAsUser: o.runAsUser, runAsNonRoot: o.runAsUser !== 0, fsGroup: o.runAsUser },
 			// The keep-alive `sleep` ignores SIGTERM, so the k8s default 30s grace
 			// would leave every deleted Pod Terminating (still holding its resources,
 			// still phase Running) for 30s. Nothing in the Pod needs a graceful stop —
@@ -140,7 +151,7 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 		metadata: {
 			name: o.name,
 			namespace: o.namespace,
-			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			labels: { ...o.extraLabels, [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
 		},
 		spec: {
 			selector: { [SANDBOX_NAME_LABEL]: o.name },
@@ -169,7 +180,7 @@ function ingressManifest(o: EnsureSandboxOptions): V1Ingress {
 		metadata: {
 			name: o.name,
 			namespace: o.namespace,
-			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			labels: { ...o.extraLabels, [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
 			annotations: validateIngressAnnotations(o.ingressAnnotations),
 		},
 		spec: {
