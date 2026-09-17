@@ -371,6 +371,8 @@ describe('KubernetesCompute', () => {
 				imagePullSecret: 'regcred',
 				imagePullPolicy: 'Always',
 				resources: { cpu: '2', memory: '4Gi', gpu: '1' },
+				extraLabels: { team: 'data' },
+				runAsUser: 1000,
 			})
 				.create(SANDBOX_ID)
 				.exec('true');
@@ -381,6 +383,8 @@ describe('KubernetesCompute', () => {
 				imagePullSecret: 'regcred',
 				imagePullPolicy: 'Always',
 				resources: { cpu: '2', memory: '4Gi', gpu: '1' },
+				extraLabels: { team: 'data' },
+				runAsUser: 1000,
 			});
 		});
 

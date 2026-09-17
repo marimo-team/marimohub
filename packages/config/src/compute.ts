@@ -15,6 +15,7 @@ import {
 	portRoutingCollision,
 	resolveIngressTlsMode,
 	validateIngressHostnameTemplate,
+	validateLabels,
 } from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
@@ -261,7 +262,17 @@ function parseLabels(env: Env, key: string): Record<string, string> | undefined 
 			});
 		out[name] = pair.slice(eq + 1).trim();
 	}
-	return Object.keys(out).length > 0 ? out : undefined;
+	if (Object.keys(out).length === 0) return undefined;
+	try {
+		validateLabels(out);
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid labels';
+		throw new ConfigError(`Invalid ${key} (${detail})`, {
+			variable: key,
+			docs: 'docs/setup/compute/kubernetes.md',
+		});
+	}
+	return out;
 }
 
 // Linux uids are unsigned 32-bit; Kubernetes rejects negatives at admission.

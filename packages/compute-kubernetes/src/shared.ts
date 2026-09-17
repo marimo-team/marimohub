@@ -58,6 +58,21 @@ export function validateIngressAnnotations(value: unknown): Record<string, strin
 	return entries.length === 0 ? undefined : Object.fromEntries(entries);
 }
 
+// Label values share the annotation name grammar (63 chars max) but may be empty.
+export function validateLabels(labels: Record<string, string>): void {
+	for (const [key, value] of Object.entries(labels)) {
+		try {
+			validateAnnotationKey(key);
+		} catch (cause) {
+			const detail = cause instanceof Error ? cause.message : String(cause);
+			throw new Error(detail.replaceAll('annotation', 'label'));
+		}
+		if (value !== '' && (value.length > 63 || !ANNOTATION_NAME.test(value))) {
+			throw new Error(`invalid label value "${value}" for key "${key}"`);
+		}
+	}
+}
+
 export function parseIngressAnnotations(
 	raw: string | undefined,
 ): Record<string, string> | undefined {

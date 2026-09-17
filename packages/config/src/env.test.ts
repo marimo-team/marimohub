@@ -69,7 +69,7 @@ describe('parseIntEnv', () => {
 		expect(parseIntEnv({ N: '42' }, 'N')).toBe(42);
 	});
 
-	it.each([undefined, ''])('returns undefined when unset (%o)', (value) => {
+	it.each([undefined, '', ' ', '\t'])('returns undefined when unset (%o)', (value) => {
 		expect(parseIntEnv({ N: value }, 'N')).toBeUndefined();
 	});
 

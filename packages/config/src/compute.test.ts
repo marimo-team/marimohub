@@ -397,6 +397,25 @@ describe('makeCompute fail-fast', () => {
 		},
 	);
 
+	it.each([
+		['team name=data', /label name/],
+		['team=data=prod', /label value/],
+		['team=da ta', /label value/],
+		[`team=${'x'.repeat(64)}`, /label value/],
+		['a/b/c=1', /label key/],
+		['-team=data', /label name/],
+		['Team.Example.com/owner=x', /DNS prefix/],
+	])('rejects a kubernetes pod label Kubernetes would refuse: %j', (labels, detail) => {
+		const error = getConfigError(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS: labels,
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS');
+		expect(error.message).toMatch(detail);
+	});
+
 	it('forwards a kubernetes run-as uid, including root', () => {
 		const k8s = (uid?: string) =>
 			configOf(
@@ -406,6 +425,8 @@ describe('makeCompute fail-fast', () => {
 				}),
 			).runAsUser;
 		expect(k8s(undefined)).toBeUndefined();
+		// Whitespace must not become uid 0 (root) via Number(' ') === 0.
+		expect(k8s(' ')).toBeUndefined();
 		expect(k8s('1000')).toBe(1000);
 		expect(k8s('0')).toBe(0);
 		expect(k8s('4294967295')).toBe(4294967295);
