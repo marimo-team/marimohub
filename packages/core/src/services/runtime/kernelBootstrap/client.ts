@@ -3,7 +3,7 @@ import fcntl, json, signal, sys, time, uuid
 from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, ProxyHandler
 
 class Incompatible(Exception):
@@ -154,6 +154,8 @@ def run_client(cfg):
         return "initializing"
     except HTTPError as error:
         return "awaiting_client" if error.code in (404, 405) else "unavailable"
+    except (URLError, ConnectionError):
+        return "initializing"
     except Exception:
         return "unavailable"
     finally:
