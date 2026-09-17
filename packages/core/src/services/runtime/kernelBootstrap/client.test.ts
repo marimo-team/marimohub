@@ -96,7 +96,9 @@ cases = [(ImportError("secret"), "awaiting_client"), (Incompatible(), "awaiting_
          (TimeoutError(), "initializing"), (ValueError("secret"), "unavailable"),
          (HTTPError("secret", 401, "secret", {}, None), "unavailable"),
          (HTTPError("secret", 500, "secret", {}, None), "unavailable"),
-         (HTTPError("secret", 404, "secret", {}, None), "awaiting_client")]
+         (HTTPError("secret", 404, "secret", {}, None), "awaiting_client"),
+         (URLError("secret"), "initializing"),
+         (ConnectionResetError("secret"), "initializing")]
 for error, expected in cases:
     with patch.dict(globals(), {"bootstrap": lambda *args: (_ for _ in ()).throw(error)}):
         assert run_client({"seconds": 1}) == expected

@@ -6,7 +6,7 @@ import { kernelBootstrapCommand } from './kernelBootstrap/command';
 afterEach(() => vi.useRealTimers());
 
 describe('bootstrapKernel', () => {
-	it.each(['ready', 'initializing', 'awaiting_client', 'unavailable'] as const)(
+	it.each(['ready', 'awaiting_client', 'unavailable'] as const)(
 		'returns the bounded %s result',
 		async (status) => {
 			const { instance } = makeFakeSandbox();
@@ -19,6 +19,48 @@ describe('bootstrapKernel', () => {
 			expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 6_000 });
 		},
 	);
+	it('polls while the kernel is still initializing, then returns ready', async () => {
+		const { instance } = makeFakeSandbox();
+		const exec = vi
+			.spyOn(instance, 'exec')
+			.mockResolvedValueOnce({
+				success: true,
+				stdout: JSON.stringify({ status: 'initializing' }),
+				stderr: '',
+			})
+			.mockResolvedValue({
+				success: true,
+				stdout: JSON.stringify({ status: 'ready' }),
+				stderr: '',
+			});
+		expect(await bootstrapKernel(instance, { timeoutMs: 5_000 })).toEqual({ status: 'ready' });
+		expect(exec.mock.calls.length).toBeGreaterThanOrEqual(2);
+	});
+	it('gives up with initializing when the budget is spent', async () => {
+		vi.useFakeTimers();
+		const { instance } = makeFakeSandbox();
+		vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: true,
+			stdout: JSON.stringify({ status: 'initializing' }),
+			stderr: '',
+		});
+		const pending = bootstrapKernel(instance, { timeoutMs: 1_000 });
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(await pending).toEqual({ status: 'initializing' });
+		expect(vi.getTimerCount()).toBe(0);
+	});
+	it('does not poll in inspect mode', async () => {
+		const { instance } = makeFakeSandbox();
+		const exec = vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: true,
+			stdout: JSON.stringify({ status: 'initializing' }),
+			stderr: '',
+		});
+		expect(await bootstrapKernel(instance, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+			status: 'initializing',
+		});
+		expect(exec).toHaveBeenCalledTimes(1);
+	});
 	it('does no work without remaining time', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		expect(await bootstrapKernel(instance, { timeoutMs: 0 })).toEqual({ status: 'initializing' });

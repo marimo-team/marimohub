@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { withDeadline } from '../../async';
+import { withAbortSignal, withDeadline } from '../../async';
+import { sleep } from '../../duration';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { kernelBootstrapCommand } from './kernelBootstrap/command';
 
@@ -8,6 +9,10 @@ const BootstrapResult = z.object({
 });
 export type KernelBootstrapResult = z.infer<typeof BootstrapResult>;
 
+// A fresh kernel reports `initializing` until marimo finishes booting. Poll across that window
+// rather than surfacing the first probe as terminal.
+const RETRY_PAUSE_MS = 500;
+
 class BootstrapTimeoutError extends Error {
 	constructor() {
 		super('Kernel bootstrap timed out');
@@ -15,12 +20,10 @@ class BootstrapTimeoutError extends Error {
 	}
 }
 
-export async function bootstrapKernel(
+async function bootstrapOnce(
 	sandbox: SandboxInstance,
 	options: { timeoutMs: number; inspectOnly?: boolean; signal?: AbortSignal },
 ): Promise<KernelBootstrapResult> {
-	options.signal?.throwIfAborted();
-	if (options.timeoutMs <= 0) return { status: 'initializing' };
 	try {
 		const executed = await withDeadline(
 			() =>
@@ -48,4 +51,28 @@ export async function bootstrapKernel(
 		if (options.signal?.aborted) throw options.signal.reason;
 		return { status: 'unavailable' };
 	}
+}
+
+export async function bootstrapKernel(
+	sandbox: SandboxInstance,
+	options: { timeoutMs: number; inspectOnly?: boolean; signal?: AbortSignal },
+): Promise<KernelBootstrapResult> {
+	options.signal?.throwIfAborted();
+	if (options.timeoutMs <= 0) return { status: 'initializing' };
+	const deadline = Date.now() + options.timeoutMs;
+	let budget = options.timeoutMs;
+	let result: KernelBootstrapResult = { status: 'initializing' };
+	while (budget > 0) {
+		result = await bootstrapOnce(sandbox, {
+			timeoutMs: budget,
+			inspectOnly: options.inspectOnly,
+			signal: options.signal,
+		});
+		if (options.inspectOnly || result.status !== 'initializing') return result;
+		const pause = Math.min(RETRY_PAUSE_MS, deadline - Date.now());
+		if (pause <= 0) break;
+		await withAbortSignal(sleep(pause), options.signal);
+		budget = deadline - Date.now();
+	}
+	return result;
 }
