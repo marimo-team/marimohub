@@ -1,4 +1,8 @@
-import type { NotebookId, ProjectId } from '../../ids';
+import { NotebookId, ProjectId } from '../../ids';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { mapWithConcurrency } from '../../concurrency';
+import { readForInspection } from './inspection';
+import { listAllObjects } from '../catalog/storage';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -8,6 +12,25 @@ import { readStored } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
 import { AppPoolSchema, emptyAppPool } from './AppPoolRouter';
 import type { AppPool } from './AppPoolRouter';
+
+function isIsoTimestamp(value: number | undefined): boolean {
+	if (value === undefined) return true;
+	const year = new Date(value).getUTCFullYear();
+	return year >= 0 && year <= 9999;
+}
+
+const InspectablePoolSchema = AppPoolSchema.refine(
+	(pool) =>
+		pool.members.every(
+			(member) => isIsoTimestamp(member.created_at) && isIsoTimestamp(member.idle_since),
+		) &&
+		pool.assignments.every(
+			(assignment) =>
+				isIsoTimestamp(assignment.grace_until) &&
+				assignment.visits.every((visit) => isIsoTimestamp(visit.expires_at)),
+		),
+	'Pool timestamps cannot be represented as ISO dates',
+);
 
 export class AppPoolStore {
 	constructor(
@@ -19,6 +42,32 @@ export class AppPoolStore {
 		const key = paths.appPool(projectId, notebookId);
 		const object = await this.bucket.get(key);
 		return object ? readStored(AppPoolSchema, object, key) : null;
+	}
+
+	async inspectAll() {
+		const objects = await listAllObjects(this.bucket, paths.appPoolsPrefix);
+		let incomplete = false;
+		const entries = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (object) => {
+			const [projectId, notebook] = object.key.slice(paths.appPoolsPrefix.length).split('/');
+			const notebookId = notebook?.replace(/\.json$/, '');
+			if (
+				!ProjectId.is(projectId) ||
+				!NotebookId.is(notebookId) ||
+				object.key !== paths.appPool(projectId, notebookId)
+			) {
+				incomplete = true;
+				return null;
+			}
+			const pool = await readForInspection(
+				this.bucket,
+				object.key,
+				InspectablePoolSchema,
+				'app_pool.inspect',
+			);
+			if (!pool) incomplete = true;
+			return { project_id: projectId, notebook_id: notebookId, pool };
+		});
+		return { entries: entries.filter((entry) => entry !== null), incomplete };
 	}
 
 	/** Share snapshots within one read-only request or maintenance pass, never across requests. */

@@ -302,6 +302,18 @@ export function useUserSearchQuery(query: string) {
 
 // Admin (super-admin pages)
 
+export function useAdminRuntimeQuery(paused = false) {
+	return useQuery({
+		queryKey: adminKeys.runtime(),
+		queryFn: () => apiData(apiClient.GET('/api/v1/admin/runtime')),
+		staleTime: 30_000,
+		refetchInterval: paused ? false : 30_000,
+		refetchIntervalInBackground: false,
+		refetchOnWindowFocus: !paused,
+		refetchOnReconnect: !paused,
+	});
+}
+
 /** The full user directory (everyone who has signed in at least once), name-sorted. */
 export function useAdminUsersQuery() {
 	return useSuspenseQuery({

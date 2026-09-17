@@ -39,7 +39,7 @@ describe('Admin routes', () => {
 
 	it('rejects unauthenticated requests with 401', async () => {
 		const app = createApi(makeTestDeps(bucket));
-		for (const path of ['/api/v1/admin/users', '/api/v1/admin/config']) {
+		for (const path of ['/api/v1/admin/users', '/api/v1/admin/config', '/api/v1/admin/runtime']) {
 			await expectError(await app.request(path), 401, 'UNAUTHORIZED');
 		}
 		await expectError(
@@ -57,6 +57,7 @@ describe('Admin routes', () => {
 		const { request } = createTestApi({ bucket, userId: ACTOR });
 		await expectError(await request('GET', '/admin/users'), 403, 'FORBIDDEN');
 		await expectError(await request('GET', '/admin/config'), 403, 'FORBIDDEN');
+		await expectError(await request('GET', '/admin/runtime'), 403, 'FORBIDDEN');
 		await expectError(
 			await request('PUT', `/admin/users/${uid('target')}/suspension`),
 			403,
@@ -81,6 +82,7 @@ describe('Admin routes', () => {
 		for (const path of [
 			'/api/v1/admin/users',
 			'/api/v1/admin/config',
+			'/api/v1/admin/runtime',
 			`/api/v1/admin/users/${uid('target')}/suspension`,
 			'/api/v1/admin/debug/sandbox-startup',
 		]) {
@@ -106,6 +108,7 @@ describe('Admin routes', () => {
 		});
 		await expectOk(await request('GET', '/admin/users'));
 		await expectOk(await request('GET', '/admin/config'));
+		await expectOk(await request('GET', '/admin/runtime'));
 	});
 
 	it('advertises only cookieAuth (not bearerAuth) for the admin routes', () => {
@@ -114,6 +117,7 @@ describe('Admin routes', () => {
 		};
 		expect(doc.paths['/api/v1/admin/users'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/config'].get.security).toEqual([{ cookieAuth: [] }]);
+		expect(doc.paths['/api/v1/admin/runtime'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/debug/sandbox-startup'].post.security).toEqual([
 			{ cookieAuth: [] },
 		]);

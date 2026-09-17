@@ -337,6 +337,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/admin/runtime': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Inspect app pools and editor sessions
+		 * @description Read-only runtime snapshot, cached for 30 seconds per service instance. Super-admin and session authentication required. Recorded state is not a live compute health check.
+		 */
+		get: operations['admin.runtime.inspect'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/admin/users': {
 		parameters: {
 			query?: never;
@@ -929,24 +949,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/deep-links': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** List notebook app links */
-		get: operations['deep-links.list'];
-		put?: never;
-		/** Register a globally unique app slug */
-		post: operations['deep-links.register'];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/deep-links/{slug}': {
 		parameters: {
 			query?: never;
@@ -962,6 +964,24 @@ export interface paths {
 		 * @description Releases the slug only when the notebook and registration ID match. The slug is immediately available for reuse. Old shared URLs can then open another notebook. App sessions and notebook permissions stay unchanged.
 		 */
 		delete: operations['deep-links.release'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/deep-links': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List notebook app links */
+		get: operations['deep-links.list'];
+		put?: never;
+		/** Register a globally unique app slug */
+		post: operations['deep-links.register'];
+		delete?: never;
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -2389,6 +2409,84 @@ export interface components {
 			actor: string;
 		} & {
 			[key: string]: unknown;
+		};
+		RuntimeDashboard: {
+			/** Format: date-time */
+			observed_at: string;
+			apps: {
+				project_id: string;
+				project_name: string;
+				notebook_id: string;
+				notebook_title: string;
+				current_version_id: string | null;
+				current_version_members: number | null;
+				sandboxes: {
+					session_id: string;
+					sandbox_id: string | null;
+					user_id: string;
+					/** @enum {string|null} */
+					status:
+						| 'starting'
+						| 'running'
+						| 'terminating'
+						| 'terminated'
+						| 'failed'
+						| 'expired'
+						| null;
+					/** Format: date-time */
+					started_at: string;
+					/** Format: date-time */
+					last_heartbeat: string | null;
+					source_version_id: string | null;
+					compute_profile: string | null;
+					active_connections: number | null;
+					/** Format: date-time */
+					connections_checked_at: string | null;
+					/** @enum {string|null} */
+					pool_state: 'starting' | 'ready' | 'draining' | 'retiring' | null;
+					/** @enum {string} */
+					version_status: 'current' | 'old' | 'unknown';
+					legacy: boolean;
+					users: number | null;
+					/** Format: date-time */
+					idle_since: string | null;
+					assignments: {
+						user_id: string;
+						visits: number;
+						/** @enum {string} */
+						state: 'active' | 'grace';
+						/** Format: date-time */
+						expires_at: string;
+					}[];
+					incomplete: boolean;
+				}[];
+				incomplete: boolean;
+			}[];
+			editors: {
+				project_id: string;
+				project_name: string;
+				notebook_id: string;
+				notebook_title: string;
+				session_id: string;
+				sandbox_id: string | null;
+				user_id: string;
+				/** @enum {string|null} */
+				status: 'starting' | 'running' | 'terminating' | 'terminated' | 'failed' | 'expired' | null;
+				/** Format: date-time */
+				started_at: string;
+				/** Format: date-time */
+				last_heartbeat: string | null;
+				source_version_id: string | null;
+				compute_profile: string | null;
+				active_connections: number | null;
+				/** Format: date-time */
+				connections_checked_at: string | null;
+			}[];
+			incomplete: boolean;
+			limits: {
+				max_users_per_session: number | null;
+				max_sessions_per_version: number | null;
+			};
 		};
 		AdminUserPage: {
 			items: components['schemas']['AdminUser'][];
@@ -6400,6 +6498,86 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.runtime.inspect': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Runtime snapshot */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['RuntimeDashboard'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -10721,6 +10899,110 @@ export interface operations {
 			};
 		};
 	};
+	'deep-links.release': {
+		parameters: {
+			query: {
+				registration_id: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				slug: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Registration released, absent, or replaced */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: null;
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'deep-links.list': {
 		parameters: {
 			query?: never;
@@ -10864,110 +11146,6 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: components['schemas']['DeepLink'];
-					};
-				};
-			};
-			/** @description Authentication required */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Access forbidden */
-			403: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Not found */
-			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Conflict */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Request body too large */
-			413: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Validation error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Internal server error */
-			500: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Service unavailable */
-			503: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-		};
-	};
-	'deep-links.release': {
-		parameters: {
-			query: {
-				registration_id: string;
-			};
-			header?: never;
-			path: {
-				pid: string;
-				nid: string;
-				slug: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Registration released, absent, or replaced */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': {
-						/** @enum {boolean} */
-						success: true;
-						data: null;
 					};
 				};
 			};

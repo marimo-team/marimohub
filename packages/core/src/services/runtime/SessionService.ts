@@ -1,3 +1,4 @@
+import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -676,6 +677,22 @@ export class SessionService {
 			return handle(session, obj, body.etag);
 		});
 		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
+	}
+
+	async inspectSessions(): Promise<{ sessions: Session[]; incomplete: boolean }> {
+		const objects = await listAllObjects(this.bucket, paths.sessionsPrefix);
+		let incomplete = false;
+		const records = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (object) => {
+			const record = await readForInspection(
+				this.bucket,
+				object.key,
+				SessionSchema,
+				'session.inspect',
+			);
+			if (!record) incomplete = true;
+			return record;
+		});
+		return { sessions: records.filter((record) => record !== null), incomplete };
 	}
 
 	async listSessions(notebookId?: NotebookId): Promise<Session[]> {
