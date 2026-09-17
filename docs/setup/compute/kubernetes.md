@@ -34,7 +34,7 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 # MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
 # For clusters whose admission policies require ownership labels or a pinned uid:
 # MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS=team=data,app.kubernetes.io/part-of=marimohub
-# MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER=1000  # also sets runAsNonRoot and fsGroup
+# MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER=1000  # also sets runAsNonRoot and fsGroup; the image workdir must be writable by this uid
 ```
 
 For proxy exposure, omit `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and the Ingress/TLS

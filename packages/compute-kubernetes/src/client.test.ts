@@ -560,6 +560,62 @@ describe('createK8sClient', () => {
 		expect(defaultImagePullPolicy('registry:5000/img:v1')).toBe('IfNotPresent');
 	});
 
+	it('spreads extra labels onto the Pod, Service, and Ingress under the managed labels', async () => {
+		const client = createK8sClient({});
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel-image:v1',
+			ports: [{ port: 2718, host: 'sb.example.com' }],
+			namespace: 'default',
+			extraLabels: {
+				team: 'data',
+				// Admission-critical: user labels never override the ones lookups key on.
+				[MANAGED_BY_LABEL]: 'someone-else',
+				'marimohub.io/sandbox-name': 'not-mh-sb',
+			},
+		});
+
+		expect(k8sMock.core.createNamespacedPod.mock.calls[0]?.[0].body.metadata.labels).toEqual({
+			team: 'data',
+			[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
+			'marimohub.io/sandbox-name': 'mh-sb',
+		});
+		for (const call of [
+			k8sMock.core.createNamespacedService.mock.calls[0],
+			k8sMock.net.createNamespacedIngress.mock.calls[0],
+		]) {
+			expect(call?.[0].body.metadata.labels).toMatchObject({
+				team: 'data',
+				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
+			});
+		}
+	});
+
+	it('omits the Pod securityContext unless a uid is configured', async () => {
+		const client = createK8sClient({});
+		const base = {
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel-image:v1',
+			ports: [{ port: 2718, host: '' }],
+			namespace: 'default',
+		};
+		await client.ensure(base);
+		await client.ensure({ ...base, runAsUser: 1000 });
+		await client.ensure({ ...base, runAsUser: 0 });
+
+		const specs = k8sMock.core.createNamespacedPod.mock.calls.map((c) => c[0].body.spec);
+		expect(specs[0].securityContext).toBeUndefined();
+		expect(specs[1].securityContext).toEqual({
+			runAsUser: 1000,
+			runAsNonRoot: true,
+			fsGroup: 1000,
+		});
+		// Root is a valid pin; runAsNonRoot: true would make the kubelet refuse it.
+		expect(specs[2].securityContext).toEqual({ runAsUser: 0, runAsNonRoot: false, fsGroup: 0 });
+	});
+
 	it('adds limits only for fields supplied by a compute profile', async () => {
 		const client = createK8sClient({});
 		await client.ensure({

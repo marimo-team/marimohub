@@ -254,13 +254,28 @@ function parseLabels(env: Env, key: string): Record<string, string> | undefined 
 	const out: Record<string, string> = {};
 	for (const pair of parseList(env[key]) ?? []) {
 		const eq = pair.indexOf('=');
-		if (eq < 1)
+		const name = eq === -1 ? '' : pair.slice(0, eq).trim();
+		if (!name)
 			throw new ConfigError(`Invalid ${key} entry: ${pair} (expected key=value)`, {
 				variable: key,
 			});
-		out[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+		out[name] = pair.slice(eq + 1).trim();
 	}
 	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// Linux uids are unsigned 32-bit; Kubernetes rejects negatives at admission.
+const MAX_UID = 0xffff_ffff;
+
+function parseRunAsUser(env: Env, key: string): number | undefined {
+	const uid = parseIntEnv(env, key);
+	if (uid === undefined) return undefined;
+	if (uid < 0 || uid > MAX_UID)
+		throw new ConfigError(`Invalid ${key}: ${uid} (expected a uid between 0 and ${MAX_UID})`, {
+			variable: key,
+			docs: 'docs/setup/compute/kubernetes.md',
+		});
+	return uid;
 }
 
 function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
@@ -537,7 +552,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				imagePullPolicy: pullPolicy as 'Always' | 'IfNotPresent' | 'Never' | undefined,
 				resources: hasResources ? resources : undefined,
 				extraLabels: parseLabels(env, 'MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS'),
-				runAsUser: parseIntEnv(env, 'MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER'),
+				runAsUser: parseRunAsUser(env, 'MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER'),
 				podReadyTimeout:
 					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),
 			});

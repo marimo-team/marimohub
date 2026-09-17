@@ -117,8 +117,9 @@ function podManifest(o: EnsureSandboxOptions): V1Pod {
 		spec: {
 			restartPolicy: 'Never',
 			// Pinned uid when configured: some clusters' admission policies reject a
-			// Pod that leaves runAsUser unset. fsGroup matches so the workdir volume
-			// (and anything the kernel writes) stays writable.
+			// Pod that leaves runAsUser unset. fsGroup matches for policies that also
+			// demand it; it only affects mounted volumes, and this Pod has none, so the
+			// image workdir must already be writable by the uid (see shared.ts).
 			securityContext:
 				o.runAsUser === undefined
 					? undefined

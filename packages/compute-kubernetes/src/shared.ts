@@ -199,7 +199,8 @@ export interface KubernetesConfig {
 	/**
 	 * `runAsUser` for the kernel Pod's securityContext (with `runAsNonRoot` and a
 	 * matching `fsGroup`). Required by clusters whose admission policy rejects Pods
-	 * that do not pin a uid. Must match a user that can write the image's workdir.
+	 * that do not pin a uid. The Pod mounts no volumes, so `fsGroup` does not make
+	 * the workdir writable: the image must already grant this uid write access.
 	 */
 	runAsUser?: number;
 	/** How long to wait for the Pod to reach `Running`. Default 2 minutes. */

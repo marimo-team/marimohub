@@ -897,13 +897,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Comma-separated `key=value` labels added to each kernel Pod, Service, and Ingress. Use for ownership labels that cluster admission policies require on every object.',
 						example: 'team=data,app.kubernetes.io/part-of=marimohub',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER',
 						name: 'Kubernetes run-as user',
 						description:
-							'`runAsUser` for the kernel Pod `securityContext`, with `runAsNonRoot` (unless `0`) and a matching `fsGroup`. Set when the cluster admission policy rejects Pods that do not pin a uid. Must be a user that can write the image workdir. Unset leaves the securityContext off.',
+							'`runAsUser` for the kernel Pod `securityContext`, with `runAsNonRoot` (unless `0`) and a matching `fsGroup`. Set when the cluster admission policy rejects Pods that do not pin a uid. The Pod mounts no volumes, so the image workdir must already be writable by this uid; `fsGroup` only affects mounted volumes. Unset leaves the securityContext off.',
 						example: '1000',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS',
