@@ -689,7 +689,10 @@ export class SessionService {
 				SessionSchema,
 				'session.inspect',
 			);
-			if (!record) incomplete = true;
+			if (!record || object.key !== paths.session(record.project_id, record.session_id)) {
+				incomplete = true;
+				return null;
+			}
 			return record;
 		});
 		return { sessions: records.filter((record) => record !== null), incomplete };

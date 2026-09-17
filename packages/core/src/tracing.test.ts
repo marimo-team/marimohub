@@ -125,7 +125,29 @@ describe('createServices tracing option', () => {
 	it('leaves everything unwrapped by default', async () => {
 		const services = createServices(new MemoryBucket());
 		await services.identities.get('user-1' as UserId);
+		await services.runtimeInspection.inspect();
 		expect(exporter.getFinishedSpans()).toHaveLength(0);
+	});
+
+	it('parents runtime scans under inspection spans and traces cache hits without rescanning', async () => {
+		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
+		await services.catalog.initialize('admin' as UserId);
+		exporter.reset();
+
+		const snapshot = await services.runtimeInspection.inspect();
+		const spans = exporter.getFinishedSpans();
+		const inspection = spans.find((span) => span.name === 'RuntimeInspectionService.inspect');
+		expect(inspection).toBeDefined();
+		for (const name of ['SessionService.inspectSessions', 'CatalogService.getCurrentSnapshot']) {
+			const child = spans.find((span) => span.name === name);
+			expect(child?.parentSpanContext?.spanId).toBe(inspection?.spanContext().spanId);
+		}
+
+		exporter.reset();
+		expect(await services.runtimeInspection.inspect()).toBe(snapshot);
+		expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual([
+			'RuntimeInspectionService.inspect',
+		]);
 	});
 
 	it('identifies proposals on lookup and publication spans', async () => {

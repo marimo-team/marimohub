@@ -158,10 +158,10 @@ export class RuntimeInspectionService {
 			return group;
 		};
 		for (const entry of poolScan.entries) {
-			if (entry.pool?.members.length === 0) continue;
+			if (entry.pool?.members.length === 0 && entry.pool.assignments.length === 0) continue;
 			const group = groupFor(entry.project_id, entry.notebook_id);
 			group.pool = entry.pool;
-			group.incomplete = entry.pool === null;
+			group.incomplete = entry.pool === null || entry.pool.members.length === 0;
 		}
 		const allSessions = new Map(
 			sessionScan.sessions.map((session) => [session.session_id, session]),

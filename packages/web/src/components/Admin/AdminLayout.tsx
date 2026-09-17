@@ -20,7 +20,7 @@ export function AdminLayout() {
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<nav
 				aria-label="Admin"
-				className="flex shrink-0 gap-1 overflow-x-auto border-b bg-background px-6 pt-2 max-md:px-3"
+				className="flex shrink-0 gap-1 overflow-x-auto whitespace-nowrap border-b bg-background px-6 pt-2 max-md:px-3"
 			>
 				{TABS.map((tab) => (
 					<NavLink

@@ -495,6 +495,50 @@ describe('runtime inspection', () => {
 		});
 	});
 
+	it.each([
+		{ hasSession: false, expiresIn: 1000 },
+		{ hasSession: false, expiresIn: -1000 },
+		{ hasSession: true, expiresIn: 1000 },
+		{ hasSession: true, expiresIn: -1000 },
+	])(
+		'keeps pools with assignments but no members incomplete (session=$hasSession, expiresIn=$expiresIn)',
+		async ({ hasSession, expiresIn }) => {
+			const m = member();
+			await savePool(
+				[],
+				[
+					{
+						user_id: ACTOR,
+						session_id: m.session_id,
+						generation: 'g',
+						visits: [{ visit_id: 'tab', expires_at: now + expiresIn }],
+					},
+				],
+			);
+			if (hasSession) await saveSession(m);
+			const original = await store.read(pid, nid);
+			const put = vi.spyOn(bucket, 'put');
+			const remove = vi.spyOn(bucket, 'delete');
+
+			const snapshot = await inspection.inspect();
+
+			expect(snapshot.incomplete).toBe(true);
+			expect(snapshot.apps).toHaveLength(1);
+			expect(snapshot.apps[0]).toMatchObject({
+				project_id: pid,
+				notebook_id: nid,
+				incomplete: true,
+				current_version_members: null,
+				sandboxes: hasSession
+					? [expect.objectContaining({ session_id: m.session_id, users: null, incomplete: true })]
+					: [],
+			});
+			expect(await store.read(pid, nid)).toEqual(original);
+			expect(put).not.toHaveBeenCalled();
+			expect(remove).not.toHaveBeenCalled();
+		},
+	);
+
 	it('excludes reclaimed pools and terminal sessions, while treating absent mode as an editor', async () => {
 		await savePool([]);
 		await store.retireForDeletion(pid, nid);

@@ -9,7 +9,13 @@ import {
 	uid,
 } from '../../testing';
 import { ConflictError, PreconditionFailedError } from '../../errors';
-import { createNotebookId, createProjectId, createVersionId, SandboxId } from '../../ids';
+import {
+	createNotebookId,
+	createProjectId,
+	createSessionId,
+	createVersionId,
+	SandboxId,
+} from '../../ids';
 import type { SessionId } from '../../ids';
 import { paths } from '../../paths';
 import { SessionService } from './SessionService';
@@ -24,6 +30,48 @@ describe('SessionService', () => {
 	beforeEach(() => {
 		bucket = new MemoryBucket();
 		sessions = new SessionService(bucket);
+	});
+
+	describe('inspectSessions', () => {
+		it('returns canonical session records without marking them incomplete', async () => {
+			const session = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+			});
+
+			expect(await sessions.inspectSessions()).toEqual({ sessions: [session], incomplete: false });
+		});
+
+		it.each(['project', 'session', 'flat', 'nested', 'extension'] as const)(
+			'skips a valid payload with a noncanonical %s key and preserves good records',
+			async (mismatch) => {
+				const create = () =>
+					sessions.createSession({
+						project_id: projectId,
+						notebook_id: notebookId,
+						user_id: ACTOR,
+					});
+				const good = await create();
+				const misplaced = await create();
+				const canonicalKey = paths.session(projectId, misplaced.session_id);
+				const keys = {
+					project: paths.session(createProjectId(), misplaced.session_id),
+					session: paths.session(projectId, createSessionId()),
+					flat: `${paths.sessionsPrefix}${misplaced.session_id}.json`,
+					nested: `${paths.sessionsForProject(projectId)}nested/${misplaced.session_id}.json`,
+					extension: `${canonicalKey}.backup`,
+				};
+				await bucket.delete(canonicalKey);
+				await bucket.put(keys[mismatch], JSON.stringify(misplaced));
+				const put = vi.spyOn(bucket, 'put');
+				const remove = vi.spyOn(bucket, 'delete');
+
+				expect(await sessions.inspectSessions()).toEqual({ sessions: [good], incomplete: true });
+				expect(put).not.toHaveBeenCalled();
+				expect(remove).not.toHaveBeenCalled();
+			},
+		);
 	});
 
 	describe('listEditorsBlockingSourceUpdate', () => {

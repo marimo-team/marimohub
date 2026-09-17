@@ -509,7 +509,10 @@ export function createServices(
 		listActiveAppsForProject: project,
 		countActiveForUser: user,
 	});
-	const runtimeInspection = new RuntimeInspectionService(bucket, sessions, catalog);
+	const runtimeInspection = wrap(
+		'RuntimeInspectionService',
+		new RuntimeInspectionService(bucket, sessions, catalog),
+	);
 	const notebooks = wrap(
 		'NotebookService',
 		new NotebookService(bucket, catalog, metrics, sessions, deepLinks),
