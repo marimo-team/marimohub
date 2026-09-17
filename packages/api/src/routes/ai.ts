@@ -21,6 +21,7 @@ import {
 	MAX_REQUEST_BYTES,
 	UnavailableError,
 	UserId,
+	isAnthropicBedrockModel,
 	verifyAiSessionToken,
 } from '@marimo-hub/core';
 import type { AiTokenClaims } from '@marimo-hub/core';
@@ -66,22 +67,48 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 	if (ai.allowedModels && !ai.allowedModels.includes(model)) model = ai.model;
 	payload.model = model;
 
+	// Bedrock serves Anthropic Claude only through the Converse API, not the
+	// OpenAI-compatible surface the passthrough targets. When the resolved model
+	// is Anthropic and the backend provides a bridge, translate; every other model
+	// (GPT, Nova, …) keeps the byte-transparent proxy below.
+	const useConverse =
+		path === '/chat/completions' && !!ai.converse && isAnthropicBedrockModel(model);
+
 	try {
-		// `proxy` streams the upstream body back and drops hop-by-hop/encoding
-		// headers; we pass our own headers so the client's session token is never
-		// forwarded. The configured key or request signer authenticates upstream.
-		const headers: Record<string, string> = { 'content-type': 'application/json' };
-		if (ai.upstreamApiKey) headers.authorization = `Bearer ${ai.upstreamApiKey}`;
-		if (ai.upstreamProject) headers['openai-project'] = ai.upstreamProject;
-		// The client's abort must reach the upstream: a cancelled completion
-		// otherwise keeps generating (and billing) to the end of the stream.
-		const res = await proxy(`${ai.upstreamBaseUrl}${path}`, {
-			method: 'POST',
-			headers,
-			body: JSON.stringify(payload),
-			signal: c.req.raw.signal,
-			customFetch: ai.upstreamFetch,
-		});
+		let res: Response;
+		if (useConverse) {
+			res = await ai.converse!({
+				payload,
+				model,
+				signal: c.req.raw.signal,
+				onStreamError: (error) =>
+					logEvent({
+						level: 'error',
+						event: 'ai_proxy_upstream_error',
+						path,
+						project_id: claims.projectId,
+						session_id: claims.sessionId,
+						model,
+						error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+					}),
+			});
+		} else {
+			// `proxy` streams the upstream body back and drops hop-by-hop/encoding
+			// headers; we pass our own headers so the client's session token is never
+			// forwarded. The configured key or request signer authenticates upstream.
+			const headers: Record<string, string> = { 'content-type': 'application/json' };
+			if (ai.upstreamApiKey) headers.authorization = `Bearer ${ai.upstreamApiKey}`;
+			if (ai.upstreamProject) headers['openai-project'] = ai.upstreamProject;
+			// The client's abort must reach the upstream: a cancelled completion
+			// otherwise keeps generating (and billing) to the end of the stream.
+			res = await proxy(`${ai.upstreamBaseUrl}${path}`, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(payload),
+				signal: c.req.raw.signal,
+				customFetch: ai.upstreamFetch,
+			});
+		}
 		logEvent({
 			level: 'info',
 			event: 'ai_proxy_request',
