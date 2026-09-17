@@ -1,6 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	BadRequestError,
+	RuntimeInspectionSchema,
+	DEFAULT_APP_POOL_POLICY,
 	createSandboxId,
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	ForbiddenError,
@@ -433,7 +435,54 @@ const unsuspendUser = createRoute({
 	},
 });
 
+const RuntimeDashboardSchema = RuntimeInspectionSchema.extend({
+	limits: z.object({
+		max_users_per_session: z.number().int().positive().nullable(),
+		max_sessions_per_version: z.number().int().positive().nullable(),
+	}),
+}).openapi('RuntimeDashboard');
+
+const inspectRuntime = createRoute({
+	method: 'get',
+	path: '/admin/runtime',
+	operationId: 'admin.runtime.inspect',
+	tags: ['Admin'],
+	summary: 'Inspect app pools and editor sessions',
+	description:
+		'Read-only runtime snapshot, cached for 30 seconds per service instance. Super-admin and session authentication required. Recorded state is not a live compute health check.',
+	security: SESSION_ONLY_SECURITY,
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: RuntimeDashboardSchema }),
+			'Runtime snapshot',
+		),
+		...commonErrors(),
+	},
+});
+
 const app = createApp();
+
+app.openapi(inspectRuntime, async (c) => {
+	const deps = c.get('deps');
+	assertSessionAuthenticated(c, 'inspect runtime');
+	await assertSuperAdmin(c.get('user'), deps);
+	c.header('Cache-Control', 'no-store');
+	const snapshot = await deps.services.runtimeInspection.inspect();
+	const policy = deps.policy.appPool ?? DEFAULT_APP_POOL_POLICY;
+	return c.json(
+		{
+			success: true,
+			data: {
+				...snapshot,
+				limits: {
+					max_users_per_session: policy.maxUsersPerSession ?? null,
+					max_sessions_per_version: policy.maxSessionsPerVersion ?? null,
+				},
+			},
+		},
+		200,
+	);
+});
 
 app.openapi(listUsers, async (c) => {
 	const deps = c.get('deps');

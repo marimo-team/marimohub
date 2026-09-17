@@ -7,6 +7,7 @@ const TABS = [
 	{ to: '/admin/settings', label: 'Settings' },
 	{ to: '/admin/audit-logs', label: 'Audit logs' },
 	{ to: '/admin/policy-analyzer', label: 'Policy' },
+	{ to: '/admin/runtime', label: 'Runtime' },
 	{ to: '/admin/debug', label: 'Debug' },
 ];
 
@@ -16,10 +17,10 @@ export function AdminLayout() {
 	if (!user?.is_super_admin) return <Navigate to="/" replace />;
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col">
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<nav
 				aria-label="Admin"
-				className="flex shrink-0 gap-1 border-b bg-background px-6 pt-2 max-md:px-3"
+				className="flex shrink-0 gap-1 overflow-x-auto whitespace-nowrap border-b bg-background px-6 pt-2 max-md:px-3"
 			>
 				{TABS.map((tab) => (
 					<NavLink

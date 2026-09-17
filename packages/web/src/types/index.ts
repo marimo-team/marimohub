@@ -137,3 +137,5 @@ export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
 export type User = ClientUser;
 export type ServerVersion = ClientDeploymentInfo;
+
+export type RuntimeDashboard = components['schemas']['RuntimeDashboard'];

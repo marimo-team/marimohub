@@ -15,6 +15,7 @@ import { DeepLinkService } from './content/DeepLinkService';
 import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
+import { RuntimeInspectionService } from './runtime/RuntimeInspectionService';
 import { JobsService } from './jobs/JobsService';
 import { JobRunService } from './jobs/JobRunService';
 import { TokenService } from './tokens/TokenService';
@@ -23,6 +24,10 @@ import { OAuthAuthorizationService } from './oauth/OAuthAuthorizationService';
 import { OAuthClientStore } from './oauth/OAuthClientStore';
 import { OAuthRateLimitService } from './oauth/OAuthRateLimitService';
 
+export {
+	RuntimeInspectionService,
+	RuntimeInspectionSchema,
+} from './runtime/RuntimeInspectionService';
 export { DeepLinkService } from './content/DeepLinkService';
 export { CatalogService } from './catalog/CatalogService';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
@@ -504,6 +509,10 @@ export function createServices(
 		listActiveAppsForProject: project,
 		countActiveForUser: user,
 	});
+	const runtimeInspection = wrap(
+		'RuntimeInspectionService',
+		new RuntimeInspectionService(bucket, sessions, catalog),
+	);
 	const notebooks = wrap(
 		'NotebookService',
 		new NotebookService(bucket, catalog, metrics, sessions, deepLinks),
@@ -574,6 +583,7 @@ export function createServices(
 		notebooks,
 		proposals,
 		sessions,
+		runtimeInspection,
 		jobs,
 		jobRuns,
 		deepLinks,
