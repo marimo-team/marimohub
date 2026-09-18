@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { MockLanguageModelV4, convertArrayToReadableStream } from 'ai/test';
 import { converseChatCompletion } from './openaiToConverse';
@@ -16,6 +16,19 @@ function streamingModel(deltas: string[], unified: 'stop' | 'length' = 'stop') {
 		...deltas.map((delta): LanguageModelV4StreamPart => ({ type: 'text-delta', id: '0', delta })),
 		{ type: 'text-end', id: '0' },
 		{ type: 'finish', finishReason: { unified, raw: unified }, usage },
+	];
+	return new MockLanguageModelV4({
+		doStream: async () => ({ stream: convertArrayToReadableStream(parts) }),
+	});
+}
+
+/** A stream that emits some text then fails part-way, as Bedrock does on error. */
+function erroringModel(deltas: string[]) {
+	const parts: LanguageModelV4StreamPart[] = [
+		{ type: 'stream-start', warnings: [] },
+		{ type: 'text-start', id: '0' },
+		...deltas.map((delta): LanguageModelV4StreamPart => ({ type: 'text-delta', id: '0', delta })),
+		{ type: 'error', error: new Error('bedrock exploded') },
 	];
 	return new MockLanguageModelV4({
 		doStream: async () => ({ stream: convertArrayToReadableStream(parts) }),
@@ -106,6 +119,27 @@ describe('converseChatCompletion — streaming', () => {
 		const last = chunks.at(-1) as { choices: Choice[] };
 		expect(last.choices[0].finish_reason).toBe('length');
 	});
+
+	it('signals a mid-stream failure instead of a clean stop', async () => {
+		const onStreamError = vi.fn();
+		const res = converseChatCompletion({
+			model: erroringModel(['par', 'tial']),
+			modelId: 'anthropic.claude-3-5-sonnet',
+			payload: { stream: true, messages: [{ role: 'user', content: 'hi' }] },
+			signal: new AbortController().signal,
+			onStreamError,
+		}) as Response;
+
+		const body = await res.text();
+		// Partial content still reaches the client…
+		expect(body).toContain('"content":"par"');
+		// …but the stream ends with an OpenAI error event, never a success finish
+		// or the [DONE] sentinel that would mark the truncated completion complete.
+		expect(body).toContain('"error"');
+		expect(body).not.toContain('"finish_reason":"stop"');
+		expect(body).not.toContain('[DONE]');
+		expect(onStreamError).toHaveBeenCalledOnce();
+	});
 });
 
 describe('converseChatCompletion — non-streaming', () => {
@@ -132,6 +166,38 @@ describe('converseChatCompletion — non-streaming', () => {
 		expect(body.choices[0].message).toEqual({ role: 'assistant', content: 'SELECT 1' });
 		expect(body.choices[0].finish_reason).toBe('stop');
 		expect(body.usage).toEqual({ prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 });
+	});
+
+	it('drops a tool-call-only assistant turn instead of sending empty content', async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: async () => ({
+				content: [{ type: 'text', text: 'ok' }],
+				finishReason: { unified: 'stop', raw: 'stop' },
+				usage,
+				warnings: [],
+			}),
+		});
+		await converseChatCompletion({
+			model,
+			modelId: 'anthropic.claude-3-5-sonnet',
+			payload: {
+				messages: [
+					{ role: 'user', content: 'run a tool' },
+					{
+						role: 'assistant',
+						content: null,
+						tool_calls: [{ id: 't1', type: 'function', function: { name: 'f', arguments: '{}' } }],
+					},
+					{ role: 'user', content: 'continue' },
+				],
+			},
+			signal: new AbortController().signal,
+		});
+
+		// The empty assistant turn must not reach the model (Bedrock rejects it).
+		const prompt = model.doGenerateCalls[0].prompt;
+		expect(prompt.some((m) => m.role === 'assistant')).toBe(false);
+		expect(prompt.filter((m) => m.role === 'user')).toHaveLength(2);
 	});
 
 	it('propagates a pre-stream model failure as a rejection', async () => {

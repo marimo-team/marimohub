@@ -81,7 +81,19 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 				payload,
 				model,
 				signal: c.req.raw.signal,
-				onStreamError: (error) =>
+				onStreamError: (error) => {
+					if (c.req.raw.signal.aborted) {
+						// The client's own abort mid-stream; not an upstream failure.
+						logEvent({
+							level: 'info',
+							event: 'ai_proxy_cancelled',
+							path,
+							project_id: claims.projectId,
+							session_id: claims.sessionId,
+							model,
+						});
+						return;
+					}
 					logEvent({
 						level: 'error',
 						event: 'ai_proxy_upstream_error',
@@ -90,7 +102,8 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 						session_id: claims.sessionId,
 						model,
 						error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-					}),
+					});
+				},
 			});
 		} else {
 			// `proxy` streams the upstream body back and drops hop-by-hop/encoding

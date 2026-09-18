@@ -82,7 +82,9 @@ function partitionMessages(messages: OpenAiMessage[]): {
 				system.push(text);
 				break;
 			case 'assistant':
-				conversation.push({ role: 'assistant', content: text });
+				// A tool-call-only assistant turn (content: null) has no usable text;
+				// pushing an empty turn can make Bedrock reject the request.
+				if (text !== '') conversation.push({ role: 'assistant', content: text });
 				break;
 			case 'user':
 				conversation.push({ role: 'user', content: text });
@@ -166,10 +168,21 @@ function sseChunk(data: unknown): Uint8Array {
 	return encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+/** OpenAI-shaped error body so marimo's `openai` client surfaces a clean message. */
+function openAiErrorBody(message: string, type: string) {
+	return { error: { message, type } };
+}
+
 /**
  * Stream an OpenAI `chat.completion.chunk` SSE sequence: a role delta, one delta
  * per text token, a terminal delta carrying `finish_reason` and `usage`, then the
  * `[DONE]` sentinel marimo's client waits for.
+ *
+ * We iterate the full event stream (not `textStream`) because a mid-stream
+ * Bedrock failure surfaces as an `error`/`abort` part rather than a throw; on that
+ * part we must NOT emit the success terminal (`finish_reason` + `[DONE]`) — that
+ * would make an OpenAI client treat a truncated completion as complete — and
+ * instead emit an OpenAI-style error event and stop.
  */
 function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOptions): Response {
 	const created = Math.floor((options.now?.() ?? Date.now()) / 1000);
@@ -179,6 +192,9 @@ function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOp
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			const result = streamText(callSettings(request, options));
+			let finishReason: FinishReason = 'stop';
+			let usage: LanguageModelUsage | undefined;
+			let streamError: unknown;
 			try {
 				controller.enqueue(
 					sseChunk({
@@ -186,30 +202,46 @@ function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOp
 						choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
 					}),
 				);
-				for await (const delta of result.textStream) {
-					controller.enqueue(
-						sseChunk({
-							...base,
-							choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
-						}),
-					);
+				for await (const part of result.stream) {
+					if (part.type === 'text-delta') {
+						controller.enqueue(
+							sseChunk({
+								...base,
+								choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
+							}),
+						);
+					} else if (part.type === 'finish') {
+						finishReason = part.finishReason;
+						usage = part.totalUsage;
+					} else if (part.type === 'error') {
+						streamError = part.error;
+						break;
+					} else if (part.type === 'abort') {
+						streamError = new Error(part.reason ?? 'stream aborted');
+						break;
+					}
 				}
-				const [finishReason, usage] = await Promise.all([result.finishReason, result.usage]);
+			} catch (error) {
+				streamError = error;
+			}
+			// The 200 headers are already sent, so we cannot downgrade to an error
+			// status; report the failure through the hook and end the stream.
+			if (streamError !== undefined) {
+				controller.enqueue(
+					sseChunk(openAiErrorBody('Upstream AI provider unreachable', 'api_error')),
+				);
+				options.onStreamError?.(streamError);
+			} else {
 				controller.enqueue(
 					sseChunk({
 						...base,
 						choices: [{ index: 0, delta: {}, finish_reason: toOpenAiFinishReason(finishReason) }],
-						usage: toOpenAiUsage(usage),
+						...(usage !== undefined ? { usage: toOpenAiUsage(usage) } : {}),
 					}),
 				);
-			} catch (error) {
-				// The 200 headers are already sent, so we cannot downgrade to an error
-				// status: close the SSE cleanly and let the caller log the failure.
-				options.onStreamError?.(error);
-			} finally {
 				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-				controller.close();
 			}
+			controller.close();
 		},
 	});
 
