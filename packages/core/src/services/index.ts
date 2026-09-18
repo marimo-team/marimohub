@@ -373,6 +373,7 @@ export {
 	MARIMOHUB_AI_PROVIDER,
 } from './ai/aiSessionConfig';
 export type { AiSessionConfig, AiTokenClaims } from './ai/aiSessionConfig';
+export { isAnthropicBedrockModel } from './ai/bedrockModels';
 export {
 	assembleMarimoToml,
 	marimoConfigToSessionEnv,

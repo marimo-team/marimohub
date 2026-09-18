@@ -244,6 +244,20 @@ export interface AiProxyConfig {
 		dialect: 'duckdb' | 'postgresql';
 		signal: AbortSignal;
 	}) => Promise<string>;
+	/**
+	 * Translate an OpenAI Chat Completions request to a backend that only speaks a
+	 * non-OpenAI API (Bedrock Converse for Anthropic Claude), returning an
+	 * OpenAI-shaped response. Present only for backends that need it; the proxy
+	 * uses it in place of the raw passthrough for models it covers. Streaming
+	 * failures are reported through `onStreamError` (the 200 headers are already
+	 * sent), while a rejected promise signals a pre-stream failure.
+	 */
+	converse?: (input: {
+		payload: Record<string, unknown>;
+		model: string;
+		signal: AbortSignal;
+		onStreamError?: (error: unknown) => void;
+	}) => Response | Promise<Response>;
 }
 
 /** Deployment-wide authorization / abuse-guard knobs. */

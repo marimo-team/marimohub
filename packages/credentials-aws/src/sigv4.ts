@@ -21,6 +21,16 @@ function queryParameters(url: URL): QueryParameterBag {
 	return query;
 }
 
+/**
+ * The keyless AWS credential chain (IRSA web-identity, ECS/EC2 metadata, env,
+ * shared config). Returns a provider the AWS SDK re-invokes to refresh; SDK
+ * clients that accept a credential provider (e.g. the Bedrock AI provider) reuse
+ * the same identity the SigV4 fetch signs with — no static keys anywhere.
+ */
+export function awsDefaultCredentialProvider(): Provider<AwsCredentialIdentity> {
+	return defaultProvider();
+}
+
 export function createAwsSigV4Fetch(options: AwsSigV4FetchOptions): typeof globalThis.fetch {
 	const fetchImpl = options.fetch ?? globalThis.fetch;
 	const signer = new SignatureV4({
