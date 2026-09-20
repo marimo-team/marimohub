@@ -1,0 +1,35 @@
+services:
+  marimohub:
+    build: .
+    container_name: marimohub
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "127.0.0.1:2718-2723:2718-2723"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+
+      MARIMOHUB_STORAGE_BACKEND: fs
+      MARIMOHUB_STORAGE_FS_ROOT: /app/storage
+
+      # Local compute runs marimo kernels inside this container.
+      MARIMOHUB_COMPUTE_BACKEND: local
+      MARIMOHUB_COMPUTE_LOCAL_ROOT: /sandboxes
+      MARIMOHUB_COMPUTE_LOCAL_HOST: localhost
+      MARIMOHUB_COMPUTE_LOCAL_BIND_HOST: 0.0.0.0
+      MARIMOHUB_COMPUTE_LOCAL_PORTS: 2718-2723
+
+      UV_CACHE_DIR: /uv-cache
+      UV_LINK_MODE: copy
+      UV_PYTHON_INSTALL_DIR: /uv-cache/python
+
+      MARIMOHUB_AUTH_BACKEND: dev
+      MARIMOHUB_AUTH_DEV_EMAIL: dev@localhost
+      MARIMOHUB_RUN_MAINTENANCE: "true"
+    volumes:
+      - ./storage:/app/storage
+      - uv-cache:/uv-cache
+
+volumes:
+  uv-cache:
