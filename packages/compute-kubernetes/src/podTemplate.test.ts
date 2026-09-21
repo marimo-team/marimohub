@@ -168,8 +168,31 @@ describe('parsePodTemplate', () => {
 			'multiple pull secrets',
 			withSpec({ imagePullSecrets: [{ name: 'primary' }, { name: 'fallback' }] }),
 		],
-	] as const)('accepts %s in JSON and YAML flow syntax', (_label, value) => {
+	] as const)('accepts %s in JSON', (_label, value) => {
 		expect(parsePodTemplate(JSON.stringify(value))).toEqual(value);
+	});
+
+	it.each([
+		[
+			'plain mapping keys and values',
+			'{spec: {serviceAccountName: kernel, automountServiceAccountToken: false}}',
+			withSpec({ serviceAccountName: 'kernel', automountServiceAccountToken: false }),
+		],
+		[
+			'single-quoted strings and trailing commas',
+			"{spec: {containers: [{name: marimo, env: [{name: ENABLED, value: 'true'},],},],},}",
+			withContainer({ env: [{ name: 'ENABLED', value: 'true' }] }),
+		],
+		[
+			'flow collections within block mappings',
+			'spec:\n  volumes: [{name: data, emptyDir: {}}]\n  containers: [{name: marimo, volumeMounts: [{name: data, mountPath: /data}]}]',
+			withSpec({
+				volumes: [{ name: 'data', emptyDir: {} }],
+				containers: [{ name: 'marimo', volumeMounts: [{ name: 'data', mountPath: '/data' }] }],
+			}),
+		],
+	] as const)('accepts YAML flow syntax with %s', (_label, source, expected) => {
+		expect(parsePodTemplate(source)).toEqual(expected);
 	});
 
 	it.each([

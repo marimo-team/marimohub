@@ -60,8 +60,9 @@ const configOf = (provider: unknown) =>
 /**
  * Backend-selector tests for `makeCompute`. It takes an env object, so each case
  * is hermetic — no `process.env`, no live SDK. Adapter constructors that touch a
- * vendor SDK (CoreWeave/E2B/Kubernetes) are exercised only on the throw-before-
- * construct paths; the lazy ones (Modal/Docker/Local) are constructed directly.
+ * vendor SDK (CoreWeave/E2B) are exercised only on the throw-before-construct
+ * paths. Lazy adapters and KubernetesCompute are constructed directly;
+ * KubernetesCompute only validates pod template and ingress configuration.
  */
 
 const modalEnv = {

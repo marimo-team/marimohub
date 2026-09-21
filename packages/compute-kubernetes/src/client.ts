@@ -116,10 +116,10 @@ export function podManifest(o: EnsureSandboxOptions): V1Pod {
 				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
 				[SANDBOX_NAME_LABEL]: o.name,
 			},
-			annotations: {
+			annotations: validateIngressAnnotations({
 				...template?.metadata?.annotations,
 				[SANDBOX_ID_ANNOTATION]: String(o.sandboxId),
-			},
+			}),
 		},
 		spec: {
 			...spec,

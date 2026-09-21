@@ -1,3 +1,5 @@
+import { KERNEL_CONTAINER_NAME } from './shared';
+
 export const projectedToken = `
 apiVersion: v1
 kind: Pod
@@ -44,4 +46,4 @@ spec:
 
 export const withSpec = (spec: unknown) => ({ spec });
 export const withContainer = (fields: Record<string, unknown>) =>
-	withSpec({ containers: [{ name: 'marimo', ...fields }] });
+	withSpec({ containers: [{ name: KERNEL_CONTAINER_NAME, ...fields }] });

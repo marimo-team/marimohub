@@ -38,7 +38,11 @@ export interface KubernetesPodTemplate {
 	};
 }
 
-const name = z.string().min(1);
+const nonemptyString = z.string().min(1);
+const dnsLabel = nonemptyString.max(63).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/);
+const dnsSubdomain = nonemptyString
+	.max(253)
+	.regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/);
 const stringMap = z.record(z.string(), z.string());
 const object = z.record(z.string(), z.json());
 const nonnegativeInt = z.number().int().nonnegative();
@@ -54,25 +58,38 @@ const securityContext = z.object({
 	runAsGroup: nonnegativeInt.optional(),
 	runAsNonRoot: z.boolean().optional(),
 	seccompProfile: z
-		.object({
-			type: z.enum(['RuntimeDefault', 'Localhost', 'Unconfined']),
-			localhostProfile: name.optional(),
-		})
-		.strict()
+		.discriminatedUnion('type', [
+			z.object({ type: z.literal('RuntimeDefault') }).strict(),
+			z.object({ type: z.literal('Unconfined') }).strict(),
+			z
+				.object({
+					type: z.literal('Localhost'),
+					localhostProfile: nonemptyString.refine(
+						(path) => !path.startsWith('/') && !path.split('/').includes('..'),
+						{ message: 'must be a relative path without backsteps' },
+					),
+				})
+				.strict(),
+		])
 		.optional(),
 });
-const namedReference = z.object({ name, optional: z.boolean().optional() }).catchall(z.json());
-const keyReference = namedReference.extend({ key: name });
+const namedReference = z
+	.object({ name: dnsSubdomain, optional: z.boolean().optional() })
+	.catchall(z.json());
+const keyReference = namedReference.extend({ key: nonemptyString });
 const envVar = z
 	.object({
-		name,
+		name: nonemptyString,
 		value: z.string().optional(),
 		valueFrom: z
 			.object({
 				secretKeyRef: keyReference.optional(),
 				configMapKeyRef: keyReference.optional(),
-				fieldRef: z.object({ fieldPath: name, apiVersion: name.optional() }).strict().optional(),
-				resourceFieldRef: z.object({ resource: name }).catchall(z.json()).optional(),
+				fieldRef: z
+					.object({ fieldPath: nonemptyString, apiVersion: nonemptyString.optional() })
+					.strict()
+					.optional(),
+				resourceFieldRef: z.object({ resource: nonemptyString }).catchall(z.json()).optional(),
 			})
 			.strict()
 			.refine((value) => exactlyOneDefined(Object.values(value)), {
@@ -86,9 +103,9 @@ const envVar = z
 	});
 const serviceAccountToken = z
 	.object({
-		audience: name.optional(),
+		audience: nonemptyString.optional(),
 		expirationSeconds: z.number().int().min(600).optional(),
-		path: name,
+		path: nonemptyString,
 	})
 	.strict();
 const projection = z
@@ -99,7 +116,7 @@ const projection = z
 	});
 const volume = z
 	.object({
-		name,
+		name: dnsLabel,
 		projected: z
 			.object({
 				defaultMode: mode.optional(),
@@ -144,8 +161,8 @@ const container = z
 				readOnlyRootFilesystem: z.boolean().optional(),
 				capabilities: z
 					.object({
-						add: z.array(name).optional(),
-						drop: z.array(name).optional(),
+						add: z.array(nonemptyString).optional(),
+						drop: z.array(nonemptyString).optional(),
 					})
 					.strict()
 					.optional(),
@@ -156,8 +173,8 @@ const container = z
 			.array(
 				z
 					.object({
-						name,
-						mountPath: name,
+						name: dnsLabel,
+						mountPath: nonemptyString,
 						readOnly: z.boolean().optional(),
 						subPath: z.string().optional(),
 						subPathExpr: z.string().optional(),
@@ -183,7 +200,7 @@ const templateSchema = z
 				ephemeralContainers: forbidden,
 				resources: forbidden,
 				restartPolicy: z.literal('Never').optional(),
-				serviceAccountName: name.optional(),
+				serviceAccountName: dnsSubdomain.optional(),
 				serviceAccount: forbidden,
 				automountServiceAccountToken: z.boolean().optional(),
 				enableServiceLinks: z.boolean().optional(),
@@ -201,8 +218,8 @@ const templateSchema = z
 				affinity: object.optional(),
 				tolerations: z.array(object).optional(),
 				topologySpreadConstraints: z.array(object).optional(),
-				runtimeClassName: name.optional(),
-				dnsPolicy: name.optional(),
+				runtimeClassName: dnsSubdomain.optional(),
+				dnsPolicy: nonemptyString.optional(),
 				dnsConfig: object.optional(),
 				hostNetwork: z.boolean().optional(),
 				hostPID: z.boolean().optional(),
