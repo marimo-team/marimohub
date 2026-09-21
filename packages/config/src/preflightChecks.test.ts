@@ -519,24 +519,62 @@ describe('ai.upstream check', () => {
 		expect((await run({}, makeDeps())).by('ai.upstream')).toBeUndefined();
 	});
 
-	it('skips the unrelated OpenAI models probe for a Converse default model', async () => {
-		const globalFetch = upstream(404);
-		const upstreamFetch = vi.fn();
+	it.each([
+		{ allowedModels: ['eu.anthropic.claude-opus-4-7'] },
+		{ allowedModels: ['eu.anthropic.claude-opus-4-7', 'anthropic.claude-sonnet'] },
+		{ allowedModels: [] },
+	])(
+		'skips the OpenAI probe for a Claude default with $allowedModels',
+		async ({ allowedModels }) => {
+			const globalFetch = upstream(404);
+			const upstreamFetch = vi.fn();
+			const converse = vi.fn();
+			const { by } = await run(
+				{},
+				ai({
+					model: 'eu.anthropic.claude-opus-4-7',
+					allowedModels,
+					upstreamFetch,
+					converse,
+				}),
+			);
+			expect(by('ai.upstream')).toMatchObject({
+				status: 'skipped',
+				message: 'Bedrock Converse inference access is checked on the first AI request',
+			});
+			expect(globalFetch).not.toHaveBeenCalled();
+			expect(upstreamFetch).not.toHaveBeenCalled();
+			expect(converse).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{
+			name: 'a mixed allowlist',
+			model: 'eu.anthropic.claude-opus-4-7',
+			allowedModels: ['eu.anthropic.claude-opus-4-7', 'openai.gpt-oss-120b-1:0'],
+		},
+		{
+			name: 'a non-Claude default outside the allowlist',
+			model: 'openai.gpt-oss-120b-1:0',
+			allowedModels: ['eu.anthropic.claude-opus-4-7'],
+		},
+		{
+			name: 'unrestricted models',
+			model: 'eu.anthropic.claude-opus-4-7',
+			allowedModels: undefined,
+		},
+	])('probes the signed OpenAI endpoint with $name', async ({ model, allowedModels }) => {
+		const globalFetch = upstream(200);
 		const converse = vi.fn();
-		const { by } = await run(
-			{},
-			ai({
-				model: 'eu.anthropic.claude-opus-4-7',
-				upstreamFetch,
-				converse,
-			}),
-		);
-		expect(by('ai.upstream')).toMatchObject({
-			status: 'skipped',
-			message: 'Bedrock Converse inference access is checked on the first AI request',
-		});
+		for (const status of [200, 403]) {
+			const upstreamFetch = vi.fn(async (_request: Request) => new Response(null, { status }));
+			const { by } = await run({}, ai({ model, allowedModels, upstreamFetch, converse }));
+			expect(by('ai.upstream')?.status).toBe(status === 200 ? 'ok' : 'fail');
+			expect(upstreamFetch).toHaveBeenCalledOnce();
+			expect(upstreamFetch.mock.calls[0][0].url).toBe('https://api.example.com/v1/models');
+		}
 		expect(globalFetch).not.toHaveBeenCalled();
-		expect(upstreamFetch).not.toHaveBeenCalled();
 		expect(converse).not.toHaveBeenCalled();
 	});
 

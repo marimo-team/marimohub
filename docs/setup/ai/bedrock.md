@@ -24,8 +24,9 @@ Claude IDs support `anthropic.`, regional profiles such as `eu.anthropic.` and
 `us.anthropic.`, and `global.anthropic.` profiles. The runtime identity must have
 access to the model or profile in the selected region.
 
-With a Claude default model, startup skips the AI probe to avoid billable inference.
-Model access is checked on the first request.
+Startup skips the AI probe only when the default and all allowed models are Claude,
+to avoid billable inference. Mixed allowlists still probe the OpenAI endpoint.
+Claude model access is checked on the first request.
 
 Claude supports text chat with JSON or streaming responses, without tools, images,
 or Responses translation. See the [proxy contract](/ai#proxy-contract) for supported fields.

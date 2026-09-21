@@ -315,7 +315,11 @@ async function checkObjectStorageWif(env: Env): Promise<CheckOutcome> {
  */
 async function checkAi(deps: ApiDeps): Promise<CheckOutcome> {
 	if (!deps.ai) return { status: 'skipped', message: 'managed AI disabled' };
-	if (deps.ai.converse && isAnthropicBedrockModel(deps.ai.model)) {
+	if (
+		deps.ai.converse &&
+		isAnthropicBedrockModel(deps.ai.model) &&
+		deps.ai.allowedModels?.every(isAnthropicBedrockModel)
+	) {
 		// /models belongs to the separate OpenAI surface; a Converse probe requires billed inference.
 		return {
 			status: 'skipped',
