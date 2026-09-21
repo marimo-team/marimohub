@@ -2,6 +2,7 @@ import {
 	useInfiniteQuery,
 	useQuery,
 	useSuspenseQuery,
+	useSuspenseQueries,
 	useMutation,
 	queryOptions,
 	keepPreviousData,
@@ -1387,8 +1388,8 @@ export function objectContentUrl(input: {
 
 // Notebooks
 
-export function useNotebooksQuery(projectId: string, filters: NotebookListFilters = {}) {
-	return useQuery({
+function notebooksQueryOptions(projectId: string, filters: NotebookListFilters) {
+	return queryOptions({
 		queryKey: notebookKeys.filteredList(projectId, filters),
 		queryFn: async () =>
 			(
@@ -1398,8 +1399,12 @@ export function useNotebooksQuery(projectId: string, filters: NotebookListFilter
 					}),
 				)
 			).items,
-		placeholderData: keepPreviousData,
-		throwOnError: true,
+	});
+}
+
+export function useProjectContentQueries(projectId: string, filters: NotebookListFilters) {
+	return useSuspenseQueries({
+		queries: [projectQueryOptions(projectId), notebooksQueryOptions(projectId, filters)],
 	});
 }
 

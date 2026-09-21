@@ -1,7 +1,7 @@
 import { useProjectThumbnails } from '@/api/thumbnails';
 import { Thumbnail } from '@/components/Notebook/Thumbnail';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState, useTransition } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FileTrigger } from 'react-aria-components';
 import { toast } from 'sonner';
@@ -63,14 +63,13 @@ import {
 	useSeedOnOpen,
 } from '@/components/form';
 import {
-	useNotebooksQuery,
+	useProjectContentQueries,
 	useCreateNotebook,
 	useDuplicateNotebook,
 	useDeleteNotebook,
 	useDownloadNotebookFile,
 	useDownloadOutputsHtml,
 	useDownloadWorkspace,
-	useProjectQuery,
 	useUpdateProject,
 	useDeleteProject,
 	useProjectSessionsQuery,
@@ -242,7 +241,14 @@ const NEW_NOTEBOOK_CODE = (name: string) => {
 function useProjectContent() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
-	const { filters, setFilters, filtersActive } = useListFilters(NOTEBOOK_STATUS_FILTERS);
+	const {
+		filters,
+		setFilters: updateFilters,
+		filtersActive,
+	} = useListFilters(NOTEBOOK_STATUS_FILTERS);
+	const [filtersPending, startFilterTransition] = useTransition();
+	const setFilters: typeof updateFilters = (values) =>
+		startFilterTransition(() => updateFilters(values));
 
 	// Dialogs acting on a row use useDialogTarget; plain ones use useDisclosure.
 	const uploadModal = useDisclosure();
@@ -281,12 +287,11 @@ function useProjectContent() {
 	const membersModal = useDisclosure();
 	const alertsModal = useDisclosure();
 
-	const {
-		data: notebooks = [],
-		isPending: notebooksLoading,
-		isFetching: notebooksFetching,
-	} = useNotebooksQuery(pid!, filters);
-	const { data: project } = useProjectQuery(pid!);
+	const [{ data: project }, { data: notebooks, isFetching }] = useProjectContentQueries(
+		pid!,
+		filters,
+	);
+	const notebooksFetching = filtersPending || isFetching;
 	const { data: sessions, isLoading: sessionsLoading } = useProjectSessionsQuery(pid!);
 	const createNotebook = useCreateNotebook(pid!);
 	const duplicateNotebook = useDuplicateNotebook(pid!);
@@ -775,7 +780,7 @@ function useProjectContent() {
 				statuses={NOTEBOOK_STATUS_FILTERS}
 				resultCount={notebooks.length}
 				resultsId="notebook-results"
-				isLoading={notebooksLoading}
+				isLoading={false}
 				isFetching={notebooksFetching}
 				onChange={setFilters}
 				actions={
@@ -818,7 +823,7 @@ function useProjectContent() {
 				}
 				isFetching={notebooksFetching}
 				isFiltered={filtersActive}
-				isLoading={notebooksLoading}
+				isLoading={false}
 				itemName="notebook"
 				onReset={() => setFilters({})}
 				resultsId="notebook-results"

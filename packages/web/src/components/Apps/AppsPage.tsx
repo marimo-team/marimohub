@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { useAppsQuery } from '@/api/apps';
+import { useAppsQuery, useProjectAppsQuery } from '@/api/apps';
 import { Project } from '@/components/Project/Project';
 import { Button } from '@/components/ui';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
@@ -31,16 +31,7 @@ export function AppAccessError({
 
 export function ProjectEntryPage() {
 	const { pid = '' } = useParams();
-	const query = useAppsQuery(pid);
-	if (query.isError)
-		return (
-			<AppAccessError
-				error={query.error}
-				onRetry={() => void query.refetch()}
-				isRetrying={query.isFetching}
-			/>
-		);
-	if (!query.data) return <p className="p-6">Loading project…</p>;
+	const query = useProjectAppsQuery(pid);
 	return query.data.pages[0].project?.your_role === 'app-user' ? (
 		<Navigate to={`/apps?project_id=${encodeURIComponent(pid)}`} replace />
 	) : (
