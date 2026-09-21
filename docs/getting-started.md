@@ -21,7 +21,7 @@ is useful for evaluation and development, but it is not durable and must not
 serve real users. See [Testing locally](./testing-locally.md) for details.
 
 To quickly get started with Docker Compose, see the [local compute and local
-storage example](../examples/docker-compose/local-compute/README.md).
+storage example](https://github.com/marimo-team/marimohub/tree/main/examples/docker-compose/local-compute).
 Please note that it is useful for evaluation and testing,
 but it is not intended for production use.
 
