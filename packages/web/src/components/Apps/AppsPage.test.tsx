@@ -143,7 +143,7 @@ describe('stakeholder apps', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
 		expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load more apps');
 		expect(screen.getByRole('link', { name: /Forecast/ })).toBeVisible();
-		expect(screen.getByRole('textbox', { name: 'Search apps' })).toBeVisible();
+		expect(screen.getByRole('searchbox', { name: 'Search apps' })).toBeVisible();
 		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 		expect(await screen.findByRole('link', { name: /Revenue/ })).toBeVisible();
 		expect(screen.getByRole('link', { name: /Forecast/ })).toBeVisible();
@@ -186,9 +186,9 @@ describe('stakeholder apps', () => {
 		]);
 	});
 
-	it('groups apps by project and debounces searches while preserving the gallery', async () => {
+	it('labels apps by project and debounces searches while preserving the gallery', async () => {
 		const { fetch } = setup();
-		expect(await screen.findByRole('heading', { name: 'Analytics' })).toBeVisible();
+		expect(await screen.findByText('Analytics')).toBeVisible();
 		expect(screen.getByRole('link', { name: /Forecast/ })).toHaveAttribute('href', app.url);
 		const queries = () =>
 			fetch.mock.calls
@@ -197,7 +197,7 @@ describe('stakeholder apps', () => {
 				.map((url) => url.searchParams.get('q'));
 		vi.useFakeTimers();
 		try {
-			const input = screen.getByRole('textbox', { name: 'Search apps' });
+			const input = screen.getByRole('searchbox', { name: 'Search apps' });
 			fireEvent.change(input, { target: { value: 'miss' } });
 			await act(() => vi.advanceTimersByTimeAsync(100));
 			fireEvent.change(input, { target: { value: 'missing' } });
