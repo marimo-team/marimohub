@@ -1,17 +1,16 @@
 # Quickstart: Local compute and local storage
 
 > [!CAUTION]
-> This example is for demonstration purposes only. It provides a working local
-> setup for evaluating marimohub, but it is not production-ready.
+> For local evaluation only. Dev authentication signs every visitor in as
+> `dev@localhost`. Keep the UI and kernel ports bound to loopback.
 
-Use this example to run marimohub with local storage and local compute in Docker
-Compose.
+Run marimohub with filesystem storage and kernels inside one Docker Compose container.
 
 ## Start the stack
 
 ```sh
 git clone https://github.com/marimo-team/marimohub.git
-cd examples/docker-compose/local-compute
+cd marimohub/examples/docker-compose/local-compute
 docker compose up -d --build
 ```
 

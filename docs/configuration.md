@@ -534,7 +534,7 @@ _No environment variables to set here._
 
 `MARIMOHUB_AI_BACKEND=bedrock`
 
-Uses the Amazon Bedrock OpenAI-compatible endpoint and signs requests with the runtime AWS identity. No Bedrock API key or AWS credential is injected into a sandbox.
+Uses Bedrock Converse for Claude chat and SQL generation, and the OpenAI-compatible endpoint for other requests. The runtime AWS identity authenticates requests. Credentials stay outside sandboxes.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |

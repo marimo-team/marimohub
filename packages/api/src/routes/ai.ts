@@ -55,7 +55,11 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 
 	let payload: Record<string, unknown>;
 	try {
-		payload = await c.req.json();
+		const body: unknown = await c.req.json();
+		if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+			return openAiError('Expected a JSON object', 'invalid_request_error', 400);
+		}
+		payload = body as Record<string, unknown>;
 	} catch {
 		return openAiError('Invalid JSON body', 'invalid_request_error', 400);
 	}
@@ -67,10 +71,7 @@ async function forward(c: Context<AiEnv>, path: string): Promise<Response> {
 	if (ai.allowedModels && !ai.allowedModels.includes(model)) model = ai.model;
 	payload.model = model;
 
-	// Bedrock serves Anthropic Claude only through the Converse API, not the
-	// OpenAI-compatible surface the passthrough targets. When the resolved model
-	// is Anthropic and the backend provides a bridge, translate; every other model
-	// (GPT, Nova, …) keeps the byte-transparent proxy below.
+	// Anthropic Bedrock models require Converse instead of the OpenAI endpoint.
 	const useConverse =
 		path === '/chat/completions' && !!ai.converse && isAnthropicBedrockModel(model);
 

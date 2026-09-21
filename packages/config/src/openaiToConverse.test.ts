@@ -3,33 +3,25 @@ import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { MockLanguageModelV4, convertArrayToReadableStream } from 'ai/test';
 import { converseChatCompletion } from './openaiToConverse';
 
-/** Nested provider-shape usage the AI SDK flattens to `{ inputTokens, outputTokens, totalTokens }`. */
 const usage = {
 	inputTokens: { total: 11, noCache: 11, cacheRead: 0, cacheWrite: 0 },
 	outputTokens: { total: 5, text: 5, reasoning: 0 },
 } as const;
 
-function streamingModel(deltas: string[], unified: 'stop' | 'length' = 'stop') {
+function streamingModel(deltas: string[], result: 'stop' | 'length' | Error = 'stop') {
 	const parts: LanguageModelV4StreamPart[] = [
 		{ type: 'stream-start', warnings: [] },
 		{ type: 'text-start', id: '0' },
 		...deltas.map((delta): LanguageModelV4StreamPart => ({ type: 'text-delta', id: '0', delta })),
-		{ type: 'text-end', id: '0' },
-		{ type: 'finish', finishReason: { unified, raw: unified }, usage },
 	];
-	return new MockLanguageModelV4({
-		doStream: async () => ({ stream: convertArrayToReadableStream(parts) }),
-	});
-}
-
-/** A stream that emits some text then fails part-way, as Bedrock does on error. */
-function erroringModel(deltas: string[]) {
-	const parts: LanguageModelV4StreamPart[] = [
-		{ type: 'stream-start', warnings: [] },
-		{ type: 'text-start', id: '0' },
-		...deltas.map((delta): LanguageModelV4StreamPart => ({ type: 'text-delta', id: '0', delta })),
-		{ type: 'error', error: new Error('bedrock exploded') },
-	];
+	if (result instanceof Error) {
+		parts.push({ type: 'error', error: result });
+	} else {
+		parts.push(
+			{ type: 'text-end', id: '0' },
+			{ type: 'finish', finishReason: { unified: result, raw: result }, usage },
+		);
+	}
 	return new MockLanguageModelV4({
 		doStream: async () => ({ stream: convertArrayToReadableStream(parts) }),
 	});
@@ -46,7 +38,6 @@ function generatingModel(text: string, unified: 'stop' | 'length' = 'stop') {
 	});
 }
 
-/** Parse an OpenAI `text/event-stream` body into its decoded `data:` payloads. */
 async function readSse(
 	res: Response,
 ): Promise<{ done: boolean; chunks: Record<string, unknown>[] }> {
@@ -90,19 +81,15 @@ describe('converseChatCompletion — streaming', () => {
 		const { done, chunks } = await readSse(res);
 		expect(done).toBe(true);
 
-		// Every chunk is a chat.completion.chunk echoing the resolved model id.
 		for (const chunk of chunks) {
 			expect(chunk.object).toBe('chat.completion.chunk');
 			expect(chunk.model).toBe('eu.anthropic.claude-opus-4-7');
 		}
 
 		const choices = chunks.map((c) => (c.choices as Choice[])[0]);
-		// First chunk opens the assistant turn.
 		expect(choices[0].delta).toEqual({ role: 'assistant' });
-		// Content deltas reassemble the full text.
 		const text = choices.map((c) => c.delta?.content ?? '').join('');
 		expect(text).toBe('Hello world');
-		// Terminal chunk carries the mapped finish_reason and usage.
 		const last = chunks.at(-1) as { choices: Choice[]; usage: unknown };
 		expect(last.choices[0].finish_reason).toBe('stop');
 		expect(last.usage).toEqual({ prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 });
@@ -120,10 +107,57 @@ describe('converseChatCompletion — streaming', () => {
 		expect(last.choices[0].finish_reason).toBe('length');
 	});
 
+	it('aborts provider generation when the response body is cancelled', async () => {
+		const started = Promise.withResolvers<AbortSignal>();
+		const onStreamError = vi.fn();
+		const model = new MockLanguageModelV4({
+			doStream: async ({ abortSignal }) => {
+				started.resolve(abortSignal!);
+				return {
+					stream: new ReadableStream<LanguageModelV4StreamPart>({
+						start(controller) {
+							controller.enqueue({ type: 'stream-start', warnings: [] });
+							abortSignal!.addEventListener('abort', () => controller.close(), { once: true });
+						},
+					}),
+				};
+			},
+		});
+		const res = await converseChatCompletion({
+			model,
+			modelId: 'anthropic.claude-3-5-sonnet',
+			payload: { stream: true, messages: [{ role: 'user', content: 'hi' }] },
+			signal: new AbortController().signal,
+			onStreamError,
+		});
+		const signal = await started.promise;
+		await res.body!.cancel('client disconnected');
+		expect(signal.aborted).toBe(true);
+		expect(signal.reason).toBe('client disconnected');
+		expect(onStreamError).not.toHaveBeenCalled();
+	});
+
+	it('encodes a synchronous SDK setup failure as an error event', async () => {
+		const onStreamError = vi.fn();
+		const res = await converseChatCompletion({
+			model: streamingModel(['unused']),
+			modelId: 'anthropic.claude-3-5-sonnet',
+			payload: { stream: true, max_tokens: 0, messages: [{ role: 'user', content: 'hi' }] },
+			signal: new AbortController().signal,
+			onStreamError,
+		});
+		const { done, chunks } = await readSse(res);
+		expect(done).toBe(false);
+		expect(chunks).toEqual([
+			{ error: { message: 'Upstream AI provider unreachable', type: 'api_error' } },
+		]);
+		expect(onStreamError).toHaveBeenCalledOnce();
+	});
+
 	it('signals a mid-stream failure instead of a clean stop', async () => {
 		const onStreamError = vi.fn();
 		const res = converseChatCompletion({
-			model: erroringModel(['par', 'tial']),
+			model: streamingModel(['par', 'tial'], new Error('bedrock exploded')),
 			modelId: 'anthropic.claude-3-5-sonnet',
 			payload: { stream: true, messages: [{ role: 'user', content: 'hi' }] },
 			signal: new AbortController().signal,
@@ -131,10 +165,7 @@ describe('converseChatCompletion — streaming', () => {
 		}) as Response;
 
 		const body = await res.text();
-		// Partial content still reaches the client…
 		expect(body).toContain('"content":"par"');
-		// …but the stream ends with an OpenAI error event, never a success finish
-		// or the [DONE] sentinel that would mark the truncated completion complete.
 		expect(body).toContain('"error"');
 		expect(body).not.toContain('"finish_reason":"stop"');
 		expect(body).not.toContain('[DONE]');
@@ -169,14 +200,7 @@ describe('converseChatCompletion — non-streaming', () => {
 	});
 
 	it('drops a tool-call-only assistant turn instead of sending empty content', async () => {
-		const model = new MockLanguageModelV4({
-			doGenerate: async () => ({
-				content: [{ type: 'text', text: 'ok' }],
-				finishReason: { unified: 'stop', raw: 'stop' },
-				usage,
-				warnings: [],
-			}),
-		});
+		const model = generatingModel('ok');
 		await converseChatCompletion({
 			model,
 			modelId: 'anthropic.claude-3-5-sonnet',
@@ -214,5 +238,72 @@ describe('converseChatCompletion — non-streaming', () => {
 				signal: new AbortController().signal,
 			}),
 		).rejects.toThrow('bedrock unreachable');
+	});
+});
+
+describe('converseChatCompletion — request conversion', () => {
+	it.each([false, true])(
+		'preserves messages and generation settings with stream=%s',
+		async (stream) => {
+			const model = stream ? streamingModel(['ok']) : generatingModel('ok');
+			const res = await converseChatCompletion({
+				model,
+				modelId: 'anthropic.claude-3-5-sonnet',
+				payload: {
+					stream,
+					messages: [
+						{ role: 'system', content: 'Be concise.' },
+						{ role: 'developer', content: [{ type: 'text', text: 'Use SQL.' }] },
+						{
+							role: 'user',
+							content: [
+								{ type: 'text', text: 'Hello' },
+								{ type: 'text', text: ' world' },
+							],
+						},
+						{ role: 'assistant', content: 'Hi' },
+						{ role: 'user', content: 'Continue' },
+					],
+					temperature: 0.3,
+					top_p: 0.9,
+					stop: 'END',
+					max_tokens: 20,
+					max_completion_tokens: 10,
+				},
+				maxOutputTokens: 50,
+				signal: new AbortController().signal,
+			});
+			await res.text();
+			const call = stream ? model.doStreamCalls[0] : model.doGenerateCalls[0];
+			expect(call).toMatchObject({
+				temperature: 0.3,
+				topP: 0.9,
+				stopSequences: ['END'],
+				maxOutputTokens: 10,
+			});
+			expect(call.prompt).toEqual([
+				{ role: 'system', content: 'Be concise.\n\nUse SQL.' },
+				{ role: 'user', content: [{ type: 'text', text: 'Hello world' }] },
+				{ role: 'assistant', content: [{ type: 'text', text: 'Hi' }] },
+				{ role: 'user', content: [{ type: 'text', text: 'Continue' }] },
+			]);
+		},
+	);
+
+	it.each([
+		{ payload: {}, expected: 50 },
+		{ payload: { max_tokens: 20 }, expected: 20 },
+		{ payload: { max_completion_tokens: 10 }, expected: 10 },
+		{ payload: { max_tokens: 'invalid' }, expected: 50 },
+	])('resolves the output token limit from $payload', async ({ payload, expected }) => {
+		const model = generatingModel('ok');
+		await converseChatCompletion({
+			model,
+			modelId: 'anthropic.claude-3-5-sonnet',
+			payload: { messages: [{ role: 'user', content: 'hi' }], ...payload },
+			maxOutputTokens: 50,
+			signal: new AbortController().signal,
+		});
+		expect(model.doGenerateCalls[0].maxOutputTokens).toBe(expected);
 	});
 });

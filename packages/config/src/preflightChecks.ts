@@ -15,6 +15,7 @@
  *   - `skipped` — not applicable to this backend.
  */
 import type { ApiDeps } from '@marimo-hub/api';
+import { isAnthropicBedrockModel } from '@marimo-hub/core';
 import type { CheckOutcome, PreflightCheck } from '@marimo-hub/core';
 import { authBackend, oidcLoginPolicySelected } from './auth';
 import { computeBackend } from './compute';
@@ -314,6 +315,17 @@ async function checkObjectStorageWif(env: Env): Promise<CheckOutcome> {
  */
 async function checkAi(deps: ApiDeps): Promise<CheckOutcome> {
 	if (!deps.ai) return { status: 'skipped', message: 'managed AI disabled' };
+	if (
+		deps.ai.converse &&
+		isAnthropicBedrockModel(deps.ai.model) &&
+		deps.ai.allowedModels?.every(isAnthropicBedrockModel)
+	) {
+		// /models belongs to the separate OpenAI surface; a Converse probe requires billed inference.
+		return {
+			status: 'skipped',
+			message: 'Bedrock Converse inference access is checked on the first AI request',
+		};
+	}
 	const { upstreamBaseUrl, upstreamFetch } = deps.ai;
 	const url = `${upstreamBaseUrl}/models`;
 	const signed = upstreamFetch !== undefined;

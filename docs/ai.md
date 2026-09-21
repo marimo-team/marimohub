@@ -73,12 +73,9 @@ a sandbox — only a minted, expiring, session-scoped token. This mirrors how
 keys.
 
 ::: warning Token revocation is not immediate
-AI session tokens are self-contained. The proxy checks the signature and expiration
-of each token without reading object storage. This avoids an object-storage read for
-each AI request.
-
-An issued token remains valid until it expires. Stopping the session, removing
-project access, or suspending the user does not invalidate the token.
+The proxy checks token signatures, expiration, and user suspension on each request.
+It rejects suspended users and fails closed if it cannot check suspension status.
+Stopping a session or removing project access does not invalidate its token.
 
 The default lifetime is one hour. Set `MARIMOHUB_AI_TOKEN_TTL_SECONDS` to a lower
 value to reduce the revocation window. AI access ends when the token expires, even
@@ -87,23 +84,31 @@ if the notebook session remains active.
 
 ## Proxy contract
 
-The proxy implements the subset of the OpenAI API that marimo calls server-side.
-All endpoints require a valid bearer session token; upstream authentication is
-applied server-side.
+The proxy exposes the OpenAI endpoints marimo needs. Each requires a bearer
+session token. The hub authenticates upstream requests.
 
-- `POST /api/ai/v1/chat/completions` — forwards to the upstream, streaming SSE when
-  `stream: true`. The request `model` is normalized to a managed model.
-- `POST /api/ai/v1/responses` — the same passthrough for the OpenAI Responses API,
-  so a client pointed at marimo's built-in `[ai.open_ai]` provider also works.
-- `GET /api/ai/v1/models` — returns the configured/allowed models.
+- `POST /api/ai/v1/chat/completions` — forwards to the upstream, using Converse
+  for Bedrock Claude and SSE for `stream: true`. The hub resolves `model` against
+  the configured allowlist.
+- `POST /api/ai/v1/responses` — forwards requests to the upstream Responses API.
+  The provider and model must support Responses. There is no Converse translation.
+- `GET /api/ai/v1/models` — lists allowed models, or the default if no allowlist is set.
 
-Each request body can contain at most 10 MB. This total includes embedded file
-content. The proxy rejects larger requests with HTTP `413` and does not send them
-upstream.
+The Bedrock Claude bridge supports:
 
-This is a deliberate allowlist, not a generic OpenAI passthrough: the session token
-authorizes untrusted notebook code, so the proxy exposes only the endpoints clients
-need. Others (`/v1/embeddings`, `/v1/images`, …) are added only on demand.
+- Text in `system`, `developer`, `user`, and `assistant` messages. System and
+  developer messages combine into system instructions.
+- `stream`, `temperature`, `top_p`, and `stop`.
+- Token limits, in precedence order: `max_completion_tokens`, `max_tokens`, then
+  `MARIMOHUB_AI_MAX_TOKENS`. The configuration supplies a default, not a hard cap.
+
+The bridge ignores other fields, tool messages, tool calls, and non-text content.
+Tool-dependent clients, including OpenCode agents, need a provider with tool support.
+
+Request bodies have a 10 MB limit, including embedded files. Larger requests receive
+HTTP `413` before reaching the provider.
+
+Other OpenAI endpoints, including embeddings and images, are not exposed.
 
 ## What the user can override
 

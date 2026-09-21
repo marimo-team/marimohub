@@ -15,6 +15,8 @@
 // with `Millis.of(...)` / `Seconds.of(...)` only where the result must stay
 // typed.
 
+import { withAbortSignal } from './async';
+
 export type Millis = number & { __brand: 'Millis' };
 export type Seconds = number & { __brand: 'Seconds' };
 
@@ -35,8 +37,17 @@ export const Seconds = {
 	toMillis: (s: Seconds): Millis => (s * 1000) as Millis,
 };
 
-export function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
+export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	signal?.throwIfAborted();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await withAbortSignal(
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, ms);
+			}),
+			signal,
+		);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }

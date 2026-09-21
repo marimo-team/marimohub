@@ -141,8 +141,11 @@ Session `status` describes the sandbox lifecycle. `execution.status` reports ker
 | `app_mode`                                       | Call `start_session` with `mode: "edit"` to execute code.                                                   |
 | `terminating`, `terminated`, `failed`, `expired` | Check the session status and error before retrying `start_session`.                                         |
 
-`wait_seconds` bounds polling and initialization after sandbox startup. Zero only
-inspects existing kernels, including browser sessions, without creating a kernel or running cells.
+`wait_seconds` accepts integers from `0` to `120` (default `60`). It bounds kernel
+initialization retries after sandbox startup while readiness remains `initializing`.
+If the wait expires, call `start_session` again. Zero inspects existing kernels,
+including browser sessions, without creating a kernel or running cells.
+
 Custom images need compatible marimo and WebSocket support. MCP does not install
 or upgrade packages during requests.
 

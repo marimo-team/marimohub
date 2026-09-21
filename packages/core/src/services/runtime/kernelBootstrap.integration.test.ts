@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { bootstrapKernel } from './kernelBootstrap';
 import { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
@@ -281,6 +281,16 @@ async with cm.get_context() as ctx:
 		},
 		30_000,
 	);
+
+	it('retries initialization within one wait window without rerunning cells', async () => {
+		const rt = await runtime(true, '', 'delay');
+		const probe = vi.spyOn(rt.sandbox, 'exec');
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toEqual({ status: 'ready' });
+		expect(probe.mock.calls.length).toBeGreaterThan(1);
+		expect(
+			await rt.execute('from pathlib import Path; print(Path("runs.txt").read_text())'),
+		).toMatchObject({ success: true, stdout: 'x\n' });
+	}, 30_000);
 
 	it.each([true, false])(
 		'inspects a browser-created kernel with auto execution %s',
