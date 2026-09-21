@@ -6,12 +6,15 @@
 import type { Millis } from '@marimo-hub/core/duration';
 import type { SandboxExposureMode } from '@marimo-hub/core/ports/sandbox-exposure';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import type { KubernetesPodTemplate } from './podTemplate';
 
 /** Label marking resources THIS deployment owns (selection + discovery/cleanup). */
 export const MANAGED_BY_LABEL = 'app.kubernetes.io/managed-by';
 export const MANAGED_BY_VALUE = 'marimohub';
 /** Annotation that carries the verbatim `SandboxId` for `listActive()` mapping. */
 export const SANDBOX_ID_ANNOTATION = 'marimohub.io/sandbox-id';
+export const SANDBOX_NAME_LABEL = 'marimohub.io/sandbox-name';
+export const KERNEL_CONTAINER_NAME = 'marimo';
 
 /** `imagePullPolicy` for the kernel container. See `defaultImagePullPolicy`. */
 export type ImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
@@ -164,6 +167,7 @@ export interface KubernetesResources {
 }
 
 export interface KubernetesConfig {
+	podTemplate?: KubernetesPodTemplate;
 	/** How the kernel is exposed. Proxy mode routes through the internal Service. */
 	exposureMode?: SandboxExposureMode;
 	/** Namespace the kernel Pod/Service and optional Ingress are created in. Default `default`. */
@@ -214,8 +218,8 @@ export interface KubernetesConfig {
 	/**
 	 * `runAsUser` for the kernel Pod's securityContext (with `runAsNonRoot` and a
 	 * matching `fsGroup`). Required by clusters whose admission policy rejects Pods
-	 * that do not pin a uid. The Pod mounts no volumes, so `fsGroup` does not make
-	 * the workdir writable: the image must already grant this uid write access.
+	 * that do not pin a uid. `fsGroup` only affects mounted volumes; the image
+	 * must already grant this uid write access to its workdir.
 	 */
 	runAsUser?: number;
 	/** How long to wait for the Pod to reach `Running`. Default 2 minutes. */
@@ -231,6 +235,7 @@ export interface K8sExecResult {
 
 /** Everything `ensure()` needs to materialise a session's Pod/Service and optional Ingress. */
 export interface EnsureSandboxOptions {
+	podTemplate?: KubernetesPodTemplate;
 	/** Deterministic resource name (`mh-<sanitized id>`); also the Pod name for exec. */
 	name: string;
 	/** Verbatim `SandboxId`, stored in an annotation for `listActive()` mapping. */

@@ -19,7 +19,9 @@
 	},
 	"dependencies": {
 		"@marimo-hub/compute-commons": "workspace:*",
-		"@marimo-hub/core": "workspace:*"
+		"@marimo-hub/core": "workspace:*",
+		"yaml": "catalog:",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@kubernetes/client-node": "catalog:",

@@ -11,6 +11,7 @@ import { E2bCompute } from '@marimo-hub/compute-e2b';
 import { FargateCompute, validateFargateTaskDefinition } from '@marimo-hub/compute-fargate';
 import {
 	KubernetesCompute,
+	loadPodTemplateFile,
 	parseIngressAnnotations,
 	portRoutingCollision,
 	resolveIngressTlsMode,
@@ -477,6 +478,20 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				ports: parsePortRange(env.MARIMOHUB_COMPUTE_LOCAL_PORTS),
 			});
 		case 'kubernetes': {
+			const templateKey = 'MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE';
+			const templatePath = env[templateKey]?.trim();
+			let podTemplate;
+			if (templatePath) {
+				try {
+					podTemplate = loadPodTemplateFile(templatePath);
+				} catch (cause) {
+					const detail = cause instanceof Error ? cause.message : 'invalid pod template';
+					throw new ConfigError(`Invalid ${templateKey}: ${detail}`, {
+						variable: templateKey,
+						docs: 'docs/setup/compute/kubernetes.md',
+					});
+				}
+			}
 			// Native Kubernetes: a Pod + Service per session, with an Ingress added for
 			// subdomain exposure. Proxy exposure reaches the Service inside the cluster.
 			const resources = {
@@ -544,6 +559,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				);
 			}
 			return new KubernetesCompute({
+				podTemplate,
 				exposureMode: opts?.sandboxExposureMode,
 				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
 				image: defaultImage,

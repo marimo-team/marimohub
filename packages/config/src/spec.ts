@@ -854,6 +854,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE',
+						name: 'Kubernetes pod template file',
+						description:
+							'Path to a YAML or JSON partial Pod manifest, read at startup for new kernel Pods. Explicit configuration overrides template values. See [pod templates](compute.md#pod-templates) for an example, precedence, and compatibility limits.',
+						example: '/etc/marimohub/kernel-pod.yaml',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT',
 						name: 'Kubernetes service account',
 						description: 'ServiceAccount the kernel Pod runs as. Omit for the namespace default.',
@@ -903,7 +911,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER',
 						name: 'Kubernetes run-as user',
 						description:
-							'`runAsUser` for the kernel Pod `securityContext`, with `runAsNonRoot` (unless `0`) and a matching `fsGroup`. Set when the cluster admission policy rejects Pods that do not pin a uid. The Pod mounts no volumes, so the image workdir must already be writable by this uid; `fsGroup` only affects mounted volumes. Unset leaves the securityContext off.',
+							'Sets Pod `runAsUser`, matching `fsGroup`, and `runAsNonRoot` (false for UID `0`). Overrides these template fields only. Unset preserves the template security context. The UID needs write access to the image workdir. `fsGroup` affects mounted volumes only.',
 						example: '1000',
 						optIn: true,
 					},

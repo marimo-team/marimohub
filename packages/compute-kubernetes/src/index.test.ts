@@ -322,6 +322,45 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('lazy ensure()', () => {
+		it('validates programmatic templates before creating a sandbox', () => {
+			const world = makeWorld();
+			expect(() =>
+				makeCompute(world, {
+					...baseConfig,
+					podTemplate: {
+						spec: { containers: [{ name: 'wrong' }] },
+					} as unknown as KubernetesConfig['podTemplate'],
+				}),
+			).toThrow(/spec.containers.0.name/);
+			expect(world.ensured).toHaveLength(0);
+		});
+
+		it('keeps the startup template across sessions and profile overrides', async () => {
+			const world = makeWorld();
+			const podTemplate: NonNullable<KubernetesConfig['podTemplate']> = {
+				spec: {
+					serviceAccountName: 'fabric',
+					containers: [
+						{ name: 'marimo', env: [{ name: 'FABRIC_URL', value: 'https://fabric.example.com' }] },
+					],
+				},
+			};
+			const original = structuredClone(podTemplate);
+			const compute = makeCompute(world, { ...baseConfig, podTemplate });
+			podTemplate.spec!.containers![0].env![0].value = 'changed-after-startup';
+			await compute
+				.create(SANDBOX_ID, { image: 'profile-image', resources: { cpu: 2 } })
+				.exec('true');
+			await compute.create('sb-second' as SandboxId).exec('true');
+			expect(world.ensured).toHaveLength(2);
+			expect(world.ensured[0]).toMatchObject({
+				podTemplate: original,
+				image: 'profile-image',
+				resources: { cpu: '2000m', profileLimits: { cpu: true } },
+			});
+			expect(world.ensured[1]).toMatchObject({ podTemplate: original, image: baseConfig.image });
+		});
+
 		it('materialises the Pod with our name, image, port, and ingress host', async () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID).exec('true');

@@ -942,6 +942,12 @@ importers:
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
     devDependencies:
       '@kubernetes/client-node':
         specifier: 'catalog:'
