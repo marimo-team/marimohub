@@ -20,6 +20,11 @@ The local stack uses memory storage, local subprocess compute, and dev auth. It
 is useful for evaluation and development, but it is not durable and must not
 serve real users. See [Testing locally](./testing-locally.md) for details.
 
+To quickly get started with Docker Compose, see the [local compute and local
+storage example](https://github.com/marimo-team/marimohub/tree/main/examples/docker-compose/local-compute).
+Please note that it is useful for evaluation and testing,
+but it is not intended for production use.
+
 ## 2. Choose production backends
 
 Every deployment picks one option for each port.
