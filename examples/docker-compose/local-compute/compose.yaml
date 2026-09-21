@@ -4,11 +4,11 @@ services:
     container_name: marimohub
     restart: unless-stopped
     ports:
-      - "3000:3000"
-      - "127.0.0.1:2718-2723:2718-2723"
+      - '3000:3000'
+      - '127.0.0.1:2718-2723:2718-2723'
     environment:
       NODE_ENV: production
-      PORT: "3000"
+      PORT: '3000'
 
       MARIMOHUB_STORAGE_BACKEND: fs
       MARIMOHUB_STORAGE_FS_ROOT: /app/storage
@@ -26,7 +26,7 @@ services:
 
       MARIMOHUB_AUTH_BACKEND: dev
       MARIMOHUB_AUTH_DEV_EMAIL: dev@localhost
-      MARIMOHUB_RUN_MAINTENANCE: "true"
+      MARIMOHUB_RUN_MAINTENANCE: 'true'
     volumes:
       - ./storage:/app/storage
       - uv-cache:/uv-cache
