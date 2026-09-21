@@ -250,9 +250,8 @@ function rejectUnsupportedCoreWeaveVars(env: Env): void {
 	}
 }
 
-/** `k=v,k2=v2` -> label map. Empty/unset yields undefined (no labels added). */
 function parseLabels(env: Env, key: string): Record<string, string> | undefined {
-	const out: Record<string, string> = {};
+	const entries: [string, string][] = [];
 	for (const pair of parseList(env[key]) ?? []) {
 		const eq = pair.indexOf('=');
 		const name = eq === -1 ? '' : pair.slice(0, eq).trim();
@@ -260,9 +259,10 @@ function parseLabels(env: Env, key: string): Record<string, string> | undefined 
 			throw new ConfigError(`Invalid ${key} entry: ${pair} (expected key=value)`, {
 				variable: key,
 			});
-		out[name] = pair.slice(eq + 1).trim();
+		entries.push([name, pair.slice(eq + 1).trim()]);
 	}
-	if (Object.keys(out).length === 0) return undefined;
+	if (entries.length === 0) return undefined;
+	const out = Object.fromEntries(entries);
 	try {
 		validateLabels(out);
 	} catch (cause) {

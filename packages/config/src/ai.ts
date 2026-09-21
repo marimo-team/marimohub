@@ -147,9 +147,10 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 					docs: DOCS,
 				})
 			: undefined;
+	const awsCredentials = awsRegion !== undefined ? awsDefaultCredentialProvider() : undefined;
 	const upstreamFetch =
 		awsRegion !== undefined
-			? createAwsSigV4Fetch({ region: awsRegion, service: 'bedrock' })
+			? createAwsSigV4Fetch({ region: awsRegion, service: 'bedrock', credentials: awsCredentials })
 			: undefined;
 	const model = requiredVar(env, 'MARIMOHUB_AI_MODEL', {
 		remediation: 'Set the default upstream model id, e.g. gpt-4o-mini',
@@ -164,14 +165,12 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 		headers: upstreamProject ? { 'OpenAI-Project': upstreamProject } : undefined,
 		fetch: upstreamFetch,
 	});
-	// Bedrock reaches Anthropic Claude only via the Converse API. The provider
-	// reuses the SAME keyless credential chain (IRSA web-identity) the SigV4 fetch
-	// signs with — no static keys are introduced.
+	// Both Bedrock APIs share one refreshable credential provider.
 	const bedrockProvider =
 		awsRegion !== undefined
 			? createAmazonBedrock({
 					region: awsRegion,
-					credentialProvider: awsDefaultCredentialProvider(),
+					credentialProvider: awsCredentials,
 				})
 			: undefined;
 	const maxTokens = parseIntEnv(env, 'MARIMOHUB_AI_MAX_TOKENS');

@@ -8,6 +8,11 @@ Run marimohub on your machine with no external services. This is the fastest way
 to evaluate the app and test changes before wiring real storage, compute, and
 auth providers.
 
+For container-based evaluation, use the [Docker Compose
+example](https://github.com/marimo-team/marimohub/tree/main/examples/docker-compose/local-compute).
+It uses persistent filesystem storage, kernels inside the hub container, and dev
+authentication. The development stack below defaults to memory storage.
+
 ## Prerequisites
 
 - Node >= 24

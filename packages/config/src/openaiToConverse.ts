@@ -1,14 +1,4 @@
-/**
- * Translate an OpenAI Chat Completions request into an AI-SDK call and re-encode
- * the result as OpenAI wire format. Anthropic Claude on Bedrock is reachable only
- * through the Converse API, which the `@ai-sdk/amazon-bedrock` provider speaks;
- * marimo, however, is an OpenAI client that POSTs `/chat/completions` and expects
- * OpenAI ChatCompletion SSE (or JSON) back. This bridge sits between the two so
- * Claude works through the same managed-AI proxy as the GPT passthrough.
- *
- * It is model-agnostic: it takes a resolved AI-SDK `LanguageModel`, so tests can
- * drive it with a mock model without a live Bedrock call.
- */
+// Claude on Bedrock requires Converse; marimo clients speak OpenAI Chat Completions.
 import type {
 	AssistantModelMessage,
 	FinishReason,
@@ -18,7 +8,6 @@ import type {
 } from 'ai';
 import { generateText, streamText } from 'ai';
 
-/** Minimal shape of the fields we read from an OpenAI Chat Completions body. */
 interface OpenAiChatRequest {
 	messages: OpenAiMessage[];
 	stream?: boolean;
@@ -47,7 +36,6 @@ export interface ConverseBridgeOptions {
 	now?: () => number;
 }
 
-/** Flatten OpenAI message content (string, or an array of parts) to text. */
 function contentToText(content: unknown): string {
 	if (typeof content === 'string') return content;
 	if (Array.isArray(content)) {
@@ -62,12 +50,7 @@ function contentToText(content: unknown): string {
 	return '';
 }
 
-/**
- * Split OpenAI messages into the AI-SDK `system` instruction (which the SDK
- * requires be passed separately, not as a message) and the user/assistant
- * conversation. `developer` collapses to system; tool-call turns are out of
- * scope for the marimo chat/edit path and are dropped rather than mistranslated.
- */
+// The marimo chat/edit path uses text only; tool turns have no Converse representation here.
 function partitionMessages(messages: OpenAiMessage[]): {
 	system: string | undefined;
 	conversation: (UserModelMessage | AssistantModelMessage)[];
@@ -101,7 +84,6 @@ function requestedMaxTokens(request: OpenAiChatRequest): number | undefined {
 	return request.max_completion_tokens ?? request.max_tokens;
 }
 
-/** AI-SDK finish reasons onto the OpenAI `finish_reason` enum. */
 const FINISH_REASON: Record<FinishReason, string> = {
 	stop: 'stop',
 	length: 'length',
@@ -137,17 +119,16 @@ function chatCompletionId(now: number): string {
 
 function callSettings(request: OpenAiChatRequest, options: ConverseBridgeOptions) {
 	const { system, conversation } = partitionMessages(request.messages);
+	const maxOutputTokens = resolveMaxOutputTokens(request, options);
 	return {
 		model: options.model,
 		messages: conversation,
 		abortSignal: options.signal,
-		...(system !== undefined ? { system } : {}),
+		...(system !== undefined ? { instructions: system } : {}),
 		...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
 		...(request.top_p !== undefined ? { topP: request.top_p } : {}),
 		...(request.stop !== undefined ? { stopSequences: normalizeStop(request.stop) } : {}),
-		...(resolveMaxOutputTokens(request, options) !== undefined
-			? { maxOutputTokens: resolveMaxOutputTokens(request, options) }
-			: {}),
+		...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
 	};
 }
 
@@ -173,29 +154,21 @@ function openAiErrorBody(message: string, type: string) {
 	return { error: { message, type } };
 }
 
-/**
- * Stream an OpenAI `chat.completion.chunk` SSE sequence: a role delta, one delta
- * per text token, a terminal delta carrying `finish_reason` and `usage`, then the
- * `[DONE]` sentinel marimo's client waits for.
- *
- * We iterate the full event stream (not `textStream`) because a mid-stream
- * Bedrock failure surfaces as an `error`/`abort` part rather than a throw; on that
- * part we must NOT emit the success terminal (`finish_reason` + `[DONE]`) — that
- * would make an OpenAI client treat a truncated completion as complete — and
- * instead emit an OpenAI-style error event and stop.
- */
+// Provider failures must end with an error, not a success finish or [DONE].
 function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOptions): Response {
 	const created = Math.floor((options.now?.() ?? Date.now()) / 1000);
 	const id = chatCompletionId(options.now?.() ?? Date.now());
 	const base = { id, object: 'chat.completion.chunk', created, model: options.modelId };
 
+	const cancelled = new AbortController();
+	const signal = AbortSignal.any([options.signal, cancelled.signal]);
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
-			const result = streamText(callSettings(request, options));
 			let finishReason: FinishReason = 'stop';
 			let usage: LanguageModelUsage | undefined;
 			let streamError: unknown;
 			try {
+				const result = streamText(callSettings(request, { ...options, signal }));
 				controller.enqueue(
 					sseChunk({
 						...base,
@@ -203,6 +176,7 @@ function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOp
 					}),
 				);
 				for await (const part of result.stream) {
+					if (cancelled.signal.aborted) return;
 					if (part.type === 'text-delta') {
 						controller.enqueue(
 							sseChunk({
@@ -224,8 +198,7 @@ function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOp
 			} catch (error) {
 				streamError = error;
 			}
-			// The 200 headers are already sent, so we cannot downgrade to an error
-			// status; report the failure through the hook and end the stream.
+			if (cancelled.signal.aborted) return;
 			if (streamError !== undefined) {
 				controller.enqueue(
 					sseChunk(openAiErrorBody('Upstream AI provider unreachable', 'api_error')),
@@ -243,6 +216,9 @@ function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOp
 			}
 			controller.close();
 		},
+		cancel(reason) {
+			cancelled.abort(reason);
+		},
 	});
 
 	return new Response(stream, {
@@ -255,7 +231,6 @@ function streamingResponse(request: OpenAiChatRequest, options: ConverseBridgeOp
 	});
 }
 
-/** Render a single OpenAI `chat.completion` JSON body. */
 async function nonStreamingResponse(
 	request: OpenAiChatRequest,
 	options: ConverseBridgeOptions,
@@ -279,19 +254,10 @@ async function nonStreamingResponse(
 	return Response.json(body);
 }
 
-/**
- * Bridge one OpenAI Chat Completions request to the Converse-backed model and
- * return an OpenAI-shaped response. Streams when the request set `stream: true`;
- * otherwise returns a single JSON completion. Non-streaming failures reject so
- * the caller can map them to an error status; streaming failures are reported
- * through `onStreamError`.
- */
-/** Read a number field, ignoring non-numeric junk from an untrusted body. */
 function numberField(value: unknown): number | undefined {
 	return typeof value === 'number' ? value : undefined;
 }
 
-/** Extract the fields the bridge needs from the untrusted OpenAI request body. */
 function parseRequest(payload: Record<string, unknown>): OpenAiChatRequest {
 	const rawMessages = payload.messages;
 	const messages: OpenAiMessage[] = Array.isArray(rawMessages)

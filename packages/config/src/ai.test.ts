@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as AiSdk from 'ai';
 import { makeAi, sqlGenerationInstructions } from './ai';
 import { ConfigError } from './errors';
+
+const { generateText } = vi.hoisted(() => ({ generateText: vi.fn() }));
+vi.mock('ai', async (importOriginal) => ({
+	...(await importOriginal<typeof AiSdk>()),
+	generateText,
+}));
+afterEach(() => vi.clearAllMocks());
 
 const aiEnv = {
 	MARIMOHUB_AI_BACKEND: 'openai-compatible',
@@ -28,6 +36,32 @@ function getConfigError(run: () => unknown): ConfigError {
 }
 
 describe('makeAi', () => {
+	it.each([
+		{ env: bedrockEnv, model: bedrockEnv.MARIMOHUB_AI_MODEL, provider: 'amazon-bedrock' },
+		{ env: bedrockEnv, model: 'openai.gpt-oss-120b-1:0', provider: 'marimohub-managed-ai.chat' },
+		{ env: aiEnv, model: 'anthropic.claude-sonnet', provider: 'marimohub-managed-ai.chat' },
+	])('generates SQL with $provider for $model', async ({ env, model, provider }) => {
+		generateText.mockResolvedValue({ text: 'SELECT 1' });
+		const { ai } = makeAi({ ...env, MARIMOHUB_AI_MODEL: model, MARIMOHUB_AI_MAX_TOKENS: '32' });
+		const signal = new AbortController().signal;
+		const result = await ai!.generateSql!({
+			dialect: 'postgresql',
+			mode: 'generate',
+			instruction: 'Show data',
+			schema: 'public.data (id int)',
+			signal,
+		});
+		expect(result).toBe('SELECT 1');
+		expect(generateText).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				model: expect.objectContaining({ modelId: model, provider }),
+				instructions: sqlGenerationInstructions('postgresql'),
+				maxOutputTokens: 32,
+				abortSignal: signal,
+			}),
+		);
+	});
+
 	it('selects SQL generation instructions from the advertised dialect', () => {
 		expect(sqlGenerationInstructions('duckdb')).toContain('generate DuckDB SQL');
 		expect(sqlGenerationInstructions('postgresql', 'Avoid private tables.')).toBe(
@@ -44,6 +78,7 @@ describe('makeAi', () => {
 	it('wires the openai-compatible backend with an optional token TTL', () => {
 		const { ai } = makeAi({ ...aiEnv, MARIMOHUB_AI_TOKEN_TTL_SECONDS: '900' });
 		expect(ai?.tokenTtlSeconds).toBe(900);
+		expect(ai?.converse).toBeUndefined();
 	});
 
 	it('wires Bedrock through its regional OpenAI-compatible endpoint without an API key', () => {
@@ -60,6 +95,7 @@ describe('makeAi', () => {
 			allowedModels: ['eu.anthropic.claude-opus-4-7'],
 		});
 		expect(ai?.upstreamFetch).toBeTypeOf('function');
+		expect(ai?.converse).toBeTypeOf('function');
 	});
 
 	it('accepts AWS_REGION for the Bedrock region', () => {

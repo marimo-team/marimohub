@@ -37,6 +37,16 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 # MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER=1000  # also sets runAsNonRoot and fsGroup; the image workdir must be writable by this uid
 ```
 
+`MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS` adds labels to Pods, Services, and
+Ingresses. Kubernetes label syntax applies, including empty values such as `team=`.
+The hub's management and selector labels take precedence.
+
+`MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER` sets the Pod UID and matching
+`fsGroup`. Positive UIDs set `runAsNonRoot: true`. UID `0` permits root.
+If unset, the hub omits the Pod security context. The selected UID must be able
+to write to the image work directory. With no mounted volumes, `fsGroup` does
+not change ownership inside the image.
+
 For proxy exposure, omit `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and the Ingress/TLS
 settings. marimohub uses the internal Service URL and does not manage Ingresses,
 so a `MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE` that uses `{host}` or

@@ -1,8 +1,8 @@
 <!-- Setup snippet — included by docs/ai.md and rendered in the deployment wizard. -->
 
-Use Amazon Bedrock's OpenAI-compatible endpoint with the hub's AWS identity.
-The hub signs upstream requests with SigV4; no Bedrock API key or AWS credential
-is written into a sandbox.
+The hub uses Bedrock Converse for Claude chat and SQL generation, and the
+OpenAI-compatible endpoint for other requests. It signs requests with its AWS
+identity through SigV4. Credentials stay outside sandboxes.
 
 ```bash
 MARIMOHUB_AI_BACKEND=bedrock
@@ -19,3 +19,13 @@ credential chain also supports local development credentials.
 When `MARIMOHUB_AI_ALLOWED_MODELS` is unset, Bedrock is restricted to
 `MARIMOHUB_AI_MODEL`. Set an explicit comma-separated allowlist to expose more
 models.
+
+Claude IDs support `anthropic.`, regional profiles such as `eu.anthropic.` and
+`us.anthropic.`, and `global.anthropic.` profiles. The runtime identity must have
+access to the model or profile in the selected region.
+
+With a Claude default model, startup skips the AI probe to avoid billable inference.
+Model access is checked on the first request.
+
+Claude supports text chat with JSON or streaming responses, without tools, images,
+or Responses translation. See the [proxy contract](/ai#proxy-contract) for supported fields.

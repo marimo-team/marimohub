@@ -519,6 +519,27 @@ describe('ai.upstream check', () => {
 		expect((await run({}, makeDeps())).by('ai.upstream')).toBeUndefined();
 	});
 
+	it('skips the unrelated OpenAI models probe for a Converse default model', async () => {
+		const globalFetch = upstream(404);
+		const upstreamFetch = vi.fn();
+		const converse = vi.fn();
+		const { by } = await run(
+			{},
+			ai({
+				model: 'eu.anthropic.claude-opus-4-7',
+				upstreamFetch,
+				converse,
+			}),
+		);
+		expect(by('ai.upstream')).toMatchObject({
+			status: 'skipped',
+			message: 'Bedrock Converse inference access is checked on the first AI request',
+		});
+		expect(globalFetch).not.toHaveBeenCalled();
+		expect(upstreamFetch).not.toHaveBeenCalled();
+		expect(converse).not.toHaveBeenCalled();
+	});
+
 	it('ok when an unsigned upstream answers /models', async () => {
 		const spy = upstream(200);
 		expect((await run({}, ai())).by('ai.upstream')?.status).toBe('ok');

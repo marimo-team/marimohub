@@ -419,6 +419,8 @@ export default defineConfig({
 			'**/dist/**',
 			'packages/web/**',
 			'apps/e2e/**',
+			// These suites run with Playwright via test:browser.
+			'packages/notebook-bridge/browser/**',
 			// This dependency-free example uses node:test (test:external-adapter).
 			'examples/external-adapter/oidc-login-policy.test.mjs',
 		],

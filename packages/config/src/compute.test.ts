@@ -398,6 +398,7 @@ describe('makeCompute fail-fast', () => {
 	);
 
 	it.each([
+		['__proto__=data', /label name/],
 		['team name=data', /label name/],
 		['team=data=prod', /label value/],
 		['team=da ta', /label value/],

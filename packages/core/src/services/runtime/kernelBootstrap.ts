@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { withAbortSignal, withDeadline } from '../../async';
+import { withDeadline } from '../../async';
+import { sleep } from '../../duration';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { kernelBootstrapCommand } from './kernelBootstrap/command';
 
@@ -11,20 +12,6 @@ export type KernelBootstrapResult = z.infer<typeof BootstrapResult>;
 // Leave time for another probe when a startup attempt stalls.
 const PROBE_TIMEOUT_MS = 2_000;
 const RETRY_PAUSE_MS = 500;
-
-async function retryPause(ms: number, signal?: AbortSignal): Promise<void> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		await withAbortSignal(
-			new Promise<void>((resolve) => {
-				timer = setTimeout(resolve, ms);
-			}),
-			signal,
-		);
-	} finally {
-		if (timer !== undefined) clearTimeout(timer);
-	}
-}
 
 class BootstrapTimeoutError extends Error {
 	constructor() {
@@ -84,7 +71,7 @@ export async function bootstrapKernel(
 		if (options.inspectOnly || result.status !== 'initializing') return result;
 		const pause = Math.min(RETRY_PAUSE_MS, deadline - Date.now());
 		if (pause <= 0) break;
-		await retryPause(pause, options.signal);
+		await sleep(pause, options.signal);
 		budget = deadline - Date.now();
 	}
 	return result;
