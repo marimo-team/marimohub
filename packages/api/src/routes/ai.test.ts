@@ -320,6 +320,70 @@ describe('POST /api/ai/v1/chat/completions', () => {
 	});
 });
 
+describe('Bedrock Converse dispatch', () => {
+	const CONVERSE_AI: ApiDeps['ai'] = {
+		...AI,
+		upstreamApiKey: undefined,
+		model: 'eu.anthropic.claude-opus-4-7',
+		allowedModels: ['eu.anthropic.claude-opus-4-7', 'openai.gpt-oss-120b-1:0'],
+	};
+
+	it('routes an Anthropic chat completion to the Converse bridge, not the proxy', async () => {
+		const fetchMock = vi.spyOn(globalThis, 'fetch');
+		const converse = vi.fn(
+			async (_input: { payload: Record<string, unknown>; model: string; signal: AbortSignal }) =>
+				new Response('bridged', { status: 200 }),
+		);
+		const res = await post(
+			await token(),
+			{ model: 'marimohub/eu.anthropic.claude-opus-4-7', messages: [], stream: true },
+			{ ai: { ...CONVERSE_AI, converse } },
+		);
+
+		expect(res.status).toBe(200);
+		expect(await res.text()).toBe('bridged');
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(converse).toHaveBeenCalledOnce();
+		const arg = converse.mock.calls[0][0];
+		// The marimo provider prefix is stripped before dispatch.
+		expect(arg.model).toBe('eu.anthropic.claude-opus-4-7');
+		expect(arg.payload.model).toBe('eu.anthropic.claude-opus-4-7');
+	});
+
+	it('keeps a non-Anthropic Bedrock model on the raw proxy path', async () => {
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response('ok', { status: 200 }));
+		const converse = vi.fn(async () => new Response('bridged', { status: 200 }));
+		await post(
+			await token(),
+			{ model: 'marimohub/openai.gpt-oss-120b-1:0', messages: [] },
+			{ ai: { ...CONVERSE_AI, converse } },
+		);
+
+		expect(converse).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledOnce();
+		const req = fetchMock.mock.calls[0][0] as Request;
+		expect(((await req.json()) as { model: string }).model).toBe('openai.gpt-oss-120b-1:0');
+	});
+
+	it('never bridges the /responses endpoint, even for an Anthropic model', async () => {
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response('{"id":"resp_1"}', { status: 200 }));
+		const converse = vi.fn(async () => new Response('bridged', { status: 200 }));
+		await post(
+			await token(),
+			{ model: 'marimohub/eu.anthropic.claude-opus-4-7', input: 'hi' },
+			{ ai: { ...CONVERSE_AI, converse } },
+			'/api/ai/v1/responses',
+		);
+
+		expect(converse).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+});
+
 describe('POST /api/ai/v1/responses', () => {
 	const RESPONSES = '/api/ai/v1/responses';
 
