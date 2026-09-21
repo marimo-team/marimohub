@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { withDeadline } from '../../async';
+import { withAbortSignal, withDeadline } from '../../async';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { kernelBootstrapCommand } from './kernelBootstrap/command';
 
@@ -8,6 +8,24 @@ const BootstrapResult = z.object({
 });
 export type KernelBootstrapResult = z.infer<typeof BootstrapResult>;
 
+// Leave time for another probe when a startup attempt stalls.
+const PROBE_TIMEOUT_MS = 2_000;
+const RETRY_PAUSE_MS = 500;
+
+async function retryPause(ms: number, signal?: AbortSignal): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await withAbortSignal(
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, ms);
+			}),
+			signal,
+		);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
 class BootstrapTimeoutError extends Error {
 	constructor() {
 		super('Kernel bootstrap timed out');
@@ -15,12 +33,10 @@ class BootstrapTimeoutError extends Error {
 	}
 }
 
-export async function bootstrapKernel(
+async function bootstrapOnce(
 	sandbox: SandboxInstance,
 	options: { timeoutMs: number; inspectOnly?: boolean; signal?: AbortSignal },
 ): Promise<KernelBootstrapResult> {
-	options.signal?.throwIfAborted();
-	if (options.timeoutMs <= 0) return { status: 'initializing' };
 	try {
 		const executed = await withDeadline(
 			() =>
@@ -48,4 +64,28 @@ export async function bootstrapKernel(
 		if (options.signal?.aborted) throw options.signal.reason;
 		return { status: 'unavailable' };
 	}
+}
+
+export async function bootstrapKernel(
+	sandbox: SandboxInstance,
+	options: { timeoutMs: number; inspectOnly?: boolean; signal?: AbortSignal },
+): Promise<KernelBootstrapResult> {
+	options.signal?.throwIfAborted();
+	if (options.timeoutMs <= 0) return { status: 'initializing' };
+	const deadline = Date.now() + options.timeoutMs;
+	let budget = options.timeoutMs;
+	let result: KernelBootstrapResult = { status: 'initializing' };
+	while (budget > 0) {
+		result = await bootstrapOnce(sandbox, {
+			timeoutMs: options.inspectOnly ? budget : Math.min(PROBE_TIMEOUT_MS, budget),
+			inspectOnly: options.inspectOnly,
+			signal: options.signal,
+		});
+		if (options.inspectOnly || result.status !== 'initializing') return result;
+		const pause = Math.min(RETRY_PAUSE_MS, deadline - Date.now());
+		if (pause <= 0) break;
+		await retryPause(pause, options.signal);
+		budget = deadline - Date.now();
+	}
+	return result;
 }

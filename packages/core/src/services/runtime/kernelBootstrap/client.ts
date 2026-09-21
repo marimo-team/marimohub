@@ -3,7 +3,7 @@ import fcntl, json, signal, sys, time, uuid
 from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, ProxyHandler
 
 class Incompatible(Exception):
@@ -147,7 +147,16 @@ def run_client(cfg):
     signal.signal(signal.SIGALRM, alarm)
     try:
         signal.setitimer(signal.ITIMER_REAL, remaining())
-        return bootstrap(cfg, remaining)
+        for attempt in range(3):
+            try:
+                return bootstrap(cfg, remaining)
+            except HTTPError:
+                raise
+            except (URLError, ConnectionError):
+                # Briefly tolerate startup races without polling a dead server for the full wait window.
+                if cfg["inspect"] or attempt == 2:
+                    return "unavailable"
+                time.sleep(min(0.1, remaining()))
     except (ImportError, Incompatible):
         return "awaiting_client"
     except TimeoutError:
