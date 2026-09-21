@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { withAbortSignal, withDeadline } from '../../async';
-import { sleep } from '../../duration';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { kernelBootstrapCommand } from './kernelBootstrap/command';
 
@@ -9,9 +8,23 @@ const BootstrapResult = z.object({
 });
 export type KernelBootstrapResult = z.infer<typeof BootstrapResult>;
 
-// A fresh kernel reports `initializing` until marimo finishes booting. Poll across that window
-// rather than surfacing the first probe as terminal.
+// Leave time for another probe when a startup attempt stalls.
+const PROBE_TIMEOUT_MS = 2_000;
 const RETRY_PAUSE_MS = 500;
+
+async function retryPause(ms: number, signal?: AbortSignal): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await withAbortSignal(
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, ms);
+			}),
+			signal,
+		);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
 
 class BootstrapTimeoutError extends Error {
 	constructor() {
@@ -64,14 +77,14 @@ export async function bootstrapKernel(
 	let result: KernelBootstrapResult = { status: 'initializing' };
 	while (budget > 0) {
 		result = await bootstrapOnce(sandbox, {
-			timeoutMs: budget,
+			timeoutMs: options.inspectOnly ? budget : Math.min(PROBE_TIMEOUT_MS, budget),
 			inspectOnly: options.inspectOnly,
 			signal: options.signal,
 		});
 		if (options.inspectOnly || result.status !== 'initializing') return result;
 		const pause = Math.min(RETRY_PAUSE_MS, deadline - Date.now());
 		if (pause <= 0) break;
-		await withAbortSignal(sleep(pause), options.signal);
+		await retryPause(pause, options.signal);
 		budget = deadline - Date.now();
 	}
 	return result;

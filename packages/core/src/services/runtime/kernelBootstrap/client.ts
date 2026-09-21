@@ -147,15 +147,22 @@ def run_client(cfg):
     signal.signal(signal.SIGALRM, alarm)
     try:
         signal.setitimer(signal.ITIMER_REAL, remaining())
-        return bootstrap(cfg, remaining)
+        for attempt in range(3):
+            try:
+                return bootstrap(cfg, remaining)
+            except HTTPError:
+                raise
+            except (URLError, ConnectionError):
+                # Briefly tolerate startup races without polling a dead server for the full wait window.
+                if cfg["inspect"] or attempt == 2:
+                    return "unavailable"
+                time.sleep(min(0.1, remaining()))
     except (ImportError, Incompatible):
         return "awaiting_client"
     except TimeoutError:
         return "initializing"
     except HTTPError as error:
         return "awaiting_client" if error.code in (404, 405) else "unavailable"
-    except (URLError, ConnectionError):
-        return "initializing"
     except Exception:
         return "unavailable"
     finally:

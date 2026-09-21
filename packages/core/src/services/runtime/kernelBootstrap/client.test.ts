@@ -96,13 +96,43 @@ cases = [(ImportError("secret"), "awaiting_client"), (Incompatible(), "awaiting_
          (TimeoutError(), "initializing"), (ValueError("secret"), "unavailable"),
          (HTTPError("secret", 401, "secret", {}, None), "unavailable"),
          (HTTPError("secret", 500, "secret", {}, None), "unavailable"),
-         (HTTPError("secret", 404, "secret", {}, None), "awaiting_client"),
-         (URLError("secret"), "initializing"),
-         (ConnectionResetError("secret"), "initializing")]
+         (HTTPError("secret", 404, "secret", {}, None), "awaiting_client")]
 for error, expected in cases:
     with patch.dict(globals(), {"bootstrap": lambda *args: (_ for _ in ()).throw(error)}):
         assert run_client({"seconds": 1}) == expected
         assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+`);
+	});
+	it('bounds persistent connection failures and allows transient startup recovery', async () => {
+		await python(String.raw`
+from unittest.mock import Mock, patch
+for error in (URLError(ConnectionRefusedError()), ConnectionRefusedError(), ConnectionResetError()):
+    for inspect in (False, True):
+        probe = Mock(side_effect=error)
+        sleep = Mock()
+        with patch.dict(globals(), {"bootstrap": probe}), patch.object(time, "sleep", sleep):
+            assert run_client({"seconds": 60, "inspect": inspect}) == "unavailable"
+        assert probe.call_count == (1 if inspect else 3)
+        assert sleep.call_count == (0 if inspect else 2)
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+for failures in (1, 2):
+    probe = Mock(side_effect=[URLError(ConnectionRefusedError())] * failures + ["ready"])
+    sleep = Mock()
+    with patch.dict(globals(), {"bootstrap": probe}), patch.object(time, "sleep", sleep):
+        assert run_client({"seconds": 1.8, "inspect": False}) == "ready"
+    assert probe.call_count == failures + 1
+    assert [call.args for call in sleep.call_args_list] == [(0.1,)] * failures
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+`);
+	});
+	it('retains the probe deadline across connection retries', async () => {
+		await python(String.raw`
+from unittest.mock import Mock, patch
+probe = Mock(side_effect=URLError(ConnectionRefusedError()))
+with patch.dict(globals(), {"bootstrap": probe}), patch.object(time, "monotonic", side_effect=[0, 0, 1]):
+    assert run_client({"seconds": 1, "inspect": False}) == "initializing"
+assert probe.call_count == 1
+assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
 `);
 	});
 	it('rejects failed initialization responses and stopped kernels', async () => {

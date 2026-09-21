@@ -16,10 +16,11 @@ describe('bootstrapKernel', () => {
 				stderr: 'private',
 			});
 			expect(await bootstrapKernel(instance, { timeoutMs: 5_000 })).toEqual({ status });
-			expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 6_000 });
+			expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 3_000 });
 		},
 	);
 	it('polls while the kernel is still initializing, then returns ready', async () => {
+		vi.useFakeTimers();
 		const { instance } = makeFakeSandbox();
 		const exec = vi
 			.spyOn(instance, 'exec')
@@ -33,8 +34,37 @@ describe('bootstrapKernel', () => {
 				stdout: JSON.stringify({ status: 'ready' }),
 				stderr: '',
 			});
-		expect(await bootstrapKernel(instance, { timeoutMs: 5_000 })).toEqual({ status: 'ready' });
-		expect(exec.mock.calls.length).toBeGreaterThanOrEqual(2);
+		const pending = bootstrapKernel(instance, { timeoutMs: 5_000 });
+		await vi.advanceTimersByTimeAsync(499);
+		expect(exec).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(await pending).toEqual({ status: 'ready' });
+		expect(exec).toHaveBeenCalledTimes(2);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+	it('retries a stalled probe while the overall deadline still has time', async () => {
+		vi.useFakeTimers();
+		const { instance } = makeFakeSandbox();
+		const exec = vi
+			.spyOn(instance, 'exec')
+			.mockImplementationOnce(() => new Promise(() => {}))
+			.mockResolvedValue({ success: true, stdout: '{"status":"ready"}', stderr: '' });
+		const pending = bootstrapKernel(instance, { timeoutMs: 5_000 });
+		await vi.advanceTimersByTimeAsync(2_500);
+		expect(await pending).toEqual({ status: 'ready' });
+		expect(exec).toHaveBeenCalledTimes(2);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+	it('bounds the final probe by the remaining overall deadline', async () => {
+		vi.useFakeTimers();
+		const { instance } = makeFakeSandbox();
+		const exec = vi.spyOn(instance, 'exec').mockImplementation(() => new Promise(() => {}));
+		const pending = bootstrapKernel(instance, { timeoutMs: 3_000 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(await pending).toEqual({ status: 'initializing' });
+		expect(exec).toHaveBeenCalledTimes(2);
+		expect(exec).toHaveBeenNthCalledWith(2, kernelBootstrapCommand(450), { timeout: 1_500 });
+		expect(vi.getTimerCount()).toBe(0);
 	});
 	it('gives up with initializing when the budget is spent', async () => {
 		vi.useFakeTimers();
@@ -60,6 +90,7 @@ describe('bootstrapKernel', () => {
 			status: 'initializing',
 		});
 		expect(exec).toHaveBeenCalledTimes(1);
+		expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 6_000 });
 	});
 	it('does no work without remaining time', async () => {
 		const { instance, calls } = makeFakeSandbox();
@@ -133,6 +164,25 @@ describe('bootstrapKernel', () => {
 		controller.abort(new Error('stopped'));
 		await rejected;
 		expect(vi.getTimerCount()).toBe(0);
+	});
+	it('clears the retry pause immediately on cancellation', async () => {
+		vi.useFakeTimers();
+		const { instance } = makeFakeSandbox();
+		const exec = vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: true,
+			stdout: '{"status":"initializing"}',
+			stderr: '',
+		});
+		const controller = new AbortController();
+		const pending = bootstrapKernel(instance, { timeoutMs: 5_000, signal: controller.signal });
+		const reason = new Error('stopped');
+		const rejected = expect(pending).rejects.toBe(reason);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(vi.getTimerCount()).toBe(1);
+		controller.abort(reason);
+		await rejected;
+		expect(vi.getTimerCount()).toBe(0);
+		expect(exec).toHaveBeenCalledTimes(1);
 	});
 	it('only embeds the token file path and never installs runtime dependencies', () => {
 		const command = kernelBootstrapCommand(1000, true);
