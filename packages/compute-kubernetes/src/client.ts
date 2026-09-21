@@ -25,13 +25,16 @@ import type {
 import { SandboxId } from '@marimo-hub/core/ids';
 import {
 	defaultImagePullPolicy,
+	KERNEL_CONTAINER_NAME,
 	MANAGED_BY_LABEL,
 	MANAGED_BY_VALUE,
 	portName,
 	resolveIngressTlsMode,
 	SANDBOX_ID_ANNOTATION,
+	SANDBOX_NAME_LABEL,
 	validateIngressAnnotations,
 } from './shared';
+import { validatePodTemplate } from './podTemplate';
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
@@ -41,11 +44,6 @@ import type {
 	K8sSandboxInfo,
 	KubernetesConfig,
 } from './shared';
-
-/** Per-session label the Service selector matches (unique per sandbox). */
-const SANDBOX_NAME_LABEL = 'marimohub.io/sandbox-name';
-/** The single container name in each kernel Pod (the exec target). */
-const CONTAINER_NAME = 'marimo';
 
 interface ExecSocket {
 	on?(event: 'close' | 'error', listener: (event?: unknown) => void): void;
@@ -102,40 +100,53 @@ function buildResources(r: EnsureSandboxOptions['resources']): V1Container['reso
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function podManifest(o: EnsureSandboxOptions): V1Pod {
+export function podManifest(o: EnsureSandboxOptions): V1Pod {
+	const template = o.podTemplate === undefined ? undefined : validatePodTemplate(o.podTemplate);
+	const spec = template?.spec;
+	const kernel = spec?.containers?.find((c) => c.name === KERNEL_CONTAINER_NAME);
 	return {
+		...(template?.apiVersion ? { apiVersion: template.apiVersion } : {}),
+		...(template?.kind ? { kind: template.kind } : {}),
 		metadata: {
 			name: o.name,
 			namespace: o.namespace,
 			labels: {
+				...template?.metadata?.labels,
 				...o.extraLabels,
 				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
 				[SANDBOX_NAME_LABEL]: o.name,
 			},
-			annotations: { [SANDBOX_ID_ANNOTATION]: String(o.sandboxId) },
+			annotations: {
+				...template?.metadata?.annotations,
+				[SANDBOX_ID_ANNOTATION]: String(o.sandboxId),
+			},
 		},
 		spec: {
+			...spec,
 			restartPolicy: 'Never',
-			// Pinned uid when configured: some clusters' admission policies reject a
-			// Pod that leaves runAsUser unset. fsGroup matches for policies that also
-			// demand it; it only affects mounted volumes, and this Pod has none, so the
-			// image workdir must already be writable by the uid (see shared.ts).
 			securityContext:
 				o.runAsUser === undefined
-					? undefined
-					: { runAsUser: o.runAsUser, runAsNonRoot: o.runAsUser !== 0, fsGroup: o.runAsUser },
+					? spec?.securityContext
+					: {
+							...spec?.securityContext,
+							runAsUser: o.runAsUser,
+							runAsNonRoot: o.runAsUser !== 0,
+							fsGroup: o.runAsUser,
+						},
 			// The keep-alive `sleep` ignores SIGTERM, so the k8s default 30s grace
 			// would leave every deleted Pod Terminating (still holding its resources,
 			// still phase Running) for 30s. Nothing in the Pod needs a graceful stop —
 			// session state is captured before destroy — so keep the window short.
-			terminationGracePeriodSeconds: 5,
-			serviceAccountName: o.serviceAccountName,
-			imagePullSecrets: o.imagePullSecret ? [{ name: o.imagePullSecret }] : undefined,
+			terminationGracePeriodSeconds: spec?.terminationGracePeriodSeconds ?? 5,
+			serviceAccountName: o.serviceAccountName ?? spec?.serviceAccountName,
+			imagePullSecrets: o.imagePullSecret ? [{ name: o.imagePullSecret }] : spec?.imagePullSecrets,
 			containers: [
 				{
-					name: CONTAINER_NAME,
+					...kernel,
+					name: KERNEL_CONTAINER_NAME,
 					image: o.image,
-					imagePullPolicy: o.imagePullPolicy ?? defaultImagePullPolicy(o.image),
+					imagePullPolicy:
+						o.imagePullPolicy ?? kernel?.imagePullPolicy ?? defaultImagePullPolicy(o.image),
 					// Keep-alive: the Pod idles while we exec marimo into it (see
 					// startProcess). Mirrors the CoreWeave "main process is keep-alive".
 					command: ['sh', '-c', 'sleep infinity'],
@@ -496,7 +507,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					.exec(
 						namespace,
 						name,
-						CONTAINER_NAME,
+						KERNEL_CONTAINER_NAME,
 						command,
 						out.stream,
 						errc.stream,

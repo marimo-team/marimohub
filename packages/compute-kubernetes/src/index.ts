@@ -57,10 +57,13 @@ import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
+import { validatePodTemplate } from './podTemplate';
 import { resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 export * from './shared';
+export { loadPodTemplateFile, parsePodTemplate, validatePodTemplate } from './podTemplate';
+export type { KubernetesPodTemplate } from './podTemplate';
 import type {
 	ActiveSandbox,
 	ComputeResources,
@@ -310,6 +313,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		if (this.resolved) return;
 		const t0 = Date.now();
 		const { createdPod } = await this.client.ensure({
+			podTemplate: this.config.podTemplate,
 			name: this.name,
 			sandboxId: this.id,
 			ports: this.portSpecs(),
@@ -678,6 +682,9 @@ export class KubernetesCompute implements SandboxProvider {
 		private readonly config: KubernetesConfig,
 		client?: K8sClient,
 	) {
+		if (config.podTemplate !== undefined) {
+			this.config = { ...config, podTemplate: validatePodTemplate(config.podTemplate) };
+		}
 		const surfaced = (config.surfacePorts?.length ?? 0) > 0;
 		if ((config.exposureMode ?? 'subdomain') === 'subdomain' && config.hostname) {
 			const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);

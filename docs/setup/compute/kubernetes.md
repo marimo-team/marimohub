@@ -42,10 +42,110 @@ Ingresses. Kubernetes label syntax applies, including empty values such as `team
 The hub's management and selector labels take precedence.
 
 `MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER` sets the Pod UID and matching
-`fsGroup`. Positive UIDs set `runAsNonRoot: true`. UID `0` permits root.
-If unset, the hub omits the Pod security context. The selected UID must be able
-to write to the image work directory. With no mounted volumes, `fsGroup` does
-not change ownership inside the image.
+`fsGroup`, with `runAsNonRoot: true` except for UID `0`.
+If unset, the hub uses the template security context or leaves it unset.
+The UID must have write access to the image work directory. `fsGroup` affects
+mounted volumes only.
+
+#### Pod templates
+
+Use a partial Pod manifest to configure volumes, environment variables, security
+contexts, and scheduling. Mount the file into the **hub server**, for example
+through a ConfigMap. Set its path, the kernel namespace, and the image:
+
+```bash
+MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE=/etc/marimohub/kernel-pod.yaml
+MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=fabric-marimohub-kernels
+MARIMOHUB_COMPUTE_IMAGE=registry.example.com/fabric/runtime:1.0.27
+```
+
+The server reads the file once at startup. After a file change, restart the
+server. The updated template applies only to new Pods.
+
+Example `kernel-pod.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: fabric-marimohub-kernel
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: marimo
+      env:
+        - name: FABRIC_URL
+          value: https://fabric-gateway.example.com
+        - name: FABRIC_TOKEN_PATH
+          value: /var/run/secrets/marimohub/token
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ['ALL']
+      volumeMounts:
+        - name: gateway-token
+          mountPath: /var/run/secrets/marimohub
+          readOnly: true
+  volumes:
+    - name: gateway-token
+      projected:
+        defaultMode: 0444
+        sources:
+          - serviceAccountToken:
+              audience: fabric-gateway
+              expirationSeconds: 600
+              path: token
+```
+
+[Kubernetes rotates the projected token](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/).
+The application must reread the file after rotation. `subPath` mounts do not
+receive updates.
+
+**Format.** Use one YAML 1.1 or JSON object. YAML mode `0444` equals JSON mode
+`292`. Quote strings such as `"true"`, `"yes"`, and `"123"` in environment
+variables, labels, and annotations. All template sections are optional.
+If supplied, `apiVersion` must be `v1`, `kind` must be `Pod`, and `containers`
+must contain one entry named `marimo`.
+
+**Precedence:** explicit environment configuration > template > adapter defaults.
+Lists remain intact unless explicitly replaced. The hub does not deep-merge
+templates. Template labels and annotations apply only to Pods.
+
+| Environment variable                             | Template override                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT`   | Replaces `spec.serviceAccountName`.                                                       |
+| `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` | Replaces the entire `imagePullSecrets` list.                                              |
+| `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` | Replaces the container pull policy.                                                       |
+| `MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER`       | Replaces Pod `runAsUser`, `runAsNonRoot`, and `fsGroup`. Preserves other security fields. |
+| `MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS`        | Overrides matching labels. Also applies to Services and Ingresses.                        |
+
+Container security fields take precedence over Pod security fields.
+
+**Managed fields.** Templates must omit:
+
+- Metadata other than `labels` and `annotations`, including the Pod name and
+  namespace. Reserved management labels and the sandbox identity annotation
+  are also prohibited.
+- Container `image`, `command`, `args`, `ports`, and `resources`. MarimoHub
+  supplies these from runtime configuration and compute profiles.
+- Extra containers, `initContainers`, `ephemeralContainers`, Pod-level
+  `resources`, and the deprecated `serviceAccount` alias.
+
+`restartPolicy` must be absent or `Never`. Other supported fields include
+`nodeSelector`, `tolerations`, `affinity`, `envFrom`, and `terminationGracePeriodSeconds`.
+
+**Compatibility.** At startup, the hub checks common field shapes, duplicate
+names, and volume references. Some nested objects reject unfamiliar
+fields. The Kubernetes SDK can silently drop other unfamiliar fields before
+submission. Custom labels and annotations are supported. Kubernetes performs
+full schema and admission checks on the submitted Pod.
+
+#### Proxy exposure
 
 For proxy exposure, omit `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and the Ingress/TLS
 settings. marimohub uses the internal Service URL and does not manage Ingresses,

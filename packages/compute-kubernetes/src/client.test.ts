@@ -58,6 +58,8 @@ vi.mock('@kubernetes/client-node', () => ({
 }));
 
 import { createK8sClient } from './client';
+import { parsePodTemplate } from './podTemplate';
+import { projectedToken } from './podTemplate.testUtils';
 import {
 	defaultImagePullPolicy,
 	MANAGED_BY_LABEL,
@@ -90,6 +92,43 @@ beforeEach(() => {
 });
 
 describe('createK8sClient', () => {
+	it('sends template fields to Kubernetes without changing the Service or Ingress', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const options = {
+			name: 'mh-sb',
+			namespace: 'kernels',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel:v1',
+			ports: [{ port: 2718, host: 'sb.example.com' }],
+		};
+		await client.ensure(options);
+		const service = structuredClone(k8sMock.core.createNamespacedService.mock.calls[0]?.[0].body);
+		const ingress = structuredClone(k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body);
+		const podTemplate = parsePodTemplate(projectedToken);
+		await client.ensure({ ...options, podTemplate });
+		expect(k8sMock.core.createNamespacedPod.mock.calls[1]?.[0].body).toMatchObject(podTemplate);
+		expect(k8sMock.core.createNamespacedService.mock.calls[1]?.[0].body).toEqual(service);
+		expect(k8sMock.net.createNamespacedIngress.mock.calls[1]?.[0].body).toEqual(ingress);
+	});
+
+	it('does not create any resources for an invalid template', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				namespace: 'kernels',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel:v1',
+				ports: [{ port: 2718, host: '' }],
+				podTemplate: { metadata: { labels: { [MANAGED_BY_LABEL]: 'other' } } },
+			}),
+		).rejects.toThrow(/management or selector/);
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.createNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.createNamespacedIngress).not.toHaveBeenCalled();
+		expect(k8sMock.kubeConfigs).toHaveLength(0);
+	});
+
 	it('creates pod, service, and ingress manifests and tolerates already-exists responses', async () => {
 		k8sMock.core.createNamespacedPod.mockRejectedValueOnce({ code: 409 });
 		const client = createK8sClient({ namespace: 'kernels' });

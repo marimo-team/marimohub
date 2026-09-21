@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it, expect } from 'vitest';
 import { Millis, Seconds } from '@marimo-hub/core';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
@@ -7,6 +10,7 @@ import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
 import { FargateCompute } from '@marimo-hub/compute-fargate';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import type { KubernetesPodTemplate } from '@marimo-hub/compute-kubernetes';
 import {
 	makeCompute,
 	resolveLifetimeBackstop,
@@ -31,6 +35,7 @@ const configOf = (provider: unknown) =>
 	(
 		provider as {
 			config: {
+				podTemplate?: KubernetesPodTemplate;
 				image?: string;
 				environment?: string;
 				template?: string;
@@ -65,6 +70,74 @@ const modalEnv = {
 	MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: 'tsecret',
 	MARIMOHUB_COMPUTE_IMAGE: 'img',
 };
+
+describe('Kubernetes pod template configuration', () => {
+	const key = 'MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE';
+	const directories: string[] = [];
+	function templateFile(source: string): string {
+		const dir = mkdtempSync(join(tmpdir(), 'config-pod-template-'));
+		directories.push(dir);
+		const path = join(dir, 'pod.yaml');
+		writeFileSync(path, source);
+		return path;
+	}
+	afterEach(() => {
+		for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it('loads a template at startup without contacting Kubernetes', () => {
+		const path = templateFile(
+			'spec:\n  serviceAccountName: fabric\n  automountServiceAccountToken: false\n',
+		);
+		const provider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes', [key]: path });
+		expect(provider).toBeInstanceOf(KubernetesCompute);
+		expect(configOf(provider).podTemplate).toEqual({
+			spec: { serviceAccountName: 'fabric', automountServiceAccountToken: false },
+		});
+		writeFileSync(path, 'invalid');
+		expect(configOf(provider).podTemplate?.spec?.serviceAccountName).toBe('fabric');
+	});
+
+	it.each([undefined, '', '   '])(
+		'preserves existing configuration with no template: %j',
+		(value) => {
+			expect(
+				configOf(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes', [key]: value }))
+					.podTemplate,
+			).toBeUndefined();
+		},
+	);
+
+	it.each([
+		'spec: [',
+		'null',
+		'{"kind":"Deployment"}',
+		'spec:\n  containers:\n    - name: kernel',
+		'spec:\n  containers:\n    - name: marimo\n      image: image:v1',
+	])('reports invalid templates as startup ConfigErrors: %s', (source) => {
+		const error = getConfigError(() =>
+			makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes', [key]: templateFile(source) }),
+		);
+		expect(error.opts.variable).toBe(key);
+		expect(error.opts.docs).toBe('docs/setup/compute/kubernetes.md');
+	});
+
+	it('reports a missing file as a ConfigError', () => {
+		const path = templateFile('{}');
+		rmSync(path);
+		const error = getConfigError(() =>
+			makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes', [key]: path }),
+		);
+		expect(error.opts.variable).toBe(key);
+		expect(error.message).toContain('Cannot read pod template file');
+	});
+
+	it('does not read Kubernetes templates for other backends', () => {
+		expect(
+			makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'none', [key]: '/missing/pod.yaml' }),
+		).toBeDefined();
+	});
+});
 
 describe('makeCompute backend selection', () => {
 	it('requires an explicit backend (no default)', () => {
