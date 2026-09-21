@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAwsSigV4Fetch } from './sigv4';
+import { awsDefaultCredentialProvider, createAwsSigV4Fetch } from './sigv4';
 
 const credentials = {
 	accessKeyId: 'AKIDEXAMPLE',
@@ -77,6 +77,12 @@ describe('createAwsSigV4Fetch', () => {
 		const { signedFetch, lastInit } = signed();
 		await signedFetch(`${BASE}/openai/v1/models`, { redirect: 'follow' });
 		expect(lastInit()?.redirect).toBe('error');
+	});
+
+	it('exposes the keyless default credential chain as a reusable provider', () => {
+		// A provider function (re-invoked by SDK clients to refresh), not resolved
+		// static credentials — the same IRSA chain the signer uses.
+		expect(awsDefaultCredentialProvider()).toBeTypeOf('function');
 	});
 
 	it('passes the caller abort signal through to the underlying fetch', async () => {
