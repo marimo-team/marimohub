@@ -71,9 +71,11 @@ describe('notebook filters', () => {
 		await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'archived');
 		await user.click(screen.getByRole('button', { name: 'Apply' }));
 
-		expect(await screen.findByText('Archived forecast')).toBeInTheDocument();
-		expect(screen.queryByText('Current forecast')).not.toBeInTheDocument();
-		expect(screen.queryByText('Archived campaign')).not.toBeInTheDocument();
+		await waitFor(() => {
+			expect(screen.getByText('Archived forecast')).toBeInTheDocument();
+			expect(screen.queryByText('Current forecast')).not.toBeInTheDocument();
+			expect(screen.queryByText('Archived campaign')).not.toBeInTheDocument();
+		});
 		const request = [...calls]
 			.reverse()
 			.find((call) => call.method === 'GET' && call.url.includes(`/projects/${PID}/notebooks?`));
@@ -100,8 +102,10 @@ describe('notebook filters', () => {
 		await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'draft');
 		await user.click(screen.getByRole('button', { name: 'Apply' }));
 
-		expect(await screen.findByText('Import retry')).toBeInTheDocument();
-		expect(screen.queryByText('Forecast')).not.toBeInTheDocument();
+		await waitFor(() => {
+			expect(screen.getByText('Import retry')).toBeInTheDocument();
+			expect(screen.queryByText('Forecast')).not.toBeInTheDocument();
+		});
 		const request = [...calls]
 			.reverse()
 			.find((call) => call.method === 'GET' && call.url.includes(`/projects/${PID}/notebooks?`));
