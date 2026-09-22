@@ -111,6 +111,136 @@ describe('JobScheduler', () => {
 		await s.drain();
 	};
 
+	it('reads source metadata once and does not load the readme when firing', async () => {
+		await createJob();
+		const get = vi.spyOn(env.bucket, 'get');
+		const s = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+
+		expect((await s.tick()).fired).toBe(1);
+
+		const nb = paths.project(pid).notebook(nid);
+		const reads = get.mock.calls.map(([key]) => key);
+		expect(reads.filter((key) => key === nb.source)).toHaveLength(1);
+		expect(reads).not.toContain(nb.readme);
+		expect(reads).not.toContain(nb.code);
+	});
+
+	it.each(['notebook', 'project'] as const)(
+		'cancels a fire already in progress when its %s is deleted',
+		async (parent) => {
+			const job = await createJob();
+			const blocked = Promise.withResolvers<void>();
+			const claiming = Promise.withResolvers<void>();
+			const claimOccurrence = env.jobRuns.claimOccurrence.bind(env.jobRuns);
+			vi.spyOn(env.jobRuns, 'claimOccurrence').mockImplementationOnce(async (...args) => {
+				claiming.resolve();
+				await blocked.promise;
+				return claimOccurrence(...args);
+			});
+			const s = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			const ticking = s.tick();
+			await claiming.promise;
+			if (parent === 'notebook') await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+			else await env.projects.deleteProject(pid, ACTOR);
+
+			const mutation = vi.spyOn(env.jobRuns, 'withJobMutation');
+			let cancellationComplete = false;
+			const cancelling = (
+				parent === 'notebook'
+					? env.jobRuns.cancelRunsOfNotebook(pid, nid, ACTOR)
+					: env.jobRuns.cancelRunsOfProject(pid, ACTOR)
+			).then((result) => {
+				cancellationComplete = true;
+				return result;
+			});
+			try {
+				await vi.waitFor(() => expect(mutation).toHaveBeenCalled());
+				expect(cancellationComplete).toBe(false);
+			} finally {
+				blocked.resolve();
+				await ticking;
+				await cancelling;
+			}
+
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([{ status: 'cancelled' }]);
+			now += MINUTE;
+			expect((await s.tick()).fired).toBe(0);
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+		},
+	);
+
+	it.each(['notebook', 'project'] as const)(
+		'cancels a late enqueue after %s cancellation exhausts its wait',
+		async (parent) => {
+			const job = await createJob();
+			const runner = fakeRunner(env);
+			const s = scheduler(runner);
+			const blocked = Promise.withResolvers<void>();
+			const enqueuing = Promise.withResolvers<void>();
+			const enqueue = env.jobRuns.enqueue.bind(env.jobRuns);
+			vi.spyOn(env.jobRuns, 'enqueue').mockImplementationOnce(async (...args) => {
+				enqueuing.resolve();
+				await blocked.promise;
+				return enqueue(...args);
+			});
+			vi.useFakeTimers();
+			const ticking = s.tick();
+			try {
+				await enqueuing.promise;
+				if (parent === 'notebook') await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+				else await env.projects.deleteProject(pid, ACTOR);
+				const cancellation = (
+					parent === 'notebook'
+						? env.jobRuns.cancelRunsOfNotebook(pid, nid, ACTOR)
+						: env.jobRuns.cancelRunsOfProject(pid, ACTOR)
+				).catch((error: unknown) => error);
+				await vi.advanceTimersByTimeAsync(5000);
+				expect(await cancellation).toMatchObject({ message: 'Job is busy; retry the operation' });
+				expect(await env.jobRuns.listActive()).toEqual([]);
+			} finally {
+				blocked.resolve();
+				await ticking;
+				vi.useRealTimers();
+			}
+
+			expect(runner.executed).toEqual([]);
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([{ status: 'cancelled' }]);
+		},
+	);
+
+	it.each(['metadata read', 'cancellation write'] as const)(
+		'keeps deleted-notebook runs undispatched while a %s fails',
+		async (failure) => {
+			const job = await createJob({ schedule: undefined });
+			await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const failingOperation =
+				failure === 'metadata read'
+					? vi.spyOn(env.notebooks, 'getNotebookMeta').mockRejectedValue(new Error('bucket down'))
+					: vi.spyOn(env.jobRuns, 'cancel').mockRejectedValue(new Error('bucket down'));
+			const runner = fakeRunner(env);
+			const s = scheduler(runner);
+			try {
+				const result = await s.tick();
+				expect(result.dispatched).toBe(0);
+				expect(result.errors).toBeGreaterThan(0);
+				expect(runner.executed).toEqual([]);
+				expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([{ status: 'queued' }]);
+				expect(await env.jobRuns.listActive()).toHaveLength(1);
+				failingOperation.mockRestore();
+				expect(await s.tick()).toMatchObject({ dispatched: 0 });
+				expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([
+					{ status: 'cancelled' },
+				]);
+				expect(runner.executed).toEqual([]);
+			} finally {
+				failingOperation.mockRestore();
+				error.mockRestore();
+			}
+		},
+	);
+
 	it('fires a due occurrence exactly once across ticks and dispatches it', async () => {
 		const job = await createJob();
 		const runner = fakeRunner(env);

@@ -23,6 +23,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import { NotFoundError } from '@marimo-hub/core/errors';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { SandboxId } from '@marimo-hub/core/ids';
 import type {
 	ActiveSandbox,
@@ -420,7 +421,9 @@ class ModalSandboxInstance implements SandboxInstance {
 				void execInSandbox(`rm -f ${shellQuote(pidPath)}`).catch(() => {});
 			});
 		const completed = Promise.all([stdoutDone, stderrDone, exited]).then(() => {});
-		void completed.catch(() => {});
+		void completed.catch((error) => {
+			logOperationalError('sandbox_process_failed', { operation: 'modal.start_process' }, error);
+		});
 
 		const sandboxProcess: SandboxProcess = {
 			id: options?.processId ?? `modal-process-${++processSequence}`,

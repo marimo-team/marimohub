@@ -1012,5 +1012,6 @@ describe('delete mutations and the apps gallery cache', () => {
 			await result.current.mutateAsync(id);
 		});
 		expect(invalidatedKeys(spy)).toContainEqual(['apps']);
+		if (id === PID) expect(invalidatedKeys(spy)).toContainEqual(['user', 'me']);
 	});
 });

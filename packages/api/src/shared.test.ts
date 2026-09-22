@@ -500,8 +500,8 @@ describe('retireLiveApps lifecycle filter', () => {
 		expect((await deps.services.sessions.getSession(pid, running.session_id)).status).toBe(
 			'terminated',
 		);
-		expect((await deps.services.sessions.getSession(pid, starting.session_id)).status).not.toBe(
-			'starting',
+		expect((await deps.services.sessions.getSession(pid, starting.session_id)).status).toBe(
+			'terminated',
 		);
 	});
 });

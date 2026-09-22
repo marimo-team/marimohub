@@ -91,6 +91,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import type { Seconds } from '@marimo-hub/core/duration';
 import type { Timings } from '@marimo-hub/core/timing';
 import { logEvent } from '@marimo-hub/core/logs';
@@ -144,6 +145,31 @@ const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
 const SLOW_BOOT_MS = 10_000;
 const SLOW_BOOT_HINT =
 	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
+
+const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
+
+async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			proc.cancel(),
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(
+					() => reject(new DOMException('Process cancellation timed out', 'TimeoutError')),
+					PROCESS_CANCEL_TIMEOUT_MS,
+				);
+			}),
+		]);
+	} catch (error) {
+		logOperationalError(
+			'sandbox_process_cancel_failed',
+			{ operation: 'coreweave.cancel_launch_process' },
+			error,
+		);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
 
 /**
  * Process states a kernel never comes back from. `failed` is a stream fault (a
@@ -774,7 +800,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			terminal = await timedOutcome;
 		} catch (error) {
 			settled = true;
-			void proc.cancel().catch(() => {});
+			await cancelLaunchProcess(proc);
 			const parsed = logs();
 			if (error instanceof DOMException && error.name === 'TimeoutError') {
 				return launchTimeoutResult({

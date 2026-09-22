@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -705,6 +705,7 @@ describe('ModalCompute', () => {
 	});
 
 	it('does not leak an unhandled rejection when the SDK wait() rejects', async () => {
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const unhandled: unknown[] = [];
 		const onUnhandled = (reason: unknown) => {
 			unhandled.push(reason);
@@ -725,7 +726,9 @@ describe('ModalCompute', () => {
 			// unhandled-rejection queue.
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			await new Promise((resolve) => setImmediate(resolve));
+			expect(log).toHaveBeenCalledWith(expect.stringContaining('"event":"sandbox_process_failed"'));
 		} finally {
+			log.mockRestore();
 			process.off('unhandledRejection', onUnhandled);
 		}
 		expect(unhandled).toEqual([]);

@@ -122,9 +122,40 @@ describe('OAuthClientStore', () => {
 		expect(await store.get(client.client_id)).toBeNull();
 	});
 
-	it('bounds the number of redirect URIs a single registration may store', async () => {
-		const many = Array.from({ length: 20_000 }, (_, index) => `https://ex.ample/cb/${index}`);
+	it.each([
+		{ redirect_uris: Array.from({ length: 101 }, () => 'https://client.example/callback') },
+		{ redirect_uris: [`https://client.example/${'x'.repeat(2048)}`] },
+		{ scope: 'x'.repeat(4097) },
+		{ grant_types: Array.from({ length: 11 }, () => 'authorization_code') },
+		{ grant_types: ['x'.repeat(101)] },
+		{ response_types: Array.from({ length: 11 }, () => 'code') },
+		{ response_types: ['x'.repeat(101)] },
+	])('bounds new metadata while retaining existing registrations: %#', async (metadata) => {
+		await expect(
+			store.register({ redirect_uris: ['https://client.example/callback'], ...metadata }),
+		).rejects.toThrow('OAuth client metadata is invalid');
+		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
 
-		await expect(store.register({ redirect_uris: many })).rejects.toThrow();
+		const client = await store.register({ redirect_uris: ['https://client.example/callback'] });
+		const legacy = { ...client, ...metadata };
+		await bucket.put(paths.oauthClient(client.client_id), JSON.stringify(legacy));
+		expect(await store.get(client.client_id)).toEqual(legacy);
+	});
+
+	it('rejects oversized URI lists before parsing their entries or accessing storage', async () => {
+		const redirect_uris = Array.from({ length: 20_000 }, () => 'https://client.example/callback');
+		Object.defineProperty(redirect_uris, 0, {
+			get: () => {
+				throw new Error('must not inspect an oversized list');
+			},
+		});
+		const put = vi.spyOn(bucket, 'put');
+		const list = vi.spyOn(bucket, 'list');
+
+		await expect(store.register({ redirect_uris })).rejects.toThrow(
+			'OAuth client metadata is invalid',
+		);
+		expect(put).not.toHaveBeenCalled();
+		expect(list).not.toHaveBeenCalled();
 	});
 });

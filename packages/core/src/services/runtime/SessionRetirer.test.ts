@@ -422,6 +422,60 @@ describe('SessionRetirer', () => {
 		await retirement;
 	});
 
+	it('captures sessions without secondary surfaces without rereading their stop fences', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockResolvedValue(false);
+		const getSession = vi
+			.spyOn(sessions, 'getSession')
+			.mockResolvedValueOnce(session)
+			.mockRejectedValueOnce(new Error('Storage unavailable'));
+
+		await retirer(fakeComputeFrom(instance)).retire(session);
+
+		expect(getSession).toHaveBeenCalledTimes(1);
+		expect(capture).toHaveBeenCalledOnce();
+		expect(calls.destroy).toBe(1);
+	});
+
+	it.each(['initial read', 'fence write', 'fenced read'] as const)(
+		'retains unsaved state for retry when the secondary surface %s fails',
+		async (failure) => {
+			const { instance, calls } = makeFakeSandbox();
+			const session = await persistentSession({
+				surfaces: {
+					vscode: {
+						status: 'starting',
+						attempt_id: 'start-attempt',
+						attempt_started_at: new Date().toISOString(),
+					},
+				},
+			});
+			await sessions.beginTerminating(projectId, session.session_id);
+			const error = new Error('Storage unavailable');
+			if (failure === 'fence write') {
+				vi.spyOn(sessions, 'beginSurfaceStop').mockRejectedValueOnce(error);
+			} else {
+				const read = vi.spyOn(sessions, 'getSession');
+				if (failure === 'fenced read') read.mockResolvedValueOnce(session);
+				read.mockRejectedValueOnce(error);
+			}
+			const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+
+			await expect(retirer(fakeComputeFrom(instance)).retire(session)).rejects.toThrow(error);
+
+			expect(capture).not.toHaveBeenCalled();
+			expect(calls.destroy).toBe(0);
+			expect(await sessions.getSession(projectId, session.session_id)).toMatchObject({
+				status: 'terminating',
+			});
+			expect(await sessions.ownsEditorClaim(session)).toBe(true);
+		},
+	);
+
 	it('does not capture when a starting surface cannot be cancelled', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession({

@@ -270,6 +270,15 @@ describe('Cloudflare Worker sandbox-host isolation guard', () => {
 		SANDBOX: {},
 	};
 
+	it('allows a sandbox hostname on a separate registrable domain', () => {
+		expect(() =>
+			buildDeps(new Request('https://hub.example.com/'), {
+				...baseEnv,
+				SANDBOX_HOSTNAME: 'sandboxes.example.net',
+			} as unknown as Env),
+		).not.toThrow();
+	});
+
 	it('rejects a sandbox hostname that differs from the app host only in case', () => {
 		expect(() =>
 			buildDeps(new Request('https://hub.example.com/'), {

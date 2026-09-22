@@ -63,8 +63,10 @@ export const customEnv = defineIntegration({
 	},
 
 	validate(config) {
-		if (Object.values(config.vars).some(hasControlCharacter)) {
-			throw new ValidationError('Environment value contains a control character.');
+		for (const [name, value] of Object.entries(config.vars)) {
+			if (hasControlCharacter(value)) {
+				throw new ValidationError(`Environment variable "${name}" contains a control character.`);
+			}
 		}
 		const seen = new Set<string>();
 		const names = [...Object.keys(config.vars), ...config.secrets.map((s) => s.name)];

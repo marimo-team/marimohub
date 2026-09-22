@@ -1,4 +1,3 @@
-import { shellQuote } from './shell';
 import { describe, expect, it } from 'vitest';
 import { buildMarimoLaunch, MARIMO_LAUNCH_STRATEGIES } from './marimoLaunch';
 import type { MarimoLaunchParams } from './marimoLaunch';
@@ -241,13 +240,11 @@ describe('buildMarimoLaunch argument quoting', () => {
 			...BASE,
 			assetUrl: 'https://cdn.example.com/$(id > /tmp/pwned)',
 		});
-		expect(start).toContain(
-			`--asset-url=${shellQuote('https://cdn.example.com/$(id > /tmp/pwned)')}`,
-		);
+		expect(start).toContain("--asset-url='https://cdn.example.com/$(id > /tmp/pwned)'");
 	});
 
 	it('escapes a double quote in --base-url', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, baseUrl: '/proxy/a"; touch /tmp/pwned; #' });
-		expect(start).toContain(`--base-url=${shellQuote('/proxy/a"; touch /tmp/pwned; #')}`);
+		expect(start).toContain(`--base-url='/proxy/a"; touch /tmp/pwned; #'`);
 	});
 });

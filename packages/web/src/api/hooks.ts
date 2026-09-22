@@ -462,7 +462,7 @@ export function useDeleteProject() {
 					params: { path: { pid: projectId } },
 				}),
 			),
-		() => [projectKeys.list(), ['apps'], ['me']],
+		() => [projectKeys.list(), ['apps'], userKeys.me()],
 	);
 }
 

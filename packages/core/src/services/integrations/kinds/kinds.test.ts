@@ -2181,6 +2181,15 @@ describe('kind renders (golden)', () => {
 		).toThrow(/Duplicate JSON secret bundle name/);
 	});
 
+	it('custom_env: names invalid plain variables without exposing their values', () => {
+		const config = customEnv.configSchema.parse({
+			vars: { VALID_NAME: 'valid', INVALID_VALUE: 'private\nvalue' },
+		});
+		expect(() => customEnv.validate?.(config)).toThrow(
+			'Environment variable "INVALID_VALUE" contains a control character.',
+		);
+	});
+
 	it('custom_env: validates names and collisions after secret JSON bundles resolve', () => {
 		const validateAndRender = (raw: unknown) => {
 			const config = customEnv.configSchema.parse(raw);

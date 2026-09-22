@@ -716,6 +716,9 @@ describe('ReconciliationService', () => {
 			const bad = makeFakeSandbox({
 				execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
 			}).instance;
+			bad.destroy = async () => {
+				destroyed.push(badId);
+			};
 			const instanceFor = (id: string): SandboxInstance => {
 				if (id === badId) {
 					if (failure === 'sandbox handle') throw new Error('Sandbox unavailable');
@@ -739,7 +742,7 @@ describe('ReconciliationService', () => {
 
 			// Visit the failing record before the healthy one.
 			const [first, second] = ['sess-00000000000000aa', 'sess-00000000000000bb'] as const;
-			await putSession({
+			const failing = await putSession({
 				status: 'expired',
 				started_at: iso(-60 * 60 * 1000),
 				last_heartbeat: iso(-30 * 60 * 1000),
@@ -765,7 +768,15 @@ describe('ReconciliationService', () => {
 			const reconciler = new ReconciliationService(sessions, notebooks, compute, bucket, 'source');
 
 			await expect(reconciler.reconcile()).resolves.toMatchObject({ orphansReaped: 1 });
-			expect(destroyed).toEqual(expect.arrayContaining([goodId, orphanId]));
+			expect(destroyed).toEqual(
+				failure === 'surface stop' ? [badId, goodId, orphanId] : [goodId, orphanId],
+			);
+			const failedSession = await sessions.getSession(projectId, failing.session_id);
+			if (failure === 'surface stop') {
+				expect(failedSession.sandbox_reclaimed_at).toEqual(expect.any(String));
+			} else {
+				expect(failedSession.sandbox_reclaimed_at).toBeUndefined();
+			}
 			expect(
 				(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,
 			).toBeDefined();

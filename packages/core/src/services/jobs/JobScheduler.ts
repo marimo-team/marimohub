@@ -262,6 +262,18 @@ export class JobScheduler {
 				continue;
 			}
 			if (run.status === 'queued') {
+				try {
+					if (await this.cancelRunIfDeleted(run)) continue;
+				} catch (err) {
+					ownershipComplete = false;
+					result.errors++;
+					logOperationalError(
+						'job_admission_failed',
+						{ operation: 'job.scheduler.admit', run_id: run.run_id },
+						err,
+					);
+					continue;
+				}
 				if (this.executing.has(run.run_id)) {
 					running.push(run);
 					continue;
@@ -353,7 +365,7 @@ export class JobScheduler {
 				await this.finalizeLocked(skipped);
 				return claim.claimed ? 'skipped' : 'repaired';
 			}
-			await this.enqueueScheduled(job, claimedRunId, scheduledFor);
+			if (!(await this.enqueueScheduled(job, claimedRunId, scheduledFor))) return 'none';
 			return claim.claimed ? 'fired' : 'repaired';
 		});
 	}
@@ -365,8 +377,8 @@ export class JobScheduler {
 	): Promise<JobDefinition | null> {
 		try {
 			const project = await this.deps.projects.getProject(projectId);
-			const notebook = await this.deps.notebooks.getNotebook(projectId, notebookId);
-			if (project.status === 'deleted' || notebook.meta.status === 'deleted') return null;
+			const notebook = await this.deps.notebooks.getNotebookMeta(projectId, notebookId);
+			if (project.status === 'deleted' || notebook.status === 'deleted') return null;
 			return await this.deps.jobs.getJob(projectId, notebookId, jobId);
 		} catch (err) {
 			// The index outlived the definition (delete crashed before the index
@@ -377,7 +389,7 @@ export class JobScheduler {
 	}
 
 	private async enqueueScheduled(job: JobDefinition, runId: RunId, scheduledFor: string) {
-		await this.deps.runs.enqueue({
+		const run = await this.deps.runs.enqueue({
 			job,
 			runId,
 			trigger: 'schedule',
@@ -386,12 +398,20 @@ export class JobScheduler {
 			sourceVersionId: await this.sourceVersionId(job),
 			timeoutSeconds: this.timeoutSeconds(job),
 		});
+		if (await this.cancelRunIfDeleted(run)) return false;
 		this.metrics.increment('jobs.fired');
+		return true;
+	}
+
+	private async cancelRunIfDeleted(run: JobRun): Promise<boolean> {
+		if (await this.loadJob(run.project_id, run.notebook_id, run.job_id)) return false;
+		await this.deps.runs.cancel(run, SYSTEM_ACTOR);
+		return true;
 	}
 
 	private async sourceVersionId(job: JobDefinition): Promise<VersionId | undefined> {
 		try {
-			const { source } = await this.deps.notebooks.getNotebook(job.project_id, job.notebook_id);
+			const source = await this.deps.notebooks.getNotebookSource(job.project_id, job.notebook_id);
 			if (source.current_version_id) return source.current_version_id;
 		} catch {
 			// Provenance is best-effort; the run still executes against the live copy.
@@ -512,7 +532,7 @@ export class JobScheduler {
 			if (await this.deps.jobs.isDeleting(job)) return;
 			const current = await this.loadJob(job.project_id, job.notebook_id, job.id);
 			if (!current) return;
-			await this.deps.runs.enqueue({
+			const retryRun = await this.deps.runs.enqueue({
 				job: current,
 				runId: continuationRunId,
 				trigger: finished.trigger,
@@ -525,6 +545,7 @@ export class JobScheduler {
 				retryOf: finished.run_id,
 				eligibleAt: new Date(this.now() + retry.backoff_seconds * 1000).toISOString(),
 			});
+			if (await this.cancelRunIfDeleted(retryRun)) return;
 			this.metrics.increment('jobs.runs.retried');
 			return;
 		}

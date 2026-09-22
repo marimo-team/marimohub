@@ -69,6 +69,6 @@ describe('formatRelative unit boundaries', () => {
 
 	it('uses a calendar date when the rounded age reaches 30 days', () => {
 		const label = formatRelative(ago(29.5 * 86_400), NOW);
-		expect(label).not.toBe('30d ago');
+		expect(label).toBe(new Date(NOW - 29.5 * 86_400 * 1000).toLocaleDateString());
 	});
 });

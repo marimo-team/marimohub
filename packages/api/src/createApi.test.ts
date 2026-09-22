@@ -463,9 +463,9 @@ describe('error envelope on unrouted /api/v1 requests', () => {
 
 		expect(res.status).toBe(404);
 		expect(res.headers.get('content-type')).toContain('application/json');
-		expect(await res.json()).toMatchObject({
+		expect(await res.json()).toEqual({
 			success: false,
-			error: { code: expect.any(String), message: expect.any(String) },
+			error: { code: 'NOT_FOUND', message: 'Route not found' },
 		});
 	});
 });

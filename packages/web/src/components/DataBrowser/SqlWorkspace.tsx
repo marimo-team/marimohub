@@ -890,8 +890,19 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 }
 
 function compareQueryValues(left: unknown, right: unknown): number {
-	if (typeof left === 'number' && typeof right === 'number') return left - right;
+	if (typeof left === 'number' || typeof right === 'number') {
+		const a = parseNumericCell(left);
+		const b = parseNumericCell(right);
+		if (a !== undefined && b !== undefined) return a - b;
+	}
 	return renderCell(left).localeCompare(renderCell(right), undefined, { numeric: true });
+}
+
+function parseNumericCell(value: unknown): number | undefined {
+	if (typeof value === 'number') return value;
+	if (typeof value !== 'string' || !value.trim()) return undefined;
+	const number = Number(value);
+	return Number.isFinite(number) ? number : undefined;
 }
 
 function renderCell(value: unknown): string {

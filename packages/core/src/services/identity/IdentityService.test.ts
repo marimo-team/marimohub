@@ -127,6 +127,20 @@ describe('IdentityService', () => {
 			expect(result.map((u) => u.id).sort()).toEqual([uid('a'), uid('b')]);
 		});
 
+		it('omits corrupt records without failing the batch', async () => {
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				await bucket.put(paths.identity(uid('b')), '{not json');
+
+				await expect(identities.getMany([uid('a'), uid('b')])).resolves.toEqual([
+					expect.objectContaining({ id: uid('a') }),
+				]);
+				expect(log).toHaveBeenCalled();
+			} finally {
+				log.mockRestore();
+			}
+		});
+
 		it('returns an empty list when nothing resolves', async () => {
 			expect(await identities.getMany([uid('missing')])).toEqual([]);
 		});
@@ -609,14 +623,5 @@ describe('IdentityService', () => {
 			expect(await identities.getUniqueByEmail('shared@x.io')).toBeNull();
 			expect(list).toHaveBeenCalledOnce();
 		});
-	});
-
-	it('omits a corrupt record from getMany instead of failing the whole batch', async () => {
-		const A = uid('user-a');
-		const B = uid('user-b');
-		await identities.upsert({ id: A, email: 'a@example.com', name: 'A' });
-		await bucket.put(paths.identity(B), '{not json');
-
-		await expect(identities.getMany([A, B])).resolves.toEqual([expect.objectContaining({ id: A })]);
 	});
 });

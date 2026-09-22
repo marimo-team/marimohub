@@ -810,7 +810,9 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 
 		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
 
-		expect(await bucket.get(nb.workspaceFile('data/keep.csv'))).not.toBeNull();
+		const stored = await bucket.get(nb.workspaceFile('data/keep.csv'));
+		expect(decode(await stored!.bytes())).toBe('last good copy');
+		expect(warn).toHaveBeenCalledWith('captureWorkspace: could not read data/keep.csv; skipping');
 	});
 
 	it('does not mirror-delete a still-present file skipped by the per-file cap', async () => {
@@ -824,6 +826,10 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 
 		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
 
-		expect(await bucket.get(nb.workspaceFile('data/big.bin'))).not.toBeNull();
+		const stored = await bucket.get(nb.workspaceFile('data/big.bin'));
+		expect(decode(await stored!.bytes())).toBe('older smaller copy');
+		expect(warn).toHaveBeenCalledWith(
+			`captureWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping data/big.bin (${MAX_WORKSPACE_FILE_BYTES + 1} bytes)`,
+		);
 	});
 });

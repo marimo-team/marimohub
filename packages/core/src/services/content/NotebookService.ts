@@ -256,6 +256,20 @@ export class NotebookService {
 		return { meta, readme, source };
 	}
 
+	async getNotebookMeta(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookMeta> {
+		const key = paths.project(projectId).notebook(notebookId).meta;
+		const obj = await this.bucket.get(key);
+		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		return readStored(NotebookMetaSchema, obj, key);
+	}
+
+	async getNotebookSource(projectId: ProjectId, notebookId: NotebookId): Promise<Source> {
+		const key = paths.project(projectId).notebook(notebookId).source;
+		const obj = await this.bucket.get(key);
+		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		return readStored(SourceSchema, obj, key);
+	}
+
 	/**
 	 * The notebook's security-label override from `meta` alone — one object read
 	 * for the hot session/proxy gates, which must apply overrides without paying
@@ -267,12 +281,7 @@ export class NotebookService {
 		notebookId: NotebookId,
 		options: { includeDeleted?: boolean } = {},
 	): Promise<ResourceSecurityLabels | null> {
-		const nb = paths.project(projectId).notebook(notebookId);
-		const metaObj = await this.bucket.get(nb.meta);
-		if (!metaObj) {
-			throw new NotFoundError(`Notebook ${notebookId} not found`);
-		}
-		const meta = await readStored(NotebookMetaSchema, metaObj, nb.meta);
+		const meta = await this.getNotebookMeta(projectId, notebookId);
 		if (meta.status === 'deleted' && !options.includeDeleted) {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
@@ -692,8 +701,12 @@ export class NotebookService {
 			await this.bucket.put(nb.readme, input.readme);
 		}
 
-		if ((input.code !== undefined || input.deps !== undefined) && source.type === 'local') {
-			const code = input.code ?? (await this.getNotebookContent(projectId, notebookId));
+		const depsChanged =
+			input.code === undefined &&
+			input.deps !== undefined &&
+			input.deps !== (await this.resolveDeps(nb.deps, undefined));
+		if ((input.code !== undefined || depsChanged) && source.type === 'local') {
+			const code = input.code ?? (await this.getContentForSource(projectId, notebookId, source));
 			const versionId = createVersionId();
 
 			// Read once, before the Promise.all, so the read does not race the write

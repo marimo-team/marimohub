@@ -5,8 +5,8 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis, sleep } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
-import { createRunId, RunId } from '../../ids';
-import type { JobId, NotebookId, ProjectId, UserId, VersionId } from '../../ids';
+import { createRunId, JobId, NotebookId, RunId } from '../../ids';
+import type { ProjectId, UserId, VersionId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import {
@@ -582,19 +582,41 @@ export class JobRunService {
 	}
 
 	/** Cancel every non-terminal run of a notebook (a soft-delete must not leave it computing). */
-	cancelRunsOfNotebook(
+	async cancelRunsOfNotebook(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		by: UserId,
 	): Promise<CancelledRuns> {
+		await this.waitForJobMutations(projectId, notebookId);
 		return this.cancelRunsWhere(
 			(marker) => marker.project_id === projectId && marker.notebook_id === notebookId,
 			by,
 		);
 	}
 
-	cancelRunsOfProject(projectId: ProjectId, by: UserId): Promise<CancelledRuns> {
+	async cancelRunsOfProject(projectId: ProjectId, by: UserId): Promise<CancelledRuns> {
+		await this.waitForJobMutations(projectId);
 		return this.cancelRunsWhere((marker) => marker.project_id === projectId, by);
+	}
+
+	private async waitForJobMutations(projectId: ProjectId, notebookId?: NotebookId): Promise<void> {
+		// Deletion marks the parent first. Earlier fires hold these claims before
+		// checking its status; later fires see the deletion and cannot enqueue.
+		const projectPrefix = paths.jobOperationClaimsForProject(projectId);
+		const prefix = notebookId
+			? paths.jobOperationClaimsForNotebook(projectId, notebookId)
+			: projectPrefix;
+		for (const key of await listAllKeys(this.bucket, prefix)) {
+			const [notebook, job] = key.slice(projectPrefix.length).split('/');
+			await this.withJobMutation(
+				{
+					project_id: projectId,
+					notebook_id: NotebookId.parse(notebook),
+					id: JobId.parse(job.replace(/\.json$/, '')),
+				},
+				async () => {},
+			);
+		}
 	}
 
 	private async cancelRunsWhere(
@@ -670,15 +692,22 @@ export class JobRunService {
 		for (const { marker, run } of await this.listActive()) {
 			const stale = !run && now - Date.parse(marker.created_at) > DANGLING_MARKER_GRACE_MS;
 			if (!stale) continue;
-			// An unreadable record is not a missing record; its marker protects
-			// the sandbox from being mistaken for an orphan by reconciliation.
-			if (
-				await this.runExists(marker.project_id, marker.notebook_id, marker.job_id, marker.run_id)
-			) {
-				continue;
+			try {
+				// An unreadable record still needs its sandbox ownership marker.
+				if (
+					await this.runExists(marker.project_id, marker.notebook_id, marker.job_id, marker.run_id)
+				) {
+					continue;
+				}
+				await this.pruneDanglingMarker(marker);
+				pruned++;
+			} catch (err) {
+				logOperationalError(
+					'job_run_marker_prune_failed',
+					{ operation: 'job.runs.prune_marker', run_id: marker.run_id },
+					err,
+				);
 			}
-			await this.pruneDanglingMarker(marker);
-			pruned++;
 		}
 		return pruned;
 	}

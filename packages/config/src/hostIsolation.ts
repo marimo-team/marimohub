@@ -6,12 +6,8 @@ export interface SandboxHostIsolation {
 	isolated: boolean;
 	sandboxHost?: string;
 	appHost?: string;
-	/**
-	 * Present only when `isolated` is false, so the caller can word the error:
-	 * `shared-origin` (hosts overlap) vs `unverifiable-redirect` (the redirect is
-	 * set but yields no usable app host).
-	 */
-	reason?: 'shared-origin' | 'unverifiable-redirect';
+	/** Present only when isolation fails, so diagnostics distinguish overlap from invalid input. */
+	reason?: 'shared-origin' | 'unverifiable-redirect' | 'invalid-sandbox-host';
 }
 
 /**
@@ -43,12 +39,35 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	// potentially same-origin untrusted kernel.
 	if (!appHost) return { isolated: false, sandboxHost, reason: 'unverifiable-redirect' };
 
-	let sharesDomain = true;
 	try {
-		sharesDomain = hostsShareCookieDomain(sandboxHost, appHost);
-	} catch {}
-	if (sharesDomain) {
-		return { isolated: false, sandboxHost, appHost, reason: 'shared-origin' };
+		if (hostsShareCookieDomain(sandboxHost, appHost)) {
+			return { isolated: false, sandboxHost, appHost, reason: 'shared-origin' };
+		}
+	} catch {
+		return { isolated: false, sandboxHost, appHost, reason: 'invalid-sandbox-host' };
 	}
 	return { isolated: true, sandboxHost, appHost };
+}
+
+export function sandboxHostIsolationMessage({
+	sandboxHost,
+	appHost,
+	reason,
+}: SandboxHostIsolation): string {
+	switch (reason) {
+		case 'unverifiable-redirect':
+			return (
+				'MARIMOHUB_AUTH_OIDC_REDIRECT_URI does not yield a usable app host, so isolation of ' +
+				`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) cannot be verified. Set a valid ` +
+				'absolute http(s) redirect URI.'
+			);
+		case 'invalid-sandbox-host':
+			return `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) is not a valid hostname, so isolation cannot be verified.`;
+		case 'shared-origin':
+		case undefined:
+			return (
+				`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) shares an origin/parent domain with the ` +
+				`app host (${appHost}).`
+			);
+	}
 }

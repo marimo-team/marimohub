@@ -769,6 +769,6 @@ describe('NotebookWorkspaceService', () => {
 
 		const results = await service.search(PROJECT_ID, NOTEBOOK_ID, 'data', 'data');
 
-		expect(results.map((item) => item.path)).not.toContain('data');
+		expect(results.map((item) => item.path)).toEqual(['data/cars.csv']);
 	});
 });

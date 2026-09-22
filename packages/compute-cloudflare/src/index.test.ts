@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import { expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_NON_DIRECTORY_PATH,
@@ -515,6 +516,6 @@ describe('CloudflareSandboxInstance.readFile', () => {
 		fakeSandbox.readFile.mockRejectedValueOnce(notFound);
 		const instance = new CloudflareSandboxProvider(fakeNamespace).create(SANDBOX_ID);
 		const result = await instance.readFile('/missing');
-		expect(result.success).toBe(false);
+		expectFileResult(result, { success: false, error: { code: 'NOT_FOUND' } });
 	});
 });

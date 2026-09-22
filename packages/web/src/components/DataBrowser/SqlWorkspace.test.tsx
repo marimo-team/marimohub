@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryExecutionResults } from './SqlWorkspace';
 import type { QueryExecution } from './SqlWorkspace';
 
-function numericExecution(values: number[]): QueryExecution[] {
+function numericExecution(values: readonly (number | string)[]): QueryExecution[] {
 	return [
 		{
 			id: 0,
@@ -25,11 +25,28 @@ function renderedColumn(): string[] {
 }
 
 describe('QueryResultTable column sorting', () => {
-	it('sorts a numeric column by value, not by collated digit groups', async () => {
+	it.each([
+		{ name: 'numbers', values: [1.5, -3, 1.25, -5], expected: ['-5', '-3', '1.25', '1.5'] },
+		{
+			name: 'mixed exponent numbers and integer strings',
+			values: [1e21, '9223372036854775807'],
+			expected: ['9223372036854775807', '1e+21'],
+		},
+		{
+			name: 'mixed decimals',
+			values: ['1.25', -5, 1.5, -3],
+			expected: ['-5', '-3', '1.25', '1.5'],
+		},
+		{
+			name: 'large integer strings',
+			values: ['9223372036854775809', '9223372036854775808'],
+			expected: ['9223372036854775808', '9223372036854775809'],
+		},
+	])('sorts $name by value', async ({ values, expected }) => {
 		const user = userEvent.setup();
 		render(
 			<QueryExecutionResults
-				executions={numericExecution([1.5, -3, 1.25, -5])}
+				executions={numericExecution(values)}
 				activeIndex={0}
 				onSelect={() => {}}
 			/>,
@@ -37,6 +54,8 @@ describe('QueryResultTable column sorting', () => {
 
 		await user.click(screen.getByRole('button', { name: 'amount' }));
 
-		expect(renderedColumn()).toEqual(['-5', '-3', '1.25', '1.5']);
+		expect(renderedColumn()).toEqual(expected);
+		await user.click(screen.getByRole('button', { name: /amount/ }));
+		expect(renderedColumn()).toEqual(expected.toReversed());
 	});
 });

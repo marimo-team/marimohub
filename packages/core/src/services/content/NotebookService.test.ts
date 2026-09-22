@@ -2565,6 +2565,28 @@ describe('NotebookService', () => {
 		});
 	});
 
+	it.each(['old-deps', ''])('preserves the version for unchanged deps %j', async (deps) => {
+		const meta = await notebooks.createNotebook(
+			projectId,
+			{ title: 'NB', description: 'D', code: 'v1', deps },
+			ACTOR,
+		);
+		const originalSource = await notebooks.getNotebookSource(projectId, meta.id);
+		const list = vi.spyOn(bucket, 'list');
+
+		await notebooks.updateNotebook(projectId, meta.id, { deps, title: 'Renamed' }, ACTOR);
+
+		expect(
+			list.mock.calls.some(
+				([options]) =>
+					options?.prefix === `${paths.project(projectId).notebook(meta.id).base}/versions/`,
+			),
+		).toBe(false);
+		expect(await notebooks.getNotebookSource(projectId, meta.id)).toEqual(originalSource);
+		expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(1);
+		expect((await notebooks.getNotebookMeta(projectId, meta.id)).title).toBe('Renamed');
+	});
+
 	it('persists a deps-only update on a local notebook', async () => {
 		const meta = await notebooks.createNotebook(
 			projectId,

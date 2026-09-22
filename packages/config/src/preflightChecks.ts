@@ -20,7 +20,7 @@ import type { CheckOutcome, PreflightCheck } from '@marimo-hub/core';
 import { authBackend, oidcLoginPolicySelected } from './auth';
 import { computeBackend } from './compute';
 import type { Env } from './env';
-import { checkSandboxHostIsolation } from './hostIsolation';
+import { checkSandboxHostIsolation, sandboxHostIsolationMessage } from './hostIsolation';
 import { storageBackend } from './storage';
 
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -137,7 +137,8 @@ function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
 	if (deps.sandbox.exposure?.mode !== 'subdomain') {
 		return { status: 'skipped', message: 'proxy mode is same-origin by design' };
 	}
-	const { isolated, sandboxHost, appHost } = checkSandboxHostIsolation(env);
+	const isolation = checkSandboxHostIsolation(env);
+	const { isolated, sandboxHost } = isolation;
 	if (isolated) {
 		return {
 			status: 'ok',
@@ -149,7 +150,7 @@ function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
 	return {
 		status: 'fail',
 		fatal: true,
-		message: `kernel host ${sandboxHost} shares a domain with the app host ${appHost}`,
+		message: sandboxHostIsolationMessage(isolation),
 		remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',
 	};
 }

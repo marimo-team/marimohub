@@ -11,10 +11,18 @@ const OAuthClientRecordSchema = z.looseObject({
 	client_id: z.string().refine(OAuthClientId.is),
 	client_id_issued_at: z.number().int().nonnegative(),
 	expires_at: z.iso.datetime(),
-	redirect_uris: z.array(z.string().max(2048)).min(1).max(100),
+	redirect_uris: z.array(z.string()).min(1),
 	token_endpoint_auth_method: z.literal('none'),
 	client_name: z.string().min(1).max(200).optional(),
 	client_uri: z.string().optional(),
+	scope: z.string().optional(),
+	grant_types: z.array(z.string()).optional(),
+	response_types: z.array(z.string()).optional(),
+});
+
+// Existing registrations remain valid until their original expiry.
+const OAuthClientRegistrationSchema = OAuthClientRecordSchema.extend({
+	redirect_uris: z.array(z.string().max(2048)).min(1).max(100),
 	scope: z.string().max(4096).optional(),
 	grant_types: z.array(z.string().max(100)).max(10).optional(),
 	response_types: z.array(z.string().max(100)).max(10).optional(),
@@ -81,6 +89,9 @@ export class OAuthClientStore {
 	constructor(private bucket: Bucket) {}
 
 	async register(input: RegisterOAuthClientInput): Promise<OAuthClientRecord> {
+		if (input.redirect_uris.length > 100 || input.redirect_uris.some((uri) => uri.length > 2048)) {
+			throw new BadRequestError('OAuth client metadata is invalid');
+		}
 		if (
 			input.redirect_uris.length === 0 ||
 			input.redirect_uris.some((uri) => !validRedirectUri(uri))
@@ -89,7 +100,6 @@ export class OAuthClientStore {
 				'OAuth redirect_uris must use HTTPS, a loopback HTTP URL, or a supported private-use scheme',
 			);
 		}
-		await this.pruneExpired();
 		const id = createOAuthClientId();
 		const now = Date.now();
 		const record: OAuthClientRecord = {
@@ -104,8 +114,9 @@ export class OAuthClientStore {
 			...(input.grant_types ? { grant_types: input.grant_types } : {}),
 			...(input.response_types ? { response_types: input.response_types } : {}),
 		};
-		const validated = OAuthClientRecordSchema.safeParse(record);
+		const validated = OAuthClientRegistrationSchema.safeParse(record);
 		if (!validated.success) throw new BadRequestError('OAuth client metadata is invalid');
+		await this.pruneExpired();
 		await this.bucket.put(paths.oauthClient(id), JSON.stringify(validated.data), {
 			onlyIfNotExists: true,
 		});

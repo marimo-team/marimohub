@@ -20,7 +20,11 @@ Idempotency-Key: 8f3c1e2a-...
 - **Payload** — HTTP create routes store a SHA-256 fingerprint of the request body.
   JSON object key order does not affect the fingerprint.
   If a retry changes the payload, the server returns `422 VALIDATION_ERROR`.
-  Older records without a fingerprint retain their original replay behavior.
+  HTTP create records without a fingerprint return `422 VALIDATION_ERROR` because
+  the server cannot verify their original payload. The server also checks the old
+  route-template scope for parametrized routes and rejects a matching legacy key.
+  This prevents an upgrade from silently treating an old retry as a new create.
+  Check whether the original operation succeeded before submitting a new key.
 - **Deletion** — deleting a resource does not erase its recorded response.
   A retry returns that response without recreating the resource. A new create requires a new key.
 - **Mechanics** — the first response's `data` is stored at

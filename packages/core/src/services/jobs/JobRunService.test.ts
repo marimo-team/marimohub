@@ -330,6 +330,29 @@ describe('JobRunService', () => {
 			vi.restoreAllMocks();
 		});
 
+		it('continues pruning after a stale marker cleanup fails', async () => {
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const stale = [await enqueue(), await enqueue()];
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			for (const run of stale) await env.bucket.delete(jobPaths.run(run.run_id).record);
+			const failedIndex = jobPaths.runIndex(stale[0].run_id);
+			const remove = env.bucket.delete.bind(env.bucket);
+			vi.spyOn(env.bucket, 'delete').mockImplementation(async (key) => {
+				if (key === failedIndex) throw new Error('storage unavailable');
+				return remove(key);
+			});
+
+			expect(await runs.pruneStaleMarkers(Date.now() + DANGLING_MARKER_GRACE_MS + 1000)).toBe(1);
+
+			expect(await env.bucket.head(paths.jobRunMarker(pid, stale[0].run_id))).not.toBeNull();
+			expect(await env.bucket.head(failedIndex)).not.toBeNull();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, stale[1].run_id))).toBeNull();
+			expect(await env.bucket.head(jobPaths.runIndex(stale[1].run_id))).toBeNull();
+			expect(
+				error.mock.calls.some(([line]) => String(line).includes('job_run_marker_prune_failed')),
+			).toBe(true);
+		});
+
 		it('reports incomplete ownership and preserves corrupt markers', async () => {
 			const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 			const healthy = await enqueue();

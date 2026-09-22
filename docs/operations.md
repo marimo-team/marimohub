@@ -92,6 +92,17 @@ capture it automatically — no separate export.
 
 ## Upgrades
 
+Before upgrading from 0.4.8, check `MARIMOHUB_SESSION_CONNECTION_AWARE` and
+`MARIMOHUB_AUTOMATIC_THUMBNAILS`. Both now accept only `true` or `false`, ignoring
+case and surrounding whitespace. Unset or blank values keep the default, `true`.
+Other values, including `1`, `0`, `yes`, and `on`, now stop startup with a
+configuration error. Previously, these values all enabled the feature. Replace
+them with the explicit boolean that matches your intended behavior.
+
+HTTP create retries with older idempotency records now return `422` instead of
+replaying an unverifiable response or creating a duplicate. Check the original
+operation before using a new key.
+
 The image and Helm chart are released together on every `v*` tag (chart version,
 `appVersion`, and image tag all match), so pinning a chart version pins
 everything.

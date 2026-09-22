@@ -16,6 +16,10 @@ import type { SurfaceId } from './surfaces/types';
 
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
+class SecondarySurfaceStopError extends Error {
+	override readonly name = 'SecondarySurfaceStopError';
+}
+
 export interface SessionRetirerDeps {
 	sessions: SessionService;
 	notebooks: NotebookService;
@@ -298,6 +302,7 @@ export class SessionRetirer {
 		try {
 			await this.stopSecondarySurfaces(sandbox, session);
 		} catch (error) {
+			if (!(error instanceof SecondarySurfaceStopError)) throw error;
 			// A live secondary writer makes a consistent capture unsafe.
 			canCapture = false;
 			logOperationalError(
@@ -399,6 +404,7 @@ export class SessionRetirer {
 					state.status === 'stopping' ||
 					state.status === 'failed'),
 		);
+		if (surfaces.length === 0) return;
 		await Promise.all(
 			surfaces.map(([id]) =>
 				this.deps.sessions.beginSurfaceStop(
@@ -418,8 +424,14 @@ export class SessionRetirer {
 						? surfaceCancelFile(session.session_id, surface, cancelledAttemptId)
 						: undefined,
 				});
-				const result = await sandbox.exec(command, { timeout: 10_000 });
-				if (!result.success) throw new Error(`Failed to stop ${id} before session retirement`);
+				try {
+					const result = await sandbox.exec(command, { timeout: 10_000 });
+					if (!result.success) throw new Error(`Failed to stop ${id} before session retirement`);
+				} catch (cause) {
+					throw new SecondarySurfaceStopError(`Failed to stop ${id} before session retirement`, {
+						cause,
+					});
+				}
 			}),
 		);
 	}

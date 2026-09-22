@@ -41,7 +41,7 @@ const resolveUsers = createRoute({
 			z.object({ success: z.literal(true), data: z.record(z.string(), UserResponseSchema) }),
 			'Map of user id → resolved identity (unknown ids omitted)',
 		),
-		...errorResponses(401),
+		...errorResponses(401, 422),
 	},
 });
 
