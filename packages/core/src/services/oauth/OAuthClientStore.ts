@@ -11,13 +11,13 @@ const OAuthClientRecordSchema = z.looseObject({
 	client_id: z.string().refine(OAuthClientId.is),
 	client_id_issued_at: z.number().int().nonnegative(),
 	expires_at: z.iso.datetime(),
-	redirect_uris: z.array(z.string()).min(1),
+	redirect_uris: z.array(z.string().max(2048)).min(1).max(100),
 	token_endpoint_auth_method: z.literal('none'),
 	client_name: z.string().min(1).max(200).optional(),
 	client_uri: z.string().optional(),
-	scope: z.string().optional(),
-	grant_types: z.array(z.string()).optional(),
-	response_types: z.array(z.string()).optional(),
+	scope: z.string().max(4096).optional(),
+	grant_types: z.array(z.string().max(100)).max(10).optional(),
+	response_types: z.array(z.string().max(100)).max(10).optional(),
 });
 
 export type OAuthClientRecord = z.infer<typeof OAuthClientRecordSchema>;

@@ -1,9 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, waitFor } from '@testing-library/react';
-import { toast } from 'sonner';
-import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
-import { browseKeys, jobKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
+	useDeleteNotebook,
+	useDeleteProject,
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
 	useBrowseCapabilityQuery,
@@ -32,6 +29,11 @@ import {
 	useUserSearchQuery,
 	useVersionQuery,
 } from './hooks';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
+import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import { browseKeys, jobKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 
 const PID = 'proj-1';
 const NID = 'nb-1';
@@ -995,5 +997,20 @@ describe('refreshBrowseQueries budget', () => {
 		const urls = urlsOf(fetchMock);
 		expect(urls.filter((url) => url.includes('fresh=true')).length).toBe(30);
 		expect(urls.some((url) => url.endsWith('/browse'))).toBe(true);
+	});
+});
+
+describe('delete mutations and the apps gallery cache', () => {
+	it.each([
+		{ name: 'notebook', useMutation: () => useDeleteNotebook(PID), id: NID },
+		{ name: 'project', useMutation: () => useDeleteProject(), id: PID },
+	])('invalidates the apps gallery after deleting a $name', async ({ useMutation, id }) => {
+		stubFetch(async () => jsonOk({ deleted: true }));
+		const { result, client } = renderHookWithClient(useMutation, { toaster: false });
+		const spy = vi.spyOn(client, 'invalidateQueries');
+		await act(async () => {
+			await result.current.mutateAsync(id);
+		});
+		expect(invalidatedKeys(spy)).toContainEqual(['apps']);
 	});
 });

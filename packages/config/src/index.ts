@@ -12,6 +12,15 @@
  * need platform bindings, not env credentials) and are wired by hand in
  * examples/cloudflare-worker rather than here.
  */
+import {
+	parseBool,
+	parseEnum,
+	parseEnumOr,
+	parseIntEnv,
+	parseList,
+	parseOnOff,
+	parseSecondsEnv,
+} from './env';
 import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
 	composeAuthenticators,
@@ -83,7 +92,7 @@ import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sess
 import { parseAppPoolPolicy } from './appPool';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
-import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseOnOff, parseSecondsEnv } from './env';
+
 import type { Env } from './env';
 import { parseSandboxAuth } from './sandboxAuth';
 import { ConfigError } from './errors';
@@ -466,7 +475,7 @@ function parseSessionLifetime(env: Env): SessionLifetimeConfig {
 			'MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS',
 			DEFAULT_SESSION_LIFETIME_EXTENSION_S,
 		),
-		connectionAware: env.MARIMOHUB_SESSION_CONNECTION_AWARE !== 'false',
+		connectionAware: parseBool(env, 'MARIMOHUB_SESSION_CONNECTION_AWARE', true),
 		sweepIntervalMs: seconds(
 			'MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS',
 			DEFAULT_SESSION_SWEEP_INTERVAL_S,
@@ -719,7 +728,7 @@ export function createFromEnv(
 			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),
-			automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false',
+			automaticThumbnails: parseBool(env, 'MARIMOHUB_AUTOMATIC_THUMBNAILS', true),
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,

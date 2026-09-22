@@ -24,6 +24,10 @@ const resolveUsers = createRoute({
 		query: z.object({
 			ids: z
 				.string()
+				.refine(
+					(value) => value.split(',').length <= 100,
+					'At most 100 user ids may be resolved at once',
+				)
 				.optional()
 				.openapi({
 					param: { name: 'ids', in: 'query' },

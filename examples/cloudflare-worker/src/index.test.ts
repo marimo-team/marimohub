@@ -260,3 +260,31 @@ describe('Cloudflare Worker scheduled handler', () => {
 		expect(waitUntil).toHaveBeenCalledWith(drainPromise);
 	});
 });
+
+describe('Cloudflare Worker sandbox-host isolation guard', () => {
+	const baseEnv = {
+		AUTH_MODE: 'dev',
+		USER_ID: 'user-test',
+		USER_EMAIL: 'test@example.com',
+		NOTEBOOKS_BUCKET: {},
+		SANDBOX: {},
+	};
+
+	it('rejects a sandbox hostname that differs from the app host only in case', () => {
+		expect(() =>
+			buildDeps(new Request('https://hub.example.com/'), {
+				...baseEnv,
+				SANDBOX_HOSTNAME: 'Hub.Example.Com',
+			} as unknown as Env),
+		).toThrow(/shares an origin/);
+	});
+
+	it('rejects a sandbox hostname that differs from the app host only by whitespace', () => {
+		expect(() =>
+			buildDeps(new Request('https://hub.example.com/'), {
+				...baseEnv,
+				SANDBOX_HOSTNAME: ' hub.example.com ',
+			} as unknown as Env),
+		).toThrow(/shares an origin/);
+	});
+});

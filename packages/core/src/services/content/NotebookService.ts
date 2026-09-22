@@ -621,7 +621,8 @@ export class NotebookService {
 				assertWritable,
 			);
 		// Blob writes must share the read lease so content matches its update token.
-		if (input.code === undefined && input.readme === undefined) return update();
+		if (input.code === undefined && input.deps === undefined && input.readme === undefined)
+			return update();
 		return this.workspace.withMutation(projectId, notebookId, {}, (lease) =>
 			update(lease.heartbeat),
 		);
@@ -652,7 +653,8 @@ export class NotebookService {
 		if (source.type !== 'local' && (input.code !== undefined || input.deps !== undefined)) {
 			throw new ConflictError('Remote-backed notebook source is updated only by sync');
 		}
-		if (input.code !== undefined) await this.assertSourceUpdateAllowed(projectId, notebookId);
+		if (input.code !== undefined || input.deps !== undefined)
+			await this.assertSourceUpdateAllowed(projectId, notebookId);
 
 		const nb = paths.project(projectId).notebook(notebookId);
 		await assertWritable?.();
@@ -690,8 +692,8 @@ export class NotebookService {
 			await this.bucket.put(nb.readme, input.readme);
 		}
 
-		// Write new version if code changed
-		if (input.code !== undefined && source.type === 'local') {
+		if ((input.code !== undefined || input.deps !== undefined) && source.type === 'local') {
+			const code = input.code ?? (await this.getNotebookContent(projectId, notebookId));
 			const versionId = createVersionId();
 
 			// Read once, before the Promise.all, so the read does not race the write
@@ -712,10 +714,10 @@ export class NotebookService {
 			const ver = nb.version(versionId);
 			await assertWritable?.();
 			await Promise.all([
-				this.bucket.put(nb.code, input.code),
+				this.bucket.put(nb.code, code),
 				this.bucket.put(nb.source, JSON.stringify(newSource)),
 				this.bucket.put(nb.deps, deps),
-				this.bucket.put(ver.code, input.code),
+				this.bucket.put(ver.code, code),
 				this.bucket.put(ver.deps, deps),
 				this.bucket.put(ver.meta, JSON.stringify(version)),
 			]);

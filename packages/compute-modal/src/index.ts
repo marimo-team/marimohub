@@ -420,6 +420,7 @@ class ModalSandboxInstance implements SandboxInstance {
 				void execInSandbox(`rm -f ${shellQuote(pidPath)}`).catch(() => {});
 			});
 		const completed = Promise.all([stdoutDone, stderrDone, exited]).then(() => {});
+		void completed.catch(() => {});
 
 		const sandboxProcess: SandboxProcess = {
 			id: options?.processId ?? `modal-process-${++processSequence}`,

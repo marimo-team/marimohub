@@ -1,3 +1,4 @@
+import { formatBytes } from '@/lib/formatBytes';
 import { canEditProject } from '@/lib/roles';
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- output cannot contain this status's paragraphs */
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
@@ -60,18 +61,6 @@ const NS_JOIN = '\u001f';
 const splitNs = (value: string | null): string[] => (value ? value.split(NS_JOIN) : []);
 
 const countFormatter = new Intl.NumberFormat();
-
-function formatBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
-	let value = bytes;
-	let unit = -1;
-	while (value >= 1024 && unit < units.length - 1) {
-		value /= 1024;
-		unit += 1;
-	}
-	return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
-}
 
 interface Selection {
 	namespace: string[];

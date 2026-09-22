@@ -810,10 +810,7 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 	const rows = useMemo(() => {
 		if (!sort) return result.rows;
 		return result.rows.toSorted(
-			(left, right) =>
-				renderCell(left[sort.index]).localeCompare(renderCell(right[sort.index]), undefined, {
-					numeric: true,
-				}) * sort.direction,
+			(left, right) => compareQueryValues(left[sort.index], right[sort.index]) * sort.direction,
 		);
 	}, [result.rows, sort]);
 	const csv = () =>
@@ -890,6 +887,11 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 			</div>
 		</div>
 	);
+}
+
+function compareQueryValues(left: unknown, right: unknown): number {
+	if (typeof left === 'number' && typeof right === 'number') return left - right;
+	return renderCell(left).localeCompare(renderCell(right), undefined, { numeric: true });
 }
 
 function renderCell(value: unknown): string {

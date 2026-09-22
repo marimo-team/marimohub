@@ -93,7 +93,7 @@ export function singleDataQueryStatement(sql: string, options: DataQuerySqlOptio
 						: 'backtick';
 			continue;
 		}
-		if (character === '$') {
+		if (character === '$' && (index === 0 || !/[\p{L}\p{N}_$]/u.test(sql[index - 1]))) {
 			dollarQuoteTag.lastIndex = index;
 			const delimiter = dollarQuoteTag.exec(sql)?.[0];
 			if (delimiter !== undefined) {

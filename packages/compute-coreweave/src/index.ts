@@ -70,6 +70,8 @@ import {
 } from '@coreweave/cwsandbox/node';
 import type { KernelIngressPublisher } from './kernelIngress';
 import {
+	LAUNCH_MARKER_GRACE_MS,
+	launchTimeoutResult,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	buildLaunchCommand,
@@ -753,12 +755,37 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			}
 		});
 
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOutcome =
+			options.startupTimeout === 0
+				? outcome
+				: Promise.race([
+						outcome,
+						new Promise<never>((_resolve, reject) => {
+							timer = setTimeout(
+								() => reject(new DOMException('Launch timed out', 'TimeoutError')),
+								Math.max(0, options.startupTimeout - start) + LAUNCH_MARKER_GRACE_MS,
+							);
+						}),
+					]);
+
 		let terminal: LaunchProtocolOutcome;
 		try {
-			terminal = await outcome;
+			terminal = await timedOutcome;
 		} catch (error) {
-			await proc.cancel().catch(() => {});
+			settled = true;
+			void proc.cancel().catch(() => {});
 			const parsed = logs();
+			if (error instanceof DOMException && error.name === 'TimeoutError') {
+				return launchTimeoutResult({
+					setup: Boolean(options.setup),
+					setupCompleted: tracker.setupCompleted,
+					startupTimeout: options.startupTimeout,
+					output: parsed,
+					start,
+					waitport: Math.max(0, Date.now() - waitStartedAt),
+				});
+			}
 			return {
 				success: false,
 				reason: 'transport_failure',
@@ -770,6 +797,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 					waitport: Math.max(0, Date.now() - waitStartedAt),
 				},
 			};
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
 		}
 		if (terminal.kind !== 'ready') {
 			return launchOutcomeResult(terminal.kind, terminal, logs(), start);

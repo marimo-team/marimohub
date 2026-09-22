@@ -15,9 +15,14 @@ Idempotency-Key: 8f3c1e2a-...
 - **Create routes** — `POST /projects` and `POST …/notebooks` accept the header.
   `POST …/sessions` accepts it but already reuses a session for `(user, notebook)`.
 - **External delivery** — `POST …/alert-destinations/{aid}/test` requires the header because it sends a real message.
-- **Scope** — keyed by `(user, route, key)`; a different user or route is a
-  distinct first use. The header is optional (omit it for plain, non-idempotent
-  creates).
+- **Scope** — keyed by `(user, route, key)`. The route includes concrete project, notebook, and job ids.
+  A different user or resource starts a separate operation. The header is optional.
+- **Payload** — HTTP create routes store a SHA-256 fingerprint of the request body.
+  JSON object key order does not affect the fingerprint.
+  If a retry changes the payload, the server returns `422 VALIDATION_ERROR`.
+  Older records without a fingerprint retain their original replay behavior.
+- **Deletion** — deleting a resource does not erase its recorded response.
+  A retry returns that response without recreating the resource. A new create requires a new key.
 - **Mechanics** — the first response's `data` is stored at
   `_system/idempotency/{sha256(user:route\nkey)}.json` with create-if-absent.
   A hit replays it. See `IdempotencyService` (core) and `idempotentCreate` (api).

@@ -1,3 +1,4 @@
+import { hostsShareCookieDomain } from '@marimo-hub/core/host-isolation';
 import type { Env } from './env';
 
 export interface SandboxHostIsolation {
@@ -42,9 +43,11 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	// potentially same-origin untrusted kernel.
 	if (!appHost) return { isolated: false, sandboxHost, reason: 'unverifiable-redirect' };
 
-	const sameOrigin = sandboxHost === appHost;
-	const sharesParent = sandboxHost.endsWith(`.${appHost}`) || appHost.endsWith(`.${sandboxHost}`);
-	if (sameOrigin || sharesParent) {
+	let sharesDomain = true;
+	try {
+		sharesDomain = hostsShareCookieDomain(sandboxHost, appHost);
+	} catch {}
+	if (sharesDomain) {
 		return { isolated: false, sandboxHost, appHost, reason: 'shared-origin' };
 	}
 	return { isolated: true, sandboxHost, appHost };

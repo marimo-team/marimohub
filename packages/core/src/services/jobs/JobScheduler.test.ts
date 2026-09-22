@@ -14,6 +14,7 @@ import type { JobSchedulerConfig, JobSchedulerDeps } from './JobScheduler';
 const T0 = Date.parse('2026-09-02T06:00:30.000Z');
 const SB = SandboxId.parse('sb-0123456789abcdef');
 const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 
 const CONFIG: JobSchedulerConfig = {
 	catchupWindowMs: 10 * MINUTE,
@@ -28,6 +29,7 @@ const CONFIG: JobSchedulerConfig = {
 function fakeRunner(
 	env: Awaited<ReturnType<typeof setupTestEnv>>,
 	outcome: 'succeed' | 'fail' | 'hang' = 'succeed',
+	clock: () => number = Date.now,
 ) {
 	const executed: JobRun[] = [];
 	const release = new Map<string, () => void>();
@@ -38,7 +40,7 @@ function fakeRunner(
 			executed.push(run);
 			const provisioning = await env.jobRuns.transition(run, 'provision', () => ({
 				sandbox_id: SB,
-				started_at: new Date().toISOString(),
+				started_at: new Date(clock()).toISOString(),
 			}));
 			if (!provisioning.transitioned) return provisioning.run;
 			await env.jobRuns.transition(run, 'start');
@@ -49,7 +51,7 @@ function fakeRunner(
 				run,
 				outcome === 'fail' ? 'fail' : 'succeed',
 				() => ({
-					finished_at: new Date().toISOString(),
+					finished_at: new Date(clock()).toISOString(),
 					...(outcome === 'fail' ? { error: { code: 'NOTEBOOK_FAILED', message: 'boom' } } : {}),
 				}),
 			);
@@ -1032,6 +1034,76 @@ describe('JobScheduler', () => {
 			for (const release of runner.release.values()) release();
 			await settle(s);
 		});
+	});
+
+	it('prunes both a dangling marker and its run-index entry', async () => {
+		const job = await createJob({ schedule: undefined });
+		const orphan = createRunId();
+		const indexKey = paths.project(pid).notebook(nid).job(job.id).runIndex(orphan);
+		await env.bucket.put(
+			paths.jobRunMarker(pid, orphan),
+			JSON.stringify({
+				run_id: orphan,
+				continuation_run_id: createRunId(),
+				job_id: job.id,
+				notebook_id: nid,
+				project_id: pid,
+				created_at: new Date(now - 30 * MINUTE).toISOString(),
+			}),
+		);
+		await env.bucket.put(indexKey, '');
+
+		const s = scheduler(fakeRunner(env, 'succeed', () => now));
+		expect((await s.tick()).markersPruned).toBe(1);
+
+		expect(await env.bucket.head(paths.jobRunMarker(pid, orphan))).toBeNull();
+		expect(await env.bucket.head(indexKey)).toBeNull();
+	});
+
+	it('retains completed occurrences throughout the catch-up window', async () => {
+		const config = { ...CONFIG, catchupWindowMs: 3 * DAY };
+		const job = await createJob({ schedule: { cron: '0 6 * * wed', timezone: 'UTC' } });
+		const runner = fakeRunner(env, 'succeed', () => now);
+		const s = scheduler(runner, { config });
+
+		expect((await s.tick()).fired).toBe(1);
+		await s.drain();
+		const [firstRun] = await env.jobRuns.listRuns(pid, nid, job.id);
+		expect(firstRun.status).toBe('succeeded');
+		expect(firstRun.scheduled_for).toBe('2026-09-02T06:00:00.000Z');
+
+		// Two days later — still inside the 3-day catch-up window, and past a 1-day
+		// run retention; the catch-up window must still protect the completed run.
+		now = Date.parse('2026-09-04T12:00:00.000Z');
+		expect(await s.prune(DAY)).toMatchObject({ runsPruned: 0 });
+
+		const second = await s.tick();
+		await s.drain();
+		expect(second.repaired).toBe(0);
+		expect(runner.executed).toHaveLength(1);
+	});
+
+	it('does not retry a notebook soft-deleted before finalization', async () => {
+		const job = await createJob({
+			schedule: undefined,
+			retry: { max_retries: 2, backoff_seconds: 0 },
+		});
+		const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+		// A crash between the terminal CAS and finalization leaves the marker behind.
+		await env.jobRuns.transition(run, 'fail', () => ({
+			finished_at: new Date(now).toISOString(),
+			error: { code: 'NOTEBOOK_FAILED', message: 'boom' },
+		}));
+		await env.jobRuns.cancelRunsOfNotebook(pid, nid, ACTOR);
+		await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+
+		const s = scheduler(fakeRunner(env, 'succeed', () => now));
+		await s.tick();
+		await s.drain();
+
+		expect((await env.jobRuns.listRuns(pid, nid, job.id)).map((r) => r.run_id)).toEqual([
+			run.run_id,
+		]);
 	});
 });
 

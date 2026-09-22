@@ -46,6 +46,10 @@ function isAlreadyExists(err: unknown): boolean {
 	return (err as AzureError)?.code === 'BlobAlreadyExists';
 }
 
+function normalizeETag(etag: string | undefined): string {
+	return (etag ?? '').replaceAll(/^"|"$/g, '');
+}
+
 function conditionETag(etag: string): string {
 	const trimmed = etag.trim();
 	if (/^(W\/)?"[^"]*"$/.test(trimmed)) return trimmed;
@@ -74,7 +78,7 @@ async function streamToBytes(stream: NodeJS.ReadableStream | undefined): Promise
 function toBucketObject(item: BlobItem): BucketObject {
 	return {
 		key: item.name,
-		etag: item.properties.etag ?? '',
+		etag: normalizeETag(item.properties.etag),
 		size: item.properties.contentLength ?? 0,
 		uploaded: item.properties.lastModified ?? new Date(),
 	};
@@ -146,7 +150,7 @@ export class AzureStorage implements Bucket {
 			const decode = () => (bodyText ??= new TextDecoder().decode(bodyBytes));
 			return {
 				key,
-				etag: response.etag ?? '',
+				etag: normalizeETag(response.etag),
 				size: response.contentLength ?? bodyBytes.length,
 				uploaded: response.lastModified ?? new Date(),
 				text: async () => decode(),
@@ -164,7 +168,7 @@ export class AzureStorage implements Bucket {
 			const response = await this.client.getBlobClient(key).getProperties();
 			return {
 				key,
-				etag: response.etag ?? '',
+				etag: normalizeETag(response.etag),
 				size: response.contentLength ?? 0,
 				uploaded: response.lastModified ?? new Date(),
 			};
@@ -196,7 +200,7 @@ export class AzureStorage implements Bucket {
 			});
 			return {
 				key,
-				etag: response.etag ?? '',
+				etag: normalizeETag(response.etag),
 				size: bytes.length,
 				uploaded: response.lastModified ?? new Date(),
 			};

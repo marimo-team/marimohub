@@ -5,6 +5,7 @@
  * and Access auth. This is also the one context where the Cloudflare compute
  * adapter works, since it needs the Workers runtime + DO binding.
  */
+import { hostsShareCookieDomain, normalizeHostname } from '@marimo-hub/core/host-isolation';
 import { parseAppPoolPolicy } from '@marimo-hub/config/app-pool';
 import {
 	createApi,
@@ -129,14 +130,11 @@ export function buildDeps(
 	//   - SANDBOX_HOSTNAME set → subdomain mode on that isolated domain. Fail closed:
 	//     it must NOT share an origin/parent domain with the app host.
 	const appHost = new URL(request.url).hostname;
-	const sandboxHostname = env.SANDBOX_HOSTNAME;
+	const sandboxHostname = env.SANDBOX_HOSTNAME?.trim()
+		? normalizeHostname(env.SANDBOX_HOSTNAME)
+		: undefined;
 	const useTunnel = !sandboxHostname;
-	if (
-		sandboxHostname &&
-		(sandboxHostname === appHost ||
-			sandboxHostname.endsWith(`.${appHost}`) ||
-			appHost.endsWith(`.${sandboxHostname}`))
-	) {
+	if (sandboxHostname && hostsShareCookieDomain(sandboxHostname, appHost)) {
 		throw new Error(
 			`SANDBOX_HOSTNAME (${sandboxHostname}) shares an origin/parent domain with the app host (${appHost}). ` +
 				'Host notebook kernels on a separate domain so a malicious notebook cannot escape the iframe sandbox.',

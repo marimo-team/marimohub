@@ -15,7 +15,7 @@
 // with `Millis.of(...)` / `Seconds.of(...)` only where the result must stay
 // typed.
 
-import { withAbortSignal } from './async';
+import { MAX_TIMER_DELAY_MS, withAbortSignal } from './async';
 
 export type Millis = number & { __brand: 'Millis' };
 export type Seconds = number & { __brand: 'Seconds' };
@@ -39,6 +39,9 @@ export const Seconds = {
 
 export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	signal?.throwIfAborted();
+	if (!Number.isFinite(ms) || ms > MAX_TIMER_DELAY_MS) {
+		throw new RangeError(`Sleep delay must not exceed ${MAX_TIMER_DELAY_MS} ms`);
+	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await withAbortSignal(

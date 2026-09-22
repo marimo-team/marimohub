@@ -121,4 +121,10 @@ describe('OAuthClientStore', () => {
 
 		expect(await store.get(client.client_id)).toBeNull();
 	});
+
+	it('bounds the number of redirect URIs a single registration may store', async () => {
+		const many = Array.from({ length: 20_000 }, (_, index) => `https://ex.ample/cb/${index}`);
+
+		await expect(store.register({ redirect_uris: many })).rejects.toThrow();
+	});
 });

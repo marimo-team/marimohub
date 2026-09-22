@@ -1,3 +1,4 @@
+import { formatBytes } from '@/lib/formatBytes';
 import { useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useNavigationType, useSearchParams } from 'react-router-dom';
@@ -1160,18 +1161,6 @@ function prefixParts(prefix: string): { label: string; value: string }[] {
 		parts.push({ label, value });
 	}
 	return parts;
-}
-
-function formatBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	const units = ['KiB', 'MiB', 'GiB', 'TiB'];
-	let value = bytes;
-	let index = -1;
-	while (value >= 1024 && index < units.length - 1) {
-		value /= 1024;
-		index += 1;
-	}
-	return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
 }
 
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {

@@ -703,6 +703,33 @@ describe('ModalCompute', () => {
 		).rejects.toThrow(/file copy fallback/);
 		expect(await compute.proxy(new Request('https://example.com'))).toBeNull();
 	});
+
+	it('does not leak an unhandled rejection when the SDK wait() rejects', async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => {
+			unhandled.push(reason);
+		};
+		process.on('unhandledRejection', onUnhandled);
+		try {
+			const sandbox = new FakeSandbox();
+			sandbox.execImpl = () => ({
+				stdout: textStream(''),
+				stderr: textStream(''),
+				wait: () => Promise.reject(new Error('modal transport failure')),
+			});
+			const world = makeWorld();
+			world.existing.set(SANDBOX_ID, sandbox);
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID).startProcess('uv run marimo edit');
+			// Let the discarded `completed` promise settle and the runtime flush the
+			// unhandled-rejection queue.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await new Promise((resolve) => setImmediate(resolve));
+		} finally {
+			process.off('unhandledRejection', onUnhandled);
+		}
+		expect(unhandled).toEqual([]);
+	});
 });
 
 function contractWorld() {

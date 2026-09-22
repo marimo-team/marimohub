@@ -233,7 +233,7 @@ export class JobScheduler {
 							marker.run_id,
 						))
 					) {
-						await this.deps.runs.deleteMarker(marker);
+						await this.deps.runs.pruneDanglingMarker(marker);
 						result.markersPruned++;
 					}
 				} catch (err) {
@@ -364,6 +364,9 @@ export class JobScheduler {
 		jobId: JobRun['job_id'],
 	): Promise<JobDefinition | null> {
 		try {
+			const project = await this.deps.projects.getProject(projectId);
+			const notebook = await this.deps.notebooks.getNotebook(projectId, notebookId);
+			if (project.status === 'deleted' || notebook.meta.status === 'deleted') return null;
 			return await this.deps.jobs.getJob(projectId, notebookId, jobId);
 		} catch (err) {
 			// The index outlived the definition (delete crashed before the index

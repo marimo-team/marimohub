@@ -39,7 +39,7 @@ export function traced<T extends object>(
 	// still only ever receives its own method's arguments.
 	const extractors = attrs as Partial<Record<string, (...args: unknown[]) => Attributes>>;
 	// Cache wrappers so repeated property access returns the same function.
-	const wrapped = new Map<string, (...args: unknown[]) => unknown>();
+	const wrapped = new Map<string, { original: unknown; invoke: (...args: unknown[]) => unknown }>();
 
 	return new Proxy(target, {
 		get(obj, prop, receiver) {
@@ -47,42 +47,41 @@ export function traced<T extends object>(
 			if (typeof value !== 'function' || typeof prop !== 'string' || prop === 'constructor') {
 				return value;
 			}
-			let fn = wrapped.get(prop);
-			if (!fn) {
-				fn = (...args) => {
-					// A broken extractor must not block the call — the span just
-					// loses its attributes.
-					let attributes: Attributes | undefined;
+			const cached = wrapped.get(prop);
+			if (cached?.original === value) return cached.invoke;
+			const fn = (...args: unknown[]) => {
+				// A broken extractor must not block the call — the span just
+				// loses its attributes.
+				let attributes: Attributes | undefined;
+				try {
+					attributes = extractors[prop]?.(...args);
+				} catch {}
+				return tracer.startActiveSpan(`${name}.${prop}`, { attributes }, (span) => {
+					const fail = (err: unknown) => {
+						span.recordException(err instanceof Error ? err : String(err));
+						span.setStatus({ code: SpanStatusCode.ERROR });
+					};
 					try {
-						attributes = extractors[prop]?.(...args);
-					} catch {}
-					return tracer.startActiveSpan(`${name}.${prop}`, { attributes }, (span) => {
-						const fail = (err: unknown) => {
-							span.recordException(err instanceof Error ? err : String(err));
-							span.setStatus({ code: SpanStatusCode.ERROR });
-						};
-						try {
-							// `obj` (not the proxy) as `this` so private-field access is unaffected.
-							const result: unknown = value.apply(obj, args);
-							if (result instanceof Promise) {
-								return result
-									.catch((err: unknown) => {
-										fail(err);
-										throw err;
-									})
-									.finally(() => span.end());
-							}
-							span.end();
-							return result;
-						} catch (err) {
-							fail(err);
-							span.end();
-							throw err;
+						// `obj` (not the proxy) as `this` so private-field access is unaffected.
+						const result: unknown = value.apply(obj, args);
+						if (result instanceof Promise) {
+							return result
+								.catch((err: unknown) => {
+									fail(err);
+									throw err;
+								})
+								.finally(() => span.end());
 						}
-					});
-				};
-				wrapped.set(prop, fn);
-			}
+						span.end();
+						return result;
+					} catch (err) {
+						fail(err);
+						span.end();
+						throw err;
+					}
+				});
+			};
+			wrapped.set(prop, { original: value, invoke: fn });
 			return fn;
 		},
 	});

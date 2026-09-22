@@ -756,3 +756,25 @@ describe('AuthorizationService: list-entry edge cases', () => {
 		).rejects.toThrow(/requires a project resource/);
 	});
 });
+
+describe('AuthorizationService app-user visibility', () => {
+	it('keeps app-user admission independent of the static viewer tier', async () => {
+		const authz = service();
+		const start: AuthorizationResource = { kind: 'session-start', project, mode: 'app' };
+		expect((await authz.authorize(APP_USER, 'session.start', start)).allowed).toBe(true);
+		expect((await authz.authorize(VIEWER, 'session.start', start)).allowed).toBe(false);
+	});
+
+	it('list visibility agrees with project.read under an app-user default role', async () => {
+		const authz = service({ defaultRole: 'app-user' });
+		const decision = await authz.authorize(STRANGER, 'project.read', { kind: 'project', project });
+		expect(
+			authz.projectEntryVisibility(STRANGER, {
+				id: project.id,
+				owner: OWNER.id,
+				member_ids: [],
+				member_emails: [],
+			}),
+		).toBe(decision.allowed);
+	});
+});

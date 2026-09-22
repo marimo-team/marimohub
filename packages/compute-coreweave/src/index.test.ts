@@ -1177,3 +1177,27 @@ computeContract(
 		semantics: { failingCommand: 'mh-contract-fail', launch: {} },
 	},
 );
+
+describe('CoreWeaveCompute launchProcess', () => {
+	it('resolves with a timeout failure when the launch stream stalls past startupTimeout', async () => {
+		async function* stalled(): AsyncGenerator<string> {
+			await new Promise<never>(() => {});
+			yield '';
+		}
+		const world = makeWorld({
+			startImpl: async () => ({ ...fakeProcess(), stdout: stalled(), stderr: stalled() }),
+		});
+		const inst = new CoreWeaveCompute({ apiKey: 'key', image: 'img' }, world.client).create(
+			SANDBOX_ID,
+			{ reuse: false },
+		);
+		vi.useFakeTimers();
+		try {
+			const pending = inst.launchProcess!('marimo edit', { port: 2718, startupTimeout: 200 });
+			await vi.advanceTimersByTimeAsync(2_000);
+			await expect(pending).resolves.toMatchObject({ success: false, reason: 'readiness_timeout' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

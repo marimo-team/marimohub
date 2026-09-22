@@ -225,7 +225,7 @@ export function canSeeProjectEntry(
 	policy?: AuthzPolicy,
 ): boolean | null {
 	if (isSuperAdmin(subject, policy?.superAdmins)) return true;
-	if (subjectDefaultRole(subject, policy) != null) return true;
+	if (roleAtLeast(subjectDefaultRole(subject, policy), 'viewer')) return true;
 	if (entry.owner === subject.id) return true;
 	if (entry.member_ids === undefined) return null;
 	if (entry.member_ids.includes(subject.id)) return true;

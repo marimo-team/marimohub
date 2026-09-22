@@ -1,8 +1,9 @@
+import type { SandboxProvider, SandboxInstance } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
-import type { SandboxInstance } from '../../ports/sandbox';
-import { listFilesFailure } from '../../ports/sandbox';
+
+import { execResult, listFilesFailure } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import {
 	fakeComputeFrom,
@@ -604,6 +605,58 @@ describe('SessionLifecycleService', () => {
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 		});
 	});
+
+	it.each(['surface stop', 'sandbox handle'])(
+		'continues sweeping after a %s failure',
+		async (failure) => {
+			const badId = createSandboxId();
+			const goodId = createSandboxId();
+			const bad = makeFakeSandbox({
+				execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
+			}).instance;
+			const good = makeFakeSandbox();
+			const compute: SandboxProvider = {
+				create: (id) => {
+					if (id === badId && failure === 'sandbox handle') throw new Error('Sandbox unavailable');
+					return id === badId ? bad : good.instance;
+				},
+				proxy: async () => null,
+			};
+
+			await putSession({
+				status: 'expired',
+				last_heartbeat: iso(-10 * 60 * 1000),
+				sandbox_id: badId,
+				surfaces: {
+					vscode: {
+						status: 'ready',
+						port: 8443,
+						url: 'https://vscode.example',
+						started_at: iso(0),
+					},
+				},
+			});
+			const healthy = await putSession({
+				status: 'expired',
+				last_heartbeat: iso(-10 * 60 * 1000),
+				sandbox_id: goodId,
+			});
+
+			const svc = new SessionLifecycleService(sessions, notebooks, compute, bucket, {
+				...CFG,
+				snapshotIntervalMs: 0,
+				connectionAware: false,
+			});
+
+			await expect(svc.sweep(now)).resolves.toMatchObject({
+				reclaimed: failure === 'sandbox handle' ? 1 : 2,
+			});
+			expect(good.calls.destroy).toBe(1);
+			expect(
+				(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,
+			).toBeDefined();
+		},
+	);
 });
 
 describe('kernelActiveConnections', () => {

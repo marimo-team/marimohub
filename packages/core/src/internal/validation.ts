@@ -15,3 +15,11 @@ export function assertPositiveInteger(name: string, value: number): void {
 export function assertPositiveIntegers(values: Readonly<Record<string, number>>): void {
 	for (const [name, value] of Object.entries(values)) assertPositiveInteger(name, value);
 }
+
+export function hasControlCharacter(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code <= 31 || code === 127) return true;
+	}
+	return false;
+}

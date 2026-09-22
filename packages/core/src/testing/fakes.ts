@@ -47,6 +47,7 @@ export interface SandboxCalls {
 }
 
 export interface FakeSandboxOptions {
+	execResult?: ExecResult;
 	/** When set, `exec(cmd)` rejects if `cmd` matches this value. */
 	failExec?: string;
 	/** When true, `mountBucket` rejects (forcing the manual-copy fallback path). */
@@ -106,7 +107,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 			if (opts.failExec !== undefined && cmd === opts.failExec) {
 				throw new Error('sandbox unreachable');
 			}
-			return { success: true, stdout: '', stderr: '' };
+			return opts.execResult ?? { success: true, stdout: '', stderr: '' };
 		},
 		execStream: async () => new ReadableStream(),
 		readFile: async (path: string): Promise<ReadFileResult> => {

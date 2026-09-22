@@ -36,6 +36,7 @@ const configOf = (provider: unknown) =>
 		provider as {
 			config: {
 				podTemplate?: KubernetesPodTemplate;
+				imagePullPolicy?: string;
 				image?: string;
 				environment?: string;
 				template?: string;
@@ -920,4 +921,28 @@ describe('makeCompute local port range', () => {
 			).toThrow(/Invalid MARIMOHUB_COMPUTE_LOCAL_PORTS/);
 		},
 	);
+});
+
+describe('optional compute configuration', () => {
+	describe('makeCompute coreweave', () => {
+		it('treats an empty MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION as unset', () => {
+			expect(() =>
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+					MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+					MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION: '',
+				}),
+			).not.toThrow();
+		});
+	});
+
+	describe('makeCompute kubernetes', () => {
+		it('treats an empty MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY as unset', () => {
+			const provider = makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: '',
+			});
+			expect(configOf(provider).imagePullPolicy).toBeUndefined();
+		});
+	});
 });

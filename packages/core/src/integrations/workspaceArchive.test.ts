@@ -415,3 +415,15 @@ describe('parseWorkspaceArchive', () => {
 		).toThrow(/Unsafe archive path/);
 	});
 });
+
+describe('parseWorkspaceArchive (tar)', () => {
+	it('accepts an archive whose entries carry the conventional ./ prefix', () => {
+		const archive = concat([
+			tarEntry('./', new Uint8Array(0), '5'),
+			tarEntry('./notebook.py', encode('import marimo\n'), '0'),
+			TAR_TRAILER,
+		]);
+		const files = parseWorkspaceArchive(archive, 'tar', undefined);
+		expect(files.map((f) => f.path)).toEqual(['notebook.py']);
+	});
+});

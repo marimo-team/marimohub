@@ -29,7 +29,7 @@ Use these as the done-criteria for any change.
   It imports **no vendor SDK** — nothing that speaks to a specific provider or
   performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`,
   `croner` (cron evaluation for notebook jobs; no timers are ever started),
-  `zod`, `better-all`, `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
+  `zod`, `better-all`, `tldts` (public suffix parsing for cookie isolation), `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
   tracing/logs facades unless an entrypoint registers a provider), the format
   serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
   config files), and `fflate` (in-memory archive decompression for workspace

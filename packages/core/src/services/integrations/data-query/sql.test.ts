@@ -62,4 +62,9 @@ describe('singleDataQueryStatement', () => {
 		const input = '$'.repeat(32 * 1024);
 		expect(singleDataQueryStatement(input)).toBe(input);
 	});
+
+	it('does not mistake a $ inside an identifier for a dollar-quote tag', () => {
+		const sql = 'select a$b$c from t';
+		expect(singleDataQueryStatement(sql)).toBe(sql);
+	});
 });

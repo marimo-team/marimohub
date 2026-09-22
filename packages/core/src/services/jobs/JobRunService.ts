@@ -616,8 +616,8 @@ export class JobRunService {
 	}
 
 	/**
-	 * Delete terminal runs past `retentionMs` and occurrence claims past the longer
-	 * of run retention and `occurrenceRetentionMs`.
+	 * Retain runs and occurrence claims for the longer of `retentionMs` and
+	 * `occurrenceRetentionMs`, so catch-up never repairs a pruned completed run.
 	 */
 	async pruneJob(
 		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
@@ -625,15 +625,14 @@ export class JobRunService {
 		now: number = Date.now(),
 		occurrenceRetentionMs: number = retentionMs,
 	): Promise<number> {
-		const runCutoff = now - retentionMs;
-		const occurrenceCutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
+		const cutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
 		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
 		const runs = await this.listRuns(job.project_id, job.notebook_id, job.id);
 		let pruned = 0;
 		for (const run of runs) {
 			if (!isTerminalRunStatus(run.status)) continue;
 			const endedAt = Date.parse(run.finished_at ?? run.queued_at);
-			if (!(endedAt < runCutoff)) continue;
+			if (!(endedAt < cutoff)) continue;
 			if ((await this.bucket.head(paths.jobRunMarker(run.project_id, run.run_id))) !== null) {
 				continue;
 			}
@@ -645,11 +644,21 @@ export class JobRunService {
 		const staleOccurrences = occurrenceKeys.filter((key) => {
 			const name = key.slice(jobPaths.occurrencesPrefix.length).replace(/\.json$/, '');
 			const instant = occurrenceKeyToInstant(name);
-			return instant !== null && instant < occurrenceCutoff;
+			return instant !== null && instant < cutoff;
 		});
 		if (staleOccurrences.length > 0) await this.bucket.delete(staleOccurrences);
 		if (pruned > 0) this.metrics.increment('jobs.runs.pruned', pruned);
 		return pruned;
+	}
+
+	async pruneDanglingMarker(marker: JobRunMarker): Promise<void> {
+		const index = paths
+			.project(marker.project_id)
+			.notebook(marker.notebook_id)
+			.job(marker.job_id)
+			.runIndex(marker.run_id);
+		await this.bucket.delete(index);
+		await this.deleteMarker(marker);
 	}
 
 	/**
@@ -668,17 +677,7 @@ export class JobRunService {
 			) {
 				continue;
 			}
-			await this.bucket
-				.delete(paths.jobRunMarker(marker.project_id, marker.run_id))
-				.catch(() => {});
-			if (!run) {
-				const index = paths
-					.project(marker.project_id)
-					.notebook(marker.notebook_id)
-					.job(marker.job_id)
-					.runIndex(marker.run_id);
-				await this.bucket.delete(index).catch(() => {});
-			}
+			await this.pruneDanglingMarker(marker);
 			pruned++;
 		}
 		return pruned;

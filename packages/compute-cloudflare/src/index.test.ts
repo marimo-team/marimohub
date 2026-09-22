@@ -507,3 +507,14 @@ computeContract(
 		},
 	},
 );
+
+describe('CloudflareSandboxInstance.readFile', () => {
+	it('returns a failed ReadFileResult instead of rejecting when the SDK throws', async () => {
+		const notFound = new Error('File not found: /missing');
+		notFound.name = 'FileNotFoundError';
+		fakeSandbox.readFile.mockRejectedValueOnce(notFound);
+		const instance = new CloudflareSandboxProvider(fakeNamespace).create(SANDBOX_ID);
+		const result = await instance.readFile('/missing');
+		expect(result.success).toBe(false);
+	});
+});

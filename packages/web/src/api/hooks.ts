@@ -462,7 +462,7 @@ export function useDeleteProject() {
 					params: { path: { pid: projectId } },
 				}),
 			),
-		() => [projectKeys.list()],
+		() => [projectKeys.list(), ['apps'], ['me']],
 	);
 }
 
@@ -1614,7 +1614,7 @@ export function useDeleteNotebook(projectId: string) {
 					params: { path: { pid: projectId, nid: notebookId } },
 				}),
 			),
-		() => [notebookKeys.list(projectId)],
+		() => [notebookKeys.list(projectId), ['apps']],
 	);
 }
 

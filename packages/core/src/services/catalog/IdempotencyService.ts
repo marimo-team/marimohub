@@ -14,6 +14,7 @@ const IdempotencyRecordSchema = z.object({
 	schema_version: z.literal(1),
 	scope: z.string(),
 	data: z.unknown(),
+	fingerprint: z.string().optional(),
 	created_at: z.iso.datetime(),
 });
 
@@ -55,7 +56,10 @@ export class IdempotencyService {
 	}
 
 	/** The recorded `data` for a prior `(scope, key)`, or null if this is a first use. */
-	async lookup(scope: string, key: string): Promise<{ data: unknown } | null> {
+	async lookup(
+		scope: string,
+		key: string,
+	): Promise<{ data: unknown; fingerprint?: string } | null> {
 		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
 		const obj = await this.bucket.get(objectKey);
 		if (!obj) return null;
@@ -73,16 +77,20 @@ export class IdempotencyService {
 			return null;
 		}
 		if (record.scope !== scope) return null;
-		return { data: record.data };
+		return {
+			data: record.data,
+			...(record.fingerprint !== undefined ? { fingerprint: record.fingerprint } : {}),
+		};
 	}
 
 	/** Record a first-use response. Best-effort: a lost create-if-absent race is ignored. */
-	async record(scope: string, key: string, data: unknown): Promise<void> {
+	async record(scope: string, key: string, data: unknown, fingerprint?: string): Promise<void> {
 		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
 		const record: IdempotencyRecord = {
 			schema_version: 1,
 			scope,
 			data,
+			...(fingerprint !== undefined ? { fingerprint } : {}),
 			created_at: new Date().toISOString(),
 		};
 		try {

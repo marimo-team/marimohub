@@ -44,4 +44,40 @@ describe('checkSandboxHostIsolation', () => {
 		expect(result.isolated).toBe(false);
 		expect(result.reason).toBe('unverifiable-redirect');
 	});
+
+	it('flags sibling subdomains of the same registrable domain as non-isolated', () => {
+		const result = checkSandboxHostIsolation({
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandboxes.example.com',
+			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
+		});
+		expect(result.isolated).toBe(false);
+		expect(result.reason).toBe('shared-origin');
+	});
+
+	it('flags a same-host sandbox hostname that only adds a port as non-isolated', () => {
+		const result = checkSandboxHostIsolation({
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'hub.example.com:8443',
+			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
+		});
+		expect(result.isolated).toBe(false);
+	});
+});
+
+describe('cookie domain boundaries', () => {
+	it.each([
+		['sandbox.example.co.uk', 'hub.example.co.uk', false],
+		['sandbox.other.co.uk', 'hub.example.co.uk', true],
+		['alice.github.io', 'bob.github.io', true],
+		['sandbox.alice.github.io', 'hub.alice.github.io', false],
+		['HUB.EXAMPLE.COM.:8443', 'hub.example.com', false],
+		['127.0.0.1:8443', '127.0.0.1', false],
+		['127.0.0.2', '127.0.0.1', true],
+	])('compares %s with %s', (sandbox, app, isolated) => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandbox,
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: `https://${app}/callback`,
+			}).isolated,
+		).toBe(isolated);
+	});
 });

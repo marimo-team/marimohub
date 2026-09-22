@@ -193,79 +193,87 @@ export class ReconciliationService {
 		const markedDeadSessions: Session[] = [];
 
 		for (const session of sessions) {
-			const sandboxId = session.sandbox_id;
-			if (!sandboxId) continue;
+			try {
+				const sandboxId = session.sandbox_id;
+				if (!sandboxId) continue;
 
-			const isLive = session.status === 'running' || session.status === 'starting';
+				const isLive = session.status === 'running' || session.status === 'starting';
 
-			if (!isLive && activeIds.has(sandboxId)) {
-				// Rule 1 — record is terminal OR mid-teardown (`terminating`) but the
-				// sandbox is still alive (and billing). A `terminating` record whose
-				// teardown never finished would otherwise leak the sandbox forever, since
-				// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Reclaim
-				// through the one seam: the record is already terminal, so this is a
-				// (save-then-)destroy plus the one-shot `sandbox_reclaimed_at` stamp.
+				if (!isLive && activeIds.has(sandboxId)) {
+					// Rule 1 — record is terminal OR mid-teardown (`terminating`) but the
+					// sandbox is still alive (and billing). A `terminating` record whose
+					// teardown never finished would otherwise leak the sandbox forever, since
+					// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Reclaim
+					// through the one seam: the record is already terminal, so this is a
+					// (save-then-)destroy plus the one-shot `sandbox_reclaimed_at` stamp.
 
-				// `expireStale()` runs immediately before this sweep, so a provision
-				// slower than the heartbeat TTL arrives here `expired` while it is still
-				// restoring files; tearing it down mid-restore mirror-deletes bucket keys.
-				const authorizationExpired =
-					session.authorization_expires_at !== undefined &&
-					now >= Date.parse(session.authorization_expires_at);
-				if (
-					session.status === 'expired' &&
-					!authorizationExpired &&
-					now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
-				) {
-					continue;
-				}
-				const save =
-					!authorizationExpired &&
-					!liveNotebooks.has(session.notebook_id) &&
-					sessionPersistsEdits(session);
-				if (await this.retirer.reclaim(session, save, thumbnailDeadlineAt)) reclaimed++;
-			} else if (isLive && !activeIds.has(sandboxId)) {
-				// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
-				// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it
-				// stops being served and gets reaped on schedule.
-
-				// A fresh `starting` record legitimately has no live sandbox yet: the saga
-				// writes the record (with sandbox_id) BEFORE creating the sandbox, and a
-				// cold provision can take minutes. Failing it here would strand the caller
-				// on a terminal record (setRunning no-ops) with a live sandbox behind it,
-				// and release the app claim mid-provision. Aged `starting` records still
-				// fall through: a provision that died must eventually be marked failed.
-				if (
-					session.status === 'starting' &&
-					now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
-				) {
-					continue;
-				}
-				if (session.app_pool && session.status === 'starting') {
-					const pool = await readPool(session.project_id, session.notebook_id);
+					// `expireStale()` runs immediately before this sweep, so a provision
+					// slower than the heartbeat TTL arrives here `expired` while it is still
+					// restoring files; tearing it down mid-restore mirror-deletes bucket keys.
+					const authorizationExpired =
+						session.authorization_expires_at !== undefined &&
+						now >= Date.parse(session.authorization_expires_at);
 					if (
-						pool?.members.some(
-							(member) =>
-								member.session_id === session.session_id &&
-								member.state === 'starting' &&
-								member.operation_expires_at > now,
-						)
-					)
+						session.status === 'expired' &&
+						!authorizationExpired &&
+						now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
+					) {
 						continue;
-				}
-				try {
-					const failed = await this.sessions.markFailedWithOutcome(
-						session.project_id,
-						session.session_id,
-					);
-					if (failed.transitioned) {
-						markedDead++;
-						markedDeadSessions.push(session);
 					}
-				} catch {
-					// Best-effort: the session may have been deleted concurrently.
+					const save =
+						!authorizationExpired &&
+						!liveNotebooks.has(session.notebook_id) &&
+						sessionPersistsEdits(session);
+					if (await this.retirer.reclaim(session, save, thumbnailDeadlineAt)) reclaimed++;
+				} else if (isLive && !activeIds.has(sandboxId)) {
+					// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
+					// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it
+					// stops being served and gets reaped on schedule.
+
+					// A fresh `starting` record legitimately has no live sandbox yet: the saga
+					// writes the record (with sandbox_id) BEFORE creating the sandbox, and a
+					// cold provision can take minutes. Failing it here would strand the caller
+					// on a terminal record (setRunning no-ops) with a live sandbox behind it,
+					// and release the app claim mid-provision. Aged `starting` records still
+					// fall through: a provision that died must eventually be marked failed.
+					if (
+						session.status === 'starting' &&
+						now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
+					) {
+						continue;
+					}
+					if (session.app_pool && session.status === 'starting') {
+						const pool = await readPool(session.project_id, session.notebook_id);
+						if (
+							pool?.members.some(
+								(member) =>
+									member.session_id === session.session_id &&
+									member.state === 'starting' &&
+									member.operation_expires_at > now,
+							)
+						)
+							continue;
+					}
+					try {
+						const failed = await this.sessions.markFailedWithOutcome(
+							session.project_id,
+							session.session_id,
+						);
+						if (failed.transitioned) {
+							markedDead++;
+							markedDeadSessions.push(session);
+						}
+					} catch {
+						// Best-effort: the session may have been deleted concurrently.
+					}
+					await this.sessions.releaseAppFor(session);
 				}
-				await this.sessions.releaseAppFor(session);
+			} catch (error) {
+				logOperationalError(
+					'session_reconcile_failed',
+					{ operation: 'session.reconcile', session_id: session.session_id },
+					error,
+				);
 			}
 		}
 

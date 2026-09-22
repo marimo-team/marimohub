@@ -610,4 +610,13 @@ describe('IdentityService', () => {
 			expect(list).toHaveBeenCalledOnce();
 		});
 	});
+
+	it('omits a corrupt record from getMany instead of failing the whole batch', async () => {
+		const A = uid('user-a');
+		const B = uid('user-b');
+		await identities.upsert({ id: A, email: 'a@example.com', name: 'A' });
+		await bucket.put(paths.identity(B), '{not json');
+
+		await expect(identities.getMany([A, B])).resolves.toEqual([expect.objectContaining({ id: A })]);
+	});
 });

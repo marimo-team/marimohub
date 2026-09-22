@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hasControlCharacter } from '../../../internal/validation';
 import { ValidationError } from '../../../errors';
 import { assertValidEnvironmentName } from '../environmentName';
 import { defineIntegration } from '../sdk';
@@ -62,6 +63,9 @@ export const customEnv = defineIntegration({
 	},
 
 	validate(config) {
+		if (Object.values(config.vars).some(hasControlCharacter)) {
+			throw new ValidationError('Environment value contains a control character.');
+		}
 		const seen = new Set<string>();
 		const names = [...Object.keys(config.vars), ...config.secrets.map((s) => s.name)];
 		for (const name of names) {

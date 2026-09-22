@@ -1,3 +1,4 @@
+import { shellQuote } from './shell';
 import { describe, expect, it } from 'vitest';
 import { buildMarimoLaunch, MARIMO_LAUNCH_STRATEGIES } from './marimoLaunch';
 import type { MarimoLaunchParams } from './marimoLaunch';
@@ -21,8 +22,8 @@ describe('buildMarimoLaunch', () => {
 	it('edit keeps --convert and --asset-url', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, mode: 'edit' });
 		expect(start).toContain('--convert');
-		expect(start).toContain('--asset-url="https://cdn.example.com/assets"');
-		expect(start).toContain('--base-url="/proxy/tok"');
+		expect(start).toContain("--asset-url='https://cdn.example.com/assets'");
+		expect(start).toContain("--base-url='/proxy/tok'");
 	});
 
 	it('adds file watching only when an edit surface requests it', () => {
@@ -54,8 +55,8 @@ describe('buildMarimoLaunch', () => {
 			"--headless --token --token-password-file '/tmp/.marimohub-kernel-token' --host 0.0.0.0 --port 2718",
 		);
 		// A hidden-but-real option on `marimo run` — the CDN fast path applies to apps.
-		expect(start).toContain('--asset-url="https://cdn.example.com/assets"');
-		expect(start).toContain('--base-url="/proxy/tok"');
+		expect(start).toContain("--asset-url='https://cdn.example.com/assets'");
+		expect(start).toContain("--base-url='/proxy/tok'");
 		// Deliberately left to marimo defaults (see LAUNCH_MODES).
 		expect(start).not.toContain('--include-code');
 		expect(start).not.toContain('--watch');
@@ -224,5 +225,29 @@ describe('buildMarimoLaunch', () => {
 			);
 			expect(hostile.setup[2].command).toContain(`--script 'apps/it'\\''s a && b.py'`);
 		});
+	});
+});
+
+describe('buildMarimoLaunch argument quoting', () => {
+	const BASE: MarimoLaunchParams = {
+		notebookFile: 'notebook.py',
+		port: 2718,
+		host: '0.0.0.0',
+		tokenPasswordFile: '/tmp/.marimohub-kernel-token',
+	};
+
+	it('escapes command substitution in --asset-url', () => {
+		const { start } = buildMarimoLaunch({
+			...BASE,
+			assetUrl: 'https://cdn.example.com/$(id > /tmp/pwned)',
+		});
+		expect(start).toContain(
+			`--asset-url=${shellQuote('https://cdn.example.com/$(id > /tmp/pwned)')}`,
+		);
+	});
+
+	it('escapes a double quote in --base-url', () => {
+		const { start } = buildMarimoLaunch({ ...BASE, baseUrl: '/proxy/a"; touch /tmp/pwned; #' });
+		expect(start).toContain(`--base-url=${shellQuote('/proxy/a"; touch /tmp/pwned; #')}`);
 	});
 });

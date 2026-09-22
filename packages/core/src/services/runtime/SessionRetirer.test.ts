@@ -1,3 +1,4 @@
+import { execResult } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
@@ -441,13 +442,11 @@ describe('SessionRetirer', () => {
 		});
 		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
 
-		await expect(retirer(fakeComputeFrom(instance)).retire(session)).rejects.toThrow(
-			'Failed to stop vscode before session retirement',
-		);
+		await expect(retirer(fakeComputeFrom(instance)).retire(session)).resolves.toBeUndefined();
 
 		expect(capture).not.toHaveBeenCalled();
-		expect(calls.destroy).toBe(0);
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
 
 	it('captures an owner-scoped filesystem snapshot during takeover', async () => {
@@ -794,5 +793,28 @@ describe('SessionRetirer', () => {
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer).toMatchObject({
 			drain_lease_id: 'lease-recovery',
 		});
+	});
+
+	it('still destroys the sandbox when a secondary surface refuses to stop', async () => {
+		const { instance, calls } = makeFakeSandbox({
+			execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
+		});
+		const session = await persistentSession({
+			status: 'terminating',
+			surfaces: {
+				vscode: {
+					status: 'ready',
+					port: 8443,
+					url: 'https://vscode.example',
+					started_at: new Date().toISOString(),
+				},
+			},
+		});
+		const service = retirer(fakeComputeFrom(instance));
+
+		await expect(service.retire(session)).resolves.toBeUndefined();
+
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
 });

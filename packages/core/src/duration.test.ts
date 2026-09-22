@@ -1,3 +1,4 @@
+import { MAX_TIMER_DELAY_MS } from './async';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Millis, Seconds, sleep } from './duration';
 
@@ -78,4 +79,13 @@ describe('sleep', () => {
 		expect(vi.getTimerCount()).toBe(0);
 		expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
 	});
+});
+
+describe('sleep timer limits', () => {
+	it.each([MAX_TIMER_DELAY_MS + 1, Infinity, Number.NaN])(
+		'rejects an unsupported delay of %s ms',
+		async (delay) => {
+			await expect(sleep(delay)).rejects.toThrow(RangeError);
+		},
+	);
 });

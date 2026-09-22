@@ -294,9 +294,20 @@ export class SessionRetirer {
 	): Promise<boolean> {
 		if (!session.sandbox_id) return true;
 		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
-		await this.stopSecondarySurfaces(sandbox, session);
+		let canCapture = captureBeforeDestroy;
+		try {
+			await this.stopSecondarySurfaces(sandbox, session);
+		} catch (error) {
+			// A live secondary writer makes a consistent capture unsafe.
+			canCapture = false;
+			logOperationalError(
+				'session_surface_stop_failed',
+				{ operation: 'session_retire.stop_surfaces', session_id: session.session_id },
+				error,
+			);
+		}
 		let persisted = false;
-		if (captureBeforeDestroy) {
+		if (canCapture) {
 			try {
 				const persistEdits =
 					sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));

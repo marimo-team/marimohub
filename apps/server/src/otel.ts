@@ -39,8 +39,12 @@ export interface OtelHandle {
 	shutdown(): Promise<void>;
 }
 
+function isSdkDisabled(env: Record<string, string | undefined>): boolean {
+	return env.OTEL_SDK_DISABLED?.toLowerCase() === 'true';
+}
+
 export function isTracingEnabled(env: Record<string, string | undefined> = process.env): boolean {
-	if (env.OTEL_SDK_DISABLED === 'true') return false;
+	if (isSdkDisabled(env)) return false;
 	// Only the OTLP exporter (the spec default) is implemented. Any other
 	// OTEL_TRACES_EXPORTER selection disables tracing rather than silently
 	// exporting somewhere the operator did not choose.
@@ -56,7 +60,7 @@ export function isTracingEnabled(env: Record<string, string | undefined> = proce
 export function metricsExporter(
 	env: Record<string, string | undefined> = process.env,
 ): 'otlp' | 'prometheus' | null {
-	if (env.OTEL_SDK_DISABLED === 'true') return null;
+	if (isSdkDisabled(env)) return null;
 	const exporter = env.OTEL_METRICS_EXPORTER ?? 'otlp';
 	if (exporter === 'prometheus') return 'prometheus';
 	if (exporter !== 'otlp') return null;
@@ -70,7 +74,7 @@ export function metricsExporter(
  * logs, and any other (unimplemented) selection disables log export.
  */
 export function isLogsEnabled(env: Record<string, string | undefined> = process.env): boolean {
-	if (env.OTEL_SDK_DISABLED === 'true') return false;
+	if (isSdkDisabled(env)) return false;
 	if ((env.OTEL_LOGS_EXPORTER ?? 'otlp') !== 'otlp') return false;
 	return Boolean(env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT);
 }

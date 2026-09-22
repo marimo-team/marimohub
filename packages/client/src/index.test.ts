@@ -229,3 +229,28 @@ describe('apiData', () => {
 		).toBeFunction();
 	});
 });
+
+describe('dispatchRequest binary bodies', () => {
+	it('forwards an octet-stream request body byte-for-byte', async () => {
+		const fn = stubFetch(async () => jsonResponse({ success: true, data: null }));
+		const bytes = new Uint8Array([0x00, 0xff, 0x80, 0xfe, 0x41]);
+
+		await apiData(
+			apiClient.PUT('/api/v1/projects/{pid}/notebooks/{nid}/workspace/files', {
+				params: {
+					path: { pid: 'proj-7h2k9qm4xz7rp3w8', nid: 'nb-7h2k9qm4xz7rp3w8' },
+					query: { path: 'data/blob.bin' },
+				},
+				headers: { 'content-type': 'application/octet-stream' },
+				// The generated type spells `format: binary` as `string`; the runtime
+				// payload is raw bytes.
+				body: bytes as unknown as string,
+				bodySerializer: (body) => body as unknown as BodyInit,
+			}),
+		);
+
+		const init = fn.mock.calls[0]?.[1];
+		const sent = new Uint8Array(await new Response(init?.body as BodyInit).arrayBuffer());
+		expect([...sent]).toEqual([...bytes]);
+	});
+});

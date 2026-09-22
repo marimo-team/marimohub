@@ -2174,6 +2174,24 @@ describe('ProjectIntegrationsStore', () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it('rejects invalid custom_env values without disrupting session rendering', async () => {
+		const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
+		await expect(
+			store.create(
+				pid,
+				{
+					kind: 'custom_env',
+					name: 'multiline',
+					config: { vars: { CERT: 'line1\nline2' } },
+				},
+				ACTOR,
+			),
+		).rejects.toThrow(/control character/);
+		await expect(
+			store.resolveForSession(pid, renderContext(createSessionId())),
+		).resolves.toBeUndefined();
+	});
 });
 
 describe('OrgIntegrationsStore + project inheritance', () => {

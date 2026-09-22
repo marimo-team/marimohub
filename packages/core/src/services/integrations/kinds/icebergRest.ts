@@ -252,6 +252,7 @@ export const icebergRest = defineIntegration({
 			throw new ValidationError('SigV4 extra properties conflict with the typed auth fields.');
 		}
 		validateExtraProperties(config.extra_properties, OWNED_PROP_KEYS);
+		assertSafeHeaders(headersFromProperties(config.extra_properties));
 		if (
 			config.storage.scheme === 'catalog' &&
 			config.storage.vended_s3 !== undefined &&
@@ -1437,6 +1438,15 @@ function typeText(type: unknown): string {
 		default:
 			return typeof record.type === 'string' ? record.type : 'unknown';
 	}
+}
+
+function headersFromProperties(properties: Record<string, string>): Record<string, string> {
+	const prefix = 'header.';
+	return Object.fromEntries(
+		Object.entries(properties)
+			.filter(([key]) => key.toLowerCase().startsWith(prefix))
+			.map(([key, value]) => [key.slice(prefix.length), value]),
+	);
 }
 
 function assertSafeHeaders(headers: Record<string, string>): void {

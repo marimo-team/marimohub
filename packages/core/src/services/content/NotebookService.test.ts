@@ -2564,6 +2564,25 @@ describe('NotebookService', () => {
 			]);
 		});
 	});
+
+	it('persists a deps-only update on a local notebook', async () => {
+		const meta = await notebooks.createNotebook(
+			projectId,
+			{ title: 'NB', description: 'D', code: 'v1', deps: 'old-deps' },
+			ACTOR,
+		);
+		const nb = paths.project(projectId).notebook(meta.id);
+
+		await notebooks.updateNotebook(projectId, meta.id, { deps: 'new-deps' }, ACTOR);
+
+		expect(await (await bucket.get(nb.deps))!.text()).toBe('new-deps');
+		expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('v1');
+		expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
+		const { source } = await notebooks.getNotebook(projectId, meta.id);
+		expect(await (await bucket.get(nb.version(source.current_version_id!).deps))!.text()).toBe(
+			'new-deps',
+		);
+	});
 });
 
 describe('NotebookService security labels', () => {
