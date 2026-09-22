@@ -133,7 +133,7 @@ To verify the direct path, temporarily set the mode to `direct`.
 Restart the hub and start a new notebook session.
 After verification, restore `auto`.
 For clients outside the cluster, use a LoadBalancer or custom TLS passthrough endpoint.
-See [CoreWeave's runner setup guide](https://coreweave-dbfa0e8d-bjacobs-sandbox-runner-direct-data-plane.mintlify.site/products/sandboxes/operations/direct-data-plane).
+See [CoreWeave's runner setup guide](https://docs.coreweave.com/products/sandboxes/operations/direct-data-plane).
 
 ### 4. Sandbox template
 
