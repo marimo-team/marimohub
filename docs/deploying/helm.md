@@ -74,6 +74,9 @@ ingress controller, cert-manager, and any kernel-namespace resources separately
 
 ## ServiceAccount
 
+For CoreWeave CAIOS, see [Pod Identity for the API and maintenance pods](./cks.md#pod-identity-for-the-api-and-maintenance-pods)
+for the access policy, webhook installation, and `caios.coreweave.com/inject` annotation.
+
 The chart creates a ServiceAccount using its fullname by default. Use annotations
 to connect it to a cloud workload identity:
 

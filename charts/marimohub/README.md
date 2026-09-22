@@ -94,6 +94,17 @@ pod is pinned to one replica with the `Recreate` strategy — don't scale it.
 
 ### ServiceAccount
 
+For CoreWeave CAIOS, see [Pod Identity for the API and maintenance pods](../../docs/deploying/cks.md#pod-identity-for-the-api-and-maintenance-pods)
+for the access policy and webhook installation. Add the annotation in your chart values:
+
+```yaml
+serviceAccount:
+  create: true
+  name: marimohub
+  annotations:
+    caios.coreweave.com/inject: 'true'
+```
+
 By default, the chart creates a ServiceAccount using the chart fullname and uses
 it for both the API and maintenance pods. Add cloud workload identity annotations
 to the generated account:
