@@ -36,7 +36,9 @@ export function Thumbnail({
 			) : (
 				<div className="flex min-w-0 flex-col items-center gap-3 px-6 text-muted-foreground">
 					<FileText className="size-9 opacity-60" />
-					<span className="line-clamp-2 text-center text-sm font-medium">{title}</span>
+					<span className="line-clamp-2 text-center text-sm font-medium wrap-anywhere">
+						{title}
+					</span>
 				</div>
 			)}
 		</div>
