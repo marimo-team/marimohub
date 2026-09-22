@@ -10,9 +10,13 @@ import { withBasePath } from '@/lib/basePath';
 import { notebookQueryParams } from '@/lib/notebookUrls';
 
 export function ShareUrlMenu({
+	label,
+	successMessage,
 	options = [],
 	onAction,
 }: {
+	label: string;
+	successMessage: string;
 	options?: DropdownMenuOption[];
 	onAction?: (action: string) => void;
 }) {
@@ -20,7 +24,7 @@ export function ShareUrlMenu({
 	const { copy } = useCopyToClipboard();
 	return (
 		<DropdownMenu
-			label="Share notebook"
+			label={label}
 			icon={<Share2 className="size-3.5" />}
 			triggerClassName="h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11"
 			options={[
@@ -39,7 +43,7 @@ export function ShareUrlMenu({
 				}
 				const url = new URL(withBasePath(location.pathname), window.location.origin);
 				url.search = notebookQueryParams(location.search).toString();
-				void copy(url.toString()).then((copied) => copied && toast.success('Notebook URL copied'));
+				void copy(url.toString()).then((copied) => copied && toast.success(successMessage));
 			}}
 		/>
 	);
@@ -51,6 +55,7 @@ interface ShareMenuProps {
 	title: string;
 	canRunApp: boolean;
 	canManageLinks?: boolean;
+	isApp?: boolean;
 }
 
 export function ShareMenu({
@@ -59,6 +64,7 @@ export function ShareMenu({
 	title,
 	canRunApp,
 	canManageLinks = false,
+	isApp = false,
 }: ShareMenuProps) {
 	const [linksOpen, setLinksOpen] = useState(false);
 	const navigate = useNavigate();
@@ -80,6 +86,8 @@ export function ShareMenu({
 	return (
 		<>
 			<ShareUrlMenu
+				label={isApp ? 'Share app' : 'Share notebook'}
+				successMessage={isApp ? 'App URL copied' : 'Notebook URL copied'}
 				options={[
 					{ id: 'app-links', label: 'App links', icon: <Link className="size-3.5" /> },
 					{

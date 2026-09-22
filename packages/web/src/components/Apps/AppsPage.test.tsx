@@ -1,6 +1,8 @@
 import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from '@/context/ThemeContext';
@@ -101,6 +103,18 @@ function setup(
 }
 
 describe('stakeholder apps', () => {
+	it('shares the app URL without exposing notebook actions', async () => {
+		const user = userEvent.setup();
+		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+		const success = vi.spyOn(toast, 'success');
+		setup(`${app.url}?id=123&access_token=evil&session_id=evil`);
+		await user.click(await screen.findByRole('button', { name: 'Share app' }));
+		expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+		await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+		expect(writeText).toHaveBeenCalledWith(`${window.location.origin}${app.url}?id=123`);
+		expect(success).toHaveBeenCalledWith('App URL copied');
+	});
+
 	it('retries an initial gallery failure without navigating away', async () => {
 		const appsResponse = vi
 			.fn()

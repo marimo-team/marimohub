@@ -40,7 +40,7 @@ export function SnapshotPage() {
 					Snapshot
 				</Chip>
 				<div className="ml-auto flex items-center gap-2">
-					<ShareUrlMenu />
+					<ShareUrlMenu label="Share snapshot" successMessage="Snapshot URL copied" />
 				</div>
 			</header>
 			<StaticNotebookView

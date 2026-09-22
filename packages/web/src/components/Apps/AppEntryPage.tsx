@@ -106,7 +106,7 @@ function StakeholderApp({
 					Back to apps
 				</Link>
 				<h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
-				<ShareUrlMenu />
+				<ShareUrlMenu label="Share app" successMessage="App URL copied" />
 			</header>
 			{!canRun ? (
 				<p className="p-6">You cannot run this app.</p>

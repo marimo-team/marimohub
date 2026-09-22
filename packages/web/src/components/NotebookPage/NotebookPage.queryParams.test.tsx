@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useNavigate } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { useTheme } from '@/context/ThemeContext';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
 
@@ -174,16 +175,18 @@ describe('NotebookPage query parameters', () => {
 
 	it('offers Copy URL on the app page without offering Run as app again', async () => {
 		const user = userEvent.setup();
+		const success = vi.spyOn(toast, 'success');
 		const writeText = vi.fn(() => Promise.resolve());
 		vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText);
 		makeFetch({ role: 'editor', session: runningSession({ mode: 'app' }) });
 		renderPage('app', { search: '?id=123&access_token=evil' });
-		await user.click(await screen.findByRole('button', { name: 'Share notebook' }));
+		await user.click(await screen.findByRole('button', { name: 'Share app' }));
 		expect(screen.queryByRole('menuitem', { name: 'Run as app' })).toBeNull();
 		await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
 		expect(writeText).toHaveBeenCalledWith(
 			`${window.location.origin}/projects/proj-x/notebooks/nb-1/app?id=123`,
 		);
+		expect(success).toHaveBeenCalledWith('App URL copied');
 	});
 
 	it.each(['app', 'edit'] as const)('forwards filtered parameters in %s mode', async (variant) => {
