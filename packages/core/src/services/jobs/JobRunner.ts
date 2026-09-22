@@ -24,6 +24,7 @@ import { resolveBaseImage } from '../runtime/resolveBaseImage';
 import { resolveComputeProfile, toComputeResourceRecord } from '../runtime/resolveComputeProfile';
 import type { ResolvedComputeProfile } from '../runtime/resolveComputeProfile';
 import { resolveLaunchStrategyForSession } from '../runtime/launchStrategy';
+import { resolveNotebookLaunchSource } from '../runtime/notebookLaunchSource';
 import { SandboxProvisioner } from '../runtime/SandboxProvisioner';
 import type { BucketConfig, PreparedSandbox, SessionEnv } from '../runtime/SandboxProvisioner';
 import { listFileSizes, readCappedFile } from '../runtime/sandboxFiles';
@@ -476,13 +477,17 @@ export class JobRunner {
 			policy.persistSessionEdits && run.source_version_id
 				? nb.version(run.source_version_id)
 				: undefined;
+		const launchSource = resolveNotebookLaunchSource({
+			entryNotebook: policy.entryNotebook,
+			workspacePrefix: syncedPaths?.workspacePrefix ?? nb.workspacePrefix,
+			localVersion,
+		});
 		const gitPrefix =
 			notebook.source.type === 'git' && notebook.source.sync_mode === 'pull'
 				? syncedPaths?.gitPrefix
 				: undefined;
 		const launchStrategy = await resolveLaunchStrategyForSession({
-			entryNotebook: policy.entryNotebook,
-			workspacePrefix: syncedPaths?.workspacePrefix,
+			entryNotebookKey: launchSource.entryNotebookKey,
 			bucket,
 		});
 		// A resolver failure surfaces as the sanitized provision error, never as the
@@ -515,12 +520,7 @@ export class JobRunner {
 			// workspace mirror, and outputs belong under the run prefix only.
 			workspaceLoadMode: 'copy-only' as const,
 			workspacePrefix: syncedPaths?.workspacePrefix,
-			workspaceOverlay: localVersion
-				? [
-						{ path: 'notebook.py', key: localVersion.code },
-						{ path: 'pyproject.toml', key: localVersion.deps },
-					]
-				: undefined,
+			workspaceOverlay: launchSource.workspaceOverlay,
 			gitPrefix,
 			workspaceArchive: syncedPaths?.workspaceArchive,
 		};

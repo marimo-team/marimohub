@@ -328,6 +328,7 @@ export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolv
 export type { ComputeProfileConfig, ResolvedComputeProfile } from './runtime/resolveComputeProfile';
 export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';
 export type { ResolvedLaunchStrategy } from './runtime/launchStrategy';
+export { resolveNotebookLaunchSource } from './runtime/notebookLaunchSource';
 export { buildMarimoLaunch } from './runtime/marimoLaunch';
 export type { MarimoLaunchMode, MarimoLaunchStrategyName } from './runtime/marimoLaunch';
 export { executeInActiveKernel, KernelDiscoveryTimeoutError } from './runtime/activeKernel';

@@ -1,50 +1,42 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createVersionId } from '../../ids';
-import { paths } from '../../paths';
-import { MemoryBucket } from '../../testing';
+import { MemoryBucket } from '../../testing/MemoryBucket';
 import { resolveLaunchStrategyForSession } from './launchStrategy';
 
 const INLINE_NOTEBOOK = ['# /// script', '# dependencies = ["cowsay==6.1"]', '# ///', ''].join(
 	'\n',
 );
-const ENTRY = 'apps/dash.py';
-// The real paths helper, so a trailing-slash change in workspacePrefix breaks here.
-const PREFIX = paths
-	.project(createProjectId())
-	.notebook(createNotebookId())
-	.version(createVersionId()).workspacePrefix;
+const ENTRY_KEY = 'workspace/notebook.py';
 
 async function seededBucket(entryCode: string): Promise<MemoryBucket> {
 	const bucket = new MemoryBucket();
-	await bucket.put(PREFIX + ENTRY, entryCode);
+	await bucket.put(ENTRY_KEY, entryCode);
 	return bucket;
 }
 
 describe('resolveLaunchStrategyForSession', () => {
-	it('uses the default without reading the bucket when there is no synced workspace', async () => {
-		const bucket = new MemoryBucket();
-		const get = vi.spyOn(bucket, 'get');
+	it('detects inline metadata in the selected source', async () => {
 		const resolved = await resolveLaunchStrategyForSession({
-			entryNotebook: 'notebook.py',
-			bucket,
+			entryNotebookKey: ENTRY_KEY,
+			bucket: await seededBucket(INLINE_NOTEBOOK),
 		});
-		expect(resolved).toEqual({ strategy: 'uv-sync-edit', detectionFailed: false });
-		expect(get).not.toHaveBeenCalled();
+		expect(resolved).toEqual({ strategy: 'uv-script-pins', detectionFailed: false });
 	});
 
-	it('detects inline metadata in the synced entry file', async () => {
+	it.each([
+		'# /// script\n# dependencies = []\n# ///',
+		'# /// script\n# dependencies = [invalid TOML\n# ///',
+		'# /// script',
+	])('delegates metadata validation to uv: %s', async (code) => {
 		const resolved = await resolveLaunchStrategyForSession({
-			entryNotebook: ENTRY,
-			workspacePrefix: PREFIX,
-			bucket: await seededBucket(INLINE_NOTEBOOK),
+			entryNotebookKey: ENTRY_KEY,
+			bucket: await seededBucket(code),
 		});
 		expect(resolved).toEqual({ strategy: 'uv-script-pins', detectionFailed: false });
 	});
 
 	it('uses the default when the entry file has no inline metadata', async () => {
 		const resolved = await resolveLaunchStrategyForSession({
-			entryNotebook: ENTRY,
-			workspacePrefix: PREFIX,
+			entryNotebookKey: ENTRY_KEY,
 			bucket: await seededBucket('import marimo\n'),
 		});
 		expect(resolved).toEqual({ strategy: 'uv-sync-edit', detectionFailed: false });
@@ -52,8 +44,7 @@ describe('resolveLaunchStrategyForSession', () => {
 
 	it('falls back leniently when the entry file is missing', async () => {
 		const resolved = await resolveLaunchStrategyForSession({
-			entryNotebook: ENTRY,
-			workspacePrefix: PREFIX,
+			entryNotebookKey: ENTRY_KEY,
 			bucket: new MemoryBucket(),
 		});
 		expect(resolved).toEqual({ strategy: 'uv-sync-edit', detectionFailed: true });
@@ -63,8 +54,7 @@ describe('resolveLaunchStrategyForSession', () => {
 		const bucket = new MemoryBucket();
 		bucket.get = () => Promise.reject(new Error('boom'));
 		const resolved = await resolveLaunchStrategyForSession({
-			entryNotebook: ENTRY,
-			workspacePrefix: PREFIX,
+			entryNotebookKey: ENTRY_KEY,
 			bucket,
 		});
 		expect(resolved).toEqual({ strategy: 'uv-sync-edit', detectionFailed: true });
@@ -72,14 +62,13 @@ describe('resolveLaunchStrategyForSession', () => {
 
 	it('falls back leniently when the entry file fails to decode', async () => {
 		const bucket = await seededBucket(INLINE_NOTEBOOK);
-		const object = await bucket.get(PREFIX + ENTRY);
+		const object = await bucket.get(ENTRY_KEY);
 		vi.spyOn(bucket, 'get').mockResolvedValue({
 			...object!,
 			text: () => Promise.reject(new Error('bad encoding')),
 		});
 		const resolved = await resolveLaunchStrategyForSession({
-			entryNotebook: ENTRY,
-			workspacePrefix: PREFIX,
+			entryNotebookKey: ENTRY_KEY,
 			bucket,
 		});
 		expect(resolved).toEqual({ strategy: 'uv-sync-edit', detectionFailed: true });

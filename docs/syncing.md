@@ -414,20 +414,18 @@ Returns a fresh `sync_url` + `sync_token`.
 
 ## Dependencies
 
-A session environment starts with the packages in the sandbox image. marimohub
-then applies dependency sources from the synced workspace in this order:
+marimohub adds dependencies to the sandbox image environment in this order:
 
-- If the synced root contains `pyproject.toml`, `uv sync --inexact` adds its
-  dependencies to the base environment. If this command fails, the session
-  continues with the base environment.
-- [PEP 723](https://peps.python.org/pep-0723/) inline metadata
-  (`# /// script … # ///`) in the entry notebook adds another dependency layer.
-  marimohub installs these dependencies with `uv export --script` and
-  `uv pip install`. If uv cannot resolve them, the session fails.
+1. Synced root `pyproject.toml` dependencies, through `uv sync --inexact`.
+2. Entry notebook [PEP 723](https://peps.python.org/pep-0723/) dependencies,
+   through `uv export --script` and `uv pip install`.
 
-If both sources declare the same package, inline metadata takes precedence.
-`marimo` is the exception: marimohub keeps the image version and prunes dependencies
-used only by marimo. No configuration is necessary.
+Setup failures stop startup with `PYTHON_ENV_SETUP_FAILED`.
+Inline pins can replace project versions, so keep requirements compatible.
+The image supplies marimo regardless of notebook pins.
+
+Local notebooks follow the same [dependency contract](sandbox-image.md#inline-dependencies),
+including Python-version and custom-index limits.
 
 ## Read-only sessions
 
