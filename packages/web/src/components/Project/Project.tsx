@@ -904,7 +904,7 @@ function useProjectContent() {
 										<span
 											className={cn(
 												'items-center gap-1 text-xs text-muted-foreground',
-												gallery ? 'flex min-w-0 flex-1' : 'hidden w-32 sm:flex',
+												gallery ? 'flex min-w-0 flex-1 overflow-hidden' : 'hidden w-32 sm:flex',
 											)}
 										>
 											<span className="shrink-0 text-muted-foreground/70">by</span>
@@ -918,7 +918,12 @@ function useProjectContent() {
 										<time
 											dateTime={nb.updated_at}
 											title={new Date(nb.updated_at).toLocaleString()}
-											className="min-w-14 shrink-0 text-right text-xs whitespace-nowrap tabular-nums text-muted-foreground"
+											className={cn(
+												'text-right text-xs tabular-nums text-muted-foreground',
+												gallery
+													? 'min-w-0 max-w-1/2 truncate'
+													: 'min-w-14 shrink-0 whitespace-nowrap',
+											)}
 										>
 											{formatRelative(nb.updated_at)}
 										</time>
