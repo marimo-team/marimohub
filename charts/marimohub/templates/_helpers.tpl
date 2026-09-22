@@ -183,7 +183,13 @@ spec:
       volumeMounts:
         - name: tmp
           mountPath: /tmp
+        {{- with $v.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
   volumes:
     - name: tmp
       emptyDir: {}
+    {{- with $v.extraVolumes }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end -}}
