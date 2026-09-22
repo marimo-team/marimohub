@@ -95,6 +95,48 @@ describe('useUsersQuery', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it('batches large user directories and merges identities across every response', async () => {
+		const ids = Array.from({ length: 205 }, (_, index) => `user-${index}`);
+		const directory = Object.fromEntries(
+			ids.map((id) => [
+				id,
+				{ id, name: `Name ${id}`, email: `${id}@example.com`, picture_url: null },
+			]),
+		);
+		const batches: string[][] = [];
+		stubFetch(async (input) => {
+			const batch = new URL(String(input), 'http://test.local').searchParams.get('ids')!.split(',');
+			batches.push(batch);
+			if (batch.length > 100) return jsonError('VALIDATION_ERROR', 'Too many ids', 422);
+			return jsonOk(
+				Object.fromEntries(batch.filter((id) => id in directory).map((id) => [id, directory[id]])),
+			);
+		});
+		const { result } = renderHookWithClient(
+			() => useUsersQuery([...ids, ids[0], undefined, 'unknown']),
+			{ toaster: false },
+		);
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(batches.map((batch) => batch.length)).toEqual([100, 100, 6]);
+		expect(batches.flat().sort()).toEqual([...ids, 'unknown'].sort());
+		expect(result.current.data).toEqual(directory);
+	});
+
+	it('reports a failed batch instead of returning an incomplete directory', async () => {
+		const ids = Array.from({ length: 101 }, (_, index) => `user-${index}`);
+		stubFetch(async (input) => {
+			const batch = new URL(String(input), 'http://test.local').searchParams.get('ids')!.split(',');
+			return batch.length === 1
+				? jsonError('SERVICE_UNAVAILABLE', 'Unavailable', 503)
+				: jsonOk({ [batch[0]]: { id: batch[0] } });
+		});
+		const { result } = renderHookWithClient(() => useUsersQuery(ids), { toaster: false });
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.data).toBeUndefined();
+	});
+
 	it('filters out undefined ids and encodes the joined list', async () => {
 		const fetchMock = stubFetch(async () => jsonOk({}));
 

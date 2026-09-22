@@ -1,3 +1,4 @@
+import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
 	useInfiniteQuery,
 	useQuery,
@@ -275,12 +276,23 @@ export function useUsersQuery(ids: readonly (string | undefined)[]) {
 	const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))].sort();
 	return useQuery({
 		queryKey: userKeys.resolve(unique),
-		queryFn: () =>
-			apiData(
-				apiClient.GET('/api/v1/users', {
-					params: { query: { ids: unique.join(',') } },
-				}),
-			),
+		queryFn: async ({ signal }): Promise<UserDirectory> => {
+			const batches = Array.from(
+				{ length: Math.ceil(unique.length / MAX_RESOLVED_USERS) },
+				(_, index) => unique.slice(index * MAX_RESOLVED_USERS, (index + 1) * MAX_RESOLVED_USERS),
+			);
+			const results = await Promise.all(
+				batches.map((batch) =>
+					apiData(
+						apiClient.GET('/api/v1/users', {
+							params: { query: { ids: batch.join(',') } },
+							signal,
+						}),
+					),
+				),
+			);
+			return Object.fromEntries(results.flatMap((users) => Object.entries(users)));
+		},
 		enabled: unique.length > 0,
 		staleTime: 5 * 60 * 1000,
 	});

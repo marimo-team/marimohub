@@ -135,7 +135,7 @@ export function SyncSettingsDialog({
 						.
 					</p>
 				</div>
-				{canOperate && (
+				{canManage && (
 					<Button type="button" size="sm" onPress={() => setConfirmRotate(true)}>
 						Rotate token
 					</Button>
@@ -150,7 +150,7 @@ export function SyncSettingsDialog({
 			) : (
 				<p className="rounded-md border border-input bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
 					The token is shown only when the notebook is created or its token is rotated.
-					{canOperate ? ' Rotate it to mint a new one.' : ''}
+					{canManage ? ' Rotate it to mint a new one.' : ''}
 				</p>
 			)}
 		</div>
@@ -258,7 +258,7 @@ export function SyncSettingsDialog({
 	return (
 		<>
 			{dialog}
-			{canOperate && source?.sync_mode === 'push' && (
+			{canManage && source?.sync_mode === 'push' && (
 				<ConfirmDialog
 					isOpen={confirmRotate}
 					onClose={() => setConfirmRotate(false)}

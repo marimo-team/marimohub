@@ -126,6 +126,8 @@ export const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024; // 25MB
  */
 export const MAX_REQUEST_BYTES = 10 * 1024 * 1024; // 10MB
 
+export const MAX_RESOLVED_USERS = 100;
+
 /**
  * Max concurrent object reads when a service scans a prefix (list-then-get-each).
  * Object storage handles high request concurrency well, so this turns an N-round-

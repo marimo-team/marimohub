@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { ForbiddenError, NotFoundError, UserId } from '@marimo-hub/core';
+import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
 	authorizationService,
 	createApp,
@@ -7,8 +8,6 @@ import {
 	jsonContent,
 	UserResponseSchema,
 } from '../shared';
-
-const MAX_RESOLVED_USERS = 100;
 
 function parseUserIds(value = ''): string[] {
 	return value

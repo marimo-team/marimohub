@@ -893,15 +893,18 @@ function compareQueryValues(left: unknown, right: unknown): number {
 	if (typeof left === 'number' || typeof right === 'number') {
 		const a = parseNumericCell(left);
 		const b = parseNumericCell(right);
-		if (a !== undefined && b !== undefined) return a - b;
+		if (a !== undefined && b !== undefined) return a < b ? -1 : a > b ? 1 : 0;
 	}
 	return renderCell(left).localeCompare(renderCell(right), undefined, { numeric: true });
 }
 
-function parseNumericCell(value: unknown): number | undefined {
+function parseNumericCell(value: unknown): number | bigint | undefined {
 	if (typeof value === 'number') return value;
-	if (typeof value !== 'string' || !value.trim()) return undefined;
-	const number = Number(value);
+	if (typeof value !== 'string') return undefined;
+	const text = value.trim();
+	if (!text) return undefined;
+	if (/^[+-]?\d+$/.test(text)) return BigInt(text);
+	const number = Number(text);
 	return Number.isFinite(number) ? number : undefined;
 }
 

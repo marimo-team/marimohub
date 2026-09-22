@@ -38,6 +38,21 @@ describe('QueryResultTable column sorting', () => {
 			expected: ['-5', '-3', '1.25', '1.5'],
 		},
 		{
+			name: 'mixed integers beyond number precision',
+			values: ['9007199254740993', 9007199254740992],
+			expected: ['9007199254740992', '9007199254740993'],
+		},
+		{
+			name: 'mixed negative integers beyond number precision',
+			values: [-9007199254740992, '-9007199254740993'],
+			expected: ['-9007199254740993', '-9007199254740992'],
+		},
+		{
+			name: 'integer strings and fractional numbers',
+			values: [2.5, '2', '-3', -2.5],
+			expected: ['-3', '-2.5', '2', '2.5'],
+		},
+		{
 			name: 'large integer strings',
 			values: ['9223372036854775809', '9223372036854775808'],
 			expected: ['9223372036854775808', '9223372036854775809'],

@@ -86,7 +86,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		);
 	});
 
-	it('keeps source settings read-only but operational controls available to editors', async () => {
+	it('keeps source settings and token rotation restricted for editors', async () => {
 		const user = userEvent.setup();
 		makeFetch({ role: 'editor', notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
@@ -96,7 +96,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
 		expect(repo).toHaveAttribute('readonly');
 		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
-		expect(screen.getByRole('button', { name: 'Rotate token' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
 	});
 
 	it('offers git notebook creation only to managers', async () => {

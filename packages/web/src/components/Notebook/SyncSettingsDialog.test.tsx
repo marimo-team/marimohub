@@ -209,15 +209,24 @@ describe('SyncSettingsDialog', () => {
 		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
 	});
 
-	it('keeps settings read-only while allowing editor operations', async () => {
-		setup({ canManage: false, canOperate: true, syncProviders: ['github'] });
+	it('allows editors to sync without managing settings or rotating credentials', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({ canManage: false, canOperate: true, syncProviders: ['github'] });
 
 		const repo = await screen.findByLabelText('Repository');
 		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
 		expect(repo).toHaveAttribute('readonly');
 		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
-		expect(screen.getByRole('button', { name: 'Rotate token' })).toBeInTheDocument();
-		expect(await screen.findByRole('button', { name: 'Sync now' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
+		expect(screen.queryByText(/Rotate it to mint a new one/)).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Rotate' })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole('button', { name: 'Sync now' }));
+		await waitFor(() =>
+			expect(
+				calls.some((call) => call.method === 'POST' && call.url.endsWith('/source/sync')),
+			).toBe(true),
+		);
+		expect(calls.some((call) => call.url.endsWith('/sync-token/rotate'))).toBe(false);
 	});
 
 	it('rotates the token after confirmation and displays it once', async () => {
