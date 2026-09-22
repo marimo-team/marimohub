@@ -110,7 +110,6 @@ Details: [Get started with sandboxes](https://docs.coreweave.com/products/sandbo
 #### For performance: enable direct runner connections
 
 Direct mTLS connections bypass the Gateway for exec, logs, and file transfers.
-During preview, CoreWeave must enable direct connections for your organization.
 
 For this guide's hub and runner in the same cluster, save `data-plane.yaml`:
 
