@@ -243,6 +243,17 @@ describe('sealConfig / openConfig / redactConfig', () => {
 			/unsupported stored shape/,
 		);
 	});
+
+	it('rejects an empty-string secret value instead of sealing it', async () => {
+		await expect(
+			sealConfig({
+				schema,
+				paths,
+				authoring: { ...authoring, auth: { ...authoring.auth, password: '' } },
+				seal: fakeSeal(),
+			}),
+		).rejects.toThrow(ValidationError);
+	});
 });
 
 describe('keep-markers in nested arrays', () => {

@@ -15,7 +15,7 @@
 // with `Millis.of(...)` / `Seconds.of(...)` only where the result must stay
 // typed.
 
-import { withAbortSignal } from './async';
+import { assertTimerDelay, withAbortSignal } from './async';
 
 export type Millis = number & { __brand: 'Millis' };
 export type Seconds = number & { __brand: 'Seconds' };
@@ -39,6 +39,7 @@ export const Seconds = {
 
 export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	signal?.throwIfAborted();
+	assertTimerDelay(ms);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await withAbortSignal(

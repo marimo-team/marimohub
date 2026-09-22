@@ -121,4 +121,71 @@ describe('OAuthClientStore', () => {
 
 		expect(await store.get(client.client_id)).toBeNull();
 	});
+
+	it.each([
+		{ redirect_uris: Array.from({ length: 101 }, () => 'https://client.example/callback') },
+		{ redirect_uris: [`https://client.example/${'x'.repeat(2048)}`] },
+		{ scope: 'x'.repeat(4097) },
+		{ grant_types: Array.from({ length: 11 }, () => 'authorization_code') },
+		{ grant_types: ['x'.repeat(101)] },
+		{ response_types: Array.from({ length: 11 }, () => 'code') },
+		{ response_types: ['x'.repeat(101)] },
+	])('bounds new metadata while retaining existing registrations: %#', async (metadata) => {
+		await expect(
+			store.register({ redirect_uris: ['https://client.example/callback'], ...metadata }),
+		).rejects.toThrow('OAuth client metadata is invalid');
+		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
+
+		const client = await store.register({ redirect_uris: ['https://client.example/callback'] });
+		const legacy = { ...client, ...metadata };
+		await bucket.put(paths.oauthClient(client.client_id), JSON.stringify(legacy));
+		expect(await store.get(client.client_id)).toEqual(legacy);
+	});
+
+	it('accepts registration metadata at the size limits', async () => {
+		const prefix = 'https://client.example/';
+		const input = {
+			client_name: 'x'.repeat(200),
+			redirect_uris: Array.from({ length: 100 }, () => prefix + 'x'.repeat(2048 - prefix.length)),
+			scope: 'x'.repeat(4096),
+			grant_types: Array.from({ length: 10 }, () => 'x'.repeat(100)),
+			response_types: Array.from({ length: 10 }, () => 'x'.repeat(100)),
+		};
+		const client = await store.register(input);
+		expect(client).toMatchObject(input);
+		expect(await store.get(client.client_id)).toEqual(client);
+	});
+
+	it.each(['redirect_uris', 'grant_types', 'response_types'] as const)(
+		'rejects oversized %s before parsing entries or accessing storage',
+		async (field) => {
+			const values = Array.from({ length: 20_000 }, () => 'https://client.example/callback');
+			Object.defineProperty(values, 0, {
+				get: () => {
+					throw new Error('must not inspect an oversized list');
+				},
+			});
+			const put = vi.spyOn(bucket, 'put');
+			const list = vi.spyOn(bucket, 'list');
+
+			await expect(
+				store.register({
+					redirect_uris: ['https://client.example/callback'],
+					[field]: values,
+				}),
+			).rejects.toThrow('OAuth client metadata is invalid');
+			expect(put).not.toHaveBeenCalled();
+			expect(list).not.toHaveBeenCalled();
+		},
+	);
+
+	it('rejects oversized scope before validating redirect URIs', async () => {
+		await expect(
+			store.register({
+				redirect_uris: ['unsafe-redirect'],
+				scope: 'x'.repeat(4097),
+			}),
+		).rejects.toThrow('OAuth client metadata is invalid');
+		expect((await bucket.list({ prefix: paths.oauthClientsPrefix })).objects).toHaveLength(0);
+	});
 });

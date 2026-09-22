@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
+import { expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_NON_DIRECTORY_PATH,
@@ -507,3 +508,14 @@ computeContract(
 		},
 	},
 );
+
+describe('CloudflareSandboxInstance.readFile', () => {
+	it('returns a failed ReadFileResult instead of rejecting when the SDK throws', async () => {
+		const notFound = new Error('File not found: /missing');
+		notFound.name = 'FileNotFoundError';
+		fakeSandbox.readFile.mockRejectedValueOnce(notFound);
+		const instance = new CloudflareSandboxProvider(fakeNamespace).create(SANDBOX_ID);
+		const result = await instance.readFile('/missing');
+		expectFileResult(result, { success: false, error: { code: 'NOT_FOUND' } });
+	});
+});

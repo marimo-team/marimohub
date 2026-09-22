@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import type { SandboxProcess } from '../../../ports/sandbox';
+import { describe, expect, it, vi } from 'vitest';
+
 import { createNotebookId, createProjectId, createSandboxId } from '../../../ids';
 import { MemoryBucket, ACTOR, fakeComputeFrom, makeFakeSandbox } from '../../../testing';
 import { SessionService } from '../SessionService';
@@ -26,12 +27,13 @@ async function setup(failWaitForPort?: Error, vscode = vscodeSurface()) {
 		false,
 	);
 	const { instance, calls } = makeFakeSandbox({ failWaitForPort });
+	const compute = fakeComputeFrom(instance);
 	const manager = new SurfaceManager(
-		fakeComputeFrom(instance),
+		compute,
 		sessions,
 		new SurfaceRegistry([marimoSurface, vscode]),
 	);
-	return { calls, instance, manager, session, sessions };
+	return { calls, instance, compute, manager, session, sessions };
 }
 
 function options() {
@@ -836,5 +838,31 @@ describe('SurfaceManager', () => {
 		expect(
 			(await sessions.getSession(session.project_id, session.session_id)).surfaces?.vscode,
 		).toMatchObject({ status: 'ready', port: 8443 });
+	});
+
+	it('passes the session owner when creating the sandbox handle to start a surface', async () => {
+		const { compute, manager, session } = await setup();
+
+		await manager.ensure(session, 'vscode', options());
+
+		expect(compute.lastCreateOptions?.owner).toEqual({
+			projectId: session.project_id,
+			userId: session.user_id,
+		});
+	});
+
+	it('passes the session owner when creating the sandbox handle to stop a surface', async () => {
+		const { compute, manager, session, sessions } = await setup();
+		await manager.ensure(session, 'vscode', options());
+		const create = vi.spyOn(compute, 'create');
+
+		await manager.stop(await sessions.getSession(session.project_id, session.session_id), 'vscode');
+
+		expect(create).toHaveBeenCalledWith(
+			session.sandbox_id,
+			expect.objectContaining({
+				owner: { projectId: session.project_id, userId: session.user_id },
+			}),
+		);
 	});
 });

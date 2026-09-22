@@ -255,6 +255,9 @@ export class NotebookWorkspaceService {
 		const prefix = `${context.prefix}${directory ? `${directory}/` : ''}`;
 		const needle = query.trim().toLowerCase();
 		if (!needle) return [];
+		const matchesSearch = (candidate: string) =>
+			(!directory || candidate.startsWith(`${directory}/`)) &&
+			candidate.toLowerCase().includes(needle);
 		const objects = await listAllObjects(this.bucket, prefix);
 		const results = new Map<string, WorkspaceFileItem>();
 		for (const object of objects) {
@@ -263,7 +266,7 @@ export class NotebookWorkspaceService {
 			const markerDirectory = workspaceDirectoryFromMarkerPath(relative);
 			if (markerDirectory !== null) {
 				const directoryPath = markerDirectory;
-				if (directoryPath.toLowerCase().includes(needle)) {
+				if (matchesSearch(directoryPath)) {
 					results.set(directoryPath, directoryItem(directoryPath));
 				}
 				if (results.size >= MAX_WORKSPACE_SEARCH_RESULTS) break;
@@ -272,11 +275,11 @@ export class NotebookWorkspaceService {
 			const segments = relative.split('/');
 			for (let index = 1; index < segments.length; index++) {
 				const directoryPath = segments.slice(0, index).join('/');
-				if (directoryPath.toLowerCase().includes(needle)) {
+				if (matchesSearch(directoryPath)) {
 					results.set(directoryPath, directoryItem(directoryPath));
 				}
 			}
-			if (relative.toLowerCase().includes(needle)) {
+			if (matchesSearch(relative)) {
 				results.set(relative, fileItem(relative, object));
 			}
 			if (results.size >= MAX_WORKSPACE_SEARCH_RESULTS) break;

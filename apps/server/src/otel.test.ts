@@ -351,3 +351,15 @@ describe('instrumentation middleware', () => {
 		await meterProvider.shutdown();
 	});
 });
+
+describe('OTEL_SDK_DISABLED', () => {
+	const endpoint = { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318' };
+
+	it('honors an uppercase OTEL_SDK_DISABLED for every pillar', () => {
+		expect(isTracingEnabled({ ...endpoint, OTEL_SDK_DISABLED: 'TRUE' })).toBe(false);
+		expect(isLogsEnabled({ ...endpoint, OTEL_SDK_DISABLED: 'TRUE' })).toBe(false);
+		expect(
+			metricsExporter({ OTEL_METRICS_EXPORTER: 'prometheus', OTEL_SDK_DISABLED: 'TRUE' }),
+		).toBe(null);
+	});
+});

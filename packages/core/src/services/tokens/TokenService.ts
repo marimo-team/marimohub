@@ -290,7 +290,7 @@ export class TokenService {
 
 		// Resolve `{email, name}` through the identity directory — every issuer has
 		// signed in at least once, which recorded them. Fail closed if it's gone.
-		const identity = await this.identities.get(record.user_id);
+		const [identity] = await this.identities.getMany([record.user_id]);
 		if (!identity) return null;
 		const entry: CacheEntry = {
 			record,

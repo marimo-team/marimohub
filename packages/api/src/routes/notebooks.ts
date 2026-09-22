@@ -1166,8 +1166,8 @@ app.openapi(rotateSyncToken, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	const project = await assertProjectRole(projects, pid, user, 'notebook.manage', deps);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.manage');
 	const { sync_token } = await notebooks.synced.rotateToken(pid, nid);
 	return c.json({ success: true, data: { sync_url: syncUrl(c, pid, nid), sync_token } }, 200);
 });

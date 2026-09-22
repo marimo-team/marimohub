@@ -188,6 +188,22 @@ export class FsStorage implements Bucket {
 		return run;
 	}
 
+	private async assertContainedParent(filePath: string): Promise<void> {
+		let directory = path.dirname(filePath);
+		while (directory !== this.root) {
+			try {
+				const real = await fsp.realpath(directory);
+				if (real !== this.root && !real.startsWith(this.rootPrefix)) {
+					throw new Error('Storage path escapes the root through a symlink');
+				}
+				return;
+			} catch (error) {
+				if (errCode(error) !== 'ENOENT') throw error;
+			}
+			directory = path.dirname(directory);
+		}
+	}
+
 	async put(
 		key: string,
 		value: string | Uint8Array,
@@ -198,6 +214,7 @@ export class FsStorage implements Bucket {
 			throw new Error('onlyIfEtagMatches and onlyIfNotExists are mutually exclusive');
 		}
 		return this.withKeyLock(key, async () => {
+			await this.assertContainedParent(filePath);
 			const body = typeof value === 'string' ? new TextEncoder().encode(value) : value;
 			const etag = sha256hex(body);
 			const tmp = path.join(this.tmpDir, randomUUID());
@@ -244,6 +261,7 @@ export class FsStorage implements Bucket {
 		for (const k of Array.isArray(key) ? key : [key]) {
 			const filePath = this.resolvePath(k);
 			try {
+				await this.assertContainedParent(filePath);
 				await fsp.unlink(filePath);
 			} catch (err) {
 				const code = errCode(err);

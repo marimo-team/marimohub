@@ -279,6 +279,9 @@ catalogs:
     tailwindcss-react-aria-components:
       specifier: ^2.1.1
       version: 2.1.1
+    tldts:
+      specifier: 7.4.2
+      version: 7.4.2
     tsx:
       specifier: ^4.23.1
       version: 4.23.1
@@ -1174,6 +1177,9 @@ importers:
       smol-toml:
         specifier: 'catalog:'
         version: 1.8.0
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.2
       ulidx:
         specifier: 'catalog:'
         version: 2.4.1

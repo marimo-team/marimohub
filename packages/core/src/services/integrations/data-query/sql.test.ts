@@ -62,4 +62,19 @@ describe('singleDataQueryStatement', () => {
 		const input = '$'.repeat(32 * 1024);
 		expect(singleDataQueryStatement(input)).toBe(input);
 	});
+
+	it('does not mistake a $ inside an identifier for a dollar-quote tag', () => {
+		const sql = 'select a$b$c from t';
+		expect(singleDataQueryStatement(sql)).toBe(sql);
+	});
+	it.each(['é', '𐐀', 'e\u0301', 'name💡'])(
+		'keeps dollar signs in the Unicode identifier %s',
+		(identifier) => {
+			const sql = `select ${identifier}$tag$ from t`;
+			expect(singleDataQueryStatement(sql)).toBe(sql);
+			expect(() => singleDataQueryStatement(`${sql}; select 2; -- $tag$`)).toThrow(
+				'exactly one statement',
+			);
+		},
+	);
 });

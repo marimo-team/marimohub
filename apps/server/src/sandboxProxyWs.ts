@@ -49,7 +49,14 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 	server.on('upgrade', (req, clientSocket, head) => {
 		clientSocket.on('error', () => clientSocket.destroy());
 
-		authorizeProxyRequest(toWebRequest(req), deps)
+		let request: Request;
+		try {
+			request = toWebRequest(req);
+		} catch {
+			rejectUpgrade(clientSocket, 400, 'Bad Request');
+			return;
+		}
+		authorizeProxyRequest(request, deps)
 			.then((decision) => {
 				// `pass` means this isn't a kernel route — leave it for any other handler.
 				if (decision.kind === 'pass') return;

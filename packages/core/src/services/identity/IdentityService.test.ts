@@ -127,6 +127,20 @@ describe('IdentityService', () => {
 			expect(result.map((u) => u.id).sort()).toEqual([uid('a'), uid('b')]);
 		});
 
+		it('omits corrupt records without failing the batch', async () => {
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				await bucket.put(paths.identity(uid('b')), '{not json');
+
+				await expect(identities.getMany([uid('a'), uid('b')])).resolves.toEqual([
+					expect.objectContaining({ id: uid('a') }),
+				]);
+				expect(log).toHaveBeenCalled();
+			} finally {
+				log.mockRestore();
+			}
+		});
+
 		it('returns an empty list when nothing resolves', async () => {
 			expect(await identities.getMany([uid('missing')])).toEqual([]);
 		});

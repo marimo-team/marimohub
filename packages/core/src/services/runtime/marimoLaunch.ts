@@ -49,8 +49,8 @@ export type MarimoLaunchStrategy = (params: MarimoLaunchParams) => MarimoLaunchP
 
 /** Flags both subcommands accept, spelled identically. */
 const commonFlags = ({ host, port, assetUrl, baseUrl, tokenPasswordFile }: MarimoLaunchParams) => {
-	const assetUrlArg = assetUrl ? ` --asset-url="${assetUrl}"` : '';
-	const baseUrlArg = baseUrl ? ` --base-url="${baseUrl}"` : '';
+	const assetUrlArg = assetUrl ? ` --asset-url=${shellQuote(assetUrl)}` : '';
+	const baseUrlArg = baseUrl ? ` --base-url=${shellQuote(baseUrl)}` : '';
 	if (tokenPasswordFile === '') throw new Error('Token password file path cannot be empty');
 	const tokenArg =
 		tokenPasswordFile !== undefined

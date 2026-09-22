@@ -785,3 +785,51 @@ describe('sandboxFiles security', () => {
 		);
 	});
 });
+
+describe('captureWorkspace mirror-delete after a skipped file', () => {
+	let warn: ReturnType<typeof vi.spyOn>;
+	beforeEach(() => {
+		warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+	});
+	afterEach(() => {
+		warn.mockRestore();
+	});
+
+	it('does not mirror-delete a still-present file whose read failed transiently', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('data/keep.csv'), 'last good copy');
+		const { instance } = makeFsSandbox({
+			files: { 'notebook.py': 'import marimo', 'data/keep.csv': 'newer content' },
+		});
+		const exec = instance.exec.bind(instance);
+		instance.exec = async (cmd, options) => {
+			if (cmd.includes('data/keep.csv')) return execResult(false, '', 'transient read error');
+			return exec(cmd, options);
+		};
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		const stored = await bucket.get(nb.workspaceFile('data/keep.csv'));
+		expect(decode(await stored!.bytes())).toBe('last good copy');
+		expect(warn).toHaveBeenCalledWith('captureWorkspace: could not read data/keep.csv; skipping');
+	});
+
+	it('does not mirror-delete a still-present file skipped by the per-file cap', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('data/big.bin'), 'older smaller copy');
+		const { instance } = makeFsSandbox({
+			files: { 'notebook.py': 'import marimo', 'data/big.bin': 'x' },
+			sizes: { 'data/big.bin': MAX_WORKSPACE_FILE_BYTES + 1 },
+		});
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		const stored = await bucket.get(nb.workspaceFile('data/big.bin'));
+		expect(decode(await stored!.bytes())).toBe('older smaller copy');
+		expect(warn).toHaveBeenCalledWith(
+			`captureWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping data/big.bin (${MAX_WORKSPACE_FILE_BYTES + 1} bytes)`,
+		);
+	});
+});

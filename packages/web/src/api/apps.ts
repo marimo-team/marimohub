@@ -5,10 +5,11 @@ import {
 	useSuspenseInfiniteQuery,
 } from '@tanstack/react-query';
 import { apiClient, apiData } from './client';
+import { appKeys } from './queryKeys';
 
 function appsQueryOptions(projectId?: string, search = '') {
 	return infiniteQueryOptions({
-		queryKey: ['apps', 'list', projectId, search],
+		queryKey: appKeys.list(projectId, search),
 		initialPageParam: undefined as string | undefined,
 		queryFn: ({ pageParam, signal }) =>
 			apiData(
@@ -31,7 +32,7 @@ export function useProjectAppsQuery(projectId: string) {
 
 export function useAppQuery(pid: string, nid: string) {
 	return useQuery({
-		queryKey: ['apps', 'detail', pid, nid],
+		queryKey: appKeys.detail(pid, nid),
 		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/app', {

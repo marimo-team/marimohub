@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { ForbiddenError, NotFoundError, UserId } from '@marimo-hub/core';
+import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
 	authorizationService,
 	createApp,
@@ -7,6 +8,13 @@ import {
 	jsonContent,
 	UserResponseSchema,
 } from '../shared';
+
+function parseUserIds(value = ''): string[] {
+	return value
+		.split(',')
+		.map((id) => id.trim())
+		.filter(Boolean);
+}
 
 // --- Route definitions ---
 
@@ -24,10 +32,14 @@ const resolveUsers = createRoute({
 		query: z.object({
 			ids: z
 				.string()
+				.refine(
+					(value) => parseUserIds(value).length <= MAX_RESOLVED_USERS,
+					`At most ${MAX_RESOLVED_USERS} user ids may be resolved at once`,
+				)
 				.optional()
 				.openapi({
 					param: { name: 'ids', in: 'query' },
-					description: 'Comma-separated user ids.',
+					description: `Comma-separated user ids. At most ${MAX_RESOLVED_USERS} non-empty ids; whitespace and empty entries are ignored.`,
 					example: 'user,sub-abc123',
 				}),
 		}),
@@ -37,7 +49,7 @@ const resolveUsers = createRoute({
 			z.object({ success: z.literal(true), data: z.record(z.string(), UserResponseSchema) }),
 			'Map of user id → resolved identity (unknown ids omitted)',
 		),
-		...errorResponses(401),
+		...errorResponses(401, 422),
 	},
 });
 
@@ -130,11 +142,7 @@ app.openapi(resolveUsers, async (c) => {
 	const { identities } = c.get('deps').services;
 	const { ids } = c.req.valid('query');
 
-	const requested = (ids ?? '')
-		.split(',')
-		.map((s) => s.trim())
-		.filter(Boolean)
-		.map((s) => UserId.parse(s));
+	const requested = parseUserIds(ids).map((id) => UserId.parse(id));
 
 	const resolved = requested.length > 0 ? await identities.getMany(requested) : [];
 

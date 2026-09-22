@@ -6,11 +6,11 @@ import { InFlightWork } from '../../concurrency';
 import { Millis } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
 import { createRunId, SandboxId, SYSTEM_ACTOR } from '../../ids';
-import type { ProjectId, RunId, VersionId } from '../../ids';
+import type { JobId, NotebookId, ProjectId, RunId, VersionId } from '../../ids';
 import { logEvent } from '../../logs';
 import { logOperationalError } from '../../operationalLog';
 import { notificationRouter } from '../../notifications';
-import type { JobDefinition, JobRun } from '../../schema';
+import type { JobDefinition, JobRun, NotebookMeta, Project } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { EventService } from '../catalog/EventService';
 import type { NotebookService } from '../content/NotebookService';
@@ -76,6 +76,26 @@ const DEFAULT_WATCHDOG_GRACE_MS = Millis.minutes(2);
 
 /** How long a marker may outlive its record before it is considered dangling. */
 const DANGLING_GRACE_MS = Millis.minutes(10);
+
+interface JobReadCache {
+	projects: Map<ProjectId, Promise<Project>>;
+	notebooks: Map<NotebookId, Promise<NotebookMeta>>;
+	jobs: Map<JobId, Promise<JobDefinition>>;
+}
+
+function cachedRead<K, V>(
+	cache: Map<K, Promise<V>> | undefined,
+	key: K,
+	read: () => Promise<V>,
+): Promise<V> {
+	if (!cache) return read();
+	let value = cache.get(key);
+	if (!value) {
+		value = read();
+		cache.set(key, value);
+	}
+	return value;
+}
 
 interface LocalExecution {
 	finalizedExternally: boolean;
@@ -220,6 +240,11 @@ export class JobScheduler {
 
 		const queued: JobRun[] = [];
 		const running: JobRun[] = [];
+		const admissionReads: JobReadCache = {
+			projects: new Map(),
+			notebooks: new Map(),
+			jobs: new Map(),
+		};
 		let ownershipComplete = active.complete;
 		for (const { marker, run } of active.entries) {
 			if (!run) {
@@ -233,7 +258,7 @@ export class JobScheduler {
 							marker.run_id,
 						))
 					) {
-						await this.deps.runs.deleteMarker(marker);
+						await this.deps.runs.pruneDanglingMarker(marker);
 						result.markersPruned++;
 					}
 				} catch (err) {
@@ -264,6 +289,17 @@ export class JobScheduler {
 			if (run.status === 'queued') {
 				if (this.executing.has(run.run_id)) {
 					running.push(run);
+					continue;
+				}
+				try {
+					if (await this.cancelRunIfDeleted(run, admissionReads)) continue;
+				} catch (err) {
+					result.errors++;
+					logOperationalError(
+						'job_admission_failed',
+						{ operation: 'job.scheduler.admit', run_id: run.run_id },
+						err,
+					);
 					continue;
 				}
 				if (!run.eligible_at || Date.parse(run.eligible_at) <= now) queued.push(run);
@@ -353,7 +389,7 @@ export class JobScheduler {
 				await this.finalizeLocked(skipped);
 				return claim.claimed ? 'skipped' : 'repaired';
 			}
-			await this.enqueueScheduled(job, claimedRunId, scheduledFor);
+			if (!(await this.enqueueScheduled(job, claimedRunId, scheduledFor))) return 'none';
 			return claim.claimed ? 'fired' : 'repaired';
 		});
 	}
@@ -362,9 +398,20 @@ export class JobScheduler {
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
 		jobId: JobRun['job_id'],
+		cache?: JobReadCache,
 	): Promise<JobDefinition | null> {
 		try {
-			return await this.deps.jobs.getJob(projectId, notebookId, jobId);
+			const project = await cachedRead(cache?.projects, projectId, () =>
+				this.deps.projects.getProject(projectId),
+			);
+			if (project.status === 'deleted') return null;
+			const notebook = await cachedRead(cache?.notebooks, notebookId, () =>
+				this.deps.notebooks.getNotebookMeta(projectId, notebookId),
+			);
+			if (notebook.status === 'deleted') return null;
+			return await cachedRead(cache?.jobs, jobId, () =>
+				this.deps.jobs.getJob(projectId, notebookId, jobId),
+			);
 		} catch (err) {
 			// The index outlived the definition (delete crashed before the index
 			// write); nothing to fire.
@@ -374,7 +421,7 @@ export class JobScheduler {
 	}
 
 	private async enqueueScheduled(job: JobDefinition, runId: RunId, scheduledFor: string) {
-		await this.deps.runs.enqueue({
+		const run = await this.deps.runs.enqueue({
 			job,
 			runId,
 			trigger: 'schedule',
@@ -383,12 +430,20 @@ export class JobScheduler {
 			sourceVersionId: await this.sourceVersionId(job),
 			timeoutSeconds: this.timeoutSeconds(job),
 		});
+		if (await this.cancelRunIfDeleted(run)) return false;
 		this.metrics.increment('jobs.fired');
+		return true;
+	}
+
+	private async cancelRunIfDeleted(run: JobRun, cache?: JobReadCache): Promise<boolean> {
+		if (await this.loadJob(run.project_id, run.notebook_id, run.job_id, cache)) return false;
+		await this.deps.runs.cancel(run, SYSTEM_ACTOR);
+		return true;
 	}
 
 	private async sourceVersionId(job: JobDefinition): Promise<VersionId | undefined> {
 		try {
-			const { source } = await this.deps.notebooks.getNotebook(job.project_id, job.notebook_id);
+			const source = await this.deps.notebooks.getNotebookSource(job.project_id, job.notebook_id);
 			if (source.current_version_id) return source.current_version_id;
 		} catch {
 			// Provenance is best-effort; the run still executes against the live copy.
@@ -509,7 +564,7 @@ export class JobScheduler {
 			if (await this.deps.jobs.isDeleting(job)) return;
 			const current = await this.loadJob(job.project_id, job.notebook_id, job.id);
 			if (!current) return;
-			await this.deps.runs.enqueue({
+			const retryRun = await this.deps.runs.enqueue({
 				job: current,
 				runId: continuationRunId,
 				trigger: finished.trigger,
@@ -522,6 +577,7 @@ export class JobScheduler {
 				retryOf: finished.run_id,
 				eligibleAt: new Date(this.now() + retry.backoff_seconds * 1000).toISOString(),
 			});
+			if (await this.cancelRunIfDeleted(retryRun)) return;
 			this.metrics.increment('jobs.runs.retried');
 			return;
 		}

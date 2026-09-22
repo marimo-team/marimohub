@@ -18740,10 +18740,12 @@ paths:
       parameters:
         - schema:
             type: string
-            description: Comma-separated user ids.
+            description: Comma-separated user ids. At most 100 non-empty ids; whitespace and
+              empty entries are ignored.
             example: user,sub-abc123
           required: false
-          description: Comma-separated user ids.
+          description: Comma-separated user ids. At most 100 non-empty ids; whitespace and
+            empty entries are ignored.
           name: ids
           in: query
       responses:
@@ -18767,6 +18769,12 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
           content:
             application/json:
               schema:

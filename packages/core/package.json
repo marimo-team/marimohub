@@ -61,7 +61,9 @@
 		"./token-grants": "./src/tokenGrants.ts",
 		"./url": "./src/url.ts",
 		"./workspace-archive": "./src/integrations/workspaceArchive.ts",
-		"./ports/notebook-bridge": "./src/ports/notebookBridge.ts"
+		"./ports/notebook-bridge": "./src/ports/notebookBridge.ts",
+		"./sha256": "./src/internal/sha256.ts",
+		"./host-isolation": "./src/hostIsolation.ts"
 	},
 	"scripts": {
 		"build": "vp pack",
@@ -77,6 +79,7 @@
 		"croner": "catalog:",
 		"fflate": "^0.8.2",
 		"smol-toml": "catalog:",
+		"tldts": "catalog:",
 		"ulidx": "catalog:",
 		"yaml": "catalog:",
 		"zod": "catalog:"

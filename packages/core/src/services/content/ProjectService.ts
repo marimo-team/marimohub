@@ -1,3 +1,4 @@
+import { nextIsoTimestamp } from '../../utcDate';
 import { projectActionMinRole } from '../authorization/actions';
 import { tokenGrantAllowsProject } from '../../tokenGrants';
 import { ThumbnailService } from './ThumbnailService';
@@ -419,7 +420,7 @@ export class ProjectService {
 					description: input.description ?? current.description,
 					tags: input.tags ?? current.tags,
 					federation: input.federation ?? current.federation,
-					updated_at: new Date().toISOString(),
+					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 				};
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
@@ -488,7 +489,7 @@ export class ProjectService {
 					return {
 						...rest,
 						...(normalized !== undefined ? { security_labels: normalized } : {}),
-						updated_at: new Date().toISOString(),
+						updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 					};
 				},
 				{ notFound: () => new NotFoundError(`Project ${id} not found`) },
@@ -711,7 +712,7 @@ export class ProjectService {
 			const updated = {
 				...current,
 				members: deriveMembers(current, claimed),
-				updated_at: new Date().toISOString(),
+				updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 			};
 			await cas.put(key, JSON.stringify(updated), { onlyIfEtagMatches: object.etag });
 			return { project: updated, claimedRows: claimed.claimedRows, written: true };

@@ -12,6 +12,15 @@
  * need platform bindings, not env credentials) and are wired by hand in
  * examples/cloudflare-worker rather than here.
  */
+import {
+	parseBool,
+	parseEnum,
+	parseEnumOr,
+	parseIntEnv,
+	parseList,
+	parseOnOff,
+	parseSecondsEnv,
+} from './env';
 import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
 	composeAuthenticators,
@@ -83,11 +92,15 @@ import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sess
 import { parseAppPoolPolicy } from './appPool';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
-import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseOnOff, parseSecondsEnv } from './env';
+
 import type { Env } from './env';
 import { parseSandboxAuth } from './sandboxAuth';
 import { ConfigError } from './errors';
-import { checkSandboxHostIsolation } from './hostIsolation';
+import {
+	checkSandboxHostIsolation,
+	sandboxHostIsolationMessage,
+	sandboxHostIsolationRemediation,
+} from './hostIsolation';
 import { buildPreflightChecks } from './preflightChecks';
 import { parseExperiments } from './experiments';
 import { postgresDataAccessFeatures } from './postgresFeatures';
@@ -466,7 +479,7 @@ function parseSessionLifetime(env: Env): SessionLifetimeConfig {
 			'MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS',
 			DEFAULT_SESSION_LIFETIME_EXTENSION_S,
 		),
-		connectionAware: env.MARIMOHUB_SESSION_CONNECTION_AWARE !== 'false',
+		connectionAware: parseBool(env, 'MARIMOHUB_SESSION_CONNECTION_AWARE', true),
 		sweepIntervalMs: seconds(
 			'MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS',
 			DEFAULT_SESSION_SWEEP_INTERVAL_S,
@@ -535,28 +548,19 @@ function parsePersistWorkspace(env: Env): 'source' | 'workspace' {
  *
  * The app's public host is derived from the OIDC redirect URI when present (the
  * only public-origin signal in env); skipped for other auth backends. The
- * suffix check catches the common same-eTLD+1 cases (app ⊃ sandbox or vice
- * versa) without a public-suffix list — it errs toward rejecting; if it ever
- * blocks a legitimate cross-eTLD setup that merely shares a label suffix, set
- * the hosts so neither is a dotted suffix of the other.
+ * public-suffix check includes private suffixes such as github.io.
  */
 function assertSandboxHostIsolated(env: Env): void {
-	const { isolated, sandboxHost, appHost, reason } = checkSandboxHostIsolation(env);
-	if (isolated) return;
-	const detail =
-		reason === 'unverifiable-redirect'
-			? `MARIMOHUB_AUTH_OIDC_REDIRECT_URI does not yield a usable app host, so isolation of ` +
-				`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) cannot be verified. Set a valid ` +
-				`absolute http(s) redirect URI.`
-			: `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) shares an origin/parent domain with the ` +
-				`app host (${appHost}).`;
+	const isolation = checkSandboxHostIsolation(env);
+	if (isolation.isolated) return;
+	const detail = sandboxHostIsolationMessage(isolation);
 	throw new ConfigError(
 		`${detail} Notebook kernels run untrusted code and must be isolated on a separate domain ` +
 			`(e.g. sandboxes.example.net) so a malicious notebook cannot escape the iframe sandbox into ` +
 			`the control plane or set cookies on the shared domain.`,
 		{
 			variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
-			remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',
+			remediation: sandboxHostIsolationRemediation(isolation),
 			docs: 'docs/security.md',
 		},
 	);
@@ -719,7 +723,7 @@ export function createFromEnv(
 			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),
-			automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false',
+			automaticThumbnails: parseBool(env, 'MARIMOHUB_AUTOMATIC_THUMBNAILS', true),
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,

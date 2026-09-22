@@ -1,3 +1,4 @@
+import { MAX_TIMER_DELAY_MS } from './async';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Millis, Seconds, sleep } from './duration';
 
@@ -78,4 +79,20 @@ describe('sleep', () => {
 		expect(vi.getTimerCount()).toBe(0);
 		expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
 	});
+	it.each([0, MAX_TIMER_DELAY_MS])('accepts the timer boundary %s ms', async (delay) => {
+		const pending = sleep(delay);
+		await vi.advanceTimersByTimeAsync(delay);
+		await expect(pending).resolves.toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it.each([-1, 0.5, MAX_TIMER_DELAY_MS + 1, Infinity, -Infinity, Number.NaN])(
+		'rejects an unsupported delay of %s ms',
+		async (delay) => {
+			await expect(sleep(delay)).rejects.toThrow(
+				new RangeError(`Timer delay must be an integer between 0 and ${MAX_TIMER_DELAY_MS} ms`),
+			);
+			expect(vi.getTimerCount()).toBe(0);
+		},
+	);
 });

@@ -71,6 +71,8 @@ import {
 } from '@coreweave/cwsandbox/node';
 import type { KernelIngressPublisher } from './kernelIngress';
 import {
+	LAUNCH_MARKER_GRACE_MS,
+	launchTimeoutResult,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	buildLaunchCommand,
@@ -90,6 +92,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import type { Seconds } from '@marimo-hub/core/duration';
 import type { Timings } from '@marimo-hub/core/timing';
 import { logEvent } from '@marimo-hub/core/logs';
@@ -143,6 +146,31 @@ const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
 const SLOW_BOOT_MS = 10_000;
 const SLOW_BOOT_HINT =
 	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
+
+const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
+
+async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			proc.cancel(),
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(
+					() => reject(new DOMException('Process cancellation timed out', 'TimeoutError')),
+					PROCESS_CANCEL_TIMEOUT_MS,
+				);
+			}),
+		]);
+	} catch (error) {
+		logOperationalError(
+			'sandbox_process_cancel_failed',
+			{ operation: 'coreweave.cancel_launch_process' },
+			error,
+		);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
 
 /**
  * Process states a kernel never comes back from. `failed` is a stream fault (a
@@ -756,12 +784,38 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			}
 		});
 
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOutcome =
+			options.startupTimeout === 0
+				? outcome
+				: Promise.race([
+						outcome,
+						new Promise<never>((_resolve, reject) => {
+							timer = setTimeout(
+								() => reject(new DOMException('Launch timed out', 'TimeoutError')),
+								Math.max(0, options.startupTimeout - start) + LAUNCH_MARKER_GRACE_MS,
+							);
+						}),
+					]);
+
 		let terminal: LaunchProtocolOutcome;
 		try {
-			terminal = await outcome;
+			terminal = await timedOutcome;
 		} catch (error) {
-			await proc.cancel().catch(() => {});
+			settled = true;
+			const waitport = Math.max(0, Date.now() - waitStartedAt);
+			await cancelLaunchProcess(proc);
 			const parsed = logs();
+			if (error instanceof DOMException && error.name === 'TimeoutError') {
+				return launchTimeoutResult({
+					setup: Boolean(options.setup),
+					setupCompleted: tracker.setupCompleted,
+					startupTimeout: options.startupTimeout,
+					output: parsed,
+					start,
+					waitport,
+				});
+			}
 			return {
 				success: false,
 				reason: 'transport_failure',
@@ -770,9 +824,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				timings: {
 					setup: 0,
 					start,
-					waitport: Math.max(0, Date.now() - waitStartedAt),
+					waitport,
 				},
 			};
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
 		}
 		if (terminal.kind !== 'ready') {
 			return launchOutcomeResult(terminal.kind, terminal, logs(), start);

@@ -1,3 +1,10 @@
+import {
+	StoredObjectError,
+	EmailAddressSchema,
+	IdentitySchema,
+	parseStored,
+	readStored,
+} from '../../schema';
 import type { Bucket } from '../../ports/bucket';
 import { StaleWhileRevalidateCache } from '../../cache';
 import { mapWithConcurrency } from '../../concurrency';
@@ -8,7 +15,6 @@ import type { UserId } from '../../ids';
 import type { AuthUser } from '../../ports/auth';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
-import { EmailAddressSchema, IdentitySchema, parseStored, readStored } from '../../schema';
 import type { Identity } from '../../schema';
 import { mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
 import { listAllKeys } from '../catalog/storage';
@@ -158,7 +164,19 @@ export class IdentityService {
 	 */
 	async getMany(ids: UserId[]): Promise<Identity[]> {
 		const unique = [...new Set(ids)];
-		const results = await Promise.all(unique.map((id) => this.get(id)));
+		const results = await mapWithConcurrency(unique, BUCKET_SCAN_CONCURRENCY, async (id) => {
+			try {
+				return await this.get(id);
+			} catch (error) {
+				if (!(error instanceof StoredObjectError)) throw error;
+				logOperationalError(
+					'stored_object_skipped',
+					{ operation: 'identity.get_many', object: paths.identity(id) },
+					error,
+				);
+				return null;
+			}
+		});
 		return results.filter((r): r is Identity => r !== null);
 	}
 

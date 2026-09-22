@@ -52,7 +52,7 @@ describe('Job routes', () => {
 		}).request;
 	});
 
-	const base = () => `/projects/${pid}/notebooks/${nid}/jobs`;
+	const base = (notebookId = nid) => `/projects/${pid}/notebooks/${notebookId}/jobs`;
 	const createJob = async (body: Record<string, unknown> = { name: 'nightly' }, who = request) =>
 		expectOk<any>(await who('POST', base(), body), 201);
 
@@ -812,5 +812,50 @@ describe('Job routes', () => {
 				compute_resources: { cpu: 4, memory_bytes: 8_000_000, gpu: 'A100' },
 			});
 		});
+	});
+
+	it('does not replay a job create across notebooks with the same Idempotency-Key', async () => {
+		const nid2 = (
+			await services.notebooks.createNotebook(
+				pid,
+				{ title: 'two', description: '', code: 'import marimo' },
+				ACTOR,
+			)
+		).id;
+		const headers = { 'idempotency-key': 'job-create-1' };
+		const first = await expectOk<any>(
+			await request('POST', base(), { name: 'nightly' }, headers),
+			201,
+		);
+		expect(first.notebook_id).toBe(nid);
+
+		const second = await expectOk<any>(
+			await request('POST', base(nid2), { name: 'nightly' }, headers),
+			201,
+		);
+		expect(second.notebook_id).toBe(nid2);
+		expect(second.id).not.toBe(first.id);
+		expect((await expectPage(await request('GET', base(nid2)))).map((j) => j.id)).toEqual([
+			second.id,
+		]);
+	});
+
+	it('does not replay a run trigger across jobs with the same Idempotency-Key', async () => {
+		const jobA = await expectOk<any>(await request('POST', base(), { name: 'a' }), 201);
+		const jobB = await expectOk<any>(await request('POST', base(), { name: 'b' }), 201);
+		const headers = { 'idempotency-key': 'trigger-1' };
+		const runA = await expectOk<any>(
+			await request('POST', `${base()}/${jobA.id}/runs`, undefined, headers),
+			201,
+		);
+		expect(runA.job_id).toBe(jobA.id);
+
+		const runB = await expectOk<any>(
+			await request('POST', `${base()}/${jobB.id}/runs`, undefined, headers),
+			201,
+		);
+		expect(runB.job_id).toBe(jobB.id);
+		expect(runB.run_id).not.toBe(runA.run_id);
+		expect(await expectPage(await request('GET', `${base()}/${jobB.id}/runs`))).toHaveLength(1);
 	});
 });

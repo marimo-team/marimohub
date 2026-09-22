@@ -16,6 +16,10 @@ import type { SurfaceId } from './surfaces/types';
 
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
+class SecondarySurfaceStopError extends Error {
+	override readonly name = 'SecondarySurfaceStopError';
+}
+
 export interface SessionRetirerDeps {
 	sessions: SessionService;
 	notebooks: NotebookService;
@@ -294,9 +298,21 @@ export class SessionRetirer {
 	): Promise<boolean> {
 		if (!session.sandbox_id) return true;
 		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
-		await this.stopSecondarySurfaces(sandbox, session);
+		let canCapture = captureBeforeDestroy;
+		try {
+			await this.stopSecondarySurfaces(sandbox, session);
+		} catch (error) {
+			if (!(error instanceof SecondarySurfaceStopError)) throw error;
+			// A live secondary writer makes a consistent capture unsafe.
+			canCapture = false;
+			logOperationalError(
+				'session_surface_stop_failed',
+				{ operation: 'session_retire.stop_surfaces', session_id: session.session_id },
+				error,
+			);
+		}
 		let persisted = false;
-		if (captureBeforeDestroy) {
+		if (canCapture) {
 			try {
 				const persistEdits =
 					sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));
@@ -388,6 +404,7 @@ export class SessionRetirer {
 					state.status === 'stopping' ||
 					state.status === 'failed'),
 		);
+		if (surfaces.length === 0) return;
 		await Promise.all(
 			surfaces.map(([id]) =>
 				this.deps.sessions.beginSurfaceStop(
@@ -398,7 +415,7 @@ export class SessionRetirer {
 			),
 		);
 		const fenced = await this.deps.sessions.getSession(session.project_id, session.session_id);
-		await Promise.all(
+		const stopped = await Promise.allSettled(
 			surfaces.map(async ([id]) => {
 				const surface = id as SurfaceId;
 				const cancelledAttemptId = fenced.surfaces?.[id]?.cancelled_attempt_id;
@@ -407,9 +424,17 @@ export class SessionRetirer {
 						? surfaceCancelFile(session.session_id, surface, cancelledAttemptId)
 						: undefined,
 				});
-				const result = await sandbox.exec(command, { timeout: 10_000 });
-				if (!result.success) throw new Error(`Failed to stop ${id} before session retirement`);
+				try {
+					const result = await sandbox.exec(command, { timeout: 10_000 });
+					if (!result.success) throw new Error(`Failed to stop ${id} before session retirement`);
+				} catch (cause) {
+					throw new SecondarySurfaceStopError(`Failed to stop ${id} before session retirement`, {
+						cause,
+					});
+				}
 			}),
 		);
+		const failure = stopped.find((result) => result.status === 'rejected');
+		if (failure) throw failure.reason;
 	}
 }

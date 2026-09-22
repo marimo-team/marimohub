@@ -109,9 +109,7 @@ async function rejectionDetails(response: Response): Promise<{ code: string; mes
 		if (result.success) {
 			return { code: result.data.error.code, message: result.data.error.message };
 		}
-	} catch {
-		// Unknown routes can return Hono's plain-text 404.
-	}
+	} catch {}
 	return {
 		code: `HTTP_${response.status}`,
 		message: response.statusText || 'Request rejected',
@@ -136,6 +134,15 @@ function requestResourceContext(path: string) {
  */
 export function createApi(rawDeps: ApiDeps) {
 	const app = createApp();
+	app.notFound((c) => {
+		if (c.req.path === AI_PROXY_PREFIX || c.req.path.startsWith(`${AI_PROXY_PREFIX}/`)) {
+			return c.json({ error: { type: 'invalid_request_error', message: 'Route not found' } }, 404);
+		}
+		return c.json(
+			{ success: false, error: { code: 'NOT_FOUND', message: 'Route not found' } },
+			404,
+		);
+	});
 
 	// Default the exposure mode and kernel probe so library callers need not wire them.
 	const deps: ApiDeps = {

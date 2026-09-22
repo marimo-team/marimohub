@@ -7,17 +7,33 @@ import { paths } from '../../paths';
 import { readStored } from '../../schema';
 import { authorizationCreatedAt } from '../tokens/authorizationCodes';
 
+const MAX_CLIENT_NAME_LENGTH = 200;
+const MAX_REDIRECT_URIS = 100;
+const MAX_REDIRECT_URI_LENGTH = 2048;
+const MAX_SCOPE_LENGTH = 4096;
+const MAX_GRANT_TYPES = 10;
+const MAX_RESPONSE_TYPES = 10;
+const MAX_TYPE_LENGTH = 100;
+
 const OAuthClientRecordSchema = z.looseObject({
 	client_id: z.string().refine(OAuthClientId.is),
 	client_id_issued_at: z.number().int().nonnegative(),
 	expires_at: z.iso.datetime(),
 	redirect_uris: z.array(z.string()).min(1),
 	token_endpoint_auth_method: z.literal('none'),
-	client_name: z.string().min(1).max(200).optional(),
+	client_name: z.string().min(1).max(MAX_CLIENT_NAME_LENGTH).optional(),
 	client_uri: z.string().optional(),
 	scope: z.string().optional(),
 	grant_types: z.array(z.string()).optional(),
 	response_types: z.array(z.string()).optional(),
+});
+
+// Existing registrations remain valid until their original expiry.
+const OAuthClientRegistrationSchema = OAuthClientRecordSchema.extend({
+	redirect_uris: z.array(z.string().max(MAX_REDIRECT_URI_LENGTH)).min(1).max(MAX_REDIRECT_URIS),
+	scope: z.string().max(MAX_SCOPE_LENGTH).optional(),
+	grant_types: z.array(z.string().max(MAX_TYPE_LENGTH)).max(MAX_GRANT_TYPES).optional(),
+	response_types: z.array(z.string().max(MAX_TYPE_LENGTH)).max(MAX_RESPONSE_TYPES).optional(),
 });
 
 export type OAuthClientRecord = z.infer<typeof OAuthClientRecordSchema>;
@@ -29,6 +45,27 @@ export interface RegisterOAuthClientInput {
 	scope?: string;
 	grant_types?: string[];
 	response_types?: string[];
+}
+
+function exceedsStringArrayBounds(
+	values: readonly string[] | undefined,
+	maxCount: number,
+	maxLength: number,
+): boolean {
+	return (
+		values !== undefined &&
+		(values.length > maxCount || values.some((value) => value.length > maxLength))
+	);
+}
+
+function exceedsRegistrationBounds(input: RegisterOAuthClientInput): boolean {
+	return (
+		(input.client_name?.length ?? 0) > MAX_CLIENT_NAME_LENGTH ||
+		(input.scope?.length ?? 0) > MAX_SCOPE_LENGTH ||
+		exceedsStringArrayBounds(input.redirect_uris, MAX_REDIRECT_URIS, MAX_REDIRECT_URI_LENGTH) ||
+		exceedsStringArrayBounds(input.grant_types, MAX_GRANT_TYPES, MAX_TYPE_LENGTH) ||
+		exceedsStringArrayBounds(input.response_types, MAX_RESPONSE_TYPES, MAX_TYPE_LENGTH)
+	);
 }
 
 // Cursor predates the reverse-domain convention recommended by RFC 8252 section 7.1.
@@ -81,6 +118,9 @@ export class OAuthClientStore {
 	constructor(private bucket: Bucket) {}
 
 	async register(input: RegisterOAuthClientInput): Promise<OAuthClientRecord> {
+		if (exceedsRegistrationBounds(input)) {
+			throw new BadRequestError('OAuth client metadata is invalid');
+		}
 		if (
 			input.redirect_uris.length === 0 ||
 			input.redirect_uris.some((uri) => !validRedirectUri(uri))
@@ -89,7 +129,6 @@ export class OAuthClientStore {
 				'OAuth redirect_uris must use HTTPS, a loopback HTTP URL, or a supported private-use scheme',
 			);
 		}
-		await this.pruneExpired();
 		const id = createOAuthClientId();
 		const now = Date.now();
 		const record: OAuthClientRecord = {
@@ -104,8 +143,9 @@ export class OAuthClientStore {
 			...(input.grant_types ? { grant_types: input.grant_types } : {}),
 			...(input.response_types ? { response_types: input.response_types } : {}),
 		};
-		const validated = OAuthClientRecordSchema.safeParse(record);
+		const validated = OAuthClientRegistrationSchema.safeParse(record);
 		if (!validated.success) throw new BadRequestError('OAuth client metadata is invalid');
+		await this.pruneExpired();
 		await this.bucket.put(paths.oauthClient(id), JSON.stringify(validated.data), {
 			onlyIfNotExists: true,
 		});

@@ -450,3 +450,22 @@ describe('createApi CSRF guard', () => {
 		).toBe(403);
 	});
 });
+
+describe('error envelope on unrouted /api/v1 requests', () => {
+	it.each([
+		['GET', '/api/v1/nope'],
+		['GET', '/api/v1/projects/proj-0000000000000000/bogus'],
+		['DELETE', '/api/v1/projects'],
+	])('returns the JSON error envelope for %s %s', async (method, path) => {
+		const { app } = createTestApi();
+
+		const res = await app.request(path, { method });
+
+		expect(res.status).toBe(404);
+		expect(res.headers.get('content-type')).toContain('application/json');
+		expect(await res.json()).toEqual({
+			success: false,
+			error: { code: 'NOT_FOUND', message: 'Route not found' },
+		});
+	});
+});

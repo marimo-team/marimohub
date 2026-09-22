@@ -105,6 +105,20 @@ describe('traced', () => {
 		await svc.fetch('x');
 		expect(raw.calls).toBe(1);
 	});
+
+	it('invokes the current method after it is replaced on the target', async () => {
+		const target = {
+			async fetch(): Promise<string> {
+				return 'original';
+			},
+		};
+		const svc = traced('Fake', target);
+		await expect(svc.fetch()).resolves.toBe('original');
+
+		target.fetch = async () => 'replaced';
+		expect(await target.fetch()).toBe('replaced');
+		await expect(svc.fetch()).resolves.toBe('replaced');
+	});
 });
 
 describe('createServices tracing option', () => {

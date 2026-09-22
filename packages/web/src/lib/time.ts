@@ -19,9 +19,9 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
 	const secs = Math.round((now - then) / 1000);
 	if (secs < 0) return 'just now';
 	if (secs < 45) return 'just now';
-	if (secs < HOUR) return `${Math.round(secs / MINUTE)}m ago`;
-	if (secs < DAY) return `${Math.round(secs / HOUR)}h ago`;
-	if (secs < 30 * DAY) return `${Math.round(secs / DAY)}d ago`;
+	if (Math.round(secs / MINUTE) < 60) return `${Math.round(secs / MINUTE)}m ago`;
+	if (Math.round(secs / HOUR) < 24) return `${Math.round(secs / HOUR)}h ago`;
+	if (Math.round(secs / DAY) < 30) return `${Math.round(secs / DAY)}d ago`;
 	return new Date(then).toLocaleDateString();
 }
 

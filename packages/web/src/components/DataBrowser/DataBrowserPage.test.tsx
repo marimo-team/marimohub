@@ -1,7 +1,15 @@
+import {
+	lakeEntry,
+	objectKind,
+	IID,
+	PID,
+	pysparkKind,
+	setup,
+	sparkEntry,
+} from './DataBrowserPage.testWorld';
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { IID, PID, pysparkKind, setup, sparkEntry } from './DataBrowserPage.testWorld';
 
 describe('DataBrowserPage catalog', () => {
 	it('shows PySpark connection info and opens its session snippet in a notebook', async () => {
@@ -275,5 +283,26 @@ describe('DataBrowserPage catalog', () => {
 		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/browse/preview'))).toBe(
 			false,
 		);
+	});
+});
+
+describe('object browser byte formatting', () => {
+	it('rolls a value that rounds to 1024 of a unit over to the next unit', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectEntries: [
+				{
+					kind: 'object',
+					name: 'almost-a-mebibyte.bin',
+					key: 'almost-a-mebibyte.bin',
+					size: 1_048_570,
+				},
+			],
+		});
+
+		await screen.findByText('almost-a-mebibyte.bin');
+		expect(screen.queryByText('1024 KiB')).not.toBeInTheDocument();
+		expect(screen.getByText('1.0 MiB')).toBeInTheDocument();
 	});
 });

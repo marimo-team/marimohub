@@ -29,6 +29,17 @@ function makeRoot(): string {
 	return root;
 }
 
+function makeEscapingSymlink() {
+	const parent = makeRoot();
+	const root = path.join(parent, 'store');
+	const external = path.join(parent, 'external');
+	mkdirSync(external);
+	const bucket = new FsStorage({ root });
+	// O_NOFOLLOW only protects the final path component.
+	symlinkSync(external, path.join(root, 'proj'));
+	return { bucket, external };
+}
+
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
 
 describe('FsStorage', () => {
@@ -339,17 +350,8 @@ describe('FsStorage negative / edge cases', () => {
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
 	it('does not follow an intermediate symlink dir that escapes the root', async () => {
-		const parent = makeRoot();
-		const root = path.join(parent, 'store');
-		const external = path.join(parent, 'external');
-		mkdirSync(external);
+		const { bucket, external } = makeEscapingSymlink();
 		writeFileSync(path.join(external, 'passwd'), 'root:x:0:0');
-
-		const bucket = new FsStorage({ root });
-		// An intermediate symlink dir (proj -> /external) escapes the root; O_NOFOLLOW
-		// only guards the final path component, and containment is a lexical prefix
-		// check, so this must not leak the external file.
-		symlinkSync(external, path.join(root, 'proj'));
 
 		expect(await bucket.get('proj/passwd')).toBeNull();
 		expect(await bucket.head('proj/passwd')).toBeNull();
@@ -411,5 +413,28 @@ describe('FsStorage negative / edge cases', () => {
 		const none = await bucket.list({ prefix: 'zzz/' });
 		expect(none.objects).toEqual([]);
 		expect(none.truncated).toBe(false);
+	});
+});
+
+describe('FsStorage symlink containment (writes)', () => {
+	it('put does not write through an intermediate symlink dir that escapes the root', async () => {
+		const { bucket, external } = makeEscapingSymlink();
+
+		await expect(bucket.put('proj/new.txt', 'leaked')).rejects.toThrow('escapes the root');
+
+		expect(existsSync(path.join(external, 'new.txt'))).toBe(false);
+	});
+
+	it('delete does not remove a file outside the root through an intermediate symlink dir', async () => {
+		const { bucket, external } = makeEscapingSymlink();
+		const secret = path.join(external, 'passwd');
+		writeFileSync(secret, 'root:x:0:0');
+
+		expect(await bucket.get('proj/passwd')).toBeNull();
+
+		await expect(bucket.delete('proj/passwd')).rejects.toThrow('escapes the root');
+
+		expect(existsSync(secret)).toBe(true);
+		expect(readFileSync(secret, 'utf8')).toBe('root:x:0:0');
 	});
 });

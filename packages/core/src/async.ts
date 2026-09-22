@@ -7,14 +7,14 @@ export interface DeadlineOptions {
 
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-function assertTimerDelay(timeoutMs: number): void {
+export function assertTimerDelay(timeoutMs: number): void {
 	const error = timerDelayError(timeoutMs);
 	if (error) throw error;
 }
 
 function timerDelayError(timeoutMs: number): RangeError | undefined {
 	return !Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMER_DELAY_MS
-		? new RangeError(`timeoutMs must be an integer between 0 and ${MAX_TIMER_DELAY_MS}`)
+		? new RangeError(`Timer delay must be an integer between 0 and ${MAX_TIMER_DELAY_MS} ms`)
 		: undefined;
 }
 

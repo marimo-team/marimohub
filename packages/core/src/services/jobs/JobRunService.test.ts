@@ -124,6 +124,89 @@ describe('JobRunService', () => {
 		expect(maximum).toBeLessThanOrEqual(BUCKET_SCAN_CONCURRENCY);
 	});
 
+	it.each(['notebook', 'project'] as const)(
+		'cancels %s runs despite a busy job claim',
+		async (scope) => {
+			const other = await env.jobs.createJob(pid, nid, { name: 'other' }, ACTOR);
+			const first = await enqueue();
+			const second = await enqueue({ job: other });
+			await runs.withJobMutation(other, async () => {});
+			const blocked = Promise.withResolvers<void>();
+			const entered = Promise.withResolvers<void>();
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			vi.useFakeTimers();
+			const busy = runs.withJobMutation(job, () => {
+				entered.resolve();
+				return blocked.promise;
+			});
+			await entered.promise;
+			const mutation = vi.spyOn(runs, 'withJobMutation');
+			try {
+				const cancellation =
+					scope === 'notebook'
+						? runs.cancelRunsOfNotebook(pid, nid, ACTOR)
+						: runs.cancelRunsOfProject(pid, ACTOR);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(mutation.mock.calls.some(([ref]) => ref.id === other.id)).toBe(true);
+				await vi.advanceTimersByTimeAsync(5000);
+				expect((await cancellation).runs.map((run) => run.run_id)).toEqual([
+					first.run_id,
+					second.run_id,
+				]);
+				expect((await runs.listActive()).map(({ run }) => run?.status)).toEqual([
+					'cancelled',
+					'cancelled',
+				]);
+				expect(
+					error.mock.calls.some(([line]) => String(line).includes('job_operation_wait_failed')),
+				).toBe(true);
+			} finally {
+				blocked.resolve();
+				await busy;
+				vi.useRealTimers();
+				mutation.mockRestore();
+				error.mockRestore();
+			}
+		},
+	);
+
+	it.each(['write', 'list'] as const)(
+		'continues cancellation after an operation claim %s fails',
+		async (failure) => {
+			const other = await env.jobs.createJob(pid, nid, { name: 'other' }, ACTOR);
+			await runs.withJobMutation(job, async () => {});
+			await runs.withJobMutation(other, async () => {});
+			const first = await enqueue();
+			const second = await enqueue({ job: other });
+			const put = env.bucket.put.bind(env.bucket);
+			const list = env.bucket.list.bind(env.bucket);
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const failed =
+				failure === 'write'
+					? vi.spyOn(env.bucket, 'put').mockImplementation((key, body, options) => {
+							if (key === paths.jobOperationClaim(pid, nid, job.id))
+								return Promise.reject(new Error('claim write failed'));
+							return put(key, body, options);
+						})
+					: vi.spyOn(env.bucket, 'list').mockImplementation((options) => {
+							if (options?.prefix === paths.jobOperationClaimsForNotebook(pid, nid))
+								return Promise.reject(new Error('claim list failed'));
+							return list(options);
+						});
+			try {
+				expect(
+					(await runs.cancelRunsOfNotebook(pid, nid, ACTOR)).runs.map((run) => run.run_id),
+				).toEqual([first.run_id, second.run_id]);
+				expect(
+					error.mock.calls.some(([line]) => String(line).includes('job_operation_wait_failed')),
+				).toBe(true);
+			} finally {
+				failed.mockRestore();
+				error.mockRestore();
+			}
+		},
+	);
+
 	it('renews the per-job mutation lease while work is still active', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime('2026-09-02T00:00:00.000Z');
@@ -328,6 +411,29 @@ describe('JobRunService', () => {
 	describe('unhappy paths', () => {
 		afterEach(() => {
 			vi.restoreAllMocks();
+		});
+
+		it('continues pruning after a stale marker cleanup fails', async () => {
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const stale = [await enqueue(), await enqueue()];
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			for (const run of stale) await env.bucket.delete(jobPaths.run(run.run_id).record);
+			const failedIndex = jobPaths.runIndex(stale[0].run_id);
+			const remove = env.bucket.delete.bind(env.bucket);
+			vi.spyOn(env.bucket, 'delete').mockImplementation(async (key) => {
+				if (key === failedIndex) throw new Error('storage unavailable');
+				return remove(key);
+			});
+
+			expect(await runs.pruneStaleMarkers(Date.now() + DANGLING_MARKER_GRACE_MS + 1000)).toBe(1);
+
+			expect(await env.bucket.head(paths.jobRunMarker(pid, stale[0].run_id))).not.toBeNull();
+			expect(await env.bucket.head(failedIndex)).not.toBeNull();
+			expect(await env.bucket.head(paths.jobRunMarker(pid, stale[1].run_id))).toBeNull();
+			expect(await env.bucket.head(jobPaths.runIndex(stale[1].run_id))).toBeNull();
+			expect(
+				error.mock.calls.some(([line]) => String(line).includes('job_run_marker_prune_failed')),
+			).toBe(true);
 		});
 
 		it('reports incomplete ownership and preserves corrupt markers', async () => {

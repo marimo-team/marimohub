@@ -1656,7 +1656,9 @@ export class SessionService {
 
 		// Bounded-parallel scan; the actual removal is already a single batch delete.
 		const candidates = await this.scanSessions((session, obj) =>
-			isTerminal(session.status) && now - new Date(session.last_heartbeat).getTime() > retentionMs
+			isTerminal(session.status) &&
+			(!session.sandbox_id || !!session.sandbox_reclaimed_at) &&
+			now - new Date(session.last_heartbeat).getTime() > retentionMs
 				? obj.key
 				: undefined,
 		);

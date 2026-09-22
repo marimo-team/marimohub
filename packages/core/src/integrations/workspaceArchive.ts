@@ -449,7 +449,7 @@ export class WorkspaceTarCollector {
 		} else if (typeFlag === 'g' || typeFlag === 'K') {
 			this.entry = { ...base, kind: 'skip' };
 		} else {
-			const path = this.pathOverride ?? headerPath;
+			const path = (this.pathOverride ?? headerPath).replace(/^(?:\.\/)+/, '');
 			this.pathOverride = undefined;
 			if (typeFlag === '0' || typeFlag === '\0' || typeFlag === '7') {
 				const mapped = this.mapPath(path);
@@ -464,7 +464,7 @@ export class WorkspaceTarCollector {
 					this.entry = { ...base, kind: 'file', path: mapped };
 				}
 			} else {
-				if (typeFlag === '5') assertSafeArchiveDirectoryPath(path);
+				if (typeFlag === '5' && path !== '') assertSafeArchiveDirectoryPath(path);
 				this.entry = { ...base, kind: 'skip' };
 			}
 		}

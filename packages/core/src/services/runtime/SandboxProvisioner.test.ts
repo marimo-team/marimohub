@@ -634,7 +634,7 @@ describe('SandboxProvisioner', () => {
 				assetUrl,
 			});
 
-			expect(calls.startProcess[0].cmd).toContain(`--asset-url="${assetUrl}"`);
+			expect(calls.startProcess[0].cmd).toContain(`--asset-url='${assetUrl}'`);
 		});
 
 		it('gives the remaining startup timeout to the kernel port wait', async () => {

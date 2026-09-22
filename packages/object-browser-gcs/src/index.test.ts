@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createProjectId, UserId } from '@marimo-hub/core/ids';
 import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import type {
@@ -204,4 +204,15 @@ describe('GCS object browser', () => {
 			throw new ObjectBrowseError('access_denied', capability.reason ?? '');
 		}).toThrow(/Ambient GCS/);
 	});
+
+	it.each(['..', '.'])(
+		'rejects dot-segment key %s before fetching object metadata',
+		async (key) => {
+			const fetchImpl = vi.fn<typeof fetch>();
+			await expect(
+				browser(fetchImpl).headObject(source, context, { bucket: 'lake', key }),
+			).rejects.toMatchObject({ code: 'not_found' });
+			expect(fetchImpl).not.toHaveBeenCalled();
+		},
+	);
 });

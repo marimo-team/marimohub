@@ -763,4 +763,12 @@ describe('NotebookWorkspaceService', () => {
 			expect(await (await bucket.get(`${prefix}target/${name}`))?.text()).toBe(name);
 		}
 	});
+
+	it('does not report the search root as a result of a scoped search', async () => {
+		await service.write(PROJECT_ID, NOTEBOOK_ID, 'data/cars.csv', encode('a,b'), ACTOR);
+
+		const results = await service.search(PROJECT_ID, NOTEBOOK_ID, 'data', 'data');
+
+		expect(results.map((item) => item.path)).toEqual(['data/cars.csv']);
+	});
 });

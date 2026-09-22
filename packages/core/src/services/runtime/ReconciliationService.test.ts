@@ -1,10 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
-import type { SandboxId } from '../../ids';
-import { paths } from '../../paths';
-import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
-import type { Session } from '../../schema';
+import { execResult } from '../../ports/sandbox';
 import {
+	makeFakeSandbox,
 	ACTOR,
 	appClaimHolder,
 	makeLocalSource,
@@ -12,6 +8,13 @@ import {
 	MemoryBucket,
 	RecordingCompute,
 } from '../../testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
+import type { SandboxId } from '../../ids';
+import { paths } from '../../paths';
+import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type { Session } from '../../schema';
+
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
 import { AppPoolService } from './AppPoolService';
@@ -702,4 +705,81 @@ describe('ReconciliationService', () => {
 			expect(await claim()).toBe(session.session_id);
 		});
 	});
+
+	it.each(['surface stop', 'sandbox handle'])(
+		'continues reconciling after a %s failure',
+		async (failure) => {
+			const badId = createSandboxId();
+			const goodId = createSandboxId();
+			const orphanId = createSandboxId();
+			const destroyed: string[] = [];
+			const bad = makeFakeSandbox({
+				execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
+			}).instance;
+			bad.destroy = async () => {
+				destroyed.push(badId);
+			};
+			const instanceFor = (id: string): SandboxInstance => {
+				if (id === badId) {
+					if (failure === 'sandbox handle') throw new Error('Sandbox unavailable');
+					return bad;
+				}
+				const { instance } = makeFakeSandbox();
+				instance.destroy = async () => {
+					destroyed.push(id);
+				};
+				return instance;
+			};
+			const compute: SandboxProvider = {
+				create: (id) => instanceFor(id),
+				proxy: async () => null,
+				listActive: async () => [
+					{ id: badId, createdAt: iso(-60 * 60 * 1000) },
+					{ id: goodId, createdAt: iso(-60 * 60 * 1000) },
+					{ id: orphanId, createdAt: iso(-60 * 60 * 1000) },
+				],
+			};
+
+			// Visit the failing record before the healthy one.
+			const [first, second] = ['sess-00000000000000aa', 'sess-00000000000000bb'] as const;
+			const failing = await putSession({
+				status: 'expired',
+				started_at: iso(-60 * 60 * 1000),
+				last_heartbeat: iso(-30 * 60 * 1000),
+				session_id: first as Session['session_id'],
+				sandbox_id: badId,
+				surfaces: {
+					vscode: {
+						status: 'ready',
+						port: 8443,
+						url: 'https://vscode.example',
+						started_at: iso(0),
+					},
+				},
+			});
+			const healthy = await putSession({
+				status: 'expired',
+				started_at: iso(-60 * 60 * 1000),
+				last_heartbeat: iso(-30 * 60 * 1000),
+				session_id: second as Session['session_id'],
+				sandbox_id: goodId,
+			});
+
+			const reconciler = new ReconciliationService(sessions, notebooks, compute, bucket, 'source');
+
+			await expect(reconciler.reconcile()).resolves.toMatchObject({ orphansReaped: 1 });
+			expect(destroyed).toEqual(
+				failure === 'surface stop' ? [badId, goodId, orphanId] : [goodId, orphanId],
+			);
+			const failedSession = await sessions.getSession(projectId, failing.session_id);
+			if (failure === 'surface stop') {
+				expect(failedSession.sandbox_reclaimed_at).toEqual(expect.any(String));
+			} else {
+				expect(failedSession.sandbox_reclaimed_at).toBeUndefined();
+			}
+			expect(
+				(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,
+			).toBeDefined();
+		},
+	);
 });

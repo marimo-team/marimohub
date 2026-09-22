@@ -2,13 +2,24 @@
 // at every '$' would make a '$'-heavy input quadratic.
 const dollarQuoteTag = /\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/y;
 
+// PostgreSQL's lexer accepts every non-ASCII byte in an unquoted identifier.
+function followsIdentifier(sql: string, index: number): boolean {
+	if (index === 0) return false;
+	const previous = sql.charCodeAt(index - 1);
+	const before = sql.charCodeAt(index - 2);
+	const isSurrogatePair =
+		previous >= 0xdc00 && previous <= 0xdfff && before >= 0xd800 && before <= 0xdbff;
+	const start = isSurrogatePair ? index - 2 : index - 1;
+	const codePoint = sql.codePointAt(start)!;
+	return codePoint >= 0x80 || /[A-Za-z0-9_$]/.test(String.fromCodePoint(codePoint));
+}
+
 // An E'...' escape string, where the prefix is its own token (so CASE'x' or
 // TABLE'x' is not mistaken for one).
 function isEscapeStringPrefix(sql: string, quoteIndex: number): boolean {
 	const prefix = sql[quoteIndex - 1];
 	if (prefix !== 'E' && prefix !== 'e') return false;
-	const before = sql[quoteIndex - 2];
-	return before === undefined || !/[A-Za-z0-9_$]/.test(before);
+	return !followsIdentifier(sql, quoteIndex - 1);
 }
 
 export interface DataQuerySqlOptions {
@@ -93,7 +104,7 @@ export function singleDataQueryStatement(sql: string, options: DataQuerySqlOptio
 						: 'backtick';
 			continue;
 		}
-		if (character === '$') {
+		if (character === '$' && !followsIdentifier(sql, index)) {
 			dollarQuoteTag.lastIndex = index;
 			const delimiter = dollarQuoteTag.exec(sql)?.[0];
 			if (delimiter !== undefined) {

@@ -38,9 +38,10 @@ export function parseList(raw: string | undefined): string[] | undefined {
 }
 
 /** Read a case-insensitive `true` or `false`; reject other non-empty values. */
-export function parseBool(env: Env, key: string): boolean {
+export function parseBool(env: Env, key: string, fallback = false): boolean {
 	const value = readFolded(env, key);
-	if (value === undefined || value === 'false') return false;
+	if (value === undefined) return fallback;
+	if (value === 'false') return false;
 	if (value === 'true') return true;
 	throw new ConfigError(`Invalid ${key}: ${env[key]} (expected true or false)`, { variable: key });
 }

@@ -1,3 +1,4 @@
+import { sha256Hex } from '@marimo-hub/core/sha256';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	AlertDestinationId,
@@ -226,8 +227,7 @@ async function alertTestDeliveryId(
 	idempotencyKey: string,
 ): Promise<string> {
 	const operation = JSON.stringify([userId, projectId, destinationId, idempotencyKey]);
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(operation));
-	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+	return sha256Hex(operation);
 }
 
 function audit(

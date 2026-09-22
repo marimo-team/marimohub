@@ -5173,7 +5173,7 @@
 					"cli_name": "ids",
 					"in": "query",
 					"required": false,
-					"description": "Comma-separated user ids.",
+					"description": "Comma-separated user ids. At most 100 non-empty ids; whitespace and empty entries are ignored.",
 					"value_type": "string",
 					"repeatable": false
 				}

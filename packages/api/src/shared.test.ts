@@ -1,13 +1,17 @@
-import { createRoute, z } from '@hono/zod-openapi';
-import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 import {
+	NotebookId,
+	ProjectId,
 	createProjectId,
 	createServices,
 	ForbiddenError,
 	NotFoundError,
 	paths,
 } from '@marimo-hub/core';
-import { MemoryBucket, makeProject, uid } from '@marimo-hub/core/testing';
+import { ACTOR, MemoryBucket, makeProject, uid } from '@marimo-hub/core/testing';
+import { createTestApi, expectOk } from './testing';
+import { createRoute, z } from '@hono/zod-openapi';
+import { describe, it, expect, expectTypeOf, vi } from 'vitest';
+
 import {
 	assertProjectRole,
 	assertSessionAccess,
@@ -456,6 +460,48 @@ describe('createApp defaultHook', () => {
 				expect.objectContaining({ field: 'n' }),
 				expect.objectContaining({ field: 'label' }),
 			]),
+		);
+	});
+});
+
+describe('retireLiveApps lifecycle filter', () => {
+	it('retires an app session that is still starting when the project is deleted', async () => {
+		const { request, deps } = createTestApi();
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'AppProj', description: 'd' }),
+			201,
+		);
+		const notebook = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${project.id}/notebooks`, {
+				title: 'N',
+				description: '',
+				code: '',
+			}),
+			201,
+		);
+		const pid = ProjectId.parse(project.id);
+		const nid = NotebookId.parse(notebook.id);
+		const starting = await deps.services.sessions.createSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		const running = await deps.services.sessions.createSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		await deps.services.sessions.setRunning(pid, running.session_id, 'https://kernel.example');
+
+		expect((await request('DELETE', `/projects/${project.id}`)).status).toBe(200);
+
+		expect((await deps.services.sessions.getSession(pid, running.session_id)).status).toBe(
+			'terminated',
+		);
+		expect((await deps.services.sessions.getSession(pid, starting.session_id)).status).toBe(
+			'terminated',
 		);
 	});
 });

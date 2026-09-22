@@ -416,3 +416,33 @@ describe('attachSandboxProxyUpgrade', () => {
 		vi.restoreAllMocks();
 	});
 });
+
+describe('attachSandboxProxyUpgrade', () => {
+	function proxyDeps() {
+		return makeTestDeps(new MemoryBucket(), {
+			sandbox: {
+				bucket: { name: 'test', endpoint: '' },
+				hostname: 'localhost',
+				workdir: '/workspace',
+				persistWorkspace: 'source',
+				exposure: new ProxyExposure(SECRET),
+			},
+		});
+	}
+
+	it('rejects an upgrade with an unparseable Host header instead of throwing synchronously', async () => {
+		const server = fakeUpgradeServer();
+		attachSandboxProxyUpgrade(server, proxyDeps());
+		const socket = new PassThrough();
+		const out = collect(socket);
+		const req = {
+			url: '/proxy/x/',
+			headers: { host: 'foo bar' },
+		} as unknown as http.IncomingMessage;
+
+		expect(() => server.listeners[0](req, socket, Buffer.alloc(0))).not.toThrow();
+
+		await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+		expect(out.text()).toMatch(/^HTTP\/1\.1 400/);
+	});
+});

@@ -202,9 +202,9 @@ export function requireRole(
 /**
  * Whether a caller may *see* a project, decided from a catalog snapshot entry
  * (owner + denormalized `member_ids`/`member_emails`) without loading
- * `project.json`. With a `defaultRole` set every authenticated user is a
- * viewer, so all projects are visible; with it null (`none`) only the owner
- * and explicit members are.
+ * `project.json`. A `defaultRole` of viewer or higher makes all projects visible
+ * to authenticated users. Otherwise, only owners and explicit members can see
+ * the project entry.
  *
  * Returns `null` when the entry predates `member_ids` and the caller is not the
  * owner — visibility is then indeterminate from the snapshot alone, so the
@@ -225,7 +225,7 @@ export function canSeeProjectEntry(
 	policy?: AuthzPolicy,
 ): boolean | null {
 	if (isSuperAdmin(subject, policy?.superAdmins)) return true;
-	if (subjectDefaultRole(subject, policy) != null) return true;
+	if (roleAtLeast(subjectDefaultRole(subject, policy), 'viewer')) return true;
 	if (entry.owner === subject.id) return true;
 	if (entry.member_ids === undefined) return null;
 	if (entry.member_ids.includes(subject.id)) return true;

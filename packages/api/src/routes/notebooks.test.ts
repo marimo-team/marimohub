@@ -1,3 +1,4 @@
+import type { NotebookId, ProjectId } from '@marimo-hub/core';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
 import {
@@ -6,7 +7,7 @@ import {
 	createVersionId,
 	MAX_WORKSPACE_FILE_BYTES,
 } from '@marimo-hub/core';
-import type { ProjectId } from '@marimo-hub/core';
+
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
@@ -1806,6 +1807,78 @@ describe('Notebook routes', () => {
 			await request('DELETE', nb(`/${created.id}`), undefined, { 'If-Match': '"stale"' }),
 			412,
 			'PRECONDITION_FAILED',
+		);
+	});
+
+	it('does not replay a notebook create across projects with the same Idempotency-Key', async () => {
+		const pidB = (await services.projects.createProject({ name: 'B', description: '' }, ACTOR)).id;
+		const headers = { 'Idempotency-Key': 'nb-create-1' };
+		const body = { title: 'NB', description: '', code: 'x = 1' };
+		const first = await expectOk<any>(
+			await request('POST', `/projects/${projectId}/notebooks`, body, headers),
+			201,
+		);
+		expect(first.project_id).toBe(projectId);
+
+		const second = await expectOk<any>(
+			await request('POST', `/projects/${pidB}/notebooks`, body, headers),
+			201,
+		);
+		expect(second.project_id).toBe(pidB);
+		expect(second.id).not.toBe(first.id);
+		const inB = await services.notebooks.listNotebooks(pidB);
+		expect(inB.map((n) => n.id)).toContain(second.id);
+	});
+
+	it('does not replay a duplicate across source notebooks with the same Idempotency-Key', async () => {
+		const one = await services.notebooks.createNotebook(
+			projectId,
+			{ title: 'One', description: '', code: 'one = 1' },
+			ACTOR,
+		);
+		const two = await services.notebooks.createNotebook(
+			projectId,
+			{ title: 'Two', description: '', code: 'two = 2' },
+			ACTOR,
+		);
+		const headers = { 'Idempotency-Key': 'dup-1' };
+		const copyOfOne = await expectOk<any>(
+			await request('POST', `/projects/${projectId}/notebooks/${one.id}/duplicate`, {}, headers),
+			201,
+		);
+		expect(copyOfOne.title).toBe('One (copy)');
+
+		const copyOfTwo = await expectOk<any>(
+			await request('POST', `/projects/${projectId}/notebooks/${two.id}/duplicate`, {}, headers),
+			201,
+		);
+		expect(copyOfTwo.id).not.toBe(copyOfOne.id);
+		expect(copyOfTwo.title).toBe('Two (copy)');
+		expect(await services.notebooks.getNotebookContent(projectId, copyOfTwo.id as NotebookId)).toBe(
+			'two = 2',
+		);
+	});
+
+	it('does not let an editor rotate a git-synced notebook sync token', async () => {
+		const EDITOR = uid('user_editor');
+		await services.projects.addMember(projectId, { user_id: EDITOR }, 'editor', ACTOR);
+		const { meta } = await services.notebooks.synced.create(
+			projectId,
+			{
+				title: 'Synced',
+				description: '',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+			},
+			ACTOR,
+		);
+		const editor = createTestApi({ bucket, userId: EDITOR }).request;
+		await expectError(
+			await editor('POST', `/projects/${projectId}/notebooks/${meta.id}/sync-token/rotate`),
+			403,
+			'FORBIDDEN',
 		);
 	});
 });

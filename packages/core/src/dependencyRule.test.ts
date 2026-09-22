@@ -25,6 +25,7 @@ const ALLOWED_DEPENDENCIES = new Set([
 	// Pure in-memory (de)compression for workspace archive parsing — no I/O.
 	'fflate',
 	'smol-toml',
+	'tldts',
 	'ulidx',
 	'yaml',
 	'zod',

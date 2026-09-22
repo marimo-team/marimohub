@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+	createSandboxId,
+	createNotebookId,
+	createProjectId,
+	createSessionId,
+	createVersionId,
+	SandboxId,
+} from '../../ids';
+
 import {
 	ACTOR,
 	advanceTime,
@@ -9,13 +18,7 @@ import {
 	uid,
 } from '../../testing';
 import { ConflictError, PreconditionFailedError } from '../../errors';
-import {
-	createNotebookId,
-	createProjectId,
-	createSessionId,
-	createVersionId,
-	SandboxId,
-} from '../../ids';
+
 import type { SessionId } from '../../ids';
 import { paths } from '../../paths';
 import { SessionService } from './SessionService';
@@ -1317,5 +1320,38 @@ describe('SessionService', () => {
 
 			restoreClock();
 		});
+	});
+});
+
+describe('SessionService terminal retention', () => {
+	let bucket: MemoryBucket;
+	let sessions: SessionService;
+	const notebookId = createNotebookId();
+	const projectId = createProjectId();
+
+	beforeEach(() => {
+		bucket = new MemoryBucket();
+		sessions = new SessionService(bucket);
+	});
+
+	afterEach(() => restoreClock());
+
+	it('keeps a terminal record whose sandbox has not been confirmed reclaimed', async () => {
+		const session = await sessions.createSession({
+			notebook_id: notebookId,
+			project_id: projectId,
+			user_id: ACTOR,
+			sandbox_id: createSandboxId(),
+		});
+		await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
+
+		advanceTime(25 * 60 * 60 * 1000);
+		await sessions.expireStale();
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('expired');
+
+		const reaped = await sessions.reapTerminated();
+
+		expect(reaped).toBe(0);
+		expect(await sessions.listSessions()).toHaveLength(1);
 	});
 });

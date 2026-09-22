@@ -57,3 +57,18 @@ describe('formatAbsolute', () => {
 		);
 	});
 });
+
+describe('formatRelative unit boundaries', () => {
+	it('rolls 59m30s over to 1h instead of showing 60m', () => {
+		expect(formatRelative(ago(59 * 60 + 30), NOW)).toBe('1h ago');
+	});
+
+	it('rolls 23h30m over to 1d instead of showing 24h', () => {
+		expect(formatRelative(ago(23 * 3600 + 30 * 60), NOW)).toBe('1d ago');
+	});
+
+	it('uses a calendar date when the rounded age reaches 30 days', () => {
+		const label = formatRelative(ago(29.5 * 86_400), NOW);
+		expect(label).toBe(new Date(NOW - 29.5 * 86_400 * 1000).toLocaleDateString());
+	});
+});

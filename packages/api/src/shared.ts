@@ -516,7 +516,10 @@ export async function retireLiveApps(
 	let apps: Session[];
 	try {
 		apps = (await deps.services.sessions.listActiveByProject(pid)).filter(
-			(s) => s.status === 'running' && !sessionPersistsEdits(s) && (!scope || scope(s)),
+			(s) =>
+				(s.status === 'running' || s.status === 'starting') &&
+				!sessionPersistsEdits(s) &&
+				(!scope || scope(s)),
 		);
 	} catch (err) {
 		logEvent({

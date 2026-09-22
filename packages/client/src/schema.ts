@@ -17387,7 +17387,7 @@ export interface operations {
 	'users.resolve': {
 		parameters: {
 			query?: {
-				/** @description Comma-separated user ids. */
+				/** @description Comma-separated user ids. At most 100 non-empty ids; whitespace and empty entries are ignored. */
 				ids?: string;
 			};
 			header?: never;
@@ -17413,6 +17413,15 @@ export interface operations {
 			};
 			/** @description Authentication required */
 			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
 				headers: {
 					[name: string]: unknown;
 				};

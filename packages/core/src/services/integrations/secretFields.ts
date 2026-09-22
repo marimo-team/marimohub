@@ -226,6 +226,8 @@ export function parseAuthoringWithPlaceholders(options: {
 	for (const path of paths) {
 		for (const concrete of expandPath(sanitized, path)) {
 			const value = getAt(sanitized, concrete);
+			if (value === '')
+				throw new ValidationError(`Secret field "${dotted(concrete)}" must not be empty.`);
 			if (typeof value === 'string' || isKeepMarker(value) || isReferenceSecret(value)) {
 				setAt(sanitized, concrete, PLACEHOLDER);
 			} else if (value !== undefined) {
@@ -334,6 +336,8 @@ function placeholderSubstituted(
 	for (const path of paths) {
 		for (const concrete of expandPath(sanitized, path)) {
 			const value = getAt(sanitized, concrete);
+			if (value === '')
+				throw new ValidationError(`Secret field "${dotted(concrete)}" must not be empty.`);
 			if (value === undefined) continue;
 			if (!isStoredSecret(value)) {
 				throw new ValidationError(

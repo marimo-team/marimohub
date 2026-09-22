@@ -311,6 +311,7 @@ export async function captureWorkspace(
 				continue;
 			}
 			if (file.type !== 'file') continue;
+			present.add(rel);
 
 			if (selected.length >= MAX_WORKSPACE_FILES) {
 				console.warn(
@@ -334,9 +335,8 @@ export async function captureWorkspace(
 			totalBytes += file.size;
 		}
 
-		// A read failure skips just that file (logged); successful ones join the
-		// `present` mirror set that drives the delete pass below.
-		const captured = await mapWithConcurrency(selected, CAPTURE_FILE_CONCURRENCY, async (rel) => {
+		// Presence comes from the listing: skipped uploads retain the last good copy.
+		await mapWithConcurrency(selected, CAPTURE_FILE_CONCURRENCY, async (rel) => {
 			const result = await sandbox.exec(`base64 -w0 ${shellQuote(`${workingDir}/${rel}`)}`);
 			if (!result.success) {
 				console.warn(`captureWorkspace: could not read ${rel}; skipping`);
@@ -346,9 +346,6 @@ export async function captureWorkspace(
 			await bucket.put(nb.workspaceFile(rel), bytes);
 			return rel;
 		});
-		for (const rel of captured) {
-			if (rel) present.add(rel);
-		}
 		await mapWithConcurrency(directoryMarkers, CAPTURE_FILE_CONCURRENCY, async (marker) =>
 			bucket.put(nb.workspaceFile(marker), new Uint8Array()),
 		);

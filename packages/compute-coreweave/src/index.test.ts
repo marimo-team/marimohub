@@ -1177,3 +1177,61 @@ computeContract(
 		semantics: { failingCommand: 'mh-contract-fail', launch: {} },
 	},
 );
+
+describe('CoreWeaveCompute launchProcess', () => {
+	it.each(['completes', 'fails', 'stalls'] as const)(
+		'waits for bounded process cancellation when a launch times out and cancellation %s',
+		async (cancellation) => {
+			let releaseStreams!: () => void;
+			const released = new Promise<void>((resolve) => {
+				releaseStreams = resolve;
+			});
+			let streamsEnded = 0;
+			async function* stalled(): AsyncGenerator<string> {
+				await released;
+				streamsEnded++;
+				yield '';
+			}
+			const cancel = vi.fn(async () => {
+				if (cancellation === 'stalls') return released;
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				if (cancellation === 'fails') throw new Error('Cancellation failed');
+				releaseStreams();
+			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const world = makeWorld({
+				startImpl: async () => ({ ...fakeProcess(), stdout: stalled(), stderr: stalled(), cancel }),
+			});
+			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			vi.useFakeTimers();
+			try {
+				let resolved = false;
+				const pending = inst.launchProcess!('marimo edit', { port: 2718, startupTimeout: 200 });
+				void pending.then(() => {
+					resolved = true;
+				});
+				await vi.advanceTimersByTimeAsync(450);
+				expect(cancel).toHaveBeenCalledOnce();
+				expect(resolved).toBe(false);
+				await vi.advanceTimersByTimeAsync(1_000);
+				await expect(pending).resolves.toMatchObject({
+					success: false,
+					reason: 'readiness_timeout',
+					timings: { waitport: 450 },
+				});
+				if (cancellation === 'completes') {
+					expect(streamsEnded).toBe(2);
+					expect(log).not.toHaveBeenCalled();
+				} else {
+					expect(log).toHaveBeenCalledWith(
+						expect.stringContaining('"event":"sandbox_process_cancel_failed"'),
+					);
+				}
+			} finally {
+				releaseStreams();
+				log.mockRestore();
+				vi.useRealTimers();
+			}
+		},
+	);
+});

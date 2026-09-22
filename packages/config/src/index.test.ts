@@ -1669,3 +1669,23 @@ describe('external issuer MCP composition', () => {
 		).toBeUndefined();
 	});
 });
+
+describe('createFromEnv boolean knobs', () => {
+	// Storage `memory` + compute `none` keep these tests free of S3/Modal config.
+	const baseEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('treats a case-variant "False" for MARIMOHUB_SESSION_CONNECTION_AWARE as off', () => {
+		const deps = createFromEnv({ ...baseEnv, MARIMOHUB_SESSION_CONNECTION_AWARE: 'False' });
+		expect(deps.sandbox.sessionLifetime?.connectionAware).toBe(false);
+	});
+
+	it('treats a case-variant "FALSE" for MARIMOHUB_AUTOMATIC_THUMBNAILS as off', () => {
+		const deps = createFromEnv({ ...baseEnv, MARIMOHUB_AUTOMATIC_THUMBNAILS: 'FALSE' });
+		expect(deps.sandbox.automaticThumbnails).toBe(false);
+	});
+});

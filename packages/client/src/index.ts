@@ -157,18 +157,22 @@ const defaultOrigin =
 	typeof globalThis.location === 'object' ? globalThis.location.origin : 'http://localhost';
 const defaultBaseUrl = defaultOrigin;
 
+async function readRequestBody(request: Request): Promise<string | ArrayBuffer | undefined> {
+	if (request.method === 'GET' || request.method === 'HEAD') return undefined;
+	// Firefox lacks Request.body; empty payloads must not acquire a text/plain content-type.
+	if (request.headers.get('content-type')?.includes('application/json')) {
+		return (await request.clone().text()) || undefined;
+	}
+	const body = await request.clone().arrayBuffer();
+	return body.byteLength ? body : undefined;
+}
+
 async function dispatchRequest(request: Request): Promise<Response> {
 	const url = new URL(request.url);
 	const input = url.origin === defaultOrigin ? `${url.pathname}${url.search}${url.hash}` : url.href;
-	// Firefox has no Request.body getter (Bugzilla #1387483), so detect a
-	// payload by reading it; '' maps to undefined so a bodyless POST does not
-	// pick up a spurious text/plain content-type.
-	const body =
-		request.method === 'GET' || request.method === 'HEAD'
-			? undefined
-			: (await request.clone().text()) || undefined;
+
 	return globalThis.fetch(input, {
-		body,
+		body: await readRequestBody(request),
 		cache: request.cache,
 		credentials: request.credentials,
 		headers: request.headers,

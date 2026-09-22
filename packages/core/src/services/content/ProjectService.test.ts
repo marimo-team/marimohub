@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
+import { uid, ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
+
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
 import { createJobId, createNotebookId, createRunId, createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
+
 import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { IdentityService } from '../identity/IdentityService';
@@ -1281,6 +1283,63 @@ describe('ProjectService', () => {
 			expect(await listAllKeys(bucket, survivorPrefix)).toEqual(survivorKeysBefore);
 			expect((await projects.listProjects()).map((p) => p.id)).toContain(survivor.id);
 			expect(await notebooks.getNotebookContent(survivor.id, survivorNb.id)).toBe('s1');
+		});
+	});
+
+	describe('update tokens', () => {
+		beforeEach(() => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2025-03-05T14:00:00.000Z'));
+		});
+		afterEach(() => vi.useRealTimers());
+
+		it('rejects a stale If-Match after a same-millisecond project update', async () => {
+			const created = await projects.createProject({ name: 'Orig', description: 'D' }, ACTOR);
+
+			const first = await projects.updateProject(
+				created.id,
+				{ name: 'First' },
+				ACTOR,
+				created.updated_at,
+			);
+			expect(first.name).toBe('First');
+
+			await expect(
+				projects.updateProject(created.id, { name: 'Second' }, ACTOR, created.updated_at),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+			expect((await projects.getProject(created.id)).name).toBe('First');
+		});
+
+		it('rejects a stale If-Match after a same-millisecond security-label change', async () => {
+			const created = await projects.createProject({ name: 'Orig', description: 'D' }, ACTOR);
+
+			await projects.setSecurityLabels(
+				created.id,
+				{ classification: 'SECRET', compartments: [] },
+				ACTOR,
+				created.updated_at,
+			);
+
+			await expect(
+				projects.setSecurityLabels(created.id, undefined, ACTOR, created.updated_at),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+			expect((await projects.getProject(created.id)).security_labels).toEqual({
+				classification: 'SECRET',
+				compartments: [],
+			});
+		});
+
+		it('advances updated_at on a same-millisecond member mutation', async () => {
+			const created = await projects.createProject({ name: 'Orig', description: 'D' }, ACTOR);
+
+			const after = await projects.addMember(
+				created.id,
+				{ user_id: uid('user_2') },
+				'viewer',
+				ACTOR,
+			);
+
+			expect(after.updated_at > created.updated_at).toBe(true);
 		});
 	});
 });

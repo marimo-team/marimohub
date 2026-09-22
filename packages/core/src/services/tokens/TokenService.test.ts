@@ -577,4 +577,14 @@ describe('TokenService', () => {
 			expect(isPatRequest(withAuth())).toBe(false);
 		});
 	});
+
+	it.each([
+		['invalid JSON', '{not json'],
+		['missing required fields', JSON.stringify({ id: OWNER, email: 'owner@x.io', name: 'Owner' })],
+	])('returns null when the issuer identity has %s', async (_reason, stored) => {
+		const { token } = await tokens.create({ name: 'ci' }, OWNER);
+		await bucket.put(paths.identity(OWNER), stored);
+		const fresh = new TokenService(bucket, new IdentityService(bucket));
+		await expect(fresh.verify(token)).resolves.toBeNull();
+	});
 });

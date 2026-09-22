@@ -95,10 +95,16 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {
-		const res = await this.sandbox.readFile(path);
-		return res.success
-			? { success: true, content: res.content, encoding: res.encoding }
-			: readFileFailure('READ_FAILED');
+		try {
+			const res = await this.sandbox.readFile(path);
+			return res.success
+				? { success: true, content: res.content, encoding: res.encoding }
+				: readFileFailure('READ_FAILED');
+		} catch (error) {
+			return readFileFailure(
+				error instanceof Error && error.name === 'FileNotFoundError' ? 'NOT_FOUND' : 'READ_FAILED',
+			);
+		}
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {

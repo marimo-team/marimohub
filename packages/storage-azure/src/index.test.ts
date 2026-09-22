@@ -232,7 +232,7 @@ describe('AzureStorage request mapping', () => {
 		await bucket.put('new', 'value', { onlyIfNotExists: true });
 
 		expect(fake.calls.uploads[1]?.options).toMatchObject({
-			conditions: { ifMatch: first.etag },
+			conditions: { ifMatch: `"${first.etag}"` },
 			blobHTTPHeaders: { blobContentType: 'text/plain' },
 			metadata: { source: 'test' },
 		});
@@ -440,3 +440,18 @@ if (liveContainer && (liveConnectionString || liveAccountUrl)) {
 		it('set the Azure test container and connection string or account URL', () => {});
 	});
 }
+
+describe('AzureStorage ETag normalization', () => {
+	it('returns bare etags from put/head/get/list, like every other Bucket adapter', async () => {
+		const bucket = new AzureStorage({ containerClient: makeFakeContainer().client });
+		const put = await bucket.put('a.txt', 'hello');
+		const head = await bucket.head('a.txt');
+		const got = await bucket.get('a.txt');
+		const listed = await bucket.list({ prefix: 'a' });
+
+		for (const etag of [put.etag, head?.etag, got?.etag, listed.objects[0]?.etag]) {
+			expect(etag).toBeDefined();
+			expect(etag).not.toMatch(/^"|"$/);
+		}
+	});
+});

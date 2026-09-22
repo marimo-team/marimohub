@@ -56,6 +56,12 @@ async function expectOpenAiError(res: Response, message: string, type: string) {
 }
 
 describe('POST /api/ai/v1/chat/completions', () => {
+	it('returns an OpenAI-shaped error for an unknown authenticated proxy route', async () => {
+		const res = await post(await token(), {}, {}, '/api/ai/v1/unknown');
+		expect(res.status).toBe(404);
+		await expectOpenAiError(res, 'Route not found', 'invalid_request_error');
+	});
+
 	it('rejects a missing token', async () => {
 		const res = await post(null, { model: 'x', messages: [] });
 		expect(res.status).toBe(401);

@@ -291,7 +291,7 @@ function parseRunAsUser(env: Env, key: string): number | undefined {
 }
 
 function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
-	const raw = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION;
+	const raw = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION?.trim() || undefined;
 	if (raw === undefined || raw === 'read' || raw === 'read-write') return raw;
 	throw new ConfigError(
 		`Invalid MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION: ${raw} (expected read or read-write)`,
@@ -509,7 +509,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				env,
 				'MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS',
 			);
-			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY;
+			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY?.trim() || undefined;
 			const proxyExposure = opts?.sandboxExposureMode === 'proxy';
 			const ingressTlsMode = proxyExposure ? undefined : kubernetesIngressTlsMode(env);
 			const ports = surfacePorts(opts?.surfaces);

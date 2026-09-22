@@ -5,8 +5,8 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis, sleep } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
-import { createRunId, RunId } from '../../ids';
-import type { JobId, NotebookId, ProjectId, UserId, VersionId } from '../../ids';
+import { createRunId, JobId, NotebookId, RunId } from '../../ids';
+import type { ProjectId, UserId, VersionId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import {
@@ -582,19 +582,60 @@ export class JobRunService {
 	}
 
 	/** Cancel every non-terminal run of a notebook (a soft-delete must not leave it computing). */
-	cancelRunsOfNotebook(
+	async cancelRunsOfNotebook(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		by: UserId,
 	): Promise<CancelledRuns> {
+		await this.waitForJobMutations(projectId, notebookId);
 		return this.cancelRunsWhere(
 			(marker) => marker.project_id === projectId && marker.notebook_id === notebookId,
 			by,
 		);
 	}
 
-	cancelRunsOfProject(projectId: ProjectId, by: UserId): Promise<CancelledRuns> {
+	async cancelRunsOfProject(projectId: ProjectId, by: UserId): Promise<CancelledRuns> {
+		await this.waitForJobMutations(projectId);
 		return this.cancelRunsWhere((marker) => marker.project_id === projectId, by);
+	}
+
+	private async waitForJobMutations(projectId: ProjectId, notebookId?: NotebookId): Promise<void> {
+		// Deletion marks the parent first. Earlier fires hold these claims before
+		// checking its status; later fires see the deletion and cannot enqueue.
+		const projectPrefix = paths.jobOperationClaimsForProject(projectId);
+		const prefix = notebookId
+			? paths.jobOperationClaimsForNotebook(projectId, notebookId)
+			: projectPrefix;
+		let keys: string[];
+		try {
+			keys = await listAllKeys(this.bucket, prefix);
+		} catch (err) {
+			logOperationalError(
+				'job_operation_wait_failed',
+				{ operation: 'job.operation.wait', object: prefix },
+				err,
+			);
+			return;
+		}
+		await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
+			try {
+				const [notebook, job] = key.slice(projectPrefix.length).split('/');
+				await this.withJobMutation(
+					{
+						project_id: projectId,
+						notebook_id: NotebookId.parse(notebook),
+						id: JobId.parse(job.replace(/\.json$/, '')),
+					},
+					async () => {},
+				);
+			} catch (err) {
+				logOperationalError(
+					'job_operation_wait_failed',
+					{ operation: 'job.operation.wait', object: key },
+					err,
+				);
+			}
+		});
 	}
 
 	private async cancelRunsWhere(
@@ -616,8 +657,8 @@ export class JobRunService {
 	}
 
 	/**
-	 * Delete terminal runs past `retentionMs` and occurrence claims past the longer
-	 * of run retention and `occurrenceRetentionMs`.
+	 * Retain runs and occurrence claims for the longer of `retentionMs` and
+	 * `occurrenceRetentionMs`, so catch-up never repairs a pruned completed run.
 	 */
 	async pruneJob(
 		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
@@ -625,15 +666,14 @@ export class JobRunService {
 		now: number = Date.now(),
 		occurrenceRetentionMs: number = retentionMs,
 	): Promise<number> {
-		const runCutoff = now - retentionMs;
-		const occurrenceCutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
+		const cutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
 		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
 		const runs = await this.listRuns(job.project_id, job.notebook_id, job.id);
 		let pruned = 0;
 		for (const run of runs) {
 			if (!isTerminalRunStatus(run.status)) continue;
 			const endedAt = Date.parse(run.finished_at ?? run.queued_at);
-			if (!(endedAt < runCutoff)) continue;
+			if (!(endedAt < cutoff)) continue;
 			if ((await this.bucket.head(paths.jobRunMarker(run.project_id, run.run_id))) !== null) {
 				continue;
 			}
@@ -645,11 +685,21 @@ export class JobRunService {
 		const staleOccurrences = occurrenceKeys.filter((key) => {
 			const name = key.slice(jobPaths.occurrencesPrefix.length).replace(/\.json$/, '');
 			const instant = occurrenceKeyToInstant(name);
-			return instant !== null && instant < occurrenceCutoff;
+			return instant !== null && instant < cutoff;
 		});
 		if (staleOccurrences.length > 0) await this.bucket.delete(staleOccurrences);
 		if (pruned > 0) this.metrics.increment('jobs.runs.pruned', pruned);
 		return pruned;
+	}
+
+	async pruneDanglingMarker(marker: JobRunMarker): Promise<void> {
+		const index = paths
+			.project(marker.project_id)
+			.notebook(marker.notebook_id)
+			.job(marker.job_id)
+			.runIndex(marker.run_id);
+		await this.bucket.delete(index);
+		await this.deleteMarker(marker);
 	}
 
 	/**
@@ -661,25 +711,22 @@ export class JobRunService {
 		for (const { marker, run } of await this.listActive()) {
 			const stale = !run && now - Date.parse(marker.created_at) > DANGLING_MARKER_GRACE_MS;
 			if (!stale) continue;
-			// An unreadable record is not a missing record; its marker protects
-			// the sandbox from being mistaken for an orphan by reconciliation.
-			if (
-				await this.runExists(marker.project_id, marker.notebook_id, marker.job_id, marker.run_id)
-			) {
-				continue;
+			try {
+				// An unreadable record still needs its sandbox ownership marker.
+				if (
+					await this.runExists(marker.project_id, marker.notebook_id, marker.job_id, marker.run_id)
+				) {
+					continue;
+				}
+				await this.pruneDanglingMarker(marker);
+				pruned++;
+			} catch (err) {
+				logOperationalError(
+					'job_run_marker_prune_failed',
+					{ operation: 'job.runs.prune_marker', run_id: marker.run_id },
+					err,
+				);
 			}
-			await this.bucket
-				.delete(paths.jobRunMarker(marker.project_id, marker.run_id))
-				.catch(() => {});
-			if (!run) {
-				const index = paths
-					.project(marker.project_id)
-					.notebook(marker.notebook_id)
-					.job(marker.job_id)
-					.runIndex(marker.run_id);
-				await this.bucket.delete(index).catch(() => {});
-			}
-			pruned++;
 		}
 		return pruned;
 	}

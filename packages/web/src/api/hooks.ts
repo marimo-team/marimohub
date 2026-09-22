@@ -1,3 +1,4 @@
+import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
 	useInfiniteQuery,
 	useQuery,
@@ -25,6 +26,7 @@ import {
 	auditKeys,
 	adminKeys,
 	jobKeys,
+	appKeys,
 } from './queryKeys';
 import { isTerminalRun } from '../lib/jobs';
 import type { AuditLogFilters } from './queryKeys';
@@ -274,12 +276,23 @@ export function useUsersQuery(ids: readonly (string | undefined)[]) {
 	const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))].sort();
 	return useQuery({
 		queryKey: userKeys.resolve(unique),
-		queryFn: () =>
-			apiData(
-				apiClient.GET('/api/v1/users', {
-					params: { query: { ids: unique.join(',') } },
-				}),
-			),
+		queryFn: async ({ signal }): Promise<UserDirectory> => {
+			const batches = Array.from(
+				{ length: Math.ceil(unique.length / MAX_RESOLVED_USERS) },
+				(_, index) => unique.slice(index * MAX_RESOLVED_USERS, (index + 1) * MAX_RESOLVED_USERS),
+			);
+			const results = await Promise.all(
+				batches.map((batch) =>
+					apiData(
+						apiClient.GET('/api/v1/users', {
+							params: { query: { ids: batch.join(',') } },
+							signal,
+						}),
+					),
+				),
+			);
+			return Object.fromEntries(results.flatMap((users) => Object.entries(users)));
+		},
 		enabled: unique.length > 0,
 		staleTime: 5 * 60 * 1000,
 	});
@@ -427,7 +440,7 @@ export function useCreateProject() {
 	return useApiMutation(
 		(body: { name: string; description: string }) =>
 			apiData(apiClient.POST('/api/v1/projects', { body })),
-		() => [projectKeys.list(), userKeys.me(), ['apps']],
+		() => [projectKeys.list(), userKeys.me(), appKeys.all],
 	);
 }
 
@@ -462,7 +475,7 @@ export function useDeleteProject() {
 					params: { path: { pid: projectId } },
 				}),
 			),
-		() => [projectKeys.list()],
+		() => [projectKeys.list(), appKeys.all, userKeys.me()],
 	);
 }
 
@@ -1614,7 +1627,7 @@ export function useDeleteNotebook(projectId: string) {
 					params: { path: { pid: projectId, nid: notebookId } },
 				}),
 			),
-		() => [notebookKeys.list(projectId)],
+		() => [notebookKeys.list(projectId), appKeys.lists(), appKeys.details(projectId)],
 	);
 }
 

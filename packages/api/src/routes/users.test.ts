@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
+
 import { ProjectId } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -225,5 +226,33 @@ describe('User routes', () => {
 
 			expect(await expectOk(await god('GET', '/users/search?q=adam'))).toHaveLength(1);
 		});
+	});
+});
+
+describe('GET /users batch size', () => {
+	it.each([100, 101])('counts normalized ids at the batch boundary (%i ids)', async (count) => {
+		const { request } = createTestApi();
+		const ids = Array.from({ length: count }, (_, index) =>
+			index === 0 ? ACTOR : `user-${index}`,
+		);
+		const query = encodeURIComponent(` , ${ids.join(', , ')}, `);
+		const response = await request('GET', `/users?ids=${query}`);
+		if (count > 100) {
+			await expectError(response, 422, 'VALIDATION_ERROR');
+		} else {
+			const data = await expectOk<Record<string, unknown>>(response);
+			expect(Object.keys(data)).toEqual([ACTOR]);
+		}
+	});
+
+	it('rejects an unbounded ids list instead of fanning out to storage', async () => {
+		const { app, bucket } = createTestApi();
+		const reads = vi.spyOn(bucket, 'get');
+		const ids = Array.from({ length: 1000 }, (_, index) => `user-${index}`).join(',');
+
+		const res = await app.request(`/api/v1/users?ids=${ids}`);
+
+		expect(res.status).toBe(422);
+		expect(reads.mock.calls.length).toBeLessThan(200);
 	});
 });

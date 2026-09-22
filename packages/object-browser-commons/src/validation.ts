@@ -13,16 +13,17 @@ export function assertObjectIdentity(source: ObjectStoreSource, request: ObjectI
 	if (!request.key || new TextEncoder().encode(request.key).length > 1_024) {
 		throw new ObjectBrowseError('not_found', 'The object key is invalid.');
 	}
-	// Providers that address a blob by URL (Azure) let the URL parser resolve
-	// dot segments, which walks the key out of the configured container.
-	if (
-		source.provider === 'azure_blob' &&
-		(request.key.startsWith('/') || hasDotSegment(request.key))
-	) {
+	if (hasUnsafeObjectPath(source.provider, request.key)) {
 		throw new ObjectBrowseError('not_found', 'The object key is invalid.');
 	}
 }
 
-function hasDotSegment(key: string): boolean {
-	return key.split('/').some((segment) => segment === '.' || segment === '..');
+function hasUnsafeObjectPath(provider: ObjectStoreSource['provider'], key: string): boolean {
+	// Azure preserves slashes; GCS encodes them, so only a whole-key dot segment escapes.
+	if (provider === 'azure_blob') return key.startsWith('/') || key.split('/').some(isDotSegment);
+	return provider === 'gcs' && isDotSegment(key);
+}
+
+function isDotSegment(segment: string): boolean {
+	return segment === '.' || segment === '..';
 }

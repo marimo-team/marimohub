@@ -849,22 +849,22 @@ describe('change request routes', () => {
 		);
 	});
 
-	it('replays the first response when a retry changes text or update target', async () => {
+	it('rejects changed text or update targets under the same idempotency key', async () => {
 		const headers = { 'Idempotency-Key': 'same-operation' };
-		const first = await expectOk<{ change_request: { number: number } }>(
+		await expectOk<{ change_request: { number: number } }>(
 			await setup.request('POST', route(), { title: 'First title' }, headers),
 			201,
 		);
-		const second = await expectOk<{ change_request: { number: number } }>(
+		await expectError(
 			await setup.request(
 				'POST',
 				route(),
 				{ title: 'Different title', target_proposal_id: createProposalId() },
 				headers,
 			),
-			201,
+			422,
+			'VALIDATION_ERROR',
 		);
-		expect(second).toEqual(first);
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 		expect(openChangeRequest.mock.calls[0]?.[0].title).toBe('First title');
 	});
