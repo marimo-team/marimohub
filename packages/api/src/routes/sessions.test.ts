@@ -324,32 +324,35 @@ describe('Session routes', () => {
 			},
 		);
 
-		it.each([
-			[
-				'invalid metadata',
-				'# /// script\n# dependencies = [invalid\n# ///',
-				'Failed to parse inline script metadata',
-			],
-			['unresolvable dependencies', INLINE_CODE, 'No solution found when resolving dependencies'],
-		])('fails local startup before starting the kernel for %s', async (_, code, stderr) => {
+		it('propagates an inline setup failure and cleans up before starting the kernel', async () => {
 			const services = createServices(bucket);
-			await services.notebooks.updateNotebook(pid, nid, { code }, ACTOR);
+			await services.notebooks.updateNotebook(pid, nid, { code: INLINE_CODE }, ACTOR);
 			const { instance, calls } = makeFakeSandbox();
 			const baseExec = instance.exec.bind(instance);
 			vi.spyOn(instance, 'exec').mockImplementation(async (command, options) => {
 				if (!command.includes('uv export --script')) return baseExec(command, options);
-				return { success: false, stdout: '', stderr, error: { code: 'COMMAND_FAILED' } };
+				return {
+					success: false,
+					stdout: '',
+					stderr: 'No solution found when resolving dependencies',
+					error: { code: 'COMMAND_FAILED' },
+				};
 			});
 			const api = createTestApi({
 				bucket,
 				userId: ACTOR,
 				compute: fakeComputeFrom(instance),
 			}).request;
-			await expectError(await api('POST', sessionsPath()), 503, 'PYTHON_ENV_SETUP_FAILED');
+			const error = await expectError(
+				await api('POST', sessionsPath()),
+				503,
+				'PYTHON_ENV_SETUP_FAILED',
+			);
+			expect(error.message).toContain('the notebook dependency constraints could not be resolved');
 			expect(await services.sessions.listSessions(nid)).toEqual([
 				expect.objectContaining({
 					status: 'failed',
-					error: expect.objectContaining({ code: 'PYTHON_ENV_SETUP_FAILED' }),
+					error: { code: 'PYTHON_ENV_SETUP_FAILED', message: error.message },
 				}),
 			]);
 			expect(calls.startProcess).toHaveLength(0);

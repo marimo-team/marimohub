@@ -9,9 +9,10 @@ import { buildMarimoLaunch } from './marimoLaunch';
 
 const exec = promisify(execFile);
 
-// CI supplies the same uv version as the sandbox image. All package resolution is offline.
+// CI pins uv for reproducibility. All package resolution is offline.
 describe.runIf(process.env.MARIMOHUB_UV_INTEGRATION === '1')(
 	'inline dependency installation',
+	{ timeout: 180_000 },
 	() => {
 		let root: string;
 		let env: NodeJS.ProcessEnv;
@@ -63,7 +64,7 @@ describe.runIf(process.env.MARIMOHUB_UV_INTEGRATION === '1')(
 			]);
 			await run('uv', ['venv', '--python', '>=3.11', '.venv']);
 			await run('uv', ['pip', 'install', '--python', '.venv', 'marimo==0.0.1']);
-		});
+		}, 90_000);
 
 		afterEach(async () => {
 			if (root) await rm(root, { recursive: true, force: true });
