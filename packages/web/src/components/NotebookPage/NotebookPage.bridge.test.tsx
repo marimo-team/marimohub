@@ -102,7 +102,9 @@ describe('notebook URL mirroring', () => {
 			expect(screen.getByTitle('Forecast')).toBe(initial);
 			expect(initial.getAttribute('src')).toContain('id=123');
 			expect(connections).toHaveLength(count);
-			await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+			await user.click(
+				screen.getByRole('button', { name: variant === 'app' ? 'Share app' : 'Share notebook' }),
+			);
 			await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
 			expect(writeText.mock.calls.at(-1)?.[0]).toContain('?id=456&tag=one&tag=two');
 			act(() => {

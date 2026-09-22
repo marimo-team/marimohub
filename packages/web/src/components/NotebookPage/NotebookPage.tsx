@@ -662,6 +662,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						title={title}
 						canRunApp={!isApp && canRunApp}
 						canManageLinks={canManageLinks}
+						isApp={isApp}
 					/>
 					<ChangeRequestActions
 						projectId={pid!}

@@ -4,9 +4,50 @@ import { Camera, Copy, Link, Play, Share2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { DropdownMenu } from '@/components/ui';
+import type { DropdownMenuOption } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { withBasePath } from '@/lib/basePath';
 import { notebookQueryParams } from '@/lib/notebookUrls';
+
+export function ShareUrlMenu({
+	label,
+	successMessage,
+	options = [],
+	onAction,
+}: {
+	label: string;
+	successMessage: string;
+	options?: DropdownMenuOption[];
+	onAction?: (action: string) => void;
+}) {
+	const location = useLocation();
+	const { copy } = useCopyToClipboard();
+	return (
+		<DropdownMenu
+			label={label}
+			icon={<Share2 className="size-3.5" />}
+			triggerClassName="h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11"
+			options={[
+				...options,
+				{
+					id: 'copy-url',
+					label: 'Copy URL',
+					icon: <Copy className="size-3.5" />,
+					separatorBefore: options.length > 0,
+				},
+			]}
+			onAction={(action) => {
+				if (action !== 'copy-url') {
+					onAction?.(action);
+					return;
+				}
+				const url = new URL(withBasePath(location.pathname), window.location.origin);
+				url.search = notebookQueryParams(location.search).toString();
+				void copy(url.toString()).then((copied) => copied && toast.success(successMessage));
+			}}
+		/>
+	);
+}
 
 interface ShareMenuProps {
 	projectId: string;
@@ -14,6 +55,7 @@ interface ShareMenuProps {
 	title: string;
 	canRunApp: boolean;
 	canManageLinks?: boolean;
+	isApp?: boolean;
 }
 
 export function ShareMenu({
@@ -22,11 +64,11 @@ export function ShareMenu({
 	title,
 	canRunApp,
 	canManageLinks = false,
+	isApp = false,
 }: ShareMenuProps) {
 	const [linksOpen, setLinksOpen] = useState(false);
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { copy } = useCopyToClipboard();
 	const notebookPath = `/projects/${projectId}/notebooks/${notebookId}`;
 
 	const handleAction = (action: string) => {
@@ -38,21 +80,14 @@ export function ShareMenu({
 			void navigate(`${notebookPath}/snapshot`, { state: { title } });
 		} else if (action === 'run-app') {
 			void navigate(`${notebookPath}/app${query}`, { state: { title } });
-		} else if (action === 'copy-url') {
-			const url = new URL(
-				withBasePath(`${location.pathname}${query}`),
-				window.location.origin,
-			).toString();
-			void copy(url).then((copied) => copied && toast.success('Notebook URL copied'));
 		}
 	};
 
 	return (
 		<>
-			<DropdownMenu
-				label="Share notebook"
-				icon={<Share2 className="size-3.5" />}
-				triggerClassName="h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11"
+			<ShareUrlMenu
+				label={isApp ? 'Share app' : 'Share notebook'}
+				successMessage={isApp ? 'App URL copied' : 'Notebook URL copied'}
 				options={[
 					{ id: 'app-links', label: 'App links', icon: <Link className="size-3.5" /> },
 					{
@@ -69,12 +104,6 @@ export function ShareMenu({
 								},
 							]
 						: []),
-					{
-						id: 'copy-url',
-						label: 'Copy URL',
-						icon: <Copy className="size-3.5" />,
-						separatorBefore: true,
-					},
 				]}
 				onAction={handleAction}
 			/>

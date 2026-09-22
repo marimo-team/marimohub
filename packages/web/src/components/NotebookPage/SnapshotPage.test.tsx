@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
+import { toast } from 'sonner';
 import { SnapshotPage } from './SnapshotPage';
 import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 
@@ -48,6 +50,8 @@ function renderPage(search = '') {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+	Reflect.deleteProperty(navigator, 'clipboard');
 });
 
 describe('SnapshotPage', () => {
@@ -79,6 +83,23 @@ describe('SnapshotPage', () => {
 			),
 		).toBe(true);
 		expect(screen.getByText(/the notebook has changed since these outputs/)).toBeInTheDocument();
+	});
+
+	it('copies the snapshot URL with its pinned version and without reserved parameters', async () => {
+		const user = userEvent.setup();
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+		const success = vi.spyOn(toast, 'success');
+		makeFetch({ html: '<html><body>old outputs</body></html>', snapshotVersion: 'ver-old' });
+		renderPage('?version=ver-old&access_token=evil&session_id=evil');
+
+		await user.click(await screen.findByRole('button', { name: 'Share snapshot' }));
+		await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+
+		expect(writeText).toHaveBeenCalledExactlyOnceWith(
+			`${window.location.origin}/projects/${PID}/notebooks/${NID}/snapshot?version=ver-old`,
+		);
+		expect(success).toHaveBeenCalledWith('Snapshot URL copied');
 	});
 
 	it('notes staleness when the latest snapshot trails the notebook head', async () => {

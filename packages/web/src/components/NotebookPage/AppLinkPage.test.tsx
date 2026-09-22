@@ -111,7 +111,7 @@ describe('AppLinkPage', () => {
 					'src',
 					'https://sandbox.example/kernel?id=123&tag=one&tag=two&empty=&theme=light&show-code=false',
 				);
-				await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+				await user.click(screen.getByRole('button', { name: 'Share app' }));
 				await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
 				expect(writeText).toHaveBeenCalledWith(
 					`${window.location.origin}/hub/app/${slug}?id=123&tag=one&tag=two&empty=`,
