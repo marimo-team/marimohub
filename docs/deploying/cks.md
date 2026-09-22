@@ -276,6 +276,10 @@ setting is needed. This key pair is for the hub only; notebooks get
 Details: [Create buckets](https://docs.coreweave.com/products/storage/object-storage/buckets/create-bucket),
 [Access keys](https://docs.coreweave.com/products/storage/object-storage/auth-access/manage-access-keys/create-keys).
 
+To use temporary credentials for the API and maintenance pods, configure
+[Pod Identity](#pod-identity-for-the-api-and-maintenance-pods).
+With Pod Identity, omit the S3 access key pair from the Secret in step 7.
+
 ### 7. Install marimohub
 
 _Gets you: the hub — API, maintenance worker, Service, and app Ingress — wired
@@ -386,6 +390,156 @@ negative-cached it — `dig @8.8.8.8 <host>`. Anything else:
 That's a complete deployment. Everything below is optional.
 
 ## Optional features
+
+### Pod Identity for the API and maintenance pods
+
+The CoreWeave Pod Identity Webhook supplies temporary CAIOS credentials through
+the Kubernetes ServiceAccount. The chart shares this account between the API
+and maintenance pods. Notebook sandboxes have [separate credential configuration](#automatic-caios-credentials-in-sandboxes).
+
+#### Values you need
+
+Replace these placeholders in the policy and commands:
+
+- `<bucket-name>`: the CAIOS bucket that stores marimohub state.
+- `<service-name>`: the Kubernetes ServiceAccount name, such as `marimohub`.
+  Set it explicitly with `serviceAccount.name` so it matches the policy.
+- `<namespace>`: the namespace for the marimohub Helm release, such as `marimohub`.
+- `<oidc-issuer-url>`: the cluster's full OIDC issuer URL, such as
+  `https://oidc.cks.coreweave.com/id/<cluster-id>`. Copy it from the cluster details in the CoreWeave Console.
+- `<org-id>`: your CoreWeave organization ID.
+- `<availability-zone>`: an Object Storage availability zone for the webhook's `config.region`.
+- `<release-name>`: your marimohub Helm release name.
+- `<chart-version>`: the marimohub chart version to deploy, without the leading `v`.
+
+#### 1. Configure federation and the access policy
+
+Enable OIDC Workload Identity on the CKS cluster. On the Console's
+**Workload Federation** page, find the cluster's OIDC configuration.
+Make sure that its issuer matches the cluster and its audience is `https://coreweave.com/iam`.
+If the configuration is absent, create it as described in the
+[CoreWeave Pod Identity guide](https://docs.coreweave.com/security/tutorials/cks-object-storage-authentication/automatic).
+
+Create an Object Storage organization access policy with this policy document.
+Use an account with permission to manage organization access policies.
+Replace every placeholder, including both copies of the principal:
+
+```json
+{
+	"name": "<service-name>",
+	"version": "v1alpha1",
+	"statements": [
+		{
+			"name": "grant-bucket-access",
+			"effect": "Allow",
+			"actions": [
+				"s3:GetObject",
+				"s3:PutObject",
+				"s3:DeleteObject",
+				"s3:ListBucket",
+				"s3:AbortMultipartUpload"
+			],
+			"resources": ["<bucket-name>", "<bucket-name>/*"],
+			"principals": ["role/<oidc-issuer-url>:system:serviceaccount:<namespace>:<service-name>"]
+		},
+		{
+			"name": "authn",
+			"effect": "Allow",
+			"actions": ["cwobject:CreateAccessKeyOIDC"],
+			"resources": ["*"],
+			"principals": ["role/<oidc-issuer-url>:system:serviceaccount:<namespace>:<service-name>"]
+		}
+	]
+}
+```
+
+The first statement grants access to the bucket and its objects. The second
+allows the ServiceAccount to exchange its OIDC token for temporary credentials.
+The issuer URL, namespace, and ServiceAccount name must match the running pods.
+
+#### 2. Install the Pod Identity Webhook
+
+Install the webhook on the cluster before you deploy marimohub:
+
+```bash
+helm repo add coreweave https://charts.core-services.ingress.coreweave.com
+helm repo update coreweave
+helm upgrade --install pod-identity-webhook coreweave/pod-identity-webhook \
+  --namespace pod-identity-webhook \
+  --create-namespace \
+  --wait \
+  --set-string config.orgID='<org-id>' \
+  --set-string config.region='<availability-zone>'
+```
+
+See the [CoreWeave installation guide](https://docs.coreweave.com/security/tutorials/cks-object-storage-authentication/automatic)
+for supported availability zones and cluster prerequisites.
+
+#### 3. Configure the marimohub ServiceAccount
+
+Merge this configuration into your existing `values.yaml`:
+
+```yaml
+serviceAccount:
+  create: true
+  name: <service-name>
+  annotations:
+    caios.coreweave.com/inject: 'true'
+
+config:
+  MARIMOHUB_STORAGE_BACKEND: s3
+  MARIMOHUB_STORAGE_S3_BUCKET: <bucket-name>
+  MARIMOHUB_STORAGE_S3_ENDPOINT: https://cwobject.com
+  MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: 'false'
+```
+
+The annotation belongs under `serviceAccount.annotations`. The chart sets
+`serviceAccountName` on both Deployments. For an existing ServiceAccount, set
+`serviceAccount.create: false` and add the annotation to that account yourself.
+
+Remove `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID` and
+`MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY` from your configuration and Secret source,
+including `secrets.existingSecret`. Also remove any manually configured
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`.
+Static credentials take precedence over the webhook's credentials.
+Without static credentials, the S3 adapter uses the AWS SDK default credential chain.
+
+Deploy with the same namespace and ServiceAccount name as the policy:
+
+```bash
+helm upgrade --install <release-name> oci://ghcr.io/marimo-team/charts/marimohub \
+  --version <chart-version> --namespace <namespace> --create-namespace \
+  -f values.yaml
+```
+
+For an existing deployment, restart both Deployments so the webhook can inject
+credentials into new pods:
+
+```bash
+kubectl -n <namespace> rollout restart deployment \
+  -l app.kubernetes.io/instance=<release-name>
+kubectl -n <namespace> rollout status deployment \
+  -l app.kubernetes.io/instance=<release-name>
+```
+
+#### 4. Validate access
+
+Make sure that the ServiceAccount annotation is `true` and both Deployments use
+`<service-name>`:
+
+```bash
+kubectl -n <namespace> get serviceaccount <service-name> \
+  -o jsonpath='{.metadata.annotations.caios\.coreweave\.com/inject}{"\n"}'
+kubectl -n <namespace> get deployments \
+  -l app.kubernetes.io/instance=<release-name> \
+  -o custom-columns=NAME:.metadata.name,SERVICEACCOUNT:.spec.template.spec.serviceAccountName
+```
+
+Open marimohub, create a notebook, save it, and reload it.
+If storage returns `AccessDenied`, make sure that both policy principals match
+the cluster issuer, namespace, and ServiceAccount name.
+If credentials are unavailable, make sure that the webhook is ready.
+Make sure that the pods were created after the ServiceAccount received the annotation.
 
 ### Automatic CAIOS credentials in sandboxes
 
