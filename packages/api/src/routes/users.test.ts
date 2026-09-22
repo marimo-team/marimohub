@@ -230,6 +230,21 @@ describe('User routes', () => {
 });
 
 describe('GET /users batch size', () => {
+	it.each([100, 101])('counts normalized ids at the batch boundary (%i ids)', async (count) => {
+		const { request } = createTestApi();
+		const ids = Array.from({ length: count }, (_, index) =>
+			index === 0 ? ACTOR : `user-${index}`,
+		);
+		const query = encodeURIComponent(` , ${ids.join(', , ')}, `);
+		const response = await request('GET', `/users?ids=${query}`);
+		if (count > 100) {
+			await expectError(response, 422, 'VALIDATION_ERROR');
+		} else {
+			const data = await expectOk<Record<string, unknown>>(response);
+			expect(Object.keys(data)).toEqual([ACTOR]);
+		}
+	});
+
 	it('rejects an unbounded ids list instead of fanning out to storage', async () => {
 		const { app, bucket } = createTestApi();
 		const reads = vi.spyOn(bucket, 'get');

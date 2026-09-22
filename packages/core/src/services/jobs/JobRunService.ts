@@ -606,17 +606,36 @@ export class JobRunService {
 		const prefix = notebookId
 			? paths.jobOperationClaimsForNotebook(projectId, notebookId)
 			: projectPrefix;
-		for (const key of await listAllKeys(this.bucket, prefix)) {
-			const [notebook, job] = key.slice(projectPrefix.length).split('/');
-			await this.withJobMutation(
-				{
-					project_id: projectId,
-					notebook_id: NotebookId.parse(notebook),
-					id: JobId.parse(job.replace(/\.json$/, '')),
-				},
-				async () => {},
+		let keys: string[];
+		try {
+			keys = await listAllKeys(this.bucket, prefix);
+		} catch (err) {
+			logOperationalError(
+				'job_operation_wait_failed',
+				{ operation: 'job.operation.wait', object: prefix },
+				err,
 			);
+			return;
 		}
+		await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
+			try {
+				const [notebook, job] = key.slice(projectPrefix.length).split('/');
+				await this.withJobMutation(
+					{
+						project_id: projectId,
+						notebook_id: NotebookId.parse(notebook),
+						id: JobId.parse(job.replace(/\.json$/, '')),
+					},
+					async () => {},
+				);
+			} catch (err) {
+				logOperationalError(
+					'job_operation_wait_failed',
+					{ operation: 'job.operation.wait', object: key },
+					err,
+				);
+			}
+		});
 	}
 
 	private async cancelRunsWhere(

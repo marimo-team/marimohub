@@ -1,3 +1,12 @@
+export const appKeys = {
+	all: ['apps'] as const,
+	lists: () => [...appKeys.all, 'list'] as const,
+	list: (projectId?: string, search = '') => [...appKeys.lists(), projectId, search] as const,
+	details: (projectId: string) => [...appKeys.all, 'detail', projectId] as const,
+	detail: (projectId: string, notebookId: string) =>
+		[...appKeys.details(projectId), notebookId] as const,
+};
+
 interface ListQueryFilters {
 	q?: string;
 	status?: string;

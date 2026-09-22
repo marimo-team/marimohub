@@ -800,6 +800,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			terminal = await timedOutcome;
 		} catch (error) {
 			settled = true;
+			const waitport = Math.max(0, Date.now() - waitStartedAt);
 			await cancelLaunchProcess(proc);
 			const parsed = logs();
 			if (error instanceof DOMException && error.name === 'TimeoutError') {
@@ -809,7 +810,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 					startupTimeout: options.startupTimeout,
 					output: parsed,
 					start,
-					waitport: Math.max(0, Date.now() - waitStartedAt),
+					waitport,
 				});
 			}
 			return {
@@ -820,7 +821,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				timings: {
 					setup: 0,
 					start,
-					waitport: Math.max(0, Date.now() - waitStartedAt),
+					waitport,
 				},
 			};
 		} finally {

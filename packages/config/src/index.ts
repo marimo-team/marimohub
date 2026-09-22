@@ -96,7 +96,11 @@ import { makeSandboxUserHome } from './userHome';
 import type { Env } from './env';
 import { parseSandboxAuth } from './sandboxAuth';
 import { ConfigError } from './errors';
-import { checkSandboxHostIsolation, sandboxHostIsolationMessage } from './hostIsolation';
+import {
+	checkSandboxHostIsolation,
+	sandboxHostIsolationMessage,
+	sandboxHostIsolationRemediation,
+} from './hostIsolation';
 import { buildPreflightChecks } from './preflightChecks';
 import { parseExperiments } from './experiments';
 import { postgresDataAccessFeatures } from './postgresFeatures';
@@ -556,7 +560,7 @@ function assertSandboxHostIsolated(env: Env): void {
 			`the control plane or set cookies on the shared domain.`,
 		{
 			variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
-			remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',
+			remediation: sandboxHostIsolationRemediation(isolation),
 			docs: 'docs/security.md',
 		},
 	);

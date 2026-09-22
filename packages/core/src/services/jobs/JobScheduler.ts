@@ -6,11 +6,11 @@ import { InFlightWork } from '../../concurrency';
 import { Millis } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
 import { createRunId, SandboxId, SYSTEM_ACTOR } from '../../ids';
-import type { ProjectId, RunId, VersionId } from '../../ids';
+import type { JobId, NotebookId, ProjectId, RunId, VersionId } from '../../ids';
 import { logEvent } from '../../logs';
 import { logOperationalError } from '../../operationalLog';
 import { notificationRouter } from '../../notifications';
-import type { JobDefinition, JobRun } from '../../schema';
+import type { JobDefinition, JobRun, NotebookMeta, Project } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { EventService } from '../catalog/EventService';
 import type { NotebookService } from '../content/NotebookService';
@@ -76,6 +76,26 @@ const DEFAULT_WATCHDOG_GRACE_MS = Millis.minutes(2);
 
 /** How long a marker may outlive its record before it is considered dangling. */
 const DANGLING_GRACE_MS = Millis.minutes(10);
+
+interface JobReadCache {
+	projects: Map<ProjectId, Promise<Project>>;
+	notebooks: Map<NotebookId, Promise<NotebookMeta>>;
+	jobs: Map<JobId, Promise<JobDefinition>>;
+}
+
+function cachedRead<K, V>(
+	cache: Map<K, Promise<V>> | undefined,
+	key: K,
+	read: () => Promise<V>,
+): Promise<V> {
+	if (!cache) return read();
+	let value = cache.get(key);
+	if (!value) {
+		value = read();
+		cache.set(key, value);
+	}
+	return value;
+}
 
 interface LocalExecution {
 	finalizedExternally: boolean;
@@ -220,6 +240,11 @@ export class JobScheduler {
 
 		const queued: JobRun[] = [];
 		const running: JobRun[] = [];
+		const admissionReads: JobReadCache = {
+			projects: new Map(),
+			notebooks: new Map(),
+			jobs: new Map(),
+		};
 		let ownershipComplete = active.complete;
 		for (const { marker, run } of active.entries) {
 			if (!run) {
@@ -262,20 +287,19 @@ export class JobScheduler {
 				continue;
 			}
 			if (run.status === 'queued') {
+				if (this.executing.has(run.run_id)) {
+					running.push(run);
+					continue;
+				}
 				try {
-					if (await this.cancelRunIfDeleted(run)) continue;
+					if (await this.cancelRunIfDeleted(run, admissionReads)) continue;
 				} catch (err) {
-					ownershipComplete = false;
 					result.errors++;
 					logOperationalError(
 						'job_admission_failed',
 						{ operation: 'job.scheduler.admit', run_id: run.run_id },
 						err,
 					);
-					continue;
-				}
-				if (this.executing.has(run.run_id)) {
-					running.push(run);
 					continue;
 				}
 				if (!run.eligible_at || Date.parse(run.eligible_at) <= now) queued.push(run);
@@ -374,12 +398,20 @@ export class JobScheduler {
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
 		jobId: JobRun['job_id'],
+		cache?: JobReadCache,
 	): Promise<JobDefinition | null> {
 		try {
-			const project = await this.deps.projects.getProject(projectId);
-			const notebook = await this.deps.notebooks.getNotebookMeta(projectId, notebookId);
-			if (project.status === 'deleted' || notebook.status === 'deleted') return null;
-			return await this.deps.jobs.getJob(projectId, notebookId, jobId);
+			const project = await cachedRead(cache?.projects, projectId, () =>
+				this.deps.projects.getProject(projectId),
+			);
+			if (project.status === 'deleted') return null;
+			const notebook = await cachedRead(cache?.notebooks, notebookId, () =>
+				this.deps.notebooks.getNotebookMeta(projectId, notebookId),
+			);
+			if (notebook.status === 'deleted') return null;
+			return await cachedRead(cache?.jobs, jobId, () =>
+				this.deps.jobs.getJob(projectId, notebookId, jobId),
+			);
 		} catch (err) {
 			// The index outlived the definition (delete crashed before the index
 			// write); nothing to fire.
@@ -403,8 +435,8 @@ export class JobScheduler {
 		return true;
 	}
 
-	private async cancelRunIfDeleted(run: JobRun): Promise<boolean> {
-		if (await this.loadJob(run.project_id, run.notebook_id, run.job_id)) return false;
+	private async cancelRunIfDeleted(run: JobRun, cache?: JobReadCache): Promise<boolean> {
+		if (await this.loadJob(run.project_id, run.notebook_id, run.job_id, cache)) return false;
 		await this.deps.runs.cancel(run, SYSTEM_ACTOR);
 		return true;
 	}

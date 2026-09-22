@@ -415,7 +415,7 @@ export class SessionRetirer {
 			),
 		);
 		const fenced = await this.deps.sessions.getSession(session.project_id, session.session_id);
-		await Promise.all(
+		const stopped = await Promise.allSettled(
 			surfaces.map(async ([id]) => {
 				const surface = id as SurfaceId;
 				const cancelledAttemptId = fenced.surfaces?.[id]?.cancelled_attempt_id;
@@ -434,5 +434,7 @@ export class SessionRetirer {
 				}
 			}),
 		);
+		const failure = stopped.find((result) => result.status === 'rejected');
+		if (failure) throw failure.reason;
 	}
 }

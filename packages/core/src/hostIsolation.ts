@@ -1,7 +1,16 @@
 import { parse } from 'tldts';
+import { hasControlCharacter } from './internal/validation';
 
 export function normalizeHostname(host: string): string {
-	return new URL(`http://${host.trim()}`).hostname.toLowerCase().replace(/\.$/, '');
+	const value = host.trim();
+	if (
+		hasControlCharacter(value) ||
+		/[\s\\/?#@]/.test(value) ||
+		!/^(?:\[[^[\]]+\]|[^:[\]]+)(?::[0-9]+)?$/.test(value)
+	) {
+		throw new TypeError('Expected a hostname with an optional port');
+	}
+	return new URL(`http://${value}`).hostname.toLowerCase().replace(/\.$/, '');
 }
 
 function isPublicSuffix(host: ReturnType<typeof parse>): boolean {

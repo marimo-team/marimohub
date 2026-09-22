@@ -248,6 +248,40 @@ describe('SessionRetirer', () => {
 		expect(calls.destroy).toBe(1);
 	});
 
+	it('waits for every secondary stop before destroying after a stop failure', async () => {
+		vi.useFakeTimers();
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			surfaces: {
+				vscode: { status: 'ready', port: 8443, url: 'https://vscode.example/' },
+				opencode: { status: 'ready', port: 4096, url: 'https://opencode.example/' },
+			},
+		});
+		await sessions.beginTerminating(projectId, session.session_id);
+		let stopped = false;
+		instance.exec = async (command) => {
+			if (command.includes('/vscode/surface.pid')) {
+				return execResult(false, '', 'stop failed');
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			stopped = true;
+			return execResult(true, '', '');
+		};
+		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const retiring = retirer(fakeComputeFrom(instance)).retire(session);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(calls.destroy).toBe(0);
+		expect(stopped).toBe(false);
+		await vi.advanceTimersByTimeAsync(100);
+		await retiring;
+
+		expect(stopped).toBe(true);
+		expect(calls.destroy).toBe(1);
+		expect(capture).not.toHaveBeenCalled();
+	});
+
 	it('does not snapshot or advance the restore pointer when the capture fails', async () => {
 		const { instance } = makeFakeSandbox();
 		const compute = snapshotProvider(instance);

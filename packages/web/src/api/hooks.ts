@@ -25,6 +25,7 @@ import {
 	auditKeys,
 	adminKeys,
 	jobKeys,
+	appKeys,
 } from './queryKeys';
 import { isTerminalRun } from '../lib/jobs';
 import type { AuditLogFilters } from './queryKeys';
@@ -427,7 +428,7 @@ export function useCreateProject() {
 	return useApiMutation(
 		(body: { name: string; description: string }) =>
 			apiData(apiClient.POST('/api/v1/projects', { body })),
-		() => [projectKeys.list(), userKeys.me(), ['apps']],
+		() => [projectKeys.list(), userKeys.me(), appKeys.all],
 	);
 }
 
@@ -462,7 +463,7 @@ export function useDeleteProject() {
 					params: { path: { pid: projectId } },
 				}),
 			),
-		() => [projectKeys.list(), ['apps'], userKeys.me()],
+		() => [projectKeys.list(), appKeys.all, userKeys.me()],
 	);
 }
 
@@ -1614,7 +1615,7 @@ export function useDeleteNotebook(projectId: string) {
 					params: { path: { pid: projectId, nid: notebookId } },
 				}),
 			),
-		() => [notebookKeys.list(projectId), ['apps']],
+		() => [notebookKeys.list(projectId), appKeys.lists(), appKeys.details(projectId)],
 	);
 }
 

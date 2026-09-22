@@ -1217,6 +1217,7 @@ describe('CoreWeaveCompute launchProcess', () => {
 				await expect(pending).resolves.toMatchObject({
 					success: false,
 					reason: 'readiness_timeout',
+					timings: { waitport: 450 },
 				});
 				if (cancellation === 'completes') {
 					expect(streamsEnded).toBe(2);

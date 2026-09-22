@@ -18,13 +18,21 @@ Idempotency-Key: 8f3c1e2a-...
 - **Scope** — keyed by `(user, route, key)`. The route includes concrete project, notebook, and job ids.
   A different user or resource starts a separate operation. The header is optional.
 - **Payload** — HTTP create routes store a SHA-256 fingerprint of the request body.
-  JSON object key order does not affect the fingerprint.
+  JSON whitespace and object key order do not affect the fingerprint. Matching uses
+  the submitted JSON, before schema coercion or defaults: a string and a number,
+  an omitted default and its explicit value, or a reordered array are different
+  payloads even if a route treats them equivalently. Retry with the original body.
   If a retry changes the payload, the server returns `422 VALIDATION_ERROR`.
   HTTP create records without a fingerprint return `422 VALIDATION_ERROR` because
   the server cannot verify their original payload. The server also checks the old
   route-template scope for parametrized routes and rejects a matching legacy key.
   This prevents an upgrade from silently treating an old retry as a new create.
   Check whether the original operation succeeded before submitting a new key.
+- **Non-HTTP job replay** — MCP `create_job` and the shared job-run enqueue
+  operation match the scoped key only; they do not compare payloads. Reusing a key
+  returns the original job or run even when parameters differ. Use a new key for a
+  distinct operation. HTTP job-create and run-trigger routes additionally enforce
+  the body fingerprint before reaching these operations.
 - **Deletion** — deleting a resource does not erase its recorded response.
   A retry returns that response without recreating the resource. A new create requires a new key.
 - **Mechanics** — the first response's `data` is stored at

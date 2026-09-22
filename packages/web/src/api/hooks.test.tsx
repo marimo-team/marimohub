@@ -1007,11 +1007,21 @@ describe('delete mutations and the apps gallery cache', () => {
 	])('invalidates the apps gallery after deleting a $name', async ({ useMutation, id }) => {
 		stubFetch(async () => jsonOk({ deleted: true }));
 		const { result, client } = renderHookWithClient(useMutation, { toaster: false });
+		client.setQueryData(['apps', 'detail', 'other-project', NID], { title: 'Unrelated app' });
 		const spy = vi.spyOn(client, 'invalidateQueries');
 		await act(async () => {
 			await result.current.mutateAsync(id);
 		});
-		expect(invalidatedKeys(spy)).toContainEqual(['apps']);
-		if (id === PID) expect(invalidatedKeys(spy)).toContainEqual(['user', 'me']);
+		if (id === PID) {
+			expect(invalidatedKeys(spy)).toContainEqual(['apps']);
+			expect(invalidatedKeys(spy)).toContainEqual(['user', 'me']);
+		} else {
+			expect(invalidatedKeys(spy)).toContainEqual(['apps', 'list']);
+			expect(invalidatedKeys(spy)).toContainEqual(['apps', 'detail', PID]);
+			expect(invalidatedKeys(spy)).not.toContainEqual(['apps']);
+			expect(client.getQueryState(['apps', 'detail', 'other-project', NID])?.isInvalidated).toBe(
+				false,
+			);
+		}
 	});
 });

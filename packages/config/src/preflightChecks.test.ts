@@ -162,6 +162,37 @@ describe('sandbox.isolation check', () => {
 		expect(by('sandbox.isolation')?.status).toBe('ok');
 	});
 
+	it.each([
+		{
+			hostname: 'sandboxes.example.net',
+			redirect: 'invalid-redirect',
+			remediation: 'Set MARIMOHUB_AUTH_OIDC_REDIRECT_URI to a valid absolute http(s) redirect URI.',
+		},
+		{
+			hostname: 'https://sandboxes.example.net',
+			redirect: 'https://hub.example.com/callback',
+			remediation:
+				'Set MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME to a hostname with an optional port, without a scheme or path.',
+		},
+		{
+			hostname: 'sandbox.example.com',
+			redirect: 'https://hub.example.com/callback',
+			remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',
+		},
+	])(
+		'recommends the repair for $hostname and $redirect',
+		async ({ hostname, redirect, remediation }) => {
+			const { by } = await run(
+				{
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hostname,
+					MARIMOHUB_AUTH_OIDC_REDIRECT_URI: redirect,
+				},
+				makeDeps(),
+			);
+			expect(by('sandbox.isolation')).toMatchObject({ status: 'fail', fatal: true, remediation });
+		},
+	);
+
 	it('fatal when the kernel host shares the app domain', async () => {
 		const { report, by } = await run(
 			{ ...env, MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'hub.example.com' },

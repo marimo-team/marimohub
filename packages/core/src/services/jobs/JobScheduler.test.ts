@@ -183,24 +183,28 @@ describe('JobScheduler', () => {
 				await blocked.promise;
 				return enqueue(...args);
 			});
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 			vi.useFakeTimers();
 			const ticking = s.tick();
 			try {
 				await enqueuing.promise;
 				if (parent === 'notebook') await env.notebooks.deleteNotebook(pid, nid, ACTOR);
 				else await env.projects.deleteProject(pid, ACTOR);
-				const cancellation = (
+				const cancellation =
 					parent === 'notebook'
 						? env.jobRuns.cancelRunsOfNotebook(pid, nid, ACTOR)
-						: env.jobRuns.cancelRunsOfProject(pid, ACTOR)
-				).catch((error: unknown) => error);
+						: env.jobRuns.cancelRunsOfProject(pid, ACTOR);
 				await vi.advanceTimersByTimeAsync(5000);
-				expect(await cancellation).toMatchObject({ message: 'Job is busy; retry the operation' });
+				expect(await cancellation).toEqual({ runs: [], sandboxIds: [] });
+				expect(
+					error.mock.calls.some(([line]) => String(line).includes('job_operation_wait_failed')),
+				).toBe(true);
 				expect(await env.jobRuns.listActive()).toEqual([]);
 			} finally {
 				blocked.resolve();
 				await ticking;
 				vi.useRealTimers();
+				error.mockRestore();
 			}
 
 			expect(runner.executed).toEqual([]);
@@ -240,6 +244,89 @@ describe('JobScheduler', () => {
 			}
 		},
 	);
+
+	it('shares admission reads across queued runs and refreshes them on the next tick', async () => {
+		const jobs = [
+			await createJob({ schedule: undefined }),
+			await createJob({ name: 'second', schedule: undefined }),
+		];
+		for (const job of jobs) {
+			for (let index = 0; index < 3; index++) {
+				await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+			}
+		}
+		const projectReads = vi.spyOn(env.projects, 'getProject');
+		const notebookReads = vi.spyOn(env.notebooks, 'getNotebookMeta');
+		const jobReads = vi.spyOn(env.jobs, 'getJob');
+		const s = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+
+		expect((await s.tick()).dispatched).toBe(0);
+
+		// Fire checks each job once; admission shares one read per parent and job.
+		expect(projectReads).toHaveBeenCalledTimes(jobs.length + 1);
+		expect(notebookReads).toHaveBeenCalledTimes(jobs.length + 1);
+		expect(jobReads).toHaveBeenCalledTimes(jobs.length * 2);
+		await env.notebooks.deleteNotebook(pid, nid, ACTOR);
+		expect((await s.tick()).dispatched).toBe(0);
+		for (const job of jobs) {
+			expect((await env.jobRuns.listRuns(pid, nid, job.id)).map((run) => run.status)).toEqual([
+				'cancelled',
+				'cancelled',
+				'cancelled',
+			]);
+		}
+	});
+
+	it('admits healthy runs when another notebook metadata read fails', async () => {
+		const brokenJob = await createJob({ schedule: undefined });
+		const broken = await env.jobRuns.enqueue({
+			job: brokenJob,
+			trigger: 'manual',
+			timeoutSeconds: 60,
+		});
+		const healthyNotebook = await env.notebooks.createNotebook(
+			pid,
+			{ title: 'healthy', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const healthyJob = await env.jobs.createJob(
+			pid,
+			healthyNotebook.id,
+			{ name: 'healthy' },
+			ACTOR,
+		);
+		const healthy = await env.jobRuns.enqueue({
+			job: healthyJob,
+			trigger: 'manual',
+			timeoutSeconds: 60,
+		});
+		const getMeta = env.notebooks.getNotebookMeta.bind(env.notebooks);
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const read = vi
+			.spyOn(env.notebooks, 'getNotebookMeta')
+			.mockImplementation((project, notebook) => {
+				if (notebook === nid) return Promise.reject(new Error('metadata unavailable'));
+				return getMeta(project, notebook);
+			});
+		const runner = fakeRunner(env);
+		const s = scheduler(runner);
+		try {
+			const result = await s.tick();
+			await s.drain();
+			expect(result.dispatched).toBe(1);
+			expect(result.errors).toBeGreaterThan(0);
+			expect(runner.executed.map((run) => run.run_id)).toEqual([healthy.run_id]);
+			expect((await env.jobRuns.getRun(pid, nid, brokenJob.id, broken.run_id)).status).toBe(
+				'queued',
+			);
+			expect(
+				(await env.jobRuns.getRun(pid, healthyNotebook.id, healthyJob.id, healthy.run_id)).status,
+			).toBe('succeeded');
+		} finally {
+			read.mockRestore();
+			error.mockRestore();
+		}
+	});
 
 	it('fires a due occurrence exactly once across ticks and dispatches it', async () => {
 		const job = await createJob();

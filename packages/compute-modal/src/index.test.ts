@@ -704,35 +704,45 @@ describe('ModalCompute', () => {
 		expect(await compute.proxy(new Request('https://example.com'))).toBeNull();
 	});
 
-	it('does not leak an unhandled rejection when the SDK wait() rejects', async () => {
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-		const unhandled: unknown[] = [];
-		const onUnhandled = (reason: unknown) => {
-			unhandled.push(reason);
-		};
-		process.on('unhandledRejection', onUnhandled);
-		try {
-			const sandbox = new FakeSandbox();
-			sandbox.execImpl = () => ({
-				stdout: textStream(''),
-				stderr: textStream(''),
-				wait: () => Promise.reject(new Error('modal transport failure')),
-			});
-			const world = makeWorld();
-			world.existing.set(SANDBOX_ID, sandbox);
-			const compute = makeCompute(world);
-			await compute.create(SANDBOX_ID).startProcess('uv run marimo edit');
-			// Let the discarded `completed` promise settle and the runtime flush the
-			// unhandled-rejection queue.
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			await new Promise((resolve) => setImmediate(resolve));
-			expect(log).toHaveBeenCalledWith(expect.stringContaining('"event":"sandbox_process_failed"'));
-		} finally {
-			log.mockRestore();
-			process.off('unhandledRejection', onUnhandled);
-		}
-		expect(unhandled).toEqual([]);
-	});
+	it.each([undefined, 'kernel'])(
+		'logs SDK wait failures with sandbox and process context (processId=%s)',
+		async (processId) => {
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const unhandled: unknown[] = [];
+			const onUnhandled = (reason: unknown) => {
+				unhandled.push(reason);
+			};
+			process.on('unhandledRejection', onUnhandled);
+			try {
+				const sandbox = new FakeSandbox();
+				sandbox.execImpl = () => ({
+					stdout: textStream(''),
+					stderr: textStream(''),
+					wait: () => Promise.reject(new Error('modal transport failure')),
+				});
+				const world = makeWorld();
+				world.existing.set(SANDBOX_ID, sandbox);
+				const compute = makeCompute(world);
+				const started = await compute
+					.create(SANDBOX_ID)
+					.startProcess('uv run marimo edit', { processId });
+				// Let the discarded `completed` promise settle and the runtime flush the
+				// unhandled-rejection queue.
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(log).toHaveBeenCalledOnce();
+				expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+					event: 'sandbox_process_failed',
+					sandbox: SANDBOX_ID,
+					process_id: started.id,
+				});
+			} finally {
+				log.mockRestore();
+				process.off('unhandledRejection', onUnhandled);
+			}
+			expect(unhandled).toEqual([]);
+		},
+	);
 });
 
 function contractWorld() {

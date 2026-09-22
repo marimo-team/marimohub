@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { Hono } from 'hono';
+import type { HonoEnv } from './context';
+import { idempotentCreate } from './idempotency';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createTestApi, expectError, expectOk } from './testing';
 
@@ -11,6 +14,31 @@ describe('idempotentCreate replay', () => {
 		api = createTestApi();
 		({ request } = api);
 	});
+
+	it.each([false, true])(
+		'allows handlers to read JSON after fingerprinting (previously parsed: %s)',
+		async (previouslyParsed) => {
+			const app = new Hono<HonoEnv>();
+			app.post('/create', async (c) => {
+				c.set('deps', api.deps);
+				c.set('user', {
+					id: ACTOR,
+					email: 'user@example.com',
+					credential: { kind: 'development' },
+				});
+				if (previouslyParsed) await c.req.json();
+				const data = await idempotentCreate(c, 'POST /create', () => c.req.json());
+				return c.json(data);
+			});
+			const response = await app.request('/create', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'body-read' },
+				body: JSON.stringify(payload),
+			});
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual(payload);
+		},
+	);
 
 	const createProject = (body = payload) =>
 		request('POST', '/projects', body, { 'Idempotency-Key': 'shared-key' });

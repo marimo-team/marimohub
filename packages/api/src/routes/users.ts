@@ -8,6 +8,15 @@ import {
 	UserResponseSchema,
 } from '../shared';
 
+const MAX_RESOLVED_USERS = 100;
+
+function parseUserIds(value = ''): string[] {
+	return value
+		.split(',')
+		.map((id) => id.trim())
+		.filter(Boolean);
+}
+
 // --- Route definitions ---
 
 const resolveUsers = createRoute({
@@ -25,13 +34,13 @@ const resolveUsers = createRoute({
 			ids: z
 				.string()
 				.refine(
-					(value) => value.split(',').length <= 100,
-					'At most 100 user ids may be resolved at once',
+					(value) => parseUserIds(value).length <= MAX_RESOLVED_USERS,
+					`At most ${MAX_RESOLVED_USERS} user ids may be resolved at once`,
 				)
 				.optional()
 				.openapi({
 					param: { name: 'ids', in: 'query' },
-					description: 'Comma-separated user ids.',
+					description: `Comma-separated user ids. At most ${MAX_RESOLVED_USERS} non-empty ids; whitespace and empty entries are ignored.`,
 					example: 'user,sub-abc123',
 				}),
 		}),
@@ -134,11 +143,7 @@ app.openapi(resolveUsers, async (c) => {
 	const { identities } = c.get('deps').services;
 	const { ids } = c.req.valid('query');
 
-	const requested = (ids ?? '')
-		.split(',')
-		.map((s) => s.trim())
-		.filter(Boolean)
-		.map((s) => UserId.parse(s));
+	const requested = parseUserIds(ids).map((id) => UserId.parse(id));
 
 	const resolved = requested.length > 0 ? await identities.getMany(requested) : [];
 

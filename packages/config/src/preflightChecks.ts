@@ -20,7 +20,11 @@ import type { CheckOutcome, PreflightCheck } from '@marimo-hub/core';
 import { authBackend, oidcLoginPolicySelected } from './auth';
 import { computeBackend } from './compute';
 import type { Env } from './env';
-import { checkSandboxHostIsolation, sandboxHostIsolationMessage } from './hostIsolation';
+import {
+	checkSandboxHostIsolation,
+	sandboxHostIsolationMessage,
+	sandboxHostIsolationRemediation,
+} from './hostIsolation';
 import { storageBackend } from './storage';
 
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -151,7 +155,7 @@ function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
 		status: 'fail',
 		fatal: true,
 		message: sandboxHostIsolationMessage(isolation),
-		remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',
+		remediation: sandboxHostIsolationRemediation(isolation),
 	};
 }
 

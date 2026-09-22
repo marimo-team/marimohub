@@ -56,6 +56,18 @@ describe('checkSandboxHostIsolation', () => {
 		);
 	});
 
+	it.each([undefined, 'https://hub.example.com/callback'])(
+		'rejects a URL in the sandbox hostname with redirect %s',
+		(redirect) => {
+			expect(
+				checkSandboxHostIsolation({
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'https://sandboxes.example.net',
+					MARIMOHUB_AUTH_OIDC_REDIRECT_URI: redirect,
+				}),
+			).toMatchObject({ isolated: false, reason: 'invalid-sandbox-host' });
+		},
+	);
+
 	it('flags sibling subdomains of the same registrable domain as non-isolated', () => {
 		const result = checkSandboxHostIsolation({
 			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandboxes.example.com',
