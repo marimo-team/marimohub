@@ -277,7 +277,7 @@ describe('Session routes', () => {
 			expect(setup).not.toContain('uv export');
 		});
 
-		it('ignores inline metadata in a local notebook (deps live in pyproject.toml)', async () => {
+		it('installs inline dependencies for a local edit session', async () => {
 			const services = createServices(bucket);
 			const local = await services.notebooks.createNotebook(
 				pid,
@@ -287,7 +287,76 @@ describe('Session routes', () => {
 			const { sb, post } = await startSessionApi(local.id as NotebookId);
 			await expectOk<ApiSession>(await post());
 			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			expect(setup).toContain("uv export --script 'notebook.py'");
+			expect(setup).toContain('uv pip install');
+			expect(setup.indexOf('uv sync --inexact')).toBeLessThan(setup.indexOf('uv export'));
+		});
+
+		it('uses the project-managed environment for a local notebook without inline metadata', async () => {
+			const { sb, post } = await startSessionApi(nid);
+			await expectOk<ApiSession>(await post());
+			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(setup).not.toContain('uv export');
+			expect(setup).not.toContain('uv pip install');
+		});
+
+		it.each([
+			{ saved: INLINE_CODE, workspace: 'import marimo', inline: true },
+			{ saved: 'import marimo', workspace: INLINE_CODE, inline: false },
+		])(
+			'uses the saved app source to detect inline dependencies ($inline)',
+			async ({ saved, workspace, inline }) => {
+				const services = createServices(bucket);
+				await services.notebooks.updateNotebook(pid, nid, { code: saved }, ACTOR);
+				// The live editor mirror may differ from the version selected for the app.
+				await bucket.put(paths.project(pid).notebook(nid).code, workspace);
+				const sb = makeFakeSandbox();
+				const api = createTestApi({
+					bucket,
+					userId: ACTOR,
+					compute: fakeComputeFrom(sb.instance),
+				}).request;
+				await expectOk<ApiSession>(await api('POST', sessionsPath(), { mode: 'app' }));
+				const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+				expect(setup.includes("uv export --script 'notebook.py'")).toBe(inline);
+				const writes = sb.calls.writeFile.filter((file) => file.path === '/workspace/notebook.py');
+				expect(writes.at(-1)?.content).toEqual(enc(saved));
+			},
+		);
+
+		it('propagates an inline setup failure and cleans up before starting the kernel', async () => {
+			const services = createServices(bucket);
+			await services.notebooks.updateNotebook(pid, nid, { code: INLINE_CODE }, ACTOR);
+			const { instance, calls } = makeFakeSandbox();
+			const baseExec = instance.exec.bind(instance);
+			vi.spyOn(instance, 'exec').mockImplementation(async (command, options) => {
+				if (!command.includes('uv export --script')) return baseExec(command, options);
+				return {
+					success: false,
+					stdout: '',
+					stderr: 'No solution found when resolving dependencies',
+					error: { code: 'COMMAND_FAILED' },
+				};
+			});
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(instance),
+			}).request;
+			const error = await expectError(
+				await api('POST', sessionsPath()),
+				503,
+				'PYTHON_ENV_SETUP_FAILED',
+			);
+			expect(error.message).toContain('the notebook dependency constraints could not be resolved');
+			expect(await services.sessions.listSessions(nid)).toEqual([
+				expect.objectContaining({
+					status: 'failed',
+					error: { code: 'PYTHON_ENV_SETUP_FAILED', message: error.message },
+				}),
+			]);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBeGreaterThanOrEqual(1);
 		});
 
 		it('does not re-read the entry file when reusing an existing session', async () => {

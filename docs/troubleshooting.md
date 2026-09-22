@@ -136,15 +136,20 @@ If the error identifies permissions, make the sandbox user own the parent of
 
 ### Session fails with a uv resolver error
 
-When a git-synced notebook contains [PEP 723](https://peps.python.org/pep-0723/)
-inline metadata, marimohub installs its dependencies at session start. If uv
-cannot resolve these dependencies, the session fails. Fix the versions in the
-repository, and then push again.
+Unresolved dependencies fail session or job startup with `PYTHON_ENV_SETUP_FAILED`.
+Keep PEP 723 requirements compatible with the workspace `pyproject.toml`.
+
+- **Local notebooks:** stop the edit session. Update the header through MCP
+  `update_notebook` or the workspace editor. Start a new session.
+- **Synced notebooks:** fix the header in the repository. Then sync again.
+
+See [the dependency contract](sandbox-image.md#inline-dependencies) for Python-version
+and custom-index limits.
 
 If uv reports disabled source builds, use a dependency version with a compatible
 wheel or adjust [`UV_NO_BUILD` in the sandbox environment](/sandbox-image#configure-source-builds).
 
-### Git-synced session with heavy inline dependencies times out
+### Session with heavy inline dependencies times out
 
 marimohub installs inline dependencies before the kernel binds its port. A large
 package, such as torch, can exceed the startup timeout. Increase

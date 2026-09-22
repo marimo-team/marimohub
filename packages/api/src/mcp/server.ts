@@ -47,7 +47,7 @@ export interface StartRequestContext {
 export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
 
 const NOTEBOOK_CODE_DESCRIPTION =
-	'Complete marimo Python notebook source (marimo.App and @app.cell definitions), stored verbatim. Local dependencies come from pyproject.toml; PEP 723 headers are preserved but do not install dependencies.';
+	'Complete marimo Python notebook source (marimo.App and @app.cell definitions), stored verbatim. Declare dependencies in a PEP 723 script header. They install at session or job startup after workspace pyproject.toml dependencies. Dependency changes require a new session. The sandbox image provides marimo.';
 const EXPECTED_UPDATED_AT_DESCRIPTION =
 	'updated_at returned by get_notebook. Rejects the change if notebook metadata changed since that read.';
 

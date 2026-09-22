@@ -20,6 +20,7 @@ import {
 
 const WORKDIR = '/workspace';
 const OUTPUT = `${WORKDIR}/__marimo__/job_output.html`;
+const INLINE_CODE = '# /// script\n# dependencies = ["cowsay==6.1"]\n# ///\nimport cowsay';
 
 interface JobSandbox {
 	instance: SandboxInstance;
@@ -169,6 +170,38 @@ describe('JobRunner', () => {
 			(file) => file.path === `${WORKDIR}/notebook.py`,
 		);
 		expect(notebookWrites.at(-1)?.content).toEqual(new TextEncoder().encode('import marimo'));
+	});
+
+	it.each([
+		{ saved: INLINE_CODE, latest: 'import marimo', inline: true },
+		{ saved: 'import marimo', latest: INLINE_CODE, inline: false },
+	])(
+		'detects inline dependencies from the queued source version ($inline)',
+		async ({ saved, latest, inline }) => {
+			await env.notebooks.updateNotebook(pid, nid, { code: saved }, ACTOR);
+			const { source } = await env.notebooks.getNotebook(pid, nid);
+			const queued = await enqueue({ sourceVersionId: source.current_version_id! });
+			await env.notebooks.updateNotebook(pid, nid, { code: latest }, ACTOR);
+			const sandbox = makeJobSandbox({ html: '<html/>' });
+			const run = await runner(sandbox).execute(queued);
+			expect(run.status).toBe('succeeded');
+			const setup = sandbox.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			expect(setup.includes("uv export --script 'notebook.py'")).toBe(inline);
+			const writes = sandbox.calls.writeFile.filter(
+				(file) => file.path === `${WORKDIR}/notebook.py`,
+			);
+			expect(writes.at(-1)?.content).toEqual(new TextEncoder().encode(saved));
+		},
+	);
+
+	it('installs inline dependencies from the local workspace when no source version is pinned', async () => {
+		await env.notebooks.updateNotebook(pid, nid, { code: INLINE_CODE }, ACTOR);
+		const sandbox = makeJobSandbox({ html: '<html/>' });
+		const run = await runner(sandbox).execute(await enqueue());
+		expect(run.status).toBe('succeeded');
+		const setup = sandbox.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+		expect(setup).toContain("uv export --script 'notebook.py'");
+		expect(setup).toContain('uv pip install');
 	});
 
 	it('marks a cell failure as failed but still keeps the rendered output', async () => {

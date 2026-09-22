@@ -39,6 +39,7 @@ import {
 	resolveBaseImage,
 	resolveComputeProfile,
 	resolveLaunchStrategyForSession,
+	resolveNotebookLaunchSource,
 	resolveRestoreSnapshot,
 	recipientFromIdentity,
 	ResourceExhaustedError,
@@ -1310,9 +1311,8 @@ export async function startNotebookSession(input: {
 	if (!workspacePolicy.persistSessionEdits && !syncedVersionId) {
 		throw new ConflictError('Synced notebook has not been synced yet');
 	}
-	const syncedVersionPaths = syncedVersionId
-		? paths.project(pid).notebook(nid).version(syncedVersionId)
-		: undefined;
+	const notebookPaths = paths.project(pid).notebook(nid);
+	const syncedVersionPaths = syncedVersionId ? notebookPaths.version(syncedVersionId) : undefined;
 	const workspacePrefix = syncedVersionPaths?.workspacePrefix;
 	const workspaceArchive = syncedVersionPaths?.workspaceArchive;
 	const gitPrefix =
@@ -1329,6 +1329,14 @@ export async function startNotebookSession(input: {
 		(MODE_POLICY[mode].persistsEdits
 			? undefined
 			: (notebook.source.current_version_id ?? undefined));
+	const launchSource = resolveNotebookLaunchSource({
+		entryNotebook: workspacePolicy.entryNotebook,
+		workspacePrefix: workspacePrefix ?? notebookPaths.workspacePrefix,
+		localVersion:
+			mode === 'app' && notebook.source.type === 'local' && sourceVersionId
+				? notebookPaths.version(sourceVersionId)
+				: undefined,
+	});
 	const logStoredConfigFallback = (config: 'base_image' | 'compute_profile') =>
 		logEvent({
 			level: 'error',
@@ -1726,8 +1734,7 @@ export async function startNotebookSession(input: {
 						exposure: async () => sandboxExposure.prepare(exposureCtx),
 						launchStrategy: async () => {
 							const resolved = await resolveLaunchStrategyForSession({
-								entryNotebook: workspacePolicy.entryNotebook,
-								workspacePrefix,
+								entryNotebookKey: launchSource.entryNotebookKey,
 								bucket: bucketHandle,
 							});
 							observer.tag('launch_strategy', resolved.strategy);
@@ -1780,20 +1787,7 @@ export async function startNotebookSession(input: {
 								workspacePrefix,
 								gitPrefix,
 								workspaceArchive,
-								...(mode === 'app' && notebook.source.type === 'local' && sourceVersionId
-									? {
-											workspaceOverlay: [
-												{
-													path: 'notebook.py',
-													key: paths.project(pid).notebook(nid).version(sourceVersionId).code,
-												},
-												{
-													path: 'pyproject.toml',
-													key: paths.project(pid).notebook(nid).version(sourceVersionId).deps,
-												},
-											],
-										}
-									: {}),
+								workspaceOverlay: launchSource.workspaceOverlay,
 							});
 						},
 					});

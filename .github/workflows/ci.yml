@@ -62,6 +62,17 @@ jobs:
           python3 --version
           vp run --filter @marimo-hub/compute-fargate test:agent
 
+      - name: Test inline dependencies with pinned uv
+        if: matrix.suite == 'backend'
+        env:
+          # Keep in sync with examples/sandbox-image/Dockerfile and
+          # examples/docker-compose/local-compute/Dockerfile; custom images may differ.
+          UV_INTEGRATION_VERSION: '0.10.9'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/uv-python"
+          "$RUNNER_TEMP/uv-python/bin/pip" install "uv==$UV_INTEGRATION_VERSION"
+          PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMOHUB_UV_INTEGRATION=1 vp test packages/core/src/services/runtime/marimoLaunch.integration.test.ts --configLoader=runner --pool=threads
+
       - name: Test marimo kernel startup and isolated thumbnail rendering
         if: matrix.suite == 'backend'
         env:

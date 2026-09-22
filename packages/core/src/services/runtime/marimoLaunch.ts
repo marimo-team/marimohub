@@ -158,7 +158,7 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 		start: `uv run --no-sync ${marimoCommand(p)}`,
 	}),
 
-	// Git-synced notebooks with PEP 723 inline metadata: the pyproject layer runs
+	// Notebooks with PEP 723 inline metadata: the pyproject layer runs
 	// first, then the script's pins install into the same base env. Prune marimo's
 	// dependency tree so a notebook's inline marimo pin cannot replace the
 	// bytecode-compiled image version. --no-hashes because hash checking rejects
