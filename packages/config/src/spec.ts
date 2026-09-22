@@ -441,6 +441,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'https://api.cwsandbox.com (SDK default)',
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE',
+						name: 'CoreWeave data connection mode',
+						description:
+							'Connection mode for exec, logs, and file transfers. `direct` requires runner mTLS and fails if unavailable. `auto` tries direct, then uses the Gateway if unavailable. `gateway` always uses the Gateway. Lifecycle calls still use the API.',
+						default: 'direct',
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG',
 						name: 'CoreWeave owner tag',
 						description: 'Tag applied to owned sandboxes for discovery and cleanup.',

@@ -723,6 +723,34 @@ describe('makeCompute fail-fast', () => {
 		);
 	});
 
+	it.each([
+		[undefined, 'direct'],
+		['', 'direct'],
+		['direct', 'direct'],
+		['auto', 'auto'],
+		['gateway', 'gateway'],
+		[' AUTO ', 'auto'],
+	])('configures CoreWeave data connections from %j as %s', (value, expected) => {
+		const provider = makeCompute({
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE: value,
+		});
+		expect(configOf(provider)).toMatchObject({ dataPlaneMode: expected });
+	});
+
+	it('rejects an unknown CoreWeave data connection mode at startup', () => {
+		const error = getConfigError(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE: 'invalid',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE');
+		expect(error.message).toContain('expected direct, auto, gateway');
+	});
+
 	it('requires the wandb api key before constructing the adapter', () => {
 		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'wandb' })).toThrow(
 			/MARIMOHUB_COMPUTE_WANDB_API_KEY/,

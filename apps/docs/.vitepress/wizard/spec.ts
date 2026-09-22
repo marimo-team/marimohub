@@ -263,10 +263,11 @@ export const COMPUTE_WIRING: Record<string, BackendWiring> = {
 	},
 	coreweave: {
 		imports: [`import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';`],
-		rhs: () =>
+		rhs: (r) =>
 			[
 				`new CoreWeaveCompute({`,
 				`\tapiKey: ${env('MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', true)},`,
+				`\tdataPlaneMode: ${lit('MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE', r)},`,
 				`\timage: ${env('MARIMOHUB_COMPUTE_IMAGE')},`,
 				`})`,
 			].join('\n'),

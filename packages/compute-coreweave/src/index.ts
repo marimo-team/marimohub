@@ -51,6 +51,7 @@ import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/
 import type {
 	CommandProcess,
 	CommandProcessStatus,
+	DataPlaneMode,
 	FileWrites,
 	ListSandboxesResult,
 	ProcessResult,
@@ -200,6 +201,8 @@ export interface CoreWeaveConfig {
 	apiKey?: string;
 	/** API base URL (`CWSANDBOX_BASE_URL`); defaults to the SDK's production endpoint. */
 	baseUrl?: string;
+	/** Defaults to direct; use auto to allow Gateway fallback when a runner is unreachable. */
+	dataPlaneMode?: DataPlaneMode;
 	/** Container image with marimo + uv + python. Defaults to the SDK's `python:3.11`. */
 	image?: string;
 	/** Port marimo binds inside the sandbox; declared public at create. Default 2718. */
@@ -966,7 +969,11 @@ export class CoreWeaveCompute implements SandboxProvider {
 			// controlled cast at the construction boundary avoids overload-variance
 			// friction between the SDK's broad signatures and our narrow seam.
 			// oxlint-disable-next-line anti-slop/no-chained-type-assertions
-			const sdk = createSandboxClient({ apiKey, baseUrl }) as unknown as CoreWeaveClient;
+			const sdk = createSandboxClient({
+				apiKey,
+				baseUrl,
+				dataPlaneMode: this.config.dataPlaneMode ?? 'direct',
+			}) as unknown as CoreWeaveClient;
 			this.client = instrumentCoreWeaveClient(sdk, baseUrl);
 		}
 		return this.client;
