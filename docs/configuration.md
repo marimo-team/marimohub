@@ -138,6 +138,7 @@ CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1).
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_COREWEAVE_API_KEY` 🔒 | CoreWeave Sandbox API key. | Yes | — | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL` | Override the CoreWeave Sandbox API base URL. | — | `https://api.cwsandbox.com (SDK default)` | — |
+| `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE` | Connection mode for exec, logs, and file transfers. `direct` requires runner mTLS and fails if unavailable. `auto` tries direct, then uses the Gateway if unavailable. `gateway` always uses the Gateway. Lifecycle calls still use the API. | — | `auto` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{sandboxId}`, `{port}`, `{host}`, `{token}`. | — | `https://{sandboxId}-{port}.{host}` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID` | Runner (by operator-assigned id) sandboxes schedule on — must name your CKS sandbox runner. A create without a runner id schedules on the CoreWeave-managed serverless pool, not your cluster. Set to an empty value to opt into serverless. | — | `marimohub` | — |

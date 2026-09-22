@@ -107,6 +107,34 @@ The one edit this guide ever suggests is the [LOTA carve-out](#automatic-caios-c
 Details: [Get started with sandboxes](https://docs.coreweave.com/products/sandboxes/get-started),
 [Policy reference](https://docs.coreweave.com/products/sandboxes/reference/profile).
 
+#### For performance: enable direct runner connections
+
+Direct mTLS connections bypass the Gateway for exec, logs, and file transfers.
+During preview, CoreWeave must enable direct connections for your organization.
+
+For this guide's hub and runner in the same cluster, save `data-plane.yaml`:
+
+```yaml
+managed_spec:
+  data_plane:
+    cluster_ip: {}
+```
+
+```bash
+cwic sandbox runner edit marimohub -f data-plane.yaml
+cwic sandbox runner describe marimohub
+```
+
+Wait for `dataPlaneStatus.state` to report `RUNNER_DATA_PLANE_STATE_READY`.
+The hub must reach the advertised Service in `cw-sandbox-system` on TCP port `9443`.
+Keep `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=auto` (the default) for Gateway fallback.
+
+To verify the direct path, temporarily set the mode to `direct`.
+Restart the hub and start a new notebook session.
+After verification, restore `auto`.
+For clients outside the cluster, use a LoadBalancer or custom TLS passthrough endpoint.
+See [CoreWeave's runner setup guide](https://docs.coreweave.com/products/sandboxes/operations/direct-data-plane).
+
 ### 4. Sandbox template
 
 _Gets you: the shape of every kernel — which port is the kernel and who may

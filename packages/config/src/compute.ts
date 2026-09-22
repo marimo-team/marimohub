@@ -372,6 +372,11 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
 				extraPorts: coreWeaveExtraPorts(opts?.surfaces),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
+				dataPlaneMode: parseEnum(env, 'MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE', {
+					allowed: ['direct', 'auto', 'gateway'] as const,
+					fallback: 'auto',
+					docs: 'docs/configuration.md#coreweave-sandbox',
+				}),
 				image: defaultImage,
 				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE,

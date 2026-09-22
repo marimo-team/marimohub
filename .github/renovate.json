@@ -33,6 +33,16 @@
 			"internalChecksFilter": "strict"
 		},
 		{
+			"description": "Check the CoreWeave Sandbox SDK daily, including beta releases",
+			"matchDatasources": ["npm"],
+			"matchPackageNames": ["@coreweave/cwsandbox"],
+			"groupName": null,
+			"groupSlug": null,
+			"schedule": ["* 0-4 * * *"],
+			"minimumReleaseAge": null,
+			"ignoreUnstable": false
+		},
+		{
 			"description": "Check the sandbox image for marimo updates daily",
 			"matchDatasources": ["pypi"],
 			"matchPackageNames": ["marimo"],
