@@ -13,12 +13,10 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID=marimohub    # your sandbox runner's id
 ```
 
-Exec, logs, and file transfers use direct runner connections with mTLS by default.
-If the runner is unreachable, these operations fail without Gateway fallback.
+Exec, logs, and file transfers prefer direct runner connections with mTLS.
+The default `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=auto` allows Gateway fallback.
+Set this variable to `direct` to require direct connections, or `gateway` to disable them.
 Lifecycle calls still use the API.
-
-To allow Gateway fallback, set `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=auto`.
-To route all data operations through the Gateway, set this variable to `gateway`.
 
 ::: tip Best for CoreWeave deployments
 This is the compute half of the [CKS deployment](/deploying/cks) — pair it

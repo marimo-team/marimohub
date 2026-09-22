@@ -445,7 +445,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'CoreWeave data connection mode',
 						description:
 							'Connection mode for exec, logs, and file transfers. `direct` requires runner mTLS and fails if unavailable. `auto` tries direct, then uses the Gateway if unavailable. `gateway` always uses the Gateway. Lifecycle calls still use the API.',
-						default: 'direct',
+						default: 'auto',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG',

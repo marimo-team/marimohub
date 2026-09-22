@@ -27,7 +27,7 @@ describe('CoreWeave SDK client configuration', () => {
 			expect(createClient).toHaveBeenCalledExactlyOnceWith({
 				apiKey: 'key',
 				baseUrl: 'https://api.cwsandbox.com',
-				dataPlaneMode: dataPlaneMode ?? 'direct',
+				dataPlaneMode: dataPlaneMode ?? 'auto',
 			});
 		},
 	);

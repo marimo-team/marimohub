@@ -724,8 +724,8 @@ describe('makeCompute fail-fast', () => {
 	});
 
 	it.each([
-		[undefined, 'direct'],
-		['', 'direct'],
+		[undefined, 'auto'],
+		['', 'auto'],
 		['direct', 'direct'],
 		['auto', 'auto'],
 		['gateway', 'gateway'],

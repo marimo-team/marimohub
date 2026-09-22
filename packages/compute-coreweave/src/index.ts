@@ -201,7 +201,7 @@ export interface CoreWeaveConfig {
 	apiKey?: string;
 	/** API base URL (`CWSANDBOX_BASE_URL`); defaults to the SDK's production endpoint. */
 	baseUrl?: string;
-	/** Defaults to direct; use auto to allow Gateway fallback when a runner is unreachable. */
+	/** Defaults to auto, which allows Gateway fallback when a runner is unreachable. */
 	dataPlaneMode?: DataPlaneMode;
 	/** Container image with marimo + uv + python. Defaults to the SDK's `python:3.11`. */
 	image?: string;
@@ -972,7 +972,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			const sdk = createSandboxClient({
 				apiKey,
 				baseUrl,
-				dataPlaneMode: this.config.dataPlaneMode ?? 'direct',
+				dataPlaneMode: this.config.dataPlaneMode ?? 'auto',
 			}) as unknown as CoreWeaveClient;
 			this.client = instrumentCoreWeaveClient(sdk, baseUrl);
 		}
