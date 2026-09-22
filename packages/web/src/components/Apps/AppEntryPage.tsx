@@ -4,13 +4,11 @@ import { useAppQuery } from '@/api/apps';
 import { projectQueryOptions, useCapabilitiesQuery, useUserQuery } from '@/api/hooks';
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { NotebookFrame } from '@/components/NotebookPage/NotebookFrame';
+import { ShareUrlMenu } from '@/components/NotebookPage/ShareMenu';
 import { Button } from '@/components/ui';
 import { useTheme } from '@/context/ThemeContext';
-import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
-import { notebookQueryParams } from '@/lib/notebookUrls';
-import { withBasePath } from '@/lib/basePath';
 import { AppAccessError } from './AppsPage';
 
 export function AppEntryPage({
@@ -94,8 +92,6 @@ function StakeholderApp({
 		appHeartbeatIntervalSeconds: capabilities?.app_pool?.heartbeat_interval_seconds,
 	});
 	const { theme } = useTheme();
-	const location = useLocation();
-	const { copy } = useCopyToClipboard();
 	const {
 		iframeSrc: src,
 		frameKey,
@@ -110,15 +106,7 @@ function StakeholderApp({
 					Back to apps
 				</Link>
 				<h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
-				<Button
-					onPress={() => {
-						const url = new URL(withBasePath(location.pathname), window.location.origin);
-						url.search = notebookQueryParams(location.search).toString();
-						void copy(url.toString());
-					}}
-				>
-					Copy link
-				</Button>
+				<ShareUrlMenu />
 			</header>
 			{!canRun ? (
 				<p className="p-6">You cannot run this app.</p>

@@ -3,6 +3,7 @@ import { ArrowLeft, Camera } from 'lucide-react';
 import { Chip, IconLink } from '@/components/ui';
 import { useNotebookQuery } from '@/api/hooks';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
+import { ShareUrlMenu } from './ShareMenu';
 
 /**
  * Full-screen view of a notebook's HTML snapshot ("View static outputs"): the
@@ -38,6 +39,9 @@ export function SnapshotPage() {
 					<Camera className="size-3" />
 					Snapshot
 				</Chip>
+				<div className="ml-auto flex items-center gap-2">
+					<ShareUrlMenu />
+				</div>
 			</header>
 			<StaticNotebookView
 				projectId={pid!}
