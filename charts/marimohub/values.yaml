@@ -116,6 +116,11 @@ extraEnv: []
 #  - name: MARIMOHUB_DEFAULT_ROLE
 #    value: editor
 
+# Applied to both API and maintenance pods, not notebook sandbox pods.
+# The chart reserves the volume name tmp and mount path /tmp.
+extraVolumes: []
+extraVolumeMounts: []
+
 containerPort: 3000
 
 service:

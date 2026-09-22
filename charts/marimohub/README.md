@@ -74,6 +74,7 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `config` | see `values.yaml` | Non-secret `MARIMOHUB_*` → ConfigMap |
 | `secrets.existingSecret` | `""` | Secret you create with the secret vars (recommended) |
 | `secrets.data` | `{}` | Or let the chart create the Secret (dev) |
+| `extraVolumes` / `extraVolumeMounts` | `[]` / `[]` | Volumes and container mounts for API and maintenance pods |
 | `ingress.enabled` / `.className` / `.host` | `true` / `""` / `hub.example.com` | |
 | `ingress.tls.*` | enabled, `marimohub-tls` | |
 | `metrics.enabled` / `.port` | `false` / `9464` | Prometheus scrape mode; port exposed on the Service, never the ingress |
@@ -91,6 +92,28 @@ baked in, so the chart is portable across any Kubernetes.
 The chart sets `MARIMOHUB_RUN_MAINTENANCE` per deployment (`false` on API pods,
 `true` on the maintenance pod), overriding any value in `config`. The maintenance
 pod is pinned to one replica with the `Recreate` strategy — don't scale it.
+
+### Extra volumes
+
+`extraVolumes` and `extraVolumeMounts` append Kubernetes volumes and mounts to API
+and maintenance pods only. Notebook sandbox pods are unaffected.
+
+To mount certificate files from an existing Secret:
+
+```yaml
+extraVolumes:
+  - name: certificates
+    secret:
+      secretName: marimohub-certificates
+extraVolumeMounts:
+  - name: certificates
+    mountPath: /etc/marimohub/certificates
+    readOnly: true
+```
+
+The volume name `tmp` and mount path `/tmp` are reserved. Referenced Secrets,
+ConfigMaps, and PVCs must exist in the release namespace. PVCs must support access
+from all API and maintenance pods.
 
 ### ServiceAccount
 

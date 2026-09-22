@@ -33,6 +33,36 @@ jobs:
       - name: helm lint
         run: helm lint --strict charts/marimohub
 
+      - name: Verify reserved volumes and mounts
+        run: |
+          assert_reserved() {
+            local error
+            if error=$(helm template test charts/marimohub \
+              --set maintenance.enabled="$maintenance" --set-json "$1" 2>&1); then
+              echo "expected reserved volume or mount to fail"
+              return 1
+            fi
+            grep -Fq "$2" <<< "$error"
+          }
+          for maintenance in true false; do
+            assert_reserved \
+              'extraVolumes=[{"name":"data","emptyDir":{}},{"name":"tmp","emptyDir":{}}]' \
+              'extraVolumes[1].name: tmp is reserved by the chart'
+            assert_reserved \
+              'extraVolumeMounts=[{"name":"tmp","mountPath":"/other"}]' \
+              'extraVolumeMounts[0].name: tmp is reserved by the chart'
+            assert_reserved \
+              'extraVolumeMounts=[{"name":"data","mountPath":"/tmp"}]' \
+              'extraVolumeMounts[0].mountPath: /tmp is reserved by the chart'
+            helm template test charts/marimohub \
+              --set maintenance.enabled="$maintenance" >/dev/null
+            helm template test charts/marimohub \
+              --set maintenance.enabled="$maintenance" \
+              --set-json 'extraVolumes=[{"name":"data","emptyDir":{}}]' \
+              --set-json 'extraVolumeMounts=[{"name":"data","mountPath":"/data"},{"name":"data","mountPath":"/other","readOnly":true}]' \
+              >/dev/null
+          done
+
       - name: Verify surface image upgrade compatibility
         run: |
           legacy_image=ghcr.io/example/sandbox:legacy-vscode

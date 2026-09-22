@@ -61,6 +61,19 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- define "marimohub.podTemplate" -}}
 {{- $root := .root -}}
 {{- $v := $root.Values -}}
+{{- range $index, $volume := $v.extraVolumes -}}
+{{- if eq $volume.name "tmp" -}}
+{{- fail (printf "extraVolumes[%d].name: tmp is reserved by the chart" $index) -}}
+{{- end -}}
+{{- end -}}
+{{- range $index, $mount := $v.extraVolumeMounts -}}
+{{- if eq $mount.name "tmp" -}}
+{{- fail (printf "extraVolumeMounts[%d].name: tmp is reserved by the chart" $index) -}}
+{{- end -}}
+{{- if eq $mount.mountPath "/tmp" -}}
+{{- fail (printf "extraVolumeMounts[%d].mountPath: /tmp is reserved by the chart" $index) -}}
+{{- end -}}
+{{- end -}}
 {{- $hasConfigMap := or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") $v.surfaces.vscode.enabled $v.surfaces.opencode.enabled -}}
 {{- $res := $v.resources -}}
 {{- if .maintenance -}}{{- $res = $v.maintenance.resources -}}{{- end }}
@@ -183,7 +196,13 @@ spec:
       volumeMounts:
         - name: tmp
           mountPath: /tmp
+        {{- with $v.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
   volumes:
     - name: tmp
       emptyDir: {}
+    {{- with $v.extraVolumes }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end -}}
