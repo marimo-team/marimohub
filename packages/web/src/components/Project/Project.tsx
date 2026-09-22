@@ -104,6 +104,7 @@ import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
 import { formatRelative } from '@/lib/time';
+import { cn } from '@/lib/utils';
 import { syncUrl } from '@/lib/links';
 import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 import { canEditProject, canManageProject } from '@/lib/roles';
@@ -869,7 +870,12 @@ function useProjectContent() {
 										tags={nb.tags.filter((tag) => nb.status === 'active' || tag !== nb.status)}
 										title={nb.title}
 									/>
-									<div className="flex shrink-0 items-center gap-3">
+									<div
+										className={cn(
+											'flex items-center gap-3',
+											gallery ? 'min-w-0 w-full' : 'shrink-0',
+										)}
+									>
 										{live?.apps?.map((appSession) => (
 											<AppSessionIndicator
 												key={appSession.session_id}
@@ -895,19 +901,24 @@ function useProjectContent() {
 												canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
 											}
 										/>
-										<span className="hidden w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">
-											<span className="text-muted-foreground/70">by</span>
+										<span
+											className={cn(
+												'items-center gap-1 text-xs text-muted-foreground',
+												gallery ? 'flex min-w-0 flex-1' : 'hidden w-32 sm:flex',
+											)}
+										>
+											<span className="shrink-0 text-muted-foreground/70">by</span>
 											<UserLabel
 												user={users?.[nb.author]}
 												fallbackId={nb.author}
 												loading={usersLoading}
-												className="max-w-[8rem]"
+												className={gallery ? 'min-w-0' : 'max-w-[8rem]'}
 											/>
 										</span>
 										<time
 											dateTime={nb.updated_at}
 											title={new Date(nb.updated_at).toLocaleString()}
-											className="w-14 text-right text-xs tabular-nums text-muted-foreground"
+											className="min-w-14 shrink-0 text-right text-xs whitespace-nowrap tabular-nums text-muted-foreground"
 										>
 											{formatRelative(nb.updated_at)}
 										</time>
