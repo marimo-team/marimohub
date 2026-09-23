@@ -1,6 +1,10 @@
 import { createRoute } from '@hono/zod-openapi';
 import { createApp, jsonContent, ok } from '../shared';
-import { DEFAULT_THEME_CONFIG, ThemeConfigSchema, ThemeResponseSchema } from '../theme';
+import {
+	DEFAULT_THEME_CONFIG,
+	ThemeConfigSchema,
+	ThemeResponseSchema,
+} from '@marimo-hub/core/theme';
 
 const app = createApp();
 

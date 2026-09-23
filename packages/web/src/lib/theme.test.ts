@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/api/theme';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { applyThemeConfig, applyThemeMode, getInitialTheme, loadThemeConfig } from './theme';
 import { installMatchMedia, jsonOk } from '@/test/render';
 

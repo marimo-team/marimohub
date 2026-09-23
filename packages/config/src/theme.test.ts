@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/api/theme';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { ConfigError } from './errors';
 import { parseTheme } from './theme';
 import { createFromEnv } from './index';

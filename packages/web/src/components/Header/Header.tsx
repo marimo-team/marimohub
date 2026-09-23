@@ -31,7 +31,7 @@ export function Header() {
 				aria-label={`${name} home`}
 				className="rounded-lg outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
-				<Brand wordmarkClassName="max-md:hidden" />
+				<Brand builtInWordmarkClassName="max-md:hidden" />
 			</Link>
 
 			<div className="ml-auto flex items-center gap-2">

@@ -1,5 +1,5 @@
 import { ColorSpace, OKLCH, sRGB, to, toGamut, serialize, contrastWCAG21 } from 'colorjs.io/fn';
-import type { ThemeConfig } from '@marimo-hub/api/theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 
 ColorSpace.register(sRGB);
 ColorSpace.register(OKLCH);

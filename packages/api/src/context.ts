@@ -1,4 +1,4 @@
-import type { ThemeConfig } from './theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {

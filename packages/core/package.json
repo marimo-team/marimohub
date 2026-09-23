@@ -57,6 +57,7 @@
 		"./testing/object-browse-contract": "./src/testing/objectBrowseContract.ts",
 		"./testing/result-assertions": "./src/testing/resultAssertions.ts",
 		"./testing/workspace-fixtures": "./src/testing/workspaceFixtures.ts",
+		"./theme": "./src/theme.ts",
 		"./timing": "./src/timing.ts",
 		"./token-grants": "./src/tokenGrants.ts",
 		"./url": "./src/url.ts",

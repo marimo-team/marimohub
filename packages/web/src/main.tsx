@@ -1,4 +1,5 @@
 import { BrandingContext } from '@/context/BrandingContext';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { applyThemeConfig, applyThemeMode, getInitialTheme, loadThemeConfig } from '@/lib/theme';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -19,9 +20,15 @@ const ReactQueryDevtools = import.meta.env.DEV
 	: () => null;
 
 async function bootstrap() {
-	applyThemeMode(getInitialTheme());
-	const branding = await loadThemeConfig();
-	applyThemeConfig(branding);
+	let branding = DEFAULT_THEME_CONFIG;
+	try {
+		applyThemeMode(getInitialTheme());
+		const config = await loadThemeConfig();
+		applyThemeConfig(config);
+		branding = config;
+	} catch (error) {
+		console.warn('Could not initialize the deployment theme. Using defaults.', error);
+	}
 	createRoot(document.getElementById('root')!).render(
 		<StrictMode>
 			<QueryClientProvider client={queryClient}>

@@ -7,12 +7,12 @@ import { cn } from '@/lib/utils';
 export interface BrandProps {
 	/** Larger mark + wordmark, for standalone screens like sign-in. */
 	size?: 'sm' | 'lg';
-	/** Hide the wordmark (the mark alone), e.g. on narrow viewports. */
-	wordmarkClassName?: string;
+	/** Applies to the built-in wordmark and image-failure fallback, not custom logos. */
+	builtInWordmarkClassName?: string;
 	className?: string;
 }
 
-function BuiltInBrand({ size = 'sm', wordmarkClassName, className }: BrandProps) {
+function BuiltInBrand({ size = 'sm', builtInWordmarkClassName, className }: BrandProps) {
 	const { wordmark, hasCustomColors } = useBranding();
 	return (
 		<span className={cn('flex items-center', size === 'sm' ? 'gap-2.5' : 'gap-3', className)}>
@@ -31,7 +31,7 @@ function BuiltInBrand({ size = 'sm', wordmarkClassName, className }: BrandProps)
 				className={cn(
 					'font-mono font-semibold tracking-[0.16em] text-foreground',
 					size === 'sm' ? 'text-[13px]' : 'text-base',
-					wordmarkClassName,
+					builtInWordmarkClassName,
 				)}
 			>
 				{wordmark}

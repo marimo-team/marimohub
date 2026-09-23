@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/api/theme';
-import type { ThemeConfig } from '@marimo-hub/api/theme';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { BrandingContext } from '@/context/BrandingContext';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { installMatchMedia } from '@/test/render';
@@ -18,7 +18,7 @@ function BrandFixture({ config }: { config: Partial<ThemeConfig> }) {
 	return (
 		<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, ...config }}>
 			<ThemeProvider>
-				<Brand wordmarkClassName="max-md:hidden" />
+				<Brand builtInWordmarkClassName="max-md:hidden" />
 				<PageTitle>Projects</PageTitle>
 				<ModeToggle />
 			</ThemeProvider>
@@ -43,7 +43,7 @@ afterEach(() => {
 describe('deployment branding', () => {
 	it('preserves stock wordmark and page titles', () => {
 		renderBrand();
-		expect(screen.getByText('MARIMOHUB')).toBeInTheDocument();
+		expect(screen.getByText('MARIMOHUB')).toHaveClass('max-md:hidden');
 		expect(document.title).toBe('Projects · marimohub');
 	});
 
@@ -62,6 +62,15 @@ describe('deployment branding', () => {
 		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.getByRole('img')).toHaveAttribute('src', '/logo-dark.png');
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('keeps custom logos visible on mobile and applies wordmark classes to the fallback', () => {
+		renderBrand({ name: 'Research Hub', logo: '/logo.svg' });
+		const logo = screen.getByRole('img', { name: 'Research Hub' });
+		expect(logo).toHaveClass('h-7', 'max-w-36', 'max-md:max-w-28');
+		expect(logo).not.toHaveClass('max-md:hidden');
+		fireEvent.error(logo);
+		expect(screen.getByText('Research Hub')).toHaveClass('max-md:hidden');
 	});
 
 	it('falls back from failed dark logo to main logo to built-in identity', async () => {

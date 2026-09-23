@@ -1,5 +1,5 @@
-import { DEFAULT_THEME_CONFIG, ThemeConfigSchema } from '@marimo-hub/api/theme';
-import type { ThemeConfig } from '@marimo-hub/api/theme';
+import { DEFAULT_THEME_CONFIG, ThemeConfigSchema } from '@marimo-hub/core/theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { ConfigError } from './errors';
 
 const THEME_VARIABLES = {

@@ -1,5 +1,5 @@
-import { DEFAULT_THEME_CONFIG, ThemeResponseSchema } from '@marimo-hub/api/theme';
-import type { ThemeConfig } from '@marimo-hub/api/theme';
+import { DEFAULT_THEME_CONFIG, ThemeResponseSchema } from '@marimo-hub/core/theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { withBasePath } from './basePath';
 import { generateThemePalette } from './themePalette';
 
@@ -13,7 +13,11 @@ export function getInitialTheme(): Theme {
 	} catch {
 		// Storage can be disabled independently of the rest of the browser.
 	}
-	return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+	try {
+		return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+	} catch {
+		return 'light';
+	}
 }
 
 export function applyThemeMode(theme: Theme): void {

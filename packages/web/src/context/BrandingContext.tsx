@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo } from 'react';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/api/theme';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 
 export const BrandingContext = createContext(DEFAULT_THEME_CONFIG);
 

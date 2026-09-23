@@ -16,7 +16,6 @@
 		"@codemirror/lint": "catalog:",
 		"@codemirror/state": "catalog:",
 		"@codemirror/view": "catalog:",
-		"@marimo-hub/api": "workspace:*",
 		"@marimo-hub/client": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/notebook-bridge": "workspace:*",

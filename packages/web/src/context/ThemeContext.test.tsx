@@ -106,6 +106,18 @@ describe('ThemeProvider', () => {
 		expect(isDarkClassOn()).toBe(false);
 	});
 
+	it.each([
+		undefined,
+		() => {
+			throw new Error('System preference unavailable');
+		},
+	])('uses light mode when the system preference is unavailable (%#)', (matchMedia) => {
+		vi.stubGlobal('matchMedia', matchMedia);
+		renderTheme();
+		expect(screen.getByTestId('theme')).toHaveTextContent('light');
+		expect(isDarkClassOn()).toBe(false);
+	});
+
 	it('persists the theme to localStorage on mount and on every change', async () => {
 		const user = userEvent.setup();
 

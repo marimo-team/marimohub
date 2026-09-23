@@ -77,9 +77,8 @@ const OPENAPI_DOC = {
 		{ name: 'Audit', description: 'Deployment and project audit events' },
 		{ name: 'System', description: 'Deployment metadata' },
 	],
-	// Every documented `/api/v1/*` route sits behind the authN guard, satisfiable
-	// by either the session cookie or a personal access token (the schemes are
-	// registered on the app below), so the requirement is global and disjunctive.
+	// API routes require a session cookie or personal access token by default.
+	// The public theme route overrides this requirement with `security: []`.
 	security: [{ cookieAuth: [] }, { bearerAuth: [] }] as Record<string, string[]>[],
 };
 

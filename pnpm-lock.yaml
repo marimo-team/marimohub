@@ -1834,9 +1834,6 @@ importers:
       '@codemirror/view':
         specifier: 'catalog:'
         version: 6.43.7
-      '@marimo-hub/api':
-        specifier: workspace:*
-        version: link:../api
       '@marimo-hub/client':
         specifier: workspace:*
         version: link:../client

@@ -52,7 +52,7 @@ export function Footer() {
 				{({ close }) => (
 					<div className="flex w-56 flex-col">
 						<div className="flex items-baseline justify-between gap-3 px-2 pb-2 pt-0.5">
-							<span className="text-sm font-semibold">marimohub</span>
+							<span className="text-sm font-semibold">{name}</span>
 							{href ? (
 								<a
 									href={href}
@@ -69,6 +69,9 @@ export function Footer() {
 								</span>
 							)}
 						</div>
+						{name !== 'marimohub' && (
+							<p className="px-2 pb-2 text-xs text-muted-foreground">Powered by marimohub</p>
+						)}
 						<div className="flex flex-col gap-0.5 border-t pt-1.5">
 							<LinkRow href={SOURCE_URL} icon={<Code2 />}>
 								Source

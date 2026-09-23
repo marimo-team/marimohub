@@ -21,7 +21,8 @@ The hub generates light and dark palettes and uses your saved mode, or the opera
 
 Colors accept opaque `#RGB` or `#RRGGBB` values.
 Quote hex values in environment files and YAML to avoid comment parsing.
-Blank values use defaults. Invalid values stop startup with the variable name and a correction.
+Blank values use defaults. Invalid values stop Node server startup with the variable name and a correction.
+On Workers, deployment succeeds, but requests return HTTP 500 with `CONFIG_ERROR` until you correct the configuration.
 
 ## Use two brand colors
 

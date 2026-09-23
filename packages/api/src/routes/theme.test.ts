@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createTestApi, expectError, expectOk } from '../testing';
-import { DEFAULT_THEME_CONFIG } from '../theme';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 
 describe('GET /api/v1/theme', () => {
 	it('serves defaults without authenticating or accessing the catalog', async () => {
