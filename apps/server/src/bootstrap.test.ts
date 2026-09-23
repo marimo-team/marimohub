@@ -504,6 +504,20 @@ describe('bootstrap', () => {
 		expect(harness.serveFn).not.toHaveBeenCalled();
 	});
 
+	it.each(['', '[::1]', '127.0.0.1:3000'])(
+		'exits on MARIMOHUB_BIND_HOST=%j without creating adapters',
+		async (value) => {
+			const harness = makeHarness(deps);
+
+			await expect(
+				bootstrap({ ...BASE_ENV, MARIMOHUB_BIND_HOST: value }, harness.overrides),
+			).resolves.toBeUndefined();
+			expect(harness.exit).toHaveBeenCalledWith(1);
+			expect(harness.createDeps).not.toHaveBeenCalled();
+			expect(harness.serveFn).not.toHaveBeenCalled();
+		},
+	);
+
 	it('can be drained with await using without exiting the process', async () => {
 		const harness = makeHarness(deps);
 

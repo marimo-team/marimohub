@@ -1469,7 +1469,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_BIND_HOST',
 						name: 'HTTP bind address',
 						description:
-							'IP address the HTTP server listens on. Unset listens on all interfaces. Set `127.0.0.1` to accept only connections from the same host, such as a reverse proxy. In a container, leave it unset and publish the port on loopback instead (`-p 127.0.0.1:3000:3000`).',
+							'IP address the HTTP server listens on. Unset listens on all interfaces; an empty value is rejected. Set `127.0.0.1` to accept only connections from the same host, such as a reverse proxy. In a container, leave it unset and publish the port on loopback instead (`-p 127.0.0.1:3000:3000`).',
 						example: '127.0.0.1',
 					},
 					{

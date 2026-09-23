@@ -444,7 +444,7 @@ Server-wide settings; no backend selector.
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown or graduated IDs (such as the removed `duckdb-wasm-preview`) are ignored with a startup warning. No experiment currently gates behavior. | — | — | — |
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
-| `MARIMOHUB_BIND_HOST` | IP address the HTTP server listens on. Unset listens on all interfaces. Set `127.0.0.1` to accept only connections from the same host, such as a reverse proxy. In a container, leave it unset and publish the port on loopback instead (`-p 127.0.0.1:3000:3000`). | — | — | `127.0.0.1` |
+| `MARIMOHUB_BIND_HOST` | IP address the HTTP server listens on. Unset listens on all interfaces; an empty value is rejected. Set `127.0.0.1` to accept only connections from the same host, such as a reverse proxy. In a container, leave it unset and publish the port on loopback instead (`-p 127.0.0.1:3000:3000`). | — | — | `127.0.0.1` |
 | `MARIMOHUB_APP_BASE_URL` | Public URL for browser links and the Node SPA base path. When the app uses a path prefix, set this variable. If unset, links use the request origin and the SPA uses `/`. | — | — | `https://hub.example.com/marimohub` |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |
