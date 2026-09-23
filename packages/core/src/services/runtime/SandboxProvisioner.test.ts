@@ -87,6 +87,30 @@ describe('SandboxProvisioner', () => {
 	const notebookId = createNotebookId();
 	const sandboxId = createSandboxId();
 
+	it.each([false, true])(
+		'cleans up a failed provision only when it owns the sandbox (existing: %s)',
+		async (existing) => {
+			const { instance, calls } = makeFakeSandbox({ failExec: 'true' });
+			const provider = fakeComputeFrom(instance);
+			const create = vi.spyOn(provider, 'create');
+			const onSandboxDestroyed = vi.fn();
+			await expect(
+				new SandboxProvisioner(provider).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					existingSandbox: existing ? instance : undefined,
+					onSandboxDestroyed,
+				}),
+			).rejects.toThrow('Sandbox compute backend is not available');
+			expect(create).toHaveBeenCalledTimes(existing ? 0 : 1);
+			expect(calls.destroy).toBe(existing ? 0 : 1);
+			expect(onSandboxDestroyed).toHaveBeenCalledTimes(existing ? 0 : 1);
+		},
+	);
+
 	describe.each(['provision', 'prepare'] as const)('%s handle creation', (operation) => {
 		it.each([
 			{ restore: false, markerFails: false },

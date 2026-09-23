@@ -59,7 +59,13 @@ import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
 import { validatePodTemplate } from './podTemplate';
 import { resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
-import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
+import type {
+	EnsureSandboxOptions,
+	K8sClient,
+	K8sExecResult,
+	K8sPodPhaseInfo,
+	KubernetesConfig,
+} from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 export * from './shared';
 export { loadPodTemplateFile, parsePodTemplate, validatePodTemplate } from './podTemplate';
@@ -312,16 +318,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<void> {
 		if (this.resolved) return;
-		if (this.existingOnly) {
-			const pod = await this.client.getPhase(this.name);
-			if (pod?.phase !== 'Running') {
-				throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
-			}
-			this.resolved = true;
-			return;
-		}
-		const t0 = Date.now();
-		const { createdPod } = await this.client.ensure({
+		const options: EnsureSandboxOptions = {
 			podTemplate: this.config.podTemplate,
 			name: this.name,
 			sandboxId: this.id,
@@ -338,7 +335,18 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			resources: this.config.resources,
 			extraLabels: this.config.extraLabels,
 			runAsUser: this.config.runAsUser,
-		});
+		};
+		if (this.existingOnly) {
+			const pod = await this.client.getPhase(this.name);
+			if (pod?.phase !== 'Running') {
+				throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
+			}
+			await this.client.reconcileRoutes(options);
+			this.resolved = true;
+			return;
+		}
+		const t0 = Date.now();
+		const { createdPod } = await this.client.ensure(options);
 		const t1 = Date.now();
 		await this.waitForRunning();
 		this.resolved = true;

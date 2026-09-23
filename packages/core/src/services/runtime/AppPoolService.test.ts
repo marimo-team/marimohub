@@ -58,6 +58,9 @@ describe('app pool admission and lifecycle', () => {
 		await expect(
 			pool.bindWarmSandbox(pid, nid, admission.member.session_id, 'stale', id),
 		).rejects.toThrow('expired');
+		expect((await pool.store.read(pid, nid))?.members[0].sandbox_id).toBe(
+			admission.member.sandbox_id,
+		);
 		await pool.bindWarmSandbox(
 			pid,
 			nid,
@@ -76,6 +79,7 @@ describe('app pool admission and lifecycle', () => {
 				createSandboxId(),
 			),
 		).rejects.toThrow('expired');
+		expect((await pool.store.read(pid, nid))?.members[0].sandbox_id).toBe(id);
 	});
 
 	const ready = async (

@@ -48,7 +48,7 @@ export class WarmPoolService {
 	constructor(
 		readonly store: WarmPoolStore,
 		private readonly compute: SandboxProvider,
-		private readonly sessions: Pick<SessionService, 'getSession'>,
+		private readonly sessions: Pick<SessionService, 'getSession' | 'markSandboxReclaimed'>,
 		readonly config: WarmPoolConfig,
 		private readonly metrics: Metrics = noopMetrics,
 		private readonly now: () => number = Date.now,
@@ -131,7 +131,7 @@ export class WarmPoolService {
 					pool.members.filter((member) => member.state === 'ready' || member.state === 'creating')
 						.length - target;
 				for (const member of pool.members) {
-					if (excess > 0 && member.state === 'ready') {
+					if (excess > 0 && (member.state === 'ready' || member.state === 'creating')) {
 						member.state = 'retiring';
 						excess--;
 					}
@@ -358,6 +358,21 @@ export class WarmPoolService {
 		const current = await this.store.getMember(member.sandbox_id);
 		if (current?.state !== 'retiring' || current.token !== member.token) return;
 		await (sandbox ?? this.compute.create(member.sandbox_id)).destroy();
+		if (current.destination) {
+			const { project_id, session_id } = current.destination;
+			try {
+				const session = await this.sessions.getSession(project_id, session_id);
+				if (session.sandbox_id === current.sandbox_id && !session.sandbox_reclaimed_at) {
+					await this.sessions.markSandboxReclaimed(
+						project_id,
+						session_id,
+						new Date(this.now()).toISOString(),
+					);
+				}
+			} catch (error) {
+				if (!(error instanceof NotFoundError)) throw error;
+			}
+		}
 		await this.store.removeMember(current);
 	}
 

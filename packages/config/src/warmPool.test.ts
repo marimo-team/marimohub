@@ -148,8 +148,9 @@ describe('warm pool configuration', () => {
 	});
 
 	it('keeps fingerprints stable across replicas and size changes, and changes them with creation configuration', () => {
+		const cw = coreWeaveOptions();
 		const key = (env: Record<string, string>) =>
-			parseWarmPoolConfig(env, options)!.config.profiles[0].key;
+			parseWarmPoolConfig(env, cw)!.config.profiles[0].key;
 		expect(key({ PORT: '3000', ...enabled })).toBe(
 			key({ PORT: '3001', ...enabled, MARIMOHUB_COMPUTE_WARM_POOL_SIZE: '2' }),
 		);

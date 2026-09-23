@@ -307,6 +307,8 @@ export interface K8sClient {
 	 * reconnect).
 	 */
 	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
+	/** Repair Service/Ingress routing without creating or replacing the Pod. */
+	reconcileRoutes(options: EnsureSandboxOptions): Promise<void>;
 	/** Pod phase + boot timestamps, or `undefined` if the Pod does not exist. */
 	getPhase(name: string): Promise<K8sPodPhaseInfo | undefined>;
 	/** Latest scheduler rejection for the Pod, when one exists. */

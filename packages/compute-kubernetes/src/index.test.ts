@@ -83,6 +83,7 @@ function makeWorld(opts?: {
 	const pods = new Map<string, { sandboxId: SandboxId; phase: string }>();
 
 	const client: K8sClient = {
+		reconcileRoutes: vi.fn(async () => {}),
 		ensure: async (o) => {
 			ensured.push(o);
 			const createdPod = !pods.has(o.name);
@@ -1138,12 +1139,25 @@ computeContract(
 );
 
 describe('Kubernetes warm sandbox reconnect', () => {
-	it('reconnects from another provider without ensuring new resources', async () => {
+	it('repairs routes when reconnecting from another provider without ensuring a Pod', async () => {
 		const world = makeWorld();
 		await makeCompute(world).create(SANDBOX_ID).ready!();
 		expectExecResult(await makeCompute(world).connectExisting(SANDBOX_ID).exec('true'), {
 			success: true,
 		});
+		expect(world.ensured).toHaveLength(1);
+		expect(world.client.reconcileRoutes).toHaveBeenCalledExactlyOnceWith(world.ensured[0]);
+	});
+
+	it('rejects a running Pod when route repair fails, and retries on the next use', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID).ready!();
+		vi.mocked(world.client.reconcileRoutes).mockRejectedValueOnce(new Error('route repair failed'));
+		const sandbox = makeCompute(world).connectExisting(SANDBOX_ID);
+		await expect(sandbox.exec('true')).rejects.toThrow('route repair failed');
+		expect(world.execCalls).toHaveLength(0);
+		expectExecResult(await sandbox.exec('true'), { success: true });
+		expect(world.client.reconcileRoutes).toHaveBeenCalledTimes(2);
 		expect(world.ensured).toHaveLength(1);
 	});
 
@@ -1154,6 +1168,7 @@ describe('Kubernetes warm sandbox reconnect', () => {
 		);
 		expect(world.ensured).toHaveLength(0);
 		expect(world.pods.size).toBe(0);
+		expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
 	});
 
 	it.each(['Pending', 'Succeeded', 'Failed'])(
@@ -1166,6 +1181,7 @@ describe('Kubernetes warm sandbox reconnect', () => {
 				'no longer running',
 			);
 			expect(world.ensured).toHaveLength(1);
+			expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
 		},
 	);
 });

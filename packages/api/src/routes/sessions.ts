@@ -1505,8 +1505,8 @@ export async function startNotebookSession(input: {
 	// Provision as a saga: if a later step fails, completed steps compensate in
 	// reverse — the session record is terminated (so it does not linger in
 	// `starting` and the reaper collects it) and a provisioned sandbox is
-	// destroyed. A failure *inside* provisioning self-cleans (see
-	// SandboxProvisioner.provision); the saga handles failures after it.
+	// destroyed. Cold provisioning self-cleans on failure; warm claims are
+	// abandoned by the outer catch so pool ownership survives failed cleanup.
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
@@ -1835,6 +1835,7 @@ export async function startNotebookSession(input: {
 					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
 				compensate: async () => {
+					if (warmClaim) return;
 					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
 					await recordSandboxCleanup();
 				},
@@ -1902,10 +1903,7 @@ export async function startNotebookSession(input: {
 			.run();
 	} catch (err) {
 		if (warmClaim) {
-			await deps
-				.warmPool!.abandon(warmClaim)
-				.then(recordSandboxCleanup)
-				.catch(() => {});
+			await deps.warmPool!.abandon(warmClaim).catch(() => {});
 		}
 		if (admission?.kind === 'reserve') {
 			// A failed session PUT may have committed; only release when it was never attempted.

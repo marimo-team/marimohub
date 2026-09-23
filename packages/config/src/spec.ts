@@ -309,7 +309,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_WARM_POOL_ENABLED',
 						name: 'Warm sandbox pools',
 						description:
-							'Keep unassigned CoreWeave or Kubernetes sandboxes ready for editor and app sessions. Requires a maintenance replica. Jobs, personal-home mounts, snapshot restores, and non-default images use cold creation. Idle sandboxes consume compute.',
+							'Keep unassigned CoreWeave or Kubernetes sandboxes ready for editor and app sessions. Requires a maintenance replica. Jobs, sandbox startup diagnostics, personal-home mounts, snapshot restores, and non-default images use cold creation. Idle sandboxes consume compute.',
 						default: 'false',
 						optIn: true,
 					},

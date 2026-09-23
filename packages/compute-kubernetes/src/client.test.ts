@@ -92,6 +92,80 @@ beforeEach(() => {
 });
 
 describe('createK8sClient', () => {
+	it.each([true, false])(
+		'repairs missing routes without creating a Pod (hosted: %s)',
+		async (hosted) => {
+			const client = createK8sClient({ namespace: 'kernels' });
+			await client.reconcileRoutes({
+				name: 'mh-sb',
+				namespace: 'kernels',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel:v1',
+				ports: [{ port: 2718, host: hosted ? 'sb.example.com' : '' }],
+			});
+			expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+			expect(k8sMock.core.createNamespacedService).toHaveBeenCalledExactlyOnceWith({
+				namespace: 'kernels',
+				body: expect.objectContaining({
+					spec: expect.objectContaining({
+						selector: { 'marimohub.io/sandbox-name': 'mh-sb' },
+						ports: [{ name: 'kernel', port: 2718, targetPort: 2718, protocol: 'TCP' }],
+					}),
+				}),
+			});
+			expect(k8sMock.net.createNamespacedIngress).toHaveBeenCalledTimes(hosted ? 1 : 0);
+		},
+	);
+
+	it('repairs inconsistent Service and Ingress routes without changing the Pod', async () => {
+		const metadata = {
+			name: 'mh-sb',
+			resourceVersion: '7',
+			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+		};
+		k8sMock.core.createNamespacedService.mockRejectedValueOnce({ code: 409 });
+		k8sMock.core.readNamespacedService.mockResolvedValueOnce({
+			metadata,
+			spec: {
+				clusterIP: '10.0.0.7',
+				selector: { 'marimohub.io/sandbox-name': 'wrong-pod' },
+				ports: [{ port: 80, targetPort: 80 }],
+			},
+		});
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress.mockResolvedValueOnce({
+			metadata,
+			spec: { rules: [{ host: 'wrong.example.com' }] },
+		});
+		await createK8sClient({ namespace: 'kernels' }).reconcileRoutes({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel:v1',
+			ports: [{ port: 2718, host: 'sb.example.com' }],
+		});
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.replaceNamespacedService.mock.calls[0]?.[0].body.spec).toMatchObject({
+			clusterIP: '10.0.0.7',
+			selector: { 'marimohub.io/sandbox-name': 'mh-sb' },
+			ports: [{ port: 2718, targetPort: 2718 }],
+		});
+		expect(k8sMock.net.replaceNamespacedIngress.mock.calls[0]?.[0].body.spec.rules).toEqual([
+			{
+				host: 'sb.example.com',
+				http: {
+					paths: [
+						{
+							path: '/',
+							pathType: 'Prefix',
+							backend: { service: { name: 'mh-sb', port: { number: 2718 } } },
+						},
+					],
+				},
+			},
+		]);
+	});
+
 	it('sends template fields to Kubernetes without changing the Service or Ingress', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		const options = {

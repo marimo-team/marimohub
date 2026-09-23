@@ -135,6 +135,40 @@ describe('warm sandbox pools', () => {
 		expect((await w.members()).map((m) => m.state)).toEqual(['ready', 'ready']);
 	});
 
+	it.each([
+		{ name: 'disabled', options: { enabled: false }, remaining: 0 },
+		{ name: 'downsized', options: { size: 1 }, remaining: 1 },
+	])('retires $name in-flight reservations before they publish', async ({ options, remaining }) => {
+		const w = setup({ size: 2 });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const create = w.compute.create.bind(w.compute);
+		vi.spyOn(w.compute, 'create').mockImplementation((id, options) => {
+			const sandbox = create(id, options);
+			return {
+				...sandbox,
+				ready: async () => {
+					await gate;
+					await sandbox.ready!();
+				},
+			};
+		});
+		const filling = w.service.sweep();
+		await vi.waitFor(async () => expect(await w.members()).toHaveLength(2));
+		await w.replica(options).sweep();
+		expect((await w.members()).map((member) => member.state)).toEqual(
+			Array.from({ length: remaining }, () => 'creating'),
+		);
+		release();
+		await filling;
+		expect((await w.members()).map((member) => member.state)).toEqual(
+			Array.from({ length: remaining }, () => 'ready'),
+		);
+		expect(w.live.size).toBe(remaining);
+	});
+
 	it('lets only one replica claim a sandbox and replenishes it', async () => {
 		const w = setup();
 		await w.service.sweep();
@@ -320,6 +354,52 @@ describe('warm sandbox pools', () => {
 		await w.replica({ enabled: false }).sweep();
 		expect(await w.members()).toEqual([]);
 		expect(w.destroyed).toContain(claim.member.sandbox_id);
+	});
+
+	it('retains the destination until a failed reclamation marker can be retried', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const request = w.request();
+		const claim = (await w.service.claim(request))!;
+		await w.sessions.createSession({
+			...request.destination,
+			user_id: ACTOR,
+			mode: 'edit',
+			sandbox_id: claim.member.sandbox_id,
+		});
+		const marker = vi
+			.spyOn(w.sessions, 'markSandboxReclaimed')
+			.mockRejectedValueOnce(new Error('session storage unavailable'));
+		await expect(w.service.abandon(claim)).rejects.toThrow('session storage unavailable');
+		expect((await w.members())[0]).toMatchObject({
+			state: 'retiring',
+			destination: request.destination,
+		});
+		await w.replica({ enabled: false }).sweep();
+		expect(marker).toHaveBeenCalledTimes(2);
+		expect(await w.members()).toEqual([]);
+		expect(
+			await w.sessions.getSession(request.destination.project_id, request.destination.session_id),
+		).toHaveProperty('sandbox_reclaimed_at');
+	});
+
+	it('does not mark a different sandbox reclaimed at the claim destination', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const request = w.request();
+		const claim = (await w.service.claim(request))!;
+		await w.sessions.createSession({
+			...request.destination,
+			user_id: ACTOR,
+			mode: 'edit',
+			sandbox_id: createSandboxId(),
+		});
+		await w.service.abandon(claim);
+		expect(await w.members()).toEqual([]);
+		expect(
+			(await w.sessions.getSession(request.destination.project_id, request.destination.session_id))
+				.sandbox_reclaimed_at,
+		).toBeUndefined();
 	});
 
 	it('protects a concurrent claim from a stale failing health check', async () => {

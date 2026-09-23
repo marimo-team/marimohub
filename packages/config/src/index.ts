@@ -686,7 +686,7 @@ export function createFromEnv(
 		backend: computeBackendValue,
 		compute,
 		images: sandboxImages,
-		profiles: appliedComputeProfiles,
+		profiles: profilesSupported ? appliedComputeProfiles : parseComputeProfiles(undefined),
 		sessionMaxLifetimeMs: sessionLifetime.maxLifetimeMs,
 		startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
 	});

@@ -120,7 +120,8 @@ External compute libraries can provide the same contract without changes to the 
 
 Only advertise support when these guarantees hold. The operator must still enable pooling.
 The shared service handles readiness probes, expiry, reservation limits, claims, and cleanup retries.
-Orphan reconciliation discovers ownership under `_system/warm-pools/`; it does not require a backend registry.
+Pool cleanup uses ownership records under `_system/warm-pools/` without a backend registry.
+Provider-level orphan reconciliation requires `SandboxProvider.listActive()` to find sandboxes without ownership records. Pool records alone cannot discover those sandboxes.
 
 ## Auth (`Authenticator`)
 

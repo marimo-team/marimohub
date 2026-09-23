@@ -122,7 +122,7 @@ describe('session warm sandbox assignment', () => {
 			const response = await w.api.request('POST', w.path, { mode });
 			expect(response.status).toBeGreaterThanOrEqual(400);
 			expect(w.fake.calls.startProcess).toHaveLength(1);
-			expect(w.fake.calls.destroy).toBeGreaterThan(0);
+			expect(w.fake.calls.destroy).toBe(1);
 			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
 			const sessions = await w.services.sessions.listSessions(w.notebook.id);
 			expect(sessions).toHaveLength(1);
@@ -132,6 +132,21 @@ describe('session warm sandbox assignment', () => {
 			});
 		},
 	);
+
+	it('destroys once when app admission fails after warm provisioning succeeds', async () => {
+		const w = await setup();
+		await w.warmPool.sweep();
+		vi.spyOn(AppPoolService.prototype, 'complete').mockRejectedValue(
+			new Error('admission expired'),
+		);
+		const response = await w.api.request('POST', w.path, { mode: 'app' });
+		expect(response.status).toBeGreaterThanOrEqual(400);
+		expect(w.fake.calls.startProcess).toHaveLength(1);
+		expect(w.fake.calls.destroy).toBe(1);
+		expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		const [session] = await w.services.sessions.listSessions(w.notebook.id);
+		expect(session.sandbox_reclaimed_at).toEqual(expect.any(String));
+	});
 
 	it('enforces the project app limit before claiming warm capacity', async () => {
 		const w = await setup();
@@ -195,9 +210,16 @@ describe('session warm sandbox assignment', () => {
 		expect(response.status).toBeGreaterThanOrEqual(400);
 		expect((await w.warmPool.store.read()).pools[0].members[0].state).toBe('retiring');
 		expect(w.fake.calls.writeFiles).toEqual([]);
+		const [failed] = await w.services.sessions.listSessions(w.notebook.id);
+		expect(failed.status).toBe('failed');
+		expect(failed.sandbox_reclaimed_at).toBeUndefined();
 		destroy.mockRestore();
 		await w.warmPool.sweep();
 		expect(w.fake.calls.destroy).toBe(1);
+		expect(await w.services.sessions.getSession(w.project.id, failed.session_id)).toMatchObject({
+			status: 'failed',
+			sandbox_reclaimed_at: expect.any(String),
+		});
 		expect((await w.warmPool.store.read()).pools[0].members.map((member) => member.state)).toEqual([
 			'ready',
 		]);

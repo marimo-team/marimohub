@@ -639,6 +639,8 @@ export class SandboxProvisioner {
 			result.timings.total = Date.now() - provisionStart;
 			return result;
 		} catch (err) {
+			// The caller retains cleanup ownership for a supplied sandbox.
+			if (options.existingSandbox) throw err;
 			// The saga does not compensate the step that throws. A failed handle
 			// constructor leaves nothing to destroy but still needs a cleanup marker.
 			try {
