@@ -15,8 +15,8 @@ authentication. The development stack below defaults to memory storage.
 
 ## Prerequisites
 
-- Node >= 24
-- pnpm 10.20.0
+- Node >= 24.11
+- pnpm 10.34.5
 - `uv` and Python, required only when you start local kernels
 
 Check the installed versions:

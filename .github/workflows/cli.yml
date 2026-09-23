@@ -22,7 +22,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
-          version: 0.1.24
+          version: 0.3.0
           node-version-file: '.node-version'
           sfw: true
           cache: true
