@@ -254,10 +254,11 @@ The copy requires the same resource clearance as the original.
 
 ## Identity lookup
 
-`GET /api/v1/users` requires directory authority to resolve another user's profile, including email and profile picture.
-The endpoint applies the same credential grants and project involvement rules as directory search.
-Authenticated callers can resolve their own profile.
-Selected-project tokens cannot resolve arbitrary directory identities.
+`GET /api/v1/users` resolves known IDs to display profiles, including email and profile picture.
+Authenticated users can resolve display identities without project membership, preserving author, member, and session-owner displays on internal deployments.
+Directory search still requires directory authority or project involvement.
+Credential grants apply to both endpoints: restricted PATs and service accounts cannot resolve arbitrary identities, and selected-project tokens cannot access the deployment directory.
+Authenticated callers can always resolve their own profile.
 
 ## Sandbox artifact reads
 
@@ -267,9 +268,11 @@ The transport stops on overflow or timeout. Earlier file sizes do not replace th
 Workspace capture also enforces its total byte limit against the captured bytes.
 A refused workspace read preserves the last stored copy.
 
-External compute adapters must implement `SandboxInstance.readFileBounded` to support artifact and workspace capture.
+External compute adapters need `SandboxInstance.readFileBounded` to support artifact and workspace capture.
 The method must enforce byte limits during transport and cancel the transport on overflow or timeout.
-Capture never falls back to an unbounded read when this method is absent.
+An adapter without this method can still run sessions. Capture logs a warning once per sandbox instance and skips artifact reads, workspace uploads, and workspace cleanup.
+Existing stored content is preserved, but new sandbox changes are not captured until the adapter supports bounded reads.
+Capture never falls back to an unbounded read.
 
 ## Request safety
 

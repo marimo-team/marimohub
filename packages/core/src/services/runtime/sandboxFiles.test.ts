@@ -830,6 +830,43 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 });
 
 describe('capture transport budgets', () => {
+	it.each(['source', 'workspace'] as const)(
+		'warns once without changing stored content when bounded reads are unsupported (%s)',
+		async (mode) => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const { projectId, notebookId, nb } = nbCtx();
+				const bucket = new MemoryBucket();
+				await bucket.put(nb.workspaceFile('previous.csv'), 'saved data');
+				const { instance } = makeFsSandbox({ files: { 'notebook.py': 'new code' } });
+				const bounded = instance.readFileBounded;
+				instance.readFileBounded = undefined;
+				const list = vi.spyOn(instance, 'listFiles');
+				const legacy = vi.spyOn(instance, 'readFile');
+				const exec = vi.spyOn(instance, 'exec');
+				expect(await readSessionArtifacts(instance, MOUNT)).toEqual({});
+				await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, mode);
+				await readSessionArtifacts(instance, MOUNT);
+				expect(warn).toHaveBeenCalledOnce();
+				expect(warn).toHaveBeenCalledWith(
+					expect.stringContaining(
+						'New sandbox changes will not be saved; stored content is preserved',
+					),
+				);
+				expect(list).not.toHaveBeenCalled();
+				expect(legacy).not.toHaveBeenCalled();
+				expect(exec).not.toHaveBeenCalled();
+				expect(await (await bucket.get(nb.workspaceFile('previous.csv')))!.text()).toBe(
+					'saved data',
+				);
+				instance.readFileBounded = bounded;
+				expect((await readSessionArtifacts(instance, MOUNT)).code).toBe('new code');
+			} finally {
+				warn.mockRestore();
+			}
+		},
+	);
+
 	it.each(['missing', 'failed', 'stale'] as const)(
 		'caps actual artifact bytes with %s listing metadata',
 		async (listing) => {

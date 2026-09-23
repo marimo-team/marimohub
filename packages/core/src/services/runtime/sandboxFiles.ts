@@ -32,6 +32,20 @@ const CAPTURE_READ_CONCURRENCY = Math.min(
 	Math.floor(MAX_WORKSPACE_BYTES / MAX_WORKSPACE_FILE_BYTES),
 );
 const CAPTURE_READ_TIMEOUT_MS = 10_000;
+const warnedUnsupportedSandboxes = new WeakSet<SandboxInstance>();
+
+function supportsBoundedReads(sandbox: SandboxInstance): boolean {
+	if (typeof sandbox.readFileBounded === 'function') return true;
+	if (!warnedUnsupportedSandboxes.has(sandbox)) {
+		warnedUnsupportedSandboxes.add(sandbox);
+		console.warn(
+			'Sandbox adapter does not implement readFileBounded; artifact and workspace capture are disabled. ' +
+				'New sandbox changes will not be saved; stored content is preserved. ' +
+				'Implement readFileBounded to enable capture.',
+		);
+	}
+	return false;
+}
 
 /**
  * Attempts for an idempotent sandbox write. A backend stream can reset mid-call
@@ -281,6 +295,7 @@ export async function captureWorkspace(
 	workingDir: string,
 	mode: 'source' | 'workspace',
 ): Promise<void> {
+	if (!supportsBoundedReads(sandbox)) return;
 	const nb = paths.project(projectId).notebook(notebookId);
 
 	// Relative paths currently present in the sandbox working dir, excluding source
@@ -390,6 +405,7 @@ export async function readSessionArtifacts(
 	sandbox: SandboxInstance,
 	mountPath: string,
 ): Promise<CommitSessionInput> {
+	if (!supportsBoundedReads(sandbox)) return {};
 	const sizes = await listFileSizes(sandbox, mountPath);
 	const read = (path: string) => readCappedFile(sandbox, path, sizes);
 	const [code, deps, html, session] = await Promise.all([
@@ -442,6 +458,7 @@ async function readBoundedBytes(
 	path: string,
 	maxBytes: number,
 ): Promise<Uint8Array | undefined> {
+	if (!supportsBoundedReads(sandbox)) return undefined;
 	// External adapters must opt into the bounded contract; never fall back to readFile.
 	const result = await sandbox.readFileBounded?.(path, {
 		maxBytes,

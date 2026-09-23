@@ -29,8 +29,8 @@ const resolveUsers = createRoute({
 	description:
 		'Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` ' +
 		'or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded ' +
-		'identity are omitted from the result map. Resolving other users requires the same ' +
-		'directory authority as user search; authenticated callers may resolve themselves.',
+		'identity are omitted from the result map. Authenticated users may resolve display ' +
+		'identities without project membership. Credential grants still restrict lookup of other users.',
 	request: {
 		query: z.object({
 			ids: z
@@ -87,18 +87,23 @@ const searchUsers = createRoute({
 	},
 });
 
-async function authorizeDirectory(deps: ApiDeps, user: AuthenticatedPrincipal): Promise<void> {
-	const { catalog } = deps.services;
+function authorizeDirectoryCredential(deps: ApiDeps, user: AuthenticatedPrincipal): void {
 	const authz = authorizationService(deps);
 	const credentialDecision = authz.credentialDecision(user, 'directory.search', {
 		kind: 'deployment',
 	});
 	if (!credentialDecision.allowed) {
 		if (credentialDecision.category === 'credential-resource') {
-			throw new NotFoundError('Directory search is not available');
+			throw new NotFoundError('Directory access is not available');
 		}
-		throw new ForbiddenError('Token grant does not permit user search');
+		throw new ForbiddenError('Token grant does not permit directory access');
 	}
+}
+
+async function authorizeDirectory(deps: ApiDeps, user: AuthenticatedPrincipal): Promise<void> {
+	authorizeDirectoryCredential(deps, user);
+	const { catalog } = deps.services;
+	const authz = authorizationService(deps);
 
 	// Check the grant separately: project involvement must never broaden a token's authority.
 	const { credential: _credential, ...directorySubject } = user;
@@ -139,7 +144,7 @@ app.openapi(resolveUsers, async (c) => {
 
 	const requested = parseUserIds(ids).map((id) => UserId.parse(id));
 
-	if (requested.some((id) => id !== user.id)) await authorizeDirectory(deps, user);
+	if (requested.some((id) => id !== user.id)) authorizeDirectoryCredential(deps, user);
 
 	const resolved = requested.length > 0 ? await identities.getMany(requested) : [];
 

@@ -59,6 +59,28 @@ afterEach(() => {
 });
 
 describe('SessionStatusDot', () => {
+	it('shows the resolved session owner in the details popover', async () => {
+		renderDot(makeSession('running'));
+		vi.mocked(fetch).mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					success: true,
+					data: {
+						user_1: {
+							id: 'user_1',
+							name: 'Session Owner',
+							email: 'owner@example.com',
+							picture_url: null,
+						},
+					},
+				}),
+				{ headers: { 'content-type': 'application/json' } },
+			),
+		);
+		await userEvent.click(screen.getByRole('button'));
+		expect(await screen.findByText('Session Owner')).toBeVisible();
+	});
+
 	it('omits attribution and user lookup when the session starter is redacted', async () => {
 		renderDot({ ...makeSession('running'), user_id: undefined });
 		await userEvent.click(screen.getByRole('button'));

@@ -1850,7 +1850,7 @@ export interface paths {
 		};
 		/**
 		 * Resolve user ids to display identities
-		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map. Resolving other users requires the same directory authority as user search; authenticated callers may resolve themselves.
+		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map. Authenticated users may resolve display identities without project membership. Credential grants still restrict lookup of other users.
 		 */
 		get: operations['users.resolve'];
 		put?: never;

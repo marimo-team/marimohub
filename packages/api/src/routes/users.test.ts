@@ -55,7 +55,6 @@ describe('User routes', () => {
 	});
 
 	it('GET /users omits ids with no recorded identity', async () => {
-		await request('POST', '/projects', { name: 'Standing', description: '' });
 		const data = await expectOk<Record<string, unknown>>(
 			await request('GET', `/users?ids=${ACTOR},sub-unknown`),
 		);
@@ -73,11 +72,32 @@ describe('User routes', () => {
 		await expectError(await app.request(`/api/v1/users?ids=${ACTOR}`), 401, 'UNAUTHORIZED');
 	});
 
-	it('denies arbitrary resolution by an uninvolved account, but permits self-resolution', async () => {
-		const other = createTestApi({ bucket, userId: uid('other') }).request;
-		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
-		expect(await expectOk(await other('GET', '/users?ids=other'))).toHaveProperty('other');
-	});
+	it.each(['sso', 'external-access-token', 'development'] as const)(
+		'preserves display identities without project membership for %s users',
+		async (kind) => {
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					id: uid('reader'),
+					email: 'reader@example.com',
+					credential: { kind },
+				}),
+			};
+			for (const id of ['author', 'member', 'session-owner']) {
+				await createTestApi({ bucket, userId: uid(id) }).request('GET', '/me');
+			}
+			const api = createTestApi({ bucket, deps: { authenticator } });
+			const catalog = vi.spyOn(api.deps.services.catalog, 'hasProjectInvolvement');
+			const data = await expectOk<Record<string, { name: string; email: string }>>(
+				await api.request('GET', '/users?ids=reader,author,member,session-owner,missing'),
+			);
+			for (const id of ['reader', 'author', 'member', 'session-owner']) {
+				expect(data[id]).toMatchObject({ name: id, email: `${id}@example.com` });
+			}
+			expect(data.missing).toBeUndefined();
+			expect(catalog).not.toHaveBeenCalled();
+			await expectError(await api.request('GET', '/users/search?q=author'), 403);
+		},
+	);
 
 	function withGrant(
 		grant: TokenGrant,
@@ -96,7 +116,17 @@ describe('User routes', () => {
 	it.each(['lookup,other', 'other,lookup', ' lookup,, other,lookup '])(
 		'denies the entire mixed batch before reading directory records: %s',
 		async (ids) => {
-			const api = createTestApi({ bucket, userId: uid('lookup') });
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					id: uid('lookup'),
+					email: 'lookup@example.com',
+					credential: {
+						kind: 'personal-access-token',
+						grant: { actions: ['org-integration.manage'], projects: '*' },
+					},
+				}),
+			};
+			const api = createTestApi({ bucket, deps: { authenticator } });
 			const lookup = vi.spyOn(api.deps.services.identities, 'getMany');
 			await expectError(await api.request('GET', `/users?ids=${encodeURIComponent(ids)}`), 403);
 			expect(lookup).not.toHaveBeenCalled();
@@ -115,18 +145,18 @@ describe('User routes', () => {
 		},
 	);
 
-	it('reuses the current membership index for repeated denied directory requests', async () => {
+	it('reuses the current membership index for repeated denied searches', async () => {
 		const other = createTestApi({ bucket, userId: uid('outsider') }).request;
 		await other('GET', '/me');
 		const get = vi.spyOn(bucket, 'get');
-		for (const url of ['/users?ids=other', '/users/search?q=other', '/users?ids=other']) {
-			await expectError(await other('GET', url), 403);
+		for (let i = 0; i < 3; i++) {
+			await expectError(await other('GET', '/users/search?q=other'), 403);
 		}
 		expect(get.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(3);
 		expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
 	});
 
-	it('revokes directory lookup after the only project membership is deleted', async () => {
+	it('retains display identities but revokes search after the only project membership is deleted', async () => {
 		const member = uid('member');
 		const other = createTestApi({ bucket, userId: member }).request;
 		await other('GET', '/me');
@@ -140,10 +170,11 @@ describe('User routes', () => {
 		);
 		expect(await expectOk(await other('GET', `/users?ids=${ACTOR}`))).toHaveProperty(ACTOR);
 		await expectOk(await request('DELETE', `/projects/${project.id}`));
-		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
+		expect(await expectOk(await other('GET', `/users?ids=${ACTOR}`))).toHaveProperty(ACTOR);
+		await expectError(await other('GET', `/users/search?q=${ACTOR}`), 403);
 	});
 
-	it('revokes lookup and search when membership removal commits but catalog projection fails', async () => {
+	it('revokes search when membership removal commits but catalog projection fails', async () => {
 		const member = uid('member');
 		const owner = createTestApi({ bucket, userId: ACTOR });
 		const other = createTestApi({ bucket, userId: member }).request;
@@ -166,7 +197,7 @@ describe('User routes', () => {
 			owner.deps.services.projects.removeMember(ProjectId.parse(project.id), member, ACTOR),
 		).rejects.toThrow('projection failed');
 		projection.mockRestore();
-		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
+		expect(await expectOk(await other('GET', `/users?ids=${ACTOR}`))).toHaveProperty(ACTOR);
 		await expectError(await other('GET', `/users/search?q=${ACTOR}`), 403);
 	});
 
@@ -186,6 +217,12 @@ describe('User routes', () => {
 		);
 		const restricted = withGrant({ actions: '*', projects: [ProjectId.parse(project.id)] });
 		await expectError(await restricted('GET', '/users?ids=unrelated'), 404);
+	});
+
+	it('permits a token explicitly granted directory access to resolve display identities', async () => {
+		const token = withGrant({ actions: ['directory.search'], projects: '*' });
+		await createTestApi({ bucket, userId: uid('author') }).request('GET', '/me');
+		expect(await expectOk(await token('GET', '/users?ids=author'))).toHaveProperty('author');
 	});
 
 	describe('GET /users/search', () => {
