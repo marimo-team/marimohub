@@ -954,7 +954,10 @@ app.openapi(getEditorSession, async (c) => {
 				user_id: holder.user_id,
 				status: holder.status,
 				started_at: holder.started_at,
-				activity: await inspectEditorActivity(deps, holder),
+				activity:
+					holder.user_id === user.id
+						? { state: holder.status === 'starting' ? ('starting' as const) : ('unknown' as const) }
+						: await inspectEditorActivity(deps, holder),
 			}
 		: null;
 	return c.json(

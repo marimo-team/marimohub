@@ -1,0 +1,9 @@
+sandboxImagePrepuller:
+  enabled: true
+  images:
+    - ghcr.io/marimo-team/marimo-sandbox:sha-example
+    - ghcr.io/marimo-team/marimo-sandbox:sha-example-tools
+  nodeSelector:
+    compute.coreweave.com/node-pool: marimohub-sandboxes
+  tolerations:
+    - operator: Exists

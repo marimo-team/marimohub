@@ -739,6 +739,10 @@ _Gets you: the sandbox filesystem (venv, caches) restored on the next session._
 
 ### Pre-pull the sandbox image
 
+Helm deployments can enable `sandboxImagePrepuller` instead of managing a separate DaemonSet.
+See the [chart configuration](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/README.md#pre-pull-sandbox-images).
+Use the sandbox node selector and the exact image references from your compute configuration.
+
 _Gets you: kernel starts that don't wait on a registry pull (≈20 s for a 650 MB
 image on a cold node). Needed once the sandbox pool autoscales or you roll
 image tags often._

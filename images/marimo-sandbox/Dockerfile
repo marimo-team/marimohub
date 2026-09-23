@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
+# All targets require --build-context notebook_bridge=packages/notebook-bridge
+# from the repository root. See README.md for the complete build command.
+
 # Held at 3.13: pyiceberg (in the acceptance image) has no cp314 wheel yet, so
 # 3.14 forces a source build that needs a compiler absent from -slim.
 FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS base
@@ -62,6 +65,12 @@ RUN cd /tmp \
 
 # uv compiles installed packages, but not the interpreter's standard library.
 RUN python3 -m compileall -j 0 -q /usr/local/lib/python3.13 || true
+
+COPY --from=notebook_bridge src/runtime.generated.ts /tmp/notebook-bridge.ts
+COPY install-bridge.py /tmp/install-bridge.py
+RUN python3 /tmp/install-bridge.py /tmp/notebook-bridge.ts \
+ && rm /tmp/install-bridge.py /tmp/notebook-bridge.ts \
+ && chown -R appuser:appuser /opt/marimohub/venv/lib/python*/site-packages/marimohub_notebook_bridge*
 
 ENV VIRTUAL_ENV=/opt/marimohub/venv \
     PATH=/opt/marimohub/venv/bin:$PATH

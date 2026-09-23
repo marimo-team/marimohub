@@ -33,6 +33,43 @@ jobs:
       - name: helm lint
         run: helm lint --strict charts/marimohub
 
+      - name: Verify sandbox pre-puller configuration
+        run: |
+          if error=$(helm template test charts/marimohub \
+            --set sandboxImagePrepuller.enabled=true \
+            --set sandboxImagePrepuller.nodeSelector.pool=sandboxes 2>&1); then
+            echo "Expected enabled pre-puller without images to fail"
+            exit 1
+          fi
+          grep -Fq 'sandboxImagePrepuller.images must list the sandbox images to pre-pull' <<< "$error"
+          if error=$(helm template test charts/marimohub \
+            --set sandboxImagePrepuller.enabled=true \
+            --set-json 'sandboxImagePrepuller.images=["example.com/sandbox:test"]' 2>&1); then
+            echo "Expected enabled pre-puller without a node selector to fail"
+            exit 1
+          fi
+          grep -Fq 'sandboxImagePrepuller.nodeSelector must select the sandbox node pool' <<< "$error"
+
+          for uid in 1000 2000; do
+            helm template test charts/marimohub \
+              -f charts/marimohub/ci/sandbox-prepuller-values.yaml \
+              --set podSecurityContext.runAsUser="$uid" | ruby -ryaml -e '
+              documents = YAML.load_stream(STDIN.read).compact
+              daemon = documents.find { |document| document["kind"] == "DaemonSet" }
+              abort "missing pre-puller" unless daemon
+              pod = daemon.fetch("spec").fetch("template").fetch("spec")
+              context = pod.fetch("securityContext")
+              abort "pod security context override ignored" unless context["runAsUser"] == ARGV[0].to_i
+              (pod.fetch("initContainers") + pod.fetch("containers")).each do |container|
+                security = context.merge(container.fetch("securityContext"))
+                abort "root container" unless security["runAsNonRoot"] == true && security["runAsUser"] > 0
+                abort "missing seccomp profile" unless security.dig("seccompProfile", "type") == "RuntimeDefault"
+                abort "privilege escalation allowed" unless security["allowPrivilegeEscalation"] == false
+                abort "capabilities retained" unless security.dig("capabilities", "drop") == ["ALL"]
+              end
+            ' "$uid"
+          done
+
       - name: Verify reserved volumes and mounts
         run: |
           assert_reserved() {
@@ -90,7 +127,7 @@ jobs:
       # schema (none of our kinds are CRDs) as an error.
       - name: Render & validate manifests
         run: |
-          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml"; do
+          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml"; do
             echo "::group::helm template ${values:-(defaults)}"
             helm template test charts/marimohub $values \
               | kubeconform -strict -summary -verbose \
