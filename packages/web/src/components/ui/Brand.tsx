@@ -43,9 +43,9 @@ function BuiltInBrand({ size = 'sm', builtInWordmarkClassName, className }: Bran
 function CustomBrand(props: BrandProps) {
 	const { name, logo, logo_dark } = useBranding();
 	const { theme } = useTheme();
-	const [failedUrls, setFailedUrls] = useState<string[]>([]);
+	const [failedUrls, setFailedUrls] = useState(() => new Set<string>());
 	const candidates = theme === 'dark' ? [logo_dark, logo] : [logo];
-	const src = candidates.find((url) => url && !failedUrls.includes(url));
+	const src = candidates.find((url) => url && !failedUrls.has(url));
 	if (!src) return <BuiltInBrand {...props} />;
 	return (
 		<img
@@ -57,7 +57,7 @@ function CustomBrand(props: BrandProps) {
 				props.size === 'lg' ? 'h-10 max-w-56' : 'h-7 max-w-36 max-md:max-w-28',
 				props.className,
 			)}
-			onError={() => setFailedUrls((urls) => [...urls, src])}
+			onError={() => setFailedUrls((urls) => new Set(urls).add(src))}
 		/>
 	);
 }
