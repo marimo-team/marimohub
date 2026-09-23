@@ -306,6 +306,30 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_WARM_POOL_ENABLED',
+						name: 'Warm sandbox pools',
+						description:
+							'Keep unassigned CoreWeave or Kubernetes sandboxes ready for editor and app sessions. Requires a maintenance replica. Jobs, sandbox startup diagnostics, personal-home mounts, snapshot restores, and non-default images use cold creation. Idle sandboxes consume compute.',
+						default: 'false',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WARM_POOL_SIZE',
+						name: 'Warm sandboxes per profile',
+						description:
+							'Positive integer target of idle sandboxes per selected profile, shared across all server replicas. Used only when warm pools are enabled.',
+						default: '1',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WARM_POOL_PROFILES',
+						name: 'Warm pool profiles',
+						description:
+							'`default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image.',
+						default: 'default',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
 						name: 'Compute profile override',
 						description:

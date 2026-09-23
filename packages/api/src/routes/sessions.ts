@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { all } from 'better-all';
 import type {
 	SecondarySurfaceId,
+	WarmPoolClaim,
 	ResourceSecurityLabels,
 	Role,
 	AuthenticatedPrincipal,
@@ -24,8 +25,10 @@ import {
 	sleep,
 	BadRequestError,
 	ConflictError,
+	WarmPoolClaimExpiredError,
 	createKernelAuthToken,
 	createSandboxId,
+	createSessionId,
 	DomainError,
 	marimoAiContributor,
 	marimoConfigToSessionEnv,
@@ -1498,20 +1501,27 @@ export async function startNotebookSession(input: {
 		? (await sessions.findReusableEditor(pid, nid, user.id, 'exclusive', true)).session
 		: undefined;
 
-	const sandboxId = admission?.member.sandbox_id ?? createSandboxId();
+	let sandboxId = admission?.member.sandbox_id ?? createSandboxId();
+	const sessionId = admission?.member.session_id ?? createSessionId();
+	let warmClaim: WarmPoolClaim | undefined;
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
 	// Provision as a saga: if a later step fails, completed steps compensate in
 	// reverse — the session record is terminated (so it does not linger in
 	// `starting` and the reaper collects it) and a provisioned sandbox is
-	// destroyed. A failure *inside* provisioning self-cleans (see
-	// SandboxProvisioner.provision); the saga handles failures after it.
+	// destroyed. Cold provisioning self-cleans on failure; warm claims are
+	// abandoned by the outer catch so pool ownership survives failed cleanup.
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {
 		if (session) {
-			await sessions.markSandboxReclaimed(pid, session.session_id, new Date().toISOString());
+			await sessions.markSandboxReclaimed(
+				pid,
+				session.session_id,
+				new Date().toISOString(),
+				sandboxId,
+			);
 		}
 	};
 	let updated: Session | undefined;
@@ -1560,13 +1570,35 @@ export async function startNotebookSession(input: {
 			.step('capacity', () =>
 				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
 			)
+			.step('warm_sandbox', async () => {
+				warmClaim = await deps.warmPool?.claim({
+					profile: requestedComputeProfile.name,
+					image,
+					userHome,
+					restoreSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+					destination: { project_id: pid, notebook_id: nid, session_id: sessionId },
+				});
+				if (!warmClaim) return;
+				sandboxId = warmClaim.member.sandbox_id;
+				sandboxMayExist = true;
+				observer.tag('sandbox_id', sandboxId);
+				observer.tag('warm_pool_hit', true);
+				if (admission) {
+					await appPool.bindWarmSandbox(
+						pid,
+						nid,
+						sessionId,
+						admission.member.operation_token,
+						sandboxId,
+					);
+				}
+			})
 			.step('session_record', async () => {
 				const create = () => {
 					sessionRecordAttempted = true;
 					return sessions.createSession({
-						...(admission
-							? { session_id: admission.member.session_id, app_pool: true as const }
-							: {}),
+						session_id: sessionId,
+						...(admission ? { app_pool: true as const } : {}),
 						notebook_id: nid,
 						project_id: pid,
 						user_id: user.id,
@@ -1734,7 +1766,6 @@ export async function startNotebookSession(input: {
 							if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
 							return env;
 						},
-						exposure: async () => sandboxExposure.prepare(exposureCtx),
 						launchStrategy: async () => {
 							const resolved = await resolveLaunchStrategyForSession({
 								entryNotebookKey: launchSource.entryNotebookKey,
@@ -1745,12 +1776,46 @@ export async function startNotebookSession(input: {
 							return resolved;
 						},
 						async provision() {
-							const { baseUrl } = await this.$.exposure;
 							const launchStrategy = await this.$.launchStrategy;
 							// A failed sibling may already have retired the record while these dependencies resolved.
 							if (this.$signal.aborted) throw this.$signal.reason;
+							if (warmClaim) {
+								try {
+									await deps.warmPool!.handoff(warmClaim);
+								} catch (error) {
+									if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
+									const expired = warmClaim;
+									await deps.warmPool!.abandon(expired).catch(() => {});
+									// A late pool cleanup must never target the cold replacement.
+									sandboxId = createSandboxId();
+									sandboxMayExist = false;
+									if (admission) {
+										await appPool.bindWarmSandbox(
+											pid,
+											nid,
+											sessionId,
+											admission.member.operation_token,
+											sandboxId,
+										);
+									}
+									session = await sessions.replaceStartingSandbox(
+										pid,
+										sessionId,
+										expired.member.sandbox_id,
+										sandboxId,
+									);
+									warmClaim = undefined;
+									exposureCtx.sandboxId = sandboxId;
+									observer.tag('sandbox_id', sandboxId);
+									observer.tag('warm_pool_hit', false);
+									observer.tag('warm_pool_fallback', 'claim_expired');
+								}
+							}
+							const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
+							if (this.$signal.aborted) throw this.$signal.reason;
 							sandboxMayExist = true;
 							return provisioner.provision({
+								existingSandbox: warmClaim?.sandbox,
 								onSandboxDestroyed: recordSandboxCleanup,
 								sandboxId,
 								projectId: pid,
@@ -1810,6 +1875,7 @@ export async function startNotebookSession(input: {
 					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
 				compensate: async () => {
+					if (warmClaim) return;
 					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
 					await recordSandboxCleanup();
 				},
@@ -1876,6 +1942,9 @@ export async function startNotebookSession(input: {
 			})
 			.run();
 	} catch (err) {
+		if (warmClaim) {
+			await deps.warmPool!.abandon(warmClaim).catch(() => {});
+		}
 		if (admission?.kind === 'reserve') {
 			// A failed session PUT may have committed; only release when it was never attempted.
 			await (

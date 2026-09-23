@@ -1,6 +1,12 @@
 import { APP_PRESENCE_PERSIST_INTERVAL_MS } from '../../constants';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createVersionId, UserId } from '../../ids';
+import {
+	createNotebookId,
+	createProjectId,
+	createSandboxId,
+	createVersionId,
+	UserId,
+} from '../../ids';
 import { MemoryBucket } from '../../testing/MemoryBucket';
 import { SessionService } from './SessionService';
 import { AppPoolService } from './AppPoolService';
@@ -46,6 +52,36 @@ describe('app pool admission and lifecycle', () => {
 			startupMs: 900_000,
 		});
 	};
+	it('binds a warm sandbox only under the current startup token', async () => {
+		const admission = await admit();
+		const id = createSandboxId();
+		await expect(
+			pool.bindWarmSandbox(pid, nid, admission.member.session_id, 'stale', id),
+		).rejects.toThrow('expired');
+		expect((await pool.store.read(pid, nid))?.members[0].sandbox_id).toBe(
+			admission.member.sandbox_id,
+		);
+		await pool.bindWarmSandbox(
+			pid,
+			nid,
+			admission.member.session_id,
+			admission.member.operation_token,
+			id,
+		);
+		expect((await pool.store.read(pid, nid))?.members[0].sandbox_id).toBe(id);
+		now += 900_001;
+		await expect(
+			pool.bindWarmSandbox(
+				pid,
+				nid,
+				admission.member.session_id,
+				admission.member.operation_token,
+				createSandboxId(),
+			),
+		).rejects.toThrow('expired');
+		expect((await pool.store.read(pid, nid))?.members[0].sandbox_id).toBe(id);
+	});
+
 	const ready = async (
 		admission: Awaited<ReturnType<typeof admit>>,
 		authorizationExpiresAt?: string,

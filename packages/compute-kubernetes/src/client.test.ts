@@ -68,6 +68,24 @@ import {
 } from './shared';
 
 const SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
+const OWNED_POD = {
+	metadata: {
+		uid: 'pod-uid',
+		labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+		annotations: { [SANDBOX_ID_ANNOTATION]: SANDBOX_ID },
+	},
+	status: { phase: 'Running' },
+};
+const OWNED_SERVICE = {
+	metadata: {
+		uid: 'service-uid',
+		resourceVersion: '1',
+		labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+	},
+};
+const OWNED_INGRESS = {
+	metadata: { ...OWNED_SERVICE.metadata, uid: 'ingress-uid' },
+};
 
 beforeEach(() => {
 	for (const fn of [
@@ -89,9 +107,86 @@ beforeEach(() => {
 		fn.mockReset().mockResolvedValue({});
 	}
 	k8sMock.kubeConfigs.length = 0;
+	k8sMock.core.readNamespacedPod.mockResolvedValue(OWNED_POD);
+	k8sMock.core.readNamespacedService.mockResolvedValue(OWNED_SERVICE);
+	k8sMock.net.readNamespacedIngress.mockResolvedValue(OWNED_INGRESS);
 });
 
 describe('createK8sClient', () => {
+	it.each([true, false])(
+		'repairs missing routes without creating a Pod (hosted: %s)',
+		async (hosted) => {
+			const client = createK8sClient({ namespace: 'kernels' });
+			await client.reconcileRoutes({
+				name: 'mh-sb',
+				namespace: 'kernels',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel:v1',
+				ports: [{ port: 2718, host: hosted ? 'sb.example.com' : '' }],
+			});
+			expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+			expect(k8sMock.core.createNamespacedService).toHaveBeenCalledExactlyOnceWith({
+				namespace: 'kernels',
+				body: expect.objectContaining({
+					spec: expect.objectContaining({
+						selector: { 'marimohub.io/sandbox-name': 'mh-sb' },
+						ports: [{ name: 'kernel', port: 2718, targetPort: 2718, protocol: 'TCP' }],
+					}),
+				}),
+			});
+			expect(k8sMock.net.createNamespacedIngress).toHaveBeenCalledTimes(hosted ? 1 : 0);
+		},
+	);
+
+	it('repairs inconsistent Service and Ingress routes without changing the Pod', async () => {
+		const metadata = {
+			name: 'mh-sb',
+			resourceVersion: '7',
+			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+		};
+		k8sMock.core.createNamespacedService.mockRejectedValueOnce({ code: 409 });
+		k8sMock.core.readNamespacedService.mockResolvedValueOnce({
+			metadata,
+			spec: {
+				clusterIP: '10.0.0.7',
+				selector: { 'marimohub.io/sandbox-name': 'wrong-pod' },
+				ports: [{ port: 80, targetPort: 80 }],
+			},
+		});
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress.mockResolvedValueOnce({
+			metadata,
+			spec: { rules: [{ host: 'wrong.example.com' }] },
+		});
+		await createK8sClient({ namespace: 'kernels' }).reconcileRoutes({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel:v1',
+			ports: [{ port: 2718, host: 'sb.example.com' }],
+		});
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.replaceNamespacedService.mock.calls[0]?.[0].body.spec).toMatchObject({
+			clusterIP: '10.0.0.7',
+			selector: { 'marimohub.io/sandbox-name': 'mh-sb' },
+			ports: [{ port: 2718, targetPort: 2718 }],
+		});
+		expect(k8sMock.net.replaceNamespacedIngress.mock.calls[0]?.[0].body.spec.rules).toEqual([
+			{
+				host: 'sb.example.com',
+				http: {
+					paths: [
+						{
+							path: '/',
+							pathType: 'Prefix',
+							backend: { service: { name: 'mh-sb', port: { number: 2718 } } },
+						},
+					],
+				},
+			},
+		]);
+	});
+
 	it('sends template fields to Kubernetes without changing the Service or Ingress', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		const options = {
@@ -727,7 +822,11 @@ describe('createK8sClient', () => {
 
 	it('getPhase carries the boot timestamps from True conditions on the same read', async () => {
 		k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
-			metadata: { uid: 'uid-current', creationTimestamp: new Date('2026-01-01T00:00:00.000Z') },
+			metadata: {
+				...OWNED_POD.metadata,
+				uid: 'uid-current',
+				creationTimestamp: new Date('2026-01-01T00:00:00.000Z'),
+			},
 			status: {
 				phase: 'Running',
 				conditions: [
@@ -753,6 +852,8 @@ describe('createK8sClient', () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 
 		await expect(client.getPhase('mh-sb')).resolves.toEqual({
+			managedBy: MANAGED_BY_VALUE,
+			sandboxId: SANDBOX_ID,
 			phase: 'Running',
 			uid: 'uid-current',
 			createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -916,7 +1017,9 @@ describe('createK8sClient', () => {
 		k8sMock.net.deleteNamespacedIngress.mockRejectedValueOnce({ code: 403 });
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await expect(client.delete('mh-sb', { ingress: true })).rejects.toMatchObject({ code: 403 });
+		await expect(
+			client.delete('mh-sb', { ingress: true, sandboxId: SANDBOX_ID }),
+		).rejects.toMatchObject({ code: 403 });
 	});
 
 	it('streams a Uint8Array stdin as raw bytes to the pod (objectMode:false)', async () => {
@@ -997,36 +1100,199 @@ describe('createK8sClient', () => {
 		k8sMock.net.deleteNamespacedIngress.mockRejectedValueOnce({ code: 404 });
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await client.delete('mh-sb', { ingress: true });
+		await client.delete('mh-sb', { ingress: true, sandboxId: SANDBOX_ID });
 
 		expect(k8sMock.net.deleteNamespacedIngress).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'ingress-uid', resourceVersion: '1' } },
 		});
 		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'service-uid', resourceVersion: '1' } },
 		});
 		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'pod-uid' } },
 		});
 	});
 
 	it('deletes only the service and pod when no ingress was managed', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await client.delete('mh-sb', { ingress: false });
+		await client.delete('mh-sb', { ingress: false, sandboxId: SANDBOX_ID });
 
 		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+		expect(k8sMock.net.readNamespacedIngress).not.toHaveBeenCalled();
 		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'service-uid', resourceVersion: '1' } },
 		});
 		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'pod-uid' } },
 		});
+	});
+
+	it.each([
+		{ labels: {} },
+		{ labels: { [MANAGED_BY_LABEL]: 'someone-else' } },
+		{ annotations: {} },
+		{ annotations: { [SANDBOX_ID_ANNOTATION]: 'another-sandbox' } },
+	])('refuses to delete resources for a foreign Pod %j', async (metadata) => {
+		k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
+			metadata: { ...OWNED_POD.metadata, ...metadata },
+		});
+		await expect(
+			createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+				ingress: true,
+				sandboxId: SANDBOX_ID,
+			}),
+		).rejects.toThrow('owned by another sandbox');
+		expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('cleans up routes for a missing Pod without deleting a replacement', async () => {
+		k8sMock.core.readNamespacedPod.mockRejectedValue({ code: 404 });
+		await createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+			ingress: true,
+			sandboxId: SANDBOX_ID,
+		});
+		expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledOnce();
+		expect(k8sMock.net.deleteNamespacedIngress).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		{ route: 'service', change: 'replaced' },
+		{ route: 'service', change: 'updated' },
+		{ route: 'ingress', change: 'replaced' },
+		{ route: 'ingress', change: 'updated' },
+	])('preserves $route $change after Pod deletion', async ({ route, change }) => {
+		const original = route === 'service' ? OWNED_SERVICE : OWNED_INGRESS;
+		let current = { ...original.metadata };
+		let deleted = false;
+		const remove =
+			route === 'service'
+				? k8sMock.core.deleteNamespacedService
+				: k8sMock.net.deleteNamespacedIngress;
+		k8sMock.core.deleteNamespacedPod.mockImplementationOnce(async () => {
+			current = {
+				...current,
+				uid: change === 'replaced' ? 'replacement-uid' : current.uid,
+				resourceVersion: '2',
+			};
+		});
+		remove.mockImplementation(async ({ body }) => {
+			if (
+				body?.preconditions?.uid !== current.uid ||
+				body?.preconditions?.resourceVersion !== current.resourceVersion
+			) {
+				throw Object.assign(new Error('route precondition failed'), { code: 409 });
+			}
+			deleted = true;
+		});
+		await expect(
+			createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+				ingress: true,
+				sandboxId: SANDBOX_ID,
+			}),
+		).rejects.toMatchObject({ code: 409 });
+		expect(deleted).toBe(false);
+		expect(remove).toHaveBeenCalledExactlyOnceWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			body: { preconditions: { uid: original.metadata.uid, resourceVersion: '1' } },
+		});
+	});
+
+	it.each([false, true])(
+		'skips teardown if a Pod appears or changes (initially absent: %s)',
+		async (absent) => {
+			if (absent) k8sMock.core.readNamespacedPod.mockRejectedValueOnce({ code: 404 });
+			else k8sMock.core.readNamespacedPod.mockResolvedValueOnce(OWNED_POD);
+			k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
+				...OWNED_POD,
+				metadata: { ...OWNED_POD.metadata, uid: 'replacement-uid' },
+			});
+			await expect(
+				createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+					ingress: true,
+					sandboxId: SANDBOX_ID,
+				}),
+			).rejects.toThrow('changed during cleanup');
+			expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+			expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+			expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+		},
+	);
+
+	it('does not delete routes that were absent from the teardown snapshot', async () => {
+		k8sMock.core.readNamespacedService.mockRejectedValueOnce({ code: 404 });
+		k8sMock.net.readNamespacedIngress.mockRejectedValueOnce({ code: 404 });
+		await createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+			ingress: true,
+			sandboxId: SANDBOX_ID,
+		});
+		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledOnce();
+		expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it.each([{ labels: {} }, { uid: undefined }, { resourceVersion: undefined }])(
+		'refuses route cleanup without ownership and identity %j',
+		async (metadata) => {
+			k8sMock.core.readNamespacedService.mockResolvedValueOnce({
+				metadata: { ...OWNED_SERVICE.metadata, ...metadata },
+			});
+			await expect(
+				createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+					ingress: true,
+					sandboxId: SANDBOX_ID,
+				}),
+			).rejects.toThrow(/unmanaged|no UID or resourceVersion/);
+			expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+			expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+			expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+		},
+	);
+
+	it('requires the Pod UID before deleting any resources', async () => {
+		k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
+			metadata: { ...OWNED_POD.metadata, uid: undefined },
+		});
+		await expect(
+			createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+				ingress: true,
+				sandboxId: SANDBOX_ID,
+			}),
+		).rejects.toThrow('has no UID');
+		expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('propagates a Pod delete precondition conflict without retrying by name', async () => {
+		k8sMock.core.deleteNamespacedPod.mockRejectedValueOnce({ code: 409 });
+		await expect(
+			createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+				ingress: true,
+				sandboxId: SANDBOX_ID,
+			}),
+		).rejects.toMatchObject({ code: 409 });
+		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledExactlyOnceWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			body: { preconditions: { uid: 'pod-uid' } },
+		});
+		expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
 	});
 
 	it('lists only pods with well-formed sandbox annotations', async () => {

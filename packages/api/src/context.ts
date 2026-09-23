@@ -2,6 +2,7 @@ import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-brid
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
 	AppPoolPolicy,
+	WarmPoolService,
 	ResourceSecurityPolicy,
 	AuthenticatedPrincipal,
 	Authenticator,
@@ -379,6 +380,7 @@ export interface McpConfig {
  * context (`c.get('deps')`) instead of instantiating adapters from `c.env`.
  */
 export interface ApiDeps {
+	warmPool?: WarmPoolService;
 	services: Services;
 	/** Operational signals shared by domain services and API-owned resource guards. */
 	metrics?: Metrics;

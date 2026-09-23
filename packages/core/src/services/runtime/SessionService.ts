@@ -492,8 +492,30 @@ export class SessionService {
 	}
 
 	/** Record provider-confirmed sandbox destruction for claim fencing and reconciliation. */
-	async markSandboxReclaimed(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
-		return this.mutate(projectId, id, (session) => ({ ...session, sandbox_reclaimed_at: at }));
+	async markSandboxReclaimed(
+		projectId: ProjectId,
+		id: SessionId,
+		at: string,
+		expectedSandboxId?: SandboxId,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			if (expectedSandboxId && session.sandbox_id !== expectedSandboxId) return null;
+			return { ...session, sandbox_reclaimed_at: at };
+		});
+	}
+
+	async replaceStartingSandbox(
+		projectId: ProjectId,
+		id: SessionId,
+		expectedSandboxId: SandboxId,
+		sandboxId: SandboxId,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			if (session.status !== 'starting' || session.sandbox_id !== expectedSandboxId) {
+				throw new ConflictError('The starting session sandbox changed');
+			}
+			return { ...session, sandbox_id: sandboxId, sandbox_reclaimed_at: undefined };
+		});
 	}
 
 	async markTakeoverCaptureCompleted(

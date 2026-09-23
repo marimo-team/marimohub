@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
+	WarmPoolStore,
+	WarmPoolService,
 	CatalogService,
 	BadRequestError,
 	ForbiddenError,
@@ -681,6 +683,45 @@ describe('stored notebook MCP tools', () => {
 });
 
 describe('MCP session execution readiness', () => {
+	it('claims a warm sandbox through start_session', async () => {
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status: 'ready' });
+		const { instance } = makeFakeSandbox();
+		const { deps, project } = await setup({
+			compute: { ...fakeComputeFrom(instance), connectExisting: () => instance },
+		});
+		deps.warmPool = new WarmPoolService(
+			new WarmPoolStore(deps.bucket, 'kubernetes'),
+			deps.compute,
+			deps.services.sessions,
+			{
+				enabled: true,
+				size: 1,
+				profiles: [{ key: 'default', resources: {} }],
+				creationTimeoutMs: 300_000,
+				minimumRemainingMs: 60_000,
+			},
+		);
+		await deps.warmPool.sweep();
+		const warm = (await deps.warmPool.store.read()).pools[0].members[0];
+		const notebook = await deps.services.notebooks.createNotebook(
+			project.id,
+			{ title: 'Warm', description: '', code: NOTEBOOK_CODE },
+			USER_ID,
+		);
+		const client = await connect(deps);
+		const response = await client.callTool({
+			name: 'start_session',
+			arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
+		});
+		expect(response).toMatchObject({ structuredContent: { status: 'running' } });
+		const data = response.structuredContent as { session_id: string };
+		const session = await deps.services.sessions.getSession(
+			project.id,
+			SessionId.parse(data.session_id),
+		);
+		expect(session.sandbox_id).toBe(warm.sandbox_id);
+	});
+
 	it.each([
 		{ ready: false, status: 'initializing' as const },
 		{ ready: false, status: 'awaiting_client' as const },

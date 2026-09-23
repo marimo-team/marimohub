@@ -35,6 +35,58 @@ describe('SessionService', () => {
 		sessions = new SessionService(bucket);
 	});
 
+	describe('replaceStartingSandbox', () => {
+		it('clears old reclamation and fences delayed cleanup against the replacement ID', async () => {
+			const oldId = createSandboxId();
+			const replacement = createSandboxId();
+			const session = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+				sandbox_id: oldId,
+			});
+			await sessions.markSandboxReclaimed(projectId, session.session_id, new Date().toISOString());
+			await sessions.replaceStartingSandbox(projectId, session.session_id, oldId, replacement);
+			const result = await sessions.markSandboxReclaimed(
+				projectId,
+				session.session_id,
+				new Date().toISOString(),
+				oldId,
+			);
+			expect(result.sandbox_id).toBe(replacement);
+			expect(result.sandbox_reclaimed_at).toBeUndefined();
+		});
+
+		it.each(['changed sandbox', 'running', 'failed'])(
+			'rejects replacement of %s',
+			async (reason) => {
+				const oldId = createSandboxId();
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebookId,
+					user_id: ACTOR,
+					sandbox_id: oldId,
+				});
+				if (reason === 'running')
+					await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
+				if (reason === 'failed')
+					await sessions.markFailed(projectId, session.session_id, {
+						code: 'FAILED',
+						message: 'failed',
+					});
+				await expect(
+					sessions.replaceStartingSandbox(
+						projectId,
+						session.session_id,
+						reason === 'changed sandbox' ? createSandboxId() : oldId,
+						createSandboxId(),
+					),
+				).rejects.toThrow('starting session sandbox changed');
+				expect((await sessions.getSession(projectId, session.session_id)).sandbox_id).toBe(oldId);
+			},
+		);
+	});
+
 	describe('inspectSessions', () => {
 		it('returns canonical session records without marking them incomplete', async () => {
 			const session = await sessions.createSession({
