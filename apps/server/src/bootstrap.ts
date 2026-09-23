@@ -162,10 +162,12 @@ export async function bootstrap(
 	}
 
 	const port = Number(validatedEnv.PORT ?? 3000);
+	// Unset listens on every interface, which a container needs to publish the port.
+	const hostname = overrides.hostname ?? validatedEnv.MARIMOHUB_BIND_HOST;
 	const serverOptions = {
 		fetch: app.fetch,
 		port,
-		...(overrides.hostname ? { hostname: overrides.hostname } : {}),
+		...(hostname ? { hostname } : {}),
 	};
 	const server = serveFn(serverOptions, (info) => {
 		const address = info.address.includes(':') ? `[${info.address}]` : info.address;

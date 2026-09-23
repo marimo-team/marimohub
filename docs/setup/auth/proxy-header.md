@@ -2,6 +2,14 @@ Use this backend behind oauth2-proxy, Tailscale Serve, Google IAP, or another SS
 
 CAUTION: In header mode, block direct access to marimohub. The proxy must remove client-supplied identity headers.
 
+When the proxy runs on the same host, bind marimohub to loopback so other machines cannot reach it directly:
+
+```bash
+MARIMOHUB_BIND_HOST=127.0.0.1
+```
+
+Local processes can still connect, so the proxy must still remove client-supplied identity headers.
+
 Both modes require `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Set `*` only to allow all authenticated domains.
 
 oauth2-proxy can supply the default marimohub headers:

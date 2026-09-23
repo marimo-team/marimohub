@@ -138,6 +138,31 @@ describe('bootstrap', () => {
 		);
 	});
 
+	it('passes MARIMOHUB_BIND_HOST to the server', async () => {
+		const harness = makeHarness(deps);
+
+		await bootstrap({ ...BASE_ENV, MARIMOHUB_BIND_HOST: '::1' }, harness.overrides);
+
+		expect(harness.serveFn).toHaveBeenCalledWith(
+			{ fetch: expect.any(Function), hostname: '::1', port: 3000 },
+			expect.any(Function),
+		);
+	});
+
+	it('prefers an explicit hostname over MARIMOHUB_BIND_HOST', async () => {
+		const harness = makeHarness(deps);
+
+		await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_BIND_HOST: '0.0.0.0' },
+			{ ...harness.overrides, hostname: '127.0.0.1' },
+		);
+
+		expect(harness.serveFn).toHaveBeenCalledWith(
+			{ fetch: expect.any(Function), hostname: '127.0.0.1', port: 3000 },
+			expect.any(Function),
+		);
+	});
+
 	it.each([
 		[{ address: '127.0.0.1', family: 'IPv4' as const, port: 3000 }, 'http://127.0.0.1:3000'],
 		[{ address: '::1', family: 'IPv6' as const, port: 4100 }, 'http://[::1]:4100'],
@@ -478,6 +503,20 @@ describe('bootstrap', () => {
 		expect(harness.createDeps).not.toHaveBeenCalled();
 		expect(harness.serveFn).not.toHaveBeenCalled();
 	});
+
+	it.each(['', '[::1]', '127.0.0.1:3000'])(
+		'exits on MARIMOHUB_BIND_HOST=%j without creating adapters',
+		async (value) => {
+			const harness = makeHarness(deps);
+
+			await expect(
+				bootstrap({ ...BASE_ENV, MARIMOHUB_BIND_HOST: value }, harness.overrides),
+			).resolves.toBeUndefined();
+			expect(harness.exit).toHaveBeenCalledWith(1);
+			expect(harness.createDeps).not.toHaveBeenCalled();
+			expect(harness.serveFn).not.toHaveBeenCalled();
+		},
+	);
 
 	it('can be drained with await using without exiting the process', async () => {
 		const harness = makeHarness(deps);

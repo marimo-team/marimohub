@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { ConfigError } from '@marimo-hub/config';
 import { parseHttpUrl } from '@marimo-hub/core';
@@ -15,8 +16,13 @@ const appBaseUrl = z
 	.string()
 	.refine((value) => !value.trim() || parseHttpUrl(value).ok, 'expected an HTTP(S) URL');
 
+// Literal IPs only: `localhost` can resolve to either loopback family, and an empty value
+// would silently fall back to every interface.
+const bindHost = z.string().refine((value) => isIP(value) !== 0, 'expected an IP address');
+
 export const ServerEnvSchema = z.looseObject({
 	PORT: port.optional(),
+	MARIMOHUB_BIND_HOST: bindHost.optional(),
 	MARIMOHUB_APP_BASE_URL: appBaseUrl.optional(),
 	MARIMOHUB_STATIC_ROOT: z
 		.string()
