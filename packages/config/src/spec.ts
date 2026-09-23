@@ -112,7 +112,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_THEME_NAME',
 						name: 'Display name',
-						description: 'Display name and browser-title suffix.',
+						description: 'Display name, browser-title suffix, and installed app name.',
 						example: 'Research Hub',
 						optIn: true,
 						default: 'marimohub',
@@ -154,6 +154,30 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Opaque #RGB or #RRGGBB color for accents and surface tints. Defaults to the primary color.',
 						example: '#7c3aed',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_PWA_ICON_192',
+						name: '192px app icon',
+						description:
+							'192×192 PNG app icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon.',
+						example: 'https://hub.example.com/brand/icon-192.png',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_PWA_ICON_512',
+						name: '512px app icon',
+						description:
+							'512×512 PNG app icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon.',
+						example: 'https://hub.example.com/brand/icon-512.png',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_APPLE_TOUCH_ICON',
+						name: 'Apple touch icon',
+						description:
+							'180×180 PNG Apple touch icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon.',
+						example: 'https://hub.example.com/brand/apple-touch-icon.png',
 						optIn: true,
 					},
 				],

@@ -15,6 +15,9 @@
 		// "MARIMOHUB_THEME_LOGO": "https://hub.example.com/brand/logo.svg",
 		// "MARIMOHUB_THEME_LOGO_DARK": "https://hub.example.com/brand/logo-dark.svg",
 		// "MARIMOHUB_THEME_FAVICON": "https://hub.example.com/brand/favicon.png",
+		// "MARIMOHUB_THEME_PWA_ICON_192": "https://hub.example.com/brand/icon-192.png",
+		// "MARIMOHUB_THEME_PWA_ICON_512": "https://hub.example.com/brand/icon-512.png",
+		// "MARIMOHUB_THEME_APPLE_TOUCH_ICON": "https://hub.example.com/brand/apple-touch-icon.png",
 		"AUTH_MODE": "dev",
 		"USER_ID": "user",
 		"USER_EMAIL": "user@localhost",
@@ -27,6 +30,7 @@
 	"assets": {
 		"directory": "../../packages/web/dist",
 		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/manifest.webmanifest", "/apple-touch-icon.png"],
 	},
 	"observability": { "enabled": true },
 	"r2_buckets": [{ "binding": "NOTEBOOKS_BUCKET", "bucket_name": "orgname-marimohub" }],

@@ -23,6 +23,40 @@ afterEach(() => {
 });
 
 describe('theme bootstrap', () => {
+	it('updates one browser theme color and restores the default when branding is cleared', () => {
+		document.head.innerHTML = '<meta name="theme-color" content="#0d9488" />';
+		applyThemeConfig({ ...DEFAULT_THEME_CONFIG, primary_color: '#123456' });
+		expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+			'content',
+			'#123456',
+		);
+		applyThemeConfig({ ...DEFAULT_THEME_CONFIG, primary_color: '#ABC' });
+		expect(document.querySelectorAll('meta[name="theme-color"]')).toHaveLength(1);
+		expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute('content', '#ABC');
+		applyThemeConfig(DEFAULT_THEME_CONFIG);
+		expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+			'content',
+			'#0d9488',
+		);
+	});
+
+	it('accepts older theme responses without installation icon fields', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				jsonOk({
+					name: 'Existing hub',
+					favicon: null,
+					logo: null,
+					logo_dark: null,
+					primary_color: null,
+					secondary_color: null,
+				}),
+			),
+		);
+		expect(await loadThemeConfig()).toEqual({ ...DEFAULT_THEME_CONFIG, name: 'Existing hub' });
+	});
+
 	it('loads public branding once under the deployment base path', async () => {
 		document.head.innerHTML = '<base href="/hub/" />';
 		const branding = { ...DEFAULT_THEME_CONFIG, name: 'Research Hub', logo: '/brand.svg' };

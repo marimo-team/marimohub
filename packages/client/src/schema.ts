@@ -4051,6 +4051,12 @@ export interface operations {
 							logo_dark: string | null;
 							primary_color: string | null;
 							secondary_color: string | null;
+							/** @default null */
+							pwa_icon_192: string | null;
+							/** @default null */
+							pwa_icon_512: string | null;
+							/** @default null */
+							apple_touch_icon: string | null;
 						};
 					};
 				};

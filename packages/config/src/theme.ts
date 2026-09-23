@@ -9,6 +9,9 @@ const THEME_VARIABLES = {
 	logo_dark: 'MARIMOHUB_THEME_LOGO_DARK',
 	primary_color: 'MARIMOHUB_THEME_PRIMARY_COLOR',
 	secondary_color: 'MARIMOHUB_THEME_SECONDARY_COLOR',
+	pwa_icon_192: 'MARIMOHUB_THEME_PWA_ICON_192',
+	pwa_icon_512: 'MARIMOHUB_THEME_PWA_ICON_512',
+	apple_touch_icon: 'MARIMOHUB_THEME_APPLE_TOUCH_ICON',
 } as const;
 
 export type ThemeEnv = Partial<

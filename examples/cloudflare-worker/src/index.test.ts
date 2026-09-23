@@ -85,6 +85,35 @@ describe('Cloudflare Worker configuration', () => {
 		});
 	});
 
+	it('serves installation branding through the shared backend', async () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_THEME_NAME: 'Research Hub',
+			MARIMOHUB_THEME_PRIMARY_COLOR: '#2563eb',
+			MARIMOHUB_THEME_PWA_ICON_192: '/brand/192.png',
+			MARIMOHUB_THEME_APPLE_TOUCH_ICON: '/brand/apple.png',
+		} as Env;
+		const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} };
+		const response = await worker.fetch(
+			new Request('https://hub.example.com/manifest.webmanifest'),
+			env,
+			ctx,
+		);
+		expect(response.headers.get('content-type')).toBe('application/manifest+json');
+		expect(await response.json()).toMatchObject({
+			name: 'Research Hub',
+			theme_color: '#2563eb',
+			icons: [{ src: '/brand/192.png' }, { src: '/icons/icon-512.png' }],
+		});
+		const icon = await worker.fetch(
+			new Request('https://hub.example.com/apple-touch-icon.png'),
+			env,
+			ctx,
+		);
+		expect(icon.status).toBe(302);
+		expect(icon.headers.get('location')).toBe('/brand/apple.png');
+	});
+
 	it.each([
 		{ MARIMOHUB_THEME_PRIMARY_COLOR: 'rgb(1,2,3)' },
 		{ MARIMOHUB_THEME_LOGO_DARK: 'javascript:alert(1)' },

@@ -1,4 +1,8 @@
-import { DEFAULT_THEME_CONFIG, ThemeResponseSchema } from '@marimo-hub/core/theme';
+import {
+	DEFAULT_PWA_THEME_COLOR,
+	DEFAULT_THEME_CONFIG,
+	ThemeResponseSchema,
+} from '@marimo-hub/core/theme';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { withBasePath } from './basePath';
 import { generateThemePalette } from './themePalette';
@@ -73,6 +77,12 @@ export function applyThemeConfig(config: ThemeConfig): void {
 		document.head.append(style);
 	}
 	document.title = config.name;
+	const themeColor =
+		document.querySelector<HTMLMetaElement>('meta[name="theme-color"]') ??
+		document.createElement('meta');
+	themeColor.name = 'theme-color';
+	themeColor.content = config.primary_color ?? DEFAULT_PWA_THEME_COLOR;
+	document.head.append(themeColor);
 	if (config.favicon) {
 		const icon =
 			document.querySelector<HTMLLinkElement>('link[rel="icon"]') ?? document.createElement('link');

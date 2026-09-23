@@ -4679,6 +4679,21 @@ paths:
                           - string
                           - 'null'
                         pattern: ^#(?:[\da-fA-F]{3}|[\da-fA-F]{6})$
+                      pwa_icon_192:
+                        type:
+                          - string
+                          - 'null'
+                        default: null
+                      pwa_icon_512:
+                        type:
+                          - string
+                          - 'null'
+                        default: null
+                      apple_touch_icon:
+                        type:
+                          - string
+                          - 'null'
+                        default: null
                     required:
                       - name
                       - favicon

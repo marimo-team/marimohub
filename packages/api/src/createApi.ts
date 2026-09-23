@@ -35,6 +35,7 @@ import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import themeApp from './routes/theme';
+import webManifestApp from './routes/webManifest';
 import tokensApp from './routes/tokens';
 import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
 import oauthAuthorizationsApp from './routes/oauthAuthorizations';
@@ -394,6 +395,7 @@ export function createApi(rawDeps: ApiDeps) {
 	});
 
 	app.route(API_PREFIX, themeApp);
+	app.route('/', webManifestApp);
 
 	// Provider-specific auth routes (e.g. the OIDC login/callback/logout flow).
 	// Mounted before the authN guard so they stay public.

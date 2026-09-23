@@ -15,12 +15,15 @@ push notifications are not included.
 
 ## Manifest and icons
 
-Relative manifest URLs support deployment paths such as `/marimohub/`. The resolved
-`start_url` identifies each installation, so deployments under separate paths remain
-distinct. Keep it stable to preserve the app identity.
+The backend serves `/manifest.webmanifest` with the deployment name, primary color,
+and app icons. Its identity, launch URL, scope, and shortcuts retain the deployment
+prefix, so branding changes preserve the installation.
 
 The manifest request includes credentials for authentication proxies. Launch uses
 the existing sign-in flow.
+
+See [theming](../../docs/theming.md#installed-app-branding) for custom app icons.
+`/apple-touch-icon.png` redirects to the configured Apple touch icon or the default.
 
 `public/icons/app-icon.svg` is the source for the 192px, 512px, and 180px PNG icons. Its opaque
 background and centered artwork prevent clipping with icon masks.
