@@ -892,12 +892,18 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 function compareQueryValues(left: unknown, right: unknown): number {
 	const a = parseNumericCell(left);
 	const b = parseNumericCell(right);
-	if (a !== undefined && b !== undefined) return a < b ? -1 : a > b ? 1 : 0;
+	if (a !== undefined && b !== undefined) {
+		if (a < b) return -1;
+		if (a > b) return 1;
+		return renderCell(left).localeCompare(renderCell(right));
+	}
+	if (a !== undefined) return -1;
+	if (b !== undefined) return 1;
 	return renderCell(left).localeCompare(renderCell(right), undefined, { numeric: true });
 }
 
 function parseNumericCell(value: unknown): number | bigint | undefined {
-	if (typeof value === 'number') return value;
+	if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
 	if (typeof value !== 'string') return undefined;
 	const text = value.trim();
 	if (!text) return undefined;

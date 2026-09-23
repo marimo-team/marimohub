@@ -193,6 +193,8 @@ describe('NotebookService', () => {
 						ACTOR,
 					),
 				).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+				const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+				expect(await storedDeps?.text()).toBe('');
 				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
 				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
@@ -220,6 +222,8 @@ describe('NotebookService', () => {
 							ACTOR,
 						),
 					).rejects.toThrow('session storage unavailable');
+					const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+					expect(await storedDeps?.text()).toBe('');
 					expect(await notebooks.getNotebook(projectId, notebook.id)).toEqual(before);
 					expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
 					expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
