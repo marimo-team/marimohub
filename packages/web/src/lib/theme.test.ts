@@ -23,6 +23,40 @@ afterEach(() => {
 });
 
 describe('theme bootstrap', () => {
+	it('updates one browser theme color and restores the default when branding is cleared', () => {
+		document.head.innerHTML = '<meta name="theme-color" content="#0d9488" />';
+		applyThemeConfig({ ...DEFAULT_THEME_CONFIG, primary_color: '#123456' });
+		expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+			'content',
+			'#123456',
+		);
+		applyThemeConfig({ ...DEFAULT_THEME_CONFIG, primary_color: '#ABC' });
+		expect(document.querySelectorAll('meta[name="theme-color"]')).toHaveLength(1);
+		expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute('content', '#ABC');
+		applyThemeConfig(DEFAULT_THEME_CONFIG);
+		expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+			'content',
+			'#0d9488',
+		);
+	});
+
+	it('accepts older theme responses without installation icon fields', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				jsonOk({
+					name: 'Existing hub',
+					favicon: null,
+					logo: null,
+					logo_dark: null,
+					primary_color: null,
+					secondary_color: null,
+				}),
+			),
+		);
+		expect(await loadThemeConfig()).toEqual({ ...DEFAULT_THEME_CONFIG, name: 'Existing hub' });
+	});
+
 	it('loads public branding once under the deployment base path', async () => {
 		document.head.innerHTML = '<base href="/hub/" />';
 		const branding = { ...DEFAULT_THEME_CONFIG, name: 'Research Hub', logo: '/brand.svg' };
@@ -112,6 +146,46 @@ describe('theme bootstrap', () => {
 		expect(document.documentElement).not.toHaveAttribute('data-custom-theme');
 		expect(document.querySelector('link[rel="icon"]')).toHaveAttribute('href', './favicon.svg');
 	});
+
+	it.each([
+		{
+			favicon: '/brand/favicon.ico',
+			pwa_icon_192: '/brand/192.png',
+			pwa_icon_512: '/brand/512.png',
+			expected: '/brand/favicon.ico',
+		},
+		{
+			favicon: null,
+			pwa_icon_192: '/brand/192.png',
+			pwa_icon_512: '/brand/512.png',
+			expected: '/brand/192.png',
+		},
+		{
+			favicon: null,
+			pwa_icon_192: null,
+			pwa_icon_512: 'https://cdn.example.com/512.png',
+			expected: 'https://cdn.example.com/512.png',
+		},
+	])(
+		'selects favicon $expected without stale image metadata',
+		({ favicon, pwa_icon_192, pwa_icon_512, expected }) => {
+			document.head.innerHTML =
+				'<base href="/hub/" /><link rel="icon" type="image/svg+xml" sizes="any" href="./favicon.svg" />';
+			applyThemeConfig({ ...DEFAULT_THEME_CONFIG, favicon, pwa_icon_192, pwa_icon_512 });
+			const icon = document.querySelector('link[rel="icon"]');
+			expect(icon).toHaveAttribute('href', expected);
+			expect(icon).not.toHaveAttribute('type');
+			expect(icon).not.toHaveAttribute('sizes');
+			applyThemeConfig({
+				...DEFAULT_THEME_CONFIG,
+				logo: '/wide.svg',
+				apple_touch_icon: '/apple.png',
+			});
+			expect(document.querySelectorAll('link[rel="icon"]')).toHaveLength(1);
+			expect(icon).toHaveAttribute('href', './favicon.svg');
+			expect(icon).toHaveAttribute('type', 'image/svg+xml');
+		},
+	);
 	it('aborts a stalled connection and ignores a late response after the deadline', async () => {
 		vi.useFakeTimers();
 		const late = deferredResponse();

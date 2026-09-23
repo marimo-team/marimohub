@@ -62,7 +62,7 @@ The deployment name supplies accessible image text and the browser-title suffix.
 
 If the dark logo is absent or cannot load, the hub uses the main logo.
 If the main logo cannot load, the hub uses the built-in mark and deployment name.
-Favicons accept SVG, PNG, and ICO. Without an override, the built-in favicon stays unchanged.
+Favicons accept SVG, PNG, and ICO. Without an override, the favicon uses the [app icon fallbacks](#installed-app-branding).
 
 ### Host the assets
 
@@ -81,6 +81,36 @@ MARIMOHUB_THEME_FAVICON="/tools/hub/brand/favicon.png"
 Configure your proxy to serve these paths from your asset directory.
 A path such as `/etc/logo.svg` refers to a browser URL, not a server file.
 The hub rejects relative paths, plain HTTP URLs, URL credentials, and `data:` URLs.
+
+## Installed app branding
+
+The installed app uses `MARIMOHUB_THEME_NAME` and `MARIMOHUB_THEME_PRIMARY_COLOR`.
+The primary color also sets the browser theme color. Without an override, this color remains teal.
+Branding changes preserve the installation identity, which depends on the deployment path.
+Browsers control when existing installations receive updated names and icons.
+
+Use dedicated square PNG icons for installation:
+
+```dotenv
+MARIMOHUB_THEME_PWA_ICON_192="https://hub.example.com/brand/icon-192.png"
+MARIMOHUB_THEME_PWA_ICON_512="https://hub.example.com/brand/icon-512.png"
+MARIMOHUB_THEME_APPLE_TOUCH_ICON="https://hub.example.com/brand/apple-touch-icon.png"
+```
+
+The required dimensions are 192×192, 512×512, and 180×180 pixels, respectively.
+Each unset PWA icon size uses its built-in default. Apple touch icons and favicons use the first configured asset:
+
+- Apple touch icon: explicit Apple icon → 192px PWA icon → 512px PWA icon → built-in Apple icon.
+- Favicon: explicit favicon → 192px PWA icon → 512px PWA icon → built-in favicon.
+
+Favicons and header logos do not replace installation icons. Reused PWA icons retain their original dimensions.
+Custom app icons use the standard icon purpose; only the built-in 512px icon declares maskable support.
+The same asset URL rules apply, including explicit prefixes for root-relative paths.
+
+The backend serves `/manifest.webmanifest` and `/apple-touch-icon.png` before sign-in, without response caching.
+The latter redirects to the selected Apple touch icon or fallback.
+For deployments under a URL prefix, include that prefix on both endpoints.
+Reverse proxies must forward both endpoints to the backend.
 
 ## Cloudflare Workers
 
@@ -118,4 +148,4 @@ For image errors, open the image URL in the browser.
 Check that it returns an image, not a sign-in page or hub HTML.
 If a replaced image stays cached, change its URL or version query parameter.
 
-See the [configuration reference](./configuration.md#theme) for all six variables.
+See the [configuration reference](./configuration.md#theme) for all theme variables.

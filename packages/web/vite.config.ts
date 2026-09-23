@@ -38,6 +38,10 @@ export default defineConfig({
 		// Proxy API calls to the local Node server (apps/server) so the SPA dev
 		// server can reach the /api/* surface during development.
 		proxy: {
+			'^/(manifest\\.webmanifest|apple-touch-icon\\.png)$': {
+				target: devApiTarget(process.env),
+				changeOrigin: false,
+			},
 			'/api': {
 				target: devApiTarget(process.env),
 				// Rewriting Host would make it differ from Origin and trip the CSRF guard.

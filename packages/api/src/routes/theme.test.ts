@@ -18,7 +18,7 @@ describe('GET /api/v1/theme', () => {
 		await expectError(await request('GET', '/capabilities'), 401, 'UNAUTHORIZED');
 	});
 
-	it('only exposes the six public theme fields', async () => {
+	it('only exposes the public theme fields', async () => {
 		const theme = {
 			...DEFAULT_THEME_CONFIG,
 			name: 'Research Hub',

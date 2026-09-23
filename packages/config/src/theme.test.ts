@@ -5,6 +5,19 @@ import { parseTheme } from './theme';
 import { createFromEnv } from './index';
 
 describe('deployment theme configuration', () => {
+	it.each([
+		['MARIMOHUB_THEME_PWA_ICON_192', 'pwa_icon_192'],
+		['MARIMOHUB_THEME_PWA_ICON_512', 'pwa_icon_512'],
+		['MARIMOHUB_THEME_APPLE_TOUCH_ICON', 'apple_touch_icon'],
+	] as const)('validates dedicated installation icon %s', (variable, field) => {
+		expect(parseTheme({ [variable]: ' https://cdn.example.com/icon.png?v=2 ' })[field]).toBe(
+			'https://cdn.example.com/icon.png?v=2',
+		);
+		expect(parseTheme({ [variable]: '/brand/icon.png' })[field]).toBe('/brand/icon.png');
+		expect(parseTheme({ [variable]: ' ' })[field]).toBeNull();
+		expect(() => parseTheme({ [variable]: 'javascript:alert(1)' })).toThrow(variable);
+	});
+
 	it('defaults empty and whitespace-only values', () => {
 		expect(parseTheme({})).toEqual(DEFAULT_THEME_CONFIG);
 		expect(parseTheme({ MARIMOHUB_THEME_NAME: '  ', MARIMOHUB_THEME_LOGO: '\t' })).toEqual(
@@ -71,11 +84,17 @@ describe('deployment theme configuration', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_THEME_NAME: 'Research Hub',
 			MARIMOHUB_THEME_LOGO_DARK: '/logo-dark.svg',
+			MARIMOHUB_THEME_PWA_ICON_192: '/brand/192.png',
+			MARIMOHUB_THEME_PWA_ICON_512: '/brand/512.png',
+			MARIMOHUB_THEME_APPLE_TOUCH_ICON: '/brand/apple.png',
 		});
 		expect(deps.theme).toEqual({
 			...DEFAULT_THEME_CONFIG,
 			name: 'Research Hub',
 			logo_dark: '/logo-dark.svg',
+			pwa_icon_192: '/brand/192.png',
+			pwa_icon_512: '/brand/512.png',
+			apple_touch_icon: '/brand/apple.png',
 		});
 	});
 
