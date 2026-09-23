@@ -63,6 +63,12 @@ RUN cd /tmp \
 # uv compiles installed packages, but not the interpreter's standard library.
 RUN python3 -m compileall -j 0 -q /usr/local/lib/python3.13 || true
 
+COPY --from=notebook_bridge src/runtime.generated.ts /tmp/notebook-bridge.ts
+COPY install-bridge.py /tmp/install-bridge.py
+RUN python3 /tmp/install-bridge.py /tmp/notebook-bridge.ts \
+ && rm /tmp/install-bridge.py /tmp/notebook-bridge.ts \
+ && chown -R appuser:appuser /opt/marimohub/venv/lib/python*/site-packages/marimohub_notebook_bridge*
+
 ENV VIRTUAL_ENV=/opt/marimohub/venv \
     PATH=/opt/marimohub/venv/bin:$PATH
 

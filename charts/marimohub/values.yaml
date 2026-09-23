@@ -30,6 +30,18 @@ serviceAccount:
 sandboxIngress:
   namespace: ''
 
+# Schedule on the sandbox node pool, which may differ from the API node pool.
+sandboxImagePrepuller:
+  enabled: false
+  images: []
+  nodeSelector: {}
+  tolerations: []
+  imagePullSecrets: []
+  pullPolicy: IfNotPresent
+  pauseImage: registry.k8s.io/pause:3.10
+  # Change when re-pulling a mutable tag; prefer immutable image digests.
+  revision: ''
+
 # Resolve integration credentials from explicitly named Kubernetes Secrets.
 # The chart grants get-only RBAC and passes the same project policy to the app.
 # It does not create the credential Secrets.

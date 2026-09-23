@@ -187,3 +187,23 @@ The chart creates a Role and RoleBinding in each namespace. Each Role grants
 Label each Secret with `marimohub.io/integration-secret: "true"`. The
 [integration secret guide](../../docs/integration-secrets.md#kubernetes-secrets)
 explains locators, access rules, caching, and rotation.
+
+## Pre-pull sandbox images
+
+Enable the optional DaemonSet to download sandbox images before notebook launches.
+Select the sandbox node pool explicitly. Its placement is independent of the API pods.
+
+```yaml
+sandboxImagePrepuller:
+  enabled: true
+  images:
+    - ghcr.io/marimo-team/marimo-sandbox:sha-YOUR_COMMIT
+  nodeSelector:
+    compute.coreweave.com/node-pool: marimohub-sandboxes
+  tolerations:
+    - operator: Exists
+```
+
+Use the same immutable image references as your compute configuration.
+For private images, set `sandboxImagePrepuller.imagePullSecrets` with secrets in the release namespace.
+For mutable tags, set `pullPolicy: Always` and change `revision` when the image changes.

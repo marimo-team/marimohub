@@ -138,7 +138,7 @@ describe('SandboxProvisioner', () => {
 			bridgeParentOrigin: 'https://hub.example',
 		};
 		it.each(['uv-sync-edit', 'uv-script-pins'] as const)(
-			'launches the extension in the actual %s runtime after setup and injection',
+			'uploads the bridge while injection is pending and waits before launching %s',
 			async (launchStrategy) => {
 				const { instance, calls } = makeFakeSandbox();
 				const pending = deferred<{ vars: Record<string, string> }>();
@@ -152,7 +152,11 @@ describe('SandboxProvisioner', () => {
 					expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(true),
 				);
 				expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
-					false,
+					true,
+				);
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.setEnvVars).not.toContainEqual(
+					expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
 				);
 				pending.resolve({ vars: { EXISTING: 'kept' } });
 				await provision;

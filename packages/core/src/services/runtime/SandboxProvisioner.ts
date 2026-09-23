@@ -730,15 +730,16 @@ export class SandboxProvisioner {
 		const ensureReachable = () => this.ensureReachable(sandbox, sw);
 		const loadWorkspace = () =>
 			withSandboxSpan(sw, 'files', async (time, span) => {
-				const loaded = await time(() =>
-					this.loadWorkspace(
+				const loaded = await time(async () => {
+					const loaded = await this.loadWorkspace(
 						sandbox,
 						options,
 						mountPath,
 						options.workspacePrefix ?? nb.workspacePrefix,
-					),
-				);
-				await time(() => this.applyWorkspaceOverlay(sandbox, options, mountPath));
+					);
+					await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+					return loaded;
+				});
 				span.setAttributes({
 					objects: loaded.stats?.objectCount ?? 0,
 					bytes: loaded.stats?.bytes ?? 0,
@@ -749,10 +750,11 @@ export class SandboxProvisioner {
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
 		const setupEnvironment = () => this.setupEnvironment(sandbox, options, mountPath, sw);
+		const uploadBridge = () => this.uploadNotebookBridge(sandbox, options, sw);
 
-		// Setup reads only the loaded workspace, so credential resolution and injection
-		// can overlap it. The kernel (or a job's command) still waits for both.
-		const { load, setup } = await all({
+		// Setup reads only the loaded workspace. The kernel waits for credential
+		// injection and bridge upload as well.
+		const { load, setup, bridge } = await all({
 			async reachable() {
 				await ensureReachable();
 			},
@@ -764,20 +766,24 @@ export class SandboxProvisioner {
 				await this.$.reachable;
 				await injectSessionEnv();
 			},
+			async bridge() {
+				await this.$.reachable;
+				return uploadBridge();
+			},
 			async setup() {
 				await this.$.load;
 				return setupEnvironment();
 			},
 		});
-		await this.prepareNotebookBridge(sandbox, options, setup);
+		if (bridge) await this.configureNotebookBridge(sandbox, options, setup, bridge);
 		return { load, startup: setup, sw, mountPath };
 	}
 
-	private async prepareNotebookBridge(
+	private async uploadNotebookBridge(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
-		startup: MarimoStartup,
-	): Promise<void> {
+		sw: Stopwatch,
+	): Promise<string | undefined> {
 		const payload = options.notebookBridge;
 		if (
 			!payload ||
@@ -786,21 +792,45 @@ export class SandboxProvisioner {
 			options.launchStrategy === 'uv-sandbox'
 		)
 			return;
-		const remaining = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
-		if (remaining <= 0) return;
 		const directory = `/tmp/marimohub-bridge/${options.sandboxId}`;
 		try {
-			await withDeadline(
-				sandbox.writeFiles(
-					payload.files.map(({ name, content }) => ({ path: `${directory}/${name}`, content })),
+			await withSandboxSpan(sw, 'bridge_prepare', (time) =>
+				time(() =>
+					withDeadline(
+						sandbox.writeFiles(
+							payload.files.map(({ name, content }) => ({ path: `${directory}/${name}`, content })),
+						),
+						{
+							timeoutMs: Math.min(10_000, options.startupTimeoutMs || 10_000),
+							timeoutError: () => new Error('Bridge preparation timed out'),
+						},
+					),
 				),
-				{
-					timeoutMs: Math.min(10_000, remaining),
-					timeoutError: () => new Error('Bridge preparation timed out'),
-				},
 			);
 			const path = `${directory}/${payload.launcher}`;
-			const launcher = sandbox.resolveProcessPath?.(path) ?? path;
+			return sandbox.resolveProcessPath?.(path) ?? path;
+		} catch {
+			logEvent(
+				{
+					level: 'warn',
+					event: 'notebook_bridge_unavailable',
+					reason: 'prepare_failed',
+					sandbox_id: options.sandboxId,
+				},
+				{ channel: 'warn' },
+			);
+			return;
+		}
+	}
+
+	private async configureNotebookBridge(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		startup: MarimoStartup,
+		launcher: string,
+	): Promise<void> {
+		if (!options.bridgeParentOrigin) return;
+		try {
 			const budget = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
 			if (budget <= 0) return;
 			await withDeadline(

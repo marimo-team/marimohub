@@ -33,6 +33,13 @@ jobs:
       - name: helm lint
         run: helm lint --strict charts/marimohub
 
+      - name: Verify sandbox pre-puller configuration
+        run: |
+          if helm template test charts/marimohub --set sandboxImagePrepuller.enabled=true >/dev/null 2>&1; then
+            echo "Expected enabled pre-puller without images to fail"
+            exit 1
+          fi
+
       - name: Verify reserved volumes and mounts
         run: |
           assert_reserved() {
@@ -90,7 +97,7 @@ jobs:
       # schema (none of our kinds are CRDs) as an error.
       - name: Render & validate manifests
         run: |
-          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml"; do
+          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml"; do
             echo "::group::helm template ${values:-(defaults)}"
             helm template test charts/marimohub $values \
               | kubeconform -strict -summary -verbose \

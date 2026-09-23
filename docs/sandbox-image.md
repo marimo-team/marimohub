@@ -291,3 +291,17 @@ Installation failures preserve the normal launch behavior.
 No image change is required for marimo 0.23.10 or 0.24.2. The environment must permit
 local wheel installation. See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md)
 for timeout, fallback, and compatibility details.
+
+## Bridge in the maintained image
+
+The maintained `images/marimo-sandbox` image includes the notebook bridge wheel.
+Supply its named build context when building from the repository root:
+
+```sh
+docker build --build-context notebook_bridge=packages/notebook-bridge \
+  -t marimo-sandbox:local images/marimo-sandbox
+```
+
+The publish workflow supplies this context automatically.
+At launch, the bridge checks its artifact identity and skips installation when the identity matches.
+Custom images and older images retain the offline installation fallback.

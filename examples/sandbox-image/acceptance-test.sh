@@ -153,7 +153,7 @@ launch_kernel() { # $1 = container id
 # --- build -------------------------------------------------------------------
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
 	echo "==> Building $IMAGE from $CONTEXT"
-	docker build -t "$IMAGE" "$CONTEXT"
+	docker build --build-context "notebook_bridge=$HERE/../../packages/notebook-bridge" -t "$IMAGE" "$CONTEXT"
 fi
 
 # --- 1. contract: tools + writable non-root workdir --------------------------
