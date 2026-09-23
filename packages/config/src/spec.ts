@@ -1466,6 +1466,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: '3000',
 					},
 					{
+						id: 'MARIMOHUB_BIND_HOST',
+						name: 'HTTP bind address',
+						description:
+							'IP address or hostname the HTTP server listens on. Unset listens on all interfaces, which a container needs to publish its port. Set `127.0.0.1` to accept only local connections, such as behind a reverse proxy on the same host.',
+						example: '127.0.0.1',
+					},
+					{
 						id: 'MARIMOHUB_APP_BASE_URL',
 						name: 'App base URL',
 						description:

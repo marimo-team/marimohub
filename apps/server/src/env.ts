@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { ConfigError } from '@marimo-hub/config';
 import { parseHttpUrl } from '@marimo-hub/core';
@@ -15,8 +16,20 @@ const appBaseUrl = z
 	.string()
 	.refine((value) => !value.trim() || parseHttpUrl(value).ok, 'expected an HTTP(S) URL');
 
+const HOSTNAME =
+	/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$/i;
+
+// Node's listen() takes a bare IPv6 address, so `[::1]` is rejected rather than failing at bind.
+const bindHost = z
+	.string()
+	.refine(
+		(value) => value === '' || isIP(value) !== 0 || HOSTNAME.test(value),
+		'expected an IP address or hostname',
+	);
+
 export const ServerEnvSchema = z.looseObject({
 	PORT: port.optional(),
+	MARIMOHUB_BIND_HOST: bindHost.optional(),
 	MARIMOHUB_APP_BASE_URL: appBaseUrl.optional(),
 	MARIMOHUB_STATIC_ROOT: z
 		.string()

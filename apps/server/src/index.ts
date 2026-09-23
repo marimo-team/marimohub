@@ -16,6 +16,7 @@ installProcessErrorHandlers();
 await bootstrap({
 	...process.env,
 	PORT: process.env.PORT,
+	MARIMOHUB_BIND_HOST: process.env.MARIMOHUB_BIND_HOST,
 	MARIMOHUB_STATIC_ROOT: process.env.MARIMOHUB_STATIC_ROOT,
 	MARIMOHUB_RUN_MAINTENANCE: process.env.MARIMOHUB_RUN_MAINTENANCE,
 });
