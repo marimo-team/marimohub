@@ -25,10 +25,9 @@ allowed domains (`example.com,partner.com`) or set `*` to allow all. See
 
 ### "SANDBOX_HOSTNAME shares an origin/parent domain with the app"
 
-In `subdomain` exposure (the default) kernels run untrusted code and must be on
-a **separate domain** from the app. Move `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`
-off the app's registrable domain (e.g. `sandboxes.example.net`), or switch to
-`proxy` exposure if you intend to serve kernels through the app. See
+When `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` is set, the server rejects identical or parent/child sandbox hostnames. Without it, the server skips this comparison.
+For an app at `hub.example.com`, set
+`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to `sandboxes.example.com` or a separate domain. See
 [Security → Kernel exposure](/security#kernel-exposure).
 
 ### `boot_failed` with `reason: preflight_fatal`

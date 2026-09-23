@@ -1,8 +1,7 @@
-import { hostsShareCookieDomain, normalizeHostname } from '@marimo-hub/core/host-isolation';
+import { hostsOverlap, normalizeHostname } from '@marimo-hub/core/host-isolation';
 import type { Env } from './env';
 
 export interface SandboxHostIsolation {
-	/** False when the hosts share an origin/parent domain OR isolation can't be verified. */
 	isolated: boolean;
 	sandboxHost?: string;
 	appHost?: string;
@@ -11,7 +10,7 @@ export interface SandboxHostIsolation {
 }
 
 /**
- * Notebook kernels must not share a cookie domain with the control plane.
+ * Sibling subdomains are supported for existing deployments.
  * A missing redirect leaves isolation unknown; a configured invalid host fails closed.
  */
 export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
@@ -32,7 +31,7 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	}
 	if (!appHost) return { isolated: false, sandboxHost, reason: 'unverifiable-redirect' };
 
-	if (hostsShareCookieDomain(sandboxHost, appHost)) {
+	if (hostsOverlap(sandboxHost, appHost)) {
 		return { isolated: false, sandboxHost, appHost, reason: 'shared-origin' };
 	}
 	return { isolated: true, sandboxHost, appHost };
@@ -69,6 +68,6 @@ export function sandboxHostIsolationRemediation({ reason }: SandboxHostIsolation
 			return 'Set MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME to a hostname with an optional port, without a scheme or path.';
 		case 'shared-origin':
 		case undefined:
-			return 'Serve kernels from a separate domain (e.g. sandboxes.example.net).';
+			return 'Use a different sandbox hostname that is not a parent or subdomain of the app hostname.';
 	}
 }
