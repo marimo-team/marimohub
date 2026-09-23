@@ -398,7 +398,6 @@ export function startWarmPools(deps: ApiDeps): JobSchedulerHandle | undefined {
 		current = (async () => {
 			try {
 				if (!service.config.enabled && (await service.store.ownedSandboxIds()).size === 0) {
-					clearInterval(interval);
 					return;
 				}
 				if (!(await lock.acquire(holder))) return;
@@ -418,7 +417,8 @@ export function startWarmPools(deps: ApiDeps): JobSchedulerHandle | undefined {
 			}
 		})();
 	};
-	const interval = setInterval(run, 5_000);
+	// Timed-out creates and draining replicas can publish cleanup records after an empty sweep.
+	const interval = setInterval(run, service.config.enabled ? 5_000 : FIVE_MINUTES_MS);
 	run();
 	return { stop: () => clearInterval(interval), drain: () => current };
 }

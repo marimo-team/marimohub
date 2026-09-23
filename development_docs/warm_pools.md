@@ -11,7 +11,7 @@ Notebook files, credentials, and kernels load after assignment.
 1. Maintenance persists creation reservations before provider calls. Creating and ready members count toward the target.
 2. A sandbox becomes ready after `ready()` and a bounded command probe succeed.
 3. A claim records its destination and changes its operation token. Strict reconnect and another command probe precede acceptance.
-4. The session keeps the original sandbox ID. Handoff checks the token and deadline before notebook data or credentials enter the sandbox.
+4. Handoff checks the token and deadline before notebook data or credentials enter the sandbox. If the claim expires, the session uses cold creation with a new sandbox ID.
 5. Session teardown owns assigned sandboxes. Claims never return to the pool. Failed cleanup retains ownership for retry.
 
 Maintenance runs every five seconds under its own lease. Idle members rotate after at most 30 minutes, sooner for limited provider lifetimes.

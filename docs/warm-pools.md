@@ -55,6 +55,8 @@ Changing creation configuration replaces incompatible idle sandboxes. Use immuta
 
 To disable pooling, set `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED=false` on all replicas. Keep maintenance running until it drains unused sandboxes. Assigned sessions continue normally.
 
+Disabled pools check for cleanup every five minutes, including after the pool becomes empty. This catches late creation results from draining replicas.
+
 Before changing compute backends, namespaces, clusters, or provider accounts, disable pooling and drain the old pool. Cleanup needs its original configuration and credentials.
 
 ## Operations

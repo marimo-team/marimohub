@@ -890,11 +890,9 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 }
 
 function compareQueryValues(left: unknown, right: unknown): number {
-	if (typeof left === 'number' || typeof right === 'number') {
-		const a = parseNumericCell(left);
-		const b = parseNumericCell(right);
-		if (a !== undefined && b !== undefined) return a < b ? -1 : a > b ? 1 : 0;
-	}
+	const a = parseNumericCell(left);
+	const b = parseNumericCell(right);
+	if (a !== undefined && b !== undefined) return a < b ? -1 : a > b ? 1 : 0;
 	return renderCell(left).localeCompare(renderCell(right), undefined, { numeric: true });
 }
 

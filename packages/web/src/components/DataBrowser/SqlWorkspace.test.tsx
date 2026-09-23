@@ -28,6 +28,21 @@ describe('QueryResultTable column sorting', () => {
 	it.each([
 		{ name: 'numbers', values: [1.5, -3, 1.25, -5], expected: ['-5', '-3', '1.25', '1.5'] },
 		{
+			name: 'negative integer strings beyond number precision',
+			values: ['-9223372036854775808', '-9223372036854775809'],
+			expected: ['-9223372036854775809', '-9223372036854775808'],
+		},
+		{
+			name: 'decimal strings',
+			values: ['1.5', '-3', '1.25', '-5'],
+			expected: ['-5', '-3', '1.25', '1.5'],
+		},
+		{
+			name: 'exponent strings',
+			values: ['1e21', '9223372036854775807', '-1e22'],
+			expected: ['-1e22', '9223372036854775807', '1e21'],
+		},
+		{
 			name: 'mixed exponent numbers and integer strings',
 			values: [1e21, '9223372036854775807'],
 			expected: ['9223372036854775807', '1e+21'],

@@ -44,6 +44,20 @@ Start an app from the notebook's actions menu ("Run as app"), or via the API:
 `{"mode": "app"}`. The router reuses the account's assignment or reserves
 capacity on the latest committed version.
 
+## Copy app and snapshot URLs
+
+From an app, select **Share app → Copy URL** to copy its current URL.
+From an editor, select **Share notebook → Copy URL**.
+Copied URLs preserve allowed query parameters and remove [reserved parameters](#reserved-parameters).
+Copying a URL does not change notebook permissions.
+Recipients must sign in and have access to the requested view.
+
+To share saved outputs without starting a sandbox, select **Share notebook → View static outputs**.
+On the snapshot page, select **Share snapshot → Copy URL**.
+A snapshot URL with `?version=<version-id>` keeps that version selected.
+Without a version parameter, the URL opens the latest captured outputs.
+App users cannot open snapshots because their role does not grant access to saved HTML.
+
 ## Authenticated app links
 
 From a notebook, open **Share notebook → App links** to create or copy a URL
