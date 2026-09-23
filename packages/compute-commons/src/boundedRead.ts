@@ -69,12 +69,18 @@ export async function readBoundedFile(
 	}
 }
 
+export function validateOutputBudget(maxBytes: number): void {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0)
+		throw new RangeError('Sandbox output byte limit must be a nonnegative safe integer');
+}
+
 /** Cancel the reader on overflow or deadline, including an idle stream. */
 export async function readBoundedStream(
 	stream: ReadableStream<string | Uint8Array>,
 	maxBytes: number,
 	signal: AbortSignal,
 ): Promise<string> {
+	validateOutputBudget(maxBytes);
 	return collectStream(stream, { remaining: maxBytes }, signal);
 }
 
@@ -86,11 +92,15 @@ export async function collectBoundedOutput<T>(
 	},
 	options: { maxOutputBytes: number; timeout?: number },
 ): Promise<{ stdout: string; stderr: string; result: T }> {
+	validateOutputBudget(options.maxOutputBytes);
+	const timeout = options.timeout ?? 10_000;
+	if (!Number.isFinite(timeout) || timeout < 0)
+		throw new RangeError('Sandbox output timeout must be finite and nonnegative');
 	const abort = new AbortController();
-	const timer = setTimeout(
-		() => abort.abort(new Error('Sandbox read timed out')),
-		options.timeout ?? 10_000,
-	);
+	const timer =
+		timeout > 0
+			? setTimeout(() => abort.abort(new Error('Sandbox read timed out')), timeout)
+			: undefined;
 	const budget = { remaining: options.maxOutputBytes };
 	try {
 		const [stdout, stderr, result] = await Promise.all([
@@ -104,7 +114,7 @@ export async function collectBoundedOutput<T>(
 		return { stdout, stderr, result };
 	} finally {
 		abort.abort();
-		clearTimeout(timer);
+		if (timer !== undefined) clearTimeout(timer);
 	}
 }
 

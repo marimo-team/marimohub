@@ -466,7 +466,7 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 			decision.targetUrl,
 			decision.sessionId,
 			decision.kernelAuthToken,
-			c.get('deps').sandbox.credentialHeaders,
+			deps.sandbox.credentialHeaders,
 		);
 	};
 }

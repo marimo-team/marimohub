@@ -105,19 +105,8 @@ async function authorizeDirectory(deps: ApiDeps, user: AuthenticatedPrincipal): 
 	const directoryDecision = await authz.authorize(directorySubject, 'directory.search', {
 		kind: 'deployment',
 	});
-	if (!directoryDecision.allowed) {
-		const snapshot = await catalog.getCurrentSnapshot();
-		const email = user.email.toLowerCase();
-		const involved = snapshot.projects.some(
-			(p) =>
-				p.status !== 'deleted' &&
-				(p.owner === user.id ||
-					(p.member_ids ?? []).includes(user.id) ||
-					(p.member_emails ?? []).includes(email)),
-		);
-		if (!involved) {
-			throw new ForbiddenError('User search requires membership in at least one project');
-		}
+	if (!directoryDecision.allowed && !(await catalog.hasProjectInvolvement(user))) {
+		throw new ForbiddenError('User search requires membership in at least one project');
 	}
 }
 

@@ -18,6 +18,7 @@
  * fake-injected path is fully covered by tests.
  */
 import {
+	validateOutputBudget,
 	readBoundedFile,
 	waitWithSignal,
 	buildFindFilesCommand,
@@ -571,6 +572,7 @@ export function createE2bClient(
 			async run(cmd, options) {
 				if (options?.maxOutputBytes !== undefined) {
 					const maxOutputBytes = options.maxOutputBytes;
+					validateOutputBudget(maxOutputBytes);
 					let bytes = 0;
 					let handle: any;
 					const abort = new AbortController();
@@ -583,10 +585,14 @@ export function createE2bClient(
 						bytes += new TextEncoder().encode(chunk).length;
 						if (abort.signal.aborted || bytes > maxOutputBytes) {
 							cancel();
-							throw new Error('Sandbox output exceeded byte limit');
+							// SDK callbacks can run before commands.run returns its handle.
+							if (handle) throw new Error('Sandbox output exceeded byte limit');
 						}
 					};
-					const timer = setTimeout(cancel, options.timeoutMs);
+					const timeout = options.timeoutMs ?? 10_000;
+					if (!Number.isFinite(timeout) || timeout < 0)
+						throw new RangeError('Sandbox output timeout must be finite and nonnegative');
+					const timer = timeout > 0 ? setTimeout(cancel, timeout) : undefined;
 					try {
 						handle = await sbx.commands.run(cmd, {
 							...options,
@@ -602,7 +608,7 @@ export function createE2bClient(
 						abort.signal.throwIfAborted();
 						return { stdout, stderr, exitCode };
 					} finally {
-						clearTimeout(timer);
+						if (timer !== undefined) clearTimeout(timer);
 						cancel();
 					}
 				}

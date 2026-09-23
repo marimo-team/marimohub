@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import {
+	validateOutputBudget,
 	readBoundedFile,
 	buildGitCloneCommand,
 	launchWithProcess,
@@ -376,6 +377,7 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	private async runCommand(cmd: string, options?: ExecOptions): Promise<ExecResult> {
+		if (options?.maxOutputBytes !== undefined) validateOutputBudget(options.maxOutputBytes);
 		await this.ensureRoot();
 		return new Promise((resolve) => {
 			const child = this.trackChild(this.spawnShell(cmd, { detached: true }));

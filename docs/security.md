@@ -279,7 +279,10 @@ Capture never falls back to an unbounded read when this method is absent.
 - **Security headers** (anti-clickjacking, nosniff, HSTS, referrer policy) wrap
   the SPA/static responses.
 - **SPA Content Security Policy:** the Node server sends a report-only policy.
-  The policy permits local scripts, Google Fonts, image sources, workers, and kernel frames.
+  Connections are limited to the app origin. Proxy-mode frames also use only the app origin.
+  Direct sandbox exposure permits HTTP(S) frames because providers assign their origins at runtime.
+  This frame allowance is intentional and does not protect against iframe exfiltration.
+  The policy also permits local scripts, Google Fonts, image sources, and workers.
   Browsers report violations in the developer console. The policy does not block resources yet.
   Before enforcement, review violations from the deployment's integrations and narrow the permitted origins.
   Kernel proxy and HTML snapshot policies remain separate.

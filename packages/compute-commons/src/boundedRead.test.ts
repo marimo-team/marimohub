@@ -21,6 +21,18 @@ const pending = () => new Promise<never>(() => {});
 afterEach(() => vi.useRealTimers());
 
 describe('bounded sandbox reads', () => {
+	it.each([Number.NaN, Infinity, -Infinity, -1, 0.5])(
+		'rejects an invalid byte cap before locking the stream: %s',
+		async (budget) => {
+			const stream = streamOf(['output']);
+			const getReader = vi.spyOn(stream, 'getReader');
+			await expect(readBoundedStream(stream, budget, new AbortController().signal)).rejects.toThrow(
+				'byte limit',
+			);
+			expect(getReader).not.toHaveBeenCalled();
+		},
+	);
+
 	it('cancels on byte overflow before retaining the offending chunk', async () => {
 		const cancel = vi.fn();
 		const stream = streamOf(['1234', '5'], false, cancel);
@@ -136,6 +148,40 @@ describe('bounded sandbox reads', () => {
 });
 
 describe('collectBoundedOutput', () => {
+	it.each([Number.NaN, Infinity, -Infinity, -1, 0.5])(
+		'rejects an invalid budget before consuming output: %s',
+		async (maxOutputBytes) => {
+			const stdout = streamOf(['output']);
+			const getReader = vi.spyOn(stdout, 'getReader');
+			const wait = vi.fn(async () => 0);
+			await expect(
+				collectBoundedOutput({ stdout, stderr: streamOf([]), wait }, { maxOutputBytes }),
+			).rejects.toThrow('byte limit');
+			expect(getReader).not.toHaveBeenCalled();
+			expect(wait).not.toHaveBeenCalled();
+		},
+	);
+
+	it('treats a zero timeout as no deadline', async () => {
+		vi.useFakeTimers();
+		let finish!: (code: number) => void;
+		const result = collectBoundedOutput(
+			{
+				stdout: streamOf([]),
+				stderr: streamOf([]),
+				wait: () =>
+					new Promise<number>((resolve) => {
+						finish = resolve;
+					}),
+			},
+			{ maxOutputBytes: 0, timeout: 0 },
+		);
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(vi.getTimerCount()).toBe(0);
+		finish(0);
+		await expect(result).resolves.toEqual({ stdout: '', stderr: '', result: 0 });
+	});
+
 	it('accepts combined output exactly at the limit and clears its timer', async () => {
 		vi.useFakeTimers();
 		const result = await collectBoundedOutput(

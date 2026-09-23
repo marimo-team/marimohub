@@ -977,6 +977,20 @@ afterAll(async () => {
 });
 
 describe('bounded artifact reads', () => {
+	it.each([Number.NaN, Infinity, -Infinity, -1, 0.5])(
+		'rejects an invalid output cap before executing: %s',
+		async (maxOutputBytes) => {
+			const sandbox = newSandbox();
+			await expect(
+				sandbox.exec('touch /workspace/invalid-cap-ran', { maxOutputBytes }),
+			).rejects.toThrow('byte limit');
+			expectFileResult(await sandbox.readFile('/workspace/invalid-cap-ran'), {
+				success: false,
+				error: { code: 'NOT_FOUND' },
+			});
+		},
+	);
+
 	it.each(["quote'file", 'spaces and $dollars', 'line\nbreak', 'unicodé'])(
 		'reads literal filenames safely: %s',
 		async (name) => {

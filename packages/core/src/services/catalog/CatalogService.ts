@@ -31,7 +31,11 @@ export function upgradeSnapshot(raw: Snapshot): Snapshot {
 	return raw;
 }
 
+type ProjectInvolvement = { userIds: Set<UserId>; emails: Set<string> };
+
 export class CatalogService {
+	private involvementIndex?: { snapshotKey: string; value: Promise<ProjectInvolvement> };
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
@@ -94,12 +98,46 @@ export class CatalogService {
 	}
 
 	async getCurrentSnapshot(): Promise<Snapshot> {
+		return this.readSnapshot(await this.readCurrentCatalog());
+	}
+
+	async hasProjectInvolvement(user: { id: UserId; email: string }): Promise<boolean> {
+		// Refresh the pointer on every check; only immutable snapshot indexes are cached.
+		const catalog = await this.readCurrentCatalog();
+		if (this.involvementIndex?.snapshotKey !== catalog.current_snapshot_key) {
+			const value = this.readSnapshot(catalog).then((snapshot) => {
+				const userIds = new Set<UserId>();
+				const emails = new Set<string>();
+				for (const project of snapshot.projects) {
+					if (project.status === 'deleted') continue;
+					userIds.add(project.owner);
+					for (const id of project.member_ids ?? []) userIds.add(id);
+					for (const email of project.member_emails ?? []) emails.add(email);
+				}
+				return { userIds, emails };
+			});
+			this.involvementIndex = { snapshotKey: catalog.current_snapshot_key, value };
+		}
+		const cached = this.involvementIndex;
+		try {
+			const index = await cached.value;
+			return index.userIds.has(user.id) || index.emails.has(user.email.toLowerCase());
+		} catch (error) {
+			if (this.involvementIndex === cached) this.involvementIndex = undefined;
+			throw error;
+		}
+	}
+
+	private async readCurrentCatalog(): Promise<Catalog> {
 		const catalogObj = await this.bucket.get(paths.catalog);
 		if (!catalogObj) {
 			throw new NotInitializedError('Catalog not found — call initialize() first');
 		}
 
-		const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
+		return readStored(CatalogSchema, catalogObj, paths.catalog);
+	}
+
+	private async readSnapshot(catalog: Catalog): Promise<Snapshot> {
 		const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
 		if (!snapshotObj) {
 			throw new NotInitializedError(`Snapshot ${catalog.current_snapshot_id} not found`);

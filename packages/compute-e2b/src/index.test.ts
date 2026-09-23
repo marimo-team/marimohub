@@ -744,6 +744,50 @@ describe('E2bCompute', () => {
 });
 
 describe('createE2bClient', () => {
+	it('cleans up output that overflows before the SDK returns its handle', async () => {
+		const handle = {
+			disconnect: vi.fn(async () => {}),
+			kill: vi.fn(async () => {}),
+			wait: vi.fn(),
+		};
+		const run = vi.fn(async (_cmd, options) => {
+			options.onStdout('too much');
+			return handle;
+		});
+		const sdk: E2bSdk = { Sandbox: { connect: async () => ({ commands: { run } }) } };
+		const sandbox = await createE2bClient(baseConfig, async () => sdk).connect('e2b-1');
+		await expect(sandbox.commands.run('read', { maxOutputBytes: 1 })).rejects.toThrow();
+		expect(handle.wait).not.toHaveBeenCalled();
+		expect(handle.disconnect).toHaveBeenCalledOnce();
+		expect(handle.kill).toHaveBeenCalledOnce();
+	});
+
+	it.each([undefined, 0])('does not cancel immediately for timeout %s', async (timeoutMs) => {
+		vi.useFakeTimers();
+		let finish!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+		const handle = {
+			disconnect: vi.fn(async () => {}),
+			kill: vi.fn(async () => {}),
+			wait: () =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		};
+		const sdk: E2bSdk = {
+			Sandbox: { connect: async () => ({ commands: { run: async () => handle } }) },
+		};
+		try {
+			const sandbox = await createE2bClient(baseConfig, async () => sdk).connect('e2b-1');
+			const result = sandbox.commands.run('read', { maxOutputBytes: 1, timeoutMs });
+			await vi.advanceTimersByTimeAsync(timeoutMs === 0 ? 20_000 : 100);
+			expect(handle.kill).not.toHaveBeenCalled();
+			finish({ stdout: '', stderr: '', exitCode: 0 });
+			await expect(result).resolves.toEqual({ stdout: '', stderr: '', exitCode: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it.each([true, false])('disconnects and kills bounded reads (overflow: %s)', async (overflow) => {
 		let emit: ((chunk: string) => void) | undefined;
 		const disconnect = vi.fn(async () => {});

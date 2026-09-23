@@ -888,6 +888,59 @@ describe('capture transport budgets', () => {
 		},
 	);
 
+	it('reserves worst-case file bytes before reads and holds the slots until uploads finish', async () => {
+		const { projectId, notebookId } = nbCtx();
+		const { instance } = makeFsSandbox({
+			files: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`file-${i}`, 'x'])),
+		});
+		const bucket = new MemoryBucket();
+		let releaseReads!: () => void;
+		let releaseUploads!: () => void;
+		const reads = new Promise<void>((resolve) => {
+			releaseReads = resolve;
+		});
+		const uploads = new Promise<void>((resolve) => {
+			releaseUploads = resolve;
+		});
+		const limits: number[] = [];
+		instance.readFileBounded = vi.fn(async (_path, { maxBytes }) => {
+			limits.push(maxBytes);
+			await reads;
+			return { success: true as const, content: 'x' };
+		});
+		const put = bucket.put.bind(bucket);
+		const upload = vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+			await uploads;
+			return put(...args);
+		});
+		const capture = captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+		await vi.waitFor(() =>
+			expect(limits).toHaveLength(MAX_WORKSPACE_BYTES / MAX_WORKSPACE_FILE_BYTES),
+		);
+		expect(limits.reduce((sum, limit) => sum + limit, 0)).toBeLessThanOrEqual(MAX_WORKSPACE_BYTES);
+		releaseReads();
+		await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(limits.length));
+		expect(limits).toHaveLength(MAX_WORKSPACE_BYTES / MAX_WORKSPACE_FILE_BYTES);
+		releaseUploads();
+		await capture;
+		expect(instance.readFileBounded).toHaveBeenCalledTimes(9);
+	});
+
+	it.each(['unsupported', 'refused'] as const)(
+		'preserves present workspace files with %s bounded reads',
+		async (kind) => {
+			const { projectId, notebookId, nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			await bucket.put(nb.workspaceFile('data.csv'), 'previous');
+			const { instance } = makeFsSandbox({ files: { 'data.csv': 'new contents' } });
+			instance.readFileBounded = kind === 'unsupported' ? undefined : async () => readFileFailure();
+			const legacy = vi.spyOn(instance, 'readFile');
+			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+			expect(await (await bucket.get(nb.workspaceFile('data.csv')))!.text()).toBe('previous');
+			expect(legacy).not.toHaveBeenCalled();
+		},
+	);
+
 	it('enforces the total workspace limit against actual concurrent reads and preserves skipped files', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
 		const bucket = new MemoryBucket();

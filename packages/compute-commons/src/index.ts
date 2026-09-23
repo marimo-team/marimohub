@@ -1,6 +1,7 @@
 import { shellQuote } from './shell';
 export { shellQuote } from './shell';
 export {
+	validateOutputBudget,
 	readBoundedFile,
 	readBoundedStream,
 	collectBoundedOutput,

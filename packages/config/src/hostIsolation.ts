@@ -21,7 +21,8 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	const sandboxHost = env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME?.trim().toLowerCase();
 	if (!sandboxHost) return { isolated: true };
 	try {
-		normalizeHostname(sandboxHost);
+		const hostname = normalizeHostname(sandboxHost);
+		if (!hostname || /^\.+$/.test(hostname)) throw new Error('Invalid sandbox hostname');
 	} catch {
 		return { isolated: false, sandboxHost, reason: 'invalid-sandbox-host' };
 	}
@@ -50,12 +51,13 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 }
 
 function parseAppOrigin(value: string | undefined): URL | undefined {
-	if (value === undefined) return undefined;
+	if (value === undefined || !/^https?:\/\/[^/\\]/i.test(value)) return undefined;
 	try {
 		const url = new URL(value);
 		if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password)
 			return undefined;
-		normalizeHostname(url.hostname);
+		const hostname = normalizeHostname(url.hostname);
+		if (!hostname || /^\.+$/.test(hostname)) return undefined;
 		return url;
 	} catch {
 		return undefined;
@@ -93,7 +95,7 @@ export function sandboxHostIsolationRemediation({
 }: Pick<SandboxHostIsolation, 'reason'>): string {
 	switch (reason) {
 		case 'unverifiable-origin':
-			return 'Set MARIMOHUB_APP_BASE_URL to a valid absolute http(s) URL so sandbox isolation can be verified.';
+			return 'Set MARIMOHUB_APP_BASE_URL or MARIMOHUB_AUTH_OIDC_REDIRECT_URI to a valid absolute http(s) URL. Both must have the same origin when present.';
 		case 'conflicting-origins':
 			return 'MARIMOHUB_APP_BASE_URL and MARIMOHUB_AUTH_OIDC_REDIRECT_URI must have the same origin.';
 		case 'unverifiable-redirect':

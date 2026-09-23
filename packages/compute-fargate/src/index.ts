@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
 	readBoundedFile,
 	readBoundedStream,
+	validateOutputBudget,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
@@ -511,7 +512,11 @@ class FargateSandboxInstance implements SandboxInstance {
 		if (maxResponseBytes !== undefined) {
 			if (!response.body) throw new Error('Missing agent response');
 			return JSON.parse(
-				await readBoundedStream(response.body, maxResponseBytes, requestInit.signal!),
+				await readBoundedStream(
+					response.body,
+					maxResponseBytes,
+					requestInit.signal ?? new AbortController().signal,
+				),
 			) as T;
 		}
 		return (await response.json()) as T;
@@ -535,6 +540,7 @@ class FargateSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		try {
+			if (options?.maxOutputBytes !== undefined) validateOutputBudget(options.maxOutputBytes);
 			const requestedTimeout = options?.timeout === Infinity ? 0 : options?.timeout;
 			const body = asJsonRecord(
 				await this.request(
@@ -550,10 +556,19 @@ class FargateSandboxInstance implements SandboxInstance {
 					},
 					true,
 					requestedTimeout,
-					options?.maxOutputBytes === undefined ? undefined : options.maxOutputBytes + 4096,
+					// A JSON-escaped control byte occupies six wire bytes.
+					options?.maxOutputBytes === undefined ? undefined : options.maxOutputBytes * 6 + 4096,
 				),
 			);
-			return execResult(body.success === true, textValue(body.stdout), textValue(body.stderr));
+			const stdout = textValue(body.stdout);
+			const stderr = textValue(body.stderr);
+			if (
+				options?.maxOutputBytes !== undefined &&
+				Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > options.maxOutputBytes
+			) {
+				throw new Error('Sandbox output limit exceeded');
+			}
+			return execResult(body.success === true, stdout, stderr);
 		} catch (error) {
 			return execResult(false, '', errorMessage(error), 'BACKEND_ERROR');
 		}

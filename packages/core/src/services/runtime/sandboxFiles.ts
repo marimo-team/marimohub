@@ -26,6 +26,11 @@ import type { CommitSessionInput } from '../content/NotebookService';
  */
 const RESTORE_FETCH_CONCURRENCY = 32;
 const CAPTURE_FILE_CONCURRENCY = 8;
+// Reserve a full per-file budget for each read/upload slot, regardless of listed size.
+const CAPTURE_READ_CONCURRENCY = Math.min(
+	CAPTURE_FILE_CONCURRENCY,
+	Math.floor(MAX_WORKSPACE_BYTES / MAX_WORKSPACE_FILE_BYTES),
+);
 const CAPTURE_READ_TIMEOUT_MS = 10_000;
 
 /**
@@ -338,11 +343,11 @@ export async function captureWorkspace(
 
 		// Presence comes from the listing: skipped uploads retain the last good copy.
 		let capturedBytes = 0;
-		await mapWithConcurrency(selected, CAPTURE_FILE_CONCURRENCY, async (rel) => {
+		await mapWithConcurrency(selected, CAPTURE_READ_CONCURRENCY, async (rel) => {
 			const bytes = await readBoundedBytes(
 				sandbox,
 				`${workingDir}/${rel}`,
-				MAX_WORKSPACE_FILE_BYTES,
+				Math.min(MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_BYTES - capturedBytes),
 			);
 			if (!bytes || capturedBytes + bytes.byteLength > MAX_WORKSPACE_BYTES) {
 				console.warn(`captureWorkspace: could not read ${rel.slice(0, 256)}; skipping`);

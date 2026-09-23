@@ -1,6 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-import { ProjectId } from '@marimo-hub/core';
+import { paths, ProjectId } from '@marimo-hub/core';
 import type { Authenticator, TokenGrant } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
@@ -114,6 +114,17 @@ describe('User routes', () => {
 			await expectError(await restricted('GET', `/users?ids=${ACTOR},other`), 403);
 		},
 	);
+
+	it('reuses the current membership index for repeated denied directory requests', async () => {
+		const other = createTestApi({ bucket, userId: uid('outsider') }).request;
+		await other('GET', '/me');
+		const get = vi.spyOn(bucket, 'get');
+		for (const url of ['/users?ids=other', '/users/search?q=other', '/users?ids=other']) {
+			await expectError(await other('GET', url), 403);
+		}
+		expect(get.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(3);
+		expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
+	});
 
 	it('revokes directory lookup after the only project membership is deleted', async () => {
 		const member = uid('member');

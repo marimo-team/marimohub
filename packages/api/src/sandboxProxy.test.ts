@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
+import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
@@ -24,7 +25,7 @@ import {
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createApi } from './createApi';
 import { createInitializedBucket, makeTestDeps } from './testing';
-import { authorizeProxyRequest, forwardHttp } from './sandboxProxy';
+import { authorizeProxyRequest, forwardHttp, sandboxProxyMiddleware } from './sandboxProxy';
 
 const SECRET = 'a-test-signing-secret-at-least-32-bytes-long!!';
 const STRANGER = uid('user_stranger');
@@ -100,6 +101,26 @@ describe('authorizeProxyRequest', () => {
 	function req(path: string): Request {
 		return new Request(`https://hub.example.com${path}`);
 	}
+
+	it('forwards directly mounted middleware without a dependency context injector', async () => {
+		const directDeps = deps(ACTOR);
+		directDeps.sandbox.credentialHeaders = ['X-Identity-Assertion'];
+		const app = new Hono();
+		app.use('*', sandboxProxyMiddleware(directDeps));
+		const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('kernel'));
+		try {
+			const response = await app.request(`https://hub.example.com/proxy/${token}/`, {
+				headers: { 'X-Identity-Assertion': 'secret', 'X-Custom': 'retained' },
+			});
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe('kernel');
+			const headers = new Headers(upstream.mock.calls[0][1]?.headers);
+			expect(headers.has('x-identity-assertion')).toBe(false);
+			expect(headers.get('x-custom')).toBe('retained');
+		} finally {
+			upstream.mockRestore();
+		}
+	});
 
 	it('passes through non-proxy paths', async () => {
 		const d = await authorizeProxyRequest(req('/api/me'), deps(ACTOR));

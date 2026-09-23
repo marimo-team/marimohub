@@ -12,7 +12,7 @@
  * Imports `vitest` — only invoke from a `*.test.ts`. Exposed at the
  * `@marimo-hub/core/testing/compute-contract` subpath so it never reaches runtime.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SandboxId } from '../ids';
 import type { SandboxInstance, SandboxProvider } from '../ports/sandbox';
 import {
@@ -233,14 +233,22 @@ export function computeContract(
 		it('bounded reads reject invalid budgets', async () => {
 			const inst = provider.create(CONTRACT_ID);
 			if (!inst.readFileBounded) return;
+			await inst.writeFiles([{ path: CONTRACT_NON_DIRECTORY_PATH, content: 'present' }]);
+			const exec = vi.spyOn(inst, 'exec');
+			const legacyRead = vi.spyOn(inst, 'readFile');
 			for (const options of [
 				{ maxBytes: -1, timeoutMs: 100 },
+				{ maxBytes: Number.NaN, timeoutMs: 100 },
+				{ maxBytes: Infinity, timeoutMs: 100 },
 				{ maxBytes: 10, timeoutMs: 0 },
 			]) {
-				expectFileResult(await inst.readFileBounded('/workspace/contract-file', options), {
+				expectFileResult(await inst.readFileBounded(CONTRACT_NON_DIRECTORY_PATH, options), {
 					success: false,
+					error: { code: 'READ_FAILED' },
 				});
 			}
+			expect(exec).not.toHaveBeenCalled();
+			expect(legacyRead).not.toHaveBeenCalled();
 		});
 
 		it('writeFiles accepts raw bytes (a backend must never stringify them)', async () => {

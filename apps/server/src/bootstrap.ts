@@ -133,8 +133,10 @@ export async function bootstrap(
 				styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
 				fontSrc: ["'self'", 'https://fonts.gstatic.com'],
 				imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-				connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
-				frameSrc: ["'self'", 'https:', 'http:'],
+				connectSrc: ["'self'"],
+				// Direct exposure uses provider-issued origins that are unknown at startup.
+				frameSrc:
+					deps.sandbox.exposure?.mode === 'proxy' ? ["'self'"] : ["'self'", 'https:', 'http:'],
 				workerSrc: ["'self'", 'blob:'],
 			},
 		}),

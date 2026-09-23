@@ -20,6 +20,12 @@ import type {
 } from '../ports/sandbox';
 import { execResult, listFilesFailure, readFileFailure } from '../ports/sandbox';
 
+function validReadBudget({ maxBytes, timeoutMs }: BoundedReadOptions): boolean {
+	return (
+		Number.isSafeInteger(maxBytes) && maxBytes >= 0 && Number.isFinite(timeoutMs) && timeoutMs > 0
+	);
+}
+
 /** URL the fake sandbox reports from `exposePort`. */
 export const EXPOSED_URL = 'https://sandbox.example/kernel';
 
@@ -112,6 +118,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 		},
 		execStream: async () => new ReadableStream(),
 		readFileBounded: async (path, options) => {
+			if (!validReadBudget(options)) return readFileFailure();
 			const result = await instance.readFile(path);
 			return result.success &&
 				new TextEncoder().encode(result.content).byteLength > options.maxBytes
@@ -257,6 +264,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 			return new ReadableStream();
 		},
 		async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+			if (!validReadBudget(options)) return readFileFailure();
 			calls.readFile.push(path);
 			const bytes = fs.get(toRel(path));
 			if (bytes === undefined || bytes.length > options.maxBytes) return readFileFailure();

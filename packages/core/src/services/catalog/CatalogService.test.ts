@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ACTOR, makeCatalog, makeSnapshot, MemoryBucket, setupTestEnv } from '../../testing';
+import {
+	ACTOR,
+	makeCatalog,
+	makeSnapshot,
+	makeSnapshotProjectEntry,
+	MemoryBucket,
+	setupTestEnv,
+	uid,
+} from '../../testing';
 import { ConflictError, NotInitializedError, PreconditionFailedError } from '../../errors';
 import { createNotebookId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
@@ -19,6 +27,79 @@ describe('CatalogService', () => {
 	beforeEach(async () => {
 		bucket = new MemoryBucket();
 		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
+	});
+
+	describe('hasProjectInvolvement', () => {
+		const outsider = { id: uid('outsider'), email: 'outsider@example.com' };
+
+		beforeEach(async () => {
+			await catalog.initialize(ACTOR);
+		});
+
+		it('shares the index across concurrent and repeated denials while refreshing the pointer', async () => {
+			const get = vi.spyOn(bucket, 'get');
+			expect(
+				await Promise.all(Array.from({ length: 5 }, () => catalog.hasProjectInvolvement(outsider))),
+			).toEqual([false, false, false, false, false]);
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+			expect(get.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(6);
+			expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(
+				1,
+			);
+		});
+
+		it.each(['owner', 'member_ids', 'member_emails'] as const)(
+			'observes grants and revocations immediately for %s',
+			async (membership) => {
+				const user = { ...outsider, email: 'OUTSIDER@example.com' };
+				expect(await catalog.hasProjectInvolvement(user)).toBe(false);
+				const project = makeSnapshotProjectEntry({
+					[membership]:
+						membership === 'owner'
+							? user.id
+							: [membership === 'member_ids' ? user.id : outsider.email],
+				});
+				await catalog.mutateSnapshot('grant', ACTOR, (snapshot) => ({
+					...snapshot,
+					projects: [project],
+				}));
+				expect(await catalog.hasProjectInvolvement(user)).toBe(true);
+				await catalog.mutateSnapshot('revoke', ACTOR, (snapshot) => ({
+					...snapshot,
+					projects: [],
+				}));
+				expect(await catalog.hasProjectInvolvement(user)).toBe(false);
+			},
+		);
+
+		it('excludes deleted projects', async () => {
+			await catalog.mutateSnapshot('delete', ACTOR, (snapshot) => ({
+				...snapshot,
+				projects: [makeSnapshotProjectEntry({ owner: outsider.id, status: 'deleted' })],
+			}));
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+		});
+
+		it('retries an index load after a transient snapshot failure', async () => {
+			const original = bucket.get.bind(bucket);
+			const get = vi
+				.spyOn(bucket, 'get')
+				.mockImplementationOnce(original)
+				.mockRejectedValueOnce(new Error('storage failed'));
+			await expect(catalog.hasProjectInvolvement(outsider)).rejects.toThrow('storage failed');
+			get.mockRestore();
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+		});
+
+		it('fails closed if the current pointer disappears after caching a grant', async () => {
+			await catalog.mutateSnapshot('grant', ACTOR, (snapshot) => ({
+				...snapshot,
+				projects: [makeSnapshotProjectEntry({ owner: outsider.id })],
+			}));
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+			await bucket.delete(paths.catalog);
+			await expect(catalog.hasProjectInvolvement(outsider)).rejects.toThrow(NotInitializedError);
+		});
 	});
 
 	describe('initialize', () => {

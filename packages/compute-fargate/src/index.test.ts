@@ -876,3 +876,66 @@ describe('bounded file transport', () => {
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 });
+
+describe('bounded exec output', () => {
+	it.each([0, Infinity])('supports explicit unlimited timeout %s', async (timeout) => {
+		const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+		await instance.exec('true');
+		vi.mocked(fetch).mockResolvedValueOnce(
+			Response.json({ success: true, stdout: 'ok', stderr: '' }),
+		);
+		expect(await instance.exec('cmd', { maxOutputBytes: 2, timeout })).toMatchObject({
+			success: true,
+			stdout: 'ok',
+			stderr: '',
+		});
+	});
+
+	it('accepts JSON escape-heavy output at the decoded byte limit', async () => {
+		const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+		await instance.exec('true');
+		const stdout = '\u0000'.repeat(5000);
+		vi.mocked(fetch).mockResolvedValueOnce(Response.json({ success: true, stdout, stderr: '' }));
+		expect(await instance.exec('cmd', { maxOutputBytes: 5000 })).toMatchObject({
+			success: true,
+			stdout,
+		});
+	});
+
+	it('rejects combined UTF-8 output above its decoded budget', async () => {
+		const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+		await instance.exec('true');
+		vi.mocked(fetch).mockResolvedValueOnce(
+			Response.json({ success: true, stdout: 'a', stderr: 'é' }),
+		);
+		expect(await instance.exec('cmd', { maxOutputBytes: 2 })).toMatchObject({
+			success: false,
+			stdout: '',
+			stderr: 'Sandbox output limit exceeded',
+		});
+	});
+
+	it('accepts combined UTF-8 output at its decoded budget', async () => {
+		const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+		await instance.exec('true');
+		vi.mocked(fetch).mockResolvedValueOnce(
+			Response.json({ success: true, stdout: 'a', stderr: 'é' }),
+		);
+		expect(await instance.exec('cmd', { maxOutputBytes: 3 })).toMatchObject({
+			success: true,
+			stdout: 'a',
+			stderr: 'é',
+		});
+	});
+
+	it.each([Number.NaN, Infinity, -1])(
+		'rejects invalid output budget %s before starting a command',
+		async (maxOutputBytes) => {
+			const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+			await instance.exec('true');
+			vi.mocked(fetch).mockClear();
+			expect((await instance.exec('cmd', { maxOutputBytes })).success).toBe(false);
+			expect(fetch).not.toHaveBeenCalled();
+		},
+	);
+});
