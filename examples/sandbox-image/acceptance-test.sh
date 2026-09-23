@@ -153,6 +153,7 @@ launch_kernel() { # $1 = container id
 # --- build -------------------------------------------------------------------
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
 	echo "==> Building $IMAGE from $CONTEXT"
+	# Required by images/marimo-sandbox; unused by the standalone example.
 	docker build --build-context "notebook_bridge=$HERE/../../packages/notebook-bridge" -t "$IMAGE" "$CONTEXT"
 fi
 

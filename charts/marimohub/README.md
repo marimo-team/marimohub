@@ -192,6 +192,8 @@ explains locators, access rules, caching, and rotation.
 
 Enable the optional DaemonSet to download sandbox images before notebook launches.
 Select the sandbox node pool explicitly. Its placement is independent of the API pods.
+Enabling requires nonempty `images` and `nodeSelector` values.
+The DaemonSet uses the chart's `podSecurityContext`, including its non-root and seccomp defaults.
 
 ```yaml
 sandboxImagePrepuller:

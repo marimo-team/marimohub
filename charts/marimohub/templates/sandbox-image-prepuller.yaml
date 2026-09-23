@@ -3,6 +3,9 @@
 {{- if empty $images }}
 {{- fail "sandboxImagePrepuller.images must list the sandbox images to pre-pull" }}
 {{- end }}
+{{- if empty .Values.sandboxImagePrepuller.nodeSelector }}
+{{- fail "sandboxImagePrepuller.nodeSelector must select the sandbox node pool" }}
+{{- end }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -24,6 +27,8 @@ spec:
         marimohub.io/image-revision: {{ .Values.sandboxImagePrepuller.revision | quote }}
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.sandboxImagePrepuller.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -30,7 +30,7 @@ serviceAccount:
 sandboxIngress:
   namespace: ''
 
-# Schedule on the sandbox node pool, which may differ from the API node pool.
+# Enabling requires images and a nodeSelector for the sandbox node pool.
 sandboxImagePrepuller:
   enabled: false
   images: []

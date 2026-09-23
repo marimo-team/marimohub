@@ -11,6 +11,10 @@ and popular libraries (polars, narwhals, numpy, pandas, pyarrow, altair, duckdb)
 into the project environment, so the base-case kernel starts instantly — no
 per-launch install.
 
+This standalone example does not preinstall the notebook bridge. Hub installs it
+at launch. The [maintained image](../../images/marimo-sandbox/README.md) preinstalls
+the bridge and requires an additional build context.
+
 ## Build & push
 
 marimo is **pinned** via the `MARIMO_VERSION` build arg (default in the
