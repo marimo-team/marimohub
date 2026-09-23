@@ -76,6 +76,16 @@ const OWNED_POD = {
 	},
 	status: { phase: 'Running' },
 };
+const OWNED_SERVICE = {
+	metadata: {
+		uid: 'service-uid',
+		resourceVersion: '1',
+		labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+	},
+};
+const OWNED_INGRESS = {
+	metadata: { ...OWNED_SERVICE.metadata, uid: 'ingress-uid' },
+};
 
 beforeEach(() => {
 	for (const fn of [
@@ -98,6 +108,8 @@ beforeEach(() => {
 	}
 	k8sMock.kubeConfigs.length = 0;
 	k8sMock.core.readNamespacedPod.mockResolvedValue(OWNED_POD);
+	k8sMock.core.readNamespacedService.mockResolvedValue(OWNED_SERVICE);
+	k8sMock.net.readNamespacedIngress.mockResolvedValue(OWNED_INGRESS);
 });
 
 describe('createK8sClient', () => {
@@ -1093,10 +1105,12 @@ describe('createK8sClient', () => {
 		expect(k8sMock.net.deleteNamespacedIngress).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'ingress-uid', resourceVersion: '1' } },
 		});
 		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'service-uid', resourceVersion: '1' } },
 		});
 		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledWith({
 			name: 'mh-sb',
@@ -1111,9 +1125,11 @@ describe('createK8sClient', () => {
 		await client.delete('mh-sb', { ingress: false, sandboxId: SANDBOX_ID });
 
 		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+		expect(k8sMock.net.readNamespacedIngress).not.toHaveBeenCalled();
 		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledWith({
 			name: 'mh-sb',
 			namespace: 'kernels',
+			body: { preconditions: { uid: 'service-uid', resourceVersion: '1' } },
 		});
 		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledWith({
 			name: 'mh-sb',
@@ -1143,7 +1159,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('cleans up routes for a missing Pod without deleting a replacement', async () => {
-		k8sMock.core.readNamespacedPod.mockRejectedValueOnce({ code: 404 });
+		k8sMock.core.readNamespacedPod.mockRejectedValue({ code: 404 });
 		await createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
 			ingress: true,
 			sandboxId: SANDBOX_ID,
@@ -1152,6 +1168,100 @@ describe('createK8sClient', () => {
 		expect(k8sMock.core.deleteNamespacedService).toHaveBeenCalledOnce();
 		expect(k8sMock.net.deleteNamespacedIngress).toHaveBeenCalledOnce();
 	});
+
+	it.each([
+		{ route: 'service', change: 'replaced' },
+		{ route: 'service', change: 'updated' },
+		{ route: 'ingress', change: 'replaced' },
+		{ route: 'ingress', change: 'updated' },
+	])('preserves $route $change after Pod deletion', async ({ route, change }) => {
+		const original = route === 'service' ? OWNED_SERVICE : OWNED_INGRESS;
+		let current = { ...original.metadata };
+		let deleted = false;
+		const remove =
+			route === 'service'
+				? k8sMock.core.deleteNamespacedService
+				: k8sMock.net.deleteNamespacedIngress;
+		k8sMock.core.deleteNamespacedPod.mockImplementationOnce(async () => {
+			current = {
+				...current,
+				uid: change === 'replaced' ? 'replacement-uid' : current.uid,
+				resourceVersion: '2',
+			};
+		});
+		remove.mockImplementation(async ({ body }) => {
+			if (
+				body?.preconditions?.uid !== current.uid ||
+				body?.preconditions?.resourceVersion !== current.resourceVersion
+			) {
+				throw Object.assign(new Error('route precondition failed'), { code: 409 });
+			}
+			deleted = true;
+		});
+		await expect(
+			createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+				ingress: true,
+				sandboxId: SANDBOX_ID,
+			}),
+		).rejects.toMatchObject({ code: 409 });
+		expect(deleted).toBe(false);
+		expect(remove).toHaveBeenCalledExactlyOnceWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			body: { preconditions: { uid: original.metadata.uid, resourceVersion: '1' } },
+		});
+	});
+
+	it.each([false, true])(
+		'skips teardown if a Pod appears or changes (initially absent: %s)',
+		async (absent) => {
+			if (absent) k8sMock.core.readNamespacedPod.mockRejectedValueOnce({ code: 404 });
+			else k8sMock.core.readNamespacedPod.mockResolvedValueOnce(OWNED_POD);
+			k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
+				...OWNED_POD,
+				metadata: { ...OWNED_POD.metadata, uid: 'replacement-uid' },
+			});
+			await expect(
+				createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+					ingress: true,
+					sandboxId: SANDBOX_ID,
+				}),
+			).rejects.toThrow('changed during cleanup');
+			expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+			expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+			expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+		},
+	);
+
+	it('does not delete routes that were absent from the teardown snapshot', async () => {
+		k8sMock.core.readNamespacedService.mockRejectedValueOnce({ code: 404 });
+		k8sMock.net.readNamespacedIngress.mockRejectedValueOnce({ code: 404 });
+		await createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+			ingress: true,
+			sandboxId: SANDBOX_ID,
+		});
+		expect(k8sMock.core.deleteNamespacedPod).toHaveBeenCalledOnce();
+		expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it.each([{ labels: {} }, { uid: undefined }, { resourceVersion: undefined }])(
+		'refuses route cleanup without ownership and identity %j',
+		async (metadata) => {
+			k8sMock.core.readNamespacedService.mockResolvedValueOnce({
+				metadata: { ...OWNED_SERVICE.metadata, ...metadata },
+			});
+			await expect(
+				createK8sClient({ namespace: 'kernels' }).delete('mh-sb', {
+					ingress: true,
+					sandboxId: SANDBOX_ID,
+				}),
+			).rejects.toThrow(/unmanaged|no UID or resourceVersion/);
+			expect(k8sMock.core.deleteNamespacedPod).not.toHaveBeenCalled();
+			expect(k8sMock.core.deleteNamespacedService).not.toHaveBeenCalled();
+			expect(k8sMock.net.deleteNamespacedIngress).not.toHaveBeenCalled();
+		},
+	);
 
 	it('requires the Pod UID before deleting any resources', async () => {
 		k8sMock.core.readNamespacedPod.mockResolvedValueOnce({

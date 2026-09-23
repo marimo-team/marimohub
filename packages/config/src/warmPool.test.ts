@@ -156,7 +156,11 @@ describe('warm pool configuration', () => {
 		const cw = coreWeaveOptions();
 		const parsed = parseWarmPoolConfig(enabled, cw)!;
 		expect(parsed.config.providerLifetimeMs).toBe(Millis.hours(8));
-		expect(parsed.config.minimumRemainingMs).toBeGreaterThan(Millis.hours(4));
+		expect(parsed.config.minimumRemainingMs).toBe(Millis.hours(4) + Millis.minutes(2 + 10));
+		expect(
+			parseWarmPoolConfig(enabled, { ...cw, startupTimeoutMs: Millis.minutes(5) })!.config
+				.minimumRemainingMs,
+		).toBe(Millis.hours(4) + Millis.minutes(5 + 10));
 		expect(() => parseWarmPoolConfig(enabled, coreWeaveOptions(14400))).toThrow(
 			'provider lifetime longer',
 		);

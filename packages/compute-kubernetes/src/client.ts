@@ -302,6 +302,26 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		}
 	}
 
+	async function readOptional<T>(read: () => Promise<T>): Promise<T | undefined> {
+		try {
+			return await read();
+		} catch (err) {
+			if (hasCode(err, 404)) return;
+			throw err;
+		}
+	}
+
+	function routePreconditions(resource: V1Service | V1Ingress | undefined, kind: string) {
+		if (!resource) return;
+		const metadata = resource.metadata;
+		if (metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE) {
+			throw new Error(`Refusing to delete unmanaged ${kind}`);
+		}
+		const { uid, resourceVersion } = metadata;
+		if (!uid || !resourceVersion) throw new Error(`${kind} has no UID or resourceVersion`);
+		return { uid, resourceVersion };
+	}
+
 	async function reconcileIngress(net: K8s.NetworkingV1Api, desired: V1Ingress): Promise<void> {
 		try {
 			await net.createNamespacedIngress({ namespace, body: desired });
@@ -556,12 +576,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 
 		async delete(name: string, options: { ingress: boolean; sandboxId: SandboxId }): Promise<void> {
 			const { core, net } = await apis();
-			let pod: V1Pod | undefined;
-			try {
-				pod = await core.readNamespacedPod({ name, namespace });
-			} catch (err) {
-				if (!hasCode(err, 404)) throw err;
-			}
+			const pod = await readOptional(() => core.readNamespacedPod({ name, namespace }));
 			if (
 				pod &&
 				(pod.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE ||
@@ -571,16 +586,43 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			}
 			const uid = pod?.metadata?.uid;
 			if (pod && !uid) throw new Error(`Pod "${name}" has no UID`);
+			// Capture routes before deleting the Pod; reconnect may replace or update them afterward.
+			const [service, ingress] = await Promise.all([
+				readOptional(() => core.readNamespacedService({ name, namespace })),
+				options.ingress
+					? readOptional(() => net.readNamespacedIngress({ name, namespace }))
+					: undefined,
+			]);
+			const servicePreconditions = routePreconditions(service, `Service "${name}"`);
+			const ingressPreconditions = routePreconditions(ingress, `Ingress "${name}"`);
+			const confirmed = await readOptional(() => core.readNamespacedPod({ name, namespace }));
+			if (confirmed?.metadata?.uid !== uid) {
+				throw new Error(`Pod "${name}" changed during cleanup`);
+			}
 			if (pod) {
 				await deleteTolerant(() =>
 					core.deleteNamespacedPod({ name, namespace, body: { preconditions: { uid } } }),
 				);
 			}
 			await Promise.all([
-				options.ingress
-					? deleteTolerant(() => net.deleteNamespacedIngress({ name, namespace }))
+				ingressPreconditions
+					? deleteTolerant(() =>
+							net.deleteNamespacedIngress({
+								name,
+								namespace,
+								body: { preconditions: ingressPreconditions },
+							}),
+						)
 					: undefined,
-				deleteTolerant(() => core.deleteNamespacedService({ name, namespace })),
+				servicePreconditions
+					? deleteTolerant(() =>
+							core.deleteNamespacedService({
+								name,
+								namespace,
+								body: { preconditions: servicePreconditions },
+							}),
+						)
+					: undefined,
 			]);
 		},
 
