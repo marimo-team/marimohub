@@ -405,6 +405,7 @@ sync-notebook:
 ## Rotating the sync token
 
 If a token leaks, rotate it. The old token stops working immediately.
+This operation requires project manager access or higher.
 
 ```http
 POST /api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate

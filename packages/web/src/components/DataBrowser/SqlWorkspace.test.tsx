@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryExecutionResults } from './SqlWorkspace';
 import type { QueryExecution } from './SqlWorkspace';
 
-function numericExecution(values: readonly (number | string)[]): QueryExecution[] {
+function queryExecution(values: readonly (number | string)[]): QueryExecution[] {
 	return [
 		{
 			id: 0,
@@ -24,9 +24,31 @@ function renderedColumn(): string[] {
 	return rows.map((row) => within(row).getAllByRole('cell')[1].textContent ?? '');
 }
 
+function permutations<T>(values: readonly T[]): T[][] {
+	if (values.length === 0) return [[]];
+	return values.flatMap((value, index) =>
+		permutations(values.filter((_, other) => other !== index)).map((rest) => [value, ...rest]),
+	);
+}
+
 describe('QueryResultTable column sorting', () => {
 	it.each([
 		{ name: 'numbers', values: [1.5, -3, 1.25, -5], expected: ['-5', '-3', '1.25', '1.5'] },
+		{
+			name: 'negative integer strings beyond number precision',
+			values: ['-9223372036854775808', '-9223372036854775809'],
+			expected: ['-9223372036854775809', '-9223372036854775808'],
+		},
+		{
+			name: 'decimal strings',
+			values: ['1.5', '-3', '1.25', '-5'],
+			expected: ['-5', '-3', '1.25', '1.5'],
+		},
+		{
+			name: 'exponent strings',
+			values: ['1e21', '9223372036854775807', '-1e22'],
+			expected: ['-1e22', '9223372036854775807', '1e21'],
+		},
 		{
 			name: 'mixed exponent numbers and integer strings',
 			values: [1e21, '9223372036854775807'],
@@ -57,11 +79,44 @@ describe('QueryResultTable column sorting', () => {
 			values: ['9223372036854775809', '9223372036854775808'],
 			expected: ['9223372036854775808', '9223372036854775809'],
 		},
+		...[
+			{
+				name: 'mixed numeric strings and text',
+				values: ['1.9', '1.10', '1.9kg'],
+				expected: ['1.10', '1.9', '1.9kg'],
+			},
+			{
+				name: 'equal numeric representations',
+				values: ['01', 1, '1.0'],
+				expected: ['01', '1', '1.0'],
+			},
+			{
+				name: 'NaN with numbers',
+				values: [Number.NaN, 2, -1],
+				expected: ['-1', '2', 'NaN'],
+			},
+			{
+				name: 'nonfinite numbers and text',
+				values: [Infinity, '-Infinity', 2],
+				expected: ['2', '-Infinity', 'Infinity'],
+			},
+			{
+				name: 'nonfinite text and numbers',
+				values: ['Infinity', -Infinity, 2],
+				expected: ['2', '-Infinity', 'Infinity'],
+			},
+		].flatMap(({ name, values, expected }) =>
+			permutations<number | string>(values).map((permutation, index) => ({
+				name: `${name}, permutation ${index + 1}`,
+				values: permutation,
+				expected,
+			})),
+		),
 	])('sorts $name by value', async ({ values, expected }) => {
 		const user = userEvent.setup();
 		render(
 			<QueryExecutionResults
-				executions={numericExecution(values)}
+				executions={queryExecution(values)}
 				activeIndex={0}
 				onSelect={() => {}}
 			/>,

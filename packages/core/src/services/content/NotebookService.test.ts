@@ -58,7 +58,7 @@ describe('NotebookService', () => {
 	});
 
 	describe('source updates during sessions', () => {
-		it.each(['update', 'restore', 'notebook.py', 'pyproject.toml'] as const)(
+		it.each(['update', 'deps', 'restore', 'notebook.py', 'pyproject.toml'] as const)(
 			'blocks %s during editing and permits retry after the editor fails without a sandbox',
 			async (operation) => {
 				const notebook = await notebooks.createNotebook(
@@ -75,6 +75,8 @@ describe('NotebookService', () => {
 				const update = () => {
 					if (operation === 'update')
 						return notebooks.updateNotebook(projectId, notebook.id, { code: '' }, ACTOR);
+					if (operation === 'deps')
+						return notebooks.updateNotebook(projectId, notebook.id, { deps: 'replacement' }, ACTOR);
 					if (operation === 'restore')
 						return notebooks.restoreVersion(projectId, notebook.id, version.version_id, ACTOR);
 					return notebooks.workspace.write(
@@ -86,6 +88,8 @@ describe('NotebookService', () => {
 					);
 				};
 				await expect(update()).rejects.toThrow(session.session_id);
+				const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+				expect(await storedDeps?.text()).toBe('');
 				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
 				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
@@ -95,6 +99,10 @@ describe('NotebookService', () => {
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe(
 					operation === 'update' ? '' : operation === 'notebook.py' ? 'replacement' : 'original',
 				);
+				if (operation === 'deps') {
+					const deps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+					expect(await deps?.text()).toBe('replacement');
+				}
 			},
 		);
 
@@ -168,62 +176,72 @@ describe('NotebookService', () => {
 			}
 		});
 
-		it('does not mutate source or metadata when a session record is corrupt', async () => {
-			const notebook = await notebooks.createNotebook(
-				projectId,
-				{ title: 'NB', description: '', code: 'original' },
-				ACTOR,
-			);
-			await bucket.put(`${paths.sessionsForProject(projectId)}corrupt.json`, '{invalid json');
-			await expect(
-				notebooks.updateNotebook(
+		it.each(['code', 'deps'] as const)(
+			'does not mutate %s or metadata when a session record is corrupt',
+			async (field) => {
+				const notebook = await notebooks.createNotebook(
 					projectId,
-					notebook.id,
-					{ code: 'replacement', title: 'Blocked' },
+					{ title: 'NB', description: '', code: 'original' },
 					ACTOR,
-				),
-			).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
-			expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
-			expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
-			expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
-		});
-
-		it('fails closed on session lookup errors without blocking metadata updates', async () => {
-			const notebook = await notebooks.createNotebook(
-				projectId,
-				{ title: 'NB', description: '', code: 'original', readme: 'original readme' },
-				ACTOR,
-			);
-			const before = await notebooks.getNotebook(projectId, notebook.id);
-			const lookup = vi
-				.spyOn(sessions, 'listEditorsBlockingSourceUpdate')
-				.mockRejectedValue(new Error('session storage unavailable'));
-			try {
+				);
+				await bucket.put(`${paths.sessionsForProject(projectId)}corrupt.json`, '{invalid json');
 				await expect(
 					notebooks.updateNotebook(
 						projectId,
 						notebook.id,
-						{ code: 'replacement', title: 'Blocked', readme: 'Blocked' },
+						{ [field]: 'replacement', title: 'Blocked' },
 						ACTOR,
 					),
-				).rejects.toThrow('session storage unavailable');
-				expect(await notebooks.getNotebook(projectId, notebook.id)).toEqual(before);
+				).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+				const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+				expect(await storedDeps?.text()).toBe('');
+				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
 				expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
-				await notebooks.updateNotebook(
+			},
+		);
+
+		it.each(['code', 'deps'] as const)(
+			'fails closed on %s updates when session lookup fails without blocking metadata updates',
+			async (field) => {
+				const notebook = await notebooks.createNotebook(
 					projectId,
-					notebook.id,
-					{ title: 'Renamed', readme: '' },
+					{ title: 'NB', description: '', code: 'original', readme: 'original readme' },
 					ACTOR,
 				);
-				expect(await notebooks.getNotebook(projectId, notebook.id)).toMatchObject({
-					meta: { title: 'Renamed' },
-					readme: '',
-				});
-			} finally {
-				lookup.mockRestore();
-			}
-		});
+				const before = await notebooks.getNotebook(projectId, notebook.id);
+				const lookup = vi
+					.spyOn(sessions, 'listEditorsBlockingSourceUpdate')
+					.mockRejectedValue(new Error('session storage unavailable'));
+				try {
+					await expect(
+						notebooks.updateNotebook(
+							projectId,
+							notebook.id,
+							{ [field]: 'replacement', title: 'Blocked', readme: 'Blocked' },
+							ACTOR,
+						),
+					).rejects.toThrow('session storage unavailable');
+					const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+					expect(await storedDeps?.text()).toBe('');
+					expect(await notebooks.getNotebook(projectId, notebook.id)).toEqual(before);
+					expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
+					expect(await notebooks.listVersions(projectId, notebook.id)).toHaveLength(1);
+					await notebooks.updateNotebook(
+						projectId,
+						notebook.id,
+						{ title: 'Renamed', readme: '' },
+						ACTOR,
+					);
+					expect(await notebooks.getNotebook(projectId, notebook.id)).toMatchObject({
+						meta: { title: 'Renamed' },
+						readme: '',
+					});
+				} finally {
+					lookup.mockRestore();
+				}
+			},
+		);
 	});
 
 	describe('createNotebook', () => {

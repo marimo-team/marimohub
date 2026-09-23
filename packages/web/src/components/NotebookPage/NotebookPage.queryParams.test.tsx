@@ -190,6 +190,8 @@ describe('NotebookPage query parameters', () => {
 	});
 
 	it.each(['app', 'edit'] as const)('forwards filtered parameters in %s mode', async (variant) => {
+		const visitId = '36710b91-38ea-47ba-bff5-36f87ace1230';
+		vi.spyOn(crypto, 'randomUUID').mockReturnValue(visitId);
 		const impl = makeFetch({
 			role: 'editor',
 			session: runningSession({
@@ -212,7 +214,12 @@ describe('NotebookPage query parameters', () => {
 		expect(url.hash).toBe('#cell');
 		expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
 		expect(sessionPosts(impl)).toHaveLength(1);
-		expect(String(sessionPosts(impl)[0][1]?.body)).not.toContain('123');
+		const body = sessionPosts(impl)[0][1]?.body;
+		if (variant === 'app') {
+			expect(JSON.parse(String(body))).toEqual({ mode: 'app', app_visit_id: visitId });
+		} else {
+			expect(body).toBeUndefined();
+		}
 	});
 
 	it.each(['app', 'edit'] as const)(

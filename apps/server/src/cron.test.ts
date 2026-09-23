@@ -638,17 +638,23 @@ describe('startWarmPools', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	it('stops disabled, empty pools without acquiring a maintenance lease', async () => {
+	it('checks disabled, empty pools for late cleanup without acquiring an idle lease', async () => {
 		const w = await setup(false);
 		const acquire = vi.spyOn(MaintenanceLock.prototype, 'acquire');
+		const owned = vi.spyOn(w.service.store, 'ownedSandboxIds').mockResolvedValue(new Set());
 		handle = startWarmPools(w.deps);
 		await flushRun();
 		expect(acquire).not.toHaveBeenCalled();
 		expect(w.sweep).not.toHaveBeenCalled();
-		expect(vi.getTimerCount()).toBe(0);
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS - 1);
+		expect(owned).toHaveBeenCalledOnce();
+		owned.mockResolvedValue(new Set(['late-cleanup']));
+		await vi.advanceTimersByTimeAsync(1);
+		expect(acquire).toHaveBeenCalledOnce();
+		expect(w.sweep).toHaveBeenCalledOnce();
 	});
 
-	it('keeps disabled cleanup running until all ownership records are drained', async () => {
+	it('keeps checking disabled cleanup after all ownership records are drained', async () => {
 		const w = await setup(false);
 		const owned = vi
 			.spyOn(w.service.store, 'ownedSandboxIds')
@@ -657,10 +663,12 @@ describe('startWarmPools', () => {
 			.mockResolvedValue(new Set());
 		handle = startWarmPools(w.deps);
 		await flushRun();
-		await vi.advanceTimersByTimeAsync(10_000);
+		await vi.advanceTimersByTimeAsync(2 * FIVE_MINUTES_MS);
 		expect(w.sweep).toHaveBeenCalledTimes(2);
 		expect(owned).toHaveBeenCalledTimes(3);
-		expect(vi.getTimerCount()).toBe(0);
+		owned.mockResolvedValue(new Set(['late-cleanup']));
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(w.sweep).toHaveBeenCalledTimes(3);
 	});
 
 	it('retries unreadable disabled ownership instead of treating it as empty', async () => {
@@ -673,7 +681,7 @@ describe('startWarmPools', () => {
 		handle = startWarmPools(w.deps);
 		await flushRun();
 		expect(w.sweep).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync(5_000);
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
 		expect(owned).toHaveBeenCalledTimes(2);
 		expect(w.sweep).toHaveBeenCalledOnce();
 	});

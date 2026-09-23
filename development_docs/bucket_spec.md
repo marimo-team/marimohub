@@ -496,7 +496,7 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 2. A heartbeat updates `last_heartbeat`. The service coalesces bucket writes to one write per minute.
 3. `DELETE /sessions/{id}` changes the record to `terminating`. Teardown changes it to `terminated` after the sandbox is gone.
 4. The lifecycle sweep changes an overdue live session to `expired`.
-5. The reaper deletes old `terminated`, `failed`, and `expired` records after the retention period.
+5. The reaper deletes old `terminated`, `failed`, and `expired` records after the retention period. Records with a `sandbox_id` also require `sandbox_reclaimed_at`, which confirms sandbox destruction.
 
 > **On object storage vs. a live state store for sessions:** the object store is appropriate for session _records_ — created on open, updated periodically, read for display — and the record carries `sandbox_id` / `sandbox_url` pointing at the live kernel runtime (a separate container/compute service). It is not appropriate for sub-second kernel state (output streaming, variable inspection); that lives in the kernel runtime itself, backed by a low-latency state store (in-memory cache / stateful coordinator) if cross-request coordination is needed. For MVP — tracking who has what open, TTL cleanup — the object store is sufficient.
 
