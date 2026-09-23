@@ -1136,3 +1136,36 @@ computeContract(
 	},
 	{ mountFallsBack: true, secondaryPort: 8443, semantics: { failingCommand: 'false', launch: {} } },
 );
+
+describe('Kubernetes warm sandbox reconnect', () => {
+	it('reconnects from another provider without ensuring new resources', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID).ready!();
+		expectExecResult(await makeCompute(world).connectExisting(SANDBOX_ID).exec('true'), {
+			success: true,
+		});
+		expect(world.ensured).toHaveLength(1);
+	});
+
+	it('fails without creating when the pod is missing', async () => {
+		const world = makeWorld();
+		await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
+			'no longer running',
+		);
+		expect(world.ensured).toHaveLength(0);
+		expect(world.pods.size).toBe(0);
+	});
+
+	it.each(['Pending', 'Succeeded', 'Failed'])(
+		'rejects a %s pod without recreating it',
+		async (phase) => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).ready!();
+			world.setPhase(NAME, phase);
+			await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
+				'no longer running',
+			);
+			expect(world.ensured).toHaveLength(1);
+		},
+	);
+});

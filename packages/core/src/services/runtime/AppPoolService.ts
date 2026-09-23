@@ -3,7 +3,7 @@ import { mapWithConcurrency } from '../../concurrency';
 import { logOperationalError } from '../../operationalLog';
 import { ConflictError, NotFoundError, ResourceExhaustedError } from '../../errors';
 import { createSandboxId, createSessionId } from '../../ids';
-import type { NotebookId, ProjectId, SessionId, UserId, VersionId } from '../../ids';
+import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -167,6 +167,28 @@ export class AppPoolService {
 		const source = await readStored(SourceSchema, object, key);
 		if (source.current_version_id !== input.versionId)
 			throw new ConflictError('The app version changed. Retry shortly.');
+	}
+
+	async bindWarmSandbox(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		sessionId: SessionId,
+		token: string,
+		sandboxId: SandboxId,
+	): Promise<void> {
+		const bound = await this.store.mutate(projectId, notebookId, (pool) => {
+			const member = pool.members.find((item) => item.session_id === sessionId);
+			if (
+				member?.state !== 'starting' ||
+				member.operation_token !== token ||
+				member.operation_expires_at <= this.now()
+			) {
+				return { pool, value: false };
+			}
+			member.sandbox_id = sandboxId;
+			return { pool, value: true };
+		});
+		if (!bound) throw new ConflictError('The app startup reservation expired. Retry shortly.');
 	}
 
 	async complete(

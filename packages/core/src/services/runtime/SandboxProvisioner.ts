@@ -176,6 +176,7 @@ export interface SessionEnv {
 }
 
 export interface ProvisionOptions {
+	existingSandbox?: SandboxInstance;
 	/** Called when failure leaves no handle or sandbox destruction succeeds. */
 	onSandboxDestroyed?: () => void | Promise<void>;
 	sandboxId: SandboxId;
@@ -613,21 +614,23 @@ export class SandboxProvisioner {
 		const createStart = Date.now();
 		let sandbox: SandboxInstance | undefined;
 		try {
-			sandbox = createOrRestoreSandbox(
-				this.provider,
-				options.sandboxId,
-				options.restoreFilesystemSnapshotId,
-				{
-					image: options.image,
-					resources: options.resources,
-					userHome: options.userHome,
-					sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
-					owner: {
-						projectId: options.projectId,
-						...(options.userId ? { userId: options.userId } : {}),
+			sandbox =
+				options.existingSandbox ??
+				createOrRestoreSandbox(
+					this.provider,
+					options.sandboxId,
+					options.restoreFilesystemSnapshotId,
+					{
+						image: options.image,
+						resources: options.resources,
+						userHome: options.userHome,
+						sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+						owner: {
+							projectId: options.projectId,
+							...(options.userId ? { userId: options.userId } : {}),
+						},
 					},
-				},
-			);
+				);
 			const createMs = Date.now() - createStart;
 			const result = await this.provisionInto(sandbox, options);
 			// Constructing the (usually lazy) handle, NOT the backend's create — that

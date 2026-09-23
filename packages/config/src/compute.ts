@@ -1,5 +1,5 @@
 import { Millis, Seconds } from '@marimo-hub/core';
-import type { SandboxExposureMode, SandboxProvider } from '@marimo-hub/core';
+import type { SandboxExposureMode, SandboxProvider, WarmPoolSupport } from '@marimo-hub/core';
 import type { SandboxConfig } from '@marimo-hub/api';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
@@ -299,6 +299,10 @@ function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefin
 	);
 }
 
+function withWarmPoolSupport(provider: SandboxProvider, support: WarmPoolSupport): SandboxProvider {
+	return Object.assign(provider, { warmPool: support });
+}
+
 export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 	const backend = computeBackend(env);
 	if (!backend) {
@@ -345,7 +349,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					: {}),
 			});
 		}
-		case 'coreweave':
+		case 'coreweave': {
 			// CoreWeave Sandboxes via the @coreweave/cwsandbox SDK (Sandbox v1, Node
 			// gRPC). A marimo-capable image (marimo + uv + python) should be supplied
 			// via MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress
@@ -368,7 +372,12 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					},
 				);
 			}
-			return new CoreWeaveCompute({
+			const maxLifetimeSeconds = resolveLifetimeBackstop(
+				env,
+				'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
+				opts?.sessionMaxLifetimeSeconds,
+			);
+			const provider = new CoreWeaveCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
 				extraPorts: coreWeaveExtraPorts(opts?.surfaces),
 				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
@@ -403,11 +412,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				// run under the runner's default policy.
 				templateId: env.MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID,
 				userHomeTemplateId: env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID,
-				maxLifetimeSeconds: resolveLifetimeBackstop(
-					env,
-					'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
-					opts?.sessionMaxLifetimeSeconds,
-				),
+				maxLifetimeSeconds,
 				// Off by default; do NOT enable alongside MARIMOHUB_PERSIST_WORKSPACE=workspace,
 				// which would double-persist the same state.
 				filesystemSnapshot: parseBool(env, 'MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT'),
@@ -416,6 +421,10 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				objectStorageEndpoint: env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT,
 				objectStorageRegion: env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION,
 			});
+			return maxLifetimeSeconds === undefined
+				? provider
+				: withWarmPoolSupport(provider, { maxLifetimeMs: maxLifetimeSeconds * 1000 });
+		}
 		case 'wandb':
 			// CoreWeave Sandboxes via the W&B gateway — the same adapter and endpoint as
 			// `coreweave`, authenticated with a W&B API key (gRPC metadata) instead of a
@@ -563,7 +572,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					},
 				);
 			}
-			return new KubernetesCompute({
+			const provider = new KubernetesCompute({
 				podTemplate,
 				exposureMode: opts?.sandboxExposureMode,
 				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
@@ -588,6 +597,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				podReadyTimeout:
 					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),
 			});
+			return withWarmPoolSupport(provider, { maxLifetimeMs: null, configuration: podTemplate });
 		}
 		case 'fargate': {
 			if (env.MARIMOHUB_COMPUTE_IMAGE?.trim()) {

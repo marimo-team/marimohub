@@ -266,6 +266,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: KubernetesConfig,
 		private readonly client: K8sClient,
+		private readonly existingOnly = false,
 	) {
 		this.name = resourceName(id);
 		this.namespace = config.namespace ?? 'default';
@@ -311,6 +312,14 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<void> {
 		if (this.resolved) return;
+		if (this.existingOnly) {
+			const pod = await this.client.getPhase(this.name);
+			if (pod?.phase !== 'Running') {
+				throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
+			}
+			this.resolved = true;
+			return;
+		}
 		const t0 = Date.now();
 		const { createdPod } = await this.client.ensure({
 			podTemplate: this.config.podTemplate,
@@ -703,6 +712,18 @@ export class KubernetesCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options);
+	}
+
+	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options, true);
+	}
+
+	private instance(
+		id: SandboxId,
+		options?: CreateSandboxOptions,
+		existingOnly = false,
+	): SandboxInstance {
 		const profileResources = kubernetesProfileResources(options?.resources);
 		const config =
 			options?.image || profileResources
@@ -723,7 +744,7 @@ export class KubernetesCompute implements SandboxProvider {
 							: {}),
 					}
 				: this.config;
-		return new KubernetesSandboxInstance(id, config, this.getClient());
+		return new KubernetesSandboxInstance(id, config, this.getClient(), existingOnly);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

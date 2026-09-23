@@ -283,6 +283,9 @@ export const paths = {
 	 */
 	appClaim: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/apps/${projectId}/${notebookId}.json`,
+	warmPoolsPrefix: '_system/warm-pools/',
+	warmPool: (backend: string) => `_system/warm-pools/${backend}.json`,
+	warmPoolLock: '_system/_warm_pool.lock',
 	appPoolsPrefix: '_system/app-pools/',
 	appPool: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/app-pools/${projectId}/${notebookId}.json`,

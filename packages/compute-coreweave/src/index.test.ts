@@ -1235,3 +1235,28 @@ describe('CoreWeaveCompute launchProcess', () => {
 		},
 	);
 });
+
+describe('CoreWeave warm sandbox reconnect', () => {
+	it('reconnects from another provider without creating a sandbox', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
+		expectExecResult(await makeCompute(world).connectExisting(SANDBOX_ID).exec('true'), {
+			success: true,
+		});
+		expect(world.created).toHaveLength(1);
+	});
+
+	it('fails without creating when the sandbox is absent or deleted', async () => {
+		const world = makeWorld();
+		await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
+			'no longer available',
+		);
+		expect(world.created).toHaveLength(0);
+		await makeCompute(world).create(SANDBOX_ID).exec('true');
+		await makeCompute(world).create(SANDBOX_ID).destroy();
+		await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+			'no longer available',
+		);
+		expect(world.created).toHaveLength(1);
+	});
+});

@@ -1,3 +1,4 @@
+import { WarmPoolStore } from './WarmPoolStore';
 import { execResult } from '../../ports/sandbox';
 import {
 	makeFakeSandbox,
@@ -82,6 +83,52 @@ describe('ReconciliationService', () => {
 		);
 		return session;
 	}
+
+	it.each(['coreweave', 'kubernetes', 'external-provider'])(
+		'protects %s warm sandboxes and fails closed on unreadable ownership',
+		async (backend) => {
+			const store = new WarmPoolStore(bucket, backend);
+			await store.mutate((record) => {
+				record.pools.push({
+					key: 'default',
+					failures: 0,
+					retry_at: 0,
+					members: [
+						{
+							sandbox_id: inflightId,
+							state: 'creating',
+							token: 'token',
+							assigned: false,
+							created_at: Date.now() - 60_000,
+							checked_at: 0,
+							ready_until: Date.now() + 60_000,
+							operation_until: Date.now() + 60_000,
+						},
+					],
+				});
+			});
+			compute.active = [
+				{ id: inflightId, createdAt: iso(-60_000) },
+				{ id: orphanId, createdAt: iso(-60_000) },
+			];
+			expect((await reconciler.reconcile({ orphanGraceMs: 1_000 })).orphanSandboxIds).toEqual([
+				orphanId,
+			]);
+			await bucket.put(paths.warmPool(backend), '{broken');
+			expect((await reconciler.reconcile({ orphanGraceMs: 1_000 })).orphansReaped).toBe(0);
+		},
+	);
+
+	it('skips orphan deletion when warm-pool ownership cannot be listed', async () => {
+		compute.active = [{ id: orphanId, createdAt: iso(-60_000) }];
+		const list = bucket.list.bind(bucket);
+		vi.spyOn(bucket, 'list').mockImplementation((options) => {
+			if (options?.prefix === paths.warmPoolsPrefix) throw new Error('ownership listing failed');
+			return list(options);
+		});
+		expect((await reconciler.reconcile({ orphanGraceMs: 1_000 })).orphansReaped).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+	});
 
 	it('Rule 3: leaves a recordless sandbox alone when an active job run owns it', async () => {
 		const jobSandboxId = createSandboxId();

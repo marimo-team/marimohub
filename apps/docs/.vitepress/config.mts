@@ -126,11 +126,12 @@ export default defineConfig({
 			{ text: 'Deploy', link: '/deploying/', activeMatch: '^/deploying/' },
 			{
 				text: 'Operate',
-				activeMatch: '^/(security|operations|app-pools|troubleshooting)',
+				activeMatch: '^/(security|operations|app-pools|warm-pools|troubleshooting)',
 				items: [
 					{ text: 'Security', link: '/security' },
 					{ text: 'Operations', link: '/operations' },
 					{ text: 'App pools', link: '/app-pools' },
+					{ text: 'Warm sandbox pools', link: '/warm-pools' },
 					{ text: 'Troubleshooting', link: '/troubleshooting' },
 				],
 			},
@@ -204,6 +205,7 @@ export default defineConfig({
 					{ text: 'Security', link: '/security' },
 					{ text: 'Operations', link: '/operations' },
 					{ text: 'App pools', link: '/app-pools' },
+					{ text: 'Warm sandbox pools', link: '/warm-pools' },
 					{ text: 'Troubleshooting', link: '/troubleshooting' },
 				],
 			},

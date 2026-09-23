@@ -1,3 +1,4 @@
+import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
 import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
@@ -310,6 +311,15 @@ const OBJECTS: BucketObject[] = [
 		summary: 'Monotonic boundary that closes old versions to newly created sessions.',
 		mutability: 'cas',
 		owner: 'SessionService',
+		tag: 'session',
+	},
+	{
+		name: 'WarmPool',
+		key: paths.warmPool('{backend}'),
+		schema: WarmPoolRecordSchema,
+		summary: 'Deployment-wide warm sandbox reservations and session handoffs.',
+		mutability: 'cas',
+		owner: 'WarmPoolStore',
 		tag: 'session',
 	},
 	{

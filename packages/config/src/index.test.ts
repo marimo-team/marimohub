@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { BadRequestError, createProjectId, createSessionId } from '@marimo-hub/core';
+import {
+	BadRequestError,
+	createNotebookId,
+	createProjectId,
+	createSessionId,
+} from '@marimo-hub/core';
 import type { ProxyExposure, SandboxProvider } from '@marimo-hub/core';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { ACTOR, makeFakeSandbox } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createFromEnv, createFromEnvAsync } from './index';
 
@@ -586,6 +591,39 @@ describe('createFromEnv external adapter libraries', () => {
 		);
 		expect(deps.compute).toBe(compute);
 		expect(deps.version?.backends?.compute).toBe('library');
+	});
+
+	it('prefills and claims a pool from a capable external compute provider', async () => {
+		const sandbox = makeFakeSandbox().instance;
+		const compute: SandboxProvider = {
+			create: vi.fn(() => sandbox),
+			connectExisting: vi.fn(() => sandbox),
+			proxy: async () => null,
+			warmPool: { maxLifetimeMs: null, configuration: { deployment: 'external-test' } },
+		};
+		const deps = createFromEnv(
+			{
+				...env,
+				MARIMOHUB_COMPUTE_BACKEND: 'library',
+				MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true',
+			},
+			undefined,
+			{ libraries: { bucket: new MemoryBucket(), compute } },
+		);
+		const pool = deps.warmPool!;
+		expect(pool.store.backend).toBe('library');
+		await pool.sweep();
+		const ready = (await pool.store.read()).pools[0].members[0];
+		const claim = await pool.claim({
+			destination: {
+				project_id: createProjectId(),
+				notebook_id: createNotebookId(),
+				session_id: createSessionId(),
+			},
+		});
+		expect(claim?.member.sandbox_id).toBe(ready.sandbox_id);
+		expect(compute.create).toHaveBeenCalledOnce();
+		expect(compute.connectExisting).toHaveBeenCalledOnce();
 	});
 
 	it('loads and wires an adapter end to end through the async API', async () => {

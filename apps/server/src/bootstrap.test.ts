@@ -5,11 +5,12 @@ import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { ConfigError } from '@marimo-hub/config';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
-import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';
+import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
 import type { OtelHandle } from './otel';
 
 vi.mock('./cron', () => ({
 	startMaintenance: vi.fn(() => vi.fn()),
+	startWarmPools: vi.fn(),
 	startSessionLifecycle: vi.fn(() => vi.fn()),
 	startJobScheduler: vi.fn(() => ({ stop: vi.fn(), drain: vi.fn(async () => {}) })),
 }));
@@ -394,6 +395,7 @@ describe('bootstrap', () => {
 		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: enabled }, harness.overrides);
 
 		expect(startMaintenance).toHaveBeenCalledTimes(calls);
+		expect(startWarmPools).toHaveBeenCalledTimes(calls);
 		expect(startSessionLifecycle).toHaveBeenCalledTimes(calls);
 	});
 

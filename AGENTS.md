@@ -140,6 +140,7 @@ These CAS-managed records also have one writer each:
   `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
+- `WarmPoolStore` owns each deployment warm-pool record at `_system/warm-pools/{backend}.json`, including creation reservations, claims, and pending reclamation.
 - `AppPoolStore` owns each app pool at `_system/app-pools/{pid}/{nid}.json`,
   including reservations, account assignments, visit leases, and retained deletion tombstones.
 - `SessionService.claimApp`/`releaseApp` owns each legacy app claim at

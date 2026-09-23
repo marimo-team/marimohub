@@ -25,6 +25,9 @@ import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
 	composeAuthenticators,
 	createServices,
+	WarmPoolStore,
+	AppPoolStore,
+	WarmPoolService,
 	Millis,
 	normalizeBaseUrl,
 	parseHttpUrl,
@@ -92,6 +95,7 @@ import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sess
 import { parseAppPoolPolicy } from './appPool';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
+import { parseWarmPoolConfig } from './warmPool';
 
 import type { Env } from './env';
 import { parseSandboxAuth } from './sandboxAuth';
@@ -678,6 +682,14 @@ export function createFromEnv(
 			{ variable: 'MARIMOHUB_SURFACES' },
 		);
 	}
+	const warmPool = parseWarmPoolConfig(env, {
+		backend: computeBackendValue,
+		compute,
+		images: sandboxImages,
+		profiles: appliedComputeProfiles,
+		sessionMaxLifetimeMs: sessionLifetime.maxLifetimeMs,
+		startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
+	});
 	const brokerPolicy =
 		integrationsEnabled(env) && env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
@@ -698,6 +710,17 @@ export function createFromEnv(
 	);
 	const dataQuery = dataQueryFromEnv(env, duckdbHttpSessionFactory, metrics);
 	const deps: ApiDeps = {
+		warmPool: warmPool
+			? new WarmPoolService(
+					new WarmPoolStore(bucket, warmPool.backend),
+					compute,
+					services.sessions,
+					warmPool.config,
+					metrics,
+					undefined,
+					new AppPoolStore(bucket),
+				)
+			: undefined,
 		services,
 		metrics,
 		bucket,

@@ -1,3 +1,4 @@
+import { WarmPoolStore } from './WarmPoolStore';
 import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
@@ -132,11 +133,20 @@ export class ReconciliationService {
 		for (const s of sessions) {
 			if (s.sandbox_id) ownedSandboxIds.add(s.sandbox_id);
 		}
-		// Read AFTER the provider snapshot for the same reason as sessions: a run
-		// that went `provisioning` mid-sweep already has its sandbox id recorded.
-		// An unreadable index fails safe: without it Rule 3 cannot tell a job
-		// sandbox from an orphan, so orphan reaping is skipped for this sweep.
+		// Read ownership after the provider snapshot to protect reservations made mid-sweep.
+		// Incomplete ownership cannot distinguish an active sandbox from an orphan.
 		let reapOrphans = true;
+		try {
+			for (const id of await WarmPoolStore.allOwnedSandboxIds(this.bucket)) ownedSandboxIds.add(id);
+		} catch (error) {
+			reapOrphans = false;
+			logOperationalError(
+				'warm_pool_ownership_unavailable',
+				{ operation: 'reconciliation.warm_pools' },
+				error,
+			);
+		}
+
 		if (this.jobRuns) {
 			try {
 				if (this.jobRuns.listActiveSnapshot) {
