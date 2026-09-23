@@ -74,6 +74,19 @@ describe('bootstrap', () => {
 		vi.useRealTimers();
 	});
 
+	it('adds report-only CSP to SPA responses without changing API policies', async () => {
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const spa = (await fetch(new Request('http://localhost/'), {} as never)) as Response;
+		expect(spa.headers.get('content-security-policy-report-only')).toContain(
+			"script-src 'self' 'wasm-unsafe-eval'",
+		);
+		expect(spa.headers.get('content-security-policy')).toBeNull();
+		const api = (await fetch(new Request('http://localhost/api/health'), {} as never)) as Response;
+		expect(api.headers.get('content-security-policy-report-only')).toBeNull();
+	});
+
 	it('exits on a fatal preflight result without serving', async () => {
 		const report: PreflightReport = {
 			ok: false,

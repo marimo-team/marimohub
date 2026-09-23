@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 import { ProjectId } from '@marimo-hub/core';
-import type { Authenticator } from '@marimo-hub/core';
+import type { Authenticator, TokenGrant } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createApi } from '../createApi';
@@ -55,6 +55,7 @@ describe('User routes', () => {
 	});
 
 	it('GET /users omits ids with no recorded identity', async () => {
+		await request('POST', '/projects', { name: 'Standing', description: '' });
 		const data = await expectOk<Record<string, unknown>>(
 			await request('GET', `/users?ids=${ACTOR},sub-unknown`),
 		);
@@ -70,6 +71,83 @@ describe('User routes', () => {
 		// A fresh app with the default deny-all authenticator.
 		const app = createApi(makeTestDeps(bucket));
 		await expectError(await app.request(`/api/v1/users?ids=${ACTOR}`), 401, 'UNAUTHORIZED');
+	});
+
+	it('denies arbitrary resolution by an uninvolved account, but permits self-resolution', async () => {
+		const other = createTestApi({ bucket, userId: uid('other') }).request;
+		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
+		expect(await expectOk(await other('GET', '/users?ids=other'))).toHaveProperty('other');
+	});
+
+	function withGrant(
+		grant: TokenGrant,
+		kind: 'personal-access-token' | 'service-account' = 'personal-access-token',
+	) {
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				credential: { kind, grant },
+			}),
+		};
+		return createTestApi({ bucket, deps: { authenticator } }).request;
+	}
+
+	it.each(['lookup,other', 'other,lookup', ' lookup,, other,lookup '])(
+		'denies the entire mixed batch before reading directory records: %s',
+		async (ids) => {
+			const api = createTestApi({ bucket, userId: uid('lookup') });
+			const lookup = vi.spyOn(api.deps.services.identities, 'getMany');
+			await expectError(await api.request('GET', `/users?ids=${encodeURIComponent(ids)}`), 403);
+			expect(lookup).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['personal-access-token', 'service-account'] as const)(
+		'permits only self-resolution with a restricted %s',
+		async (kind) => {
+			const restricted = withGrant({ actions: ['org-integration.manage'], projects: '*' }, kind);
+			expect(
+				await expectOk(await restricted('GET', `/users?ids=${ACTOR},${ACTOR}`)),
+			).toHaveProperty(ACTOR);
+			expect(await expectOk(await restricted('GET', '/users?ids=,,%20'))).toEqual({});
+			await expectError(await restricted('GET', `/users?ids=${ACTOR},other`), 403);
+		},
+	);
+
+	it('revokes directory lookup after the only project membership is deleted', async () => {
+		const member = uid('member');
+		const other = createTestApi({ bucket, userId: member }).request;
+		await other('GET', '/me');
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'Standing', description: '' }),
+			201,
+		);
+		await expectOk(
+			await request('POST', `/projects/${project.id}/members`, { user_id: member, role: 'viewer' }),
+			201,
+		);
+		expect(await expectOk(await other('GET', `/users?ids=${ACTOR}`))).toHaveProperty(ACTOR);
+		await expectOk(await request('DELETE', `/projects/${project.id}`));
+		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
+	});
+
+	it.each(['personal-access-token', 'service-account'] as const)(
+		'denies arbitrary resolution with an integration-only %s',
+		async (kind) => {
+			await request('POST', '/projects', { name: 'Standing', description: '' });
+			const restricted = withGrant({ actions: ['org-integration.manage'], projects: '*' }, kind);
+			await expectError(await restricted('GET', '/users?ids=other'), 403);
+		},
+	);
+
+	it('masks arbitrary lookup with a selected-project token', async () => {
+		const project = await expectOk<{ id: string }>(
+			await request('POST', '/projects', { name: 'P', description: '' }),
+			201,
+		);
+		const restricted = withGrant({ actions: '*', projects: [ProjectId.parse(project.id)] });
+		await expectError(await restricted('GET', '/users?ids=unrelated'), 404);
 	});
 
 	describe('GET /users/search', () => {

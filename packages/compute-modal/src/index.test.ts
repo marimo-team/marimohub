@@ -794,3 +794,34 @@ computeContract('ModalCompute', () => makeCompute(contractWorld()), {
 		},
 	},
 });
+
+describe('bounded file transport', () => {
+	it('cancels both streams on overflow and bounds the exit wait', async () => {
+		for (const overflow of [true, false]) {
+			const world = makeWorld();
+			const sandbox = new FakeSandbox();
+			const cancel = vi.fn();
+			sandbox.execImpl = () => ({
+				stdout: new ReadableStream({
+					start(c) {
+						if (overflow) c.enqueue('12345');
+						else c.close();
+					},
+					cancel,
+				}),
+				stderr: new ReadableStream({ cancel }),
+				wait: () => new Promise(() => {}),
+			});
+			world.existing.set(SANDBOX_ID, sandbox);
+			expect(
+				(
+					await makeCompute(world).create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+						maxBytes: 2,
+						timeoutMs: 20,
+					})
+				).success,
+			).toBe(false);
+			expect(cancel).toHaveBeenCalled();
+		}
+	});
+});

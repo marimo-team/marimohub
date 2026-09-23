@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import {
+	readBoundedFile,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	buildLaunchCommand,
@@ -25,6 +26,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import { SandboxId } from '@marimo-hub/core/ids';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
@@ -101,7 +103,7 @@ interface ContainerSandboxProcess extends SandboxProcess {
 export interface ContainerRunner {
 	run(
 		args: string[],
-		options?: { stdin?: string | Uint8Array; timeout?: number },
+		options?: { stdin?: string | Uint8Array; timeout?: number; maxOutputBytes?: number },
 	): Promise<ContainerRunResult>;
 }
 
@@ -121,8 +123,21 @@ export function spawnContainerRunner(bin: string): ContainerRunner {
 							}, options.timeout)
 						: undefined;
 				timer?.unref();
-				child.stdout?.on('data', (d) => (stdout += d.toString()));
-				child.stderr?.on('data', (d) => (stderr += d.toString()));
+				let bytes = 0;
+				let overflow = false;
+				const append = (chunk: Buffer, output: 'stdout' | 'stderr') => {
+					if (overflow || timedOut) return;
+					bytes += chunk.length;
+					if (options?.maxOutputBytes !== undefined && bytes > options.maxOutputBytes) {
+						overflow = true;
+						child.kill('SIGKILL');
+						return;
+					}
+					if (output === 'stdout') stdout += chunk.toString();
+					else stderr += chunk.toString();
+				};
+				child.stdout?.on('data', (d) => append(d, 'stdout'));
+				child.stderr?.on('data', (d) => append(d, 'stderr'));
 				child.on('error', (err) => {
 					clearTimeout(timer);
 					resolve({ stdout, stderr: stderr + String(err), exitCode: 127 });
@@ -134,7 +149,7 @@ export function spawnContainerRunner(bin: string): ContainerRunner {
 						stderr: timedOut
 							? [stderr, `command timed out after ${options?.timeout}ms`].filter(Boolean).join('\n')
 							: stderr,
-						exitCode: timedOut ? 124 : (code ?? 1),
+						exitCode: timedOut || overflow ? 124 : (code ?? 1),
 					});
 				});
 				if (options?.stdin !== undefined) {
@@ -247,6 +262,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 				: ['sh', '-lc', this.withEnv(cmd)];
 		return this.runner.run(['exec', ...flags, this.name, ...command], {
 			timeout: options?.timeout,
+			maxOutputBytes: options?.maxOutputBytes,
 		});
 	}
 
@@ -264,6 +280,10 @@ class ContainerSandboxInstance implements SandboxInstance {
 				controller.close();
 			},
 		});
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

@@ -844,18 +844,53 @@ describe('forwardHttp', () => {
 				'cf-access-jwt-assertion': 'eyJhbGciOiJSUzI1NiJ9.access.jwt',
 				'cf-access-client-id': 'svc.access',
 				'cf-access-client-secret': 'svc-secret',
+				'X-Goog-IAP-JWT-Assertion': 'iap-proof',
+				'X-Custom-Assertion': 'custom-proof',
 				'x-custom': 'passes',
 			},
 		});
-		const res = await forwardHttp(req, `${origin}/echo`, 'sess-123', TEST_KERNEL_AUTH_TOKEN);
+		const res = await forwardHttp(req, `${origin}/echo`, 'sess-123', TEST_KERNEL_AUTH_TOKEN, [
+			'x-CUSTOM-assertion',
+		]);
 		const seen = (await res.json()) as Record<string, string>;
 		expect(seen.cookie).toBeUndefined();
 		expect(seen.authorization).toBe(`Bearer ${TEST_KERNEL_AUTH_TOKEN}`);
 		expect(seen['cf-access-jwt-assertion']).toBeUndefined();
 		expect(seen['cf-access-client-id']).toBeUndefined();
 		expect(seen['cf-access-client-secret']).toBeUndefined();
+		expect(seen['x-goog-iap-jwt-assertion']).toBeUndefined();
+		expect(seen['x-custom-assertion']).toBeUndefined();
 		expect(seen['x-custom']).toBe('passes');
 	});
+
+	it.each([undefined, [], ['AUTHORIZATION', 'X-Custom-Identity', 'x-custom-identity']])(
+		'strips default credentials independently of extra header configuration: %j',
+		async (headers) => {
+			const request = new Request('https://hub/x', {
+				headers: {
+					Authorization: 'Bearer hub-secret',
+					'X-Forwarded-Email': 'private@example.com',
+					'X-Forwarded-User': 'private-user',
+					'X-Goog-Iap-Jwt-Assertion': 'iap-secret',
+					'X-Custom-Identity': 'custom-secret',
+					'X-Request-Id': 'request-123',
+				},
+			});
+			const res = await forwardHttp(
+				request,
+				`${origin}/echo`,
+				undefined,
+				TEST_KERNEL_AUTH_TOKEN,
+				headers,
+			);
+			const seen = (await res.json()) as Record<string, string>;
+			expect(seen.authorization).toBe(`Bearer ${TEST_KERNEL_AUTH_TOKEN}`);
+			for (const header of ['x-forwarded-email', 'x-forwarded-user', 'x-goog-iap-jwt-assertion'])
+				expect(seen[header]).toBeUndefined();
+			expect(seen['x-custom-identity']).toBe(headers?.length ? undefined : 'custom-secret');
+			expect(seen['x-request-id']).toBe('request-123');
+		},
+	);
 
 	it('forwards no authorization header for a legacy tokenless session', async () => {
 		const res = await forwardHttp(new Request('https://hub/x'), `${origin}/echo`);

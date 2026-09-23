@@ -225,12 +225,11 @@ function exitCodeFromStatus(status: V1Status | undefined): number {
 	return Number.isNaN(code) ? 1 : code;
 }
 
-/** A `Writable` that accumulates everything written to it into a string. */
-function collector(): { stream: Writable; text: () => string } {
+function collector(accept: (bytes: number) => boolean): { stream: Writable; text: () => string } {
 	const chunks: Buffer[] = [];
 	const stream = new Writable({
 		write(chunk, _enc, cb) {
-			chunks.push(Buffer.from(chunk));
+			if (accept(chunk.length)) chunks.push(Buffer.from(chunk));
 			cb();
 		},
 	});
@@ -509,8 +508,6 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			options?: K8sExecOptions,
 		): Promise<K8sExecResult> {
 			const { exec } = await apis();
-			const out = collector();
-			const errc = collector();
 			// objectMode: false — the default would emit a Uint8Array as a single
 			// object chunk instead of streaming its bytes to the pod's stdin.
 			const stdinStream =
@@ -532,6 +529,20 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					clearTimeout(timer);
 					reject(execSocketError(error));
 				};
+				let bytes = 0;
+				const accept = (length: number) => {
+					if (settled) return false;
+					bytes += length;
+					if (options?.maxOutputBytes !== undefined && bytes > options.maxOutputBytes) {
+						fail(new Error('Sandbox output exceeded byte limit'));
+						stdinStream?.destroy();
+						socket?.close();
+						return false;
+					}
+					return true;
+				};
+				const out = collector(accept);
+				const errc = collector(accept);
 				const timer =
 					options?.timeout !== undefined && options.timeout > 0
 						? setTimeout(() => {

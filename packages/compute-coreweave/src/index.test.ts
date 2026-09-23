@@ -1260,3 +1260,27 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(world.created).toHaveLength(1);
 	});
 });
+
+describe('bounded file transport', () => {
+	it('cancels the process when streamed output exceeds the limit', async () => {
+		const cancel = vi.fn(async () => {});
+		const world = makeWorld({
+			startImpl: async () => ({
+				...fakeProcess({ exitCode: 0 }),
+				stdout: (async function* () {
+					yield '12345';
+				})(),
+				cancel,
+			}),
+		});
+		expect(
+			(
+				await makeCompute(world).create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+					maxBytes: 2,
+					timeoutMs: 100,
+				})
+			).success,
+		).toBe(false);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+});

@@ -1850,7 +1850,7 @@ export interface paths {
 		};
 		/**
 		 * Resolve user ids to display identities
-		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map.
+		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map. Resolving other users requires the same directory authority as user search; authenticated callers may resolve themselves.
 		 */
 		get: operations['users.resolve'];
 		put?: never;
@@ -17467,6 +17467,24 @@ export interface operations {
 			};
 			/** @description Authentication required */
 			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

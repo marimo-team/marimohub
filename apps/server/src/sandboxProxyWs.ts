@@ -11,7 +11,7 @@ import https from 'node:https';
 import type { Duplex } from 'node:stream';
 import {
 	authorizeProxyRequest,
-	CREDENTIAL_HEADERS,
+	isCredentialHeader,
 	UNSAFE_RESPONSE_HEADERS,
 } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
@@ -83,7 +83,7 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 				// header passes through.
 				const forwarded: http.OutgoingHttpHeaders = {};
 				for (const [key, value] of Object.entries(req.headers)) {
-					if (CREDENTIAL_HEADERS.has(key.toLowerCase())) continue;
+					if (isCredentialHeader(key, deps.sandbox.credentialHeaders)) continue;
 					forwarded[key] = value;
 				}
 				const headers = {

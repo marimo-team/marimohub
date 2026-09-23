@@ -26,6 +26,7 @@ import type { CommitSessionInput } from '../content/NotebookService';
  */
 const RESTORE_FETCH_CONCURRENCY = 32;
 const CAPTURE_FILE_CONCURRENCY = 8;
+const CAPTURE_READ_TIMEOUT_MS = 10_000;
 
 /**
  * Attempts for an idempotent sandbox write. A backend stream can reset mid-call
@@ -257,8 +258,8 @@ export async function restoreWorkspace(
  * `pyproject.toml`) and `__marimo__/` snapshots are excluded — they are owned by
  * `NotebookService.commitSession` — so this captures only the runtime workspace.
  *
- * In `workspace` mode every remaining file is read binary-safely (via
- * `base64 -w0`) and written to its `workspace/` key. In `source` mode no runtime
+ * In `workspace` mode every remaining file is read with a byte/deadline budget
+ * and written to its `workspace/` key. In `source` mode no runtime
  * files are uploaded. Both modes then mirror-delete: any key under `workspace/`
  * (other than the excluded source files) that is no longer present in the sandbox
  * is removed, keeping `workspace/` an accurate latest-only mirror and cleaning up
@@ -336,15 +337,19 @@ export async function captureWorkspace(
 		}
 
 		// Presence comes from the listing: skipped uploads retain the last good copy.
+		let capturedBytes = 0;
 		await mapWithConcurrency(selected, CAPTURE_FILE_CONCURRENCY, async (rel) => {
-			const result = await sandbox.exec(`base64 -w0 ${shellQuote(`${workingDir}/${rel}`)}`);
-			if (!result.success) {
-				console.warn(`captureWorkspace: could not read ${rel}; skipping`);
+			const bytes = await readBoundedBytes(
+				sandbox,
+				`${workingDir}/${rel}`,
+				MAX_WORKSPACE_FILE_BYTES,
+			);
+			if (!bytes || capturedBytes + bytes.byteLength > MAX_WORKSPACE_BYTES) {
+				console.warn(`captureWorkspace: could not read ${rel.slice(0, 256)}; skipping`);
 				return;
 			}
-			const bytes = base64Decode(result.stdout.trim());
+			capturedBytes += bytes.byteLength;
 			await bucket.put(nb.workspaceFile(rel), bytes);
-			return rel;
 		});
 		await mapWithConcurrency(directoryMarkers, CAPTURE_FILE_CONCURRENCY, async (marker) =>
 			bucket.put(nb.workspaceFile(marker), new Uint8Array()),
@@ -392,12 +397,7 @@ export async function readSessionArtifacts(
 	return { code, deps, html, session };
 }
 
-/**
- * Sizes of every file under `mountPath`, keyed by absolute path, so an
- * oversized artifact can be refused BEFORE `readFile` buffers it. Best-effort:
- * a listing failure yields an empty map and the reads below run uncapped —
- * a teardown's save-on-reap commit must never be blocked by a stat.
- */
+/** Listing sizes are an optimization; bounded reads enforce the actual limit. */
 export async function listFileSizes(
 	sandbox: SandboxInstance,
 	mountPath: string,
@@ -407,20 +407,15 @@ export async function listFileSizes(
 		const listing = await sandbox.listFiles(mountPath, { recursive: true, includeHidden: true });
 		if (listing.success) {
 			for (const file of listing.files) {
-				if (file.type === 'file') sizes.set(file.absolutePath, file.size);
+				sizes.set(file.absolutePath, file.type === 'file' ? file.size : Infinity);
 			}
 		}
 	} catch {
-		// Listing unsupported/failed: the caller reads without the cap.
+		// Transport limits still apply when listing is unavailable.
 	}
 	return sizes;
 }
 
-/**
- * Read one sandbox file as text, or `undefined` when it is absent, unreadable,
- * or listed above `MAX_ARTIFACT_BYTES` (an artifact absent from `sizes` falls
- * through to the read, preserving the omit-when-unreadable contract).
- */
 export async function readCappedFile(
 	sandbox: SandboxInstance,
 	absolutePath: string,
@@ -433,8 +428,32 @@ export async function readCappedFile(
 		);
 		return undefined;
 	}
-	const result = await sandbox.readFile(absolutePath);
-	return result.success ? result.content : undefined;
+	const bytes = await readBoundedBytes(sandbox, absolutePath, MAX_ARTIFACT_BYTES);
+	return bytes === undefined ? undefined : new TextDecoder().decode(bytes);
+}
+
+async function readBoundedBytes(
+	sandbox: SandboxInstance,
+	path: string,
+	maxBytes: number,
+): Promise<Uint8Array | undefined> {
+	// External adapters must opt into the bounded contract; never fall back to readFile.
+	const result = await sandbox.readFileBounded?.(path, {
+		maxBytes,
+		timeoutMs: CAPTURE_READ_TIMEOUT_MS,
+	});
+	if (!result?.success) return undefined;
+	const encodedLimit = result.encoding === 'base64' ? 4 * Math.ceil(maxBytes / 3) : maxBytes;
+	if (result.content.length > encodedLimit) return undefined;
+	try {
+		const bytes =
+			result.encoding === 'base64'
+				? base64Decode(result.content)
+				: new TextEncoder().encode(result.content);
+		return bytes.byteLength <= maxBytes ? bytes : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Decode a base64 string to raw bytes without depending on Node's `Buffer`. */

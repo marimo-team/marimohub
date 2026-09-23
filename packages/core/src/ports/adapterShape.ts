@@ -30,6 +30,7 @@ export const SANDBOX_INSTANCE_REQUIRED_METHODS = [
 ] as const satisfies readonly (keyof SandboxInstance)[];
 
 export const SANDBOX_INSTANCE_OPTIONAL_METHODS = [
+	'readFileBounded',
 	'ready',
 	'launchProcess',
 	'drainTimings',

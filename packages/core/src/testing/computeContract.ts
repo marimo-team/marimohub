@@ -230,6 +230,19 @@ export function computeContract(
 			).toBe(true);
 		});
 
+		it('bounded reads reject invalid budgets', async () => {
+			const inst = provider.create(CONTRACT_ID);
+			if (!inst.readFileBounded) return;
+			for (const options of [
+				{ maxBytes: -1, timeoutMs: 100 },
+				{ maxBytes: 10, timeoutMs: 0 },
+			]) {
+				expectFileResult(await inst.readFileBounded('/workspace/contract-file', options), {
+					success: false,
+				});
+			}
+		});
+
 		it('writeFiles accepts raw bytes (a backend must never stringify them)', async () => {
 			const inst = provider.create(CONTRACT_ID);
 			// Invalid UTF-8 with a NUL: a backend that round-trips through a string or a

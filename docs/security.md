@@ -17,14 +17,18 @@ of the compute backend. The modes trade origin isolation against authentication.
 
 Kernels run arbitrary Python in an `<iframe sandbox="allow-scripts allow-same-origin …">`.
 Browsers connect **directly** to kernels. Sibling hostnames such as `hub.example.com` and `sandboxes.example.com` are supported.
-When `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` is set, the server uses its hostname to reject identical or parent/child sandbox hostnames.
-Without it, the server skips this comparison. The Cloudflare Worker example compares against the request hostname instead.
+The server rejects identical or parent/child app and sandbox hostnames.
+It uses `MARIMOHUB_APP_BASE_URL`, with the OIDC redirect URI as a fallback.
+Both URLs must have the same origin when both are present.
+A configured kernel host without a valid app origin prevents startup for every authentication backend.
+The Cloudflare Worker example also compares against the request hostname.
 
 Sibling subdomains share cookie scope. Separate registrable domains provide stronger isolation from cookies set by notebooks.
 
 ```bash
 # app:      https://hub.example.com
 # kernels:  https://sandboxes.example.com
+MARIMOHUB_APP_BASE_URL=https://hub.example.com
 MARIMOHUB_SANDBOX_EXPOSURE=subdomain   # default
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.com
 ```
@@ -71,6 +75,10 @@ whoever opens the kernel. App-user assignments and either
 `MARIMOHUB_VIEWER_MODE=applications` or `MARIMOHUB_VIEWER_MODE=ephemeral-sandbox`
 extend this risk to people who use apps that other authors wrote.
 If you combine proxy mode with app access, trust every notebook author in the deployment.
+
+HTTP and WebSocket proxies remove hub credentials before they forward requests to kernels or secondary editor surfaces.
+The filter includes cookies, Authorization, Cloudflare Access headers, the IAP assertion, and configured `MARIMOHUB_AUTH_PROXY_HEADER` names.
+Library deployments must supply custom identity headers through `sandbox.credentialHeaders`.
 
 ## Native kernel authentication
 
@@ -240,6 +248,28 @@ is evaluated in addition to the project labels, so it can only add
 restrictions. The responses carry an `ETag`; send it back as `If-Match` to
 reject a concurrent change with `412`.
 
+Notebook duplication preserves the source notebook's security labels in the initial metadata and catalog entry.
+The copy requires the same resource clearance as the original.
+
+## Identity lookup
+
+`GET /api/v1/users` requires directory authority to resolve another user's profile, including email and profile picture.
+The endpoint applies the same credential grants and project involvement rules as directory search.
+Authenticated callers can resolve their own profile.
+Selected-project tokens cannot resolve arbitrary directory identities.
+
+## Sandbox artifact reads
+
+Artifact capture accepts regular files only and rejects symlinks in every path component.
+Each read has a 25 MiB limit and a 10-second command deadline.
+The transport stops on overflow or timeout. Earlier file sizes do not replace the transport limit.
+Workspace capture also enforces its total byte limit against the captured bytes.
+A refused workspace read preserves the last stored copy.
+
+External compute adapters must implement `SandboxInstance.readFileBounded` to support artifact and workspace capture.
+The method must enforce byte limits during transport and cancel the transport on overflow or timeout.
+Capture never falls back to an unbounded read when this method is absent.
+
 ## Request safety
 
 - **CSRF:** state-changing requests are same-origin by default; add trusted
@@ -248,6 +278,11 @@ reject a concurrent change with `412`.
   kernels per user; `0` disables the cap.
 - **Security headers** (anti-clickjacking, nosniff, HSTS, referrer policy) wrap
   the SPA/static responses.
+- **SPA Content Security Policy:** the Node server sends a report-only policy.
+  The policy permits local scripts, Google Fonts, image sources, workers, and kernel frames.
+  Browsers report violations in the developer console. The policy does not block resources yet.
+  Before enforcement, review violations from the deployment's integrations and narrow the permitted origins.
+  Kernel proxy and HTML snapshot policies remain separate.
 
 ## Storage integrity
 

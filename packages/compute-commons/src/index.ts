@@ -1,3 +1,11 @@
+import { shellQuote } from './shell';
+export { shellQuote } from './shell';
+export {
+	readBoundedFile,
+	readBoundedStream,
+	collectBoundedOutput,
+	waitWithSignal,
+} from './boundedRead';
 /**
  * @marimo-hub/compute-commons — vendor-free helpers shared by the compute
  * adapters (`compute-local`, `compute-coreweave`, …).
@@ -14,18 +22,6 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => {
 		setTimeout(resolve, ms);
 	});
-}
-
-/**
- * Single-quote a value for safe interpolation into a `sh -lc` / `sh -c` string.
- * Wraps the value in single quotes and escapes any embedded single quote as the
- * classic `'\''` sequence, so the result is injection-safe for arbitrary input
- * (paths, repo URLs, env values, …).
- *
- * @example shellQuote("a'b") // => "'a'\\''b'"
- */
-export function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 /**

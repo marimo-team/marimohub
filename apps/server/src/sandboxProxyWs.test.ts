@@ -209,6 +209,7 @@ describe('attachSandboxProxyUpgrade', () => {
 
 		it('relays a non-upgrade upstream response and closes the client socket', async () => {
 			const { deps, token } = await runningProxySession(upstreamOrigin);
+			deps.sandbox.credentialHeaders = ['X-Custom-Assertion', 'AUTHORIZATION'];
 			const server = fakeUpgradeServer();
 			attachSandboxProxyUpgrade(server, deps);
 
@@ -220,6 +221,10 @@ describe('attachSandboxProxyUpgrade', () => {
 			req.headers.cookie = 'hub_session=secret';
 			req.headers.authorization = 'Bearer mhub_pat_secret';
 			req.headers['cf-access-jwt-assertion'] = 'eyJhbGciOiJSUzI1NiJ9.access.jwt';
+			req.headers['X-CUSTOM-ASSERTION'] = 'custom-proof';
+			req.headers['x-goog-iap-jwt-assertion'] = 'iap-proof';
+			req.headers['x-forwarded-user'] = 'private-user';
+			req.headers['x-forwarded-email'] = 'private@example.com';
 			req.headers['x-custom'] = 'passes';
 			lastUpstreamHeaders = undefined;
 			server.listeners[0](req, socket, Buffer.alloc(0));
@@ -230,6 +235,10 @@ describe('attachSandboxProxyUpgrade', () => {
 			expect(lastUpstreamHeaders!.cookie).toBeUndefined();
 			expect(lastUpstreamHeaders!.authorization).toBe(`Bearer ${TEST_KERNEL_AUTH_TOKEN}`);
 			expect(lastUpstreamHeaders!['cf-access-jwt-assertion']).toBeUndefined();
+			expect(lastUpstreamHeaders!['x-custom-assertion']).toBeUndefined();
+			expect(lastUpstreamHeaders!['x-goog-iap-jwt-assertion']).toBeUndefined();
+			expect(lastUpstreamHeaders!['x-forwarded-user']).toBeUndefined();
+			expect(lastUpstreamHeaders!['x-forwarded-email']).toBeUndefined();
 			expect(lastUpstreamHeaders!['x-custom']).toBe('passes');
 		});
 

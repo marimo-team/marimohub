@@ -969,6 +969,27 @@ describe('createK8sClient', () => {
 		);
 	});
 
+	it.each([false, true])('closes on output overflow (before connection: %s)', async (early) => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const socket = Object.assign(new EventTarget(), { close: vi.fn() });
+		k8sMock.exec.mockImplementationOnce(
+			async (_ns, _name, _container, _cmd, stdout: Writable, stderr: Writable) => {
+				const emit = () => {
+					stdout.write('1234');
+					stderr.write('5');
+					stdout.write('ignored');
+				};
+				if (early) emit();
+				else setTimeout(emit, 0);
+				return socket;
+			},
+		);
+		await expect(
+			client.exec('pod', ['cat', '/file'], undefined, { maxOutputBytes: 4, timeout: 100 }),
+		).rejects.toThrow('byte limit');
+		await vi.waitFor(() => expect(socket.close).toHaveBeenCalledOnce());
+	});
+
 	it('closes the exec WebSocket when the command times out', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		const socket = Object.assign(new EventTarget(), { close: vi.fn() });

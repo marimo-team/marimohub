@@ -119,6 +119,8 @@ export interface SandboxUserHomeResolver {
 
 /** Everything about how a notebook sandbox is mounted, exposed, and persisted. */
 export interface SandboxConfig {
+	/** Ingress identity headers stripped before HTTP and WebSocket kernel forwarding. */
+	credentialHeaders?: readonly string[];
 	/** Bucket connection info the sandbox mounts for notebook files (was `c.env.R2_*`). */
 	bucket: BucketConfig;
 	/** Public hostname used when exposing kernel ports (was `c.env.SANDBOX_HOSTNAME`). */

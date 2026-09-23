@@ -721,6 +721,7 @@ export function createFromEnv(
 		}),
 		authRoutes,
 		sandbox: {
+			credentialHeaders: env.MARIMOHUB_AUTH_PROXY_HEADER?.split(',').map((header) => header.trim()),
 			bucket: makeSandboxBucketConfig(env),
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',

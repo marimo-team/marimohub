@@ -121,13 +121,24 @@ export async function bootstrap(
 		}
 	}
 
-	// Security headers for the SPA/static responses: anti-clickjacking
-	// (X-Frame-Options: SAMEORIGIN), MIME-sniffing (nosniff), HSTS, Referrer-Policy,
-	// and cross-origin isolation defaults. Registered after createApi, so it wraps the
-	// fall-through static/HTML responses (the framing/XSS-delivery surface); the
-	// terminal /api/* JSON routes inside createApi are unaffected. No CSP is set here —
-	// a tuned CSP (allowing the font CDN + the sandbox iframe origin) is a follow-up.
-	app.use('*', secureHeaders());
+	// Keep SPA policy separate from terminal API, kernel-proxy, and snapshot responses.
+	app.use(
+		'*',
+		secureHeaders({
+			contentSecurityPolicyReportOnly: {
+				defaultSrc: ["'self'"],
+				baseUri: ["'self'"],
+				objectSrc: ["'none'"],
+				scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+				styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+				fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+				imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+				connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
+				frameSrc: ["'self'", 'https:', 'http:'],
+				workerSrc: ["'self'", 'blob:'],
+			},
+		}),
+	);
 
 	// Serve the prebuilt SPA. API routes (registered inside createApi) are terminal,
 	// so they take precedence; everything else falls through to static assets, with

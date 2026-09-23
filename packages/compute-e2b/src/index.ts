@@ -18,6 +18,8 @@
  * fake-injected path is fully covered by tests.
  */
 import {
+	readBoundedFile,
+	waitWithSignal,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	buildLaunchCommand,
@@ -36,6 +38,7 @@ import {
 import { SandboxId } from '@marimo-hub/core/ids';
 import { Seconds } from '@marimo-hub/core/duration';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	CreateSandboxOptions,
 	ExecOptions,
@@ -98,7 +101,12 @@ export interface E2bSandboxHandle {
 	commands: {
 		run(
 			cmd: string,
-			options?: { cwd?: string; envs?: Record<string, string>; timeoutMs?: number },
+			options?: {
+				cwd?: string;
+				envs?: Record<string, string>;
+				timeoutMs?: number;
+				maxOutputBytes?: number;
+			},
 		): Promise<E2bExecResult>;
 		runBackground(
 			cmd: string,
@@ -227,6 +235,7 @@ class E2bSandboxInstance implements SandboxInstance {
 		const res = await sb.commands.run(this.withDefaults(cmd), {
 			envs: this.env,
 			timeoutMs: options?.timeout,
+			maxOutputBytes: options?.maxOutputBytes,
 		});
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
@@ -239,6 +248,10 @@ class E2bSandboxInstance implements SandboxInstance {
 				controller.close();
 			},
 		});
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {
@@ -556,6 +569,43 @@ export function createE2bClient(
 		sandboxId: sbx.sandboxId,
 		commands: {
 			async run(cmd, options) {
+				if (options?.maxOutputBytes !== undefined) {
+					const maxOutputBytes = options.maxOutputBytes;
+					let bytes = 0;
+					let handle: any;
+					const abort = new AbortController();
+					const cancel = () => {
+						abort.abort(new Error('Sandbox read cancelled'));
+						void handle?.disconnect().catch(() => {});
+						void handle?.kill().catch(() => {});
+					};
+					const onOutput = (chunk: string) => {
+						bytes += new TextEncoder().encode(chunk).length;
+						if (abort.signal.aborted || bytes > maxOutputBytes) {
+							cancel();
+							throw new Error('Sandbox output exceeded byte limit');
+						}
+					};
+					const timer = setTimeout(cancel, options.timeoutMs);
+					try {
+						handle = await sbx.commands.run(cmd, {
+							...options,
+							background: true,
+							onStdout: onOutput,
+							onStderr: onOutput,
+						});
+						abort.signal.throwIfAborted();
+						const { stdout, stderr, exitCode } = await waitWithSignal<E2bExecResult>(
+							handle.wait(),
+							abort.signal,
+						);
+						abort.signal.throwIfAborted();
+						return { stdout, stderr, exitCode };
+					} finally {
+						clearTimeout(timer);
+						cancel();
+					}
+				}
 				try {
 					const r = await sbx.commands.run(cmd, { ...options });
 					return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };

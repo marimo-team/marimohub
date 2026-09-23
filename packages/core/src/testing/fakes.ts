@@ -1,5 +1,6 @@
 import type { SandboxId } from '../ids';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	CreateSandboxOptions,
 	ExecOptions,
@@ -110,6 +111,13 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 			return opts.execResult ?? { success: true, stdout: '', stderr: '' };
 		},
 		execStream: async () => new ReadableStream(),
+		readFileBounded: async (path, options) => {
+			const result = await instance.readFile(path);
+			return result.success &&
+				new TextEncoder().encode(result.content).byteLength > options.maxBytes
+				? readFileFailure()
+				: result;
+		},
 		readFile: async (path: string): Promise<ReadFileResult> => {
 			calls.readFile.push(path);
 			const content = opts.files?.[path];
@@ -192,7 +200,7 @@ export interface FsSandboxOptions {
  * this one actually round-trips file contents, so it exercises the real
  * `sandboxFiles` codec:
  *   - restore stores the bytes `writeFiles` hands over, verbatim;
- *   - capture emits `base64 -w0 <path>`, since reads still come back over `exec`;
+ *   - bounded reads preserve bytes through base64 encoding;
  *   - `listFiles` reports current contents with real byte sizes;
  *   - `readFile` returns stored content (decoded as UTF-8).
  *
@@ -247,6 +255,12 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 		},
 		async execStream() {
 			return new ReadableStream();
+		},
+		async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+			calls.readFile.push(path);
+			const bytes = fs.get(toRel(path));
+			if (bytes === undefined || bytes.length > options.maxBytes) return readFileFailure();
+			return { success: true, content: fsBase64Encode(bytes), encoding: 'base64' };
 		},
 		async readFile(path: string): Promise<ReadFileResult> {
 			calls.readFile.push(path);

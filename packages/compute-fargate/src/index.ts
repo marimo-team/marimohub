@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+	readBoundedFile,
+	readBoundedStream,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
@@ -9,6 +11,7 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import type {
+	BoundedReadOptions,
 	ComputeResources,
 	ExecOptions,
 	ExecResult,
@@ -460,6 +463,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		init: RequestInit = {},
 		parse = true,
 		requestedTimeoutMs?: number,
+		maxResponseBytes?: number,
 	): Promise<T> {
 		await this.ensure();
 		return this.requestAt(
@@ -468,6 +472,8 @@ class FargateSandboxInstance implements SandboxInstance {
 			init,
 			parse,
 			requestedTimeoutMs,
+			AGENT_TRANSPORT_GRACE_MS,
+			maxResponseBytes,
 		) as Promise<T>;
 	}
 
@@ -478,6 +484,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		parse = true,
 		requestedTimeoutMs?: number,
 		transportGraceMs = AGENT_TRANSPORT_GRACE_MS,
+		maxResponseBytes?: number,
 	): Promise<T> {
 		const token = deriveAgentToken(this.config.agentSecret, String(this.id));
 		const headers = new Headers(init.headers);
@@ -501,6 +508,12 @@ class FargateSandboxInstance implements SandboxInstance {
 		if (!response.ok)
 			throw new AgentHttpError(response.status, `Fargate agent returned HTTP ${response.status}`);
 		if (!parse) return undefined as T;
+		if (maxResponseBytes !== undefined) {
+			if (!response.body) throw new Error('Missing agent response');
+			return JSON.parse(
+				await readBoundedStream(response.body, maxResponseBytes, requestInit.signal!),
+			) as T;
+		}
 		return (await response.json()) as T;
 	}
 
@@ -537,6 +550,7 @@ class FargateSandboxInstance implements SandboxInstance {
 					},
 					true,
 					requestedTimeout,
+					options?.maxOutputBytes === undefined ? undefined : options.maxOutputBytes + 4096,
 				),
 			);
 			return execResult(body.success === true, textValue(body.stdout), textValue(body.stderr));
@@ -554,6 +568,10 @@ class FargateSandboxInstance implements SandboxInstance {
 				controller.close();
 			},
 		});
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

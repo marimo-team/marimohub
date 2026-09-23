@@ -40,6 +40,7 @@
  * `python3` is on the image PATH (see `portWaitCommand`).
  */
 import {
+	readBoundedFile,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
@@ -71,6 +72,7 @@ export * from './shared';
 export { loadPodTemplateFile, parsePodTemplate, validatePodTemplate } from './podTemplate';
 export type { KubernetesPodTemplate } from './podTemplate';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
@@ -498,7 +500,12 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private execInPod(
 		cmd: string,
-		opts?: { login?: boolean; stdin?: string | Uint8Array; timeout?: number },
+		opts?: {
+			login?: boolean;
+			stdin?: string | Uint8Array;
+			timeout?: number;
+			maxOutputBytes?: number;
+		},
 	): Promise<K8sExecResult> {
 		this.execCount++;
 		return this.client.exec(
@@ -507,6 +514,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			opts?.stdin,
 			{
 				timeout: opts?.timeout,
+				maxOutputBytes: opts?.maxOutputBytes,
 			},
 		);
 	}
@@ -516,6 +524,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		const res = await this.execInPod(this.withEnv(cmd), {
 			login: true,
 			timeout: options?.timeout,
+			maxOutputBytes: options?.maxOutputBytes,
 		});
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
@@ -531,6 +540,10 @@ class KubernetesSandboxInstance implements SandboxInstance {
 				controller.close();
 			},
 		});
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

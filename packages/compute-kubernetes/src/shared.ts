@@ -295,6 +295,7 @@ export interface K8sSandboxInfo {
 
 export interface K8sExecOptions {
 	timeout?: number;
+	maxOutputBytes?: number;
 }
 
 /**

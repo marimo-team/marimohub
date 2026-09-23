@@ -519,3 +519,74 @@ describe('CloudflareSandboxInstance.readFile', () => {
 		expectFileResult(result, { success: false, error: { code: 'NOT_FOUND' } });
 	});
 });
+
+describe('bounded file transport', () => {
+	it('reads SSE output without using the buffered file API', async () => {
+		const encode = new TextEncoder();
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(
+						encode.encode(
+							'data: {"type":"stdout","data":"aGk="}\n\ndata: {"type":"complete","exitCode":0}\n\n',
+						),
+					);
+					c.close();
+				},
+			}),
+		);
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+				maxBytes: 2,
+				timeoutMs: 100,
+			}),
+		).toEqual({ success: true, content: 'aGk=', encoding: 'base64' });
+	});
+
+	it.each([
+		'data: invalid-json\n\n',
+		'data: {"type":"stdout","data":"aGk="}\n\n',
+		'data: {"type":"stdout","data":"aGk="}\n\ndata: {"type":"complete","exitCode":1}\n\n',
+		'data: {"type":"stdout","data":"aGk="}\n\ndata: {"type":"stderr","data":"x"}\n\ndata: {"type":"complete","exitCode":0}\n\n',
+	])('refuses malformed, incomplete, failed, or over-budget SSE output: %s', async (wire) => {
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode(wire));
+					c.close();
+				},
+			}),
+		);
+		expect(
+			(
+				await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+					maxBytes: 2,
+					timeoutMs: 100,
+				})
+			).success,
+		).toBe(false);
+	});
+
+	it('cancels an oversized or stalled wire stream', async () => {
+		for (const oversized of [true, false]) {
+			const cancel = vi.fn();
+			fakeSandbox.execStream.mockResolvedValueOnce(
+				new ReadableStream({
+					start(c) {
+						if (oversized) c.enqueue(new Uint8Array(70_000));
+					},
+					cancel,
+				}),
+			);
+			expect(
+				(
+					await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+						maxBytes: 2,
+						timeoutMs: 10,
+					})
+				).success,
+			).toBe(false);
+			expect(cancel).toHaveBeenCalledOnce();
+		}
+	});
+});

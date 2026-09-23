@@ -744,6 +744,89 @@ describe('E2bCompute', () => {
 });
 
 describe('createE2bClient', () => {
+	it.each([true, false])('disconnects and kills bounded reads (overflow: %s)', async (overflow) => {
+		let emit: ((chunk: string) => void) | undefined;
+		const disconnect = vi.fn(async () => {});
+		const kill = vi.fn(async () => {});
+		const process = {
+			disconnect,
+			kill,
+			wait: async () => {
+				if (overflow) emit!('12345');
+				return new Promise(() => {});
+			},
+		};
+		const run = vi.fn(async (_cmd, options) => {
+			emit = options.onStdout;
+			return process;
+		});
+		const sdk: E2bSdk = {
+			Sandbox: { connect: vi.fn(async () => ({ sandboxId: 'e2b-1', commands: { run } })) },
+		};
+		const client = createE2bClient(baseConfig, async () => sdk);
+		const sandbox = await client.connect('e2b-1');
+		await expect(
+			sandbox.commands.run('read', { maxOutputBytes: 4, timeoutMs: 10 }),
+		).rejects.toThrow();
+		expect(disconnect).toHaveBeenCalled();
+		expect(kill).toHaveBeenCalled();
+	});
+
+	it('cleans up a command that starts after its read deadline', async () => {
+		vi.useFakeTimers();
+		const process = {
+			disconnect: vi.fn(async () => {}),
+			kill: vi.fn(async () => {}),
+			wait: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+		};
+		let completeStartup!: (handle: typeof process) => void;
+		const run = vi.fn(
+			() =>
+				new Promise<typeof process>((resolve) => {
+					completeStartup = resolve;
+				}),
+		);
+		const sdk: E2bSdk = {
+			Sandbox: { connect: async () => ({ sandboxId: 'e2b-1', commands: { run } }) },
+		};
+		try {
+			const sandbox = await createE2bClient(baseConfig, async () => sdk).connect('e2b-1');
+			const result = sandbox.commands.run('read', { maxOutputBytes: 4, timeoutMs: 10 });
+			const assertion = expect(result).rejects.toThrow('cancelled');
+			await vi.advanceTimersByTimeAsync(10);
+			completeStartup(process);
+			await assertion;
+			expect(process.wait).not.toHaveBeenCalled();
+			expect(process.disconnect).toHaveBeenCalledOnce();
+			expect(process.kill).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('accepts combined output at the byte limit and cleans up after success', async () => {
+		const process = {
+			disconnect: vi.fn(async () => {}),
+			kill: vi.fn(async () => {}),
+			wait: vi.fn(async () => ({ stdout: 'ab', stderr: 'é', exitCode: 0 })),
+		};
+		const run = vi.fn(async (_cmd, options) => {
+			options.onStdout('ab');
+			options.onStderr('é');
+			return process;
+		});
+		const sdk: E2bSdk = {
+			Sandbox: { connect: async () => ({ sandboxId: 'e2b-1', commands: { run } }) },
+		};
+		const sandbox = await createE2bClient(baseConfig, async () => sdk).connect('e2b-1');
+		await expect(
+			sandbox.commands.run('read', { maxOutputBytes: 4, timeoutMs: 100 }),
+		).resolves.toEqual({ stdout: 'ab', stderr: 'é', exitCode: 0 });
+		expect(process.disconnect).toHaveBeenCalledOnce();
+		expect(process.kill).toHaveBeenCalledOnce();
+	});
+
 	it('threads apiKey (and domain) into every SDK call', async () => {
 		const handle = {
 			sandboxId: 'e2b-1',

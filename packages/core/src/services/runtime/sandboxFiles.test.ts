@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createNotebookId, createProjectId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
-import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../../constants';
+import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import {
 	bytesOfSize,
 	makeFakeSandbox,
@@ -9,7 +9,7 @@ import {
 	MemoryBucket,
 	RecordingBucket,
 } from '../../testing';
-import { execResult, listFilesFailure } from '../../ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
 import {
 	WORKSPACE_DIRECTORY_MARKER,
 	workspaceDirectoryMarkerPath,
@@ -592,15 +592,10 @@ describe('captureWorkspace', () => {
 			const { instance: base } = makeFsSandbox({ files: { 'good.txt': 'g', 'bad.txt': 'b' } });
 			const instance = {
 				...base,
-				exec: async (cmd: string) =>
-					cmd.startsWith('base64 -w0') && cmd.includes('bad.txt')
-						? {
-								success: false,
-								stdout: '',
-								stderr: 'io error',
-								error: { code: 'COMMAND_FAILED' },
-							}
-						: base.exec(cmd),
+				readFileBounded: async (
+					path: string,
+					options: Parameters<NonNullable<typeof base.readFileBounded>>[1],
+				) => (path.includes('bad.txt') ? readFileFailure() : base.readFileBounded!(path, options)),
 			} as unknown as typeof base;
 
 			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
@@ -802,10 +797,10 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 		const { instance } = makeFsSandbox({
 			files: { 'notebook.py': 'import marimo', 'data/keep.csv': 'newer content' },
 		});
-		const exec = instance.exec.bind(instance);
-		instance.exec = async (cmd, options) => {
-			if (cmd.includes('data/keep.csv')) return execResult(false, '', 'transient read error');
-			return exec(cmd, options);
+		const read = instance.readFileBounded!.bind(instance);
+		instance.readFileBounded = async (path, options) => {
+			if (path.includes('data/keep.csv')) return readFileFailure();
+			return read(path, options);
 		};
 
 		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
@@ -831,5 +826,125 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 		expect(warn).toHaveBeenCalledWith(
 			`captureWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping data/big.bin (${MAX_WORKSPACE_FILE_BYTES + 1} bytes)`,
 		);
+	});
+});
+
+describe('capture transport budgets', () => {
+	it.each(['missing', 'failed', 'stale'] as const)(
+		'caps actual artifact bytes with %s listing metadata',
+		async (listing) => {
+			const { instance } = makeFsSandbox({
+				files: {
+					'notebook.py': 'saved',
+					'__marimo__/notebook.html': bytesOfSize(MAX_ARTIFACT_BYTES + 1),
+				},
+				sizes: { '__marimo__/notebook.html': 1 },
+			});
+			if (listing === 'missing') instance.listFiles = async () => ({ success: true, files: [] });
+			if (listing === 'failed') instance.listFiles = async () => listFilesFailure();
+			const legacy = vi.spyOn(instance, 'readFile');
+			const result = await readSessionArtifacts(instance, MOUNT);
+			expect(result.code).toBe('saved');
+			expect(result.html).toBeUndefined();
+			expect(legacy).not.toHaveBeenCalled();
+		},
+	);
+
+	it('omits malformed base64 while preserving other artifacts', async () => {
+		const { instance } = makeFsSandbox({
+			files: { 'notebook.py': 'saved', 'pyproject.toml': 'dependencies' },
+		});
+		const read = instance.readFileBounded!.bind(instance);
+		instance.readFileBounded = (path, options) =>
+			path.endsWith('.html')
+				? Promise.resolve({ success: true, content: '!!!!', encoding: 'base64' })
+				: read(path, options);
+		const result = await readSessionArtifacts(instance, MOUNT);
+		expect(result).toMatchObject({ code: 'saved', deps: 'dependencies', html: undefined });
+	});
+
+	it('propagates unexpected adapter failures so a save cannot silently lose changes', async () => {
+		const { instance } = makeFsSandbox();
+		instance.readFileBounded = async () => {
+			throw new Error('connection lost');
+		};
+		await expect(readSessionArtifacts(instance, MOUNT)).rejects.toThrow('connection lost');
+	});
+
+	it.each(['directory', 'symlink'] as const)(
+		'never reads artifacts listed as a %s',
+		async (type) => {
+			const { instance } = makeFsSandbox({ files: { 'notebook.py': 'saved' } });
+			const list = instance.listFiles.bind(instance);
+			instance.listFiles = async (...args) => {
+				const result = await list(...args);
+				return result.success
+					? { ...result, files: result.files.map((file) => ({ ...file, type })) }
+					: result;
+			};
+			const read = vi.spyOn(instance, 'readFileBounded');
+			expect((await readSessionArtifacts(instance, MOUNT)).code).toBeUndefined();
+			expect(read.mock.calls.some(([path]) => path.endsWith('/notebook.py'))).toBe(false);
+		},
+	);
+
+	it('enforces the total workspace limit against actual concurrent reads and preserves skipped files', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const files = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`file-${i}`, 'x']));
+		for (const name of Object.keys(files)) await bucket.put(nb.workspaceFile(name), 'previous');
+		const { instance } = makeFsSandbox({ files });
+		const content = 'x'.repeat(MAX_WORKSPACE_FILE_BYTES);
+		instance.readFileBounded = async () => ({ success: true, content });
+		const captured: { path: string; bytes: number }[] = [];
+		vi.spyOn(bucket, 'put').mockImplementation(async (path, bytes) => {
+			captured.push({ path, bytes: (bytes as Uint8Array).byteLength });
+			return {
+				key: path,
+				etag: 'captured',
+				size: (bytes as Uint8Array).byteLength,
+				uploaded: new Date(),
+			};
+		});
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+		expect(captured).toHaveLength(4);
+		expect(captured.reduce((sum, file) => sum + file.bytes, 0)).toBe(MAX_WORKSPACE_BYTES);
+		const skipped = Object.keys(files).find(
+			(name) => !captured.some((file) => file.path === nb.workspaceFile(name)),
+		)!;
+		expect(await (await bucket.get(nb.workspaceFile(skipped)))!.text()).toBe('previous');
+	});
+
+	it('retains the last workspace copy when a file outgrows its listed size', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('growing'), 'last good');
+		const { instance } = makeFsSandbox({
+			files: { growing: bytesOfSize(MAX_WORKSPACE_FILE_BYTES + 1), good: 'saved' },
+			sizes: { growing: 1 },
+		});
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+		expect(await (await bucket.get(nb.workspaceFile('growing')))!.text()).toBe('last good');
+		expect(await (await bucket.get(nb.workspaceFile('good')))!.text()).toBe('saved');
+	});
+
+	it('omits unsupported or refused bounded reads without invoking the legacy transport', async () => {
+		const { instance } = makeFakeSandbox({ files: { [`${MOUNT}/notebook.py`]: 'code' } });
+		const legacy = vi.spyOn(instance, 'readFile');
+		expect(
+			(await readSessionArtifacts({ ...instance, readFileBounded: undefined }, MOUNT)).code,
+		).toBeUndefined();
+		expect(
+			(
+				await readSessionArtifacts(
+					{
+						...instance,
+						readFileBounded: async () => readFileFailure(),
+					},
+					MOUNT,
+				)
+			).code,
+		).toBeUndefined();
+		expect(legacy).not.toHaveBeenCalled();
 	});
 });

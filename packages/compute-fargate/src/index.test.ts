@@ -854,3 +854,25 @@ computeContract(
 		},
 	},
 );
+
+describe('bounded file transport', () => {
+	it('cancels an agent response that exceeds the wire budget', async () => {
+		const instance = makeCompute(new FakeEcs()).create(ID, { reuse: false });
+		await instance.exec('true');
+		const cancel = vi.fn();
+		vi.mocked(fetch).mockResolvedValueOnce(
+			new Response(
+				new ReadableStream({
+					start(c) {
+						c.enqueue(new Uint8Array(5000));
+					},
+					cancel,
+				}),
+			),
+		);
+		expect(
+			(await instance.readFileBounded!('/workspace/file', { maxBytes: 2, timeoutMs: 100 })).success,
+		).toBe(false);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+});

@@ -6,6 +6,8 @@ import {
 	SandboxFilesystemNotADirectoryError,
 } from 'modal';
 import {
+	readBoundedFile,
+	collectBoundedOutput,
 	buildLaunchCommand,
 	buildGitCloneCommand,
 	errorMessage,
@@ -26,6 +28,7 @@ import { NotFoundError } from '@marimo-hub/core/errors';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { SandboxId } from '@marimo-hub/core/ids';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
@@ -293,9 +296,15 @@ class ModalSandboxInstance implements SandboxInstance {
 	}
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
-		return runProcess(
-			await this.spawn(['sh', '-lc', this.withDefaults(cmd)], { timeout: options?.timeout }),
+		const process = await this.spawn(['sh', '-lc', this.withDefaults(cmd)], {
+			timeout: options?.timeout,
+		});
+		if (options?.maxOutputBytes === undefined) return runProcess(process);
+		const { stdout, stderr, result } = await collectBoundedOutput(
+			{ stdout: process.stdout, stderr: process.stderr, wait: () => process.wait() },
+			{ maxOutputBytes: options.maxOutputBytes, timeout: options.timeout },
 		);
+		return execResult(result === 0, stdout, stderr);
 	}
 
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -305,6 +314,10 @@ class ModalSandboxInstance implements SandboxInstance {
 		void readStream(process.stderr).catch(() => {});
 		void process.wait().catch(() => {});
 		return process.stdout;
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

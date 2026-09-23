@@ -19,12 +19,13 @@
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import {
+	readBoundedFile,
 	buildGitCloneCommand,
 	launchWithProcess,
 	mapWithConcurrency,
@@ -37,6 +38,7 @@ import { KERNEL_AUTH_TOKEN_FILE } from '@marimo-hub/core/kernel-auth';
 import { SURFACE_STATE_ROOT } from '@marimo-hub/core/surface-state';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	ExecOptions,
 	ExecResult,
@@ -370,10 +372,29 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
+		return this.runCommand(this.rewriteCmd(cmd), options);
+	}
+
+	private async runCommand(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensureRoot();
 		return new Promise((resolve) => {
-			const child = this.trackChild(this.spawnShell(this.rewriteCmd(cmd), { detached: true }));
-			const { stdout, stderr } = captureOutput(child);
+			const child = this.trackChild(this.spawnShell(cmd, { detached: true }));
+			let overflow = false;
+			let bytes = 0;
+			const stdout = new Utf8TailBuffer(options?.maxOutputBytes ?? OUTPUT_TAIL_CHARS);
+			const stderr = new Utf8TailBuffer(options?.maxOutputBytes ?? OUTPUT_TAIL_CHARS);
+			const append = (chunk: Buffer, sink: Utf8TailBuffer) => {
+				if (overflow) return;
+				bytes += chunk.length;
+				if (options?.maxOutputBytes !== undefined && bytes > options.maxOutputBytes) {
+					overflow = true;
+					killProcessGroup(child, 'SIGKILL');
+					return;
+				}
+				sink.append(chunk);
+			};
+			child.stdout?.on('data', (chunk: Buffer) => append(chunk, stdout));
+			child.stderr?.on('data', (chunk: Buffer) => append(chunk, stderr));
 			let timedOut = false;
 			const timer =
 				options?.timeout !== undefined && options.timeout > 0
@@ -397,7 +418,7 @@ class LocalSandboxInstance implements SandboxInstance {
 				const timeoutMessage = timedOut ? `command timed out after ${options?.timeout}ms` : '';
 				resolve(
 					execResult(
-						!timedOut && code === 0,
+						!timedOut && !overflow && code === 0,
 						stdout.toString(),
 						[stderr.toString(), timeoutMessage].filter(Boolean).join('\n'),
 					),
@@ -416,6 +437,18 @@ class LocalSandboxInstance implements SandboxInstance {
 			if (stdout.readableAborted) killProcessGroup(child, 'SIGKILL');
 		});
 		return Readable.toWeb(stdout) as ReadableStream;
+	}
+
+	async readFileBounded(p: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		await this.ensureRoot();
+		// macOS temporary directories have trusted symlink ancestors (/var -> /private/var).
+		const parent = await realpath(path.dirname(this.root));
+		const target = path.join(
+			parent,
+			path.basename(this.root),
+			path.relative(this.root, this.mapPath(p)),
+		);
+		return readBoundedFile(target, options, (command, limits) => this.runCommand(command, limits));
 	}
 
 	async readFile(p: string): Promise<ReadFileResult> {

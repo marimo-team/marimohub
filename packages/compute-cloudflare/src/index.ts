@@ -1,6 +1,8 @@
 import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 import type { Sandbox } from '@cloudflare/sandbox';
 import {
+	readBoundedFile,
+	readBoundedStream,
 	base64Encode,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -13,6 +15,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type {
+	BoundedReadOptions,
 	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
@@ -81,6 +84,34 @@ class CloudflareSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		const command = this.withDefaults(cmd);
+		if (options?.maxOutputBytes !== undefined) {
+			const stream = await this.sandbox.execStream(command, { timeout: options.timeout });
+			// Bound the SSE wire payload before parsing: an unterminated event must not grow forever.
+			const raw = await readBoundedStream(
+				stream,
+				options.maxOutputBytes * 2 + 64 * 1024,
+				AbortSignal.timeout(options.timeout ?? 10_000),
+			);
+			let stdout = '';
+			let stderr = '';
+			let success = false;
+			for (const line of raw.split('\n')) {
+				if (!line.startsWith('data:')) continue;
+				const event = JSON.parse(line.slice(5)) as {
+					type: string;
+					data?: string;
+					exitCode?: number;
+				};
+				if (event.type === 'stdout') stdout += event.data ?? '';
+				if (event.type === 'stderr') stderr += event.data ?? '';
+				if (event.type === 'complete') success = event.exitCode === 0;
+			}
+			return execResult(
+				success && new TextEncoder().encode(stdout + stderr).length <= options.maxOutputBytes,
+				stdout,
+				stderr,
+			);
+		}
 		const res =
 			options?.timeout === undefined
 				? await this.sandbox.exec(command)
@@ -92,6 +123,10 @@ class CloudflareSandboxInstance implements SandboxInstance {
 		return this.sandbox.execStream(this.withDefaults(cmd), {
 			timeout: options?.timeout,
 		});
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {
