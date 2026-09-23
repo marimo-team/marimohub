@@ -225,6 +225,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	const author = notebook?.meta.author;
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
 	const title = notebook?.meta.title ?? notebookTitle;
+	const [documentTitle, onTitle] = useState<string | null>(null);
 	const holderId = editorState?.holder?.user_id;
 	const sharedStarterId =
 		session?.editor_sandbox_sharing === 'shared' && !session.ephemeral
@@ -317,6 +318,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 						retrySrc={latestSrc}
 						sandboxUrl={sandboxUrl}
 						onQuery={onQuery}
+						onTitle={onTitle}
 						title={title}
 					/>
 				),
@@ -473,6 +475,8 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		latestSrc,
 		sandboxUrl,
 		onQuery,
+		onTitle,
+		documentTitle,
 		isApp,
 		isProvisioning,
 		isRunning,
@@ -557,6 +561,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		latestSrc,
 		sandboxUrl,
 		onQuery,
+		onTitle,
+		documentTitle,
 		isApp,
 		isProvisioning,
 		isRunning,
@@ -598,7 +604,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 	} = model;
 	return (
 		<div className="flex h-dvh flex-col">
-			<PageTitle>{title}</PageTitle>
+			<PageTitle>{documentTitle ?? title}</PageTitle>
 			<header className="flex h-10 min-h-10 items-center gap-2 border-b bg-background px-3 max-md:h-11 max-md:min-h-11">
 				<IconLink
 					to={`/projects/${pid}`}
@@ -922,6 +928,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 								retrySrc={latestSrc}
 								sandboxUrl={sandboxUrl}
 								onQuery={onQuery}
+								onTitle={onTitle}
 								title={title}
 							/>
 						) : (

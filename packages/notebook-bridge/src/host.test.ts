@@ -19,11 +19,13 @@ function fixture() {
 	Object.assign(frame, { ownerDocument: { defaultView: parent }, contentWindow: peer });
 	const onQuery = vi.fn(() => true);
 	const onStatus = vi.fn();
+	const onTitle = vi.fn(() => true);
 	const bridge = createHostBridge({
 		iframe: frame as HTMLIFrameElement,
 		origin: 'https://notebook.example',
 		excludedKeys: ['provider'],
 		onQuery,
+		onTitle,
 		onStatus,
 	});
 	cleanups.push(() => bridge.dispose());
@@ -44,13 +46,13 @@ function fixture() {
 		});
 		parent.dispatchEvent(event);
 	};
-	const negotiate = async (documentId = 'frozen-document') => {
+	const negotiate = async (documentId = 'frozen-document', capabilities = ['query-params.v1']) => {
 		const connected = new Promise<void>((resolve) => {
 			onStatus.mockImplementation((status) => {
 				if (status === 'connected') resolve();
 			});
 		});
-		ready({ documentId });
+		ready({ documentId, capabilities });
 		const [connect, , ports] = peer.postMessage.mock.calls.at(-1)!;
 		const port = ports[0] as MessagePort;
 		cleanups.push(() => port.close());
@@ -61,10 +63,39 @@ function fixture() {
 		await connected;
 		return remote;
 	};
-	return { parent, frame, peer, bridge, ready, onQuery, onStatus, negotiate };
+	return { parent, frame, peer, bridge, ready, onQuery, onTitle, onStatus, negotiate };
 }
 
 describe('host lifecycle and frozen v1 peer', () => {
+	it('negotiates titles separately and rejects stale or excessive updates', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const { negotiate, onTitle, onQuery } = fixture();
+		const remote = await negotiate('titles', ['query-params.v1', 'document-title.v1']);
+		await expect(remote.call('replaceTitle', { revision: 1, title: 'Live' })).resolves.toEqual({
+			applied: true,
+		});
+		await expect(remote.call('replaceTitle', { revision: 2, title: 'Too soon' })).resolves.toEqual({
+			applied: false,
+		});
+		vi.setSystemTime(Date.now() + 100);
+		await expect(remote.call('replaceTitle', { revision: 1, title: 'Stale' })).resolves.toEqual({
+			applied: false,
+		});
+		await expect(remote.call('replaceTitle', { revision: 3, title: '' })).resolves.toEqual({
+			applied: true,
+		});
+		expect(onTitle.mock.calls).toEqual([['Live'], ['']]);
+		expect(onQuery).not.toHaveBeenCalled();
+	});
+	it('ignores title requests without a negotiated capability', async () => {
+		const { negotiate, onTitle } = fixture();
+		const remote = await negotiate();
+		await expect(remote.call('replaceTitle', { revision: 1, title: 'Ignored' })).resolves.toEqual({
+			applied: false,
+		});
+		expect(onTitle).not.toHaveBeenCalled();
+	});
+
 	it('rejects spoofed windows and origins before creating a channel', () => {
 		const { ready, peer, bridge } = fixture();
 		ready({}, 'https://evil.example');

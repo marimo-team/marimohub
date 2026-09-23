@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
 export const NAMESPACE = 'marimohub.notebook-bridge';
-export const VERSION = { major: 1, minor: 0 } as const;
+export const VERSION = { major: 1, minor: 1 } as const;
 export const QUERY_CAPABILITY = 'query-params.v1';
+export const TITLE_CAPABILITY = 'document-title.v1';
+export const MAX_TITLE_LENGTH = 4096;
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 export const REQUEST_TIMEOUT_MS = 5_000;
 export const UPDATE_INTERVAL_MS = 100;
 export const MAX_QUERY_BYTES = 64 * 1024;
 const identifier = z.string().min(1).max(128);
+const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const version = z.object({
 	major: z.number().int().nonnegative(),
 	minor: z.number().int().nonnegative(),
@@ -25,7 +28,7 @@ export const Connect = z.object({
 export const Probe = z.object({ namespace: z.literal(NAMESPACE), kind: z.literal('probe') });
 export const QuerySnapshot = z
 	.object({
-		revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+		revision,
 		entries: z
 			.array(z.tuple([z.string().max(MAX_QUERY_BYTES), z.string().max(MAX_QUERY_BYTES)]))
 			.max(256),
@@ -34,7 +37,13 @@ export const QuerySnapshot = z
 export type QuerySnapshot = z.infer<typeof QuerySnapshot>;
 export const QueryResult = z.object({ applied: z.boolean() });
 export type QueryResult = z.infer<typeof QueryResult>;
+export const TitleSnapshot = z.object({
+	revision,
+	title: z.string().max(MAX_TITLE_LENGTH),
+});
+export type TitleSnapshot = z.infer<typeof TitleSnapshot>;
 export interface HostApi {
+	replaceTitle(snapshot: TitleSnapshot): QueryResult;
 	replaceQuery(snapshot: QuerySnapshot): QueryResult;
 }
 export interface NotebookApi {

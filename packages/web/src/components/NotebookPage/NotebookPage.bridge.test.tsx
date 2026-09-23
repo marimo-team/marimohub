@@ -49,6 +49,32 @@ function Controls() {
 
 describe('notebook URL mirroring', () => {
 	it.each(['app', 'edit'] as const)(
+		'mirrors the %s title and resets it when the frame changes',
+		async (variant) => {
+			makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
+			renderPage(variant, { search: '?id=123', controls: <Controls /> });
+			const initial = await screen.findByTitle('Forecast');
+			const connection = connections.at(-1)!;
+			act(() => {
+				connection.options.onTitle!('Live forecast');
+			});
+			expect(document.title).toBe('Live forecast · marimohub');
+			expect(screen.getByTitle('Forecast')).toBe(initial);
+			act(() => {
+				connection.options.onTitle!('   ');
+			});
+			expect(document.title).toBe('Forecast · marimohub');
+			act(() => {
+				connection.options.onTitle!('Another forecast');
+			});
+			fireEvent.click(screen.getByText('External query'));
+			expect(document.title).toBe('Forecast · marimohub');
+			expect(connection.options.onTitle!('Stale')).toBe(false);
+			expect(document.title).toBe('Forecast · marimohub');
+		},
+	);
+
+	it.each(['app', 'edit'] as const)(
 		'reloads the %s iframe when explicit navigation returns to its original launch query',
 		async (variant) => {
 			const impl = makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
