@@ -1,7 +1,9 @@
+import { applyThemeMode, getInitialTheme, THEME_STORAGE_KEY } from '@/lib/theme';
+import type { Theme } from '@/lib/theme';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
-export type Theme = 'light' | 'dark';
+export type { Theme } from '@/lib/theme';
 
 interface ThemeContextValue {
 	theme: Theme;
@@ -11,21 +13,16 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const STORAGE_KEY = 'marimohub-theme';
-
-function getInitialTheme(): Theme {
-	const stored = localStorage.getItem(STORAGE_KEY);
-	if (stored === 'light' || stored === 'dark') return stored;
-	return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
 	const [theme, setThemeState] = useState<Theme>(getInitialTheme);
 
 	useEffect(() => {
-		const root = document.documentElement;
-		root.classList.toggle('dark', theme === 'dark');
-		localStorage.setItem(STORAGE_KEY, theme);
+		applyThemeMode(theme);
+		try {
+			localStorage.setItem(THEME_STORAGE_KEY, theme);
+		} catch {
+			// The mode still works when browser storage is disabled.
+		}
 	}, [theme]);
 
 	const setTheme = useCallback((next: Theme) => setThemeState(next), []);

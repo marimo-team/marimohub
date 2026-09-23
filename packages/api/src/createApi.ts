@@ -34,6 +34,7 @@ import deepLinksApp from './routes/deepLinks';
 import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
+import themeApp from './routes/theme';
 import tokensApp from './routes/tokens';
 import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
 import oauthAuthorizationsApp from './routes/oauthAuthorizations';
@@ -76,9 +77,8 @@ const OPENAPI_DOC = {
 		{ name: 'Audit', description: 'Deployment and project audit events' },
 		{ name: 'System', description: 'Deployment metadata' },
 	],
-	// Every documented `/api/v1/*` route sits behind the authN guard, satisfiable
-	// by either the session cookie or a personal access token (the schemes are
-	// registered on the app below), so the requirement is global and disjunctive.
+	// API routes require a session cookie or personal access token by default.
+	// The public theme route overrides this requirement with `security: []`.
 	security: [{ cookieAuth: [] }, { bearerAuth: [] }] as Record<string, string[]>[],
 };
 
@@ -392,6 +392,8 @@ export function createApi(rawDeps: ApiDeps) {
 			ok ? 200 : 503,
 		);
 	});
+
+	app.route(API_PREFIX, themeApp);
 
 	// Provider-specific auth routes (e.g. the OIDC login/callback/logout flow).
 	// Mounted before the authN guard so they stay public.

@@ -31,6 +31,10 @@ targets:
 OpenCode is pinned to 1.18.17 with separate SHA-256 checksums for Linux x64 and
 arm64 builds.
 
+> **Build requirement:** All `images/marimo-sandbox` targets require the
+> `notebook_bridge` named build context. Older build commands without this context
+> fail. See [Build the maintained image](#build-the-maintained-image).
+
 ## Multiple images
 
 To offer more than one image — say a lean default plus a GPU or heavy-ML
@@ -291,3 +295,24 @@ Installation failures preserve the normal launch behavior.
 No image change is required for marimo 0.23.10 or 0.24.2. The environment must permit
 local wheel installation. See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md)
 for timeout, fallback, and compatibility details.
+
+## Build the maintained image
+
+The maintained `images/marimo-sandbox` image includes the notebook bridge wheel.
+Its default, `base`, `release`, `vscode`, `opencode`, and `tools` targets all require
+the `notebook_bridge` named build context. Builds without this context fail.
+
+From the repository root, use:
+
+```sh
+docker build --build-context notebook_bridge=packages/notebook-bridge \
+  -t marimo-sandbox:local images/marimo-sandbox
+```
+
+For an optional target, add `--target vscode`, `--target opencode`, or `--target tools`.
+The publish workflow supplies this context automatically.
+At launch, the bridge checks its artifact identity and skips installation when the identity matches.
+Custom images and older images retain the offline installation fallback.
+
+For a standalone image without bridge preinstallation, use `examples/sandbox-image`.
+That Dockerfile needs no named context. Hub installs the bridge at launch.

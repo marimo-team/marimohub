@@ -1,3 +1,4 @@
+import { parseTheme } from '@marimo-hub/config/theme';
 /**
  * Cloudflare Workers reference deployment (not an actively-built app — a
  * copy-pasteable example). It composes the SAME provider-agnostic `createApi`
@@ -5,7 +6,7 @@
  * and Access auth. This is also the one context where the Cloudflare compute
  * adapter works, since it needs the Workers runtime + DO binding.
  */
-import { hostsShareCookieDomain, normalizeHostname } from '@marimo-hub/core/host-isolation';
+import { hostsOverlap, normalizeHostname } from '@marimo-hub/core/host-isolation';
 import { parseAppPoolPolicy } from '@marimo-hub/config/app-pool';
 import {
 	createApi,
@@ -123,21 +124,16 @@ export function buildDeps(
 		);
 	}
 
-	// Sandbox exposure. Notebook kernels run untrusted code, so they must never be
-	// served same-origin with the control plane. Two cross-origin options:
-	//   - No SANDBOX_HOSTNAME → quick tunnels: each kernel gets a random, unguessable
-	//     `*.trycloudflare.com` URL (zero config).
-	//   - SANDBOX_HOSTNAME set → subdomain mode on that isolated domain. Fail closed:
-	//     it must NOT share an origin/parent domain with the app host.
+	// Without a sandbox hostname, quick tunnels give each kernel a random URL.
 	const appHost = new URL(request.url).hostname;
 	const sandboxHostname = env.SANDBOX_HOSTNAME?.trim()
 		? normalizeHostname(env.SANDBOX_HOSTNAME)
 		: undefined;
 	const useTunnel = !sandboxHostname;
-	if (sandboxHostname && hostsShareCookieDomain(sandboxHostname, appHost)) {
+	if (sandboxHostname && hostsOverlap(sandboxHostname, appHost)) {
 		throw new Error(
 			`SANDBOX_HOSTNAME (${sandboxHostname}) shares an origin/parent domain with the app host (${appHost}). ` +
-				'Host notebook kernels on a separate domain so a malicious notebook cannot escape the iframe sandbox.',
+				'Use a different sandbox hostname that is not a parent or subdomain of the app hostname.',
 		);
 	}
 
@@ -157,6 +153,7 @@ export function buildDeps(
 
 	const services = createServices(bucket);
 	return {
+		theme: parseTheme(env),
 		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),

@@ -16,24 +16,18 @@ of the compute backend. The modes trade origin isolation against authentication.
 ### `subdomain` (default): isolated kernel domain
 
 Kernels run arbitrary Python in an `<iframe sandbox="allow-scripts allow-same-origin …">`.
-`allow-same-origin` is required for the kernel to work, so a kernel on the **same
-registrable domain** as the app could escape the iframe into the app's origin or
-set cookies on the shared parent domain.
+Browsers connect **directly** to kernels. Sibling hostnames such as `hub.example.com` and `sandboxes.example.com` are supported.
+When `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` is set, the server uses its hostname to reject identical or parent/child sandbox hostnames.
+Without it, the server skips this comparison. The Cloudflare Worker example compares against the request hostname instead.
 
-The browser connects **directly** to the kernel, so marimohub **refuses to
-start** if `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` shares an origin or parent domain
-with the app (taken from the OIDC redirect URI):
+Sibling subdomains share cookie scope. Separate registrable domains provide stronger isolation from cookies set by notebooks.
 
 ```bash
 # app:      https://hub.example.com
-# kernels:  https://sandboxes.example.net   ✅ separate registrable domain
+# kernels:  https://sandboxes.example.com
 MARIMOHUB_SANDBOX_EXPOSURE=subdomain   # default
-MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.com
 ```
-
-::: danger Don't host kernels under the app domain
-`sandboxes.hub.example.com` or `hub.example.com` for kernels is rejected at boot.
-:::
 
 The hub does not authenticate direct kernel traffic. Protect the kernel endpoint
 at the ingress. [Native kernel authentication](#native-kernel-authentication)

@@ -30,6 +30,34 @@ const sandboxId = createSandboxId();
 const bucket = { name: 'test-bucket', endpoint: 'https://r2.example' };
 
 describe('SandboxProvisioner tracing', () => {
+	it('keeps workspace loading in the files timing when the overlay is empty', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			const { instance } = makeFakeSandbox();
+			instance.ready = async () => {};
+			const loader = {
+				async load() {
+					vi.setSystemTime(Date.now() + 450);
+					return { usedFallback: true };
+				},
+			};
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance), {
+				copyOnly: loader,
+				mountOrCopy: loader,
+			});
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket,
+			});
+			expect(result.timings.files).toBe(450);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('emits sibling spans for every provision phase with phase measurements', async () => {
 		const { instance } = makeFakeSandbox();
 		instance.drainTimings = () => ({ find: 7, create: 42, boot: 11 });

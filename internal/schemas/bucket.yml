@@ -1036,6 +1036,42 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/warm-pools/{backend}.json:
+    summary: Deployment-wide warm sandbox reservations and session handoffs.
+    parameters:
+      - name: backend
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: WarmPoolStore
+    get:
+      operationId: read_system_warm_pools_json
+      summary: Read WarmPool
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarmPool'
+    put:
+      operationId: write_system_warm_pools_json
+      summary: Write WarmPool
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WarmPool'
+      responses:
+        '204':
+          description: Stored.
   /_system/app-pools/{pid}/{nid}.json:
     summary: App sandbox reservations, account assignments, and visit leases.
     parameters:
@@ -3446,6 +3482,87 @@ components:
           type: string
       required:
         - cutoff_version_id
+    WarmPool:
+      type: object
+      properties:
+        pools:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              failures:
+                type: integer
+                minimum: 0
+                maximum: 9007199254740991
+              retry_at:
+                type: integer
+                minimum: 0
+                maximum: 9007199254740991
+              members:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    sandbox_id:
+                      type: string
+                    state:
+                      type: string
+                      enum:
+                        - creating
+                        - ready
+                        - claimed
+                        - retiring
+                    token:
+                      type: string
+                    created_at:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    ready_until:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    operation_until:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    checked_at:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    destination:
+                      type: object
+                      properties:
+                        project_id:
+                          type: string
+                        notebook_id:
+                          type: string
+                        session_id:
+                          type: string
+                      required:
+                        - project_id
+                        - notebook_id
+                        - session_id
+                    assigned:
+                      type: boolean
+                  required:
+                    - sandbox_id
+                    - state
+                    - token
+                    - created_at
+                    - ready_until
+                    - operation_until
+                    - checked_at
+                    - assigned
+            required:
+              - key
+              - failures
+              - retry_at
+              - members
+      required:
+        - pools
     AppPool:
       type: object
       properties:

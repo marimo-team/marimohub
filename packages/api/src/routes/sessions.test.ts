@@ -855,6 +855,22 @@ describe('Session routes', () => {
 		expect(otherCompute.lastCreateOptions?.owner).toEqual({ projectId: pid, userId: ACTOR });
 	});
 
+	it('returns the owner’s editor claim without contacting compute', async () => {
+		const { instance } = makeFakeSandbox();
+		const compute = fakeComputeFrom(instance);
+		const exclusiveOwner = exclusiveApi(ACTOR, compute);
+		const session = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const create = vi.spyOn(compute, 'create').mockImplementation(() => {
+			throw new Error('Compute unavailable');
+		});
+		const state = await expectOk<EditorState>(await exclusiveOwner('GET', editorSessionPath()));
+		expect(state).toMatchObject({
+			holder: { session_id: session.session_id, activity: { state: 'unknown' } },
+			can_take_over: false,
+		});
+		expect(create).not.toHaveBeenCalled();
+	});
+
 	it('does not fail a takeover when notification delivery fails', async () => {
 		const notifier = new MemoryNotifier();
 		notifier.failNext();

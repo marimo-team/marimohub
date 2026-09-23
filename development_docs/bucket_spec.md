@@ -1533,3 +1533,20 @@ The empty deletion tombstone remains to prevent delayed admissions from recreati
 
 The legacy `_system/apps/{pid}/{nid}.json` claim remains owned by `SessionService` during migration.
 New pool members do not acquire that singleton claim. See [App pools](../docs/app-pools.md) for rollout and presence semantics.
+
+## Warm pool records
+
+`_system/warm-pools/{backend}.json` is a CAS record owned by `WarmPoolStore`.
+It stores pool configuration fingerprints, retry deadlines, and sandbox members.
+Member states are `creating`, `ready`, `claimed`, and `retiring`.
+
+Creation reservations precede provider calls. Claims record their destination session before session publication.
+An assigned claim remains until session reclamation, so an interrupted handoff does not lose ownership.
+Retiring records remain until provider deletion succeeds. A claimed sandbox never returns to `ready`.
+
+Orphan reconciliation discovers every record under `_system/warm-pools/` after its provider snapshot.
+A failed listing or unreadable warm record prevents orphan deletion during that sweep.
+Pool cleanup uses recorded sandbox IDs and does not require provider enumeration.
+
+The maintenance replica uses `_system/_warm_pool.lock` as its advisory lease.
+Pool CAS transitions remain authoritative when maintenance passes overlap.

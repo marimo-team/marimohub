@@ -302,6 +302,26 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		}
 	}
 
+	async function readOptional<T>(read: () => Promise<T>): Promise<T | undefined> {
+		try {
+			return await read();
+		} catch (err) {
+			if (hasCode(err, 404)) return;
+			throw err;
+		}
+	}
+
+	function routePreconditions(resource: V1Service | V1Ingress | undefined, kind: string) {
+		if (!resource) return;
+		const metadata = resource.metadata;
+		if (metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE) {
+			throw new Error(`Refusing to delete unmanaged ${kind}`);
+		}
+		const { uid, resourceVersion } = metadata;
+		if (!uid || !resourceVersion) throw new Error(`${kind} has no UID or resourceVersion`);
+		return { uid, resourceVersion };
+	}
+
 	async function reconcileIngress(net: K8s.NetworkingV1Api, desired: V1Ingress): Promise<void> {
 		try {
 			await net.createNamespacedIngress({ namespace, body: desired });
@@ -373,20 +393,36 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		}
 	}
 
+	async function reconcileRoutes(
+		service: V1Service,
+		ingress: V1Ingress | undefined,
+	): Promise<void> {
+		const { core, net } = await apis();
+		await Promise.all([
+			reconcileService(core, service),
+			ingress ? reconcileIngress(net, ingress) : undefined,
+		]);
+	}
+
 	return {
+		async reconcileRoutes(o: EnsureSandboxOptions): Promise<void> {
+			await reconcileRoutes(
+				serviceManifest(o),
+				o.ports.some((p) => p.host) ? ingressManifest(o) : undefined,
+			);
+		},
 		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
 			const pod = podManifest(o);
 			const service = serviceManifest(o);
 			const ingress = o.ports.some((p) => p.host) ? ingressManifest(o) : undefined;
-			const { core, net } = await apis();
+			const { core } = await apis();
 			// Order-independent: k8s is declarative (a Service's selector / an
 			// Ingress's backend need not pre-exist), so the creates fan out. The
 			// Service and Ingress reconcile so a reconnect picks up newly reserved
 			// surface ports rather than swallowing the create conflict.
 			const [createdPod] = await Promise.all([
 				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
-				reconcileService(core, service),
-				ingress ? reconcileIngress(net, ingress) : undefined,
+				reconcileRoutes(service, ingress),
 			]);
 			return { createdPod };
 		},
@@ -399,6 +435,8 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					pod.status?.conditions?.find((c) => c.type === type && c.status === 'True')
 						?.lastTransitionTime;
 				return {
+					managedBy: pod.metadata?.labels?.[MANAGED_BY_LABEL],
+					sandboxId: pod.metadata?.annotations?.[SANDBOX_ID_ANNOTATION],
 					phase: pod.status?.phase,
 					uid: pod.metadata?.uid,
 					createdAt: pod.metadata?.creationTimestamp,
@@ -536,14 +574,55 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			});
 		},
 
-		async delete(name: string, options: { ingress: boolean }): Promise<void> {
+		async delete(name: string, options: { ingress: boolean; sandboxId: SandboxId }): Promise<void> {
 			const { core, net } = await apis();
-			await Promise.all([
+			const pod = await readOptional(() => core.readNamespacedPod({ name, namespace }));
+			if (
+				pod &&
+				(pod.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE ||
+					pod.metadata?.annotations?.[SANDBOX_ID_ANNOTATION] !== options.sandboxId)
+			) {
+				throw new Error(`Refusing to delete Pod "${name}" owned by another sandbox`);
+			}
+			const uid = pod?.metadata?.uid;
+			if (pod && !uid) throw new Error(`Pod "${name}" has no UID`);
+			// Capture routes before deleting the Pod; reconnect may replace or update them afterward.
+			const [service, ingress] = await Promise.all([
+				readOptional(() => core.readNamespacedService({ name, namespace })),
 				options.ingress
-					? deleteTolerant(() => net.deleteNamespacedIngress({ name, namespace }))
+					? readOptional(() => net.readNamespacedIngress({ name, namespace }))
 					: undefined,
-				deleteTolerant(() => core.deleteNamespacedService({ name, namespace })),
-				deleteTolerant(() => core.deleteNamespacedPod({ name, namespace })),
+			]);
+			const servicePreconditions = routePreconditions(service, `Service "${name}"`);
+			const ingressPreconditions = routePreconditions(ingress, `Ingress "${name}"`);
+			const confirmed = await readOptional(() => core.readNamespacedPod({ name, namespace }));
+			if (confirmed?.metadata?.uid !== uid) {
+				throw new Error(`Pod "${name}" changed during cleanup`);
+			}
+			if (pod) {
+				await deleteTolerant(() =>
+					core.deleteNamespacedPod({ name, namespace, body: { preconditions: { uid } } }),
+				);
+			}
+			await Promise.all([
+				ingressPreconditions
+					? deleteTolerant(() =>
+							net.deleteNamespacedIngress({
+								name,
+								namespace,
+								body: { preconditions: ingressPreconditions },
+							}),
+						)
+					: undefined,
+				servicePreconditions
+					? deleteTolerant(() =>
+							core.deleteNamespacedService({
+								name,
+								namespace,
+								body: { preconditions: servicePreconditions },
+							}),
+						)
+					: undefined,
 			]);
 		},
 

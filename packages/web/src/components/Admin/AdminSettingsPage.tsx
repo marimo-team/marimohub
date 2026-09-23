@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import type { ReactNode } from 'react';
 import { ExternalLink, Lock, ShieldCheck } from 'lucide-react';
 import { Chip, PageContainer, PageHeader } from '@/components/ui';
@@ -109,7 +110,7 @@ export default function AdminSettingsPage() {
 
 	return (
 		<PageContainer>
-			<title>Settings · marimohub</title>
+			<PageTitle>Settings</PageTitle>
 			<PageHeader>
 				<div className="flex min-w-0 flex-col gap-0.5">
 					<h1 className="text-2xl font-semibold tracking-tight">Settings</h1>

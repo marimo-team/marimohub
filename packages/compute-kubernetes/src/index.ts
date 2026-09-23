@@ -58,8 +58,14 @@ import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
 import { validatePodTemplate } from './podTemplate';
-import { resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
-import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
+import { MANAGED_BY_VALUE, resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
+import type {
+	EnsureSandboxOptions,
+	K8sClient,
+	K8sExecResult,
+	K8sPodPhaseInfo,
+	KubernetesConfig,
+} from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 export * from './shared';
 export { loadPodTemplateFile, parsePodTemplate, validatePodTemplate } from './podTemplate';
@@ -266,6 +272,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: KubernetesConfig,
 		private readonly client: K8sClient,
+		private readonly existingOnly = false,
 	) {
 		this.name = resourceName(id);
 		this.namespace = config.namespace ?? 'default';
@@ -311,8 +318,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<void> {
 		if (this.resolved) return;
-		const t0 = Date.now();
-		const { createdPod } = await this.client.ensure({
+		const options: EnsureSandboxOptions = {
 			podTemplate: this.config.podTemplate,
 			name: this.name,
 			sandboxId: this.id,
@@ -329,11 +335,34 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			resources: this.config.resources,
 			extraLabels: this.config.extraLabels,
 			runAsUser: this.config.runAsUser,
-		});
+		};
+		if (this.existingOnly) {
+			const pod = await this.existingPod();
+			await this.client.reconcileRoutes(options);
+			const confirmed = await this.existingPod();
+			if (pod.uid !== confirmed.uid) {
+				throw new Error(`Kubernetes sandbox ${this.id} was replaced during reconnect`);
+			}
+			this.resolved = true;
+			return;
+		}
+		const t0 = Date.now();
+		const { createdPod } = await this.client.ensure(options);
 		const t1 = Date.now();
 		await this.waitForRunning();
 		this.resolved = true;
 		await this.recordEnsure(createdPod, t1 - t0, Date.now() - t1);
+	}
+
+	private async existingPod(): Promise<K8sPodPhaseInfo> {
+		const pod = await this.client.getPhase(this.name);
+		if (pod?.phase !== 'Running') {
+			throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
+		}
+		if (pod.managedBy !== MANAGED_BY_VALUE || pod.sandboxId !== this.id) {
+			throw new Error(`Kubernetes Pod ${this.name} does not belong to sandbox ${this.id}`);
+		}
+		return pod;
 	}
 
 	/**
@@ -669,7 +698,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async destroy(): Promise<void> {
 		// A removed hostname can leave an Ingress from earlier subdomain config.
 		// Proxy mode remains free of Ingress API access.
-		await this.client.delete(this.name, { ingress: this.subdomainExposure });
+		await this.client.delete(this.name, { ingress: this.subdomainExposure, sandboxId: this.id });
 		this.resolved = false;
 	}
 }
@@ -703,6 +732,18 @@ export class KubernetesCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options);
+	}
+
+	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options, true);
+	}
+
+	private instance(
+		id: SandboxId,
+		options?: CreateSandboxOptions,
+		existingOnly = false,
+	): SandboxInstance {
 		const profileResources = kubernetesProfileResources(options?.resources);
 		const config =
 			options?.image || profileResources
@@ -723,7 +764,7 @@ export class KubernetesCompute implements SandboxProvider {
 							: {}),
 					}
 				: this.config;
-		return new KubernetesSandboxInstance(id, config, this.getClient());
+		return new KubernetesSandboxInstance(id, config, this.getClient(), existingOnly);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

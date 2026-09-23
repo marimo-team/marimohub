@@ -154,13 +154,16 @@ describe('sandbox.isolation check', () => {
 		MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
 	};
 
-	it('ok when the kernel host is on a separate domain', async () => {
-		const { by } = await run(
-			{ ...env, MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandboxes.example.net' },
-			makeDeps(),
-		);
-		expect(by('sandbox.isolation')?.status).toBe('ok');
-	});
+	it.each(['sandboxes.example.net', 'sandboxes.example.com'])(
+		'accepts kernel host %s',
+		async (hostname) => {
+			const { by } = await run(
+				{ ...env, MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hostname },
+				makeDeps(),
+			);
+			expect(by('sandbox.isolation')?.status).toBe('ok');
+		},
+	);
 
 	it.each([
 		{
@@ -175,9 +178,10 @@ describe('sandbox.isolation check', () => {
 				'Set MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME to a hostname with an optional port, without a scheme or path.',
 		},
 		{
-			hostname: 'sandbox.example.com',
+			hostname: 'sandbox.hub.example.com',
 			redirect: 'https://hub.example.com/callback',
-			remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',
+			remediation:
+				'Use a different sandbox hostname that is not a parent or subdomain of the app hostname.',
 		},
 	])(
 		'recommends the repair for $hostname and $redirect',

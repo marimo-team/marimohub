@@ -6,7 +6,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
-import { startJobScheduler, startMaintenance, startSessionLifecycle } from './cron';
+import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
 import { validateServerEnv } from './env';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
@@ -144,7 +144,13 @@ export async function bootstrap(
 	// defense-in-depth guards.
 	const stops: (() => void)[] = [];
 	let drainJobRuns: () => Promise<void> = () => Promise.resolve();
+	let drainWarmPools: () => Promise<void> = () => Promise.resolve();
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {
+		const warmPools = startWarmPools(deps);
+		if (warmPools) {
+			stops.push(warmPools.stop);
+			drainWarmPools = warmPools.drain;
+		}
 		stops.push(startMaintenance(deps, wideEvents));
 		const stopLifecycle = startSessionLifecycle(deps);
 		if (stopLifecycle) stops.push(stopLifecycle);
@@ -196,7 +202,7 @@ export async function bootstrap(
 				return dataBrowserClose;
 			};
 			const disposeCompute = deps.compute[Symbol.asyncDispose];
-			const schedulerDrained = drainJobRuns();
+			const schedulerDrained = Promise.all([drainJobRuns(), drainWarmPools()]);
 			const shutdowns: PromiseLike<unknown>[] = [
 				closed,
 				...(deps.dataBrowser?.close ? [closed.then(closeDataBrowser)] : []),

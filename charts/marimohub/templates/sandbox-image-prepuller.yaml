@@ -1,0 +1,70 @@
+{{- if .Values.sandboxImagePrepuller.enabled }}
+{{- $images := .Values.sandboxImagePrepuller.images }}
+{{- if empty $images }}
+{{- fail "sandboxImagePrepuller.images must list the sandbox images to pre-pull" }}
+{{- end }}
+{{- if empty .Values.sandboxImagePrepuller.nodeSelector }}
+{{- fail "sandboxImagePrepuller.nodeSelector must select the sandbox node pool" }}
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "marimohub.fullname" . }}-sandbox-prepuller
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-prepuller
+spec:
+  selector:
+    matchLabels:
+      {{- include "marimohub.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sandbox-prepuller
+  template:
+    metadata:
+      labels:
+        {{- include "marimohub.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sandbox-prepuller
+      annotations:
+        marimohub.io/image-revision: {{ .Values.sandboxImagePrepuller.revision | quote }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.sandboxImagePrepuller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sandboxImagePrepuller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sandboxImagePrepuller.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- range $index, $image := $images }}
+        - name: pull-{{ $index }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $.Values.sandboxImagePrepuller.pullPolicy }}
+          command: ["/bin/true"]
+          resources:
+            requests: { cpu: 1m, memory: 8Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+        {{- end }}
+      containers:
+        - name: pause
+          image: {{ .Values.sandboxImagePrepuller.pauseImage | quote }}
+          resources:
+            requests: { cpu: 1m, memory: 8Mi }
+            limits: { cpu: 10m, memory: 16Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: [ALL]
+{{- end }}

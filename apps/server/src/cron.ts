@@ -384,3 +384,41 @@ export function startJobScheduler(deps: ApiDeps, metrics: WideEventMetrics): Job
 		},
 	};
 }
+
+export function startWarmPools(deps: ApiDeps): JobSchedulerHandle | undefined {
+	const service = deps.warmPool;
+	if (!service) return;
+	const lock = new MaintenanceLock(deps.bucket, paths.warmPoolLock);
+	const holder = `${os.hostname()}:${process.pid}:warm-pools`;
+	let running = false;
+	let current = Promise.resolve();
+	const run = () => {
+		if (running) return;
+		running = true;
+		current = (async () => {
+			try {
+				if (!service.config.enabled && (await service.store.ownedSandboxIds()).size === 0) {
+					clearInterval(interval);
+					return;
+				}
+				if (!(await lock.acquire(holder))) return;
+				try {
+					await service.sweep();
+				} finally {
+					await lock.release(holder);
+				}
+			} catch (error) {
+				logEvent({
+					level: 'error',
+					event: 'warm_pool_sweep_failed',
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				running = false;
+			}
+		})();
+	};
+	const interval = setInterval(run, 5_000);
+	run();
+	return { stop: () => clearInterval(interval), drain: () => current };
+}

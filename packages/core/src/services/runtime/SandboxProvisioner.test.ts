@@ -87,6 +87,30 @@ describe('SandboxProvisioner', () => {
 	const notebookId = createNotebookId();
 	const sandboxId = createSandboxId();
 
+	it.each([false, true])(
+		'cleans up a failed provision only when it owns the sandbox (existing: %s)',
+		async (existing) => {
+			const { instance, calls } = makeFakeSandbox({ failExec: 'true' });
+			const provider = fakeComputeFrom(instance);
+			const create = vi.spyOn(provider, 'create');
+			const onSandboxDestroyed = vi.fn();
+			await expect(
+				new SandboxProvisioner(provider).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					existingSandbox: existing ? instance : undefined,
+					onSandboxDestroyed,
+				}),
+			).rejects.toThrow('Sandbox compute backend is not available');
+			expect(create).toHaveBeenCalledTimes(existing ? 0 : 1);
+			expect(calls.destroy).toBe(existing ? 0 : 1);
+			expect(onSandboxDestroyed).toHaveBeenCalledTimes(existing ? 0 : 1);
+		},
+	);
+
 	describe.each(['provision', 'prepare'] as const)('%s handle creation', (operation) => {
 		it.each([
 			{ restore: false, markerFails: false },
@@ -138,7 +162,7 @@ describe('SandboxProvisioner', () => {
 			bridgeParentOrigin: 'https://hub.example',
 		};
 		it.each(['uv-sync-edit', 'uv-script-pins'] as const)(
-			'launches the extension in the actual %s runtime after setup and injection',
+			'uploads the bridge while injection is pending and waits before launching %s',
 			async (launchStrategy) => {
 				const { instance, calls } = makeFakeSandbox();
 				const pending = deferred<{ vars: Record<string, string> }>();
@@ -152,7 +176,11 @@ describe('SandboxProvisioner', () => {
 					expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(true),
 				);
 				expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
-					false,
+					true,
+				);
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.setEnvVars).not.toContainEqual(
+					expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
 				);
 				pending.resolve({ vars: { EXISTING: 'kept' } });
 				await provision;
@@ -618,6 +646,41 @@ describe('SandboxProvisioner', () => {
 
 			expect(result.timings.reachable_create).toBe(42);
 			expect(result.timings.reachable_find).toBe(7);
+		});
+
+		it('excludes warm claim telemetry while retaining provisioning telemetry', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			let timings: Record<string, number> = { find: 42 };
+			let drainedExecs = 0;
+			instance.drainTimings = () => {
+				const recorded = timings;
+				timings = {};
+				return recorded;
+			};
+			instance.drainCounters = () => {
+				const execs = calls.exec.length - drainedExecs;
+				drainedExecs = calls.exec.length;
+				return { execs };
+			};
+			instance.ready = async () => {
+				timings.boot = 7;
+			};
+			await instance.exec('true');
+			const claimExecs = calls.exec.length;
+
+			const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				existingSandbox: instance,
+			});
+
+			expect(result.timings).not.toHaveProperty('reachable_find');
+			expect(result.timings.reachable_boot).toBe(7);
+			expect(result.counters.execs).toBeGreaterThan(0);
+			expect(result.counters.execs).toBe(calls.exec.length - claimExecs);
 		});
 
 		it('passes --asset-url when assetUrl is set', async () => {

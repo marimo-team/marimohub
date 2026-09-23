@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { BrandingContext } from '@/context/BrandingContext';
 import { jsonOk, renderWithClient } from '@/test/render';
 import { Footer } from './Footer';
 
@@ -15,7 +17,8 @@ function LocationProbe() {
 function setup({
 	version = '0.2.0',
 	me = USER as Record<string, unknown>,
-}: { version?: string; me?: Record<string, unknown> } = {}) {
+	name = 'marimohub',
+}: { version?: string; me?: Record<string, unknown>; name?: string } = {}) {
 	const capabilitiesFetch = vi.fn(() => jsonOk({}));
 	vi.stubGlobal(
 		'fetch',
@@ -30,7 +33,9 @@ function setup({
 	const user = userEvent.setup();
 	renderWithClient(
 		<AuthProvider>
-			<Footer />
+			<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, name }}>
+				<Footer />
+			</BrandingContext>
 			<LocationProbe />
 		</AuthProvider>,
 		{ route: '/' },
@@ -49,9 +54,25 @@ afterEach(() => {
 });
 
 describe('Footer', () => {
+	it('uses the deployment name in About while preserving product attribution and source links', async () => {
+		const name = 'Research <Hub>';
+		const { user } = setup({ name });
+		expect(screen.getByText(name)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: `About ${name}` }));
+
+		const popover = within(screen.getByRole('dialog'));
+		expect(popover.getByText(name)).toBeInTheDocument();
+		expect(popover.getByText('Powered by marimohub')).toBeInTheDocument();
+		expect(popover.getByRole('link', { name: /Source/ })).toHaveAttribute(
+			'href',
+			'https://github.com/marimo-team/marimohub',
+		);
+	});
+
 	it('links a release version to its GitHub release page', async () => {
 		const { user } = setup();
 		await openPopover(user);
+		expect(screen.queryByText('Powered by marimohub')).not.toBeInTheDocument();
 
 		const link = await screen.findByRole('link', { name: /0\.2\.0/ });
 		expect(link).toHaveAttribute(

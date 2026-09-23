@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { BrandingContext } from '@/context/BrandingContext';
 import { UserAvatar } from './UserAvatar';
 
 const FIRST_URL = 'https://identity.example/avatar/first.png';
@@ -10,6 +12,28 @@ function image(): HTMLImageElement | null {
 }
 
 describe('UserAvatar', () => {
+	it('uses the teal gradient with default branding', () => {
+		render(<UserAvatar label="Ada" />);
+
+		expect(screen.getByText('A')).toHaveClass('from-teal-500/15', 'to-teal-600/25');
+		expect(screen.getByText('A')).not.toHaveClass('from-primary/15', 'to-primary/25');
+	});
+
+	it.each([
+		{ primary_color: '#345678' },
+		{ secondary_color: '#abcdef' },
+		{ primary_color: '#345678', secondary_color: '#abcdef' },
+	])('uses the theme gradient with custom colors %j', (colors) => {
+		render(
+			<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, ...colors }}>
+				<UserAvatar label="Ada" />
+			</BrandingContext>,
+		);
+
+		expect(screen.getByText('A')).toHaveClass('from-primary/15', 'to-primary/25');
+		expect(screen.getByText('A')).not.toHaveClass('from-teal-500/15', 'to-teal-600/25');
+	});
+
 	it('renders the identity-provider picture with privacy attributes', () => {
 		render(<UserAvatar pictureUrl={FIRST_URL} label="Ada" />);
 

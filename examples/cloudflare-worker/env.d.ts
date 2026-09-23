@@ -1,8 +1,9 @@
+import type { ThemeEnv } from '@marimo-hub/config/theme';
 import type { Sandbox } from '@cloudflare/sandbox';
 import type { AssignableRole } from '@marimo-hub/core/constants';
 
 declare global {
-	interface Env {
+	interface Env extends ThemeEnv {
 		MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS?: string;
 		MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS?: string;
 		MARIMOHUB_APP_MAX_USERS_PER_SESSION?: string;

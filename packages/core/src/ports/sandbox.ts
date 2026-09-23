@@ -299,11 +299,22 @@ export interface CreateSandboxOptions {
 	owner?: SandboxOwner;
 }
 
+export interface WarmPoolSupport {
+	/** Guaranteed lifetime from before creation; null means no provider lifetime cap. */
+	maxLifetimeMs: number | null;
+	/** Serializable creation inputs not represented by environment variables, such as loaded templates. */
+	configuration?: unknown;
+}
+
 export interface SandboxProvider {
+	/** Opt-in requires strict reconnect and idempotent destruction by the original sandbox ID. */
+	readonly warmPool?: WarmPoolSupport;
 	readonly capabilities?: {
 		multiPort: boolean;
 	};
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
+	/** Attach without creating; a missing or stopped sandbox must fail on first use. */
+	connectExisting?(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/**
 	 * Proxy an incoming request to a sandbox's exposed port.
 	 * Returns a Response if the request matched a sandbox URL, null otherwise.

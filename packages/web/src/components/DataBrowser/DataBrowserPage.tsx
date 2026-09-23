@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { formatBytes } from '@/lib/formatBytes';
 import { canEditProject } from '@/lib/roles';
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- output cannot contain this status's paragraphs */
@@ -288,7 +289,7 @@ export default function DataBrowserPage() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-6 max-md:overflow-y-auto max-md:p-3">
-			<title>{`Data · ${project.name} · marimohub`}</title>
+			<PageTitle>{`Data · ${project.name}`}</PageTitle>
 			<div className="flex items-center justify-between gap-4">
 				<div className="flex min-w-0 items-center gap-2">
 					<IconLink

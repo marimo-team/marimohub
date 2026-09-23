@@ -1,3 +1,4 @@
+import { parseTheme } from './theme';
 /**
  * Configuration composition root.
  *
@@ -25,6 +26,9 @@ import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
 	composeAuthenticators,
 	createServices,
+	WarmPoolStore,
+	AppPoolStore,
+	WarmPoolService,
 	Millis,
 	normalizeBaseUrl,
 	parseHttpUrl,
@@ -92,6 +96,7 @@ import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sess
 import { parseAppPoolPolicy } from './appPool';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
+import { parseWarmPoolConfig } from './warmPool';
 
 import type { Env } from './env';
 import { parseSandboxAuth } from './sandboxAuth';
@@ -538,32 +543,15 @@ function parsePersistWorkspace(env: Env): 'source' | 'workspace' {
 	);
 }
 
-/**
- * Reject a sandbox hostname that shares an origin or parent domain with the app.
- * Notebook kernels run untrusted user code; if they are served same-origin (or on
- * the same registrable domain) as the control plane, a malicious notebook can
- * escape the iframe sandbox (`allow-scripts allow-same-origin`) into the app's
- * origin, or set cookies on the shared parent domain. Sandboxes must live on a
- * separate domain (e.g. `sandboxes.example.net`).
- *
- * The app's public host is derived from the OIDC redirect URI when present (the
- * only public-origin signal in env); skipped for other auth backends. The
- * public-suffix check includes private suffixes such as github.io.
- */
 function assertSandboxHostIsolated(env: Env): void {
 	const isolation = checkSandboxHostIsolation(env);
 	if (isolation.isolated) return;
 	const detail = sandboxHostIsolationMessage(isolation);
-	throw new ConfigError(
-		`${detail} Notebook kernels run untrusted code and must be isolated on a separate domain ` +
-			`(e.g. sandboxes.example.net) so a malicious notebook cannot escape the iframe sandbox into ` +
-			`the control plane or set cookies on the shared domain.`,
-		{
-			variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
-			remediation: sandboxHostIsolationRemediation(isolation),
-			docs: 'docs/security.md',
-		},
-	);
+	throw new ConfigError(detail, {
+		variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
+		remediation: sandboxHostIsolationRemediation(isolation),
+		docs: 'docs/security.md',
+	});
 }
 
 /**
@@ -620,6 +608,7 @@ export function createFromEnv(
 ): ApiDeps {
 	// Warns on unknown experiment IDs; no experiment currently gates behavior.
 	parseExperiments(env);
+	const theme = parseTheme(env);
 	const serviceAccounts = serviceAccountsFromEnv(env);
 	const bucket = makeStorage(env, options?.libraries);
 	const exposure = parseSandboxExposure(env);
@@ -678,6 +667,14 @@ export function createFromEnv(
 			{ variable: 'MARIMOHUB_SURFACES' },
 		);
 	}
+	const warmPool = parseWarmPoolConfig(env, {
+		backend: computeBackendValue,
+		compute,
+		images: sandboxImages,
+		profiles: profilesSupported ? appliedComputeProfiles : parseComputeProfiles(undefined),
+		sessionMaxLifetimeMs: sessionLifetime.maxLifetimeMs,
+		startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
+	});
 	const brokerPolicy =
 		integrationsEnabled(env) && env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
@@ -698,6 +695,18 @@ export function createFromEnv(
 	);
 	const dataQuery = dataQueryFromEnv(env, duckdbHttpSessionFactory, metrics);
 	const deps: ApiDeps = {
+		warmPool: warmPool
+			? new WarmPoolService(
+					new WarmPoolStore(bucket, warmPool.backend),
+					compute,
+					services.sessions,
+					warmPool.config,
+					metrics,
+					undefined,
+					new AppPoolStore(bucket),
+				)
+			: undefined,
+		theme,
 		services,
 		metrics,
 		bucket,

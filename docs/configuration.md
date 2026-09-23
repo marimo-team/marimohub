@@ -14,6 +14,21 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 🔒 marks a sensitive value (a secret).
 
+## Theme
+
+Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.
+
+### Branding
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_THEME_NAME` | Display name and browser-title suffix. | — | `marimohub` | `Research Hub` |
+| `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/favicon.svg` |
+| `MARIMOHUB_THEME_LOGO` | SVG or PNG logo that replaces the full icon and wordmark. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/logo.svg` |
+| `MARIMOHUB_THEME_LOGO_DARK` | SVG or PNG logo for dark mode. Defaults to the main logo. | — | — | `https://hub.example.com/brand/logo-dark.svg` |
+| `MARIMOHUB_THEME_PRIMARY_COLOR` | Opaque #RGB or #RRGGBB color for actions, links, and focus. Generates readable light and dark palettes. | — | — | `#2563eb` |
+| `MARIMOHUB_THEME_SECONDARY_COLOR` | Opaque #RGB or #RRGGBB color for accents and surface tints. Defaults to the primary color. | — | — | `#7c3aed` |
+
 ## Storage
 
 Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `azure`, `fs`, `memory`, `library`, `r2`.
@@ -112,6 +127,9 @@ Read regardless of the selected compute backend.
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
 | `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi\|Gi\|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend applies GPU requests. Other backends ignore GPU values and log a startup warning. | — | — | `small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100` |
+| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED` | Keep unassigned CoreWeave or Kubernetes sandboxes ready for editor and app sessions. Requires a maintenance replica. Jobs, sandbox startup diagnostics, personal-home mounts, snapshot restores, and non-default images use cold creation. Idle sandboxes consume compute. | — | `false` | — |
+| `MARIMOHUB_COMPUTE_WARM_POOL_SIZE` | Positive integer target of idle sandboxes per selected profile, shared across all server replicas. Used only when warm pools are enabled. | — | `1` | — |
+| `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image. | — | `default` | — |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
@@ -313,7 +331,7 @@ How running kernels are surfaced to the browser, agnostic of the compute backend
 
 `MARIMOHUB_SANDBOX_EXPOSURE=subdomain`
 
-The compute adapter's public kernel URL is used as-is. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a domain separate from the app host.
+Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.
 
 _No environment variables to set here._
 

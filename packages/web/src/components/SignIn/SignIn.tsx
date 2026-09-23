@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { LogIn, AlertCircle } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
@@ -37,7 +38,7 @@ export function SignIn() {
 
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center gap-8 p-8">
-			<title>Sign in · marimohub</title>
+			<PageTitle>Sign in</PageTitle>
 			<Brand size="lg" />
 
 			<div className="flex w-full max-w-sm flex-col items-center gap-6 rounded-xl border bg-card p-8 text-center shadow-md">

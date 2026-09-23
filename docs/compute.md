@@ -177,3 +177,7 @@ After deploy:
 
 See [Troubleshooting -> Kernels won't start](./troubleshooting.md#kernels-wont-start)
 and [Sandbox image](./sandbox-image.md).
+
+## Warm sandbox pools
+
+CoreWeave and Kubernetes support opt-in [warm sandbox pools](./warm-pools.md). Pools keep the default image running for faster editor and app startup.

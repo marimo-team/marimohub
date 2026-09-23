@@ -393,6 +393,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		/** Reconnect-by-tag before creating. False on a fresh provision (skips a wasted list). */
 		private readonly reuse = true,
 		private readonly userHome?: SandboxUserHome,
+		private readonly existingOnly = false,
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
@@ -412,6 +413,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// container start or time spent waiting on a poll.
 		const t0 = Date.now();
 		const existing = this.reuse ? await this.findByOurId() : undefined;
+		if (this.existingOnly && existing?.status !== 'running') {
+			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
+		}
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
 		// and boot phases separately measurable for the wide event below.
@@ -1036,6 +1040,18 @@ export class CoreWeaveCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options);
+	}
+
+	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, { ...options, reuse: true }, true);
+	}
+
+	private instance(
+		id: SandboxId,
+		options?: CreateSandboxOptions,
+		existingOnly = false,
+	): SandboxInstance {
 		if (options?.userHome && !this.config.userHomeTemplateId) {
 			// Failing here beats provisioning an editor without its mount: the
 			// bootstrap would abort in-sandbox, after the boot wait.
@@ -1059,6 +1075,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			this.getClient(),
 			options?.reuse ?? true,
 			options?.userHome,
+			existingOnly,
 		);
 	}
 

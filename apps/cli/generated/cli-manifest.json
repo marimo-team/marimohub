@@ -5161,6 +5161,19 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "theme",
+			"command": ["theme"],
+			"method": "GET",
+			"path": "/api/v1/theme",
+			"summary": "Get public deployment branding",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "users.resolve",
 			"command": ["users", "resolve"],
 			"method": "GET",
