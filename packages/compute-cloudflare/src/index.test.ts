@@ -567,14 +567,78 @@ describe('bounded file transport', () => {
 		).toBe(false);
 	});
 
+	it('accepts thousands of single-byte output events within the decoded budget', async () => {
+		const data = `${'data: {"type":"stdout","data":"x"}\n\n'.repeat(3_000)}data: {"type":"complete","exitCode":0}\n\n`;
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode(data));
+					c.close();
+				},
+			}),
+		);
+		const result = await makeProvider()
+			.create(SANDBOX_ID)
+			.exec('chatty', { maxOutputBytes: 3_000 });
+		expect(result).toMatchObject({ success: true, stdout: 'x'.repeat(3_000), stderr: '' });
+	});
+
+	it.each([100.5, 2 ** 31 - 1])('accepts bounded read timeout %s', async (timeoutMs) => {
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode('data: {"type":"complete","exitCode":0}\n\n'));
+					c.close();
+				},
+			}),
+		);
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/empty', {
+				maxBytes: 0,
+				timeoutMs,
+			}),
+		).toEqual({ success: true, content: '', encoding: 'base64' });
+		expect(fakeSandbox.execStream).toHaveBeenLastCalledWith(expect.any(String), {
+			timeout: Math.ceil(timeoutMs),
+			signal: expect.any(AbortSignal),
+		});
+	});
+
+	it('rejects out-of-range read timeout before starting the command', async () => {
+		fakeSandbox.execStream.mockClear();
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/empty', {
+				maxBytes: 0,
+				timeoutMs: 2 ** 31,
+			}),
+		).toMatchObject({ success: false, error: { code: 'READ_FAILED' } });
+		expect(fakeSandbox.execStream).not.toHaveBeenCalled();
+	});
+
+	it('bounds an unterminated frame independently of the total framing allowance', async () => {
+		const cancel = vi.fn();
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode('data: '));
+					c.enqueue(new Uint8Array(64 * 1024 + 32).fill(120));
+				},
+				cancel,
+			}),
+		);
+		await expect(
+			makeProvider().create(SANDBOX_ID).exec('unterminated', { maxOutputBytes: 4 }),
+		).rejects.toThrow('SSE frame limit exceeded');
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
 	it('cancels an oversized wire stream before its deadline', async () => {
 		const maxOutputBytes = 4;
 		const cancel = vi.fn();
 		fakeSandbox.execStream.mockResolvedValueOnce(
 			new ReadableStream({
 				start(c) {
-					// Matches the JSON escaping and repeated-output allowance in collectExecOutput.
-					c.enqueue(new Uint8Array(maxOutputBytes * 12 + 64 * 1024 + 1));
+					c.enqueue(new Uint8Array(1024 * 1024));
 				},
 				cancel,
 			}),
@@ -657,26 +721,29 @@ describe('bounded file transport', () => {
 		},
 	);
 
-	it('preserves split UTF-8 SSE frames at the exact output budget with no deadline', async () => {
-		const wire = new TextEncoder().encode(
-			'data: {"type":"stdout","data":"é"}\r\n\r\ndata: {"type":"complete","exitCode":0}\r\n\r\n',
-		);
-		fakeSandbox.execStream.mockResolvedValueOnce(
-			new ReadableStream({
-				async start(c) {
-					await new Promise((resolve) => setTimeout(resolve, 10));
-					for (const byte of wire) c.enqueue(new Uint8Array([byte]));
-					c.close();
-				},
-			}),
-		);
-		expect(
-			await makeProvider().create(SANDBOX_ID).exec('cmd', {
-				maxOutputBytes: 2,
-				timeout: 0,
-			}),
-		).toMatchObject({ success: true, stdout: 'é', stderr: '' });
-	});
+	it.each([0, Infinity])(
+		'preserves split UTF-8 SSE frames at the exact output budget with timeout %s',
+		async (timeout) => {
+			const wire = new TextEncoder().encode(
+				'data: {"type":"stdout","data":"é"}\r\n\r\ndata: {"type":"complete","exitCode":0}\r\n\r\n',
+			);
+			fakeSandbox.execStream.mockResolvedValueOnce(
+				new ReadableStream({
+					async start(c) {
+						await new Promise((resolve) => setTimeout(resolve, 10));
+						for (const byte of wire) c.enqueue(new Uint8Array([byte]));
+						c.close();
+					},
+				}),
+			);
+			expect(
+				await makeProvider().create(SANDBOX_ID).exec('cmd', {
+					maxOutputBytes: 2,
+					timeout,
+				}),
+			).toMatchObject({ success: true, stdout: 'é', stderr: '' });
+		},
+	);
 
 	it.each([Number.NaN, Infinity, -1])(
 		'rejects invalid output budget %s before starting a command',

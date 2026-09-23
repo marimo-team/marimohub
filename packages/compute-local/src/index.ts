@@ -442,14 +442,16 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	async readFileBounded(p: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		let mapped: string;
+		try {
+			mapped = this.mapPath(p);
+		} catch {
+			return readFileFailure();
+		}
 		await this.ensureRoot();
 		// macOS temporary directories have trusted symlink ancestors (/var -> /private/var).
 		const parent = await realpath(path.dirname(this.root));
-		const target = path.join(
-			parent,
-			path.basename(this.root),
-			path.relative(this.root, this.mapPath(p)),
-		);
+		const target = path.join(parent, path.basename(this.root), path.relative(this.root, mapped));
 		return readBoundedFile(target, options, (command, limits) => this.runCommand(command, limits));
 	}
 

@@ -18,7 +18,8 @@ of the compute backend. The modes trade origin isolation against authentication.
 Kernels run arbitrary Python in an `<iframe sandbox="allow-scripts allow-same-origin …">`.
 Browsers connect **directly** to kernels. Sibling hostnames such as `hub.example.com` and `sandboxes.example.com` are supported.
 The server rejects identical or parent/child app and sandbox hostnames.
-It uses `MARIMOHUB_APP_BASE_URL`, with the OIDC redirect URI as a fallback.
+It uses `MARIMOHUB_APP_BASE_URL`, with the OIDC redirect URI as a fallback when the app URL is unset or blank.
+Surrounding whitespace is ignored. A nonblank invalid value blocks startup instead of using the fallback.
 Both URLs must have the same origin when both are present.
 A configured kernel host without a valid app origin prevents startup for every authentication backend.
 The Cloudflare Worker example also compares against the request hostname.

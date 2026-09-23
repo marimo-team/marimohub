@@ -607,6 +607,16 @@ export function createE2bClient(
 						);
 						abort.signal.throwIfAborted();
 						return { stdout, stderr, exitCode };
+					} catch (error) {
+						abort.signal.throwIfAborted();
+						const result = commandExitResult(error);
+						if (
+							new TextEncoder().encode(result.stdout).byteLength +
+								new TextEncoder().encode(result.stderr).byteLength >
+							maxOutputBytes
+						)
+							throw new Error('Sandbox output exceeded byte limit');
+						return result;
 					} finally {
 						if (timer !== undefined) clearTimeout(timer);
 						cancel();
@@ -616,13 +626,7 @@ export function createE2bClient(
 					const r = await sbx.commands.run(cmd, { ...options });
 					return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
 				} catch (err) {
-					// e2b throws CommandExitError on a non-zero exit; surface it as a result
-					// (the error carries stdout/stderr/exitCode). Anything else is a real fault.
-					const e = err as { exitCode?: number; stdout?: string; stderr?: string };
-					if (e && typeof e.exitCode === 'number') {
-						return { stdout: e.stdout ?? '', stderr: e.stderr ?? '', exitCode: e.exitCode };
-					}
-					throw err;
+					return commandExitResult(err);
 				}
 			},
 			async runBackground(cmd, options) {
@@ -669,6 +673,14 @@ export function createE2bClient(
 			}));
 		},
 	};
+}
+
+function commandExitResult(error: unknown): E2bExecResult {
+	// Nonzero exits carry their output on CommandExitError; transport faults do not.
+	const result = error as Partial<E2bExecResult> | null;
+	if (result && typeof result.exitCode === 'number')
+		return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', exitCode: result.exitCode };
+	throw error;
 }
 
 /** Default SDK loader: a runtime `import('e2b')`, left unbundled for the Node image. */

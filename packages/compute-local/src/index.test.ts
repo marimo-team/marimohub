@@ -8,7 +8,7 @@ import type { SandboxId } from '@marimo-hub/core/ids';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { SandboxInstance } from '@marimo-hub/core/ports/sandbox';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
-import { expectFileResult } from '@marimo-hub/core/testing/result-assertions';
+import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
@@ -1030,11 +1030,24 @@ describe('bounded artifact reads', () => {
 		expect(
 			(await sb.readFileBounded!('/workspace/file.bin', { ...options, maxBytes: 2 })).success,
 		).toBe(false);
-		await sb.exec(
-			'ln -s file.bin /workspace/link; mkfifo /workspace/pipe; mkdir /workspace/dir; ln -s dir /workspace/dir-link',
+		expectExecResult(
+			await sb.exec(
+				'ln -s file.bin /workspace/link && mkfifo /workspace/pipe && mkdir /workspace/dir && ln -s dir /workspace/dir-link',
+			),
+			{ success: true },
 		);
 		await sb.writeFiles([{ path: '/workspace/dir/file', content: 'ok' }]);
 		for (const name of ['link', 'pipe', 'dir-link/file'])
 			expect((await sb.readFileBounded!(`/workspace/${name}`, options)).success).toBe(false);
 	});
+
+	it.each(['../outside', '/workspace/../../outside'])(
+		'returns a refusal for a path outside the sandbox: %s',
+		async (filename) => {
+			expectFileResult(
+				await newSandbox().readFileBounded!(filename, { maxBytes: 10, timeoutMs: 100 }),
+				{ success: false, error: { code: 'READ_FAILED' } },
+			);
+		},
+	);
 });

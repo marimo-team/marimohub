@@ -22,7 +22,12 @@ import { execResult, listFilesFailure, readFileFailure } from '../ports/sandbox'
 
 function validReadBudget({ maxBytes, timeoutMs }: BoundedReadOptions): boolean {
 	return (
-		Number.isSafeInteger(maxBytes) && maxBytes >= 0 && Number.isFinite(timeoutMs) && timeoutMs > 0
+		Number.isSafeInteger(maxBytes) &&
+		maxBytes >= 0 &&
+		Number.isSafeInteger(4 * Math.ceil(maxBytes / 3)) &&
+		Number.isFinite(timeoutMs) &&
+		timeoutMs > 0 &&
+		timeoutMs <= 2 ** 31 - 1
 	);
 }
 

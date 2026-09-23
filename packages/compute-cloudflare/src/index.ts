@@ -80,8 +80,11 @@ async function collectExecOutput(
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	const encoder = new TextEncoder();
-	// JSON escapes cost up to six bytes, and complete events can repeat the output.
-	let wireRemaining = maxOutputBytes * 12 + 64 * 1024;
+	// Allow JSON escaping, repeated completion output, and 128 framing bytes per
+	// single-byte output event. Empty/control events share the fixed allowance.
+	let wireRemaining = Math.min(Number.MAX_SAFE_INTEGER, maxOutputBytes * (12 + 128) + 64 * 1024);
+	const frameLimit = Math.min(Number.MAX_SAFE_INTEGER, maxOutputBytes * 6 + 64 * 1024);
+	let frameBytes = 0;
 	let outputRemaining = maxOutputBytes;
 	let pending = '';
 	let stdout = '';
@@ -93,11 +96,17 @@ async function collectExecOutput(
 			if (done) break;
 			wireRemaining -= value.byteLength;
 			if (wireRemaining < 0) throw new Error('Sandbox SSE wire limit exceeded');
-			pending += decoder.decode(value, { stream: true });
-			let newline: number;
-			while ((newline = pending.indexOf('\n')) !== -1) {
-				const line = pending.slice(0, newline);
-				pending = pending.slice(newline + 1);
+			for (let offset = 0; offset < value.byteLength; ) {
+				const newline = value.indexOf(10, offset);
+				const end = newline === -1 ? value.byteLength : newline + 1;
+				frameBytes += end - offset;
+				if (frameBytes > frameLimit) throw new Error('Sandbox SSE frame limit exceeded');
+				pending += decoder.decode(value.subarray(offset, end), { stream: true });
+				offset = end;
+				if (newline === -1) continue;
+				const line = pending.slice(0, -1);
+				pending = '';
+				frameBytes = 0;
 				if (!line.startsWith('data:')) continue;
 				const event = JSON.parse(line.slice(5)) as {
 					type: string;
@@ -145,11 +154,21 @@ class CloudflareSandboxInstance implements SandboxInstance {
 		if (options?.maxOutputBytes !== undefined) {
 			validateOutputBudget(options.maxOutputBytes);
 			const timeout = options.timeout ?? 10_000;
+			if (
+				Number.isNaN(timeout) ||
+				timeout < 0 ||
+				(Number.isFinite(timeout) && timeout > 2 ** 31 - 1)
+			)
+				throw new RangeError('Sandbox output timeout exceeds timer range');
+			const delay = Math.ceil(timeout);
 			const signal =
 				timeout > 0 && Number.isFinite(timeout)
-					? AbortSignal.timeout(timeout)
+					? AbortSignal.timeout(delay)
 					: new AbortController().signal;
-			const stream = await this.sandbox.execStream(command, { timeout: options.timeout, signal });
+			const stream = await this.sandbox.execStream(command, {
+				timeout: options.timeout === undefined ? undefined : delay,
+				signal,
+			});
 			return collectExecOutput(stream, options.maxOutputBytes, signal);
 		}
 		const res =

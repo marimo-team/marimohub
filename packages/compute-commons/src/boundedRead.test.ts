@@ -107,12 +107,27 @@ describe('bounded sandbox reads', () => {
 		{ maxBytes: 10, timeoutMs: -1 },
 		{ maxBytes: 10, timeoutMs: Number.NaN },
 		{ maxBytes: 10, timeoutMs: Infinity },
+		{ maxBytes: 10, timeoutMs: 2 ** 31 },
+		{ maxBytes: Number.MAX_SAFE_INTEGER, timeoutMs: 100 },
+		{ maxBytes: 3 * Math.floor(Number.MAX_SAFE_INTEGER / 4) + 1, timeoutMs: 100 },
 	])('rejects invalid budgets before starting a command: %j', async (options) => {
 		const execute = vi.fn();
 		expect(await readBoundedFile('/workspace/file', options, execute)).toMatchObject({
 			success: false,
 		});
 		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it.each([0.1, 100.5, 2 ** 31 - 1])('normalizes supported read timeout %s', async (timeoutMs) => {
+		const execute = vi.fn(async () => ({ success: true, stdout: '' }));
+		const maxBytes = 3 * Math.floor(Number.MAX_SAFE_INTEGER / 4);
+		expect(
+			await readBoundedFile('/workspace/file', { maxBytes, timeoutMs }, execute),
+		).toMatchObject({ success: true });
+		expect(execute).toHaveBeenCalledWith(expect.any(String), {
+			maxOutputBytes: 4 * Math.floor(Number.MAX_SAFE_INTEGER / 4),
+			timeout: Math.ceil(timeoutMs),
+		});
 	});
 
 	it.each([

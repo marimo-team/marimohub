@@ -152,6 +152,38 @@ describe('app URL isolation across authentication backends', () => {
 });
 
 describe('configured origin edge cases', () => {
+	it.each(['', ' ', '\t\n'])('uses the redirect when the app URL is blank: %j', (appUrl) => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+				MARIMOHUB_APP_BASE_URL: appUrl,
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/callback',
+			}),
+		).toMatchObject({ isolated: true, appHost: 'hub.example.com' });
+	});
+
+	it.each(['MARIMOHUB_APP_BASE_URL', 'MARIMOHUB_AUTH_OIDC_REDIRECT_URI'] as const)(
+		'ignores surrounding whitespace in %s',
+		(key) => {
+			expect(
+				checkSandboxHostIsolation({
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+					[key]: ' \nhttps://hub.example.com/callback\t ',
+				}),
+			).toMatchObject({ isolated: true, appHost: 'hub.example.com' });
+		},
+	);
+
+	it('rejects a nonblank invalid app URL even with a valid redirect', () => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+				MARIMOHUB_APP_BASE_URL: ' invalid ',
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/callback',
+			}),
+		).toMatchObject({ isolated: false, reason: 'unverifiable-origin' });
+	});
+
 	it.each(['MARIMOHUB_APP_BASE_URL', 'MARIMOHUB_AUTH_OIDC_REDIRECT_URI'] as const)(
 		'rejects malformed or credential-bearing origins from %s',
 		(key) => {

@@ -50,13 +50,16 @@ export async function readBoundedFile(
 		!Number.isSafeInteger(options.maxBytes) ||
 		options.maxBytes < 0 ||
 		!Number.isFinite(options.timeoutMs) ||
-		options.timeoutMs <= 0
+		options.timeoutMs <= 0 ||
+		options.timeoutMs > 2 ** 31 - 1
 	)
 		return failure;
 	try {
 		const maxOutputBytes = 4 * Math.ceil(options.maxBytes / 3);
-		const command = `python3 -I -c ${shellQuote(READ_FILE)} ${shellQuote(path)} ${options.maxBytes} ${options.timeoutMs}`;
-		const result = await execute(command, { timeout: options.timeoutMs, maxOutputBytes });
+		validateOutputBudget(maxOutputBytes);
+		const timeout = Math.ceil(options.timeoutMs);
+		const command = `python3 -I -c ${shellQuote(READ_FILE)} ${shellQuote(path)} ${options.maxBytes} ${timeout}`;
+		const result = await execute(command, { timeout, maxOutputBytes });
 		if (
 			!result.success ||
 			result.stdout.length > maxOutputBytes ||

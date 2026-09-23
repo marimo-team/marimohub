@@ -89,18 +89,21 @@ describe('bootstrap', () => {
 	});
 
 	it.each([
-		[new ProxyExposure('secret'), "frame-src 'self'"],
-		[new SubdomainExposure(), "frame-src 'self' https: http:"],
-	])('scopes SPA connection and frame sources for %s', async (exposure, framePolicy) => {
-		deps.sandbox.exposure = exposure;
-		const harness = makeHarness(deps);
-		await bootstrap(BASE_ENV, harness.overrides);
-		const fetch = harness.serveFn.mock.calls[0][0].fetch;
-		const response = (await fetch(new Request('http://localhost/'), {} as never)) as Response;
-		const directives = response.headers.get('content-security-policy-report-only')!.split('; ');
-		expect(directives).toContain("connect-src 'self'");
-		expect(directives).toContain(framePolicy);
-	});
+		['proxy', new ProxyExposure('secret'), "frame-src 'self'"],
+		['subdomain', new SubdomainExposure(), "frame-src 'self' https: http:"],
+	] as const)(
+		'scopes SPA connection and frame sources for %s',
+		async (_mode, exposure, framePolicy) => {
+			deps.sandbox.exposure = exposure;
+			const harness = makeHarness(deps);
+			await bootstrap(BASE_ENV, harness.overrides);
+			const fetch = harness.serveFn.mock.calls[0][0].fetch;
+			const response = (await fetch(new Request('http://localhost/'), {} as never)) as Response;
+			const directives = response.headers.get('content-security-policy-report-only')!.split('; ');
+			expect(directives).toContain("connect-src 'self'");
+			expect(directives).toContain(framePolicy);
+		},
+	);
 
 	it('exits on a fatal preflight result without serving', async () => {
 		const report: PreflightReport = {

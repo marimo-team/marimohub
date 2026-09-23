@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
 import { Millis } from '@marimo-hub/core/duration';
@@ -840,7 +840,14 @@ describe('bounded file transport', () => {
 		},
 	);
 
-	it('kills the supervised command on overflow without waiting for the remote deadline', async () => {
+	it('kills the supervised command on overflow without waiting for the remote deadline', async (context) => {
+		if (
+			process.platform === 'win32' ||
+			spawnSync('python3', ['--version']).status !== 0 ||
+			spawnSync('sh', ['-c', 'command -v sleep']).status !== 0
+		) {
+			context.skip('Requires Python 3 and a POSIX shell with sleep');
+		}
 		const world = makeWorld();
 		const sandbox = new FakeSandbox();
 		let child: ReturnType<typeof spawn> | undefined;

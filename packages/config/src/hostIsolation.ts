@@ -26,8 +26,8 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	} catch {
 		return { isolated: false, sandboxHost, reason: 'invalid-sandbox-host' };
 	}
-	const appUrl = env.MARIMOHUB_APP_BASE_URL;
-	const redirect = env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI;
+	const appUrl = env.MARIMOHUB_APP_BASE_URL?.trim() || undefined;
+	const redirect = env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI?.trim() || undefined;
 	if (!appUrl && !redirect) {
 		return { isolated: false, sandboxHost, reason: 'unverifiable-origin' };
 	}

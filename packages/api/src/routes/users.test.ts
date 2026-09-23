@@ -143,6 +143,33 @@ describe('User routes', () => {
 		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
 	});
 
+	it('revokes lookup and search when membership removal commits but catalog projection fails', async () => {
+		const member = uid('member');
+		const owner = createTestApi({ bucket, userId: ACTOR });
+		const other = createTestApi({ bucket, userId: member }).request;
+		const project = await expectOk<{ id: string }>(
+			await owner.request('POST', '/projects', { name: 'Standing', description: '' }),
+			201,
+		);
+		await expectOk(
+			await owner.request('POST', `/projects/${project.id}/members`, {
+				user_id: member,
+				role: 'viewer',
+			}),
+			201,
+		);
+		expect(await expectOk(await other('GET', `/users?ids=${ACTOR}`))).toHaveProperty(ACTOR);
+		const projection = vi
+			.spyOn(owner.deps.services.catalog, 'updateProjectEntry')
+			.mockRejectedValueOnce(new Error('projection failed'));
+		await expect(
+			owner.deps.services.projects.removeMember(ProjectId.parse(project.id), member, ACTOR),
+		).rejects.toThrow('projection failed');
+		projection.mockRestore();
+		await expectError(await other('GET', `/users?ids=${ACTOR}`), 403);
+		await expectError(await other('GET', `/users/search?q=${ACTOR}`), 403);
+	});
+
 	it.each(['personal-access-token', 'service-account'] as const)(
 		'denies arbitrary resolution with an integration-only %s',
 		async (kind) => {

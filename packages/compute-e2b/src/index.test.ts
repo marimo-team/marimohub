@@ -871,6 +871,79 @@ describe('createE2bClient', () => {
 		expect(process.kill).toHaveBeenCalledOnce();
 	});
 
+	it.each(['startup', 'wait'] as const)('returns capped nonzero exits from %s', async (stage) => {
+		const failure = Object.assign(new Error('command failed'), {
+			stdout: 'out',
+			stderr: 'err',
+			exitCode: 7,
+		});
+		const handle = {
+			disconnect: vi.fn(async () => {}),
+			kill: vi.fn(async () => {}),
+			wait: vi.fn(async () => {
+				throw failure;
+			}),
+		};
+		const run = vi.fn(async () => {
+			if (stage === 'startup') throw failure;
+			return handle;
+		});
+		const sdk: E2bSdk = { Sandbox: { connect: async () => ({ commands: { run } }) } };
+		const sandbox = await createE2bClient(baseConfig, async () => sdk).connect('e2b-1');
+		await expect(sandbox.commands.run('bad', { maxOutputBytes: 6 })).resolves.toEqual({
+			stdout: 'out',
+			stderr: 'err',
+			exitCode: 7,
+		});
+		if (stage === 'wait') {
+			expect(handle.disconnect).toHaveBeenCalledOnce();
+			expect(handle.kill).toHaveBeenCalledOnce();
+		}
+	});
+
+	it.each(['transport', 'output', 'callback'] as const)(
+		'does not normalize capped %s faults as command exits',
+		async (failureKind) => {
+			const transportError = new Error('connection lost');
+			const failure = Object.assign(new Error('command failed'), {
+				stdout: 'abc',
+				stderr: 'é',
+				exitCode: 7,
+			});
+			let onOutput!: (chunk: string) => void;
+			const handle = {
+				disconnect: vi.fn(async () => {}),
+				kill: vi.fn(async () => {}),
+				wait: vi.fn(async () => {
+					if (failureKind === 'transport') throw transportError;
+					if (failureKind === 'callback') {
+						try {
+							onOutput('too much');
+						} catch {
+							/* SDK reports its command exit after the callback. */
+						}
+					}
+					throw failure;
+				}),
+			};
+			const run = vi.fn(async (_cmd, options) => {
+				onOutput = options.onStdout;
+				return handle;
+			});
+			const sdk: E2bSdk = { Sandbox: { connect: async () => ({ commands: { run } }) } };
+			const sandbox = await createE2bClient(baseConfig, async () => sdk).connect('e2b-1');
+			await expect(sandbox.commands.run('bad', { maxOutputBytes: 4 })).rejects.toThrow(
+				failureKind === 'transport'
+					? 'connection lost'
+					: failureKind === 'output'
+						? 'byte limit'
+						: 'cancelled',
+			);
+			expect(handle.disconnect).toHaveBeenCalled();
+			expect(handle.kill).toHaveBeenCalled();
+		},
+	);
+
 	it('threads apiKey (and domain) into every SDK call', async () => {
 		const handle = {
 			sandboxId: 'e2b-1',

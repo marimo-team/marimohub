@@ -119,7 +119,9 @@ export function readFileFailure(
 }
 
 export interface BoundedReadOptions {
+	/** Nonnegative safe integer whose base64 size is also a safe integer. */
 	maxBytes: number;
+	/** Positive, at most 2^31 - 1 ms; fractional milliseconds round up. */
 	timeoutMs: number;
 }
 
