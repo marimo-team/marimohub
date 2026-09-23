@@ -598,7 +598,7 @@ describe('createFromEnv external adapter libraries', () => {
 		{ profiles: 'small:cpu=1;mem=2Gi,large:cpu=4;mem=8Gi', selection: 'default' },
 		{ profiles: 'small:cpu=1;mem=2Gi,large:cpu=4;mem=8Gi', selection: 'all' },
 	])(
-		'prefills and claims an external pool with $profiles profiles and $selection selection',
+		'uses adapter defaults for external pools despite unsupported $profiles profiles and $selection selection',
 		async ({ profiles, selection }) => {
 			const sandbox = makeFakeSandbox().instance;
 			const compute: SandboxProvider = {
@@ -644,6 +644,39 @@ describe('createFromEnv external adapter libraries', () => {
 			expect(compute.connectExisting).toHaveBeenCalledOnce();
 		},
 	);
+
+	it('drains a disabled external pool despite invalid unused pool settings', async () => {
+		const sandbox = makeFakeSandbox();
+		const compute: SandboxProvider = {
+			create: vi.fn(() => sandbox.instance),
+			connectExisting: () => sandbox.instance,
+			proxy: async () => null,
+			warmPool: { maxLifetimeMs: null },
+		};
+		const libraries = { bucket: new MemoryBucket(), compute };
+		const poolEnv = { ...env, MARIMOHUB_COMPUTE_BACKEND: 'library' };
+		const active = createFromEnv(
+			{ ...poolEnv, MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true' },
+			undefined,
+			{ libraries },
+		).warmPool!;
+		await active.sweep();
+		expect((await active.store.read()).pools[0].members).toHaveLength(1);
+		const disabled = createFromEnv(
+			{
+				...poolEnv,
+				MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'false',
+				MARIMOHUB_COMPUTE_WARM_POOL_SIZE: '0',
+				MARIMOHUB_COMPUTE_WARM_POOL_PROFILES: 'unknown',
+			},
+			undefined,
+			{ libraries },
+		).warmPool!;
+		await disabled.sweep();
+		expect((await disabled.store.read()).pools[0].members).toEqual([]);
+		expect(sandbox.calls.destroy).toBe(1);
+		expect(sandbox.calls.exec).toEqual(['true']);
+	});
 
 	it('loads and wires an adapter end to end through the async API', async () => {
 		const deps = await createFromEnvAsync({

@@ -36,6 +36,12 @@ export interface WarmPoolClaim {
 	member: WarmPoolMember;
 	sandbox: SandboxInstance;
 }
+export class WarmPoolClaimExpiredError extends ConflictError {
+	constructor() {
+		super('The warm sandbox claim expired. Retry shortly.');
+		this.name = 'WarmPoolClaimExpiredError';
+	}
+}
 interface ClaimRequest {
 	profile?: string;
 	image?: string;
@@ -112,7 +118,7 @@ export class WarmPoolService {
 			if (this.isExpired(member)) return false;
 			member.assigned = true;
 		});
-		if (!assigned) throw new ConflictError('The warm sandbox claim expired. Retry shortly.');
+		if (!assigned) throw new WarmPoolClaimExpiredError();
 	}
 
 	async abandon(claim: WarmPoolClaim): Promise<void> {
@@ -262,6 +268,7 @@ export class WarmPoolService {
 
 	private async fill(profile: WarmPoolProfile, member: WarmPoolMember): Promise<void> {
 		let abandoned = false;
+		let booted = false;
 		let sandbox: SandboxInstance | undefined;
 		try {
 			sandbox = this.compute.create(member.sandbox_id, {
@@ -286,12 +293,19 @@ export class WarmPoolService {
 				timeoutMs: this.config.creationTimeoutMs,
 				timeoutError: () => new Error('Warm sandbox creation timed out'),
 			});
+			booted = true;
 			const published = await this.store.updateMember(member, 'creating', (current) => {
 				if (this.isExpired(current)) return false;
 				current.state = 'ready';
 				current.checked_at = this.now();
 			});
-			if (!published) throw new Error('Warm sandbox creation reservation expired');
+			if (!published) {
+				this.metrics.increment('warm_pool.creation_discarded');
+				await this.reclaimCreation(profile, member, sandbox).catch((error) =>
+					this.report('cleanup_failed', error),
+				);
+				return;
+			}
 			await this.store.mutate((record) => {
 				const pool = getOrCreateWarmPool(record, profile.key);
 				pool.failures = 0;
@@ -300,14 +314,16 @@ export class WarmPoolService {
 			this.metrics.increment('warm_pool.created');
 		} catch (error) {
 			abandoned = true;
-			this.report('create_failed', error);
-			await this.store
-				.mutate((record) => {
-					const pool = getOrCreateWarmPool(record, profile.key);
-					pool.failures = Math.min(pool.failures + 1, 10);
-					pool.retry_at = this.now() + Math.min(300_000, 5_000 * 2 ** (pool.failures - 1));
-				})
-				.catch((cause) => this.report('backoff_failed', cause));
+			this.report(booted ? 'publish_failed' : 'create_failed', error);
+			if (!booted) {
+				await this.store
+					.mutate((record) => {
+						const pool = getOrCreateWarmPool(record, profile.key);
+						pool.failures = Math.min(pool.failures + 1, 10);
+						pool.retry_at = this.now() + Math.min(300_000, 5_000 * 2 ** (pool.failures - 1));
+					})
+					.catch((cause) => this.report('backoff_failed', cause));
+			}
 			await this.reclaimCreation(profile, member, sandbox).catch((cause) =>
 				this.report('cleanup_failed', cause),
 			);
@@ -367,6 +383,7 @@ export class WarmPoolService {
 						project_id,
 						session_id,
 						new Date(this.now()).toISOString(),
+						current.sandbox_id,
 					);
 				}
 			} catch (error) {

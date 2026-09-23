@@ -32,6 +32,7 @@ import type {
 	K8sPodPhaseInfo,
 	KubernetesConfig,
 } from './index';
+import { MANAGED_BY_VALUE } from './shared';
 
 /**
  * Tests for the native Kubernetes compute adapter.
@@ -80,19 +81,28 @@ function makeWorld(opts?: {
 		stdin?: string | Uint8Array;
 		options?: K8sExecOptions;
 	}[] = [];
-	const pods = new Map<string, { sandboxId: SandboxId; phase: string }>();
+	const pods = new Map<
+		string,
+		{ sandboxId: SandboxId; phase: string; managedBy?: string; uid?: string }
+	>();
 
 	const client: K8sClient = {
 		reconcileRoutes: vi.fn(async () => {}),
 		ensure: async (o) => {
 			ensured.push(o);
 			const createdPod = !pods.has(o.name);
-			if (createdPod) pods.set(o.name, { sandboxId: o.sandboxId, phase: opts?.phase ?? 'Running' });
+			if (createdPod)
+				pods.set(o.name, {
+					sandboxId: o.sandboxId,
+					phase: opts?.phase ?? 'Running',
+					managedBy: MANAGED_BY_VALUE,
+					uid: 'pod-uid',
+				});
 			return { createdPod };
 		},
 		getPhase: async (name) => {
 			const p = pods.get(name);
-			return p ? { phase: p.phase, ...opts?.bootInfo } : undefined;
+			return p ? { ...p, ...opts?.bootInfo } : undefined;
 		},
 		getSchedulingFailure: async () => opts?.schedulingFailure,
 		getImagePullMessage: async () => opts?.imagePullMessage,
@@ -1157,9 +1167,51 @@ describe('Kubernetes warm sandbox reconnect', () => {
 		await expect(sandbox.exec('true')).rejects.toThrow('route repair failed');
 		expect(world.execCalls).toHaveLength(0);
 		expectExecResult(await sandbox.exec('true'), { success: true });
+		expect(world.execCalls).toHaveLength(1);
 		expect(world.client.reconcileRoutes).toHaveBeenCalledTimes(2);
 		expect(world.ensured).toHaveLength(1);
 	});
+
+	it.each([
+		{ managedBy: undefined },
+		{ managedBy: 'someone-else' },
+		{ sandboxId: undefined },
+		{ sandboxId: 'another-sandbox' as SandboxId },
+	])(
+		'rejects a Pod with mismatched ownership %j before route repair or exec',
+		async (ownership) => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).ready!();
+			Object.assign(world.pods.get(NAME)!, ownership);
+			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+				'does not belong',
+			);
+			expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
+			expect(world.execCalls).toHaveLength(0);
+		},
+	);
+
+	it.each(['missing', 'Failed', 'replaced', 'foreign'])(
+		'rejects a Pod that becomes %s during route repair',
+		async (change) => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).ready!();
+			vi.mocked(world.client.reconcileRoutes).mockImplementationOnce(async () => {
+				if (change === 'missing') world.pods.delete(NAME);
+				else if (change === 'Failed') world.setPhase(NAME, change);
+				else
+					Object.assign(
+						world.pods.get(NAME)!,
+						change === 'replaced' ? { uid: 'new-uid' } : { managedBy: 'someone-else' },
+					);
+			});
+			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+				/no longer running|was replaced|does not belong/,
+			);
+			expect(world.execCalls).toHaveLength(0);
+			expect(world.ensured).toHaveLength(1);
+		},
+	);
 
 	it('fails without creating when the pod is missing', async () => {
 		const world = makeWorld();

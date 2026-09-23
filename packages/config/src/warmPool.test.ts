@@ -125,6 +125,24 @@ describe('warm pool configuration', () => {
 		).toThrow('MARIMOHUB_COMPUTE_WARM_POOL_SIZE');
 	});
 
+	it.each([undefined, 'false'])('ignores unused pool settings when enabled is %s', (value) => {
+		const env = {
+			MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: value,
+			MARIMOHUB_COMPUTE_WARM_POOL_SIZE: 'not-a-number',
+			MARIMOHUB_COMPUTE_WARM_POOL_PROFILES: 'unknown',
+		};
+		const parsed = parseWarmPoolConfig(env, options)!;
+		expect(parsed.config.enabled).toBe(false);
+		expect(parsed.config.size).toBe(1);
+		expect(parsed.config.profiles.map((profile) => profile.name)).toEqual(['small']);
+		expect(
+			parseWarmPoolConfig(env, {
+				...options,
+				compute: { ...options.compute, warmPool: undefined },
+			}),
+		).toBeUndefined();
+	});
+
 	it('rejects unknown profile selection and providers without warm-pool support', () => {
 		expect(() =>
 			parseWarmPoolConfig({ ...enabled, MARIMOHUB_COMPUTE_WARM_POOL_PROFILES: 'small' }, options),

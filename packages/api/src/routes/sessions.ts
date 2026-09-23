@@ -25,6 +25,7 @@ import {
 	sleep,
 	BadRequestError,
 	ConflictError,
+	WarmPoolClaimExpiredError,
 	createKernelAuthToken,
 	createSandboxId,
 	createSessionId,
@@ -1512,7 +1513,12 @@ export async function startNotebookSession(input: {
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {
 		if (session) {
-			await sessions.markSandboxReclaimed(pid, session.session_id, new Date().toISOString());
+			await sessions.markSandboxReclaimed(
+				pid,
+				session.session_id,
+				new Date().toISOString(),
+				sandboxId,
+			);
 		}
 	};
 	let updated: Session | undefined;
@@ -1757,7 +1763,6 @@ export async function startNotebookSession(input: {
 							if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
 							return env;
 						},
-						exposure: async () => sandboxExposure.prepare(exposureCtx),
 						launchStrategy: async () => {
 							const resolved = await resolveLaunchStrategyForSession({
 								entryNotebookKey: launchSource.entryNotebookKey,
@@ -1768,11 +1773,43 @@ export async function startNotebookSession(input: {
 							return resolved;
 						},
 						async provision() {
-							const { baseUrl } = await this.$.exposure;
 							const launchStrategy = await this.$.launchStrategy;
 							// A failed sibling may already have retired the record while these dependencies resolved.
 							if (this.$signal.aborted) throw this.$signal.reason;
-							if (warmClaim) await deps.warmPool!.handoff(warmClaim);
+							if (warmClaim) {
+								try {
+									await deps.warmPool!.handoff(warmClaim);
+								} catch (error) {
+									if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
+									const expired = warmClaim;
+									await deps.warmPool!.abandon(expired).catch(() => {});
+									// A late pool cleanup must never target the cold replacement.
+									sandboxId = createSandboxId();
+									sandboxMayExist = false;
+									if (admission) {
+										await appPool.bindWarmSandbox(
+											pid,
+											nid,
+											sessionId,
+											admission.member.operation_token,
+											sandboxId,
+										);
+									}
+									session = await sessions.replaceStartingSandbox(
+										pid,
+										sessionId,
+										expired.member.sandbox_id,
+										sandboxId,
+									);
+									warmClaim = undefined;
+									exposureCtx.sandboxId = sandboxId;
+									observer.tag('sandbox_id', sandboxId);
+									observer.tag('warm_pool_hit', false);
+									observer.tag('warm_pool_fallback', 'claim_expired');
+								}
+							}
+							const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
+							if (this.$signal.aborted) throw this.$signal.reason;
 							sandboxMayExist = true;
 							return provisioner.provision({
 								existingSandbox: warmClaim?.sandbox,

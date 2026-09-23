@@ -167,6 +167,11 @@ describe('warm sandbox pools', () => {
 			Array.from({ length: remaining }, () => 'ready'),
 		);
 		expect(w.live.size).toBe(remaining);
+		expect((await w.service.store.read()).pools[0]).toMatchObject({ failures: 0, retry_at: 0 });
+		await w.replica(options).sweep();
+		expect((await w.members()).filter((member) => member.state === 'ready')).toHaveLength(
+			remaining,
+		);
 	});
 
 	it('lets only one replica claim a sandbox and replenishes it', async () => {
@@ -181,6 +186,18 @@ describe('warm sandbox pools', () => {
 		await w.service.sweep();
 		expect(w.created).toHaveLength(2);
 		expect((await w.members()).map((m) => m.state)).toEqual(['claimed', 'ready']);
+	});
+
+	it('does not back off provider creation after a publication storage failure', async () => {
+		const w = setup();
+		vi.spyOn(w.service.store, 'updateMember').mockRejectedValueOnce(
+			new Error('bucket unavailable'),
+		);
+		await w.service.sweep();
+		expect(w.destroyed).toHaveLength(1);
+		expect((await w.service.store.read()).pools[0]).toMatchObject({ failures: 0, retry_at: 0 });
+		await w.service.sweep();
+		expect((await w.members()).map((member) => member.state)).toEqual(['ready']);
 	});
 
 	it('publishes ownership before compute creation, including failed boot recovery', async () => {

@@ -270,6 +270,8 @@ export interface EnsureSandboxOptions {
  * `Ready=False` must not be reported as readiness.
  */
 export interface K8sPodPhaseInfo {
+	managedBy?: string;
+	sandboxId?: string;
 	/** Pod phase (`Pending` | `Running` | `Succeeded` | `Failed` | `Unknown`). */
 	phase?: string;
 	/** UID of this Pod incarnation (a recreated Pod reuses the name, not the UID). */
@@ -327,7 +329,7 @@ export interface K8sClient {
 		options?: K8sExecOptions,
 	): Promise<K8sExecResult>;
 	/** Delete the managed resources for a session. Idempotent (tolerates 404). */
-	delete(name: string, options: { ingress: boolean }): Promise<void>;
+	delete(name: string, options: { ingress: boolean; sandboxId: SandboxId }): Promise<void>;
 	/** List sandboxes THIS deployment owns (label-scoped), for the reconciler. */
 	list(): Promise<K8sSandboxInfo[]>;
 }

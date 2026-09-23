@@ -644,6 +644,41 @@ describe('SandboxProvisioner', () => {
 			expect(result.timings.reachable_find).toBe(7);
 		});
 
+		it('excludes warm claim telemetry while retaining provisioning telemetry', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			let timings: Record<string, number> = { find: 42 };
+			let drainedExecs = 0;
+			instance.drainTimings = () => {
+				const recorded = timings;
+				timings = {};
+				return recorded;
+			};
+			instance.drainCounters = () => {
+				const execs = calls.exec.length - drainedExecs;
+				drainedExecs = calls.exec.length;
+				return { execs };
+			};
+			instance.ready = async () => {
+				timings.boot = 7;
+			};
+			await instance.exec('true');
+			const claimExecs = calls.exec.length;
+
+			const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				existingSandbox: instance,
+			});
+
+			expect(result.timings).not.toHaveProperty('reachable_find');
+			expect(result.timings.reachable_boot).toBe(7);
+			expect(result.counters.execs).toBeGreaterThan(0);
+			expect(result.counters.execs).toBe(calls.exec.length - claimExecs);
+		});
+
 		it('passes --asset-url when assetUrl is set', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));

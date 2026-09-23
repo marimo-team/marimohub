@@ -5,6 +5,7 @@ import {
 	createServices,
 	WarmPoolService,
 	WarmPoolStore,
+	WarmPoolClaimExpiredError,
 	paths,
 } from '@marimo-hub/core';
 import type { SandboxProvider, Session } from '@marimo-hub/core';
@@ -75,6 +76,70 @@ describe('session warm sandbox assignment', () => {
 			expect(claim).not.toHaveBeenCalled();
 		},
 	);
+
+	it.each(['edit', 'app'])(
+		'falls back to a fresh sandbox after a %s claim is reaped before session publication',
+		async (mode) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const oldId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
+			const cold = makeFakeSandbox();
+			vi.spyOn(w.compute, 'create').mockImplementation((id) =>
+				id === oldId ? w.fake.instance : cold.instance,
+			);
+			const claim = w.warmPool.claim.bind(w.warmPool);
+			vi.spyOn(w.warmPool, 'claim').mockImplementationOnce(async (request) => {
+				const result = await claim(request);
+				await w.warmPool.store.mutate((record) => {
+					record.pools[0].members[0].operation_until = 0;
+				});
+				await new WarmPoolService(w.warmPool.store, w.compute, w.services.sessions, {
+					...w.warmPool.config,
+					enabled: false,
+				}).sweep();
+				return result;
+			});
+			const response = await expectOk<Session>(await w.api.request('POST', w.path, { mode }));
+			const session = await w.services.sessions.getSession(w.project.id, response.session_id);
+			expect(session.sandbox_id).not.toBe(oldId);
+			expect(session.status).toBe('running');
+			expect(session.sandbox_reclaimed_at).toBeUndefined();
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			expect(cold.calls.startProcess).toHaveLength(1);
+			if (mode === 'app') {
+				const pool = await new AppPoolService(w.bucket, w.services.sessions).store.read(
+					w.project.id,
+					w.notebook.id,
+				);
+				expect(pool?.members[0].sandbox_id).toBe(session.sandbox_id);
+			}
+		},
+	);
+
+	it('keeps delayed cleanup of an expired claim separate from its cold replacement', async () => {
+		const w = await setup();
+		await w.warmPool.sweep();
+		const oldId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
+		const cold = makeFakeSandbox();
+		vi.spyOn(w.compute, 'create').mockImplementation((id) =>
+			id === oldId ? w.fake.instance : cold.instance,
+		);
+		vi.spyOn(w.warmPool, 'handoff').mockRejectedValueOnce(new WarmPoolClaimExpiredError());
+		vi.spyOn(w.fake.instance, 'destroy').mockRejectedValueOnce(new Error('delete unavailable'));
+		const response = await expectOk<Session>(await w.api.request('POST', w.path, { mode: 'edit' }));
+		const session = await w.services.sessions.getSession(w.project.id, response.session_id);
+		expect(session.sandbox_id).not.toBe(oldId);
+		expect((await w.warmPool.store.read()).pools[0].members[0].state).toBe('retiring');
+		await w.warmPool.sweep();
+		expect(cold.calls.destroy).toBe(0);
+		expect(await w.services.sessions.getSession(w.project.id, session.session_id)).toMatchObject({
+			status: 'running',
+			sandbox_id: session.sandbox_id,
+		});
+		expect(
+			(await w.services.sessions.getSession(w.project.id, session.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+	});
 
 	it('uses ordinary creation on a pool miss', async () => {
 		const w = await setup();

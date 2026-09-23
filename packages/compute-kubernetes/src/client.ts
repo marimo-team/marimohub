@@ -415,6 +415,8 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					pod.status?.conditions?.find((c) => c.type === type && c.status === 'True')
 						?.lastTransitionTime;
 				return {
+					managedBy: pod.metadata?.labels?.[MANAGED_BY_LABEL],
+					sandboxId: pod.metadata?.annotations?.[SANDBOX_ID_ANNOTATION],
 					phase: pod.status?.phase,
 					uid: pod.metadata?.uid,
 					createdAt: pod.metadata?.creationTimestamp,
@@ -552,14 +554,33 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			});
 		},
 
-		async delete(name: string, options: { ingress: boolean }): Promise<void> {
+		async delete(name: string, options: { ingress: boolean; sandboxId: SandboxId }): Promise<void> {
 			const { core, net } = await apis();
+			let pod: V1Pod | undefined;
+			try {
+				pod = await core.readNamespacedPod({ name, namespace });
+			} catch (err) {
+				if (!hasCode(err, 404)) throw err;
+			}
+			if (
+				pod &&
+				(pod.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE ||
+					pod.metadata?.annotations?.[SANDBOX_ID_ANNOTATION] !== options.sandboxId)
+			) {
+				throw new Error(`Refusing to delete Pod "${name}" owned by another sandbox`);
+			}
+			const uid = pod?.metadata?.uid;
+			if (pod && !uid) throw new Error(`Pod "${name}" has no UID`);
+			if (pod) {
+				await deleteTolerant(() =>
+					core.deleteNamespacedPod({ name, namespace, body: { preconditions: { uid } } }),
+				);
+			}
 			await Promise.all([
 				options.ingress
 					? deleteTolerant(() => net.deleteNamespacedIngress({ name, namespace }))
 					: undefined,
 				deleteTolerant(() => core.deleteNamespacedService({ name, namespace })),
-				deleteTolerant(() => core.deleteNamespacedPod({ name, namespace })),
 			]);
 		},
 

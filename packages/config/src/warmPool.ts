@@ -18,16 +18,6 @@ export function parseWarmPoolConfig(
 	},
 ): { backend: string; config: WarmPoolConfig } | undefined {
 	const enabled = parseBool(env, 'MARIMOHUB_COMPUTE_WARM_POOL_ENABLED');
-	const size = parseIntEnv(env, 'MARIMOHUB_COMPUTE_WARM_POOL_SIZE') ?? 1;
-	if (!Number.isSafeInteger(size) || size < 1) {
-		throw new ConfigError('MARIMOHUB_COMPUTE_WARM_POOL_SIZE must be a positive safe integer', {
-			variable: 'MARIMOHUB_COMPUTE_WARM_POOL_SIZE',
-		});
-	}
-	const selection = parseEnum(env, 'MARIMOHUB_COMPUTE_WARM_POOL_PROFILES', {
-		allowed: ['default', 'all'] as const,
-		fallback: 'default',
-	});
 	const support = options.compute.warmPool;
 	if (!support || !options.compute.connectExisting) {
 		if (enabled)
@@ -36,6 +26,18 @@ export function parseWarmPoolConfig(
 			});
 		return;
 	}
+	const size = enabled ? (parseIntEnv(env, 'MARIMOHUB_COMPUTE_WARM_POOL_SIZE') ?? 1) : 1;
+	if (!Number.isSafeInteger(size) || size < 1) {
+		throw new ConfigError('MARIMOHUB_COMPUTE_WARM_POOL_SIZE must be a positive safe integer', {
+			variable: 'MARIMOHUB_COMPUTE_WARM_POOL_SIZE',
+		});
+	}
+	const selection = enabled
+		? parseEnum(env, 'MARIMOHUB_COMPUTE_WARM_POOL_PROFILES', {
+				allowed: ['default', 'all'] as const,
+				fallback: 'default',
+			})
+		: 'default';
 	const creationTimeoutMs = 5 * 60_000;
 	const minimumRemainingMs =
 		options.sessionMaxLifetimeMs + (options.startupTimeoutMs ?? 120_000) + 10 * 60_000;

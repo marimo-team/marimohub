@@ -631,6 +631,11 @@ export class SandboxProvisioner {
 						},
 					},
 				);
+			if (options.existingSandbox) {
+				// Claim-time probes belong to warm-pool telemetry, not provisioning.
+				sandbox.drainTimings?.();
+				sandbox.drainCounters?.();
+			}
 			const createMs = Date.now() - createStart;
 			const result = await this.provisionInto(sandbox, options);
 			// Constructing the (usually lazy) handle, NOT the backend's create — that

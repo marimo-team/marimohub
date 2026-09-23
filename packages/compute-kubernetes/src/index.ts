@@ -58,7 +58,7 @@ import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
 import { validatePodTemplate } from './podTemplate';
-import { resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
+import { MANAGED_BY_VALUE, resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
@@ -337,11 +337,12 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			runAsUser: this.config.runAsUser,
 		};
 		if (this.existingOnly) {
-			const pod = await this.client.getPhase(this.name);
-			if (pod?.phase !== 'Running') {
-				throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
-			}
+			const pod = await this.existingPod();
 			await this.client.reconcileRoutes(options);
+			const confirmed = await this.existingPod();
+			if (pod.uid !== confirmed.uid) {
+				throw new Error(`Kubernetes sandbox ${this.id} was replaced during reconnect`);
+			}
 			this.resolved = true;
 			return;
 		}
@@ -351,6 +352,17 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		await this.waitForRunning();
 		this.resolved = true;
 		await this.recordEnsure(createdPod, t1 - t0, Date.now() - t1);
+	}
+
+	private async existingPod(): Promise<K8sPodPhaseInfo> {
+		const pod = await this.client.getPhase(this.name);
+		if (pod?.phase !== 'Running') {
+			throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
+		}
+		if (pod.managedBy !== MANAGED_BY_VALUE || pod.sandboxId !== this.id) {
+			throw new Error(`Kubernetes Pod ${this.name} does not belong to sandbox ${this.id}`);
+		}
+		return pod;
 	}
 
 	/**
@@ -686,7 +698,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async destroy(): Promise<void> {
 		// A removed hostname can leave an Ingress from earlier subdomain config.
 		// Proxy mode remains free of Ingress API access.
-		await this.client.delete(this.name, { ingress: this.subdomainExposure });
+		await this.client.delete(this.name, { ingress: this.subdomainExposure, sandboxId: this.id });
 		this.resolved = false;
 	}
 }

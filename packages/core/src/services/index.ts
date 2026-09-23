@@ -662,5 +662,9 @@ export type {
 } from './runtime/AppPoolRouter';
 
 export { WarmPoolStore, WarmPoolRecordSchema } from './runtime/WarmPoolStore';
-export { WarmPoolService, WARM_POOL_MAX_IDLE_MS } from './runtime/WarmPoolService';
+export {
+	WarmPoolService,
+	WarmPoolClaimExpiredError,
+	WARM_POOL_MAX_IDLE_MS,
+} from './runtime/WarmPoolService';
 export type { WarmPoolConfig, WarmPoolClaim, WarmPoolProfile } from './runtime/WarmPoolService';
