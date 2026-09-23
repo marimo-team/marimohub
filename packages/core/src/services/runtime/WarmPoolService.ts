@@ -161,6 +161,11 @@ export class WarmPoolService {
 							// A visible session owns teardown, even when the publisher died before handoff.
 							continue;
 						}
+						if (!session && member.assigned) {
+							// Assignment follows publication; retention only removes reclaimed sessions.
+							await this.store.removeMember(member);
+							continue;
+						}
 						const app = await this.appPools?.read(destination.project_id, destination.notebook_id);
 						if (
 							app?.members.some(

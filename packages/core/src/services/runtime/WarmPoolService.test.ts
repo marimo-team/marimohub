@@ -297,6 +297,58 @@ describe('warm sandbox pools', () => {
 		expect(await w.members()).toEqual([]);
 	});
 
+	it.each([true, false])(
+		'forgets assigned members after session retention (enabled: %s)',
+		async (enabled) => {
+			const w = setup();
+			await w.service.sweep();
+			const request = w.request();
+			const claim = (await w.service.claim(request))!;
+			const session = await w.sessions.createSession({
+				...request.destination,
+				user_id: ACTOR,
+				sandbox_id: claim.member.sandbox_id,
+			});
+			await w.service.handoff(claim);
+			await w.sessions.markFailed(session.project_id, session.session_id, {
+				code: 'STARTUP_FAILED',
+				message: 'failed',
+			});
+			await w.compute.create(claim.member.sandbox_id).destroy();
+			await w.sessions.markSandboxReclaimed(
+				session.project_id,
+				session.session_id,
+				new Date().toISOString(),
+			);
+			const elapsed = 25 * 60 * 60_000;
+			vi.spyOn(Date, 'now').mockReturnValue(Date.parse(session.last_heartbeat) + elapsed);
+			w.advance(elapsed);
+			expect(await w.sessions.reapTerminated()).toBe(1);
+			expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: true });
+			await w.replica({ enabled }).sweep();
+			expect((await w.members()).map((member) => member.state)).toEqual(enabled ? ['ready'] : []);
+			expect(w.destroyed).toEqual([claim.member.sandbox_id]);
+		},
+	);
+
+	it('retains assigned ownership when the destination read fails', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const request = w.request();
+		const claim = (await w.service.claim(request))!;
+		await w.sessions.createSession({
+			...request.destination,
+			user_id: ACTOR,
+			sandbox_id: claim.member.sandbox_id,
+		});
+		await w.service.handoff(claim);
+		vi.spyOn(w.sessions, 'getSession').mockRejectedValue(new Error('storage unavailable'));
+		w.advance(61_000);
+		await w.replica({ enabled: false }).sweep();
+		expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: true });
+		expect(w.destroyed).toEqual([]);
+	});
+
 	it('destroys abandoned transfers and fences a delayed publisher', async () => {
 		const w = setup();
 		await w.service.sweep();
