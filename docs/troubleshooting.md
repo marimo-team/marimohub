@@ -25,7 +25,8 @@ allowed domains (`example.com,partner.com`) or set `*` to allow all. See
 
 ### "SANDBOX_HOSTNAME shares an origin/parent domain with the app"
 
-Identical or parent/child hostnames are rejected. For an app at `hub.example.com`, set
+When `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` is set, the server rejects identical or parent/child sandbox hostnames. Without it, the server skips this comparison.
+For an app at `hub.example.com`, set
 `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to `sandboxes.example.com` or a separate domain. See
 [Security → Kernel exposure](/security#kernel-exposure).
 

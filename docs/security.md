@@ -17,7 +17,8 @@ of the compute backend. The modes trade origin isolation against authentication.
 
 Kernels run arbitrary Python in an `<iframe sandbox="allow-scripts allow-same-origin …">`.
 Browsers connect **directly** to kernels. Sibling hostnames such as `hub.example.com` and `sandboxes.example.com` are supported.
-marimohub rejects identical or parent/child hostnames, using the OIDC redirect URI to identify the app host.
+When `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` is set, the server uses its hostname to reject identical or parent/child sandbox hostnames.
+Without it, the server skips this comparison. The Cloudflare Worker example compares against the request hostname instead.
 
 Sibling subdomains share cookie scope. Separate registrable domains provide stronger isolation from cookies set by notebooks.
 
