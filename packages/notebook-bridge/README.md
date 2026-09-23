@@ -78,11 +78,13 @@ The notebook observes its document head with `MutationObserver` and sends `repla
 The initial child title does not replace the Hub title. Synchronization starts after the first child title change.
 Subsequent title changes, replacements, and removals update the Hub title.
 Titles have a limit of 4096 UTF-16 code units. Oversized titles do not block query updates.
-Title updates use separate rate limits and revisions from query updates.
+The host tracks title rate limits and stale revisions separately from query updates.
+Title request failures stop title synchronization until the next connection. Query synchronization continues.
 Older peers continue to synchronize query parameters without title support.
 
 The Hub retains its branding suffix and uses the notebook name when the child title is empty.
-Frame reload, replacement, and disposal clear the previous child title.
+The Hub clears the previous child title through its bridge status callback and frame cleanup.
+Frame reload, replacement, and disposal restore the notebook name.
 
 Handshake retries stop after ten seconds. RPC requests time out after five
 seconds. A new iframe load starts a new connection. An absent or incompatible

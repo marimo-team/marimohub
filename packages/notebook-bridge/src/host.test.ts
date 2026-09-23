@@ -87,6 +87,19 @@ describe('host lifecycle and frozen v1 peer', () => {
 		expect(onTitle.mock.calls).toEqual([['Live'], ['']]);
 		expect(onQuery).not.toHaveBeenCalled();
 	});
+	it('applies title and query updates within the same rate-limit window', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const { negotiate, onTitle, onQuery } = fixture();
+		const remote = await negotiate('titles', ['query-params.v1', 'document-title.v1']);
+		await expect(remote.call('replaceTitle', { revision: 1, title: 'Live' })).resolves.toEqual({
+			applied: true,
+		});
+		await expect(
+			remote.call('replaceQuery', { revision: 1, entries: [['id', 'one']] }),
+		).resolves.toEqual({ applied: true });
+		expect(onTitle).toHaveBeenCalledExactlyOnceWith('Live');
+		expect(onQuery).toHaveBeenCalledExactlyOnceWith({ revision: 1, entries: [['id', 'one']] });
+	});
 	it('ignores title requests without a negotiated capability', async () => {
 		const { negotiate, onTitle } = fixture();
 		const remote = await negotiate();
@@ -229,6 +242,20 @@ describe('host lifecycle and frozen v1 peer', () => {
 			remote.call('replaceQuery', { revision: 2, entries: [['id', 'one']] }),
 		).resolves.toEqual({ applied: true });
 		expect(onQuery).toHaveBeenCalledTimes(2);
+	});
+	it('does not cache titles that the router refuses', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const { negotiate, onTitle } = fixture();
+		onTitle.mockReturnValueOnce(false);
+		const remote = await negotiate('titles', ['query-params.v1', 'document-title.v1']);
+		await expect(remote.call('replaceTitle', { revision: 1, title: 'Live' })).resolves.toEqual({
+			applied: false,
+		});
+		vi.setSystemTime(Date.now() + 100);
+		await expect(remote.call('replaceTitle', { revision: 2, title: 'Live' })).resolves.toEqual({
+			applied: true,
+		});
+		expect(onTitle.mock.calls).toEqual([['Live'], ['Live']]);
 	});
 	it('resets revisions and snapshot equality after a new document loads', async () => {
 		const { negotiate, onQuery, frame } = fixture();

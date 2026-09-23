@@ -61,6 +61,16 @@ describe('notebook URL mirroring', () => {
 			expect(document.title).toBe('Live forecast · marimohub');
 			expect(screen.getByTitle('Forecast')).toBe(initial);
 			act(() => {
+				connection.options.onStatus?.('connecting');
+			});
+			expect(document.title).toBe('Forecast · marimohub');
+			expect(screen.getByTitle('Forecast')).toBe(initial);
+			act(() => {
+				connection.options.onStatus?.('connected');
+				connection.options.onTitle!('Reloaded forecast');
+			});
+			expect(document.title).toBe('Reloaded forecast · marimohub');
+			act(() => {
 				connection.options.onTitle!('   ');
 			});
 			expect(document.title).toBe('Forecast · marimohub');
