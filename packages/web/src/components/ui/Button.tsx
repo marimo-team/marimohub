@@ -15,7 +15,7 @@ const buttonVariants = cva(
 				// The sheen is an inset top highlight (not a bg-image gradient, which
 				// tailwind-merge would collapse into the bg-color class).
 				primary:
-					'border border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/25 inset-shadow-[0_1px_0_rgba(255,255,255,0.2)] hover:bg-primary/90',
+					'border border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/25 inset-shadow-[0_1px_0_rgba(255,255,255,0.2)] hover:bg-primary/90 branded:hover:bg-primary-hover branded:hover:text-primary-hover-foreground',
 				ghost:
 					'border border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-accent hover:text-primary',
 				danger:

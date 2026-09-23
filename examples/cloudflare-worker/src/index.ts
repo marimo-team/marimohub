@@ -1,3 +1,4 @@
+import { parseTheme } from '@marimo-hub/config/theme';
 /**
  * Cloudflare Workers reference deployment (not an actively-built app — a
  * copy-pasteable example). It composes the SAME provider-agnostic `createApi`
@@ -152,6 +153,7 @@ export function buildDeps(
 
 	const services = createServices(bucket);
 	return {
+		theme: parseTheme(env),
 		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),

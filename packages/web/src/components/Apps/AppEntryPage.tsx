@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
@@ -100,7 +101,7 @@ function StakeholderApp({
 	} = useNotebookFrameLocation(sandboxUrl, theme, true);
 	return (
 		<div className="flex h-dvh flex-col">
-			<title>{title} · marimohub</title>
+			<PageTitle>{title}</PageTitle>
 			<header className="flex min-h-12 items-center gap-4 border-b px-4">
 				<Link to="/apps" className="text-sm text-muted-foreground hover:text-foreground">
 					Back to apps

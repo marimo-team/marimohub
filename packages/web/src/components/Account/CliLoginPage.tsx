@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { useState } from 'react';
 import { ArrowRight, Check, Clock3, ShieldCheck, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
@@ -33,7 +34,7 @@ export function CliLoginPage({ navigate = navigateToUrl }: CliLoginPageProps) {
 	if (!request) {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-muted/30 p-6">
-				<title>Invalid CLI request · marimohub</title>
+				<PageTitle>Invalid CLI request</PageTitle>
 				<Brand size="lg" />
 				<div className="flex w-full max-w-md flex-col items-center gap-3 rounded-xl border bg-card p-8 text-center shadow-md">
 					<Terminal className="size-8 text-muted-foreground" />
@@ -76,7 +77,7 @@ export function CliLoginPage({ navigate = navigateToUrl }: CliLoginPageProps) {
 
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-muted/30 p-6">
-			<title>Connect the mohub CLI · marimohub</title>
+			<PageTitle>Connect the mohub CLI</PageTitle>
 			<Brand size="lg" />
 
 			<div className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border bg-card shadow-lg">

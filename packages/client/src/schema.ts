@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+	'/api/v1/theme': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get public deployment branding */
+		get: operations['theme'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/cli/v1/device-authorizations': {
 		parameters: {
 			query?: never;
@@ -4009,6 +4026,37 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+	theme: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Deployment branding, available before sign-in */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							name: string;
+							favicon: string | null;
+							logo: string | null;
+							logo_dark: string | null;
+							primary_color: string | null;
+							secondary_color: string | null;
+						};
+					};
+				};
+			};
+		};
+	};
 	'auth.cli.device.request': {
 		parameters: {
 			query?: never;

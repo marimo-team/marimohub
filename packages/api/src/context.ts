@@ -1,3 +1,4 @@
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
@@ -381,6 +382,7 @@ export interface McpConfig {
  */
 export interface ApiDeps {
 	warmPool?: WarmPoolService;
+	theme?: ThemeConfig;
 	services: Services;
 	/** Operational signals shared by domain services and API-owned resource guards. */
 	metrics?: Metrics;

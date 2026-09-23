@@ -72,6 +72,7 @@ catalog:
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   codemirror: ^6.0.2
+  colorjs.io: ^0.7.1
   croner: ^10.0.1
   csv-parse: ^7.0.2
   google-auth-library: ^11.0.0

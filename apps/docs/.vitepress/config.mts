@@ -101,12 +101,13 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
 					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'Session surfaces', link: '/surfaces' },
+					{ text: 'Theming', link: '/theming' },
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Service accounts', link: '/service-accounts' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
@@ -168,6 +169,7 @@ export default defineConfig({
 					{ text: 'Compute', link: '/compute' },
 					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'Session surfaces', link: '/surfaces' },
+					{ text: 'Theming', link: '/theming' },
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Service accounts', link: '/service-accounts' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },

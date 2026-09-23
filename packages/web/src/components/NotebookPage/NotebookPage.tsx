@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
@@ -597,7 +598,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 	} = model;
 	return (
 		<div className="flex h-dvh flex-col">
-			<title>{`${title} · marimohub`}</title>
+			<PageTitle>{title}</PageTitle>
 			<header className="flex h-10 min-h-10 items-center gap-2 border-b bg-background px-3 max-md:h-11 max-md:min-h-11">
 				<IconLink
 					to={`/projects/${pid}`}

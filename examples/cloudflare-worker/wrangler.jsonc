@@ -8,6 +8,13 @@
 	// fixed user). A real deployment MUST set AUTH_MODE=access plus ACCESS_TEAM
 	// and ACCESS_AUD. The worker now refuses to start on any other value.
 	"vars": {
+		// Optional hub branding; see docs/theming.md.
+		// "MARIMOHUB_THEME_NAME": "Research Hub",
+		// "MARIMOHUB_THEME_PRIMARY_COLOR": "#2563eb",
+		// "MARIMOHUB_THEME_SECONDARY_COLOR": "#7c3aed",
+		// "MARIMOHUB_THEME_LOGO": "https://hub.example.com/brand/logo.svg",
+		// "MARIMOHUB_THEME_LOGO_DARK": "https://hub.example.com/brand/logo-dark.svg",
+		// "MARIMOHUB_THEME_FAVICON": "https://hub.example.com/brand/favicon.png",
 		"AUTH_MODE": "dev",
 		"USER_ID": "user",
 		"USER_EMAIL": "user@localhost",

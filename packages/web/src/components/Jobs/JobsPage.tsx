@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { canEditProject } from '@/lib/roles';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, Pencil, Play, Plus, Trash2 } from 'lucide-react';
@@ -168,7 +169,7 @@ export function JobsPage() {
 
 	return (
 		<div className="flex h-dvh flex-col">
-			<title>{`${m.title} · Jobs · marimohub`}</title>
+			<PageTitle>{`${m.title} · Jobs`}</PageTitle>
 			<header className="flex h-10 min-h-10 items-center gap-2 border-b bg-background px-3 max-md:h-11 max-md:min-h-11">
 				<IconLink
 					to={`/projects/${m.projectId}`}

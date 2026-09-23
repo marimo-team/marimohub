@@ -4632,6 +4632,63 @@ components:
         - created_at
   parameters: {}
 paths:
+  /api/v1/theme:
+    get:
+      operationId: theme
+      tags:
+        - System
+      summary: Get public deployment branding
+      security: []
+      responses:
+        '200':
+          description: Deployment branding, available before sign-in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      favicon:
+                        type:
+                          - string
+                          - 'null'
+                      logo:
+                        type:
+                          - string
+                          - 'null'
+                      logo_dark:
+                        type:
+                          - string
+                          - 'null'
+                      primary_color:
+                        type:
+                          - string
+                          - 'null'
+                        pattern: ^#(?:[\da-fA-F]{3}|[\da-fA-F]{6})$
+                      secondary_color:
+                        type:
+                          - string
+                          - 'null'
+                        pattern: ^#(?:[\da-fA-F]{3}|[\da-fA-F]{6})$
+                    required:
+                      - name
+                      - favicon
+                      - logo
+                      - logo_dark
+                      - primary_color
+                      - secondary_color
+                required:
+                  - success
+                  - data
   /api/cli/v1/device-authorizations:
     post:
       operationId: auth.cli.device.request

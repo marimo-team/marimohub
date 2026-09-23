@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { Ban, SearchX, ShieldCheck, UserCheck, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -59,7 +60,7 @@ export default function AdminUsersPage() {
 
 	return (
 		<PageContainer>
-			<title>Users · marimohub</title>
+			<PageTitle>Users</PageTitle>
 			<PageHeader>
 				<div className="flex min-w-0 flex-col gap-0.5">
 					<h1 className="text-2xl font-semibold tracking-tight">Users</h1>

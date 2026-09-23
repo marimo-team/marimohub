@@ -1,3 +1,4 @@
+import { useBranding } from '@/context/BrandingContext';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bug, Code2, ExternalLink, Info, Settings2 } from 'lucide-react';
@@ -28,6 +29,7 @@ function LinkRow({ href, icon, children }: { href: string; icon: ReactNode; chil
  * known — so it never blocks or shifts the layout.
  */
 export function Footer() {
+	const { name, wordmark } = useBranding();
 	const { data: v } = useVersionQuery();
 	const { user } = useAuth();
 	const navigate = useNavigate();
@@ -39,10 +41,10 @@ export function Footer() {
 	return (
 		<footer className="flex shrink-0 items-center justify-between border-t bg-background px-4 py-2 max-md:px-3">
 			<span className="font-mono text-[11px] tracking-[0.12em] text-muted-foreground/60">
-				MARIMOHUB
+				{wordmark}
 			</span>
 			<Popover
-				label="About marimohub"
+				label={`About ${name}`}
 				placement="top end"
 				trigger={<Info className="size-3.5" />}
 				triggerClassName="rounded-full text-muted-foreground transition-colors hover:text-foreground"
@@ -50,7 +52,7 @@ export function Footer() {
 				{({ close }) => (
 					<div className="flex w-56 flex-col">
 						<div className="flex items-baseline justify-between gap-3 px-2 pb-2 pt-0.5">
-							<span className="text-sm font-semibold">marimohub</span>
+							<span className="text-sm font-semibold">{name}</span>
 							{href ? (
 								<a
 									href={href}
@@ -67,6 +69,9 @@ export function Footer() {
 								</span>
 							)}
 						</div>
+						{name !== 'marimohub' && (
+							<p className="px-2 pb-2 text-xs text-muted-foreground">Powered by marimohub</p>
+						)}
 						<div className="flex flex-col gap-0.5 border-t pt-1.5">
 							<LinkRow href={SOURCE_URL} icon={<Code2 />}>
 								Source

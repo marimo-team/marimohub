@@ -102,6 +102,66 @@ const AI_TOKEN_TTL_SECONDS: ConfigVar = {
 
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
+		name: 'Theme',
+		description:
+			'Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.',
+		backends: [
+			{
+				name: 'Branding',
+				vars: [
+					{
+						id: 'MARIMOHUB_THEME_NAME',
+						name: 'Display name',
+						description: 'Display name and browser-title suffix.',
+						example: 'Research Hub',
+						optIn: true,
+						default: 'marimohub',
+					},
+					{
+						id: 'MARIMOHUB_THEME_FAVICON',
+						name: 'Favicon',
+						description:
+							'SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path.',
+						example: 'https://hub.example.com/brand/favicon.svg',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_LOGO',
+						name: 'Logo',
+						description:
+							'SVG or PNG logo that replaces the full icon and wordmark. Use an HTTPS URL or root-relative same-origin path.',
+						example: 'https://hub.example.com/brand/logo.svg',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_LOGO_DARK',
+						name: 'Dark-mode logo',
+						description: 'SVG or PNG logo for dark mode. Defaults to the main logo.',
+						example: 'https://hub.example.com/brand/logo-dark.svg',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_PRIMARY_COLOR',
+						name: 'Primary color',
+						description:
+							'Opaque #RGB or #RRGGBB color for actions, links, and focus. Generates readable light and dark palettes.',
+						example: '#2563eb',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_SECONDARY_COLOR',
+						name: 'Secondary color',
+						description:
+							'Opaque #RGB or #RRGGBB color for accents and surface tints. Defaults to the primary color.',
+						example: '#7c3aed',
+						optIn: true,
+					},
+				],
+			},
+		],
+	},
+
+	{
 		name: 'Storage',
 		selector: 'MARIMOHUB_STORAGE_BACKEND',
 		selectorDefault: 's3',
