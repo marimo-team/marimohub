@@ -236,3 +236,47 @@ test('preserves native History arguments, serialization errors, and third-party 
 	await page.waitForTimeout(200);
 	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
 });
+
+for (const delayed of [false, true]) {
+	test(`mirrors title mutations and cleans up observers (delayed host: ${delayed})`, async ({
+		page,
+	}) => {
+		await page.goto(`${server.hostOrigin}/?delay=${delayed ? 1 : 0}`);
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		await page.waitForTimeout(200);
+		await expect(page).toHaveTitle('Hub notebook title');
+		const frame = page.frames().find((f) => f.parentFrame())!;
+		const loads = await page.evaluate(() => window.loads);
+		const updates = await page.evaluate(() => window.updates);
+		await frame.evaluate(() => {
+			document.title = 'Live forecast';
+		});
+		await expect(page).toHaveTitle('Live forecast');
+		await frame.evaluate(() => {
+			document.querySelector('title')!.firstChild!.textContent = 'Text mutation';
+		});
+		await expect(page).toHaveTitle('Text mutation');
+		await frame.evaluate(() => {
+			const title = document.createElement('title');
+			title.textContent = 'Replacement';
+			document.querySelector('title')!.replaceWith(title);
+		});
+		await expect(page).toHaveTitle('Replacement');
+		await frame.evaluate(() => {
+			document.querySelector('title')!.remove();
+		});
+		await expect(page).toHaveTitle('');
+		await frame.evaluate(() => {
+			document.title = 'Recreated';
+		});
+		await expect(page).toHaveTitle('Recreated');
+		expect(await page.evaluate(() => window.loads)).toBe(loads);
+		expect(await page.evaluate(() => window.updates)).toBe(updates);
+		await frame.evaluate(() => {
+			window.bridge.dispose();
+			document.title = 'Ignored';
+		});
+		await page.waitForTimeout(200);
+		await expect(page).toHaveTitle('Recreated');
+	});
+}

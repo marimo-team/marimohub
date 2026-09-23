@@ -2,6 +2,7 @@ import {
 	Connect,
 	NAMESPACE,
 	QUERY_CAPABILITY,
+	TITLE_CAPABILITY,
 	Ready,
 	UPDATE_INTERVAL_MS,
 	VERSION,
@@ -26,6 +27,7 @@ export interface HostBridgeOptions extends StatusOptions {
 	origin: string;
 	excludedKeys?: readonly string[];
 	onQuery(snapshot: QuerySnapshot): boolean;
+	onTitle?: (title: string) => boolean;
 }
 
 export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
@@ -36,9 +38,6 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 	let status: BridgeStatus = 'connecting';
 	let channel: ReturnType<typeof createChannelRpc<NotebookApi, HostApi>> | undefined;
 	let documentId: string | undefined;
-	let revision = -1;
-	let lastApplied = -Infinity;
-	let lastQuery: string | undefined;
 	const updateStatus = (next: BridgeStatus) => {
 		status = next;
 		options.onStatus?.(next);
@@ -64,9 +63,6 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 			updateStatus('unavailable');
 			return;
 		}
-		revision = -1;
-		lastApplied = -Infinity;
-		lastQuery = undefined;
 		updateStatus('connecting');
 		handshake.start();
 	};
@@ -83,11 +79,12 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 		channel?.dispose();
 		documentId = parsed.data.documentId;
 		const connectionId = randomIdentifier(win.crypto);
+		const syncTitle = !!options.onTitle && parsed.data.capabilities.includes(TITLE_CAPABILITY);
 		const connect = Connect.safeParse({
 			namespace: NAMESPACE,
 			kind: 'connect',
 			version: VERSION,
-			capabilities: [QUERY_CAPABILITY],
+			capabilities: [QUERY_CAPABILITY, ...(syncTitle ? [TITLE_CAPABILITY] : [])],
 			documentId,
 			connectionId,
 			excludedKeys,
@@ -97,23 +94,18 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 			return;
 		}
 		const ports = new MessageChannel();
+		const isActive = () => channel === current && status === 'connected';
+		const receiveQuery = createSnapshotReceiver(isActive);
+		const receiveTitle = createSnapshotReceiver(() => syncTitle && isActive());
 		const current = createChannelRpc<NotebookApi, HostApi>(ports.port1, connectionId, 'host', {
+			replaceTitle({ revision, title }) {
+				return receiveTitle(revision, title, () => options.onTitle?.(title) ?? false);
+			},
 			replaceQuery(snapshot) {
-				if (
-					channel !== current ||
-					status !== 'connected' ||
-					snapshot.revision <= revision ||
-					Date.now() - lastApplied < UPDATE_INTERVAL_MS
-				)
-					return { applied: false };
-				revision = snapshot.revision;
 				const entries = [...notebookQueryParams(snapshot.entries, excludedKeys)];
-				const query = new URLSearchParams(entries).toString();
-				if (query === lastQuery) return { applied: true };
-				lastApplied = Date.now();
-				const applied = options.onQuery({ ...snapshot, entries });
-				if (applied) lastQuery = query;
-				return { applied };
+				return receiveQuery(snapshot.revision, new URLSearchParams(entries).toString(), () =>
+					options.onQuery({ ...snapshot, entries }),
+				);
 			},
 		});
 		channel = current;
@@ -151,5 +143,22 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 			iframe.removeEventListener('load', restart);
 			updateStatus('disposed');
 		},
+	};
+}
+
+function createSnapshotReceiver(isActive: () => boolean) {
+	let revision = -1;
+	let lastApplied = -Infinity;
+	let lastValue: string | undefined;
+	return (nextRevision: number, value: string, apply: () => boolean) => {
+		const now = Date.now();
+		if (!isActive() || nextRevision <= revision || now - lastApplied < UPDATE_INTERVAL_MS)
+			return { applied: false };
+		revision = nextRevision;
+		if (value === lastValue) return { applied: true };
+		lastApplied = now;
+		const applied = apply();
+		if (applied) lastValue = value;
+		return { applied };
 	};
 }

@@ -1,10 +1,12 @@
 import { Suspense } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import type { HostBridgeOptions } from '@marimo-hub/notebook-bridge/host';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys } from '@/api/queryKeys';
 import { AppsPage, ProjectEntryPage } from './AppsPage';
@@ -16,6 +18,20 @@ import {
 	runningSession,
 	sessionPosts,
 } from '../NotebookPage/NotebookPage.testWorld';
+
+const connections = vi.hoisted(
+	() => [] as { options: HostBridgeOptions; dispose: ReturnType<typeof vi.fn> }[],
+);
+vi.mock('@marimo-hub/notebook-bridge/host', () => ({
+	createHostBridge: (options: HostBridgeOptions) => {
+		const dispose = vi.fn();
+		connections.push({ options, dispose });
+		return { status: 'connected', dispose };
+	},
+}));
+afterEach(() => {
+	connections.length = 0;
+});
 
 const app = {
 	project_id: PID,
@@ -35,6 +51,7 @@ function setup(
 		projectStatus?: number;
 		projectReload?: Promise<void>;
 		appsResponse?: (url: URL) => Response;
+		controls?: ReactNode;
 	} = {},
 ) {
 	const existing = makeFetch({
@@ -83,6 +100,7 @@ function setup(
 	const result = render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={[entry]}>
+				{options.controls}
 				<ThemeProvider>
 					<Suspense fallback={<p>Loading…</p>}>
 						<Routes>
@@ -103,6 +121,47 @@ function setup(
 }
 
 describe('stakeholder apps', () => {
+	it('mirrors child titles and resets them when the app-user frame changes', async () => {
+		setup(`${app.url}?id=123`, [app], {
+			controls: <Link to={`${app.url}?id=external`}>External query</Link>,
+		});
+		const initial = await screen.findByTitle('Forecast');
+		const connection = connections.at(-1)!;
+		expect(document.title).toBe('Forecast · marimohub');
+		act(() => {
+			expect(connection.options.onTitle!('Live forecast')).toBe(true);
+		});
+		expect(document.title).toBe('Live forecast · marimohub');
+		expect(screen.getByTitle('Forecast')).toBe(initial);
+		act(() => {
+			connection.options.onStatus?.('connecting');
+		});
+		expect(document.title).toBe('Forecast · marimohub');
+		expect(screen.getByTitle('Forecast')).toBe(initial);
+		act(() => {
+			connection.options.onStatus?.('connected');
+			connection.options.onTitle!('Reloaded forecast');
+		});
+		expect(document.title).toBe('Reloaded forecast · marimohub');
+		act(() => {
+			connection.options.onTitle!('   ');
+		});
+		expect(document.title).toBe('Forecast · marimohub');
+		act(() => {
+			connection.options.onTitle!('Another forecast');
+		});
+		fireEvent.click(screen.getByRole('link', { name: 'External query' }));
+		expect(screen.getByTitle('Forecast')).not.toBe(initial);
+		expect(connection.dispose).toHaveBeenCalledOnce();
+		expect(document.title).toBe('Forecast · marimohub');
+		expect(connection.options.onTitle!('Stale forecast')).toBe(false);
+		expect(document.title).toBe('Forecast · marimohub');
+		act(() => {
+			expect(connections.at(-1)!.options.onTitle!('New forecast')).toBe(true);
+		});
+		expect(document.title).toBe('New forecast · marimohub');
+	});
+
 	it('shares the app URL without exposing notebook actions', async () => {
 		const user = userEvent.setup();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');

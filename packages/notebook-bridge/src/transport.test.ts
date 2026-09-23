@@ -18,6 +18,7 @@ function fixture() {
 	const handler = vi.fn<HostApi['replaceQuery']>(() => ({ applied: true }));
 	const host = createChannelRpc<NotebookApi, HostApi>(ports.port1, 'connection-v1', 'host', {
 		replaceQuery: handler,
+		replaceTitle: vi.fn(() => ({ applied: true })),
 	});
 	disposals.push(() => {
 		host.dispose();

@@ -13,9 +13,17 @@ interface NotebookFrameProps {
 	sandboxUrl?: string;
 	retrySrc?: string;
 	onQuery?: (snapshot: QuerySnapshot) => boolean;
+	onTitle?: (title: string | null) => void;
 }
 
-export function NotebookFrame({ src, title, sandboxUrl, retrySrc, onQuery }: NotebookFrameProps) {
+export function NotebookFrame({
+	src,
+	title,
+	sandboxUrl,
+	retrySrc,
+	onQuery,
+	onTitle,
+}: NotebookFrameProps) {
 	const [attempt, setAttempt] = useState(0);
 	if (!src) return null;
 	return (
@@ -25,6 +33,7 @@ export function NotebookFrame({ src, title, sandboxUrl, retrySrc, onQuery }: Not
 			title={title}
 			sandboxUrl={sandboxUrl}
 			onQuery={onQuery}
+			onTitle={onTitle}
 			onRetry={() => setAttempt((current) => current + 1)}
 		/>
 	);
@@ -35,17 +44,16 @@ function FrameAttempt({
 	onRetry,
 	sandboxUrl,
 	onQuery,
+	onTitle,
 	initialSrc,
-}: {
-	title: string;
+}: Omit<NotebookFrameProps, 'src' | 'retrySrc'> & {
 	onRetry: () => void;
-	sandboxUrl?: string;
-	onQuery?: (snapshot: QuerySnapshot) => boolean;
 	initialSrc: string;
 }) {
 	const [launchSrc] = useState(initialSrc);
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const receiveQuery = useEffectEvent((snapshot: QuerySnapshot) => onQuery?.(snapshot) ?? false);
+	const receiveTitle = useEffectEvent((value: string | null) => onTitle?.(value));
 	useLayoutEffect(() => {
 		const iframe = frameRef.current;
 		if (!iframe || !sandboxUrl) return;
@@ -58,7 +66,13 @@ function FrameAttempt({
 				origin: new URL(launchSrc).origin,
 				excludedKeys: [...trusted.searchParams.keys()],
 				onQuery: (snapshot) => active && receiveQuery(snapshot),
+				onTitle: (value) => {
+					if (!active) return false;
+					receiveTitle(value.trim() || null);
+					return true;
+				},
 				onStatus: (status) => {
+					if (active && status !== 'connected') receiveTitle(null);
 					iframe.dataset.notebookBridgeStatus = status;
 				},
 			});
@@ -68,6 +82,7 @@ function FrameAttempt({
 		return () => {
 			active = false;
 			bridge?.dispose();
+			receiveTitle(null);
 		};
 	}, [sandboxUrl, launchSrc]);
 	const [loaded, setLoaded] = useState(false);

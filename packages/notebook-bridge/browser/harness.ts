@@ -64,6 +64,7 @@ export async function harness() {
 				? notebookScript
 				: `<script type="module">
    import { startNotebookBridge } from '/notebook.js';
+   document.title = 'Initial child title';
    window.bridge = startNotebookBridge({parentOrigin: '${hostOrigin}'});
    if (new URLSearchParams(location.search).has('early')) history.replaceState({}, '', '?early=observed&access_token=private');
   </script><p>Notebook</p>`,
@@ -81,7 +82,7 @@ export async function harness() {
 		const params = new URL(req.url!, 'http://localhost').searchParams;
 		const source = params.get('child') ?? `${childOrigin}/?early=1`;
 		// Test-only fixture URLs are escaped as data, never HTML attributes.
-		res.end(`<iframe id="frame" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+		res.end(`<title>Hub notebook title</title><iframe id="frame" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
   <script type="module">
    import { createHostBridge } from '/host.js';
    import { mergeNotebookQuery } from '/query.js';
@@ -89,7 +90,7 @@ export async function harness() {
    const excludedKeys = ['provider'];
    window.updates = 0; window.loads = 0;
    frame.addEventListener('load', () => window.loads++);
-   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys, onQuery({entries}) {
+   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys, onTitle(title) { document.title = title; return true; }, onQuery({entries}) {
     window.updates++; const query = mergeNotebookQuery(location.search, entries, excludedKeys);
     history.replaceState(history.state, '', location.pathname + query + location.hash);
     return true;

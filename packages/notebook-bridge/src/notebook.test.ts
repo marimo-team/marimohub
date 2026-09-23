@@ -1,23 +1,45 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { startNotebookBridge } from './notebook';
 import { wirePeer } from './testing-peer';
-import { NAMESPACE } from './protocol';
+import { NAMESPACE, REQUEST_TIMEOUT_MS } from './protocol';
+
+// birpc captures timer functions at import time.
+vi.hoisted(() => vi.useFakeTimers());
+afterAll(() => vi.useRealTimers());
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
-	vi.useRealTimers();
+	vi.clearAllTimers();
+	vi.unstubAllGlobals();
 });
 function fixture() {
+	let onMutation: () => void;
+	vi.stubGlobal(
+		'MutationObserver',
+		class {
+			constructor(callback: () => void) {
+				onMutation = callback;
+			}
+			observe() {}
+			disconnect() {}
+		},
+	);
 	const win = new EventTarget();
 	const parent = { postMessage: vi.fn() };
 	const location = { search: '?early=1' };
 	const history = { pushState: vi.fn(), replaceState: vi.fn() };
+	const document = { head: {}, title: 'Notebook' };
+	const changeTitle = (title: string) => {
+		document.title = title;
+		onMutation();
+	};
 	Object.assign(win, {
 		parent,
 		history,
 		crypto: globalThis.crypto,
 		location,
+		document,
 	});
 	const options = { window: win as unknown as Window, parentOrigin: 'https://hub.example' };
 	const bridge = startNotebookBridge(options);
@@ -53,17 +75,118 @@ function fixture() {
 		location.search = search;
 		win.dispatchEvent(new Event('popstate'));
 	};
-	const negotiate = async (connectionId = 'fresh') => {
-		const { peer: port } = connect({ connectionId, excludedKeys: ['provider'] });
+	const negotiate = async (connectionId = 'fresh', titles = false) => {
+		const { peer: port } = connect({
+			connectionId,
+			excludedKeys: ['provider'],
+			capabilities: ['query-params.v1', ...(titles ? ['document-title.v1'] : [])],
+		});
 		const peer = wirePeer(port, connectionId);
 		cleanups.push(peer.dispose);
 		await expect(peer.call('connected')).resolves.toEqual({ ready: true });
 		return peer;
 	};
-	return { win, bridge, options, history, connect, change, negotiate };
+	return { win, bridge, options, history, connect, change, changeTitle, negotiate };
 }
 
 describe('notebook observer lifecycle', () => {
+	it('keeps the initial title local until it changes, including after reconnect', async () => {
+		const { negotiate, changeTitle } = fixture();
+		for (const connectionId of ['fresh', 'replacement']) {
+			const peer = await negotiate(connectionId, true);
+			await vi.advanceTimersByTimeAsync(100);
+			const query = await peer.nextRequest();
+			expect(query.m).toBe('replaceQuery');
+			peer.reply(query, { applied: true });
+			await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+			changeTitle('Notebook');
+			await vi.advanceTimersByTimeAsync(200);
+			expect(peer.requests).toHaveLength(0);
+			if (connectionId === 'fresh') continue;
+			changeTitle('Live forecast');
+			await vi.advanceTimersByTimeAsync(100);
+			const title = await peer.nextRequest();
+			expect(title.m).toBe('replaceTitle');
+			expect(title.a).toEqual([{ revision: 3, title: 'Live forecast' }]);
+			peer.reply(title, { applied: true });
+			await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+			changeTitle('Notebook');
+			await vi.advanceTimersByTimeAsync(100);
+			expect((await peer.nextRequest()).a).toEqual([{ revision: 4, title: 'Notebook' }]);
+		}
+	});
+	it('retains title changes before negotiation and across reconnects', async () => {
+		const { negotiate, changeTitle } = fixture();
+		changeTitle('Early change');
+		for (const connectionId of ['fresh', 'replacement']) {
+			const peer = await negotiate(connectionId, true);
+			await vi.advanceTimersByTimeAsync(100);
+			const query = await peer.nextRequest();
+			const title = await peer.nextRequest();
+			expect(query.m).toBe('replaceQuery');
+			expect(title.m).toBe('replaceTitle');
+			expect(title.a[0]).toMatchObject({ title: 'Early change' });
+			peer.reply(query, { applied: true });
+			peer.reply(title, { applied: true });
+			await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+		}
+	});
+
+	it('keeps query updates flowing while a title request stalls or times out', async () => {
+		const { negotiate, change, changeTitle, bridge } = fixture();
+		changeTitle('Pending title');
+		const peer = await negotiate('fresh', true);
+		await vi.advanceTimersByTimeAsync(100);
+		const initialQuery = await peer.nextRequest();
+		const pendingTitle = await peer.nextRequest();
+		expect(pendingTitle.m).toBe('replaceTitle');
+		peer.reply(initialQuery, { applied: true });
+		await vi.waitFor(() => expect(vi.getTimerCount()).toBe(2));
+
+		change('?during=title');
+		await vi.advanceTimersByTimeAsync(100);
+		const during = await peer.nextRequest();
+		expect(during.m).toBe('replaceQuery');
+		expect(during.a[0]).toMatchObject({ entries: [['during', 'title']] });
+		peer.reply(during, { applied: true });
+		await vi.waitFor(() => expect(vi.getTimerCount()).toBe(2));
+		await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+		expect(bridge.status).toBe('connected');
+
+		change('?after=timeout');
+		changeTitle('New title');
+		await vi.advanceTimersByTimeAsync(100);
+		const after = await peer.nextRequest();
+		expect(after.m).toBe('replaceQuery');
+		expect(after.a[0]).toMatchObject({ entries: [['after', 'timeout']] });
+		peer.reply(after, { applied: true });
+		await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(peer.requests).toHaveLength(0);
+
+		const replacement = await negotiate('replacement', true);
+		await vi.advanceTimersByTimeAsync(100);
+		expect((await replacement.nextRequest()).m).toBe('replaceQuery');
+		const title = await replacement.nextRequest();
+		expect(title.m).toBe('replaceTitle');
+		expect(title.a[0]).toMatchObject({ title: 'New title' });
+	});
+	it('keeps title updates flowing while a query acknowledgement is pending', async () => {
+		const { negotiate, changeTitle } = fixture();
+		const peer = await negotiate('fresh', true);
+		await vi.advanceTimersByTimeAsync(100);
+		expect((await peer.nextRequest()).m).toBe('replaceQuery');
+		for (const title of ['First title', 'Second title']) {
+			changeTitle(title);
+			await vi.advanceTimersByTimeAsync(100);
+			const request = await peer.nextRequest();
+			expect(request.m).toBe('replaceTitle');
+			expect(request.a[0]).toMatchObject({ title });
+			peer.reply(request, { applied: true });
+			await vi.waitFor(() => expect(vi.getTimerCount()).toBe(2));
+		}
+	});
+
 	it('installs once and preserves later History wrappers on disposal', () => {
 		const { bridge, options, history } = fixture();
 		expect(startNotebookBridge(options)).toBe(bridge);
@@ -87,7 +210,6 @@ describe('notebook observer lifecycle', () => {
 		expect(bridge.status).toBe('connecting');
 	});
 	it('bounds incomplete negotiation and rejects connection replay', () => {
-		vi.useFakeTimers();
 		const { bridge, connect } = fixture();
 		connect();
 		expect(connect().close).toHaveBeenCalledOnce();
@@ -97,7 +219,6 @@ describe('notebook observer lifecycle', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it('coalesces updates while a request is pending and sends only the latest snapshot', async () => {
-		vi.useFakeTimers();
 		const { negotiate, change } = fixture();
 		const peer = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -128,7 +249,6 @@ describe('notebook observer lifecycle', () => {
 		expect(peer.requests).toHaveLength(0);
 	});
 	it('retries an unaccepted snapshot with a newer revision', async () => {
-		vi.useFakeTimers();
 		const { negotiate } = fixture();
 		const peer = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -140,7 +260,6 @@ describe('notebook observer lifecycle', () => {
 		expect(retry.a).toEqual([{ revision: 2, entries: [['early', '1']] }]);
 	});
 	it('ignores acknowledgements from a replaced connection with an update outstanding', async () => {
-		vi.useFakeTimers();
 		const { negotiate, change, bridge } = fixture();
 		const old = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -154,7 +273,6 @@ describe('notebook observer lifecycle', () => {
 		expect(bridge.status).toBe('connected');
 	});
 	it('cancels an in-flight update without resurrecting timers or status', async () => {
-		vi.useFakeTimers();
 		const { negotiate, bridge, change } = fixture();
 		const peer = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -168,7 +286,6 @@ describe('notebook observer lifecycle', () => {
 		expect(peer.requests).toHaveLength(0);
 	});
 	it('recovers from an oversized snapshot and sends a subsequent clear', async () => {
-		vi.useFakeTimers();
 		const { negotiate, change } = fixture();
 		change(`?large=${'x'.repeat(70_000)}`);
 		const peer = await negotiate();
@@ -180,7 +297,6 @@ describe('notebook observer lifecycle', () => {
 		expect(cleared.a).toEqual([{ revision: 2, entries: [] }]);
 	});
 	it('accepts a fresh host after the initial readiness window expires', async () => {
-		vi.useFakeTimers();
 		const { negotiate, bridge, change } = fixture();
 		await vi.advanceTimersByTimeAsync(10_000);
 		expect(bridge.status).toBe('unavailable');
