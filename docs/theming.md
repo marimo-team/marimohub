@@ -62,7 +62,7 @@ The deployment name supplies accessible image text and the browser-title suffix.
 
 If the dark logo is absent or cannot load, the hub uses the main logo.
 If the main logo cannot load, the hub uses the built-in mark and deployment name.
-Favicons accept SVG, PNG, and ICO. Without an override, the built-in favicon stays unchanged.
+Favicons accept SVG, PNG, and ICO. Without an override, the favicon uses the [app icon fallbacks](#installed-app-branding).
 
 ### Host the assets
 
@@ -98,12 +98,17 @@ MARIMOHUB_THEME_APPLE_TOUCH_ICON="https://hub.example.com/brand/apple-touch-icon
 ```
 
 The required dimensions are 192×192, 512×512, and 180×180 pixels, respectively.
-Each unset icon uses its built-in default. Favicons and header logos do not replace installation icons.
+Each unset PWA icon size uses its built-in default. Apple touch icons and favicons use the first configured asset:
+
+- Apple touch icon: explicit Apple icon → 192px PWA icon → 512px PWA icon → built-in Apple icon.
+- Favicon: explicit favicon → 192px PWA icon → 512px PWA icon → built-in favicon.
+
+Favicons and header logos do not replace installation icons. Reused PWA icons retain their original dimensions.
 Custom app icons use the standard icon purpose; only the built-in 512px icon declares maskable support.
 The same asset URL rules apply, including explicit prefixes for root-relative paths.
 
 The backend serves `/manifest.webmanifest` and `/apple-touch-icon.png` before sign-in, without response caching.
-The latter redirects to the configured Apple touch icon or its default.
+The latter redirects to the selected Apple touch icon or fallback.
 For deployments under a URL prefix, include that prefix on both endpoints.
 Reverse proxies must forward both endpoints to the backend.
 

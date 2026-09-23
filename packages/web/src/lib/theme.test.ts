@@ -146,6 +146,46 @@ describe('theme bootstrap', () => {
 		expect(document.documentElement).not.toHaveAttribute('data-custom-theme');
 		expect(document.querySelector('link[rel="icon"]')).toHaveAttribute('href', './favicon.svg');
 	});
+
+	it.each([
+		{
+			favicon: '/brand/favicon.ico',
+			pwa_icon_192: '/brand/192.png',
+			pwa_icon_512: '/brand/512.png',
+			expected: '/brand/favicon.ico',
+		},
+		{
+			favicon: null,
+			pwa_icon_192: '/brand/192.png',
+			pwa_icon_512: '/brand/512.png',
+			expected: '/brand/192.png',
+		},
+		{
+			favicon: null,
+			pwa_icon_192: null,
+			pwa_icon_512: 'https://cdn.example.com/512.png',
+			expected: 'https://cdn.example.com/512.png',
+		},
+	])(
+		'selects favicon $expected without stale image metadata',
+		({ favicon, pwa_icon_192, pwa_icon_512, expected }) => {
+			document.head.innerHTML =
+				'<base href="/hub/" /><link rel="icon" type="image/svg+xml" sizes="any" href="./favicon.svg" />';
+			applyThemeConfig({ ...DEFAULT_THEME_CONFIG, favicon, pwa_icon_192, pwa_icon_512 });
+			const icon = document.querySelector('link[rel="icon"]');
+			expect(icon).toHaveAttribute('href', expected);
+			expect(icon).not.toHaveAttribute('type');
+			expect(icon).not.toHaveAttribute('sizes');
+			applyThemeConfig({
+				...DEFAULT_THEME_CONFIG,
+				logo: '/wide.svg',
+				apple_touch_icon: '/apple.png',
+			});
+			expect(document.querySelectorAll('link[rel="icon"]')).toHaveLength(1);
+			expect(icon).toHaveAttribute('href', './favicon.svg');
+			expect(icon).toHaveAttribute('type', 'image/svg+xml');
+		},
+	);
 	it('aborts a stalled connection and ignores a late response after the deadline', async () => {
 		vi.useFakeTimers();
 		const late = deferredResponse();

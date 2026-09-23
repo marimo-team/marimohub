@@ -121,7 +121,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_THEME_FAVICON',
 						name: 'Favicon',
 						description:
-							'SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path.',
+							'SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in favicon.',
 						example: 'https://hub.example.com/brand/favicon.svg',
 						optIn: true,
 					},
@@ -176,7 +176,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_THEME_APPLE_TOUCH_ICON',
 						name: 'Apple touch icon',
 						description:
-							'180×180 PNG Apple touch icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon.',
+							'180×180 PNG Apple touch icon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in icon.',
 						example: 'https://hub.example.com/brand/apple-touch-icon.png',
 						optIn: true,
 					},

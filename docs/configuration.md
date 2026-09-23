@@ -23,14 +23,14 @@ Deployment branding for the hub UI. All values are public. See the [theming guid
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_THEME_NAME` | Display name, browser-title suffix, and installed app name. | — | `marimohub` | `Research Hub` |
-| `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/favicon.svg` |
+| `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in favicon. | — | — | `https://hub.example.com/brand/favicon.svg` |
 | `MARIMOHUB_THEME_LOGO` | SVG or PNG logo that replaces the full icon and wordmark. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/logo.svg` |
 | `MARIMOHUB_THEME_LOGO_DARK` | SVG or PNG logo for dark mode. Defaults to the main logo. | — | — | `https://hub.example.com/brand/logo-dark.svg` |
 | `MARIMOHUB_THEME_PRIMARY_COLOR` | Opaque #RGB or #RRGGBB color for actions, links, and focus. Generates readable light and dark palettes. | — | — | `#2563eb` |
 | `MARIMOHUB_THEME_SECONDARY_COLOR` | Opaque #RGB or #RRGGBB color for accents and surface tints. Defaults to the primary color. | — | — | `#7c3aed` |
 | `MARIMOHUB_THEME_PWA_ICON_192` | 192×192 PNG app icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon. | — | — | `https://hub.example.com/brand/icon-192.png` |
 | `MARIMOHUB_THEME_PWA_ICON_512` | 512×512 PNG app icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon. | — | — | `https://hub.example.com/brand/icon-512.png` |
-| `MARIMOHUB_THEME_APPLE_TOUCH_ICON` | 180×180 PNG Apple touch icon. Use an HTTPS URL or root-relative same-origin path. Defaults to the built-in icon. | — | — | `https://hub.example.com/brand/apple-touch-icon.png` |
+| `MARIMOHUB_THEME_APPLE_TOUCH_ICON` | 180×180 PNG Apple touch icon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in icon. | — | — | `https://hub.example.com/brand/apple-touch-icon.png` |
 
 ## Storage
 

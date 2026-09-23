@@ -129,6 +129,49 @@ describe('installation metadata', () => {
 		expect(secondManifest).toMatchObject({ id: '/', start_url: '/' });
 	});
 
+	it.each([
+		{
+			pwa_icon_192: '/brand/192.png',
+			pwa_icon_512: 'https://cdn.example.com/512.png',
+			expected: '/brand/192.png',
+		},
+		{
+			pwa_icon_192: null,
+			pwa_icon_512: 'https://cdn.example.com/512.png',
+			expected: 'https://cdn.example.com/512.png',
+		},
+		{ pwa_icon_192: null, pwa_icon_512: null, expected: '/hub/icons/apple-touch-icon.png' },
+	])(
+		'uses Apple icon fallback $expected without changing manifest sizes',
+		async ({ pwa_icon_192, pwa_icon_512, expected }) => {
+			const { app } = createTestApi({
+				deps: {
+					sandbox: {
+						...makeTestDeps(new MemoryBucket()).sandbox,
+						appBaseUrl: 'https://hub.example.com/hub/',
+					},
+					theme: {
+						...DEFAULT_THEME_CONFIG,
+						favicon: '/favicon.ico',
+						logo: '/wide-logo.svg',
+						pwa_icon_192,
+						pwa_icon_512,
+					},
+				},
+			});
+			const response = await app.request('/apple-touch-icon.png');
+			expect(response.status).toBe(302);
+			expect(response.headers.get('location')).toBe(expected);
+			expect(response.headers.get('cache-control')).toBe('no-store');
+			expect(await (await app.request('/manifest.webmanifest')).json()).toMatchObject({
+				icons: [
+					{ src: pwa_icon_192 ?? '/hub/icons/icon-192.png', sizes: '192x192' },
+					{ src: pwa_icon_512 ?? '/hub/icons/icon-512.png', sizes: '512x512' },
+				],
+			});
+		},
+	);
+
 	it.each(['/manifest.webmanifest', '/apple-touch-icon.png'])(
 		'rejects invalid branding at %s without exposing its value',
 		async (path) => {

@@ -53,7 +53,13 @@ app.get('/apple-touch-icon.png', (c) => {
 	const theme = ThemeConfigSchema.parse(deps.theme ?? DEFAULT_THEME_CONFIG);
 	const base = baseHrefFromUrl(resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl));
 	c.header('Cache-Control', 'no-store');
-	return c.redirect(theme.apple_touch_icon ?? `${base}icons/apple-touch-icon.png`, 302);
+	return c.redirect(
+		theme.apple_touch_icon ??
+			theme.pwa_icon_192 ??
+			theme.pwa_icon_512 ??
+			`${base}icons/apple-touch-icon.png`,
+		302,
+	);
 });
 
 export default app;

@@ -83,12 +83,16 @@ export function applyThemeConfig(config: ThemeConfig): void {
 	themeColor.name = 'theme-color';
 	themeColor.content = config.primary_color ?? DEFAULT_PWA_THEME_COLOR;
 	document.head.append(themeColor);
-	if (config.favicon) {
-		const icon =
-			document.querySelector<HTMLLinkElement>('link[rel="icon"]') ?? document.createElement('link');
-		icon.rel = 'icon';
+	const favicon = config.favicon ?? config.pwa_icon_192 ?? config.pwa_icon_512;
+	const icon =
+		document.querySelector<HTMLLinkElement>('link[rel="icon"]') ?? document.createElement('link');
+	icon.rel = 'icon';
+	icon.removeAttribute('sizes');
+	if (favicon) {
 		icon.removeAttribute('type');
-		icon.href = config.favicon;
-		document.head.append(icon);
+	} else {
+		icon.type = 'image/svg+xml';
 	}
+	icon.href = favicon ?? './favicon.svg';
+	document.head.append(icon);
 }

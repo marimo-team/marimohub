@@ -23,7 +23,7 @@ The manifest request includes credentials for authentication proxies. Launch use
 the existing sign-in flow.
 
 See [theming](../../docs/theming.md#installed-app-branding) for custom app icons.
-`/apple-touch-icon.png` redirects to the configured Apple touch icon or the default.
+Apple touch icons and favicons fall back to the 192px PWA icon, then 512px, then their built-in defaults.
 
 `public/icons/app-icon.svg` is the source for the 192px, 512px, and 180px PNG icons. Its opaque
 background and centered artwork prevent clipping with icon masks.
