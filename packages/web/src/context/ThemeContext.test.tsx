@@ -141,4 +141,18 @@ describe('ThemeProvider', () => {
 		await user.click(screen.getByRole('button', { name: 'Go dark' }));
 		expect(screen.getByTestId('theme')).toHaveTextContent('dark');
 	});
+	it('keeps mode switching usable when browser storage rejects writes', async () => {
+		const user = userEvent.setup();
+		const store = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+			throw new DOMException('Quota exceeded', 'QuotaExceededError');
+		});
+		renderTheme();
+		await user.click(screen.getByRole('button', { name: 'Toggle' }));
+		expect(screen.getByTestId('theme')).toHaveTextContent('dark');
+		expect(isDarkClassOn()).toBe(true);
+		expect(document.documentElement.style.colorScheme).toBe('dark');
+		await user.click(screen.getByRole('button', { name: 'Toggle' }));
+		expect(isDarkClassOn()).toBe(false);
+		expect(store).toHaveBeenLastCalledWith(STORAGE_KEY, 'light');
+	});
 });

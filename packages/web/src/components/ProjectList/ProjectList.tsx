@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { ChevronRight, Folder, FolderPlus, Plus } from 'lucide-react';
@@ -65,7 +66,7 @@ export function ProjectList() {
 
 	return (
 		<PageContainer>
-			<title>Projects · marimohub</title>
+			<PageTitle>Projects</PageTitle>
 			<PageHeader
 				actions={
 					canCreateProjects ? (

@@ -26,3 +26,5 @@ export {
 export type { ProxyDecision } from './sandboxProxy';
 
 export { sweepAppPools } from './appPools';
+
+export type { ThemeConfig } from './theme';

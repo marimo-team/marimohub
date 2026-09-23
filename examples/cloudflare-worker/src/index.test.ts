@@ -6,6 +6,9 @@ vi.mock('@marimo-hub/compute-cloudflare', () => ({
 			readonly binding: unknown,
 			readonly options: unknown,
 		) {}
+		async proxy() {
+			return null;
+		}
 	},
 	ContainerProxy: class ContainerProxy {},
 	Sandbox: class Sandbox {},
@@ -64,6 +67,42 @@ describe('Cloudflare Worker configuration', () => {
 		NOTEBOOKS_BUCKET: {},
 		SANDBOX: {},
 	};
+
+	it('wires public deployment branding', async () => {
+		const response = await worker.fetch(
+			new Request('https://hub.example.com/api/v1/theme'),
+			{
+				...baseEnv,
+				MARIMOHUB_THEME_NAME: 'Research Hub',
+				MARIMOHUB_THEME_PRIMARY_COLOR: '#2563eb',
+			} as Env,
+			{ waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			data: { name: 'Research Hub', primary_color: '#2563eb' },
+		});
+	});
+
+	it.each([
+		{ MARIMOHUB_THEME_PRIMARY_COLOR: 'rgb(1,2,3)' },
+		{ MARIMOHUB_THEME_LOGO_DARK: 'javascript:alert(1)' },
+	])('rejects invalid theme configuration at the Worker request boundary: %j', async (theme) => {
+		const response = await worker.fetch(
+			new Request('https://hub.example.com/api/v1/theme'),
+			{ ...baseEnv, ...theme } as Env,
+			{ waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
+		);
+		expect(response.status).toBe(500);
+		expect(await response.json()).toMatchObject({
+			success: false,
+			error: {
+				code: 'CONFIG_ERROR',
+				message: expect.stringContaining(Object.keys(theme)[0]),
+			},
+		});
+	});
 
 	it.each([
 		[undefined, 'off'],

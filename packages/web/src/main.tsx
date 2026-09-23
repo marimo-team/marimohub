@@ -1,3 +1,5 @@
+import { BrandingContext } from '@/context/BrandingContext';
+import { applyThemeConfig, applyThemeMode, getInitialTheme, loadThemeConfig } from '@/lib/theme';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -16,15 +18,24 @@ const ReactQueryDevtools = import.meta.env.DEV
 		)
 	: () => null;
 
-createRoot(document.getElementById('root')!).render(
-	<StrictMode>
-		<QueryClientProvider client={queryClient}>
-			<App />
-			{import.meta.env.DEV && (
-				<Suspense fallback={null}>
-					<ReactQueryDevtools initialIsOpen={false} />
-				</Suspense>
-			)}
-		</QueryClientProvider>
-	</StrictMode>,
-);
+async function bootstrap() {
+	applyThemeMode(getInitialTheme());
+	const branding = await loadThemeConfig();
+	applyThemeConfig(branding);
+	createRoot(document.getElementById('root')!).render(
+		<StrictMode>
+			<QueryClientProvider client={queryClient}>
+				<BrandingContext value={branding}>
+					<App />
+				</BrandingContext>
+				{import.meta.env.DEV && (
+					<Suspense fallback={null}>
+						<ReactQueryDevtools initialIsOpen={false} />
+					</Suspense>
+				)}
+			</QueryClientProvider>
+		</StrictMode>,
+	);
+}
+
+void bootstrap();

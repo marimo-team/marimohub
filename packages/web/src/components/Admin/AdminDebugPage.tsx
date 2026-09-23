@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { AlertTriangle, CheckCircle2, CircleDashed, Play, Terminal, XCircle } from 'lucide-react';
 import { Button, Chip, PageContainer, PageHeader } from '@/components/ui';
 import { useAppForm } from '@/components/form';
@@ -286,7 +287,7 @@ export default function AdminDebugPage() {
 
 	return (
 		<PageContainer>
-			<title>Sandbox startup time · marimohub</title>
+			<PageTitle>Sandbox startup time</PageTitle>
 			<form
 				onSubmit={(event) => {
 					event.preventDefault();

@@ -7,6 +7,7 @@ import type { ConfigVar } from './spec';
 
 // Files that read the env surface; scanned for MARIMOHUB_*/PORT literals.
 const WIRING_SOURCES = [
+	fileURLToPath(new URL('./theme.ts', import.meta.url)),
 	fileURLToPath(new URL('./appPool.ts', import.meta.url)),
 	fileURLToPath(new URL('./warmPool.ts', import.meta.url)),
 	fileURLToPath(new URL('./sessionDefaults.ts', import.meta.url)),

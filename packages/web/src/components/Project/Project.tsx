@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { useProjectThumbnails } from '@/api/thumbnails';
 import { Thumbnail } from '@/components/Notebook/Thumbnail';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
@@ -678,7 +679,7 @@ function useProjectContent() {
 
 	return (
 		<PageContainer>
-			<title>{`${project.name} · marimohub`}</title>
+			<PageTitle>{project.name}</PageTitle>
 			<PageHeader
 				actions={
 					<div className="flex items-center gap-1.5">

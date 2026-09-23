@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { useState } from 'react';
 import { ArrowRight, Clock3, ShieldAlert } from 'lucide-react';
 import { TOKEN_GRANT_PRESETS } from '@marimo-hub/core/token-grants';
@@ -72,7 +73,7 @@ export function OAuthConsentPage({ navigate = navigateToUrl }: OAuthConsentPageP
 
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-muted/30 p-6">
-			<title>Connect an MCP client · marimohub</title>
+			<PageTitle>Connect an MCP client</PageTitle>
 			<Brand size="lg" />
 			<div className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border bg-card shadow-lg">
 				<div className="flex flex-col gap-2 border-b px-8 py-7 text-center">

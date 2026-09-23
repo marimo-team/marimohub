@@ -3,6 +3,7 @@
 @plugin 'tailwindcss-react-aria-components';
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant branded (&:where([data-custom-theme], [data-custom-theme] *));
 
 :root {
 	/* Page background is a whisper of cool grey so white cards read as elevated. */
@@ -93,6 +94,8 @@
 	--color-popover-foreground: var(--popover-foreground);
 	--color-primary: var(--primary);
 	--color-primary-foreground: var(--primary-foreground);
+	--color-primary-hover: var(--primary-hover);
+	--color-primary-hover-foreground: var(--primary-hover-foreground);
 	--color-secondary: var(--secondary);
 	--color-secondary-foreground: var(--secondary-foreground);
 	--color-muted: var(--muted);

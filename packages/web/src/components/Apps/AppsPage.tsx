@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { ArrowRight, Folder, LayoutGrid, Search } from 'lucide-react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAppsQuery, useProjectAppsQuery } from '@/api/apps';
@@ -57,7 +58,7 @@ export function AppsPage() {
 	const project = query.data?.pages[0].project;
 	return (
 		<section aria-label="Apps" className="min-w-0 flex-1 overflow-auto px-5 py-8 sm:px-8 sm:py-10">
-			<title>Apps · marimohub</title>
+			<PageTitle>Apps</PageTitle>
 			<div className="mx-auto max-w-6xl space-y-8">
 				<header className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-2">

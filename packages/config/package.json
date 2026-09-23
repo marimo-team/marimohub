@@ -13,7 +13,8 @@
 		"./compute-profiles": "./src/computeProfiles.ts",
 		"./sandbox-auth": "./src/sandboxAuth.ts",
 		"./spec": "./src/spec.ts",
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./theme": "./src/theme.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

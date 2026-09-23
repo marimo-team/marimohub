@@ -1,3 +1,4 @@
+import { useBranding } from '@/context/BrandingContext';
 import { Link, useNavigate } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
 import { ChevronDown, Copy, KeyRound, Moon, Plug, Puzzle, Shield, Sun } from 'lucide-react';
@@ -13,6 +14,7 @@ import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
 import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
 
 export function Header() {
+	const { name } = useBranding();
 	const navigate = useNavigate();
 	const { user, signOut } = useAuth();
 	const { theme, toggleTheme } = useTheme();
@@ -26,7 +28,7 @@ export function Header() {
 		<header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
 			<Link
 				to={user?.app_only ? '/apps' : '/'}
-				aria-label="marimohub home"
+				aria-label={`${name} home`}
 				className="rounded-lg outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
 				<Brand wordmarkClassName="max-md:hidden" />

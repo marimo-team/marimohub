@@ -34,6 +34,7 @@ import deepLinksApp from './routes/deepLinks';
 import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
+import themeApp from './routes/theme';
 import tokensApp from './routes/tokens';
 import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
 import oauthAuthorizationsApp from './routes/oauthAuthorizations';
@@ -392,6 +393,8 @@ export function createApi(rawDeps: ApiDeps) {
 			ok ? 200 : 503,
 		);
 	});
+
+	app.route(API_PREFIX, themeApp);
 
 	// Provider-specific auth routes (e.g. the OIDC login/callback/logout flow).
 	// Mounted before the authN guard so they stay public.

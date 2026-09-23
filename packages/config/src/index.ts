@@ -1,3 +1,4 @@
+import { parseTheme } from './theme';
 /**
  * Configuration composition root.
  *
@@ -607,6 +608,7 @@ export function createFromEnv(
 ): ApiDeps {
 	// Warns on unknown experiment IDs; no experiment currently gates behavior.
 	parseExperiments(env);
+	const theme = parseTheme(env);
 	const serviceAccounts = serviceAccountsFromEnv(env);
 	const bucket = makeStorage(env, options?.libraries);
 	const exposure = parseSandboxExposure(env);
@@ -704,6 +706,7 @@ export function createFromEnv(
 					new AppPoolStore(bucket),
 				)
 			: undefined,
+		theme,
 		services,
 		metrics,
 		bucket,

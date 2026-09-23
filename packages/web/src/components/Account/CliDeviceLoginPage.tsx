@@ -1,3 +1,4 @@
+import { PageTitle } from '@/components/ui/PageTitle';
 import { useState } from 'react';
 import { ArrowRight, CheckCircle2, Clock3, ShieldAlert, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
@@ -111,9 +112,7 @@ export function CliDeviceLoginPage({ navigate = navigateToUrl }: CliDeviceLoginP
 
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-muted/30 p-6">
-			<title>
-				{approved ? 'CLI connected · marimohub' : 'Connect a remote mohub CLI · marimohub'}
-			</title>
+			<PageTitle>{approved ? 'CLI connected' : 'Connect a remote mohub CLI'}</PageTitle>
 			<Brand size="lg" />
 			{approved ? (
 				<div className="flex w-full max-w-md flex-col items-center gap-4 rounded-xl border bg-card p-8 text-center shadow-md">

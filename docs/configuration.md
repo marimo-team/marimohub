@@ -14,6 +14,21 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 🔒 marks a sensitive value (a secret).
 
+## Theme
+
+Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.
+
+### Branding
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_THEME_NAME` | Display name and browser-title suffix. | — | `marimohub` | `Research Hub` |
+| `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/favicon.svg` |
+| `MARIMOHUB_THEME_LOGO` | SVG or PNG logo that replaces the full icon and wordmark. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/logo.svg` |
+| `MARIMOHUB_THEME_LOGO_DARK` | SVG or PNG logo for dark mode. Defaults to the main logo. | — | — | `https://hub.example.com/brand/logo-dark.svg` |
+| `MARIMOHUB_THEME_PRIMARY_COLOR` | Opaque #RGB or #RRGGBB color for actions, links, and focus. Generates readable light and dark palettes. | — | — | `#2563eb` |
+| `MARIMOHUB_THEME_SECONDARY_COLOR` | Opaque #RGB or #RRGGBB color for accents and surface tints. Defaults to the primary color. | — | — | `#7c3aed` |
+
 ## Storage
 
 Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `azure`, `fs`, `memory`, `library`, `r2`.
