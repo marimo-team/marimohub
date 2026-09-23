@@ -71,6 +71,8 @@ import {
 } from '@coreweave/cwsandbox/node';
 import type { KernelIngressPublisher } from './kernelIngress';
 import {
+	readBoundedFile,
+	collectBoundedOutput,
 	LAUNCH_MARKER_GRACE_MS,
 	launchTimeoutResult,
 	buildFindFilesCommand,
@@ -97,6 +99,7 @@ import type { Seconds } from '@marimo-hub/core/duration';
 import type { Timings } from '@marimo-hub/core/timing';
 import { logEvent } from '@marimo-hub/core/logs';
 import type {
+	BoundedReadOptions,
 	ComputeResources,
 	SandboxUserHome,
 	CreateSandboxOptions,
@@ -356,7 +359,10 @@ export interface CoreWeaveSandbox {
 			command: readonly string[],
 			options?: { cwd?: string; timeoutMs?: number },
 		): Promise<ProcessResult>;
-		start(command: readonly string[], options?: { cwd?: string }): Promise<CommandProcess>;
+		start(
+			command: readonly string[],
+			options?: { cwd?: string; timeoutMs?: number; bufferedMaxKiB?: number },
+		): Promise<CommandProcess>;
 	};
 	readonly files: {
 		readText(path: string): Promise<string>;
@@ -630,6 +636,25 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		const sandbox = await this.ensure();
 		this.execCount++;
+		if (options?.maxOutputBytes !== undefined) {
+			const proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(cmd)], {
+				timeoutMs: options.timeout,
+				bufferedMaxKiB: 0,
+			});
+			try {
+				const { stdout, stderr, result } = await collectBoundedOutput(
+					{
+						stdout: iterableToStream(proc.stdout),
+						stderr: iterableToStream(proc.stderr),
+						wait: (signal) => proc.wait({ signal }),
+					},
+					{ maxOutputBytes: options.maxOutputBytes, timeout: options.timeout },
+				);
+				return execResult(result.exitCode === 0, stdout, stderr);
+			} finally {
+				void cancelLaunchProcess(proc);
+			}
+		}
 		const res = await sandbox.commands.run(['sh', '-lc', this.withEnv(cmd)], {
 			timeoutMs: options?.timeout,
 		});
@@ -640,6 +665,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const sandbox = await this.ensure();
 		const proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(cmd)]);
 		return iterableToStream(proc.stdout);
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

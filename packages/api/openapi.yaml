@@ -18809,6 +18809,8 @@ paths:
       description: Batch-resolve opaque user ids (the auth `sub` stored as a notebook
         `author` or session `user_id`) into `{ id, email, name, picture_url }`.
         Ids with no recorded identity are omitted from the result map.
+        Authenticated users may resolve display identities without project
+        membership. Credential grants still restrict lookup of other users.
       parameters:
         - schema:
             type: string
@@ -18841,6 +18843,18 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
           content:
             application/json:
               schema:

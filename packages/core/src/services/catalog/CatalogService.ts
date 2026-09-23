@@ -5,7 +5,16 @@ import { NotInitializedError, PreconditionFailedError } from '../../errors';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
-import { CURRENT_SNAPSHOT_VERSION, CatalogSchema, readStored, SnapshotSchema } from '../../schema';
+import { mapWithConcurrency } from '../../concurrency';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { memberRefMatchesSubject, normalizeEmail } from '../../identityMatch';
+import {
+	CURRENT_SNAPSHOT_VERSION,
+	CatalogSchema,
+	ProjectSchema,
+	readStored,
+	SnapshotSchema,
+} from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import { withCasRetry } from './cas';
 import type { CasRetryOptions } from './cas';
@@ -31,7 +40,14 @@ export function upgradeSnapshot(raw: Snapshot): Snapshot {
 	return raw;
 }
 
+type ProjectInvolvement = {
+	userIds: Map<string, ProjectId[]>;
+	emails: Map<string, ProjectId[]>;
+};
+
 export class CatalogService {
+	private involvementIndex?: { snapshotKey: string; value: Promise<ProjectInvolvement> };
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
@@ -94,12 +110,86 @@ export class CatalogService {
 	}
 
 	async getCurrentSnapshot(): Promise<Snapshot> {
+		return this.readSnapshot(await this.readCurrentCatalog());
+	}
+
+	async hasProjectInvolvement(user: { id: UserId; email: string }): Promise<boolean> {
+		// Refresh the pointer on every check; cache candidates, never authorization decisions.
+		const catalog = await this.readCurrentCatalog();
+		if (this.involvementIndex?.snapshotKey !== catalog.current_snapshot_key) {
+			const value = this.readSnapshot(catalog).then(async (snapshot) => {
+				const userIds = new Map<string, ProjectId[]>();
+				const emails = new Map<string, ProjectId[]>();
+				const legacy: ProjectId[] = [];
+				const add = (index: Map<string, ProjectId[]>, key: string, project: ProjectId) => {
+					const candidates = index.get(key) ?? [];
+					candidates.push(project);
+					index.set(key, candidates);
+				};
+				for (const project of snapshot.projects) {
+					if (project.status === 'deleted') continue;
+					add(userIds, project.owner, project.id);
+					if (project.member_ids === undefined) legacy.push(project.id);
+					for (const id of project.member_ids ?? []) add(userIds, id, project.id);
+					for (const email of project.member_emails ?? []) {
+						add(emails, normalizeEmail(email), project.id);
+					}
+				}
+				await mapWithConcurrency(legacy, BUCKET_SCAN_CONCURRENCY, async (id) => {
+					const project = await this.readProject(id);
+					if (!project || project.status === 'deleted') return;
+					add(userIds, project.owner, id);
+					for (const member of project.members) {
+						if (member.user_id !== undefined) add(userIds, member.user_id, id);
+						if (member.email !== undefined) add(emails, normalizeEmail(member.email), id);
+					}
+				});
+				return { userIds, emails };
+			});
+			this.involvementIndex = { snapshotKey: catalog.current_snapshot_key, value };
+		}
+		const cached = this.involvementIndex;
+		let index: ProjectInvolvement;
+		try {
+			index = await cached.value;
+		} catch (error) {
+			if (this.involvementIndex === cached) this.involvementIndex = undefined;
+			throw error;
+		}
+		const candidates = new Set([
+			...(index.userIds.get(user.id) ?? []),
+			...(index.emails.get(normalizeEmail(user.email)) ?? []),
+		]);
+		// A failed roster projection must not preserve a revoked directory grant.
+		for (const id of candidates) {
+			const project = await this.readProject(id);
+			if (!project || project.status === 'deleted') continue;
+			if (
+				project.owner === user.id ||
+				project.members.some((m) => memberRefMatchesSubject(m, user))
+			) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private async readProject(id: ProjectId) {
+		const key = paths.project(id).meta;
+		const object = await this.bucket.get(key);
+		return object ? readStored(ProjectSchema, object, key) : null;
+	}
+
+	private async readCurrentCatalog(): Promise<Catalog> {
 		const catalogObj = await this.bucket.get(paths.catalog);
 		if (!catalogObj) {
 			throw new NotInitializedError('Catalog not found — call initialize() first');
 		}
 
-		const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
+		return readStored(CatalogSchema, catalogObj, paths.catalog);
+	}
+
+	private async readSnapshot(catalog: Catalog): Promise<Snapshot> {
 		const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
 		if (!snapshotObj) {
 			throw new NotInitializedError(`Snapshot ${catalog.current_snapshot_id} not found`);

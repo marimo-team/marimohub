@@ -849,6 +849,28 @@ describe('createFromEnv sandbox-host isolation guard', () => {
 		MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
 	};
 
+	it('requires an isolated app URL for proxy-header auth without OIDC settings', () => {
+		const proxy = {
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+			MARIMOHUB_STORAGE_BACKEND: 'memory',
+			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+			MARIMOHUB_COMPUTE_BACKEND: 'none',
+			MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+		};
+		expect(() => createFromEnv(proxy)).toThrow(/MARIMOHUB_APP_BASE_URL/);
+		expect(() =>
+			createFromEnv({ ...proxy, MARIMOHUB_APP_BASE_URL: 'https://kernels.example.net' }),
+		).toThrow(/shares an origin/);
+		const deps = createFromEnv({
+			...proxy,
+			MARIMOHUB_APP_BASE_URL: 'https://hub.example.net',
+			MARIMOHUB_AUTH_PROXY_HEADER: 'X-Custom-Email, X-Custom-User',
+		});
+		expect(deps.sandbox.hostname).toBe('kernels.example.net');
+		expect(deps.sandbox.credentialHeaders).toEqual(['X-Custom-Email', 'X-Custom-User']);
+	});
+
 	it('throws when the sandbox host equals the app host', () => {
 		expect(() =>
 			createFromEnv({ ...env, MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'hub.example.com' }),

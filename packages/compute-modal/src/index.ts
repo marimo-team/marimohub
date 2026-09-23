@@ -6,6 +6,9 @@ import {
 	SandboxFilesystemNotADirectoryError,
 } from 'modal';
 import {
+	validateOutputBudget,
+	readBoundedFile,
+	collectBoundedOutput,
 	buildLaunchCommand,
 	buildGitCloneCommand,
 	errorMessage,
@@ -26,6 +29,7 @@ import { NotFoundError } from '@marimo-hub/core/errors';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { SandboxId } from '@marimo-hub/core/ids';
 import type {
+	BoundedReadOptions,
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
@@ -68,6 +72,7 @@ export interface ModalConfig {
 }
 
 export interface ModalProcessLike {
+	stdin: Pick<WritableStream<string>, 'close'>;
 	stdout: ReadableStream<string>;
 	stderr: ReadableStream<string>;
 	wait(): Promise<number>;
@@ -129,6 +134,29 @@ export interface ModalClientLike {
 		list(options: { appId: string; tags: Record<string, string> }): AsyncIterable<ModalSandboxLike>;
 	};
 }
+
+// Modal exposes stdin EOF, but no process signal API. Keep cancellation outside
+// the command's process group so closing stdin also stops surviving descendants.
+const BOUNDED_EXEC = `import os, signal, subprocess, sys, threading
+child = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, start_new_session=True)
+def kill():
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+def watch_stdin():
+    os.read(0, 1)
+    kill()
+threading.Thread(target=watch_stdin, daemon=True).start()
+timeout = float(sys.argv[1]) / 1000
+if timeout > 0:
+    timer = threading.Timer(timeout, kill)
+    timer.daemon = True
+    timer.start()
+try:
+    sys.exit(child.wait())
+finally:
+    kill()`;
 
 const DEFAULT_APP_NAME = 'marimohub';
 const KERNEL_PORT = 2718;
@@ -293,9 +321,31 @@ class ModalSandboxInstance implements SandboxInstance {
 	}
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
-		return runProcess(
-			await this.spawn(['sh', '-lc', this.withDefaults(cmd)], { timeout: options?.timeout }),
+		if (options?.maxOutputBytes === undefined) {
+			return runProcess(
+				await this.spawn(['sh', '-lc', this.withDefaults(cmd)], {
+					timeout: options?.timeout,
+				}),
+			);
+		}
+		validateOutputBudget(options.maxOutputBytes);
+		const timeout = options.timeout ?? 10_000;
+		if (!Number.isFinite(timeout) || timeout < 0)
+			throw new RangeError('Sandbox output timeout must be finite and nonnegative');
+		const process = await this.spawn(
+			['python3', '-I', '-c', BOUNDED_EXEC, String(timeout), 'sh', '-lc', this.withDefaults(cmd)],
+			// Let the supervisor kill its process group before the provider deadline.
+			{ timeout: timeout > 0 ? timeout + 1000 : 0 },
 		);
+		try {
+			const { stdout, stderr, result } = await collectBoundedOutput(
+				{ stdout: process.stdout, stderr: process.stderr, wait: () => process.wait() },
+				{ maxOutputBytes: options.maxOutputBytes, timeout },
+			);
+			return execResult(result === 0, stdout, stderr);
+		} finally {
+			await process.stdin.close().catch(() => {});
+		}
 	}
 
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -305,6 +355,10 @@ class ModalSandboxInstance implements SandboxInstance {
 		void readStream(process.stderr).catch(() => {});
 		void process.wait().catch(() => {});
 		return process.stdout;
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

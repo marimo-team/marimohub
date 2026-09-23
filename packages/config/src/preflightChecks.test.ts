@@ -154,6 +154,19 @@ describe('sandbox.isolation check', () => {
 		MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
 	};
 
+	it('reports unknown proxy-header app origins as fatal, never verified', async () => {
+		const { by, report } = await run(
+			{
+				MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+			},
+			makeDeps(),
+		);
+		expect(by('sandbox.isolation')).toMatchObject({ status: 'fail', fatal: true });
+		expect(by('sandbox.isolation')?.message).toContain('MARIMOHUB_APP_BASE_URL');
+		expect(report.fatal).toBe(true);
+	});
+
 	it.each(['sandboxes.example.net', 'sandboxes.example.com'])(
 		'accepts kernel host %s',
 		async (hostname) => {

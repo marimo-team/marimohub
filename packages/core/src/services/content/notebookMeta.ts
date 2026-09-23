@@ -14,6 +14,7 @@ interface BuildNotebookMetaArgs {
 	runtime?: NotebookMeta['runtime'];
 	baseImage?: string;
 	computeProfile?: string;
+	securityLabels?: NotebookMeta['security_labels'];
 }
 
 /**
@@ -36,6 +37,7 @@ export function buildNotebookMeta(args: BuildNotebookMetaArgs): NotebookMeta {
 		runtime: args.runtime,
 		base_image: args.baseImage,
 		compute_profile: args.computeProfile,
+		...(args.securityLabels ? { security_labels: args.securityLabels } : {}),
 	};
 }
 

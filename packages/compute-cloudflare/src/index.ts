@@ -1,6 +1,9 @@
 import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 import type { Sandbox } from '@cloudflare/sandbox';
 import {
+	readBoundedFile,
+	validateOutputBudget,
+	waitWithSignal,
 	base64Encode,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
@@ -13,6 +16,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type {
+	BoundedReadOptions,
 	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
@@ -68,6 +72,72 @@ async function waitForTunnelReady(url: string): Promise<void> {
 	}
 }
 
+async function collectExecOutput(
+	stream: ReadableStream<Uint8Array>,
+	maxOutputBytes: number,
+	signal: AbortSignal,
+): Promise<ExecResult> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	// Allow JSON escaping, repeated completion output, and 128 framing bytes per
+	// single-byte output event. Empty/control events share the fixed allowance.
+	let wireRemaining = Math.min(Number.MAX_SAFE_INTEGER, maxOutputBytes * (12 + 128) + 64 * 1024);
+	const frameLimit = Math.min(Number.MAX_SAFE_INTEGER, maxOutputBytes * 6 + 64 * 1024);
+	let frameBytes = 0;
+	let outputRemaining = maxOutputBytes;
+	let pending = '';
+	let stdout = '';
+	let stderr = '';
+	let success = false;
+	try {
+		for (;;) {
+			const { done, value } = await waitWithSignal(reader.read(), signal);
+			if (done) break;
+			wireRemaining -= value.byteLength;
+			if (wireRemaining < 0) throw new Error('Sandbox SSE wire limit exceeded');
+			for (let offset = 0; offset < value.byteLength; ) {
+				const newline = value.indexOf(10, offset);
+				const end = newline === -1 ? value.byteLength : newline + 1;
+				frameBytes += end - offset;
+				if (frameBytes > frameLimit) throw new Error('Sandbox SSE frame limit exceeded');
+				pending += decoder.decode(value.subarray(offset, end), { stream: true });
+				offset = end;
+				if (newline === -1) continue;
+				const line = pending.slice(0, -1);
+				pending = '';
+				frameBytes = 0;
+				if (!line.startsWith('data:')) continue;
+				const event = JSON.parse(line.slice(5)) as {
+					type: string;
+					data?: unknown;
+					exitCode?: unknown;
+				};
+				if (event.type === 'stdout' || event.type === 'stderr') {
+					if (typeof event.data !== 'string') throw new Error('Malformed sandbox output event');
+					outputRemaining -= encoder.encode(event.data).byteLength;
+					if (outputRemaining < 0) throw new Error('Sandbox output limit exceeded');
+					if (event.type === 'stdout') stdout += event.data;
+					else stderr += event.data;
+				} else if (event.type === 'complete') {
+					if (!Number.isInteger(event.exitCode))
+						throw new Error('Malformed sandbox completion event');
+					success = event.exitCode === 0;
+				} else if (event.type === 'error') {
+					throw new Error('Sandbox command failed');
+				}
+			}
+		}
+		if ((pending + decoder.decode()).trim()) throw new Error('Incomplete sandbox output event');
+		return execResult(success, stdout, stderr);
+	} catch (error) {
+		void reader.cancel(error).catch(() => {});
+		throw error;
+	} finally {
+		reader.releaseLock();
+	}
+}
+
 class CloudflareSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = true;
 	private sandbox: SandboxType;
@@ -81,6 +151,26 @@ class CloudflareSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		const command = this.withDefaults(cmd);
+		if (options?.maxOutputBytes !== undefined) {
+			validateOutputBudget(options.maxOutputBytes);
+			const timeout = options.timeout ?? 10_000;
+			if (
+				Number.isNaN(timeout) ||
+				timeout < 0 ||
+				(Number.isFinite(timeout) && timeout > 2 ** 31 - 1)
+			)
+				throw new RangeError('Sandbox output timeout exceeds timer range');
+			const delay = Math.ceil(timeout);
+			const signal =
+				timeout > 0 && Number.isFinite(timeout)
+					? AbortSignal.timeout(delay)
+					: new AbortController().signal;
+			const stream = await this.sandbox.execStream(command, {
+				timeout: options.timeout === undefined ? undefined : delay,
+				signal,
+			});
+			return collectExecOutput(stream, options.maxOutputBytes, signal);
+		}
 		const res =
 			options?.timeout === undefined
 				? await this.sandbox.exec(command)
@@ -92,6 +182,10 @@ class CloudflareSandboxInstance implements SandboxInstance {
 		return this.sandbox.execStream(this.withDefaults(cmd), {
 			timeout: options?.timeout,
 		});
+	}
+
+	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
+		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

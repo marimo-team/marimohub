@@ -19,6 +19,7 @@ export { scheduleProjectAlert } from './notifications';
 export {
 	authorizeProxyRequest,
 	CREDENTIAL_HEADERS,
+	isCredentialHeader,
 	forwardHttp,
 	sandboxProxyMiddleware,
 	UNSAFE_RESPONSE_HEADERS,

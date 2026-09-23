@@ -118,6 +118,13 @@ export function readFileFailure(
 	return { success: false, content: '', error: { code } };
 }
 
+export interface BoundedReadOptions {
+	/** Nonnegative safe integer whose base64 size is also a safe integer. */
+	maxBytes: number;
+	/** Positive, at most 2^31 - 1 ms; fractional milliseconds round up. */
+	timeoutMs: number;
+}
+
 export interface FileInfo {
 	name: string;
 	absolutePath: string;
@@ -161,6 +168,7 @@ export interface ExecStreamOptions {
 
 export interface ExecOptions {
 	timeout?: number;
+	maxOutputBytes?: number;
 }
 
 /** One file to write into a sandbox. `Uint8Array` content is written verbatim. */
@@ -189,6 +197,8 @@ export interface SandboxInstance {
 	exec(cmd: string, options?: ExecOptions): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
 	readFile(path: string): Promise<ReadFileResult>;
+	/** Reject symlinks/nonregular files; cap transport bytes and cancel on deadline/overflow. */
+	readFileBounded?(path: string, options: BoundedReadOptions): Promise<ReadFileResult>;
 	/**
 	 * List entries below a directory. An existing non-directory path returns
 	 * `NOT_A_DIRECTORY`; it must never succeed with an empty file list.

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
+import { Readable } from 'node:stream';
 import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -36,6 +38,7 @@ function textStream(value: string): ReadableStream<string> {
 
 function processResult(exitCode = 0, stdout = '', stderr = ''): ModalProcessLike {
 	return {
+		stdin: { close: async () => {} },
 		stdout: textStream(stdout),
 		stderr: textStream(stderr),
 		wait: async () => exitCode,
@@ -52,6 +55,7 @@ function pendingProcessResult(): {
 	});
 	return {
 		process: {
+			stdin: { close: async () => {} },
 			stdout: textStream(''),
 			stderr: textStream(''),
 			wait: () => wait,
@@ -461,6 +465,7 @@ describe('ModalCompute', () => {
 			const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
 			if (!nonce) return processResult();
 			return {
+				stdin: { close: async () => {} },
 				stdout: textStream('kernel output\n'),
 				stderr: textStream(
 					`__MARIMOHUB_LAUNCH_${nonce}__{"event":"ready","setupMs":8,"waitportMs":13}\n`,
@@ -491,6 +496,7 @@ describe('ModalCompute', () => {
 		/** A process whose streams never emit and whose wait never resolves. */
 		function hangingProcess(): ModalProcessLike {
 			return {
+				stdin: { close: async () => {} },
 				stdout: new ReadableStream<string>({ start() {} }),
 				stderr: new ReadableStream<string>({ start() {} }),
 				wait: () => new Promise<number>(() => {}),
@@ -547,6 +553,7 @@ describe('ModalCompute', () => {
 				const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
 				if (!nonce) return processResult();
 				return {
+					stdin: { close: async () => {} },
 					stdout: new ReadableStream<string>({ start() {} }),
 					stderr: new ReadableStream<string>({
 						start(controller) {
@@ -594,6 +601,7 @@ describe('ModalCompute', () => {
 				const nonce = command[2]?.match(/[a-f0-9]{32}/)?.[0];
 				if (!nonce) return processResult();
 				return {
+					stdin: { close: async () => {} },
 					stdout: new ReadableStream<string>({ start() {} }),
 					stderr: new ReadableStream<string>({
 						start(controller) {
@@ -716,6 +724,7 @@ describe('ModalCompute', () => {
 			try {
 				const sandbox = new FakeSandbox();
 				sandbox.execImpl = () => ({
+					stdin: { close: async () => {} },
 					stdout: textStream(''),
 					stderr: textStream(''),
 					wait: () => Promise.reject(new Error('modal transport failure')),
@@ -757,6 +766,7 @@ function contractWorld() {
 					// A live kernel: the ready marker arrives on stderr and the process
 					// keeps running (wait never resolves).
 					return {
+						stdin: { close: async () => {} },
 						stdout: textStream(''),
 						stderr: textStream(launch.transcript),
 						wait: () => new Promise<number>(() => {}),
@@ -793,4 +803,84 @@ computeContract('ModalCompute', () => makeCompute(contractWorld()), {
 				]),
 		},
 	},
+});
+
+describe('bounded file transport', () => {
+	it.each([true, false])(
+		'cancels stdout, stderr, and the remote process (overflow: %s)',
+		async (overflow) => {
+			const world = makeWorld();
+			const sandbox = new FakeSandbox();
+			const stdoutCancel = vi.fn();
+			const stderrCancel = vi.fn();
+			const close = vi.fn(async () => {});
+			sandbox.execImpl = () => ({
+				stdin: { close },
+				stdout: new ReadableStream({
+					start(c) {
+						if (overflow) c.enqueue('12345');
+					},
+					cancel: stdoutCancel,
+				}),
+				stderr: new ReadableStream({ cancel: stderrCancel }),
+				wait: () => new Promise(() => {}),
+			});
+			world.existing.set(SANDBOX_ID, sandbox);
+			await expect(
+				makeCompute(world)
+					.create(SANDBOX_ID)
+					.exec('read', {
+						maxOutputBytes: 4,
+						timeout: overflow ? 10_000 : 20,
+					}),
+			).rejects.toThrow(overflow ? 'byte limit' : 'timed out');
+			expect(stdoutCancel).toHaveBeenCalledOnce();
+			expect(stderrCancel).toHaveBeenCalledOnce();
+			expect(close).toHaveBeenCalledOnce();
+		},
+	);
+
+	it('kills the supervised command on overflow without waiting for the remote deadline', async (context) => {
+		if (
+			process.platform === 'win32' ||
+			spawnSync('python3', ['--version']).status !== 0 ||
+			spawnSync('sh', ['-c', 'command -v sleep']).status !== 0
+		) {
+			context.skip('Requires Python 3 and a POSIX shell with sleep');
+		}
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		let child: ReturnType<typeof spawn> | undefined;
+		let exited: Promise<unknown> | undefined;
+		sandbox.execImpl = ([command, ...args]) => {
+			child = spawn(command, args);
+			exited = new Promise((resolve, reject) => {
+				child!.once('exit', resolve);
+				child!.once('error', reject);
+			});
+			return {
+				stdin: {
+					close: async () => {
+						child!.stdin!.end();
+					},
+				},
+				stdout: Readable.toWeb(child.stdout!) as ReadableStream<string>,
+				stderr: Readable.toWeb(child.stderr!) as ReadableStream<string>,
+				wait: async () => Number(await exited),
+			};
+		};
+		world.existing.set(SANDBOX_ID, sandbox);
+		try {
+			await expect(
+				makeCompute(world).create(SANDBOX_ID).exec('printf overflow; sleep 60', {
+					maxOutputBytes: 1,
+					timeout: 60_000,
+				}),
+			).rejects.toThrow('byte limit');
+			await exited;
+			expect(child!.exitCode).not.toBeNull();
+		} finally {
+			child?.kill('SIGKILL');
+		}
+	}, 3000);
 });

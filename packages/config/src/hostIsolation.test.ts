@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { checkSandboxHostIsolation, sandboxHostIsolationMessage } from './hostIsolation';
+import {
+	checkSandboxHostIsolation,
+	sandboxHostIsolationMessage,
+	sandboxHostIsolationRemediation,
+} from './hostIsolation';
 
 describe('checkSandboxHostIsolation', () => {
 	it('flags a same-origin sandbox host as non-isolated', () => {
@@ -40,16 +44,19 @@ describe('checkSandboxHostIsolation', () => {
 		expect(result.reason).toBe('unverifiable-redirect');
 	});
 
-	it.each(['::1', 'hub:bad-port'])('reports an invalid sandbox hostname: %s', (sandboxHost) => {
-		const result = checkSandboxHostIsolation({
-			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandboxHost,
-			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/callback',
-		});
-		expect(result).toMatchObject({ isolated: false, reason: 'invalid-sandbox-host' });
-		expect(sandboxHostIsolationMessage(result)).toBe(
-			`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) is not a valid hostname, so isolation cannot be verified.`,
-		);
-	});
+	it.each(['::1', 'hub:bad-port', '.', '..', '...'])(
+		'reports an invalid sandbox hostname: %s',
+		(sandboxHost) => {
+			const result = checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandboxHost,
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/callback',
+			});
+			expect(result).toMatchObject({ isolated: false, reason: 'invalid-sandbox-host' });
+			expect(sandboxHostIsolationMessage(result)).toBe(
+				`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) is not a valid hostname, so isolation cannot be verified.`,
+			);
+		},
+	);
 
 	it.each([undefined, 'https://hub.example.com/callback'])(
 		'rejects a URL in the sandbox hostname with redirect %s',
@@ -106,5 +113,160 @@ describe('hostname boundaries', () => {
 				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: `https://${app}/callback`,
 			}).isolated,
 		).toBe(isolated);
+	});
+});
+
+describe('app URL isolation across authentication backends', () => {
+	it.each([
+		['https://hub.example.com', 'hub.example.com', false],
+		['https://hub.example.com', 'kernels.example.com', true],
+		['https://hub.example.com', 'kernels.example.net', true],
+		[undefined, 'kernels.example.net', false],
+		['invalid', 'kernels.example.net', false],
+		['ftp://hub.example.com', 'kernels.example.net', false],
+	])('checks app %s and sandbox %s', (app, sandbox, isolated) => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+				MARIMOHUB_APP_BASE_URL: app,
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandbox,
+			}).isolated,
+		).toBe(isolated);
+	});
+
+	it('rejects conflicting origins and malformed fallback even with a valid app URL', () => {
+		for (const redirect of [
+			'https://other.example.org/callback',
+			'http://hub.example.com/callback',
+			'invalid',
+		]) {
+			expect(
+				checkSandboxHostIsolation({
+					MARIMOHUB_APP_BASE_URL: 'https://hub.example.com',
+					MARIMOHUB_AUTH_OIDC_REDIRECT_URI: redirect,
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+				}).isolated,
+			).toBe(false);
+		}
+	});
+});
+
+describe('configured origin edge cases', () => {
+	it.each(['', ' ', '\t\n'])('uses the redirect when the app URL is blank: %j', (appUrl) => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+				MARIMOHUB_APP_BASE_URL: appUrl,
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/callback',
+			}),
+		).toMatchObject({ isolated: true, appHost: 'hub.example.com' });
+	});
+
+	it.each(['MARIMOHUB_APP_BASE_URL', 'MARIMOHUB_AUTH_OIDC_REDIRECT_URI'] as const)(
+		'ignores surrounding whitespace in %s',
+		(key) => {
+			expect(
+				checkSandboxHostIsolation({
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+					[key]: ' \nhttps://hub.example.com/callback\t ',
+				}),
+			).toMatchObject({ isolated: true, appHost: 'hub.example.com' });
+		},
+	);
+
+	it('rejects a nonblank invalid app URL even with a valid redirect', () => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+				MARIMOHUB_APP_BASE_URL: ' invalid ',
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/callback',
+			}),
+		).toMatchObject({ isolated: false, reason: 'unverifiable-origin' });
+	});
+
+	it.each(['MARIMOHUB_APP_BASE_URL', 'MARIMOHUB_AUTH_OIDC_REDIRECT_URI'] as const)(
+		'rejects malformed or credential-bearing origins from %s',
+		(key) => {
+			for (const value of [
+				'',
+				' ',
+				'/relative',
+				'//hub.example.com',
+				'https://user:secret@hub.example.com',
+				'https://user@hub.example.com',
+				'file:///tmp/app',
+				'data:text/html,hello',
+			]) {
+				const result = checkSandboxHostIsolation({
+					MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+					[key]: value,
+				});
+				expect(result.isolated, value).toBe(false);
+				expect(result.reason).toMatch(/^unverifiable-/);
+			}
+		},
+	);
+
+	it.each([
+		['https://HUB.EXAMPLE.COM:443/app', 'https://hub.example.com/callback?state=123', true],
+		['http://hub.example.com:80', 'http://hub.example.com/callback', true],
+		['https://hub.example.com:8443', 'https://hub.example.com:8443/callback', true],
+		['https://hub.example.com:8443', 'https://hub.example.com/callback', false],
+		['https://hub.example.com', 'http://hub.example.com/callback', false],
+	])('compares complete origins: %s and %s', (app, callback, isolated) => {
+		const result = checkSandboxHostIsolation({
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.net',
+			MARIMOHUB_APP_BASE_URL: app,
+			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: callback,
+		});
+		expect(result.isolated).toBe(isolated);
+		if (!isolated) expect(result.reason).toBe('conflicting-origins');
+	});
+
+	it('does not require an app origin when no public sandbox host is configured', () => {
+		expect(checkSandboxHostIsolation({})).toEqual({ isolated: true });
+	});
+});
+
+describe('canonical app origins', () => {
+	it.each([
+		'http://.',
+		'https://..',
+		'https://...',
+		'https:path',
+		'https:/path',
+		'https:///path',
+		'https:\\path',
+	])('rejects a malformed app URL without throwing: %s', (url) => {
+		for (const key of ['MARIMOHUB_APP_BASE_URL', 'MARIMOHUB_AUTH_OIDC_REDIRECT_URI'] as const) {
+			const result = checkSandboxHostIsolation({
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
+				[key]: url,
+			});
+			expect(result).toMatchObject({
+				isolated: false,
+				reason: key === 'MARIMOHUB_APP_BASE_URL' ? 'unverifiable-origin' : 'unverifiable-redirect',
+			});
+		}
+	});
+
+	it.each([
+		'https://intranet',
+		'http://localhost:3000',
+		'http://127.0.0.1:3000',
+		'http://[::1]:3000',
+	])('preserves absolute private-network origins: %s', (url) => {
+		expect(
+			checkSandboxHostIsolation({
+				MARIMOHUB_APP_BASE_URL: url,
+				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
+			}).isolated,
+		).toBe(true);
+	});
+
+	it('describes both accepted origin settings in the remediation', () => {
+		const message = sandboxHostIsolationRemediation({ reason: 'unverifiable-origin' });
+		expect(message).toContain('MARIMOHUB_APP_BASE_URL or MARIMOHUB_AUTH_OIDC_REDIRECT_URI');
+		expect(message).toContain('same origin');
 	});
 });

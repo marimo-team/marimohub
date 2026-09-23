@@ -1,11 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ACTOR, makeCatalog, makeSnapshot, MemoryBucket, setupTestEnv } from '../../testing';
+import {
+	ACTOR,
+	makeCatalog,
+	makeProject,
+	makeSnapshot,
+	makeSnapshotProjectEntry,
+	MemoryBucket,
+	setupTestEnv,
+	uid,
+} from '../../testing';
 import { ConflictError, NotInitializedError, PreconditionFailedError } from '../../errors';
 import { createNotebookId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
 import { EventSchema, SnapshotSchema } from '../../schema';
-import type { Snapshot } from '../../schema';
+import type { Project, Snapshot, SnapshotProjectEntry } from '../../schema';
 import { CatalogService } from './CatalogService';
 import { EventService } from './EventService';
 
@@ -19,6 +28,195 @@ describe('CatalogService', () => {
 	beforeEach(async () => {
 		bucket = new MemoryBucket();
 		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
+	});
+
+	describe('hasProjectInvolvement', () => {
+		const outsider = { id: uid('outsider'), email: 'outsider@example.com' };
+
+		beforeEach(async () => {
+			await catalog.initialize(ACTOR);
+		});
+
+		async function seedProject(project: Project, projection: Partial<SnapshotProjectEntry> = {}) {
+			await bucket.put(paths.project(project.id).meta, JSON.stringify(project));
+			await catalog.mutateSnapshot('seed', ACTOR, (snapshot) => ({
+				...snapshot,
+				projects: [
+					...snapshot.projects,
+					makeSnapshotProjectEntry({
+						id: project.id,
+						owner: project.owner,
+						status: project.status,
+						member_ids: project.members.flatMap((m) => (m.user_id ? [m.user_id] : [])),
+						member_emails: project.members.flatMap((m) => (m.email ? [m.email] : [])),
+						...projection,
+					}),
+				],
+			}));
+		}
+
+		it('shares the index across concurrent and repeated denials while refreshing the pointer', async () => {
+			const get = vi.spyOn(bucket, 'get');
+			expect(
+				await Promise.all(Array.from({ length: 5 }, () => catalog.hasProjectInvolvement(outsider))),
+			).toEqual([false, false, false, false, false]);
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+			expect(get.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(6);
+			expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(
+				1,
+			);
+		});
+
+		it.each(['owner', 'member_ids', 'member_emails'] as const)(
+			'observes grants and authoritative revocations immediately for %s',
+			async (membership) => {
+				const user = { ...outsider, email: 'OUTSIDER@example.com' };
+				expect(await catalog.hasProjectInvolvement(user)).toBe(false);
+				const project = makeProject({
+					owner: membership === 'owner' ? user.id : ACTOR,
+					members:
+						membership === 'owner'
+							? []
+							: [
+									membership === 'member_ids'
+										? { user_id: user.id, role: 'viewer' }
+										: { email: outsider.email, role: 'viewer' },
+								],
+				});
+				await seedProject(project);
+				expect(await catalog.hasProjectInvolvement(user)).toBe(true);
+				const pointer = await bucket.get(paths.catalog);
+				await bucket.put(
+					paths.project(project.id).meta,
+					JSON.stringify({ ...project, owner: ACTOR, members: [] }),
+				);
+				expect(await catalog.hasProjectInvolvement(user)).toBe(false);
+				expect((await bucket.get(paths.catalog))?.etag).toBe(pointer?.etag);
+			},
+		);
+
+		it('loads authoritative membership when a legacy roster has no member_ids', async () => {
+			const project = makeProject({ members: [{ user_id: outsider.id, role: 'viewer' }] });
+			await seedProject(project, { member_ids: undefined, member_emails: undefined });
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+			await bucket.put(paths.project(project.id).meta, JSON.stringify({ ...project, members: [] }));
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+		});
+
+		it('normalizes both projected and authoritative emails and the caller email', async () => {
+			await seedProject(
+				makeProject({ members: [{ email: 'Outsider@Example.COM', role: 'viewer' }] }),
+				{ member_emails: ['  Outsider@Example.COM '] },
+			);
+			expect(
+				await catalog.hasProjectInvolvement({ ...outsider, email: ' OUTSIDER@EXAMPLE.com ' }),
+			).toBe(true);
+		});
+
+		it.each(['deleted', 'missing'] as const)(
+			'rejects a cached candidate whose authoritative project is %s',
+			async (state) => {
+				const project = makeProject({ owner: outsider.id });
+				await seedProject(project);
+				expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+				if (state === 'missing') await bucket.delete(paths.project(project.id).meta);
+				else
+					await bucket.put(
+						paths.project(project.id).meta,
+						JSON.stringify({ ...project, status: 'deleted' }),
+					);
+				expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+			},
+		);
+
+		it('checks each candidate only once and continues past a stale membership', async () => {
+			const stale = makeProject({ members: [{ user_id: outsider.id, role: 'viewer' }] });
+			const active = makeProject({
+				owner: outsider.id,
+				members: [
+					{ user_id: outsider.id, role: 'admin' },
+					{ email: outsider.email, role: 'viewer' },
+				],
+			});
+			await seedProject(stale);
+			await seedProject(active);
+			await bucket.put(paths.project(stale.id).meta, JSON.stringify({ ...stale, members: [] }));
+			const get = vi.spyOn(bucket, 'get');
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+			expect(get.mock.calls.filter(([key]) => key === paths.project(stale.id).meta)).toHaveLength(
+				1,
+			);
+			expect(get.mock.calls.filter(([key]) => key === paths.project(active.id).meta)).toHaveLength(
+				1,
+			);
+		});
+
+		it('does not load unrelated modern projects for repeated denials', async () => {
+			await seedProject(makeProject());
+			const get = vi.spyOn(bucket, 'get');
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+			expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(0);
+			expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(
+				1,
+			);
+		});
+
+		it('indexes legacy rosters once across concurrent and repeated denials', async () => {
+			const project = makeProject();
+			await seedProject(project, { member_ids: undefined });
+			const get = vi.spyOn(bucket, 'get');
+			expect(
+				await Promise.all(Array.from({ length: 5 }, () => catalog.hasProjectInvolvement(outsider))),
+			).toEqual([false, false, false, false, false]);
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+			expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+				1,
+			);
+			expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(
+				1,
+			);
+		});
+
+		it('fails closed on an authoritative read failure and retries the read', async () => {
+			const project = makeProject({ owner: outsider.id });
+			await seedProject(project);
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+			const original = bucket.get.bind(bucket);
+			const get = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === paths.project(project.id).meta) throw new Error('project unavailable');
+				return original(key);
+			});
+			await expect(catalog.hasProjectInvolvement(outsider)).rejects.toThrow('project unavailable');
+			get.mockRestore();
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+		});
+
+		it('excludes deleted projects', async () => {
+			await catalog.mutateSnapshot('delete', ACTOR, (snapshot) => ({
+				...snapshot,
+				projects: [makeSnapshotProjectEntry({ owner: outsider.id, status: 'deleted' })],
+			}));
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+		});
+
+		it('retries an index load after a transient snapshot failure', async () => {
+			const original = bucket.get.bind(bucket);
+			const get = vi
+				.spyOn(bucket, 'get')
+				.mockImplementationOnce(original)
+				.mockRejectedValueOnce(new Error('storage failed'));
+			await expect(catalog.hasProjectInvolvement(outsider)).rejects.toThrow('storage failed');
+			get.mockRestore();
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
+		});
+
+		it('fails closed if the current pointer disappears after caching a grant', async () => {
+			await seedProject(makeProject({ owner: outsider.id }));
+			expect(await catalog.hasProjectInvolvement(outsider)).toBe(true);
+			await bucket.delete(paths.catalog);
+			await expect(catalog.hasProjectInvolvement(outsider)).rejects.toThrow(NotInitializedError);
+		});
 	});
 
 	describe('initialize', () => {

@@ -519,3 +519,240 @@ describe('CloudflareSandboxInstance.readFile', () => {
 		expectFileResult(result, { success: false, error: { code: 'NOT_FOUND' } });
 	});
 });
+
+describe('bounded file transport', () => {
+	it('reads SSE output without using the buffered file API', async () => {
+		const encode = new TextEncoder();
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(
+						encode.encode(
+							'data: {"type":"stdout","data":"aGk="}\n\ndata: {"type":"complete","exitCode":0}\n\n',
+						),
+					);
+					c.close();
+				},
+			}),
+		);
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+				maxBytes: 2,
+				timeoutMs: 100,
+			}),
+		).toEqual({ success: true, content: 'aGk=', encoding: 'base64' });
+	});
+
+	it.each([
+		'data: invalid-json\n\n',
+		'data: {"type":"stdout","data":"aGk="}\n\n',
+		'data: {"type":"stdout","data":"aGk="}\n\ndata: {"type":"complete","exitCode":1}\n\n',
+		'data: {"type":"stdout","data":"aGk="}\n\ndata: {"type":"stderr","data":"x"}\n\ndata: {"type":"complete","exitCode":0}\n\n',
+	])('refuses malformed, incomplete, failed, or over-budget SSE output: %s', async (wire) => {
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode(wire));
+					c.close();
+				},
+			}),
+		);
+		expect(
+			(
+				await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+					maxBytes: 2,
+					timeoutMs: 100,
+				})
+			).success,
+		).toBe(false);
+	});
+
+	it('accepts thousands of single-byte output events within the decoded budget', async () => {
+		const data = `${'data: {"type":"stdout","data":"x"}\n\n'.repeat(3_000)}data: {"type":"complete","exitCode":0}\n\n`;
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode(data));
+					c.close();
+				},
+			}),
+		);
+		const result = await makeProvider()
+			.create(SANDBOX_ID)
+			.exec('chatty', { maxOutputBytes: 3_000 });
+		expect(result).toMatchObject({ success: true, stdout: 'x'.repeat(3_000), stderr: '' });
+	});
+
+	it.each([100.5, 2 ** 31 - 1])('accepts bounded read timeout %s', async (timeoutMs) => {
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode('data: {"type":"complete","exitCode":0}\n\n'));
+					c.close();
+				},
+			}),
+		);
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/empty', {
+				maxBytes: 0,
+				timeoutMs,
+			}),
+		).toEqual({ success: true, content: '', encoding: 'base64' });
+		expect(fakeSandbox.execStream).toHaveBeenLastCalledWith(expect.any(String), {
+			timeout: Math.ceil(timeoutMs),
+			signal: expect.any(AbortSignal),
+		});
+	});
+
+	it('rejects out-of-range read timeout before starting the command', async () => {
+		fakeSandbox.execStream.mockClear();
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/empty', {
+				maxBytes: 0,
+				timeoutMs: 2 ** 31,
+			}),
+		).toMatchObject({ success: false, error: { code: 'READ_FAILED' } });
+		expect(fakeSandbox.execStream).not.toHaveBeenCalled();
+	});
+
+	it('bounds an unterminated frame independently of the total framing allowance', async () => {
+		const cancel = vi.fn();
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode('data: '));
+					c.enqueue(new Uint8Array(64 * 1024 + 32).fill(120));
+				},
+				cancel,
+			}),
+		);
+		await expect(
+			makeProvider().create(SANDBOX_ID).exec('unterminated', { maxOutputBytes: 4 }),
+		).rejects.toThrow('SSE frame limit exceeded');
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('cancels an oversized wire stream before its deadline', async () => {
+		const maxOutputBytes = 4;
+		const cancel = vi.fn();
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(new Uint8Array(1024 * 1024));
+				},
+				cancel,
+			}),
+		);
+		await expect(
+			makeProvider().create(SANDBOX_ID).exec('cmd', {
+				maxOutputBytes,
+				timeout: 1000,
+			}),
+		).rejects.toThrow('SSE wire limit exceeded');
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('cancels a stalled wire stream', async () => {
+		const cancel = vi.fn();
+		fakeSandbox.execStream.mockResolvedValueOnce(new ReadableStream({ cancel }));
+		expect(
+			(
+				await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+					maxBytes: 2,
+					timeoutMs: 10,
+				})
+			).success,
+		).toBe(false);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it.each(['stdout', 'stderr'])(
+		'cancels immediately when decoded %s exceeds the combined budget',
+		async (type) => {
+			const cancel = vi.fn();
+			fakeSandbox.execStream.mockResolvedValueOnce(
+				new ReadableStream({
+					start(c) {
+						c.enqueue(
+							new TextEncoder().encode(
+								'data: {"type":"stdout","data":"a"}\n\n' +
+									`data: ${JSON.stringify({ type, data: 'é' })}\n\n`,
+							),
+						);
+					},
+					cancel,
+				}),
+			);
+			await expect(
+				makeProvider().create(SANDBOX_ID).exec('cmd', {
+					maxOutputBytes: 2,
+					timeout: 1000,
+				}),
+			).rejects.toThrow('Sandbox output limit exceeded');
+			expect(cancel).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each(['stdout', 'stderr'])(
+		'rejects malformed %s payloads instead of persisting empty data',
+		async (type) => {
+			for (const data of [undefined, null, 42, {}, []]) {
+				fakeSandbox.execStream.mockResolvedValueOnce(
+					new ReadableStream({
+						start(c) {
+							c.enqueue(
+								new TextEncoder().encode(
+									`data: ${JSON.stringify({ type, data })}\n\ndata: {"type":"complete","exitCode":0}\n\n`,
+								),
+							);
+							c.close();
+						},
+					}),
+				);
+				expect(
+					(
+						await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+							maxBytes: 2,
+							timeoutMs: 100,
+						})
+					).success,
+				).toBe(false);
+			}
+		},
+	);
+
+	it.each([0, Infinity])(
+		'preserves split UTF-8 SSE frames at the exact output budget with timeout %s',
+		async (timeout) => {
+			const wire = new TextEncoder().encode(
+				'data: {"type":"stdout","data":"é"}\r\n\r\ndata: {"type":"complete","exitCode":0}\r\n\r\n',
+			);
+			fakeSandbox.execStream.mockResolvedValueOnce(
+				new ReadableStream({
+					async start(c) {
+						await new Promise((resolve) => setTimeout(resolve, 10));
+						for (const byte of wire) c.enqueue(new Uint8Array([byte]));
+						c.close();
+					},
+				}),
+			);
+			expect(
+				await makeProvider().create(SANDBOX_ID).exec('cmd', {
+					maxOutputBytes: 2,
+					timeout,
+				}),
+			).toMatchObject({ success: true, stdout: 'é', stderr: '' });
+		},
+	);
+
+	it.each([Number.NaN, Infinity, -1])(
+		'rejects invalid output budget %s before starting a command',
+		async (maxOutputBytes) => {
+			fakeSandbox.execStream.mockClear();
+			await expect(
+				makeProvider().create(SANDBOX_ID).exec('cmd', { maxOutputBytes }),
+			).rejects.toThrow();
+			expect(fakeSandbox.execStream).not.toHaveBeenCalled();
+		},
+	);
+});

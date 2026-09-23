@@ -8,7 +8,7 @@ import type { SandboxId } from '@marimo-hub/core/ids';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { SandboxInstance } from '@marimo-hub/core/ports/sandbox';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
-import { expectFileResult } from '@marimo-hub/core/testing/result-assertions';
+import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
@@ -974,4 +974,80 @@ computeContract('LocalCompute', () => new LocalCompute(), {
 
 afterAll(async () => {
 	await new LocalCompute().create(CONTRACT_SANDBOX_ID).destroy();
+});
+
+describe('bounded artifact reads', () => {
+	it.each([Number.NaN, Infinity, -Infinity, -1, 0.5])(
+		'rejects an invalid output cap before executing: %s',
+		async (maxOutputBytes) => {
+			const sandbox = newSandbox();
+			await expect(
+				sandbox.exec('touch /workspace/invalid-cap-ran', { maxOutputBytes }),
+			).rejects.toThrow('byte limit');
+			expectFileResult(await sandbox.readFile('/workspace/invalid-cap-ran'), {
+				success: false,
+				error: { code: 'NOT_FOUND' },
+			});
+		},
+	);
+
+	it.each(["quote'file", 'spaces and $dollars', 'line\nbreak', 'unicodé'])(
+		'reads literal filenames safely: %s',
+		async (name) => {
+			const sb = newSandbox();
+			const filename = `/workspace/${name}`;
+			await sb.writeFiles([{ path: filename, content: 'ok' }]);
+			expectFileResult(await sb.readFileBounded!(filename, { maxBytes: 2, timeoutMs: 2000 }), {
+				success: true,
+				content: 'b2s=',
+				encoding: 'base64',
+			});
+		},
+	);
+
+	it('accepts an empty file with a zero-byte budget and refuses missing files and directories', async () => {
+		const sb = newSandbox();
+		await sb.writeFiles([{ path: '/workspace/empty', content: '' }]);
+		const options = { maxBytes: 0, timeoutMs: 2000 };
+		expectFileResult(await sb.readFileBounded!('/workspace/empty', options), {
+			success: true,
+			content: '',
+			encoding: 'base64',
+		});
+		for (const path of ['/workspace', '/workspace/missing'])
+			expectFileResult(await sb.readFileBounded!(path, options), { success: false });
+	});
+
+	it('preserves binary contents and rejects oversize files, links, and FIFOs', async () => {
+		const sb = newSandbox();
+		await sb.writeFiles([{ path: '/workspace/file.bin', content: new Uint8Array([0, 255, 1]) }]);
+		const options = { maxBytes: 3, timeoutMs: 2000 };
+		expect(await sb.readFileBounded!('/workspace/file.bin', options)).toEqual({
+			success: true,
+			content: 'AP8B',
+			encoding: 'base64',
+		});
+		expect(
+			(await sb.readFileBounded!('/workspace/file.bin', { ...options, maxBytes: 2 })).success,
+		).toBe(false);
+		expectExecResult(
+			await sb.exec(
+				'ln -s file.bin /workspace/link && mkfifo /workspace/pipe && mkdir /workspace/dir && ln -s dir /workspace/dir-link',
+			),
+			{ success: true },
+		);
+		await sb.writeFiles([{ path: '/workspace/dir/file', content: 'ok' }]);
+		for (const name of ['link', 'pipe', 'dir-link/file'])
+			expect((await sb.readFileBounded!(`/workspace/${name}`, options)).success).toBe(false);
+	});
+
+	it.each(['../outside', '/workspace/../../outside'])(
+		'returns a refusal for a path outside the sandbox: %s',
+		async (filename) => {
+			expectFileResult(
+				await newSandbox().readFileBounded!(filename, { maxBytes: 10, timeoutMs: 100 }),
+				{ success: false, error: { code: 'READ_FAILED' } },
+			);
+		},
+	);
 });

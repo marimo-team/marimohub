@@ -2666,6 +2666,137 @@ describe('NotebookService security labels', () => {
 			.find((p) => p.id === pid)
 			?.notebooks.find((n) => n.id === nid);
 
+	it.each(['local', 'git'] as const)(
+		'duplicates %s notebooks with labels before publication',
+		async (kind) => {
+			let nid: NotebookId;
+			if (kind === 'local') nid = await createLabeled();
+			else {
+				const { meta } = await notebooks.synced.create(
+					pid,
+					{
+						title: 'Git',
+						description: '',
+						repo: 'org/repo',
+						branch: 'main',
+						entry_notebook: 'app.py',
+					},
+					ACTOR,
+				);
+				nid = meta.id as NotebookId;
+				await notebooks.synced.sync(pid, nid, {
+					repo: 'org/repo',
+					branch: 'main',
+					root_path: '',
+					commit: 'abc',
+					files: [{ path: 'app.py', bytes: new TextEncoder().encode('import marimo') }],
+				});
+				await notebooks.setSecurityLabels(pid, nid, LABELS, ACTOR);
+			}
+			const labels = (await notebooks.getNotebookMeta(pid, nid)).security_labels;
+			const append = catalog.appendNotebookEntry.bind(catalog);
+			const publication = vi
+				.spyOn(catalog, 'appendNotebookEntry')
+				.mockImplementation(async (...args) => {
+					const entry = args[3];
+					expect(entry.security_labels).toEqual(labels);
+					expect((await notebooks.getNotebookMeta(pid, entry.id)).security_labels).toEqual(labels);
+					return append(...args);
+				});
+			try {
+				const copy = await notebooks.duplicateNotebook(pid, nid, ACTOR);
+				expect(copy.security_labels).toEqual(labels);
+				expect((await entryFor(copy.id))?.security_labels).toEqual(labels);
+				expect(
+					await notebooks.listNotebooks(pid, {
+						subject: SUBJECT,
+						resourceSecurity: security(
+							makeSubjectContext({ classification: 'UNCLASSIFIED', compartments: [] }),
+						),
+					}),
+				).toEqual([]);
+				expect(
+					(
+						await notebooks.listNotebooks(pid, { subject: SUBJECT, resourceSecurity: security() })
+					).map((n) => n.id),
+				).toEqual(expect.arrayContaining([nid, copy.id]));
+			} finally {
+				publication.mockRestore();
+			}
+		},
+	);
+
+	it('keeps an unlabeled duplicate unlabeled', async () => {
+		const original = await notebooks.createNotebook(
+			pid,
+			{ title: 'Plain', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const copy = await notebooks.duplicateNotebook(pid, original.id, ACTOR);
+		expect(copy.security_labels).toBeUndefined();
+		expect((await entryFor(copy.id))?.security_labels).toBeNull();
+	});
+
+	it('does not couple labels between the original and duplicate after creation', async () => {
+		const nid = await createLabeled();
+		const copy = await notebooks.duplicateNotebook(pid, nid, ACTOR);
+		await notebooks.setSecurityLabels(
+			pid,
+			nid,
+			{ classification: 'TOP_SECRET', compartments: [] },
+			ACTOR,
+		);
+		expect((await notebooks.getNotebookMeta(pid, copy.id)).security_labels).toEqual(
+			copy.security_labels,
+		);
+		await notebooks.setSecurityLabels(pid, copy.id, undefined, ACTOR);
+		expect((await notebooks.getNotebookMeta(pid, nid)).security_labels?.classification).toBe(
+			'TOP_SECRET',
+		);
+		expect((await entryFor(nid))?.security_labels?.classification).toBe('TOP_SECRET');
+	});
+
+	it('does not publish a duplicate when its labeled metadata cannot be written', async () => {
+		const nid = await createLabeled();
+		const put = bucket.put.bind(bucket);
+		const write = vi.spyOn(bucket, 'put').mockImplementation((key, ...args) => {
+			if (key.endsWith('/meta.json') && !key.includes(`/${nid}/`))
+				return Promise.reject(new Error('metadata unavailable'));
+			return put(key, ...args);
+		});
+		const publication = vi.spyOn(catalog, 'appendNotebookEntry');
+		try {
+			await expect(notebooks.duplicateNotebook(pid, nid, ACTOR)).rejects.toThrow(
+				'metadata unavailable',
+			);
+			expect(publication).not.toHaveBeenCalled();
+			expect(
+				(await catalog.getCurrentSnapshot()).projects.find((p) => p.id === pid)?.notebooks,
+			).toHaveLength(1);
+		} finally {
+			write.mockRestore();
+			publication.mockRestore();
+		}
+	});
+
+	it('failed duplicate publication leaves no unlabeled entry and a retry preserves labels', async () => {
+		const nid = await createLabeled();
+		const publication = vi
+			.spyOn(catalog, 'appendNotebookEntry')
+			.mockRejectedValueOnce(new Error('publication failed'));
+		await expect(notebooks.duplicateNotebook(pid, nid, ACTOR)).rejects.toThrow(
+			'publication failed',
+		);
+		expect(
+			(await catalog.getCurrentSnapshot()).projects.find((p) => p.id === pid)?.notebooks,
+		).toHaveLength(1);
+		publication.mockRestore();
+		const copy = await notebooks.duplicateNotebook(pid, nid, ACTOR);
+		expect((await entryFor(copy.id))?.security_labels).toEqual(
+			(await entryFor(nid))?.security_labels,
+		);
+	});
+
 	it('routine projections never resurrect an override while a mutation is pending', async () => {
 		const nid = await createLabeled();
 		// Freeze the crashed/in-flight window: pending marker set, authoritative

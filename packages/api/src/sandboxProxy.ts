@@ -308,6 +308,9 @@ const HOP_BY_HOP = new Set([
 export const CREDENTIAL_HEADERS = new Set([
 	'cookie',
 	'authorization',
+	'x-goog-iap-jwt-assertion',
+	'x-forwarded-email',
+	'x-forwarded-user',
 	'cf-access-jwt-assertion',
 	'cf-access-client-id',
 	'cf-access-client-secret',
@@ -320,11 +323,23 @@ export const CREDENTIAL_HEADERS = new Set([
  */
 export const UNSAFE_RESPONSE_HEADERS = new Set(['set-cookie', 'set-cookie2']);
 
-function requestHeaders(request: Request, targetUrl: string, kernelAuthToken?: string): Headers {
+export function isCredentialHeader(name: string, additional: readonly string[] = []): boolean {
+	const lower = name.toLowerCase();
+	return (
+		CREDENTIAL_HEADERS.has(lower) || additional.some((header) => header.toLowerCase() === lower)
+	);
+}
+
+function requestHeaders(
+	request: Request,
+	targetUrl: string,
+	kernelAuthToken?: string,
+	credentialHeaders?: readonly string[],
+): Headers {
 	const out = new Headers();
 	request.headers.forEach((value, key) => {
 		const k = key.toLowerCase();
-		if (!HOP_BY_HOP.has(k) && !CREDENTIAL_HEADERS.has(k)) out.set(key, value);
+		if (!HOP_BY_HOP.has(k) && !isCredentialHeader(k, credentialHeaders)) out.set(key, value);
 	});
 	// marimo validates a request's Origin against its own host; present the kernel
 	// origin so the proxied request reads as same-origin (Host is set by `fetch`).
@@ -367,10 +382,11 @@ export async function forwardHttp(
 	targetUrl: string,
 	sessionId?: string,
 	kernelAuthToken?: string,
+	credentialHeaders?: readonly string[],
 ): Promise<Response> {
 	const init: RequestInit = {
 		method: request.method,
-		headers: requestHeaders(request, targetUrl, kernelAuthToken),
+		headers: requestHeaders(request, targetUrl, kernelAuthToken, credentialHeaders),
 		redirect: 'manual',
 	};
 	const retryable = request.method === 'GET' || request.method === 'HEAD';
@@ -445,6 +461,12 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 		if (decision.kind === 'reject') {
 			return fail(c, decision.code, decision.message, decision.status);
 		}
-		return forwardHttp(c.req.raw, decision.targetUrl, decision.sessionId, decision.kernelAuthToken);
+		return forwardHttp(
+			c.req.raw,
+			decision.targetUrl,
+			decision.sessionId,
+			decision.kernelAuthToken,
+			deps.sandbox.credentialHeaders,
+		);
 	};
 }

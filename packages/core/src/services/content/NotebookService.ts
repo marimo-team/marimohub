@@ -373,6 +373,15 @@ export class NotebookService {
 		input: CreateNotebookInput,
 		actor: UserId,
 	): Promise<NotebookMeta> {
+		return this.createNotebookWithLabels(projectId, input, actor);
+	}
+
+	private async createNotebookWithLabels(
+		projectId: ProjectId,
+		input: CreateNotebookInput,
+		actor: UserId,
+		securityLabels?: ResourceSecurityLabels,
+	): Promise<NotebookMeta> {
 		const notebookId = createNotebookId();
 		const versionId = createVersionId();
 		const now = new Date().toISOString();
@@ -389,6 +398,7 @@ export class NotebookService {
 			runtime: input.runtime,
 			baseImage: input.base_image,
 			computeProfile: input.compute_profile,
+			securityLabels,
 		});
 
 		const source = localSource(versionId);
@@ -474,7 +484,7 @@ export class NotebookService {
 		]);
 		const deps = depsObj ? await depsObj.text() : '';
 
-		return this.createNotebook(
+		return this.createNotebookWithLabels(
 			projectId,
 			{
 				title: newTitle?.trim() || `${meta.title} (copy)`,
@@ -488,6 +498,7 @@ export class NotebookService {
 				compute_profile: meta.compute_profile,
 			},
 			actor,
+			meta.security_labels,
 		);
 	}
 

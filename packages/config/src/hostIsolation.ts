@@ -6,35 +6,62 @@ export interface SandboxHostIsolation {
 	sandboxHost?: string;
 	appHost?: string;
 	/** Present only when isolation fails, so diagnostics distinguish overlap from invalid input. */
-	reason?: 'shared-origin' | 'unverifiable-redirect' | 'invalid-sandbox-host';
+	reason?:
+		| 'shared-origin'
+		| 'unverifiable-redirect'
+		| 'invalid-sandbox-host'
+		| 'unverifiable-origin'
+		| 'conflicting-origins';
 }
 
 /**
- * Sibling subdomains are supported for existing deployments.
- * A missing redirect leaves isolation unknown; a configured invalid host fails closed.
+ * Sibling subdomains are supported; missing or invalid app origins fail closed.
  */
 export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	const sandboxHost = env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME?.trim().toLowerCase();
 	if (!sandboxHost) return { isolated: true };
 	try {
-		normalizeHostname(sandboxHost);
+		const hostname = normalizeHostname(sandboxHost);
+		if (!hostname || /^\.+$/.test(hostname)) throw new Error('Invalid sandbox hostname');
 	} catch {
 		return { isolated: false, sandboxHost, reason: 'invalid-sandbox-host' };
 	}
-	const redirect = env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI;
-	if (!redirect) return { isolated: true, sandboxHost };
-	let appHost: string;
-	try {
-		appHost = normalizeHostname(new URL(redirect).hostname);
-	} catch {
-		appHost = '';
+	const appUrl = env.MARIMOHUB_APP_BASE_URL?.trim() || undefined;
+	const redirect = env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI?.trim() || undefined;
+	if (!appUrl && !redirect) {
+		return { isolated: false, sandboxHost, reason: 'unverifiable-origin' };
 	}
-	if (!appHost) return { isolated: false, sandboxHost, reason: 'unverifiable-redirect' };
+	const app = parseAppOrigin(appUrl);
+	if (appUrl !== undefined && !app) {
+		return { isolated: false, sandboxHost, reason: 'unverifiable-origin' };
+	}
+	const callback = parseAppOrigin(redirect);
+	if (redirect !== undefined && !callback) {
+		return { isolated: false, sandboxHost, reason: 'unverifiable-redirect' };
+	}
+	if (app && callback && app.origin !== callback.origin) {
+		return { isolated: false, sandboxHost, reason: 'conflicting-origins' };
+	}
+	const appHost = normalizeHostname((app ?? callback)!.hostname);
 
 	if (hostsOverlap(sandboxHost, appHost)) {
 		return { isolated: false, sandboxHost, appHost, reason: 'shared-origin' };
 	}
 	return { isolated: true, sandboxHost, appHost };
+}
+
+function parseAppOrigin(value: string | undefined): URL | undefined {
+	if (value === undefined || !/^https?:\/\/[^/\\]/i.test(value)) return undefined;
+	try {
+		const url = new URL(value);
+		if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password)
+			return undefined;
+		const hostname = normalizeHostname(url.hostname);
+		if (!hostname || /^\.+$/.test(hostname)) return undefined;
+		return url;
+	} catch {
+		return undefined;
+	}
 }
 
 export function sandboxHostIsolationMessage({
@@ -43,6 +70,9 @@ export function sandboxHostIsolationMessage({
 	reason,
 }: SandboxHostIsolation): string {
 	switch (reason) {
+		case 'unverifiable-origin':
+		case 'conflicting-origins':
+			return sandboxHostIsolationRemediation({ reason });
 		case 'unverifiable-redirect':
 			return (
 				'MARIMOHUB_AUTH_OIDC_REDIRECT_URI does not yield a usable app host, so isolation of ' +
@@ -60,8 +90,14 @@ export function sandboxHostIsolationMessage({
 	}
 }
 
-export function sandboxHostIsolationRemediation({ reason }: SandboxHostIsolation): string {
+export function sandboxHostIsolationRemediation({
+	reason,
+}: Pick<SandboxHostIsolation, 'reason'>): string {
 	switch (reason) {
+		case 'unverifiable-origin':
+			return 'Set MARIMOHUB_APP_BASE_URL or MARIMOHUB_AUTH_OIDC_REDIRECT_URI to a valid absolute http(s) URL. Both must have the same origin when present.';
+		case 'conflicting-origins':
+			return 'MARIMOHUB_APP_BASE_URL and MARIMOHUB_AUTH_OIDC_REDIRECT_URI must have the same origin.';
 		case 'unverifiable-redirect':
 			return 'Set MARIMOHUB_AUTH_OIDC_REDIRECT_URI to a valid absolute http(s) redirect URI.';
 		case 'invalid-sandbox-host':
