@@ -39,7 +39,7 @@
 		"vite-plus": "catalog:"
 	},
 	"engines": {
-		"node": ">=24.0.0"
+		"node": ">=24.11.0"
 	},
 	"packageManager": "pnpm@10.34.5",
 	"pnpm": {
@@ -54,10 +54,17 @@
 			"nanoid": "3.3.18",
 			"postcss@<=8.5.22": "8.5.23",
 			"protobufjs@>=7.5.0 <=7.6.4": "7.6.5",
+			"vite-plus>oxfmt": "0.52.0",
+			"vite-plus>oxlint": "1.67.0",
+			"vite-plus>oxlint-tsgolint": "0.23.0",
+			"vite-plus>@oxlint/plugins": "1.61.0",
+			"qs@<6.16.0": "6.16.0",
 			"shell-quote@<=1.8.4": "1.9.0",
 			"smol-toml@<1.7.1": "1.7.1",
 			"tar": "7.5.21",
 			"undici@>=7.0.0 <7.29.0": "^7.29.0",
+			"vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
+			"vitest": "4.1.11",
 			"vitepress>vite": "^6.4.3"
 		}
 	}

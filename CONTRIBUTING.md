@@ -15,8 +15,8 @@ well-scoped changes with clear verification are the easiest to review.
 
 Requirements:
 
-- Node >= 24
-- pnpm 10.20.0
+- Node >= 24.11
+- pnpm 10.34.5
 - `uv` and Python if you run local notebook kernels
 
 ```bash

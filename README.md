@@ -27,7 +27,7 @@ to operate storage, compute, and auth, this is probably not the right shape yet.
 
 ## Try it locally
 
-Requirements: Node >= 24, pnpm 10.20.0, and `uv` plus Python if you want to
+Requirements: Node >= 24.11, pnpm 10.34.5, and `uv` plus Python if you want to
 start local notebook kernels.
 
 ```bash

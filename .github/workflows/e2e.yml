@@ -31,7 +31,7 @@ jobs:
       # See ci.yml for why setup-vp is SHA-pinned + sfw + frozen install.
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
-          version: 0.1.24
+          version: 0.3.0
           node-version-file: '.node-version'
           sfw: true
           cache: true
