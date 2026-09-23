@@ -31,9 +31,11 @@ describe('validateServerEnv', () => {
 		['PORT', 'abc', 'expected an integer from 1 to 65535'],
 		['PORT', '0', 'expected an integer from 1 to 65535'],
 		['PORT', '65536', 'expected an integer from 1 to 65535'],
-		['MARIMOHUB_BIND_HOST', ' 127.0.0.1', 'expected an IP address or hostname'],
-		['MARIMOHUB_BIND_HOST', '[::1]', 'expected an IP address or hostname'],
-		['MARIMOHUB_BIND_HOST', '127.0.0.1:3000', 'expected an IP address or hostname'],
+		['MARIMOHUB_BIND_HOST', '', 'expected an IP address'],
+		['MARIMOHUB_BIND_HOST', ' 127.0.0.1', 'expected an IP address'],
+		['MARIMOHUB_BIND_HOST', '[::1]', 'expected an IP address'],
+		['MARIMOHUB_BIND_HOST', '127.0.0.1:3000', 'expected an IP address'],
+		['MARIMOHUB_BIND_HOST', 'localhost', 'expected an IP address'],
 		['MARIMOHUB_APP_BASE_URL', 'hub.example.com/marimohub', 'expected an HTTP(S) URL'],
 		['MARIMOHUB_APP_BASE_URL', 'ftp://hub.example.com', 'expected an HTTP(S) URL'],
 		['MARIMOHUB_STATIC_ROOT', '   ', 'expected a non-empty path'],
@@ -49,7 +51,7 @@ describe('validateServerEnv', () => {
 		expect(validateServerEnv({ PORT: value })).toEqual({ PORT: value });
 	});
 
-	it.each(['', '127.0.0.1', '0.0.0.0', '::1', '::', '10.0.0.5', 'localhost', 'hub.internal'])(
+	it.each(['127.0.0.1', '0.0.0.0', '::1', '::', '10.0.0.5'])(
 		'accepts MARIMOHUB_BIND_HOST=%s',
 		(value) => {
 			expect(validateServerEnv({ MARIMOHUB_BIND_HOST: value })).toEqual({

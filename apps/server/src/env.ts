@@ -16,16 +16,9 @@ const appBaseUrl = z
 	.string()
 	.refine((value) => !value.trim() || parseHttpUrl(value).ok, 'expected an HTTP(S) URL');
 
-const HOSTNAME =
-	/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$/i;
-
-// Node's listen() takes a bare IPv6 address, so `[::1]` is rejected rather than failing at bind.
-const bindHost = z
-	.string()
-	.refine(
-		(value) => value === '' || isIP(value) !== 0 || HOSTNAME.test(value),
-		'expected an IP address or hostname',
-	);
+// Literal IPs only: `localhost` can resolve to either loopback family, and an empty value
+// would silently fall back to every interface.
+const bindHost = z.string().refine((value) => isIP(value) !== 0, 'expected an IP address');
 
 export const ServerEnvSchema = z.looseObject({
 	PORT: port.optional(),
