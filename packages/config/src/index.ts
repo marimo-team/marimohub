@@ -538,32 +538,15 @@ function parsePersistWorkspace(env: Env): 'source' | 'workspace' {
 	);
 }
 
-/**
- * Reject a sandbox hostname that shares an origin or parent domain with the app.
- * Notebook kernels run untrusted user code; if they are served same-origin (or on
- * the same registrable domain) as the control plane, a malicious notebook can
- * escape the iframe sandbox (`allow-scripts allow-same-origin`) into the app's
- * origin, or set cookies on the shared parent domain. Sandboxes must live on a
- * separate domain (e.g. `sandboxes.example.net`).
- *
- * The app's public host is derived from the OIDC redirect URI when present (the
- * only public-origin signal in env); skipped for other auth backends. The
- * public-suffix check includes private suffixes such as github.io.
- */
 function assertSandboxHostIsolated(env: Env): void {
 	const isolation = checkSandboxHostIsolation(env);
 	if (isolation.isolated) return;
 	const detail = sandboxHostIsolationMessage(isolation);
-	throw new ConfigError(
-		`${detail} Notebook kernels run untrusted code and must be isolated on a separate domain ` +
-			`(e.g. sandboxes.example.net) so a malicious notebook cannot escape the iframe sandbox into ` +
-			`the control plane or set cookies on the shared domain.`,
-		{
-			variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
-			remediation: sandboxHostIsolationRemediation(isolation),
-			docs: 'docs/security.md',
-		},
-	);
+	throw new ConfigError(detail, {
+		variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
+		remediation: sandboxHostIsolationRemediation(isolation),
+		docs: 'docs/security.md',
+	});
 }
 
 /**

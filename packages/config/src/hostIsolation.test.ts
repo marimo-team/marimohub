@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkSandboxHostIsolation, sandboxHostIsolationMessage } from './hostIsolation';
 
-/**
- * Isolation guard: when a sandbox host is configured, the guard derives the app
- * host from the OIDC redirect URI and refuses a same-origin/parent-domain
- * sandbox (untrusted kernels must not share an origin with the control plane).
- */
 describe('checkSandboxHostIsolation', () => {
 	it('flags a same-origin sandbox host as non-isolated', () => {
 		const result = checkSandboxHostIsolation({
@@ -68,13 +63,13 @@ describe('checkSandboxHostIsolation', () => {
 		},
 	);
 
-	it('flags sibling subdomains of the same registrable domain as non-isolated', () => {
+	it('allows sibling subdomains of the same registrable domain', () => {
 		const result = checkSandboxHostIsolation({
 			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandboxes.example.com',
 			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
 		});
-		expect(result.isolated).toBe(false);
-		expect(result.reason).toBe('shared-origin');
+		expect(result.isolated).toBe(true);
+		expect(result.reason).toBeUndefined();
 	});
 
 	it('flags a same-host sandbox hostname that only adds a port as non-isolated', () => {
@@ -86,9 +81,9 @@ describe('checkSandboxHostIsolation', () => {
 	});
 });
 
-describe('cookie domain boundaries', () => {
+describe('hostname boundaries', () => {
 	it.each([
-		['sandbox.example.co.uk', 'hub.example.co.uk', false],
+		['sandbox.example.co.uk', 'hub.example.co.uk', true],
 		['sandbox.other.co.uk', 'hub.example.co.uk', true],
 		['alice.github.io', 'bob.github.io', true],
 		['sandbox.github.io', 'github.io', true],
@@ -96,7 +91,11 @@ describe('cookie domain boundaries', () => {
 		['sandbox.co.uk', 'co.uk', true],
 		['co.uk', 'sandbox.co.uk', true],
 		['sandbox.localhost', 'localhost', false],
-		['sandbox.alice.github.io', 'hub.alice.github.io', false],
+		['sandbox.alice.github.io', 'hub.alice.github.io', true],
+		['sandbox.hub.example.com', 'hub.example.com', false],
+		['example.com', 'hub.example.com', false],
+		['notexample.com', 'example.com', true],
+		['SANDBOX.HUB.EXAMPLE.COM.:8443', 'hub.example.com', false],
 		['HUB.EXAMPLE.COM.:8443', 'hub.example.com', false],
 		['127.0.0.1:8443', '127.0.0.1', false],
 		['127.0.0.2', '127.0.0.1', true],

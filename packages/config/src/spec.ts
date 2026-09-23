@@ -1019,7 +1019,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Subdomain (direct, isolated domain)',
 				selectorValue: 'subdomain',
 				description:
-					"The compute adapter's public kernel URL is used as-is. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a domain separate from the app host.",
+					'Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.',
 				vars: [],
 			},
 			{
