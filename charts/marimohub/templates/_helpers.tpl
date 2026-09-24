@@ -21,7 +21,8 @@
 {{- define "marimohub.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{ include "marimohub.selectorLabels" . }}
-app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
+{{/* Digests exceed Kubernetes' 63-character label limit and contain a colon. */}}
+app.kubernetes.io/version: {{ include "marimohub.imageVersion" . | replace ":" "-" | trunc 63 | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
@@ -40,9 +41,27 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{/* Resolved image ref: repository:(tag|appVersion). */}}
+{{- define "marimohub.imageVersion" -}}
+{{- if not (kindIs "string" .Values.image.digest) -}}
+{{- fail "image.digest must be a string (empty or a sha256 digest)" -}}
+{{- end -}}
+{{- if ne .Values.image.digest "" -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.image.digest) -}}
+{{- fail "image.digest must be a sha256 digest with 64 lowercase hexadecimal characters" -}}
+{{- end -}}
+{{- .Values.image.digest -}}
+{{- else -}}
+{{- .Values.image.tag | default .Chart.AppVersion -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "marimohub.image" -}}
-{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- $version := include "marimohub.imageVersion" . -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository $version -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository $version -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Name of the Secret to consume via envFrom (existing or chart-managed). */}}

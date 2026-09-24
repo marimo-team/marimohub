@@ -21,7 +21,8 @@ import {
 	setupCompleteMarker,
 	shellQuote,
 	transportFailureResult,
-	withEnvPrefix,
+	ShellEnvironment,
+	privateEnvironmentWriteCommand,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { SandboxId } from '@marimo-hub/core/ids';
@@ -190,8 +191,6 @@ let procSeq = 0;
 class ContainerSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
 	private readonly name: string;
-	private env: Record<string, string> = {};
-	private envDefaults: Record<string, string> = {};
 	/** Cached host port for the published kernel port, once known. */
 	private hostPort?: number;
 
@@ -208,6 +207,8 @@ class ContainerSandboxInstance implements SandboxInstance {
 	private async ensure(): Promise<void> {
 		const inspect = await this.runner.run(['inspect', '-f', '{{.State.Running}}', this.name]);
 		if (inspect.exitCode === 0 && inspect.stdout.trim() === 'true') return;
+
+		this.environment.invalidate();
 
 		// A stopped container with our name would make `run --name` fail — clear it.
 		if (inspect.exitCode === 0) {
@@ -237,17 +238,22 @@ class ContainerSandboxInstance implements SandboxInstance {
 		}
 	}
 
-	/** Prefix accumulated env vars onto a shell command. */
-	private withEnv(cmd: string): string {
-		return withEnvPrefix(cmd, this.env, this.envDefaults);
-	}
+	private readonly environment = new ShellEnvironment(async (path, content) => {
+		const result = await this.runner.run(
+			['exec', '-i', this.name, 'sh', '-c', privateEnvironmentWriteCommand(path)],
+			{ stdin: content, timeout: 10_000, maxOutputBytes: 64 * 1024 },
+		);
+		if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
+	});
 
 	private async dexec(
 		cmd: string,
 		flags: string[] = [],
 		options?: ExecOptions,
+		prepared = false,
 	): Promise<ContainerRunResult> {
 		await this.ensure();
+		const script = prepared ? cmd : await this.environment.command(cmd);
 		const command =
 			options?.timeout !== undefined && options.timeout > 0
 				? [
@@ -257,9 +263,9 @@ class ContainerSandboxInstance implements SandboxInstance {
 						String(
 							Math.max(1, options.timeout - Math.min(EXEC_TIMEOUT_GRACE_MS, options.timeout / 10)),
 						),
-						this.withEnv(cmd),
+						script,
 					]
-				: ['sh', '-lc', this.withEnv(cmd)];
+				: ['sh', '-lc', script];
 		return this.runner.run(['exec', ...flags, this.name, ...command], {
 			timeout: options?.timeout,
 			maxOutputBytes: options?.maxOutputBytes,
@@ -328,11 +334,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		if (options?.onlyIfUnset) {
-			this.envDefaults = { ...this.envDefaults, ...vars };
-		} else {
-			this.env = { ...this.env, ...vars };
-		}
+		this.environment.setEnvVars(vars, options);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
@@ -377,8 +379,13 @@ class ContainerSandboxInstance implements SandboxInstance {
 		// Run detached inside the container; redirect to a log file we can tail.
 		// `sh -lc` has no cwd flag, so cd into the working dir first when requested.
 		const prefix = options?.cwd ? `cd ${shellQuote(options.cwd)} && ` : '';
-		const processCommand = withEnvPrefix(cmd, removeUndefined(options?.env ?? {}));
-		const res = await this.dexec(`${prefix}${processCommand} > ${logPath} 2>&1 &`, ['-d']);
+		const processCommand = await this.environment.command(cmd, removeUndefined(options?.env ?? {}));
+		const res = await this.dexec(
+			`${prefix}${processCommand} > ${logPath} 2>&1 &`,
+			['-d'],
+			undefined,
+			true,
+		);
 		if (res.exitCode !== 0) {
 			throw new Error(`startProcess failed: ${res.stderr || res.stdout}`);
 		}

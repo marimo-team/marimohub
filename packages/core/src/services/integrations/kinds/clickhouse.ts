@@ -3,7 +3,6 @@ import { UnavailableError, ValidationError } from '../../../errors';
 import { isRecord } from '../../../internal/validation';
 import type { IntegrationProbe } from '../../../ports/integrations';
 import { validateTableData } from '../data-preview/previewResult';
-import { sqlIdentifier } from '../data-preview/sql';
 import {
 	basicAuthHeader,
 	defineIntegration,
@@ -32,6 +31,10 @@ const clickhouseConfig = z.strictObject({
 	username: z.string().min(1).default('default'),
 	password: zSecret().optional().describe('Omit for a user with no password'),
 });
+
+function sqlIdentifier(value: string): string {
+	return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+}
 
 export const clickhouse = defineIntegration({
 	kind: 'clickhouse',

@@ -37,6 +37,8 @@ export interface SecretResolver {
 	readonly locatorPlaceholder: string;
 	readonly locatorHelp: string;
 	readonly docsUrl?: string;
+	/** Optional policy-only check, without fetching the secret. */
+	authorize?(ref: SecretRef, context: SecretResolutionContext): void;
 	/** → plaintext. MUST throw a safe error without echoing the ref on failure. */
 	resolve(ref: SecretRef, context: SecretResolutionContext): Promise<string>;
 }

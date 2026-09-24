@@ -62,6 +62,38 @@ describe('makeIntegrations', () => {
 		});
 	});
 
+	it.each([
+		['s3', 'MARIMOHUB_STORAGE_S3_BUCKET', { bucket: 'hub', auth: { method: 'ambient' } }],
+		['gcs', 'MARIMOHUB_STORAGE_GCS_BUCKET', { bucket: 'hub', auth: { method: 'ambient' } }],
+		[
+			'azure_blob',
+			'MARIMOHUB_STORAGE_AZURE_CONTAINER',
+			{ container: 'hub', account_name: 'account', auth: { method: 'ambient' } },
+		],
+	])(
+		'hides configured control-plane storage from ambient %s browsing',
+		async (kind, variable, config) => {
+			const integrations = makeIntegrations(
+				{ [variable]: 'hub', MARIMOHUB_DATA_BROWSER: 'full' },
+				new MemoryBucket(),
+			).integrations!;
+			const pid = createProjectId();
+			const created = await integrations.create(pid, { kind, name: 'hub', config }, ACTOR);
+			const capability = await integrations.browseCapability(pid, created.id, {
+				project_id: pid,
+				user_id: ACTOR,
+				user_email: 'user@example.com',
+				allow_server_ambient: { s3: true, gcs: true, azure_blob: true },
+			});
+			expect(capability.surfaces.objects).toMatchObject({
+				available: false,
+				preview: false,
+				download: false,
+				reason: expect.stringContaining('Control-plane storage'),
+			});
+		},
+	);
+
 	it('keeps ambient BigQuery notebook configuration valid while explaining hub limitations', async () => {
 		const { integrations } = makeIntegrations({}, new MemoryBucket());
 		const pid = createProjectId();

@@ -27,6 +27,7 @@ import { collectTarballWorkspace, validateCommit, validateRootPath } from './git
 import { materializeGitDirectory } from './githubGitDirectory';
 
 export type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './githubClient';
+export { parseRepository as parseGitHubRepository } from './githubValidation';
 
 interface GitHubPublicationContext {
 	repository: GitHubRepositoryWriter;

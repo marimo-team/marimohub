@@ -15,8 +15,8 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - '127.0.0.1:9000:9000'
+      - '127.0.0.1:9001:9001'
     volumes:
       - minio-data:/data
 
@@ -44,7 +44,7 @@ services:
       createbucket:
         condition: service_completed_successfully
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
       # Published kernel ports (must match MARIMOHUB_COMPUTE_LOCAL_PORTS). Bound to
       # 127.0.0.1 so kernels are reachable only from this machine.
       - '127.0.0.1:2718-2723:2718-2723'

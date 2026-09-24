@@ -67,6 +67,69 @@ describe('buildGitCloneCommand', () => {
 });
 
 describe('withEnvPrefix', () => {
+	it.each([
+		'',
+		'1NAME',
+		'A-B',
+		'A B',
+		'A=B',
+		'A; echo injected',
+		'A$(echo injected)',
+		'A\n',
+		'A\0',
+		'É',
+	])('rejects the invalid environment name %j in either map', (name) => {
+		expect(() => withEnvPrefix('run', { [name]: 'value' })).toThrow('Invalid environment name');
+		expect(() => withEnvPrefix('run', {}, { [name]: 'value' })).toThrow('Invalid environment name');
+	});
+
+	it.each([
+		{ inherited: undefined, forced: undefined, expected: 'fallback' },
+		{ inherited: '', forced: undefined, expected: '' },
+		{ inherited: 'inherited', forced: undefined, expected: 'inherited' },
+		{ inherited: undefined, forced: '', expected: '' },
+		{ inherited: 'inherited', forced: '', expected: '' },
+		{ inherited: '', forced: 'forced', expected: 'forced' },
+	])('preserves presence and precedence: %j', ({ inherited, forced, expected }) => {
+		const result = spawnSync(
+			'sh',
+			[
+				'-uc',
+				withEnvPrefix(
+					'printf "%s" "$TEST_VALUE"',
+					forced === undefined ? {} : { TEST_VALUE: forced },
+					{ TEST_VALUE: 'fallback' },
+				),
+			],
+			{
+				encoding: 'utf8',
+				env: inherited === undefined ? {} : { TEST_VALUE: inherited },
+			},
+		);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe('');
+		expect(result.stdout).toBe(expected);
+	});
+
+	it('exports valid identifiers and literal values into a child shell', () => {
+		const value = 'quotes\'"; $(printf injected) `printf injected`\nend';
+		const result = spawnSync(
+			'sh',
+			[
+				'-uc',
+				withEnvPrefix(
+					`sh -uc 'printf "%s\\n%s" "$_mixed_1" "$default_2"'`,
+					{ _mixed_1: value },
+					{ default_2: value },
+				),
+			],
+			{ encoding: 'utf8', env: {} },
+		);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe('');
+		expect(result.stdout).toBe(`${value}\n${value}`);
+	});
+
 	it('returns the command unchanged when there are no env vars', () => {
 		expect(withEnvPrefix('echo hi', {})).toBe('echo hi');
 	});
@@ -80,18 +143,18 @@ describe('withEnvPrefix', () => {
 	});
 
 	it('emits defaults as guarded exports the existing environment wins over', () => {
-		expect(withEnvPrefix('run', {}, { A: '1' })).toBe('[ -n "${A:-}" ] || export A=\'1\'; run');
+		expect(withEnvPrefix('run', {}, { A: '1' })).toBe('[ -n "${A+x}" ] || export A=\'1\'; run');
 	});
 
 	it('puts forced exports before default guards, so a forced value wins the key', () => {
 		expect(withEnvPrefix('run', { A: '1' }, { A: '2', B: '3' })).toBe(
-			"export A='1'; [ -n \"${A:-}\" ] || export A='2'; [ -n \"${B:-}\" ] || export B='3'; run",
+			"export A='1'; [ -n \"${A+x}\" ] || export A='2'; [ -n \"${B+x}\" ] || export B='3'; run",
 		);
 	});
 
 	it('shell-quotes default values (injection-safe)', () => {
 		expect(withEnvPrefix('run', {}, { TOKEN: "a'b" })).toBe(
-			"[ -n \"${TOKEN:-}\" ] || export TOKEN='a'\\''b'; run",
+			"[ -n \"${TOKEN+x}\" ] || export TOKEN='a'\\''b'; run",
 		);
 	});
 });

@@ -60,6 +60,7 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | --- | --- | --- |
 | `image.repository` | `ghcr.io/marimo-team/marimohub` | |
 | `image.tag` | `""` → chart `appVersion` | Override to decouple image from chart version |
+| `image.digest` | `""` | Optional `sha256:…` digest. Overrides the tag. |
 | `replicaCount` | `2` | Stateless API replicas |
 | `serviceAccount.create` / `.name` | `true` / `""` | Create a release-scoped account, or name an existing account |
 | `serviceAccount.annotations` | `{}` | Workload identity annotations, such as EKS IRSA or GKE Workload Identity |

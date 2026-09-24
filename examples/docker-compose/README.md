@@ -8,6 +8,9 @@ open http://localhost:3000        # SPA + API
 open http://localhost:9001        # MinIO console (minioadmin / minioadmin)
 ```
 
+Ports bind to `127.0.0.1`. For remote access, configure authentication and a
+reverse proxy. Then change the Compose port bindings.
+
 - **Storage** → MinIO via the S3 adapter (`forcePathStyle: true`). The server runs
   `verifyConditionalWrites()` at boot to confirm MinIO honors `If-Match`.
 - **Auth** → `dev` bypass (every request is a fixed local user). Switch to OIDC by

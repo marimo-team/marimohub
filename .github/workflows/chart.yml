@@ -33,6 +33,9 @@ jobs:
       - name: helm lint
         run: helm lint --strict charts/marimohub
 
+      - name: Verify image references
+        run: bash charts/marimohub/ci/check-images.sh
+
       - name: Verify sandbox pre-puller configuration
         run: |
           if error=$(helm template test charts/marimohub \

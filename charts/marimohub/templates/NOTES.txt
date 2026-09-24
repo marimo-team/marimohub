@@ -1,4 +1,4 @@
-marimohub {{ .Values.image.tag | default .Chart.AppVersion }} deployed as release {{ .Release.Name }} (namespace {{ .Release.Namespace }}).
+marimohub {{ include "marimohub.imageVersion" . }} deployed as release {{ .Release.Name }} (namespace {{ .Release.Namespace }}).
 
 Image:  {{ include "marimohub.image" . }}
 Secret: {{ include "marimohub.secretName" . }}{{ if .Values.secrets.existingSecret }} (existing){{ else if .Values.secrets.data }} (chart-managed){{ else }} (NOT FOUND — create it, see below){{ end }}

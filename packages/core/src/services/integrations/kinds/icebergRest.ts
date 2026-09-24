@@ -468,7 +468,7 @@ export const icebergRest = defineIntegration({
 			const catalog = await openCatalog(config, probe, request?.signal);
 			const body = await catalogGet(
 				catalog,
-				`/namespaces/${namespacePathSegment(catalog, namespace)}/tables/${encodeURIComponent(table)}`,
+				`/namespaces/${namespacePathSegment(catalog, namespace)}/tables/${catalogPathSegment(table)}`,
 			);
 			return tableSchemaOf(body);
 		},
@@ -1315,7 +1315,13 @@ function childNamespaces(items: string[][], parent: string[]): string[][] {
  * is used and re-encoded by URLSearchParams.
  */
 function namespacePathSegment(catalog: OpenedCatalog, namespace: string[]): string {
-	return namespace.map(encodeURIComponent).join(catalog.separator);
+	return namespace.map(catalogPathSegment).join(catalog.separator);
+}
+
+function catalogPathSegment(value: string): string {
+	if (value === '.' || value === '..')
+		throw new ValidationError('Catalog path segments cannot be dots.');
+	return encodeURIComponent(value);
 }
 
 function decodedSeparator(separator: string): string {

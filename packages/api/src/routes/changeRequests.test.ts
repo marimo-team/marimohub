@@ -593,7 +593,7 @@ describe('change request routes', () => {
 			'SERVICE_UNAVAILABLE',
 		);
 
-		expect(getPublisher).toHaveBeenCalledExactlyOnceWith('github');
+		expect(getPublisher).toHaveBeenCalledExactlyOnceWith('github', projectId);
 		expect(capture).not.toHaveBeenCalled();
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});

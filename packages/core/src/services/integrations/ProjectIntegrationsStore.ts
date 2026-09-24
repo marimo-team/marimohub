@@ -817,7 +817,7 @@ class ScopedIntegrationsStore {
 				// New drafts use an in-memory codec so testing does not require persistence.
 				const resolutionContext = this.secretResolutionContext(scope);
 				const transient = transientSealer(
-					(ref) => this.storeReference(ref),
+					(ref) => this.storeReference(ref, resolutionContext),
 					(ref, at) => this.resolveReference(ref, at, resolutionContext),
 				);
 				const stored = await sealConfig({
@@ -1771,7 +1771,7 @@ class ScopedIntegrationsStore {
 					const envelope = await codec.encrypt(plaintext, { path: contextFor(at) });
 					return { $secret: { kind: 'managed', envelope } };
 				},
-				reference: (ref) => this.storeReference(ref),
+				reference: (ref) => this.storeReference(ref, this.secretResolutionContext(scope, id)),
 			},
 		});
 	}
@@ -1803,11 +1803,20 @@ class ScopedIntegrationsStore {
 		});
 	}
 
-	private storeReference(ref: SecretRef): Promise<StoredSecretValue> {
-		if (!this.resolvers.has(ref.backend)) {
+	private storeReference(
+		ref: SecretRef,
+		context: SecretResolutionContext,
+	): Promise<StoredSecretValue> {
+		const resolver = this.resolvers.get(ref.backend);
+		if (!resolver) {
 			throw new ValidationError(
 				`Unknown secret backend "${ref.backend}" — no resolver is configured for it.`,
 			);
+		}
+		try {
+			resolver.authorize?.(ref, context);
+		} catch {
+			throw new ValidationError('Secret reference is not allowed for this integration scope.');
 		}
 		return Promise.resolve({
 			$secret: { kind: 'reference', backend: ref.backend, locator: ref.locator },

@@ -93,6 +93,7 @@ export interface FakeSandbox {
 	sandboxId: string;
 	runCalls: string[][];
 	startCalls: string[][];
+	stdinWrites: string[];
 	/** One entry per `files.write(files)` call — the set sent in that call. */
 	batchWrites: { path: string; content: unknown }[][];
 	reads: Record<string, string>;
@@ -137,6 +138,7 @@ export function makeWorld(opts?: {
 			sandboxId,
 			runCalls: [],
 			startCalls: [],
+			stdinWrites: [],
 			batchWrites: [],
 			reads: {},
 			deleted: 0,
@@ -153,8 +155,18 @@ export function makeWorld(opts?: {
 					fake.runCalls.push([...command]);
 					return runImpl(command);
 				},
-				start: async (command: readonly string[]) => {
+				start: async (command: readonly string[], options?: { stdin?: boolean }) => {
 					fake.startCalls.push([...command]);
+					if (options?.stdin)
+						return {
+							...fakeProcess({ exitCode: 0 }),
+							stdin: {
+								write: async (content: string) => {
+									fake.stdinWrites.push(content);
+								},
+								close: async () => {},
+							},
+						};
 					return opts?.startImpl?.(command) ?? fakeProcess(opts?.proc);
 				},
 			},
@@ -223,8 +235,18 @@ export function makeWorld(opts?: {
 					entry.fake.runCalls.push([...command]);
 					return runImpl(command);
 				},
-				start: async (command: readonly string[]) => {
+				start: async (command: readonly string[], options?: { stdin?: boolean }) => {
 					entry.fake.startCalls.push([...command]);
+					if (options?.stdin)
+						return {
+							...fakeProcess({ exitCode: 0 }),
+							stdin: {
+								write: async (content: string) => {
+									entry.fake.stdinWrites.push(content);
+								},
+								close: async () => {},
+							},
+						};
 					return opts?.startImpl?.(command) ?? fakeProcess();
 				},
 			},

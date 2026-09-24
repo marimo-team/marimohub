@@ -50,6 +50,11 @@
 			"groupName": "marimo sandbox image",
 			"groupSlug": "marimo-sandbox",
 			"schedule": ["* 0-4 * * *"]
+		},
+		{
+			"description": "Keep the chart default tied to appVersion; image.digest is an operator override",
+			"matchFileNames": ["charts/**/values.yaml"],
+			"pinDigests": false
 		}
 	]
 }

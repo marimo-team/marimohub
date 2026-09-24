@@ -10,6 +10,8 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { SecretsManagerClientConfig } from '@aws-sdk/client-secrets-manager';
 import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
+import { allowsProjectResource } from '@marimo-hub/core/project-resource-policy';
+import type { ProjectResourceRule } from '@marimo-hub/core/project-resource-policy';
 import type {
 	SecretRef,
 	SecretResolutionContext,
@@ -27,6 +29,7 @@ export type SecretFetcher = (secretId: string) => Promise<GetSecretValueResult>;
 
 export interface AwsSecretsManagerResolverOptions {
 	fetch: SecretFetcher;
+	allowedSecrets?: readonly ProjectResourceRule[];
 	/** In-memory cache TTL in ms; `0` (default) disables caching. */
 	cacheTtlMs?: number;
 	/** Injectable clock for deterministic cache tests. */
@@ -50,14 +53,34 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 	private readonly cacheTtlMs: number;
 	private readonly now: () => number;
 	private readonly cache = new Map<string, CacheEntry>();
+	private readonly allowedSecrets?: readonly ProjectResourceRule[];
 
 	constructor(opts: AwsSecretsManagerResolverOptions) {
 		this.fetch = opts.fetch;
+		this.allowedSecrets = opts.allowedSecrets;
 		this.cacheTtlMs = opts.cacheTtlMs ?? 0;
 		this.now = opts.now ?? (() => Date.now());
 	}
 
-	async resolve(ref: SecretRef, _context?: SecretResolutionContext): Promise<string> {
+	authorize(ref: SecretRef, context?: SecretResolutionContext): void {
+		if (this.allowedSecrets === undefined) return;
+		const { secretId } = parseLocator(ref.locator);
+		if (
+			!context ||
+			!allowsProjectResource(
+				this.allowedSecrets,
+				secretId,
+				context.scope === 'project' ? context.projectId : undefined,
+			)
+		)
+			throw new SecretResolutionError(
+				'forbidden',
+				'Secret reference is not allowed for this integration scope.',
+			);
+	}
+
+	async resolve(ref: SecretRef, context?: SecretResolutionContext): Promise<string> {
+		this.authorize(ref, context);
 		const { secretId, jsonKey } = parseLocator(ref.locator);
 		const result = await this.fetchCached(secretId);
 
@@ -148,6 +171,7 @@ function describeAwsError(err: unknown): string {
 }
 
 export interface CreateAwsSecretsManagerResolverOptions {
+	allowedSecrets?: readonly ProjectResourceRule[];
 	region?: string;
 	credentials?: { accessKeyId: string; secretAccessKey: string };
 	cacheTtlMs?: number;
@@ -166,6 +190,7 @@ export function createAwsSecretsManagerResolver(
 	if (opts.credentials) config.credentials = opts.credentials;
 	const client = new SecretsManagerClient(config);
 	return new AwsSecretsManagerResolver({
+		allowedSecrets: opts.allowedSecrets,
 		fetch: async (secretId) => {
 			const out = await client.send(new GetSecretValueCommand({ SecretId: secretId }));
 			return { SecretString: out.SecretString, SecretBinary: out.SecretBinary };

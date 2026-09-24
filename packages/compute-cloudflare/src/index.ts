@@ -249,6 +249,7 @@ class CloudflareSandboxInstance implements SandboxInstance {
 				endpoint: options.endpoint,
 				prefix: options.prefix,
 				credentials: options.credentials,
+				credentialProxy: true,
 			});
 			return;
 		}

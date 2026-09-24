@@ -236,7 +236,7 @@ describe('CloudflareSandboxProvider', () => {
 			expect(makeProvider().create(SANDBOX_ID).supportsBucketMount).toBe(true);
 		});
 
-		it('reshapes the options object into positional (name, path, {endpoint,prefix,credentials})', async () => {
+		it('keeps endpoint mount credentials behind the credential proxy', async () => {
 			// The single most error-prone line in the adapter: object → positional args.
 			fakeSandbox.mountBucket.mockResolvedValueOnce(undefined);
 			const credentials = { accessKeyId: 'a', secretAccessKey: 'b' };
@@ -251,6 +251,7 @@ describe('CloudflareSandboxProvider', () => {
 				endpoint: 'https://e',
 				prefix: 'pfx',
 				credentials,
+				credentialProxy: true,
 			});
 		});
 
@@ -418,7 +419,7 @@ describe('CloudflareSandboxProvider', () => {
 
 			await instance.exec('run');
 			expect(fakeSandbox.exec).toHaveBeenCalledWith(
-				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run',
+				'[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; run',
 			);
 
 			fakeSandbox.startProcess.mockResolvedValueOnce({
@@ -430,14 +431,14 @@ describe('CloudflareSandboxProvider', () => {
 			});
 			await instance.startProcess('serve');
 			expect(fakeSandbox.startProcess).toHaveBeenCalledWith(
-				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; serve',
+				'[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; serve',
 				expect.anything(),
 			);
 
 			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
 			await instance.gitCheckout('https://x/y');
 			expect(fakeSandbox.exec).toHaveBeenCalledWith(
-				"[ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; git clone 'https://x/y' '.'",
+				"[ -n \"${CACHE+x}\" ] || export CACHE='/tmp/c'; git clone 'https://x/y' '.'",
 			);
 		});
 	});

@@ -1,11 +1,12 @@
-import type {
-	SourceControlPublisher,
-	SourceControlReader,
-	SourceControlRegistry,
-} from '@marimo-hub/core';
-import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
+import type { SourceControlRegistry } from '@marimo-hub/core/ports/source-control';
+import type { ProjectId } from '@marimo-hub/core/ids';
+import { ForbiddenError } from '@marimo-hub/core/errors';
+import { allowsProjectResource } from '@marimo-hub/core/project-resource-policy';
+import { GitHubAppPublisher, parseGitHubRepository } from '@marimo-hub/source-control-github';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import { projectResourceRules } from './projectResourcePolicy';
+import { ConfiguredSourceControlRegistry } from './sourceControlRegistry';
 
 const GITHUB_APP_ID_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID';
 const GITHUB_APP_PRIVATE_KEY_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY';
@@ -13,32 +14,6 @@ const GITHUB_APP_PRIVATE_KEY_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_
 type SourceControlConfig = {
 	sourceControl?: SourceControlRegistry;
 };
-
-function sourceControlRegistry(
-	publishers: readonly SourceControlPublisher[],
-	readers: readonly SourceControlReader[],
-): SourceControlRegistry {
-	const publishersByProvider = new Map(
-		publishers.map((publisher) => [publisher.provider, publisher]),
-	);
-	const readersByProvider = new Map(readers.map((reader) => [reader.provider, reader]));
-	if (
-		publishersByProvider.size !== publishers.length ||
-		readersByProvider.size !== readers.length
-	) {
-		throw new ConfigError('Source-control provider ids must be unique');
-	}
-	return {
-		getPublisher: (provider) => publishersByProvider.get(provider),
-		getReader: (provider) => readersByProvider.get(provider),
-		publisherProviders: () => [...publishersByProvider.keys()],
-		readerProviders: () => [...readersByProvider.keys()],
-		pullSourceProviders: () =>
-			[...readersByProvider.values()]
-				.filter((reader) => reader.fetchGitDirectory)
-				.map((reader) => reader.provider),
-	};
-}
 
 export function makeSourceControl(env: Env): SourceControlConfig {
 	const appId = env[GITHUB_APP_ID_ENV]?.trim();
@@ -72,7 +47,25 @@ export function makeSourceControl(env: Env): SourceControlConfig {
 		});
 	}
 
-	return {
-		sourceControl: sourceControlRegistry([github], [github]),
+	const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES';
+	const rules = projectResourceRules(env, variable);
+	const canonical = (repository: string) => {
+		const { owner, repo } = parseGitHubRepository(repository);
+		return `${owner}/${repo}`.toLowerCase();
 	};
+	if (rules) {
+		try {
+			for (const rule of rules) if (rule.resource !== '*') rule.resource = canonical(rule.resource);
+		} catch {
+			throw new ConfigError(`${variable} contains an invalid GitHub repository.`, { variable });
+		}
+	}
+	const authorize = rules
+		? (repository: string, projectId?: ProjectId) => {
+				if (!allowsProjectResource(rules, canonical(repository), projectId)) {
+					throw new ForbiddenError('Repository is not allowed for this project.');
+				}
+			}
+		: undefined;
+	return { sourceControl: new ConfiguredSourceControlRegistry([github], [github], authorize) };
 }

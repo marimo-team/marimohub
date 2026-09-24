@@ -157,6 +157,9 @@ API key. Project configuration and bring-your-own-key providers can override it.
 - The session cookie is signed with `MARIMOHUB_AUTH_SESSION_SECRET` (HS256, ≥32
   bytes). Generate it with `openssl rand -base64 32` and treat it as a secret.
 
+Cloudflare Access requires a valid team name and a nonblank application audience.
+Tokens must use RS256 and match both the audience and team issuer.
+
 See [Auth](/auth) for provider setup.
 
 ## Authorization (roles)
@@ -306,3 +309,30 @@ manager and inject via `envFrom` — see [Operations](/operations#secrets) and
 [Deploying with Helm](/deploying/helm). The published image and Helm chart run
 **non-root with a read-only root filesystem and all capabilities dropped** by
 default.
+
+Kubernetes, Docker, Podman, and CoreWeave send session environment values through
+stdin to private files outside the workspace. Exec arguments contain no
+injected values. Files use mode `0600` in directories with mode `0700` and remain
+until sandbox destruction. Notebook code can read its own credentials.
+
+Environment preparation adds one remote command per new set of values, including
+process overrides. Commands reuse the file while values stay unchanged.
+Workspace file transfers are unchanged.
+
+Cloudflare endpoint bucket mounts use the SDK credential proxy to keep mount
+credentials outside the container filesystem.
+
+## Shared deployment credentials
+
+[AWS](integration-secrets.md#aws-project-policies) and
+[GitHub](syncing.md#github-project-policies) project policies are optional. Unset
+or blank policies keep existing access with a startup warning. The hub enforces
+configured rules before it uses shared credentials.
+
+Ambient object browsing excludes the configured hub bucket or Azure container,
+even with server ambient access enabled. The exclusion matches names within each
+provider, across endpoints and accounts. Explicit integration credentials remain
+available.
+
+Use a separate data bucket for ambient browsing. Restrict hub storage credentials
+to hub storage.

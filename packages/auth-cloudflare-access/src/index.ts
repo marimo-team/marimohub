@@ -21,8 +21,15 @@ export class CloudflareAccessAuthenticator implements Authenticator {
 	private jwks: ReturnType<typeof createRemoteJWKSet>;
 
 	constructor(private config: CloudflareAccessConfig) {
+		const team = config.team.trim().toLowerCase();
+		const aud = config.aud.trim();
+		if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(team) || team.length > 63) {
+			throw new Error('Cloudflare Access requires a valid team name.');
+		}
+		if (!aud) throw new Error('Cloudflare Access requires an application audience.');
+		this.config = { team, aud };
 		this.jwks = createRemoteJWKSet(
-			new URL(`https://${config.team}.cloudflareaccess.com/cdn-cgi/access/certs`),
+			new URL(`https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`),
 		);
 	}
 
@@ -31,7 +38,11 @@ export class CloudflareAccessAuthenticator implements Authenticator {
 		if (!jwt) return null;
 
 		try {
-			const { payload } = await jwtVerify(jwt, this.jwks, { audience: this.config.aud });
+			const { payload } = await jwtVerify(jwt, this.jwks, {
+				audience: this.config.aud,
+				issuer: `https://${this.config.team}.cloudflareaccess.com`,
+				algorithms: ['RS256'],
+			});
 			if (!payload.sub || typeof payload.email !== 'string') {
 				console.error('Access JWT missing sub or email claim');
 				return null;

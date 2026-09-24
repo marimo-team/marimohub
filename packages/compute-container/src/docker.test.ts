@@ -72,6 +72,20 @@ describe('DockerCompute', () => {
 		expect(write!.args.join(' ')).toContain("cat > '/home/appuser/notebooks/notebook.py'");
 	});
 
+	it('does not run the user command when private environment preparation fails', async () => {
+		const { runner, calls } = fakeRunner((args) =>
+			args.at(-1)?.includes('marimohub-env-')
+				? { stdout: '', stderr: 'secret value', exitCode: 1 }
+				: defaultHandler(args),
+		);
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+		await sb.setEnvVars({ TOKEN: 'secret value' });
+		await expect(sb.exec('run-user-command')).rejects.toThrow(
+			'Could not prepare sandbox environment',
+		);
+		expect(calls.some((call) => call.args.at(-1)?.includes('run-user-command'))).toBe(false);
+	});
+
 	it('writeFiles throws when mkdir fails', async () => {
 		const { runner } = fakeRunner((args) => {
 			const base = defaultHandler(args);
@@ -168,9 +182,9 @@ describe('DockerCompute', () => {
 		await sb.exec('echo "$TOKEN:$MODE"');
 
 		const exec = calls.find((c) => c.args.at(-1)?.includes('echo "$TOKEN:$MODE"'));
-		expect(exec?.args.at(-1)).toBe(
-			"export TOKEN='a'\\''b'; export MODE='prod'; echo \"$TOKEN:$MODE\"",
-		);
+		expect(exec?.args.at(-1)).toContain('env.sh');
+		expect(calls.flatMap((c) => c.args).join(' ')).not.toContain("a'b");
+		expect(calls.find((c) => c.stdin)?.stdin).toBe("export TOKEN='a'\\''b'; export MODE='prod'; ");
 	});
 
 	it('applies onlyIfUnset vars as guarded defaults after the forced exports', async () => {
@@ -182,8 +196,10 @@ describe('DockerCompute', () => {
 		await sb.exec('echo defaults');
 
 		const exec = calls.find((c) => c.args.at(-1)?.includes('echo defaults'));
-		expect(exec?.args.at(-1)).toBe(
-			"export MODE='prod'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; echo defaults",
+		expect(exec?.args.at(-1)).toContain('env.sh');
+		expect(exec?.args.at(-1)).not.toContain('/tmp/c');
+		expect(calls.find((c) => c.stdin)?.stdin).toBe(
+			"export MODE='prod'; [ -n \"${CACHE+x}\" ] || export CACHE='/tmp/c'; ",
 		);
 	});
 
@@ -401,9 +417,13 @@ describe('DockerCompute', () => {
 		expect(proc.command).toBe('uv run marimo edit app.py');
 		expect(logs).toEqual({ stdout: 'kernel log', stderr: '' });
 		const launch = calls.find((c) => c.args[0] === 'exec' && c.args.includes('-d'))!;
-		expect(launch.args.at(-1)).toContain(
-			"cd '/workspace' && export SESSION_TOKEN='a b'; uv run marimo edit app.py >",
-		);
+		expect(launch.args.at(-1)).toContain('env.sh');
+		expect(calls.flatMap((c) => c.args).join(' ')).not.toContain('a b');
+		expect(
+			calls.some(
+				(c) => typeof c.stdin === 'string' && c.stdin.includes("export SESSION_TOKEN='a b'"),
+			),
+		).toBe(true);
 		expect(launch.args.at(-1)).not.toContain('OMITTED');
 		expect(calls.some((c) => c.args[0] === 'exec' && c.args.includes('pkill'))).toBe(true);
 	});

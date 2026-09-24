@@ -52,7 +52,17 @@ describe('clickhouse browse', () => {
 		const tables = fakeProbe(result(['name'], [['orders']]));
 		await browse.listTables(config(), tables.probe, ['weird"db'], { limit: 10 });
 		expect(new URL(tables.calls[0].url).searchParams.get('query')).toBe(
-			'SHOW TABLES FROM "weird""db" FORMAT JSONCompact',
+			String.raw`SHOW TABLES FROM "weird\"db" FORMAT JSONCompact`,
+		);
+	});
+
+	it('escapes backslashes before quotes in database and table identifiers', async () => {
+		const { probe, calls } = fakeProbe(result(['id'], []));
+		await browse.previewRows!(config(), probe, [String.raw`db\"name`], String.raw`table\"name`, {
+			limit: 1,
+		});
+		expect(new URL(calls[0].url).searchParams.get('query')).toBe(
+			String.raw`SELECT * FROM "db\\\"name"."table\\\"name" LIMIT 1 FORMAT JSONCompact`,
 		);
 	});
 

@@ -90,6 +90,20 @@ describe('Source drift and sync-now routes', () => {
 		return data.notebook.id;
 	}
 
+	it('passes project identity to readers for pull creation and subsequent sync', async () => {
+		const reader = stubReader({
+			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
+		});
+		const sourceControl = stubSourceControl({ reader });
+		const getReader = vi.spyOn(sourceControl, 'getReader');
+		const { request } = createTestApi({ bucket, deps: { sourceControl } });
+		const nid = await createPullNotebook(request);
+		expect(getReader).toHaveBeenCalledWith('github', projectId);
+		getReader.mockClear();
+		await expectOk(await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`));
+		expect(getReader).toHaveBeenCalledExactlyOnceWith('github', projectId);
+	});
+
 	it('creates a pull source with an inline first sync and no push credentials', async () => {
 		const reader = stubReader({
 			fetchGitDirectory: async () => [
