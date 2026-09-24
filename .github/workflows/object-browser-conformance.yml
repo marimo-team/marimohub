@@ -28,11 +28,10 @@ jobs:
             - args: ['--frozen-lockfile']
       - name: Start MinIO
         run: |
-          docker build -t marimohub/minio:ci scripts/dev-services/minio
           docker run -d --name minio -p 19000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            marimohub/minio:ci server /data
+            ghcr.io/marimo-team/marimohub-minio@sha256:ddd7806175ccb64aee1cb8c821bbc1bb1b7d6d8ab6689b62e06ad390d943953d server /data
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:19000/minio/health/live && break
             sleep 1

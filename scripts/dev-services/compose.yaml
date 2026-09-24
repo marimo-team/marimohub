@@ -7,11 +7,8 @@ name: marimohub-dev-services
 
 services:
   minio:
-    build: &minio-build
-      context: ./minio
-      args:
-        # RELEASE.2025-04-22T22-12-26Z retains the dev console used here.
-        MINIO_VERSION: v0.0.0-20250422221226-0d7408fc9969
+    # RELEASE.2025-04-22T22-12-26Z retains the dev console used here.
+    image: &minio-image ghcr.io/marimo-team/marimohub-minio@sha256:2e0f6a2b25003b5498ee044fe80d95114d3fd4f6da2408f359fc111e901e2470
     command: server /data --console-address ':9001'
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -29,7 +26,7 @@ services:
       - minio-data:/data
 
   minio-seed:
-    build: *minio-build
+    image: *minio-image
     depends_on:
       minio:
         condition: service_healthy
