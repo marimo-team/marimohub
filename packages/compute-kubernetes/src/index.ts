@@ -319,6 +319,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<void> {
 		if (this.resolved) return;
+		this.environment.invalidate();
 		const options: EnsureSandboxOptions = {
 			podTemplate: this.config.podTemplate,
 			name: this.name,

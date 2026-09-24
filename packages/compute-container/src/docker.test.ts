@@ -199,7 +199,7 @@ describe('DockerCompute', () => {
 		expect(exec?.args.at(-1)).toContain('env.sh');
 		expect(exec?.args.at(-1)).not.toContain('/tmp/c');
 		expect(calls.find((c) => c.stdin)?.stdin).toBe(
-			"export MODE='prod'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; ",
+			"export MODE='prod'; [ -n \"${CACHE+x}\" ] || export CACHE='/tmp/c'; ",
 		);
 	});
 

@@ -66,6 +66,59 @@ export function containerCliContract(
 	spawnRunner: (bin?: string) => ContainerRunner,
 ): void {
 	describe(`Container CLI contract: ${name}`, () => {
+		it.each(['destroyed', 'missing', 'stopped'] as const)(
+			'restores the environment after the container is %s without rewriting it while running',
+			async (change) => {
+				let state: 'missing' | 'stopped' | 'running' = 'missing';
+				const files = new Map<string, string | Uint8Array>();
+				const { runner, calls } = createRecordingContainerRunner((args, stdin) => {
+					if (args[0] === 'inspect') {
+						return {
+							stdout: String(state === 'running'),
+							stderr: '',
+							exitCode: state === 'missing' ? 1 : 0,
+						};
+					}
+					if (args[0] === 'run' || args[0] === 'rm') {
+						state = args[0] === 'run' ? 'running' : 'missing';
+						files.clear();
+					}
+					if (args[0] === 'exec') {
+						const command = args.at(-1)!;
+						const destination = command.match(/cat > '([^']+)'/)?.[1];
+						if (destination && stdin !== undefined) files.set(destination, stdin);
+						const source = command.match(/^\. '([^']+)'/)?.[1];
+						if (source && !files.has(source)) {
+							return { stdout: '', stderr: 'environment file missing', exitCode: 2 };
+						}
+					}
+					return;
+				});
+				const sandbox = makeProvider({}, runner).create(SANDBOX_ID);
+				await sandbox.setEnvVars({ TOKEN: 'secret' });
+				await sandbox.setEnvVars({ CACHE: '/tmp/cache' }, { onlyIfUnset: true });
+				await sandbox.exec('first');
+				await sandbox.exec('second');
+				const writes = () => calls.filter((call) => call.stdin !== undefined);
+				expect(writes()).toHaveLength(1);
+				const originalPath = [...files.keys()][0];
+
+				if (change === 'destroyed') await sandbox.destroy();
+				else state = change;
+				if (change === 'missing') files.clear();
+				expect((await sandbox.exec('after-recreation')).success).toBe(true);
+				await sandbox.exec('still-running');
+
+				expect(calls.filter((call) => call.args[0] === 'run')).toHaveLength(2);
+				expect(writes().map((call) => call.stdin)).toEqual([
+					"export TOKEN='secret'; [ -n \"${CACHE+x}\" ] || export CACHE='/tmp/cache'; ",
+					"export TOKEN='secret'; [ -n \"${CACHE+x}\" ] || export CACHE='/tmp/cache'; ",
+				]);
+				expect(files.size).toBe(1);
+				expect(files.has(originalPath)).toBe(false);
+			},
+		);
+
 		it('creates a labelled container with a random loopback port and optional network', async () => {
 			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const provider = makeProvider(

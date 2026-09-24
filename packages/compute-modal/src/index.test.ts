@@ -309,13 +309,13 @@ describe('ModalCompute', () => {
 		expect(sandbox.execCalls[0].command).toEqual([
 			'sh',
 			'-lc',
-			'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run',
+			'[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; run',
 		]);
 		expect(sandbox.execCalls[0].options?.env).toEqual({ A: '1' });
 
 		await instance.startProcess('serve');
 		const started = sandbox.execCalls.at(-1)!;
-		expect(started.command[2].startsWith('[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; ')).toBe(
+		expect(started.command[2].startsWith('[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; ')).toBe(
 			true,
 		);
 		expect(started.options?.env).toEqual({ A: '1' });

@@ -63,6 +63,42 @@ describe('ShellEnvironment', () => {
 		expect(write).toHaveBeenCalledTimes(2);
 	});
 
+	it('prepares unchanged values again after the sandbox filesystem is replaced', async () => {
+		const write = vi.fn<(_path: string, _content: string) => Promise<void>>(async () => {});
+		const env = new ShellEnvironment(write);
+		env.setEnvVars({ TOKEN: 'value' });
+		env.setEnvVars({ CACHE: 'default' }, { onlyIfUnset: true });
+		const first = await env.command('run');
+		env.invalidate();
+		const second = await env.command('run');
+		expect(second).not.toBe(first);
+		expect(write).toHaveBeenCalledTimes(2);
+		expect(write.mock.calls[1]).toEqual([expect.any(String), write.mock.calls[0][1]]);
+		expect(await env.command('run')).toBe(second);
+		expect(write).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not reuse a write that was in flight when the sandbox was replaced', async () => {
+		let finishOld!: () => void;
+		const write = vi
+			.fn()
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((resolve) => {
+						finishOld = resolve;
+					}),
+			)
+			.mockResolvedValue(undefined);
+		const env = new ShellEnvironment(write);
+		const first = env.command('run', { TOKEN: 'value' });
+		env.invalidate();
+		const second = await env.command('run', { TOKEN: 'value' });
+		finishOld();
+		expect(await first).not.toBe(second);
+		expect(await env.command('run', { TOKEN: 'value' })).toBe(second);
+		expect(write).toHaveBeenCalledTimes(2);
+	});
+
 	it('does no I/O without env and refuses invalid names before writing', async () => {
 		const write = vi.fn(async () => {});
 		const env = new ShellEnvironment(write);
@@ -161,8 +197,8 @@ describe('ShellEnvironment', () => {
 		await env.command('run', { TOKEN: 'command' });
 		await env.command('run');
 		expect(writes).toEqual([
-			"export TOKEN='command'; [ -n \"${CACHE:-}\" ] || export CACHE='second'; ",
-			"export TOKEN='session'; [ -n \"${CACHE:-}\" ] || export CACHE='second'; ",
+			"export TOKEN='command'; [ -n \"${CACHE+x}\" ] || export CACHE='second'; ",
+			"export TOKEN='session'; [ -n \"${CACHE+x}\" ] || export CACHE='second'; ",
 		]);
 	});
 });

@@ -7,6 +7,10 @@ export class ShellEnvironment {
 
 	constructor(private readonly write: (path: string, content: string) => Promise<void>) {}
 
+	invalidate(): void {
+		this.pending = undefined;
+	}
+
 	setEnvVars(vars: Record<string, string>, options?: { onlyIfUnset?: boolean }): void {
 		if (options?.onlyIfUnset) {
 			this.defaults = { ...this.defaults, ...vars };
@@ -21,9 +25,6 @@ export class ShellEnvironment {
 		defaults: Record<string, string> = this.defaults,
 	): Promise<string> {
 		const env = { ...this.env, ...overrides };
-		for (const name of [...Object.keys(env), ...Object.keys(defaults)]) {
-			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error('Invalid environment name');
-		}
 		const content = withEnvPrefix('', env, defaults);
 		if (!content) return command;
 		// Immutable files keep concurrent commands from observing another command's env.

@@ -414,6 +414,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<CoreWeaveSandbox> {
 		if (this.sandbox) return this.sandbox;
+		this.environment.invalidate();
 		// find = the reconnect lookup, create = the API accepting the start request,
 		// boot = reaching `running` (cold start + image pull). create and boot are
 		// split because only that says whether the dominant startup cost is a real

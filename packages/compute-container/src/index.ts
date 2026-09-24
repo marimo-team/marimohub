@@ -208,6 +208,8 @@ class ContainerSandboxInstance implements SandboxInstance {
 		const inspect = await this.runner.run(['inspect', '-f', '{{.State.Running}}', this.name]);
 		if (inspect.exitCode === 0 && inspect.stdout.trim() === 'true') return;
 
+		this.environment.invalidate();
+
 		// A stopped container with our name would make `run --name` fail — clear it.
 		if (inspect.exitCode === 0) {
 			await this.runner.run(['rm', '-f', this.name]);

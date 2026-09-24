@@ -602,6 +602,32 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('destroy()', () => {
+		it('prepares retained environment values at a new path when the same instance recreates its sandbox', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			await inst.setEnvVars({ TOKEN: 'secret' });
+			await inst.setEnvVars({ CACHE: '/tmp/cache' }, { onlyIfUnset: true });
+			await inst.exec('first');
+			await inst.exec('second');
+			const original = world.registry.get('cw-1')!.fake;
+			expect(original.stdinWrites).toHaveLength(1);
+			await inst.destroy();
+			expect(world.registry.size).toBe(0);
+			await inst.exec('first');
+			await inst.exec('second');
+			const recreated = world.registry.get('cw-2')!.fake;
+
+			expect(world.created).toHaveLength(2);
+			expect(recreated.stdinWrites).toEqual([
+				"export TOKEN='secret'; [ -n \"${CACHE+x}\" ] || export CACHE='/tmp/cache'; ",
+			]);
+			expect(recreated.stdinWrites).toEqual(original.stdinWrites);
+			const newPath = recreated.startCalls[0][2].match(/cat > '([^']+)'/)?.[1];
+			expect(newPath).toMatch(/^\/tmp\/marimohub-env-.+\/env.sh$/);
+			expect(original.runCalls.at(-1)![2]).not.toContain(newPath);
+			expect(recreated.runCalls.at(-1)![2]).toContain(`. '${newPath}'`);
+		});
+
 		it('deletes the cached sandbox handle', async () => {
 			const world = makeWorld();
 			const inst = makeCompute(world).create(SANDBOX_ID);
@@ -881,7 +907,7 @@ describe('CoreWeaveCompute', () => {
 			const cmd = fake.stdinWrites.at(-1)!;
 			expect(fake.runCalls.at(-1)![2]).toContain('/tmp/marimohub-env-');
 			expect(JSON.stringify([...fake.runCalls, ...fake.startCalls])).not.toContain('export ');
-			expect(cmd).toBe("export A='1'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; ");
+			expect(cmd).toBe("export A='1'; [ -n \"${CACHE+x}\" ] || export CACHE='/tmp/c'; ");
 		});
 	});
 

@@ -714,13 +714,13 @@ describe('E2bCompute', () => {
 		await sb.exec('echo env');
 
 		const run = fake.runOptions.find((r) => r.cmd.endsWith('echo env'));
-		expect(run?.cmd).toBe('[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; echo env');
+		expect(run?.cmd).toBe('[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; echo env');
 		expect(run?.options?.envs).toEqual({ TOKEN: 'abc' });
 
 		const proc = await sb.startProcess('run kernel', { cwd: '/workspace' });
 		await proc.kill();
 		expect(fake.backgroundCalls[0]).toMatchObject({
-			cmd: '[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run kernel > /tmp/marimohub-kernel.log 2>&1',
+			cmd: '[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; run kernel > /tmp/marimohub-kernel.log 2>&1',
 			options: { cwd: '/workspace', envs: { TOKEN: 'abc' } },
 		});
 	});

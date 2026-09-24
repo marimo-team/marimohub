@@ -419,7 +419,7 @@ describe('CloudflareSandboxProvider', () => {
 
 			await instance.exec('run');
 			expect(fakeSandbox.exec).toHaveBeenCalledWith(
-				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run',
+				'[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; run',
 			);
 
 			fakeSandbox.startProcess.mockResolvedValueOnce({
@@ -431,14 +431,14 @@ describe('CloudflareSandboxProvider', () => {
 			});
 			await instance.startProcess('serve');
 			expect(fakeSandbox.startProcess).toHaveBeenCalledWith(
-				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; serve',
+				'[ -n "${CACHE+x}" ] || export CACHE=\'/tmp/c\'; serve',
 				expect.anything(),
 			);
 
 			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
 			await instance.gitCheckout('https://x/y');
 			expect(fakeSandbox.exec).toHaveBeenCalledWith(
-				"[ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; git clone 'https://x/y' '.'",
+				"[ -n \"${CACHE+x}\" ] || export CACHE='/tmp/c'; git clone 'https://x/y' '.'",
 			);
 		});
 	});
