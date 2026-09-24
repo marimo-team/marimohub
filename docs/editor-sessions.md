@@ -77,6 +77,13 @@ sandbox mounts (`workspace/` in the bucket). Project editors can create, edit,
 rename, copy, move, and delete files and directories there without starting a
 sandbox. Viewers can browse and download only.
 
+<figure class="doc-screenshot">
+  <a href="/screenshots/workspace-files.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Workspace browser with a file tree and README editor (new tab)">
+    <img src="/screenshots/workspace-files.png" alt="Workspace browser with a file tree and README editor" width="1062" height="390" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Browse the workspace and edit files beside the file list.</figcaption>
+</figure>
+
 The browser is read-only when:
 
 - the notebook is Git-synced (`git_source`): the workspace is an immutable

@@ -20,6 +20,15 @@ The local stack uses memory storage, local subprocess compute, and dev auth. It
 is useful for evaluation and development, but it is not durable and must not
 serve real users. See [Testing locally](./testing-locally.md) for details.
 
+Open a notebook to edit Python cells and explore their outputs in marimo.
+
+<figure class="doc-screenshot">
+  <a href="/screenshots/editor-chart.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: A marimo Python cell with its rendered revenue chart (new tab)">
+    <img src="/screenshots/editor-chart.png" alt="A marimo Python cell with its rendered revenue chart" width="921" height="453" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Python source and its chart output in the notebook editor.</figcaption>
+</figure>
+
 The [Docker Compose
 example](https://github.com/marimo-team/marimohub/tree/main/examples/docker-compose/local-compute)
 uses filesystem storage to preserve notebooks across restarts and runs kernels

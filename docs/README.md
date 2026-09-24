@@ -6,6 +6,7 @@ backends, deploy, operate, and troubleshoot the hub.
 
 ## Start
 
+- [Feature gallery](./feature-gallery.md) - a visual tour of notebook workflows, collaboration, and automation.
 - [Getting started](./getting-started.md) - the operator path from local trial to
   production deployment.
 - [Testing locally](./testing-locally.md) - run the full stack on your laptop

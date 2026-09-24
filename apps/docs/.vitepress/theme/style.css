@@ -59,3 +59,46 @@
 	margin: 0 0 0.5rem;
 	color: var(--vp-c-text-2);
 }
+
+.vp-doc .doc-screenshot {
+	max-width: 560px;
+	margin: 24px auto;
+}
+
+.vp-doc .doc-screenshot--narrow {
+	max-width: 420px;
+}
+
+.vp-doc .doc-screenshot--portrait {
+	max-width: 360px;
+}
+
+.vp-doc .doc-screenshot--card {
+	max-width: 300px;
+}
+
+.doc-screenshot > a {
+	display: block;
+	border-radius: 8px;
+	cursor: zoom-in;
+}
+
+.doc-screenshot > a:focus-visible {
+	outline: 2px solid var(--vp-c-brand-1);
+	outline-offset: 4px;
+}
+
+.doc-screenshot img {
+	width: 100%;
+	height: auto;
+	border: 1px solid var(--vp-c-divider);
+	border-radius: 8px;
+}
+
+.doc-screenshot figcaption {
+	margin-top: 8px;
+	color: var(--vp-c-text-2);
+	font-size: 13px;
+	line-height: 1.5;
+	text-align: center;
+}
