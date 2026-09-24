@@ -9,7 +9,7 @@ import type {
 	ProbeRequestInit,
 } from '../../../ports/integrations';
 import { bundleIntegrations as bundleWorkloadIntegrations, INTEGRATIONS_DIR } from '../bundle';
-import { SECRET_MARK } from '../secretFields';
+import { parseAuthoringWithPlaceholders, SECRET_MARK } from '../secretFields';
 import type { IntegrationDefinition, RenderInput } from '../sdk';
 import { athena } from './awsQueryEngines';
 import { bigquery } from './bigquery';
@@ -834,6 +834,60 @@ describe('kind renders (golden)', () => {
 	});
 
 	it.each([
+		{},
+		{ endpoint: '', allowed_locations: [] },
+		{ endpoint: '', region: 'us-east-1', force_virtual_addressing: false, allowed_locations: [] },
+	])('iceberg_rest ignores an empty vended S3 form block: %j', (vendedS3) => {
+		for (const uri of [
+			'https://catalog.cloudflarestorage.com/account-id/warehouse',
+			'https://catalog.example.com/iceberg',
+		]) {
+			const base = { uri, auth: { method: 'bearer_token', token: 'catalog-token' } };
+			const withoutBlock = icebergRest.configSchema.parse({
+				...base,
+				storage: { scheme: 'catalog' },
+			});
+			const config = icebergRest.configSchema.parse({
+				...base,
+				storage: { scheme: 'catalog', vended_s3: vendedS3 },
+			});
+
+			expect(config).toStrictEqual(withoutBlock);
+			expect(() => icebergRest.validate?.(config)).not.toThrow();
+			expect(icebergRest.query?.readiness?.(config)).toEqual(
+				icebergRest.query?.readiness?.(withoutBlock),
+			);
+		}
+	});
+
+	it('iceberg_rest accepts an empty vended S3 block with a retained secret', () => {
+		const registry = defaultRegistry();
+		const parsed = parseAuthoringWithPlaceholders({
+			schema: icebergRest.configSchema,
+			paths: registry.secretPathsOf('iceberg_rest'),
+			authoring: {
+				uri: 'https://catalog.cloudflarestorage.com/account-id/warehouse',
+				auth: { method: 'bearer_token', token: { $secret: { kind: 'managed', set: true } } },
+				storage: {
+					scheme: 'catalog',
+					vended_s3: {
+						endpoint: '',
+						region: 'us-east-1',
+						force_virtual_addressing: false,
+						allowed_locations: [],
+					},
+				},
+			},
+		});
+		const config = icebergRest.configSchema.parse(parsed);
+		expect(config.storage).toStrictEqual({ scheme: 'catalog' });
+		expect(() => icebergRest.validate?.(config)).not.toThrow();
+		expect(icebergRest.query?.readiness?.(config).every((check) => check.ready)).toBe(true);
+	});
+
+	it.each([
+		['an unknown field', { endpoint: '', allowed_locations: [], unexpected: true }],
+		['a non-default region', { endpoint: '', region: 'eu-west-1', allowed_locations: [] }],
 		['missing storage bounds', { endpoint: 'https://objects.example.com', allowed_locations: [] }],
 		[
 			'an endpoint path',

@@ -115,6 +115,15 @@ export function branchForValue(node: JsonSchemaNode, value: unknown): JsonSchema
 export const isRecordNode = (node: JsonSchemaNode): boolean =>
 	node.type === 'object' && !node.properties && typeof node.additionalProperties === 'object';
 
+export function isOptionalObject(node: JsonSchemaNode, required: boolean): boolean {
+	if (required || node.default !== undefined || isSecretNode(node) || isRecordNode(node))
+		return false;
+	const branches = unionBranches(node);
+	return branches
+		? branches.every((branch) => branch.type === 'object' && !isRecordNode(branch))
+		: node.type === 'object';
+}
+
 /** Builds a create-form value from schema defaults and first union branches. */
 export function buildDefaults(node: JsonSchemaNode): unknown {
 	if (node.default !== undefined) return structuredClone(node.default);
@@ -126,6 +135,7 @@ export function buildDefaults(node: JsonSchemaNode): unknown {
 			if (isRecordNode(node)) return {};
 			const out: Record<string, unknown> = {};
 			for (const [key, child] of Object.entries(node.properties ?? {})) {
+				if (isOptionalObject(child, isRequired(node, key))) continue;
 				if (typeof child.const === 'string') {
 					out[key] = child.const;
 				} else {
@@ -152,6 +162,7 @@ const isRequired = (parent: JsonSchemaNode, key: string): boolean =>
 
 /** Removes unset optional values so server-side defaults can apply. */
 export function pruneForSubmit(node: JsonSchemaNode, value: unknown): unknown {
+	if (value === undefined) return undefined;
 	const branch = branchForValue(node, value);
 	if (branch) return pruneForSubmit(branch, value);
 	if (node.type === 'object') {
@@ -200,6 +211,7 @@ export function redactSecretsForRequest(
 		) {
 			return null;
 		}
+		if (value === undefined && rawValue === undefined) return undefined;
 		const rawRecord = (rawValue as Record<string, unknown>) ?? {};
 		const record = (value as Record<string, unknown>) ?? {};
 		if (isRecordNode(node)) {
@@ -236,6 +248,7 @@ export function validateValue(
 	secretSources: SecretSources = { inline: true, references: [] },
 ): Record<string, string> {
 	const errors: Record<string, string> = {};
+	if (!required && value === undefined) return errors;
 	const at = (p: string, message: string) => {
 		errors[p] = message;
 	};

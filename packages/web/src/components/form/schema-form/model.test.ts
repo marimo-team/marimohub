@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { icebergRest } from '../../../../../core/src/services/integrations/kinds/icebergRest';
+import { IntegrationRegistry } from '../../../../../core/src/services/integrations/registry';
 import {
 	branchDiscriminator,
 	branchForValue,
@@ -17,7 +19,7 @@ import type { JsonSchemaNode, UiHints } from './model';
 /** Fixture covering defaults, secrets, unions, and key/value records. */
 const schema: JsonSchemaNode = {
 	type: 'object',
-	required: ['host', 'database', 'username', 'password'],
+	required: ['host', 'database', 'username', 'password', 'auth'],
 	properties: {
 		host: { type: 'string' },
 		port: { type: 'integer', minimum: 1, maximum: 65535, default: 5432 },
@@ -52,6 +54,151 @@ const schema: JsonSchemaNode = {
 };
 
 const authNode = schema.properties!.auth;
+
+describe('optional config objects', () => {
+	const credentials: JsonSchemaNode = {
+		type: 'object',
+		required: ['token'],
+		properties: {
+			token: { type: 'string', 'x-marimohub-secret': true },
+			region: { type: 'string', default: 'us-east-1' },
+		},
+	};
+	const optionalSchema: JsonSchemaNode = {
+		type: 'object',
+		properties: {
+			credentials,
+			connection: { anyOf: [credentials] },
+		},
+	};
+
+	it('keeps absent objects and object unions out of defaults, submissions, and readiness', () => {
+		const value = buildDefaults(optionalSchema);
+		expect(value).toEqual({});
+		expect(pruneForSubmit(optionalSchema, value)).toEqual({});
+		expect(redactSecretsForRequest(optionalSchema, value)).toEqual({});
+		expect(validateValue(optionalSchema, value)).toEqual({});
+		expect(needsSecretSource(optionalSchema, value)).toBe(false);
+	});
+
+	it('validates enabled objects and keeps their defaults and secrets', () => {
+		const value = { credentials: buildDefaults(credentials) };
+		expect(validateValue(optionalSchema, value)).toEqual({ 'credentials.token': 'Required' });
+		expect(pruneForSubmit(optionalSchema, value)).toEqual(value);
+		expect(needsSecretSource(optionalSchema, value)).toBe(true);
+		expect(redactSecretsForRequest(optionalSchema, value)).toEqual({
+			credentials: { token: KEEP_SECRET, region: 'us-east-1' },
+		});
+	});
+
+	it('keeps required and defaulted objects enabled', () => {
+		const requiredSchema: JsonSchemaNode = {
+			...optionalSchema,
+			required: ['credentials'],
+			properties: {
+				credentials,
+				connection: { ...credentials, default: { token: '', region: 'eu-west-1' } },
+			},
+		};
+		expect(buildDefaults(requiredSchema)).toEqual({
+			credentials: { token: '', region: 'us-east-1' },
+			connection: { token: '', region: 'eu-west-1' },
+		});
+		expect(validateValue(requiredSchema, {})).toHaveProperty('credentials.token');
+	});
+
+	it('preserves configured objects and omits explicitly disabled objects', () => {
+		const raw = { credentials: { token: KEEP_SECRET, region: 'eu-west-1' }, connection: undefined };
+		const submitted = pruneForSubmit(optionalSchema, raw);
+		expect(submitted).toEqual({ credentials: raw.credentials });
+		expect(redactSecretsForRequest(optionalSchema, submitted, raw)).toEqual(submitted);
+	});
+
+	it('preserves evidence of invalid object shapes during redaction', () => {
+		expect(redactSecretsForRequest(optionalSchema, {}, { credentials: 'secret' })).toEqual({
+			credentials: null,
+		});
+		expect(
+			redactSecretsForRequest(optionalSchema, {}, { credentials: { unknown: 'secret' } }),
+		).toEqual({
+			credentials: { unknown: null },
+		});
+	});
+});
+
+describe('Iceberg REST form submissions', () => {
+	const registry = new IntegrationRegistry();
+	registry.register(icebergRest);
+	const icebergSchema = registry.jsonSchema('iceberg_rest') as JsonSchemaNode;
+	const storageSchema = icebergSchema.properties!.storage;
+	const catalogBranch = branchForValue(storageSchema, { scheme: 'catalog' })!;
+	const vendedSchema = catalogBranch.properties!.vended_s3;
+	const base = {
+		uri: 'https://catalog.cloudflarestorage.com/account-id/warehouse',
+		auth: { method: 'bearer_token', token: 'test-token' },
+	};
+
+	it.each(['create', 'edit', 'switch storage'])(
+		'omits vended S3 for R2 Data Catalog during %s',
+		(flow) => {
+			const value = {
+				...(buildDefaults(icebergSchema) as Record<string, unknown>),
+				...base,
+				storage: flow === 'switch storage' ? buildDefaults(catalogBranch) : { scheme: 'catalog' },
+			};
+			const raw = flow === 'edit' ? icebergRest.configSchema.parse(value) : value;
+			const submitted = pruneForSubmit(icebergSchema, raw) as Record<string, unknown>;
+			expect(submitted.storage).toEqual({ scheme: 'catalog' });
+			expect(validateValue(icebergSchema, raw)).toEqual({});
+			expect(redactSecretsForRequest(icebergSchema, submitted, raw)).toMatchObject({
+				storage: { scheme: 'catalog' },
+				auth: { token: KEEP_SECRET },
+			});
+			expect(
+				(redactSecretsForRequest(icebergSchema, submitted, raw) as typeof submitted).storage,
+			).toEqual({ scheme: 'catalog' });
+			const parsed = icebergRest.configSchema.parse(submitted);
+			expect(() => icebergRest.validate?.(parsed)).not.toThrow();
+			expect(icebergRest.query?.readiness?.(parsed).every((check) => check.ready)).toBe(true);
+		},
+	);
+
+	it('retains and rejects a partially configured vended S3 block', () => {
+		const raw = {
+			...base,
+			storage: {
+				scheme: 'catalog',
+				vended_s3: {
+					...(buildDefaults(vendedSchema) as Record<string, unknown>),
+					region: 'eu-west-1',
+				},
+			},
+		};
+		const submitted = pruneForSubmit(icebergSchema, raw);
+		expect(validateValue(icebergSchema, raw)).toHaveProperty('storage.vended_s3.endpoint');
+		expect(icebergRest.configSchema.safeParse(submitted).success).toBe(false);
+		expect(redactSecretsForRequest(icebergSchema, submitted, raw)).toMatchObject({
+			storage: { vended_s3: { endpoint: '', allowed_locations: [] } },
+		});
+	});
+
+	it('retains valid vended S3 settings for generic catalogs', () => {
+		const storage = {
+			scheme: 'catalog',
+			vended_s3: {
+				endpoint: 'https://objects.example.com',
+				region: 'us-east-1',
+				force_virtual_addressing: false,
+				allowed_locations: [{ bucket: 'warehouse', prefix: 'production' }],
+			},
+		};
+		const raw = { ...base, uri: 'https://catalog.example.com', storage };
+		const submitted = pruneForSubmit(icebergSchema, raw) as Record<string, unknown>;
+		expect(submitted.storage).toEqual(storage);
+		expect(validateValue(icebergSchema, raw)).toEqual({});
+		expect(() => icebergRest.validate?.(icebergRest.configSchema.parse(submitted))).not.toThrow();
+	});
+});
 
 describe('buildDefaults', () => {
 	it('fills scalar defaults, empty strings, and the first union branch with its discriminator', () => {

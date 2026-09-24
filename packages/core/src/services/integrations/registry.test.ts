@@ -2,12 +2,43 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { IntegrationRegistry } from './registry';
 import { defineIntegration } from './sdk';
+import { icebergRest } from './kinds/icebergRest';
 
 afterEach(() => {
 	vi.restoreAllMocks();
 });
 
 describe('IntegrationRegistry', () => {
+	it('registers Iceberg REST with structured input and stored schemas after preprocessing', () => {
+		const registry = new IntegrationRegistry();
+		registry.register(icebergRest);
+
+		expect(registry.get('iceberg_rest')).toBe(icebergRest);
+		for (const schema of [
+			registry.jsonSchema('iceberg_rest'),
+			registry.storedJsonSchema('iceberg_rest'),
+		]) {
+			expect(schema).toHaveProperty('properties.storage.default', { scheme: 'catalog' });
+			expect(schema).toHaveProperty(
+				'properties.storage.oneOf',
+				expect.arrayContaining([
+					expect.objectContaining({
+						properties: expect.objectContaining({
+							scheme: { type: 'string', const: 'catalog' },
+							vended_s3: expect.objectContaining({
+								type: 'object',
+								properties: expect.objectContaining({
+									endpoint: expect.objectContaining({ type: 'string' }),
+									allowed_locations: expect.objectContaining({ type: 'array', minItems: 1 }),
+								}),
+							}),
+						}),
+					}),
+				]),
+			);
+		}
+	});
+
 	it('describes table, object, combined, and non-browsable surfaces', () => {
 		const registry = new IntegrationRegistry();
 		const base = {
