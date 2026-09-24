@@ -18,8 +18,14 @@
 	"customManagers": [
 		{
 			"customType": "regex",
-			"managerFilePatterns": ["/^images\\/marimo-sandbox\\/Dockerfile$/"],
-			"matchStrings": ["ARG MARIMO_VERSION=(?<currentValue>\\S+)"],
+			"managerFilePatterns": [
+				"/^images\\/marimo-sandbox\\/Dockerfile$/",
+				"/^scripts\\/test-app-source\\.py$/"
+			],
+			"matchStrings": [
+				"ARG MARIMO_VERSION=(?<currentValue>\\d\\S+)",
+				"marimo==(?<currentValue>[^\"]+)"
+			],
 			"depNameTemplate": "marimo",
 			"datasourceTemplate": "pypi",
 			"versioningTemplate": "pep440"
@@ -46,7 +52,7 @@
 			"description": "Check the sandbox image for marimo updates daily",
 			"matchDatasources": ["pypi"],
 			"matchPackageNames": ["marimo"],
-			"matchFileNames": ["images/marimo-sandbox/Dockerfile"],
+			"matchFileNames": ["images/marimo-sandbox/Dockerfile", "scripts/test-app-source.py"],
 			"groupName": "marimo sandbox image",
 			"groupSlug": "marimo-sandbox",
 			"schedule": ["* 0-4 * * *"]
