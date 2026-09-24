@@ -53,6 +53,17 @@ material instead.
 pnpm --filter @marimo-hub/config docs:generate
 ```
 
+## Screenshots
+
+- Capture the local hub with sample data. Exclude credentials, private URLs, and personal information.
+- Crop to the relevant cell, dialog, or controls. Place the image beside the instructions it illustrates.
+- Store PNG files in `docs/public/screenshots/`. Use a descriptive filename, such as `workspace-files.png`.
+- Use a `<figure class="doc-screenshot">` with descriptive image alt text and a short `<figcaption>`.
+- Link the image to its full-size file. Include the new-tab behavior in the link’s accessible label.
+- Set the image’s intrinsic `width` and `height`, plus `loading="lazy"` and `decoding="async"`.
+- Add `doc-screenshot--narrow` for dialogs, `doc-screenshot--portrait` for tall forms, or `doc-screenshot--card` for a single gallery card.
+- Check the page on desktop and mobile, in light and dark themes.
+
 ## Verification
 
 For docs-only changes, run:

@@ -3,6 +3,13 @@
 Choose **Gallery** on the project page. The hub remembers your view.
 A notebook and its app share one thumbnail.
 
+<figure class="doc-screenshot doc-screenshot--card">
+  <a href="/screenshots/notebook-gallery.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Revenue explorer gallery card with a chart thumbnail (new tab)">
+    <img src="/screenshots/notebook-gallery.png" alt="Revenue explorer gallery card with a chart thumbnail" width="376" height="362" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>A custom thumbnail helps people recognize a notebook in Gallery view.</figcaption>
+</figure>
+
 ## Use a screenshot
 
 1. Capture the notebook or app area you want to show:
@@ -12,6 +19,13 @@ A notebook and its app share one thumbnail.
 3. Choose **Upload image**, drop an image, or paste with ⌘V or Ctrl+V.
 4. Adjust the crop in the preview.
 5. Select **Save thumbnail**.
+
+<figure class="doc-screenshot doc-screenshot--narrow">
+  <a href="/screenshots/thumbnail-crop.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Thumbnail crop selection around the revenue chart and region selector (new tab)">
+    <img src="/screenshots/thumbnail-crop.png" alt="Thumbnail crop selection around the revenue chart and region selector" width="486" height="278" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Keep the controls and outputs that identify the notebook inside the crop.</figcaption>
+</figure>
 
 Editors and higher roles can use PNG, JPEG, or WebP files up to 10 MB.
 Images must fit within 32 megapixels and 16,384 pixels per side.

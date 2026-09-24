@@ -7,6 +7,13 @@ workflow is untouched: an app runs alongside edit sessions, in its own sandbox.
 App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
 See [App pools](./app-pools.md) for capacity settings, sticky routing, and coordinated rollout requirements.
 
+<figure class="doc-screenshot">
+  <a href="/screenshots/notebook-app.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Revenue explorer app with a region selector and stacked bar chart (new tab)">
+    <img src="/screenshots/notebook-app.png" alt="Revenue explorer app with a region selector and stacked bar chart" width="1000" height="560" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The same notebook as an app: interactive controls and outputs, with code hidden.</figcaption>
+</figure>
+
 ## How it works
 
 - **Shared sandboxes, with a separate view for each user.** "Run as app" assigns
@@ -68,6 +75,13 @@ digits, or hyphens, and start and end with a letter or digit.
 Links inherit the notebook's permissions. Recipients must sign in and have
 permission to run the app. Several names can point to one notebook, and each
 uses the same notebook pool and account assignments.
+
+<figure class="doc-screenshot doc-screenshot--narrow">
+  <a href="/screenshots/app-links.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: App links dialog with a revenue link and access requirements (new tab)">
+    <img src="/screenshots/app-links.png" alt="App links dialog with a revenue link and access requirements" width="510" height="191" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>A named app link keeps the notebook’s existing permissions.</figcaption>
+</figure>
 
 Removing a link releases its name immediately. Old shared URLs can then open
 another notebook that registers the same name. Removal does not stop running

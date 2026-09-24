@@ -96,7 +96,7 @@ export default defineConfig({
 			{
 				text: 'Start',
 				link: '/getting-started',
-				activeMatch: '^/(getting-started|deployment-options|testing-locally)',
+				activeMatch: '^/(getting-started|feature-gallery|deployment-options|testing-locally)',
 			},
 			{
 				text: 'Configure',
@@ -157,6 +157,7 @@ export default defineConfig({
 				text: 'Start',
 				items: [
 					{ text: 'Overview', link: '/' },
+					{ text: 'Feature gallery', link: '/feature-gallery' },
 					{ text: 'Getting started', link: '/getting-started' },
 					{ text: 'Testing locally', link: '/testing-locally' },
 					{ text: 'Deployment options', link: '/deployment-options' },

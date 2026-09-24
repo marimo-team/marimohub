@@ -42,6 +42,9 @@ notebooks. Bring your own object storage, sandbox provider, and identity system;
 the hub provides the web app, API, version history, access control, and kernel
 lifecycle.
 
+Explore the [Feature gallery](./feature-gallery.md) for a visual tour of notebooks,
+apps, collaboration, and automation.
+
 <div class="home-wizard">
 
 ## Configure your deployment

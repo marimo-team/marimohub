@@ -21,6 +21,20 @@ UI, the Node maintenance scheduler or Cloudflare `scheduled()` handler, and the
 its entry points, and stored job definitions and run history are left untouched
 so the feature can be turned back on without loss.
 
+## Create a schedule
+
+1. Open **Jobs & schedules** from the notebook’s actions menu.
+2. Select **New job** and enter a name.
+3. Enable **Run on a schedule**, then enter a cron expression and time zone.
+4. Select **Create job**.
+
+<figure class="doc-screenshot doc-screenshot--narrow">
+  <a href="/screenshots/job-schedule.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: New job form with a weekday cron schedule at 09:00 UTC (new tab)">
+    <img src="/screenshots/job-schedule.png" alt="New job form with a weekday cron schedule at 09:00 UTC" width="670" height="334" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>This schedule runs the notebook at 09:00 UTC, Monday through Friday.</figcaption>
+</figure>
+
 ## How it works
 
 - **A job belongs to a notebook.** Open **Jobs & schedules** from the notebook's
