@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -68,4 +68,80 @@ describe('ShellEnvironment', () => {
 		);
 		expect(write).not.toHaveBeenCalled();
 	});
+	it('keeps a newer environment cached when an older in-flight write fails', async () => {
+		let rejectOld!: (error: Error) => void;
+		const oldWrite = new Promise<void>((_resolve, reject) => {
+			rejectOld = reject;
+		});
+		const write = vi
+			.fn<(_path: string, _content: string) => Promise<void>>()
+			.mockReturnValueOnce(oldWrite)
+			.mockResolvedValue(undefined);
+		const env = new ShellEnvironment(write);
+		const oldCommand = env
+			.command('old-command', { TOKEN: 'old' })
+			.catch((error: unknown) => error);
+		const newCommand = await env.command('new-command', { TOKEN: 'new' });
+		const failure = new Error('old write failed');
+		rejectOld(failure);
+		expect(await oldCommand).toBe(failure);
+		expect(await env.command('new-command', { TOKEN: 'new' })).toBe(newCommand);
+		expect(write).toHaveBeenCalledTimes(2);
+		await env.command('retry-old', { TOKEN: 'old' });
+		expect(write).toHaveBeenCalledTimes(3);
+	});
+
+	it('rejects all commands waiting on a failed shared write and retries only once', async () => {
+		let rejectWrite!: (error: Error) => void;
+		const pendingWrite = new Promise<void>((_resolve, reject) => {
+			rejectWrite = reject;
+		});
+		const write = vi.fn().mockReturnValueOnce(pendingWrite).mockResolvedValue(undefined);
+		const env = new ShellEnvironment(write);
+		const commands = Promise.allSettled(
+			['one', 'two'].map((command) => env.command(command, { TOKEN: 'value' })),
+		);
+		expect(write).toHaveBeenCalledOnce();
+		const failure = new Error('write failed');
+		rejectWrite(failure);
+		expect(await commands).toEqual([
+			{ status: 'rejected', reason: failure },
+			{ status: 'rejected', reason: failure },
+		]);
+		await Promise.all(['one', 'two'].map((command) => env.command(command, { TOKEN: 'value' })));
+		expect(write).toHaveBeenCalledTimes(2);
+	});
+
+	it('prepares changed defaults and drops the prefix when all values are cleared', async () => {
+		const write = vi.fn(async () => {});
+		const env = new ShellEnvironment(write);
+		const first = await env.command('run', {}, { CACHE: 'first' });
+		const second = await env.command('run', {}, { CACHE: 'second' });
+		expect(first).not.toBe(second);
+		expect(write).toHaveBeenCalledTimes(2);
+		expect(await env.command('run', {})).toBe('run');
+		expect(write).toHaveBeenCalledTimes(2);
+	});
+
+	it.skipIf(process.platform === 'win32')(
+		'does not execute a command when its environment file disappeared',
+		async () => {
+			const env = new ShellEnvironment(async () => {});
+			const command = await env.command('printf command-ran', { TOKEN: 'value' });
+			const result = spawnSync('sh', ['-c', command], { encoding: 'utf8' });
+			expect(result.status).not.toBe(0);
+			expect(result.stdout).toBe('');
+		},
+	);
+
+	it.each(['', '1INVALID', 'INVALID-NAME', 'A\nB'])(
+		'rejects invalid default names before writing (%j)',
+		async (name) => {
+			const write = vi.fn(async () => {});
+			await expect(
+				new ShellEnvironment(write).command('run', {}, { [name]: 'value' }),
+			).rejects.toThrow('Invalid environment name');
+			expect(write).not.toHaveBeenCalled();
+		},
+	);
 });

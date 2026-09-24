@@ -681,6 +681,64 @@ describe('ProjectIntegrationsStore', () => {
 		expect(resolve).not.toHaveBeenCalled();
 	});
 
+	it('does not resolve or persist an unauthorized draft reference', async () => {
+		const authorize = vi.fn(() => {
+			throw new Error('private policy details');
+		});
+		const resolve = vi.fn(vaultResolver.resolve);
+		const store = makeStore(bucket, true, [{ ...vaultResolver, authorize, resolve }]);
+		await expect(
+			store.test(pid, {
+				source: 'draft',
+				kind: 'echo',
+				config: {
+					token: { $secret: { kind: 'reference', backend: 'vault', locator: 'hidden/path' } },
+				},
+			}),
+		).rejects.toThrow('Secret reference is not allowed');
+		expect(authorize).toHaveBeenCalledWith(
+			{ backend: 'vault', locator: 'hidden/path' },
+			{ scope: 'project', projectId: pid },
+		);
+		expect(resolve).not.toHaveBeenCalled();
+		expect(await store.list(pid)).toEqual([]);
+	});
+
+	it('preserves the previous integration when an updated reference is denied', async () => {
+		const authorize = vi.fn<() => void>();
+		const resolve = vi.fn(vaultResolver.resolve);
+		const store = makeStore(bucket, true, [{ ...vaultResolver, authorize, resolve }]);
+		const created = await store.create(
+			pid,
+			{
+				kind: 'echo',
+				name: 'prod',
+				config: {
+					token: { $secret: { kind: 'reference', backend: 'vault', locator: 'allowed' } },
+				},
+			},
+			ACTOR,
+		);
+		const before = await store.get(pid, created.id);
+		authorize.mockImplementation(() => {
+			throw new Error('private policy details');
+		});
+		await expect(
+			store.update(
+				pid,
+				created.id,
+				{
+					config: {
+						token: { $secret: { kind: 'reference', backend: 'vault', locator: 'denied' } },
+					},
+				},
+				ACTOR,
+			),
+		).rejects.toThrow('Secret reference is not allowed');
+		expect(await store.get(pid, created.id)).toEqual(before);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
 	it('resolves references only when testing or rendering and sanitizes failures', async () => {
 		const locator = 'hidden/path#token';
 		const providerMessage = 'provider response contained plaintext';

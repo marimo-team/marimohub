@@ -106,6 +106,62 @@ describe('GitHub repository policies', () => {
 		}).sourceControl!;
 	}
 	const rule = [{ resource: 'https://github.com/Team/Repo.git', projects: [projectId] }];
+	it.each([undefined, '', ' \n\t '])(
+		'keeps the shared GitHub adapter for an unset policy (%j)',
+		async (policy) => {
+			vi.spyOn(console, 'warn').mockImplementation(() => {});
+			const head = vi
+				.spyOn(GitHubAppPublisher.prototype, 'getBranchHead')
+				.mockResolvedValue({ commit: 'abc' });
+			const sources = makeSourceControl({
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: key,
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: policy,
+			}).sourceControl!;
+			for (const pid of [undefined, projectId, ProjectId.parse('proj-1111111111111111')]) {
+				const reader = sources.getReader('github', pid)!;
+				expect(reader).toBeInstanceOf(GitHubAppPublisher);
+				expect(sources.getPublisher('github', pid)).toBe(reader);
+				await expect(reader.getBranchHead('other/unlisted-repo', 'main')).resolves.toEqual({
+					commit: 'abc',
+				});
+			}
+			expect(head).toHaveBeenCalledTimes(3);
+		},
+	);
+	it.each([null, {}, [{ resource: 'team/repo', projects: [] }]])(
+		'refuses a malformed opt-in GitHub policy instead of granting shared access (%j)',
+		(policy) => {
+			expect(() => registry(policy)).toThrow('must be a JSON array');
+		},
+	);
+	it('preserves upstream failures and permits an authorized retry', async () => {
+		const failure = new Error('GitHub temporarily unavailable');
+		const head = vi
+			.spyOn(GitHubAppPublisher.prototype, 'getBranchHead')
+			.mockRejectedValueOnce(failure)
+			.mockResolvedValue({ commit: 'abc' });
+		const reader = registry(rule).getReader('github', projectId)!;
+		await expect(reader.getBranchHead('team/repo', 'main')).rejects.toBe(failure);
+		await expect(reader.getBranchHead('team/repo', 'main')).resolves.toEqual({ commit: 'abc' });
+		expect(head).toHaveBeenCalledTimes(2);
+	});
+	it('does not let a wildcard project rule authorize other projects or unsupported hosts', async () => {
+		const head = vi
+			.spyOn(GitHubAppPublisher.prototype, 'getBranchHead')
+			.mockResolvedValue({ commit: 'abc' });
+		const sources = registry([{ resource: '*', projects: [projectId] }]);
+		const reader = sources.getReader('github', projectId)!;
+		expect(reader.supportsRepository('https://github.enterprise.example/team/repo')).toBe(false);
+		await expect(reader.getBranchHead('https://gitlab.com/team/repo', 'main')).rejects.toThrow();
+		await expect(sources.getReader('github')!.getBranchHead('team/repo', 'main')).rejects.toThrow(
+			'not allowed',
+		);
+		expect(head).not.toHaveBeenCalled();
+		await reader.getBranchHead('other/repo', 'main');
+		expect(head).toHaveBeenCalledOnce();
+	});
+
 	it('canonicalizes repository coordinates and binds every read to the project', async () => {
 		const head = vi
 			.spyOn(GitHubAppPublisher.prototype, 'getBranchHead')

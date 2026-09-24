@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAwsSecretsManagerResolver } from '@marimo-hub/secrets-aws';
 import { createKubernetesSecretResolver } from '@marimo-hub/secrets-kubernetes';
 import type * as KubernetesSecretsModule from '@marimo-hub/secrets-kubernetes';
@@ -39,7 +39,47 @@ beforeEach(() => {
 	vi.mocked(createKubernetesSecretResolver).mockClear();
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('makeSecretSources', () => {
+	it.each([undefined, '', ' \n\t '])(
+		'keeps AWS access unrestricted for an unset policy (%j)',
+		(policy) => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			makeSecretSources({
+				MARIMOHUB_SECRETS_AWS: 'true',
+				MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS: policy,
+			});
+			expect(createAwsSecretsManagerResolver).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({ allowedSecrets: undefined }),
+			);
+			expect(warn).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each(['null', '{}', 'not-json', '[{"resource":"secret","projects":[]}]'])(
+		'does not fall back to shared access for a malformed AWS policy (%s)',
+		(policy) => {
+			expect(() =>
+				makeSecretSources({
+					MARIMOHUB_SECRETS_AWS: 'true',
+					MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS: policy,
+				}),
+			).toThrow(ConfigError);
+			expect(createAwsSecretsManagerResolver).not.toHaveBeenCalled();
+		},
+	);
+
+	it('passes an explicitly empty AWS policy through as deny-all', () => {
+		makeSecretSources({
+			MARIMOHUB_SECRETS_AWS: 'true',
+			MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS: '[]',
+		});
+		expect(createAwsSecretsManagerResolver).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ allowedSecrets: [] }),
+		);
+	});
+
 	it('returns no sources when none are configured', () => {
 		expect(makeSecretSources({})).toEqual({ codec: undefined, resolvers: [] });
 	});

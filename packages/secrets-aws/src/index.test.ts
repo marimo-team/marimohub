@@ -176,6 +176,54 @@ describe('AwsSecretsManagerResolver', () => {
 describe('project policies', () => {
 	const projectId = ProjectId.parse('proj-0000000000000000');
 	const context = { scope: 'project' as const, projectId };
+	it('preserves unconfigured shared access across projects, orgs, and legacy callers', async () => {
+		const fetch = vi.fn(async () => ({ SecretString: SECRET }));
+		const r = new AwsSecretsManagerResolver({ fetch, cacheTtlMs: 10000 });
+		for (const scope of [
+			undefined,
+			context,
+			{ scope: 'org' as const },
+			{ scope: 'project' as const, projectId: ProjectId.parse('proj-1111111111111111') },
+		]) {
+			await expect(r.resolve(ref('unlisted/secret'), scope)).resolves.toBe(SECRET);
+		}
+		expect(fetch).toHaveBeenCalledOnce();
+	});
+	it('scopes wildcard resources to their projects and does not interpret partial wildcards', async () => {
+		const fetch = vi.fn(async () => ({ SecretString: SECRET }));
+		const r = new AwsSecretsManagerResolver({
+			fetch,
+			allowedSecrets: [{ resource: '*', projects: [projectId] }],
+		});
+		await expect(r.resolve(ref('anything'), { scope: 'org' })).rejects.toMatchObject({
+			reason: 'forbidden',
+		});
+		await expect(r.resolve(ref('anything'))).rejects.toMatchObject({ reason: 'forbidden' });
+		const exact = new AwsSecretsManagerResolver({
+			fetch,
+			allowedSecrets: [{ resource: 'prod/*', projects: '*' }],
+		});
+		await expect(exact.resolve(ref('prod/secret'), context)).rejects.toMatchObject({
+			reason: 'forbidden',
+		});
+		expect(fetch).not.toHaveBeenCalled();
+		await expect(r.resolve(ref('anything'), context)).resolves.toBe(SECRET);
+	});
+	it('keeps shared resource rules exact rather than granting every secret to every project', async () => {
+		const fetch = vi.fn(async () => ({ SecretString: SECRET }));
+		const r = new AwsSecretsManagerResolver({
+			fetch,
+			allowedSecrets: [{ resource: 'prod/key', projects: '*' }],
+		});
+		for (const resource of ['prod/key-extra', 'prod/key/child', 'PROD/key']) {
+			await expect(r.resolve(ref(resource), context)).rejects.toMatchObject({
+				reason: 'forbidden',
+			});
+		}
+		expect(fetch).not.toHaveBeenCalled();
+		await expect(r.resolve(ref('prod/key'), { scope: 'org' })).resolves.toBe(SECRET);
+	});
+
 	it('checks project access before fetching and before serving cached JSON fields', async () => {
 		const fetch = vi.fn(async () => ({ SecretString: JSON.stringify({ token: SECRET }) }));
 		const r = new AwsSecretsManagerResolver({
