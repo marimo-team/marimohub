@@ -1,9 +1,48 @@
 import { describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+import { NotebookMenu } from './NotebookMenu';
 import { makeFetch, renderPage, runningSession } from './NotebookPage.testWorld';
 
+function LocationState() {
+	const location = useLocation();
+	return <output data-testid="location">{JSON.stringify(location)}</output>;
+}
+
 describe('Notebook header', () => {
+	it('renders a plain title when an app viewer has no notebook actions', async () => {
+		makeFetch({ role: 'viewer', session: runningSession({ mode: 'app' }) });
+		renderPage('app');
+		await screen.findByRole('button', { name: /Session Running/ });
+		expect(screen.getByText('Forecast')).toBeVisible();
+		expect(screen.queryByRole('button', { name: 'Forecast — notebook menu' })).toBeNull();
+	});
+
+	it('preserves the notebook title when following the Jobs link', async () => {
+		const user = userEvent.setup();
+		render(
+			<MemoryRouter>
+				<NotebookMenu
+					projectId="proj-x"
+					notebookId="nb-1"
+					title="Forecast"
+					canSync={false}
+					showJobs
+				/>
+				<LocationState />
+			</MemoryRouter>,
+		);
+		await user.click(screen.getByRole('button', { name: 'Forecast — notebook menu' }));
+		const jobs = screen.getByRole('menuitem', { name: 'Jobs & schedules' });
+		expect(jobs).toHaveAttribute('href', '/projects/proj-x/notebooks/nb-1/jobs');
+		await user.click(jobs);
+		expect(JSON.parse(screen.getByTestId('location').textContent)).toMatchObject({
+			pathname: '/projects/proj-x/notebooks/nb-1/jobs',
+			state: { title: 'Forecast' },
+		});
+	});
+
 	it('groups notebook actions with attribution and opens the rename dialog', async () => {
 		const user = userEvent.setup();
 		makeFetch({ role: 'editor' });

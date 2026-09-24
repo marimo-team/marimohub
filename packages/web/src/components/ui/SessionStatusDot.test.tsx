@@ -235,4 +235,9 @@ describe('SessionStatusDot', () => {
 		const { container } = renderDot(undefined);
 		expect(container).toBeEmptyDOMElement();
 	});
+
+	it('renders nothing for an unrecognized status from the server', () => {
+		const { container } = renderDot(makeSession('restarting' as Session['status']));
+		expect(container).toBeEmptyDOMElement();
+	});
 });

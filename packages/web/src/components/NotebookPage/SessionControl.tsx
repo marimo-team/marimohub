@@ -32,10 +32,9 @@ export function SessionControl({
 	onStop,
 	onRestart,
 }: SessionControlProps) {
-	const status =
-		SESSION_STATUS[
-			error ? 'failed' : (session?.status ?? (isProvisioning ? 'starting' : 'terminated'))
-		];
+	const status = SESSION_STATUS[
+		error ? 'failed' : (session?.status ?? (isProvisioning ? 'starting' : 'terminated'))
+	] ?? { label: 'Unknown', className: 'bg-muted-foreground' };
 	const sharing = session?.ephemeral
 		? 'Temporary'
 		: session?.mode === 'edit' && session.editor_sandbox_sharing === 'shared'
@@ -54,6 +53,7 @@ export function SessionControl({
 					<span className="relative flex">
 						<SessionIcon className="size-4 md:hidden" />
 						<StatusDot
+							pulse={status.pulse}
 							className={cn(
 								status.className,
 								'max-md:absolute max-md:-right-1 max-md:-top-1 max-md:ring-2 max-md:ring-background',

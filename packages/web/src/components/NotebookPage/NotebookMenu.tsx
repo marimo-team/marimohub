@@ -60,11 +60,19 @@ export function NotebookMenu({
 			separatorBefore: options.length > 0,
 		});
 
+	if (options.length === 0) {
+		return (
+			<span className="truncate px-2 text-[13px] font-medium" title={title}>
+				{title}
+			</span>
+		);
+	}
+
 	return (
 		<>
 			<RouterProvider
 				navigate={(href) => {
-					void navigate(href);
+					void navigate(href, { state: { title } });
 				}}
 			>
 				<DropdownMenu

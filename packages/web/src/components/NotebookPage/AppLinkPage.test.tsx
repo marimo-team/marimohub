@@ -10,6 +10,9 @@ import { deepLinkKeys } from '@/api/deepLinks';
 import { AppLinkPage } from './AppLinkPage';
 import { makeFetch, runningSession, PID, NID, sessionPosts } from './NotebookPage.testWorld';
 
+const notebookFrame = (title: string, element: Element | null) =>
+	title === 'Forecast' && element?.tagName === 'IFRAME';
+
 function LocationProbe() {
 	const location = useLocation();
 	return (
@@ -106,7 +109,7 @@ describe('AppLinkPage', () => {
 					`/hub/app/${slug}?id=123&tag=one&tag=two&empty=&%61ccess_token=evil&session_id=evil&file=other.py`,
 					'/hub',
 				);
-				const frame = await screen.findByTitle('Forecast');
+				const frame = await screen.findByTitle(notebookFrame);
 				expect(frame).toHaveAttribute(
 					'src',
 					'https://sandbox.example/kernel?id=123&tag=one&tag=two&empty=&theme=light&show-code=false',
@@ -135,12 +138,12 @@ describe('AppLinkPage', () => {
 		}
 		const { existing, fetch } = linkFetch();
 		renderLink('/app/sales?id=123', '/', undefined, <Controls />);
-		const initial = await screen.findByTitle('Forecast');
+		const initial = await screen.findByTitle(notebookFrame);
 		const resolves = fetch.mock.calls.filter(([input]) =>
 			String(input).includes('/deep-links/'),
 		).length;
 		fireEvent.click(screen.getByText('Change query'));
-		const frame = screen.getByTitle('Forecast');
+		const frame = screen.getByTitle(notebookFrame);
 		expect(frame).not.toBe(initial);
 		expect(new URL(frame.getAttribute('src')!).searchParams.get('id')).toBe('456');
 		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales?id=456');
@@ -157,7 +160,7 @@ describe('AppLinkPage', () => {
 	])('opens the shared app and preserves %s', async (path) => {
 		const { existing } = linkFetch();
 		renderLink(path);
-		const frame = await screen.findByTitle('Forecast');
+		const frame = await screen.findByTitle(notebookFrame);
 		expect(new URL(frame.getAttribute('src')!).searchParams.get('filter')).toBe('2026');
 		expect(screen.getByTestId('location')).toHaveTextContent(path);
 		expect(sessionPosts(existing)).toHaveLength(1);
@@ -166,10 +169,10 @@ describe('AppLinkPage', () => {
 	it('supports deployment base paths and resolves again on remount', async () => {
 		const { fetch } = linkFetch();
 		const view = renderLink('/hub/app/sales', '/hub');
-		expect(await screen.findByTitle('Forecast')).toBeInTheDocument();
+		expect(await screen.findByTitle(notebookFrame)).toBeInTheDocument();
 		view.unmount();
 		renderLink('/hub/app/sales', '/hub');
-		expect(await screen.findByTitle('Forecast')).toBeInTheDocument();
+		expect(await screen.findByTitle(notebookFrame)).toBeInTheDocument();
 		expect(
 			fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/')),
 		).toHaveLength(2);
@@ -179,7 +182,7 @@ describe('AppLinkPage', () => {
 		const { existing } = linkFetch({ missing: true });
 		renderLink();
 		expect(await screen.findByRole('heading', { name: 'App link not found' })).toBeInTheDocument();
-		expect(screen.queryByTitle('Forecast')).toBeNull();
+		expect(screen.queryByTitle(notebookFrame)).toBeNull();
 		expect(sessionPosts(existing)).toHaveLength(0);
 	});
 
@@ -187,7 +190,7 @@ describe('AppLinkPage', () => {
 		const { existing } = linkFetch({ forbiddenSession: true });
 		renderLink();
 		expect(await screen.findByText('App access denied')).toBeInTheDocument();
-		expect(screen.queryByTitle('Forecast')).toBeNull();
+		expect(screen.queryByTitle(notebookFrame)).toBeNull();
 		expect(sessionPosts(existing)).toHaveLength(1);
 		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales');
 	});
@@ -231,7 +234,7 @@ describe('AppLinkPage', () => {
 			expect(screen.getByText('Opening app…')).toBeInTheDocument();
 			expect(existing).not.toHaveBeenCalled();
 			await act(async () => onlineManager.setOnline(true));
-			expect(await screen.findByTitle('Forecast')).toBeInTheDocument();
+			expect(await screen.findByTitle(notebookFrame)).toBeInTheDocument();
 			expect(sessionPosts(existing)).toHaveLength(1);
 		} finally {
 			view.unmount();
@@ -264,10 +267,10 @@ describe('AppLinkPage', () => {
 		expect(sessionPosts(existing)).toHaveLength(0);
 		unavailable = false;
 		await user.click(screen.getByRole('button', { name: 'Try again' }));
-		expect(await screen.findByTitle('Forecast')).toBeInTheDocument();
+		expect(await screen.findByTitle(notebookFrame)).toBeInTheDocument();
 		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales?filter=2026#chart');
 		expect(
-			new URL(screen.getByTitle('Forecast').getAttribute('src')!).searchParams.get('filter'),
+			new URL(screen.getByTitle(notebookFrame).getAttribute('src')!).searchParams.get('filter'),
 		).toBe('2026');
 		expect(sessionPosts(existing)).toHaveLength(1);
 	});

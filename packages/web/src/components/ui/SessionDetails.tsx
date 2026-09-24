@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Session } from '@/types';
 import { useUsersQuery } from '@/api/hooks';
 import { useNow } from '@/hooks/useNow';
@@ -11,11 +12,17 @@ export function SessionDetails({
 	label,
 	profiles,
 	selectedProfileName,
+	durationLabel = 'Running for',
+	detailRows,
+	children,
 }: {
 	session: Session;
 	label: string;
 	profiles: ComputeProfile[];
 	selectedProfileName?: string;
+	durationLabel?: string;
+	detailRows?: ReactNode;
+	children?: ReactNode;
 }) {
 	const now = useNow();
 	const { data: users } = useUsersQuery([session.user_id]);
@@ -42,6 +49,15 @@ export function SessionDetails({
 				)}
 				<dt>Started</dt>
 				<dd className="text-foreground">{formatRelative(session.started_at, now)}</dd>
+				{showDuration && (
+					<>
+						<dt>{durationLabel}</dt>
+						<dd className="text-foreground tabular-nums">
+							{formatDuration(session.started_at, now)}
+						</dd>
+					</>
+				)}
+				{detailRows}
 				{compute.runningLabel && (
 					<>
 						<dt>{compute.pending ? 'Running' : 'Compute'}</dt>
@@ -52,14 +68,6 @@ export function SessionDetails({
 					<>
 						<dt>Next</dt>
 						<dd className="text-foreground">{compute.selectedLabel}</dd>
-					</>
-				)}
-				{showDuration && (
-					<>
-						<dt>Running for</dt>
-						<dd className="text-foreground tabular-nums">
-							{formatDuration(session.started_at, now)}
-						</dd>
 					</>
 				)}
 			</dl>
@@ -74,6 +82,7 @@ export function SessionDetails({
 						</span>
 					),
 			)}
+			{children}
 		</div>
 	);
 }

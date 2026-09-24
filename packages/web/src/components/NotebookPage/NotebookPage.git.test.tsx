@@ -63,7 +63,8 @@ describe('NotebookPage git-synced editor', () => {
 		);
 	});
 
-	it('the app view shows no repo chip', async () => {
+	it('the app view hides Git details from the badge and notebook menu', async () => {
+		const user = userEvent.setup();
 		makeFetch({
 			role: 'editor',
 			sourceType: 'git',
@@ -73,6 +74,9 @@ describe('NotebookPage git-synced editor', () => {
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		expect(screen.queryByRole('button', { name: /Git branch .* — details/ })).toBeNull();
+		await user.click(screen.getByRole('button', { name: 'Forecast — notebook menu' }));
+		expect(screen.getByRole('menu')).toBeVisible();
+		expect(screen.queryByRole('menuitem', { name: 'Git source details…' })).toBeNull();
 	});
 
 	it('shows the banner without a restart CTA when the caller cannot stop the session', async () => {

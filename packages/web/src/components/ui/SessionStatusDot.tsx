@@ -6,6 +6,8 @@ import { Popover } from './Popover';
 import { Skeleton } from './Skeleton';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
+const EMPTY_PROFILES: ComputeProfile[] = [];
+
 interface SessionStatusDotProps {
 	/** The notebook's most-alive session, or undefined when stopped. */
 	session: Session | undefined;
@@ -18,13 +20,14 @@ interface SessionStatusDotProps {
 export function SessionStatusDot({
 	session,
 	loading,
-	profiles = [],
+	profiles = EMPTY_PROFILES,
 	selectedProfileName,
 }: SessionStatusDotProps) {
 	// Before the first poll we can't tell stopped from running; hold a placeholder.
 	if (loading && !session) return <Skeleton className="size-2 rounded-full" />;
 	if (!session || session.status === 'terminated' || session.status === 'expired') return null;
 	const dot = SESSION_STATUS[session.status];
+	if (!dot) return null;
 
 	return (
 		<Popover
