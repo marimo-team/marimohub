@@ -662,6 +662,25 @@ describe('ProjectIntegrationsStore', () => {
 		).rejects.toThrow(/Unknown secret backend "missing"/);
 	});
 
+	it('checks reference policy on save without fetching and keeps denials opaque', async () => {
+		const authorize = vi.fn<() => void>(() => {
+			throw new Error('sensitive provider details');
+		});
+		const resolve = vi.fn(vaultResolver.resolve);
+		const store = makeStore(bucket, true, [{ ...vaultResolver, authorize, resolve }]);
+		const ref = { kind: 'reference' as const, backend: 'vault', locator: 'hidden/path' };
+		const input = { kind: 'echo', name: 'prod', config: { token: { $secret: ref } } };
+		await expect(store.create(pid, input, ACTOR)).rejects.toThrow('not allowed');
+		expect(authorize).toHaveBeenCalledWith(
+			{ backend: 'vault', locator: 'hidden/path' },
+			expect.objectContaining({ scope: 'project', projectId: pid }),
+		);
+		expect(resolve).not.toHaveBeenCalled();
+		authorize.mockImplementation(() => {});
+		await store.create(pid, input, ACTOR);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
 	it('resolves references only when testing or rendering and sanitizes failures', async () => {
 		const locator = 'hidden/path#token';
 		const providerMessage = 'provider response contained plaintext';

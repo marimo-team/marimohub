@@ -460,3 +460,23 @@ If the synced version [includes `.git`](#include-git-for-multi-file-publishing),
 the proposal can contain changes from the full working tree. Otherwise, the
 proposal contains only the entry notebook. Each proposal supports 1,000 changes
 and 10 MB of added or modified content.
+
+## GitHub project policies
+
+`MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` restricts the shared GitHub
+App by repository and project:
+
+```bash
+MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]'
+```
+
+Repositories accept GitHub `owner/repo` coordinates or URLs and match without
+case sensitivity. `resource: "*"` permits any repository for the listed projects;
+`projects: "*"` shares that repository across projects. An empty array (`[]`)
+denies all access. Unset or blank preserves existing access with a startup
+warning. Malformed policies stop startup.
+
+Rules cover branch checks, workspace and Git downloads, and pull request creation
+and updates. The GitHub App installation must also permit the repository. These
+rules govern the hub's App credentials; they do not restrict credentials that
+users supply themselves. Restart the hub to apply policy changes.

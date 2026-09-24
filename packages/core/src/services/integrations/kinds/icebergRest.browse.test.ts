@@ -552,3 +552,11 @@ describe('iceberg_rest browse URI and scoping', () => {
 		expect(schema.partitioning).toEqual(['day(ts)']);
 	});
 });
+
+it.each(['.', '..'])('rejects dot path segment %s before requesting a table', async (segment) => {
+	const requested: string[] = [];
+	const probe = fakeCatalog({ '/api/catalog/v1/config': CONFIG_RESPONSE }, requested);
+	await expect(browse.listTables(config(), probe, [segment], { limit: 10 })).rejects.toThrow();
+	await expect(browse.getTableSchema(config(), probe, ['sales'], segment)).rejects.toThrow();
+	expect(requested.every((url) => new URL(url).pathname === '/api/catalog/v1/config')).toBe(true);
+});

@@ -1,5 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ProjectId } from '@marimo-hub/core/ids';
+import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
 import { makeSourceControl } from './sourceControl';
 
 function privateKey(): string {
@@ -89,5 +91,95 @@ describe('makeSourceControl', () => {
 		}
 		expect(thrown).toBeInstanceOf(Error);
 		expect((thrown as Error).message).not.toContain(secret);
+	});
+});
+
+afterEach(() => vi.restoreAllMocks());
+describe('GitHub repository policies', () => {
+	const projectId = ProjectId.parse('proj-0000000000000000');
+	const key = privateKey();
+	function registry(policy: unknown) {
+		return makeSourceControl({
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: key,
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify(policy),
+		}).sourceControl!;
+	}
+	const rule = [{ resource: 'https://github.com/Team/Repo.git', projects: [projectId] }];
+	it('canonicalizes repository coordinates and binds every read to the project', async () => {
+		const head = vi
+			.spyOn(GitHubAppPublisher.prototype, 'getBranchHead')
+			.mockResolvedValue({ commit: 'abc' });
+		const files = vi.spyOn(GitHubAppPublisher.prototype, 'fetchWorkspace').mockResolvedValue([]);
+		const git = vi.spyOn(GitHubAppPublisher.prototype, 'fetchGitDirectory').mockResolvedValue([]);
+		const sources = registry(rule);
+		const allowed = sources.getReader('github', projectId)!;
+		expect(allowed.supportsRepository('team/repo')).toBe(true);
+		await allowed.getBranchHead('team/repo', 'main');
+		await allowed.fetchWorkspace('team/repo', 'abc', '.');
+		await allowed.fetchGitDirectory!('team/repo', 'abc', 'main');
+		for (const pid of [undefined, ProjectId.parse('proj-1111111111111111')]) {
+			const denied = sources.getReader('github', pid)!;
+			expect(() => denied.supportsRepository('team/repo')).toThrow('not allowed');
+			await expect(denied.getBranchHead('team/repo', 'main')).rejects.toThrow('not allowed');
+			await expect(denied.fetchWorkspace('team/repo', 'abc', '.')).rejects.toThrow('not allowed');
+			await expect(denied.fetchGitDirectory!('team/repo', 'abc', 'main')).rejects.toThrow(
+				'not allowed',
+			);
+		}
+		await expect(allowed.getBranchHead('team/other', 'main')).rejects.toThrow('not allowed');
+		for (const call of [head, files, git]) expect(call).toHaveBeenCalledOnce();
+	});
+	it('checks publishing and retries before using the GitHub App', async () => {
+		const result = {
+			number: 1,
+			url: 'https://github.com/team/repo/pull/1',
+			headBranch: 'change',
+			headCommit: 'abc',
+		};
+		const open = vi
+			.spyOn(GitHubAppPublisher.prototype, 'openChangeRequest')
+			.mockResolvedValue(result);
+		const update = vi
+			.spyOn(GitHubAppPublisher.prototype, 'updateChangeRequest')
+			.mockResolvedValue(result);
+		const sources = registry(rule);
+		const input = {
+			repository: 'team/repo',
+			baseBranch: 'main',
+			baseCommit: 'abc',
+			headBranch: 'change',
+			title: 'Change',
+			body: '',
+			draft: true,
+			changes: [],
+		};
+		const allowed = sources.getPublisher('github', projectId)!;
+		await allowed.openChangeRequest(input);
+		await allowed.updateChangeRequest!({ ...input, changeRequest: result });
+		const denied = sources.getPublisher('github', ProjectId.parse('proj-1111111111111111'))!;
+		await expect(denied.openChangeRequest(input)).rejects.toThrow('not allowed');
+		await expect(denied.updateChangeRequest!({ ...input, changeRequest: result })).rejects.toThrow(
+			'not allowed',
+		);
+		expect(open).toHaveBeenCalledOnce();
+		expect(update).toHaveBeenCalledOnce();
+	});
+	it('supports explicit shared access, deny-all, and unknown providers', () => {
+		expect(
+			registry([{ resource: '*', projects: '*' }])
+				.getReader('github')!
+				.supportsRepository('team/repo'),
+		).toBe(true);
+		expect(() =>
+			registry([]).getReader('github', projectId)!.supportsRepository('team/repo'),
+		).toThrow('not allowed');
+		expect(registry(rule).getPublisher('gitlab', projectId)).toBeUndefined();
+		expect(registry(rule).getReader('gitlab', projectId)).toBeUndefined();
+	});
+	it('rejects non-GitHub repositories in policy configuration', () => {
+		expect(() => registry([{ resource: 'https://gitlab.com/team/repo', projects: '*' }])).toThrow(
+			'invalid GitHub repository',
+		);
 	});
 });

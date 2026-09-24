@@ -25,6 +25,7 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
+import { protectControlPlaneBucket } from './objectBrowserPolicy';
 import {
 	postgresDataAccessFeatures,
 	postgresDataAccessGate,
@@ -97,9 +98,18 @@ export function makeIntegrations(
 						},
 					};
 					return {
-						s3: new S3ObjectBrowser(browserOptions),
-						gcs: new GcsObjectBrowser(browserOptions),
-						azure_blob: new AzureBlobObjectBrowser(browserOptions),
+						s3: protectControlPlaneBucket(
+							new S3ObjectBrowser(browserOptions),
+							env.MARIMOHUB_STORAGE_S3_BUCKET,
+						),
+						gcs: protectControlPlaneBucket(
+							new GcsObjectBrowser(browserOptions),
+							env.MARIMOHUB_STORAGE_GCS_BUCKET,
+						),
+						azure_blob: protectControlPlaneBucket(
+							new AzureBlobObjectBrowser(browserOptions),
+							env.MARIMOHUB_STORAGE_AZURE_CONTAINER,
+						),
 					};
 				})();
 	const postgresRuntime = resolveHost

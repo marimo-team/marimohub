@@ -585,6 +585,27 @@ describe('KubernetesCompute', () => {
 		});
 	});
 
+	it('does not execute with an incomplete environment and retries preparation after failure', async () => {
+		let fail = true;
+		const world = makeWorld({
+			execImpl: (_cmd, stdin) =>
+				stdin && fail ? { stdout: '', stderr: 'private token value', exitCode: 1 } : undefined,
+		});
+		const sb = makeCompute(world).create(SANDBOX_ID);
+		await sb.setEnvVars({ TOKEN: 'private token value' });
+		await expect(sb.exec('run-user-command')).rejects.toThrow(
+			'Could not prepare sandbox environment',
+		);
+		expect(world.execCalls.some((call) => shCmd(call).includes('run-user-command'))).toBe(false);
+		fail = false;
+		await sb.exec('run-user-command');
+		await sb.exec('second-user-command');
+		expect(world.execCalls.filter((call) => call.stdin)).toHaveLength(2);
+		expect(world.execCalls.flatMap((call) => call.command).join(' ')).not.toContain(
+			'private token value',
+		);
+	});
+
 	describe('listFiles()', () => {
 		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 
@@ -713,8 +734,9 @@ describe('KubernetesCompute', () => {
 
 			const launch = world.execCalls.find((c) => shCmd(c).includes('setsid'))!;
 			expect(shCmd(launch)).toContain("cd '/workspace'");
-			expect(shCmd(launch)).toContain('export SESSION_TOKEN=');
-			expect(shCmd(launch)).toContain('a b');
+			expect(shCmd(launch)).not.toContain('export SESSION_TOKEN=');
+			expect(shCmd(launch)).not.toContain('a b');
+			expect(world.execCalls.find((c) => c.stdin)?.stdin).toContain("export SESSION_TOKEN='a b';");
 			expect(shCmd(launch)).not.toContain('OMITTED');
 			expect(shCmd(launch)).toContain('uv run marimo edit --port 2718');
 			// Outer shell non-login (its stdout is the parsed PID); the detached
@@ -921,8 +943,9 @@ describe('KubernetesCompute', () => {
 			await inst.exec('echo "$TOKEN:$MODE"');
 
 			const exec = world.execCalls.find((c) => shCmd(c).includes('echo "$TOKEN:$MODE"'));
-			expect(shCmd(exec!)).toBe(
-				"export TOKEN='a'\\''b'; export MODE='prod'; echo \"$TOKEN:$MODE\"",
+			expect(shCmd(exec!)).not.toContain('export TOKEN');
+			expect(world.execCalls.find((c) => c.stdin)?.stdin).toBe(
+				"export TOKEN='a'\\''b'; export MODE='prod'; ",
 			);
 		});
 
@@ -935,8 +958,9 @@ describe('KubernetesCompute', () => {
 			await inst.exec('echo defaults');
 
 			const exec = world.execCalls.find((c) => shCmd(c).includes('echo defaults'));
-			expect(shCmd(exec!)).toBe(
-				"export MODE='prod'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; echo defaults",
+			expect(shCmd(exec!)).not.toContain('export MODE');
+			expect(world.execCalls.find((c) => c.stdin)?.stdin).toBe(
+				"export MODE='prod'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; ",
 			);
 		});
 

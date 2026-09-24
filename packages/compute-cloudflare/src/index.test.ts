@@ -236,7 +236,7 @@ describe('CloudflareSandboxProvider', () => {
 			expect(makeProvider().create(SANDBOX_ID).supportsBucketMount).toBe(true);
 		});
 
-		it('reshapes the options object into positional (name, path, {endpoint,prefix,credentials})', async () => {
+		it('keeps endpoint mount credentials behind the credential proxy', async () => {
 			// The single most error-prone line in the adapter: object → positional args.
 			fakeSandbox.mountBucket.mockResolvedValueOnce(undefined);
 			const credentials = { accessKeyId: 'a', secretAccessKey: 'b' };
@@ -251,6 +251,7 @@ describe('CloudflareSandboxProvider', () => {
 				endpoint: 'https://e',
 				prefix: 'pfx',
 				credentials,
+				credentialProxy: true,
 			});
 		});
 

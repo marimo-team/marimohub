@@ -8,6 +8,7 @@ import {
 import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import { projectResourceRules } from './projectResourcePolicy';
 
 const DOCS = 'docs/integration-secrets.md';
 
@@ -111,6 +112,7 @@ function makeAwsResolver(env: Env): SecretResolver | undefined {
 
 	const ttlSeconds = parseIntEnv(env, 'MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS');
 	return createAwsSecretsManagerResolver({
+		allowedSecrets: projectResourceRules(env, 'MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS'),
 		region,
 		credentials: accessKeyId && secretAccessKey ? { accessKeyId, secretAccessKey } : undefined,
 		cacheTtlMs: ttlSeconds === undefined ? undefined : ttlSeconds * 1000,

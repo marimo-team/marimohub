@@ -90,7 +90,8 @@ import {
 	removeUndefined,
 	shellQuote,
 	transportFailureResult,
-	withEnvPrefix,
+	ShellEnvironment,
+	privateEnvironmentWriteCommand,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -361,8 +362,10 @@ export interface CoreWeaveSandbox {
 		): Promise<ProcessResult>;
 		start(
 			command: readonly string[],
-			options?: { cwd?: string; timeoutMs?: number; bufferedMaxKiB?: number },
-		): Promise<CommandProcess>;
+			options?: { cwd?: string; timeoutMs?: number; bufferedMaxKiB?: number; stdin?: boolean },
+		): Promise<
+			CommandProcess & { stdin?: { write(data: string): Promise<void>; close(): Promise<void> } }
+		>;
 	};
 	readonly files: {
 		readText(path: string): Promise<string>;
@@ -628,16 +631,32 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		return `${bootstrap} ${cmd}`;
 	}
 
-	/** Prefix accumulated env vars onto a shell command (the SDK has no per-command env). */
-	private withEnv(cmd: string): string {
-		return withEnvPrefix(this.takeBootstrap(cmd), this.env, this.envDefaults);
-	}
+	private readonly environment = new ShellEnvironment(async (path, content) => {
+		const sandbox = await this.ensure();
+		const process = await sandbox.commands.start(
+			['sh', '-c', privateEnvironmentWriteCommand(path)],
+			{ stdin: true, timeoutMs: 10_000, bufferedMaxKiB: 64 },
+		);
+		try {
+			if (!process.stdin) throw new Error('Sandbox command does not support stdin');
+			await process.stdin.write(content);
+			await process.stdin.close();
+			const result = await process.wait();
+			if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
+		} finally {
+			void cancelLaunchProcess(process);
+		}
+	});
 
+	private async withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
+		const prefix = await this.environment.command('', { ...this.env, ...extra }, this.envDefaults);
+		return `${prefix}${this.takeBootstrap(cmd)}`;
+	}
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		const sandbox = await this.ensure();
 		this.execCount++;
 		if (options?.maxOutputBytes !== undefined) {
-			const proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(cmd)], {
+			const proc = await sandbox.commands.start(['sh', '-lc', await this.withEnv(cmd)], {
 				timeoutMs: options.timeout,
 				bufferedMaxKiB: 0,
 			});
@@ -655,7 +674,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				void cancelLaunchProcess(proc);
 			}
 		}
-		const res = await sandbox.commands.run(['sh', '-lc', this.withEnv(cmd)], {
+		const res = await sandbox.commands.run(['sh', '-lc', await this.withEnv(cmd)], {
 			timeoutMs: options?.timeout,
 		});
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
@@ -663,7 +682,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
 		const sandbox = await this.ensure();
-		const proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(cmd)]);
+		const proc = await sandbox.commands.start(['sh', '-lc', await this.withEnv(cmd)]);
 		return iterableToStream(proc.stdout);
 	}
 
@@ -723,8 +742,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		// Stored and applied as a shell prefix by withEnv(); the SDK sets env only at
-		// create time, and the provisioner never calls this on the hot path.
 		if (options?.onlyIfUnset) {
 			this.envDefaults = { ...this.envDefaults, ...vars };
 		} else {
@@ -755,7 +772,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		let proc: CommandProcess;
 		try {
 			const sandbox = await this.ensure();
-			proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(built.command)], {
+			proc = await sandbox.commands.start(['sh', '-lc', await this.withEnv(built.command)], {
 				cwd: options.cwd,
 			});
 		} catch (error) {
@@ -893,9 +910,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		const sandbox = await this.ensure();
-		const proc = await sandbox.commands.start(['sh', '-lc', this.withEnv(cmd)], {
-			cwd: options?.cwd,
-		});
+		const proc = await sandbox.commands.start(
+			['sh', '-lc', await this.withEnv(cmd, removeUndefined(options?.env ?? {}))],
+			{
+				cwd: options?.cwd,
+			},
+		);
 
 		// marimo runs as a streamed command (not the sandbox main process), so drain
 		// its output in the background to back getLogs() and to surface errors if the

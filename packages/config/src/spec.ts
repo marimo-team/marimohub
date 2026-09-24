@@ -1816,6 +1816,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 						secret: true,
 					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
+						name: 'GitHub repository project policy',
+						description:
+							'JSON array of `{resource, projects}` rules. Resources are GitHub owner/repo coordinates or `*`; projects are project IDs or `"*"` for shared access. An empty array denies all. Unset preserves deployment-wide access with a startup warning. See [syncing](syncing.md#github-project-policies).',
+						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
+						optIn: true,
+					},
 				],
 			},
 		],
@@ -2042,6 +2050,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Resolve cache TTL (seconds)',
 						description: 'Cache duration for resolved values. A value of `0` disables caching.',
 						default: '0',
+					},
+					{
+						id: 'MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS',
+						name: 'AWS secret project policy',
+						description:
+							'JSON array of `{resource, projects}` rules. Resources are exact secret IDs/ARNs without `#json-key`, or `*`; projects are project IDs or `"*"` for shared/org access. An empty array denies all. Unset preserves deployment-wide access with a startup warning. See [integration secrets](integration-secrets.md#aws-project-policies).',
+						example: '[{"resource":"prod/warehouse","projects":["proj-0000000000000000"]}]',
 					},
 				],
 			},

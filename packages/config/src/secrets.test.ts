@@ -49,6 +49,17 @@ describe('makeSecretSources', () => {
 		expect(sources.resolvers).toHaveLength(1);
 	});
 
+	it('passes AWS project rules to the resolver', () => {
+		const rules = [{ resource: 'prod/secret', projects: [PROJECT] }];
+		makeSecretSources({
+			MARIMOHUB_SECRETS_AWS: 'true',
+			MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS: JSON.stringify(rules),
+		});
+		expect(createAwsSecretsManagerResolver).toHaveBeenCalledWith(
+			expect.objectContaining({ allowedSecrets: rules }),
+		);
+	});
+
 	it('throws on partial static AWS credentials', () => {
 		expect(() =>
 			makeSecretSources({

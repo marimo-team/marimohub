@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { ProjectId } from '@marimo-hub/core/ids';
 import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
 import { AwsSecretsManagerResolver } from './index';
 import type { GetSecretValueResult, SecretFetcher } from './index';
@@ -169,5 +170,50 @@ describe('AwsSecretsManagerResolver', () => {
 	it('stringifies a null JSON field value', async () => {
 		const r = resolver(async () => ({ SecretString: JSON.stringify({ k: null }) }));
 		expect(await r.resolve(ref('db#k'))).toBe('null');
+	});
+});
+
+describe('project policies', () => {
+	const projectId = ProjectId.parse('proj-0000000000000000');
+	const context = { scope: 'project' as const, projectId };
+	it('checks project access before fetching and before serving cached JSON fields', async () => {
+		const fetch = vi.fn(async () => ({ SecretString: JSON.stringify({ token: SECRET }) }));
+		const r = new AwsSecretsManagerResolver({
+			fetch,
+			cacheTtlMs: 10000,
+			allowedSecrets: [{ resource: 'prod/bundle', projects: [projectId] }],
+		});
+		expect(await r.resolve(ref('prod/bundle#token'), context)).toBe(SECRET);
+		for (const denied of [
+			undefined,
+			{ scope: 'org' as const },
+			{ scope: 'project' as const, projectId: ProjectId.parse('proj-1111111111111111') },
+		]) {
+			await expect(r.resolve(ref('prod/bundle#token'), denied)).rejects.toMatchObject({
+				reason: 'forbidden',
+			});
+		}
+		await expect(r.resolve(ref('prod/other'), context)).rejects.toMatchObject({
+			reason: 'forbidden',
+		});
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+	it('supports explicitly shared org secrets without fetching during authorization', async () => {
+		const fetch = vi.fn(async () => ({ SecretString: SECRET }));
+		const r = new AwsSecretsManagerResolver({
+			fetch,
+			allowedSecrets: [{ resource: 'shared', projects: '*' }],
+		});
+		r.authorize(ref('shared'), { scope: 'org' });
+		expect(fetch).not.toHaveBeenCalled();
+		expect(await r.resolve(ref('shared'), { scope: 'org' })).toBe(SECRET);
+	});
+	it('treats an empty policy as deny-all', async () => {
+		const fetch = vi.fn();
+		const r = new AwsSecretsManagerResolver({ fetch, allowedSecrets: [] });
+		await expect(r.resolve(ref('anything'), context)).rejects.toMatchObject({
+			reason: 'forbidden',
+		});
+		expect(fetch).not.toHaveBeenCalled();
 	});
 });

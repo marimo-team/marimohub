@@ -204,3 +204,25 @@ sources as project integrations.
 
 The standalone project-secret subsystem was unreleased. This change removes its
 routes, bucket objects, and `MARIMOHUB_SECRETS_BACKEND`. No migration is provided.
+
+## AWS project policies
+
+`MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS` restricts which projects can use the hub's
+AWS Secrets Manager credentials:
+
+```bash
+MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS='[{"resource":"prod/warehouse","projects":["proj-0000000000000000"]},{"resource":"shared/analytics","projects":"*"}]'
+```
+
+Use exact secret IDs or ARNs, without the optional `#json-key` suffix. Names and
+ARNs are separate matches; use the same form in references and policy rules.
+`resource: "*"` permits any secret for the listed projects. `projects: "*"`
+permits shared access, including organization integrations. Project-specific
+rules do not authorize organization integrations.
+
+An empty array (`[]`) denies all references. An unset or blank variable preserves
+existing deployment-wide access and logs a startup warning. Malformed policies
+stop startup. IAM permissions still apply. The hub checks configured rules on
+save and on every resolution, including cache hits. Restart the hub after
+changing rules; existing sandbox credentials remain valid until those sessions
+end or the credentials are revoked at the provider.

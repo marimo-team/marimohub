@@ -1107,7 +1107,7 @@ app.openapi(createGitNotebook, async (c) => {
 	const input = { ...body, base_image, compute_profile };
 	const prospectiveSource = createGitSource(input);
 	if (prospectiveSource.sync_mode === 'pull') {
-		assertPullSourceSupported(deps, prospectiveSource);
+		assertPullSourceSupported(deps, prospectiveSource, pid);
 	}
 	const { meta, sync_token } = await notebooks.synced.create(pid, input, user.id);
 	let syncError: { code: string; message: string } | undefined;
@@ -1183,7 +1183,7 @@ app.openapi(updateGitSource, async (c) => {
 		(await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.manage')).source,
 	);
 	const prospective = applyGitSourceUpdate(current, input) ?? current;
-	if (current.sync_mode === 'pull') assertPullSourceSupported(deps, prospective);
+	if (current.sync_mode === 'pull') assertPullSourceSupported(deps, prospective, pid);
 	const source = await notebooks.synced.updateSource(pid, nid, input, user.id);
 	const { schema_version: _schemaVersion, ...publicSource } = source;
 	return c.json({ success: true, data: { source: publicSource } }, 200);
@@ -1196,7 +1196,7 @@ app.openapi(getSourceDrift, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
 	const { source } = await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
-	const { git, head } = await resolveSyncTarget(deps, source);
+	const { git, head } = await resolveSyncTarget(deps, source, pid);
 	return c.json(
 		{ success: true, data: sourceDrift(git, head.commit, new Date().toISOString()) },
 		200,

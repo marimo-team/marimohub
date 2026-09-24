@@ -44,6 +44,7 @@
 		"./ports/secrets": "./src/ports/secrets.ts",
 		"./ports/source-control": "./src/ports/sourceControl.ts",
 		"./ports/subject-context": "./src/ports/subjectContext.ts",
+		"./project-resource-policy": "./src/projectResourcePolicy.ts",
 		"./remote-workspace": "./src/integrations/remoteWorkspace.ts",
 		"./surface-state": "./src/services/runtime/surfaces/state.ts",
 		"./testing/thumbnail": "./src/testing/thumbnail.ts",

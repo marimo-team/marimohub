@@ -45,6 +45,33 @@ describe('CloudflareAccessAuthenticator', () => {
 		expect(url.toString()).toBe('https://myteam.cloudflareaccess.com/cdn-cgi/access/certs');
 	});
 
+	it.each(['', ' ', 'https://team.example', 'team/path', 'team.example', '-team', 'team-'])(
+		'rejects an invalid team %j before creating a JWKS client',
+		(team) => {
+			expect(() => new CloudflareAccessAuthenticator({ team, aud: 'app' })).toThrow('team name');
+			expect(createRemoteJWKSet).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['', '   '])('rejects a blank audience %j', (aud) => {
+		expect(() => new CloudflareAccessAuthenticator({ team: 'myteam', aud })).toThrow('audience');
+		expect(createRemoteJWKSet).not.toHaveBeenCalled();
+	});
+
+	it('normalizes configuration whitespace', async () => {
+		const auth = new CloudflareAccessAuthenticator({ team: ' MyTeam ', aud: ' my-aud ' });
+		await auth.authenticate(requestWithJwt('jwt'));
+		expect(jwtVerify).toHaveBeenCalledWith(
+			'jwt',
+			{ __mockJwks: true },
+			{
+				audience: 'my-aud',
+				issuer: 'https://myteam.cloudflareaccess.com',
+				algorithms: ['RS256'],
+			},
+		);
+	});
+
 	it('returns null when the CF-Access-JWT-Assertion header is missing', async () => {
 		const auth = makeAuth();
 		expect(await auth.authenticate(requestWithJwt(null))).toBeNull();
@@ -62,7 +89,11 @@ describe('CloudflareAccessAuthenticator', () => {
 			credential: { kind: 'sso' },
 		});
 		// Verification is performed with the configured audience.
-		expect(jwtVerify).toHaveBeenCalledWith('a.b.c', { __mockJwks: true }, { audience: 'my-aud' });
+		expect(jwtVerify).toHaveBeenCalledWith(
+			'a.b.c',
+			{ __mockJwks: true },
+			{ audience: 'my-aud', issuer: 'https://myteam.cloudflareaccess.com', algorithms: ['RS256'] },
+		);
 	});
 
 	it('returns null when the verified payload is missing sub', async () => {
@@ -96,11 +127,10 @@ describe('CloudflareAccessAuthenticator', () => {
 		// Real jose throws JWTClaimValidationFailed when `aud` != the expected audience.
 		jwtVerify.mockRejectedValue(new Error('unexpected "aud" claim value'));
 		expect(await auth.authenticate(requestWithJwt('a.b.c'))).toBeNull();
-		expect(jwtVerify).toHaveBeenCalledWith('a.b.c', { __mockJwks: true }, { audience: 'my-aud' });
+		expect(jwtVerify).toHaveBeenCalledWith(
+			'a.b.c',
+			{ __mockJwks: true },
+			{ audience: 'my-aud', issuer: 'https://myteam.cloudflareaccess.com', algorithms: ['RS256'] },
+		);
 	});
-
-	// Can't be driven hermetically (jose is fully mocked). Latent gap worth pinning:
-	// the adapter passes neither an `algorithms` nor an `issuer` pin to jwtVerify,
-	// leaning entirely on jose's key-derived defaults and the team JWKS URL.
-	it.skip('does not accept a token signed with an unexpected algorithm (no algorithms/issuer pin)', () => {});
 });

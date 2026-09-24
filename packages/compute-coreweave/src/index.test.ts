@@ -843,15 +843,18 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('setEnvVars() + withEnv', () => {
-		it('prefixes exec commands with shell-quoted exported env vars', async () => {
+		it('sends shell-quoted environment values over stdin', async () => {
 			const world = makeWorld();
 			const inst = makeCompute(world).create(SANDBOX_ID);
 			await inst.setEnvVars({ TOKEN: "a'b", DIR: '/x' });
 			await inst.exec('echo hi');
-			const cmd = [...world.registry.values()][0].fake.runCalls.at(-1)![2];
+			const fake = [...world.registry.values()][0].fake;
+			const cmd = fake.stdinWrites.at(-1)!;
+			expect(fake.runCalls.at(-1)![2]).toContain('/tmp/marimohub-env-');
+			expect(JSON.stringify([...fake.runCalls, ...fake.startCalls])).not.toContain('export ');
 			expect(cmd).toContain("export TOKEN='a'\\''b'; ");
 			expect(cmd).toContain("export DIR='/x'; ");
-			expect(cmd.endsWith('echo hi')).toBe(true);
+			expect(fake.runCalls.at(-1)![2].endsWith('echo hi')).toBe(true);
 		});
 
 		it('merges across multiple setEnvVars calls', async () => {
@@ -860,7 +863,10 @@ describe('CoreWeaveCompute', () => {
 			await inst.setEnvVars({ A: '1' });
 			await inst.setEnvVars({ B: '2' });
 			await inst.exec('run');
-			const cmd = [...world.registry.values()][0].fake.runCalls.at(-1)![2];
+			const fake = [...world.registry.values()][0].fake;
+			const cmd = fake.stdinWrites.at(-1)!;
+			expect(fake.runCalls.at(-1)![2]).toContain('/tmp/marimohub-env-');
+			expect(JSON.stringify([...fake.runCalls, ...fake.startCalls])).not.toContain('export ');
 			expect(cmd).toContain("export A='1'; ");
 			expect(cmd).toContain("export B='2'; ");
 		});
@@ -871,8 +877,11 @@ describe('CoreWeaveCompute', () => {
 			await inst.setEnvVars({ A: '1' });
 			await inst.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
 			await inst.exec('run');
-			const cmd = [...world.registry.values()][0].fake.runCalls.at(-1)![2];
-			expect(cmd).toBe("export A='1'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; run");
+			const fake = [...world.registry.values()][0].fake;
+			const cmd = fake.stdinWrites.at(-1)!;
+			expect(fake.runCalls.at(-1)![2]).toContain('/tmp/marimohub-env-');
+			expect(JSON.stringify([...fake.runCalls, ...fake.startCalls])).not.toContain('export ');
+			expect(cmd).toBe("export A='1'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; ");
 		});
 	});
 

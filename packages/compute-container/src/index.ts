@@ -21,7 +21,8 @@ import {
 	setupCompleteMarker,
 	shellQuote,
 	transportFailureResult,
-	withEnvPrefix,
+	ShellEnvironment,
+	privateEnvironmentWriteCommand,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { SandboxId } from '@marimo-hub/core/ids';
@@ -237,15 +238,22 @@ class ContainerSandboxInstance implements SandboxInstance {
 		}
 	}
 
-	/** Prefix accumulated env vars onto a shell command. */
-	private withEnv(cmd: string): string {
-		return withEnvPrefix(cmd, this.env, this.envDefaults);
-	}
+	private readonly environment = new ShellEnvironment(async (path, content) => {
+		const result = await this.runner.run(
+			['exec', '-i', this.name, 'sh', '-c', privateEnvironmentWriteCommand(path)],
+			{ stdin: content, timeout: 10_000, maxOutputBytes: 64 * 1024 },
+		);
+		if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
+	});
 
+	private withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
+		return this.environment.command(cmd, { ...this.env, ...extra }, this.envDefaults);
+	}
 	private async dexec(
 		cmd: string,
 		flags: string[] = [],
 		options?: ExecOptions,
+		prepared = false,
 	): Promise<ContainerRunResult> {
 		await this.ensure();
 		const command =
@@ -257,9 +265,9 @@ class ContainerSandboxInstance implements SandboxInstance {
 						String(
 							Math.max(1, options.timeout - Math.min(EXEC_TIMEOUT_GRACE_MS, options.timeout / 10)),
 						),
-						this.withEnv(cmd),
+						prepared ? cmd : await this.withEnv(cmd),
 					]
-				: ['sh', '-lc', this.withEnv(cmd)];
+				: ['sh', '-lc', prepared ? cmd : await this.withEnv(cmd)];
 		return this.runner.run(['exec', ...flags, this.name, ...command], {
 			timeout: options?.timeout,
 			maxOutputBytes: options?.maxOutputBytes,
@@ -377,8 +385,13 @@ class ContainerSandboxInstance implements SandboxInstance {
 		// Run detached inside the container; redirect to a log file we can tail.
 		// `sh -lc` has no cwd flag, so cd into the working dir first when requested.
 		const prefix = options?.cwd ? `cd ${shellQuote(options.cwd)} && ` : '';
-		const processCommand = withEnvPrefix(cmd, removeUndefined(options?.env ?? {}));
-		const res = await this.dexec(`${prefix}${processCommand} > ${logPath} 2>&1 &`, ['-d']);
+		const processCommand = await this.withEnv(cmd, removeUndefined(options?.env ?? {}));
+		const res = await this.dexec(
+			`${prefix}${processCommand} > ${logPath} 2>&1 &`,
+			['-d'],
+			undefined,
+			true,
+		);
 		if (res.exitCode !== 0) {
 			throw new Error(`startProcess failed: ${res.stderr || res.stdout}`);
 		}

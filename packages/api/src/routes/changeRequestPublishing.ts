@@ -32,8 +32,12 @@ export interface PreparedProposal {
 	state: 'new' | 'pending' | 'published';
 }
 
-function publisherFor(deps: PrepareProposalInput['deps'], provider: string) {
-	const publisher = deps.sourceControl?.getPublisher(provider);
+function publisherFor(
+	deps: PrepareProposalInput['deps'],
+	provider: string,
+	projectId: Project['id'],
+) {
+	const publisher = deps.sourceControl?.getPublisher(provider, projectId);
 	if (!publisher) {
 		throw new UnavailableError(`Change-request publishing is not configured for ${provider}`);
 	}
@@ -83,7 +87,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		);
 		return {
 			proposal: reusable.proposal,
-			publisher: publisherFor(input.deps, reusable.proposal.source.provider),
+			publisher: publisherFor(input.deps, reusable.proposal.source.provider, input.project.id),
 			notebookTitle: notebook.meta.title,
 			state: 'pending',
 		};
@@ -124,7 +128,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		session.source_version_id,
 		legacySourceRevision,
 	);
-	const publisher = publisherFor(input.deps, sourceRevision.provider);
+	const publisher = publisherFor(input.deps, sourceRevision.provider, input.project.id);
 	const { proposal, created, publicationState } =
 		await input.deps.services.proposals.captureProposalWithOutcome({
 			projectId: input.project.id,

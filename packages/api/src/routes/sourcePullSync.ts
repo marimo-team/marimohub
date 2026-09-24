@@ -11,6 +11,7 @@ import type {
 	GitSourceConfig,
 	NotebookId,
 	Project,
+	ProjectId,
 	Source,
 	SourceBranchHead,
 	SourceControlReader,
@@ -32,6 +33,7 @@ export interface SyncTarget {
 function requireSyncReader(
 	deps: PullSyncDeps,
 	source: Source,
+	projectId: ProjectId,
 ): { git: GitSource; reader: SourceControlReader; config: GitSourceConfig } {
 	if (source.type !== 'git') {
 		throw new NotFoundError('Notebook is not backed by a synced source');
@@ -42,7 +44,7 @@ function requireSyncReader(
 	// `github` while the reader serves github.com only.
 	const config = effectiveGitSourceConfig(source);
 	const provider = providerForRepo(source, config.repo);
-	const reader = provider ? deps.sourceControl?.getReader(provider) : undefined;
+	const reader = provider ? deps.sourceControl?.getReader(provider, projectId) : undefined;
 	if (!reader?.supportsRepository(config.repo)) throw new SyncNotConfiguredError();
 	if (source.sync_mode === 'pull' && !reader.fetchGitDirectory) {
 		throw new SyncNotConfiguredError();
@@ -50,16 +52,24 @@ function requireSyncReader(
 	return { git: source, reader, config };
 }
 
-export function assertPullSourceSupported(deps: PullSyncDeps, source: Source): void {
+export function assertPullSourceSupported(
+	deps: PullSyncDeps,
+	source: Source,
+	projectId: ProjectId,
+): void {
 	if (source.type !== 'git' || source.sync_mode !== 'pull') {
 		throw new SyncNotConfiguredError();
 	}
-	requireSyncReader(deps, source);
+	requireSyncReader(deps, source, projectId);
 }
 
 /** Resolve the reader and live branch head for a notebook's effective sync coordinates. */
-export async function resolveSyncTarget(deps: PullSyncDeps, source: Source): Promise<SyncTarget> {
-	const { git, reader, config } = requireSyncReader(deps, source);
+export async function resolveSyncTarget(
+	deps: PullSyncDeps,
+	source: Source,
+	projectId: ProjectId,
+): Promise<SyncTarget> {
+	const { git, reader, config } = requireSyncReader(deps, source, projectId);
 	const head = await reader.getBranchHead(config.repo, config.branch);
 	return { git, reader, config, head };
 }
@@ -90,7 +100,7 @@ export async function pullSourceToHead(
 		subject,
 		'notebook.write',
 	);
-	const { git, reader, config, head } = await resolveSyncTarget(deps, source);
+	const { git, reader, config, head } = await resolveSyncTarget(deps, source, project.id);
 	if (isAtBranchHead(git, head.commit)) {
 		return { synced: false, commit: head.commit, version_id: null };
 	}

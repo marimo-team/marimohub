@@ -51,7 +51,8 @@ import {
 	portWaitCommand,
 	removeUndefined,
 	shellQuote,
-	withEnvPrefix,
+	ShellEnvironment,
+	privateEnvironmentWriteCommand,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core/duration';
@@ -482,11 +483,18 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		);
 	}
 
-	/** Prefix accumulated env vars onto a shell command (exec carries no env). */
-	private withEnv(cmd: string): string {
-		return withEnvPrefix(cmd, this.env, this.envDefaults);
-	}
+	private readonly environment = new ShellEnvironment(async (path, content) => {
+		const result = await this.execInPod(privateEnvironmentWriteCommand(path), {
+			stdin: content,
+			timeout: 10_000,
+			maxOutputBytes: 64 * 1024,
+		});
+		if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
+	});
 
+	private withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
+		return this.environment.command(cmd, { ...this.env, ...extra }, this.envDefaults);
+	}
 	/**
 	 * Run a shell command in the Pod, counting the round-trip.
 	 *
@@ -521,7 +529,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensure();
-		const res = await this.execInPod(this.withEnv(cmd), {
+		const res = await this.execInPod(await this.withEnv(cmd), {
 			login: true,
 			timeout: options?.timeout,
 			maxOutputBytes: options?.maxOutputBytes,
@@ -594,8 +602,6 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		// Stored and applied as a shell prefix by withEnv(); the Pod env is fixed at
-		// create time and the provisioner never calls this on the hot path.
 		if (options?.onlyIfUnset) {
 			this.envDefaults = { ...this.envDefaults, ...vars };
 		} else {
@@ -619,13 +625,13 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		await this.ensure();
 		const logFile = `/tmp/mh-proc-${++PROC_SEQ}.log`;
 		const cwd = options?.cwd ? `cd ${shellQuote(options.cwd)}; ` : '';
-		const processCommand = withEnvPrefix(cmd, removeUndefined(options?.env ?? {}));
+		const processCommand = await this.withEnv(cmd, removeUndefined(options?.env ?? {}));
 		// Launch marimo detached so it outlives this exec session (the kernel must keep
 		// serving after startProcess returns). setsid + redirect + background; echo PID.
 		// The OUTER shell is non-login (its stdout is the PID we parse); the inner
 		// detached shell is a login shell so profile-provided env reaches the kernel
 		// (its output goes to the log file, where profile noise is harmless).
-		const launch = `${cwd}setsid sh -lc ${shellQuote(this.withEnv(processCommand))} >${logFile} 2>&1 </dev/null & echo $!`;
+		const launch = `${cwd}setsid sh -lc ${shellQuote(processCommand)} >${logFile} 2>&1 </dev/null & echo $!`;
 		const started = await this.execInPod(launch);
 		const pid = started.stdout.trim();
 

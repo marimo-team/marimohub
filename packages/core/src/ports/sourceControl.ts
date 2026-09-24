@@ -1,5 +1,6 @@
 import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
 import { BadRequestError } from '../errors';
+import type { ProjectId } from '../ids';
 
 export interface SourceControlContentChange {
 	/** Repository-relative path; absolute paths and `..` segments are invalid. */
@@ -213,8 +214,8 @@ export interface SourceControlReader {
 
 /** Server-side source-control capabilities configured for this deployment. */
 export interface SourceControlRegistry {
-	getPublisher(provider: string): SourceControlPublisher | undefined;
-	getReader(provider: string): SourceControlReader | undefined;
+	getPublisher(provider: string, projectId?: ProjectId): SourceControlPublisher | undefined;
+	getReader(provider: string, projectId?: ProjectId): SourceControlReader | undefined;
 	/** Provider ids that can publish change requests. */
 	publisherProviders(): readonly string[];
 	/** Provider ids that can serve server-initiated pull sync. */
