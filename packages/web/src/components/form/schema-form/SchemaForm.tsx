@@ -51,6 +51,7 @@ export function SchemaForm({
 	secretSources = { inline: true, references: [] },
 }: SchemaFormProps) {
 	const groups = groupFields(schema, hints);
+	const requiredFields = new Set(schema.required);
 	const hasUnavailableSecrets =
 		needsSecretSource(schema, value) &&
 		!secretSources.inline &&
@@ -72,7 +73,7 @@ export function SchemaForm({
 							key={key}
 							path={key}
 							node={node}
-							required={schema.required?.includes(key) ?? false}
+							required={requiredFields.has(key)}
 							hints={hints}
 							value={value[key]}
 							onChange={(next) => setField(key, next)}
@@ -350,6 +351,7 @@ function NestedFields({
 	secretSources: SecretSources;
 }) {
 	const entries = Object.entries(properties);
+	const requiredFields = new Set(required);
 	const advanced = entries.filter(([key]) => hintFor(hints, `${path}.${key}`)?.advanced);
 	const regular = entries.filter(([key]) => !hintFor(hints, `${path}.${key}`)?.advanced);
 	const fields = (items: [string, JsonSchemaNode][]) =>
@@ -358,7 +360,7 @@ function NestedFields({
 				key={key}
 				path={`${path}.${key}`}
 				node={child}
-				required={required?.includes(key) ?? false}
+				required={requiredFields.has(key)}
 				hints={hints}
 				value={record[key]}
 				onChange={(next) => onChange({ ...record, [key]: next })}
@@ -638,6 +640,7 @@ function KvPairsField({
 function ObjectListField(props: SchemaFieldProps & { label: string }) {
 	const { path, node, hints, value, onChange, errors, editing, secretSources, label } = props;
 	const itemSchema = node.items ?? {};
+	const requiredFields = new Set(itemSchema.required);
 	const [rows, setRows] = useState<{ id: number; item: Record<string, unknown> }[]>(() =>
 		((value as Record<string, unknown>[]) ?? []).map((item) => ({ id: rowId(), item })),
 	);
@@ -656,7 +659,7 @@ function ObjectListField(props: SchemaFieldProps & { label: string }) {
 							<SchemaField
 								path={`${path}[${i}].${key}`}
 								node={child}
-								required={itemSchema.required?.includes(key) ?? false}
+								required={requiredFields.has(key)}
 								hints={hints}
 								value={row.item[key]}
 								onChange={(next) =>
