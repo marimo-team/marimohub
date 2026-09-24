@@ -15,10 +15,14 @@ describe('ShellEnvironment', () => {
 			});
 			try {
 				const token = "a'b\n$(touch should-not-exist); secret";
-				const command = await env.command(
-					'printf "%s|%s|%s" "$TOKEN" "$CACHE" "$FALLBACK"',
-					{ TOKEN: token },
+				env.setEnvVars({ TOKEN: 'old', PRESERVED: 'base' });
+				env.setEnvVars({ TOKEN: token });
+				env.setEnvVars(
 					{ TOKEN: 'wrong', CACHE: 'wrong', FALLBACK: 'default' },
+					{ onlyIfUnset: true },
+				);
+				const command = await env.command(
+					'printf "%s|%s|%s|%s" "$TOKEN" "$CACHE" "$FALLBACK" "$PRESERVED"',
 				);
 				expect(command).not.toContain(token);
 				expect(
@@ -26,7 +30,7 @@ describe('ShellEnvironment', () => {
 						env: { ...process.env, CACHE: 'image' },
 						encoding: 'utf8',
 					}),
-				).toBe(`${token}|image|default`);
+				).toBe(`${token}|image|default|base`);
 				expect(statSync(paths[0]).mode & 0o777).toBe(0o600);
 				expect(statSync(dirname(paths[0])).mode & 0o777).toBe(0o700);
 			} finally {
@@ -144,4 +148,21 @@ describe('ShellEnvironment', () => {
 			expect(write).not.toHaveBeenCalled();
 		},
 	);
+	it('keeps per-command overrides separate from accumulated session values', async () => {
+		const writes: string[] = [];
+		const env = new ShellEnvironment(async (_path, content) => {
+			writes.push(content);
+		});
+		const vars = { TOKEN: 'session' };
+		env.setEnvVars(vars);
+		vars.TOKEN = 'caller-mutated';
+		env.setEnvVars({ CACHE: 'first' }, { onlyIfUnset: true });
+		env.setEnvVars({ CACHE: 'second' }, { onlyIfUnset: true });
+		await env.command('run', { TOKEN: 'command' });
+		await env.command('run');
+		expect(writes).toEqual([
+			"export TOKEN='command'; [ -n \"${CACHE:-}\" ] || export CACHE='second'; ",
+			"export TOKEN='session'; [ -n \"${CACHE:-}\" ] || export CACHE='second'; ",
+		]);
+	});
 });

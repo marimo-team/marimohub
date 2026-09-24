@@ -387,8 +387,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private readonly idTag: string;
 	private readonly kernelPort: number;
 	private sandbox?: CoreWeaveSandbox;
-	private env: Record<string, string> = {};
-	private envDefaults: Record<string, string> = {};
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
@@ -649,7 +647,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	});
 
 	private async withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
-		const prefix = await this.environment.command('', { ...this.env, ...extra }, this.envDefaults);
+		const prefix = await this.environment.command('', extra);
 		return `${prefix}${this.takeBootstrap(cmd)}`;
 	}
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
@@ -742,11 +740,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		if (options?.onlyIfUnset) {
-			this.envDefaults = { ...this.envDefaults, ...vars };
-		} else {
-			this.env = { ...this.env, ...vars };
-		}
+		this.environment.setEnvVars(vars, options);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {

@@ -264,8 +264,6 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly surfacePorts: readonly number[];
 	private readonly subdomainExposure: boolean;
 	private resolved = false;
-	private env: Record<string, string> = {};
-	private envDefaults: Record<string, string> = {};
 	private execCount = 0;
 	private lastEnsureTimings?: Timings;
 	/** Latest Pod snapshot from the boot poll (uid + condition timestamps). */
@@ -492,9 +490,6 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
 	});
 
-	private withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
-		return this.environment.command(cmd, { ...this.env, ...extra }, this.envDefaults);
-	}
 	/**
 	 * Run a shell command in the Pod, counting the round-trip.
 	 *
@@ -529,7 +524,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensure();
-		const res = await this.execInPod(await this.withEnv(cmd), {
+		const res = await this.execInPod(await this.environment.command(cmd), {
 			login: true,
 			timeout: options?.timeout,
 			maxOutputBytes: options?.maxOutputBytes,
@@ -602,11 +597,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		if (options?.onlyIfUnset) {
-			this.envDefaults = { ...this.envDefaults, ...vars };
-		} else {
-			this.env = { ...this.env, ...vars };
-		}
+		this.environment.setEnvVars(vars, options);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
@@ -625,7 +616,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		await this.ensure();
 		const logFile = `/tmp/mh-proc-${++PROC_SEQ}.log`;
 		const cwd = options?.cwd ? `cd ${shellQuote(options.cwd)}; ` : '';
-		const processCommand = await this.withEnv(cmd, removeUndefined(options?.env ?? {}));
+		const processCommand = await this.environment.command(cmd, removeUndefined(options?.env ?? {}));
 		// Launch marimo detached so it outlives this exec session (the kernel must keep
 		// serving after startProcess returns). setsid + redirect + background; echo PID.
 		// The OUTER shell is non-login (its stdout is the PID we parse); the inner

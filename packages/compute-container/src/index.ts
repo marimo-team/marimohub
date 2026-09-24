@@ -191,8 +191,6 @@ let procSeq = 0;
 class ContainerSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
 	private readonly name: string;
-	private env: Record<string, string> = {};
-	private envDefaults: Record<string, string> = {};
 	/** Cached host port for the published kernel port, once known. */
 	private hostPort?: number;
 
@@ -246,9 +244,6 @@ class ContainerSandboxInstance implements SandboxInstance {
 		if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
 	});
 
-	private withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
-		return this.environment.command(cmd, { ...this.env, ...extra }, this.envDefaults);
-	}
 	private async dexec(
 		cmd: string,
 		flags: string[] = [],
@@ -256,6 +251,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		prepared = false,
 	): Promise<ContainerRunResult> {
 		await this.ensure();
+		const script = prepared ? cmd : await this.environment.command(cmd);
 		const command =
 			options?.timeout !== undefined && options.timeout > 0
 				? [
@@ -265,9 +261,9 @@ class ContainerSandboxInstance implements SandboxInstance {
 						String(
 							Math.max(1, options.timeout - Math.min(EXEC_TIMEOUT_GRACE_MS, options.timeout / 10)),
 						),
-						prepared ? cmd : await this.withEnv(cmd),
+						script,
 					]
-				: ['sh', '-lc', prepared ? cmd : await this.withEnv(cmd)];
+				: ['sh', '-lc', script];
 		return this.runner.run(['exec', ...flags, this.name, ...command], {
 			timeout: options?.timeout,
 			maxOutputBytes: options?.maxOutputBytes,
@@ -336,11 +332,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
-		if (options?.onlyIfUnset) {
-			this.envDefaults = { ...this.envDefaults, ...vars };
-		} else {
-			this.env = { ...this.env, ...vars };
-		}
+		this.environment.setEnvVars(vars, options);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
@@ -385,7 +377,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		// Run detached inside the container; redirect to a log file we can tail.
 		// `sh -lc` has no cwd flag, so cd into the working dir first when requested.
 		const prefix = options?.cwd ? `cd ${shellQuote(options.cwd)} && ` : '';
-		const processCommand = await this.withEnv(cmd, removeUndefined(options?.env ?? {}));
+		const processCommand = await this.environment.command(cmd, removeUndefined(options?.env ?? {}));
 		const res = await this.dexec(
 			`${prefix}${processCommand} > ${logPath} 2>&1 &`,
 			['-d'],

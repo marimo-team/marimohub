@@ -1,15 +1,26 @@
 import { shellQuote, withEnvPrefix } from './shell';
 
 export class ShellEnvironment {
+	private env: Record<string, string> = {};
+	private defaults: Record<string, string> = {};
 	private pending?: { content: string; path: Promise<string> };
 
 	constructor(private readonly write: (path: string, content: string) => Promise<void>) {}
 
+	setEnvVars(vars: Record<string, string>, options?: { onlyIfUnset?: boolean }): void {
+		if (options?.onlyIfUnset) {
+			this.defaults = { ...this.defaults, ...vars };
+		} else {
+			this.env = { ...this.env, ...vars };
+		}
+	}
+
 	async command(
 		command: string,
-		env: Record<string, string>,
-		defaults: Record<string, string> = {},
+		overrides: Record<string, string> = {},
+		defaults: Record<string, string> = this.defaults,
 	): Promise<string> {
+		const env = { ...this.env, ...overrides };
 		for (const name of [...Object.keys(env), ...Object.keys(defaults)]) {
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error('Invalid environment name');
 		}
