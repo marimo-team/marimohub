@@ -564,7 +564,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		<div className="flex h-dvh flex-col">
 			<PageTitle>{title}</PageTitle>
 			<header className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-3 py-1.5">
-				<div className="flex min-w-0 flex-1 items-center gap-1 max-sm:basis-full">
+				<div className="flex min-w-0 flex-1 items-center gap-1 max-md:min-w-32">
 					<IconLink
 						to={`/projects/${pid}`}
 						label="Back to project"
@@ -582,7 +582,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 								<UserLabel user={users?.[author]} fallbackId={author} className="max-w-[12rem]" />
 							) : undefined
 						}
-						isGit={!isApp && notebook?.source.type === 'git'}
+						gitSource={!isApp && notebook?.source.type === 'git' ? notebook.source : undefined}
 						canSync={!isViewer}
 						showJobs={!isApp && !!capabilities?.jobs?.available}
 						onRename={!isApp && !isViewer ? renameModal.open : undefined}
@@ -595,7 +595,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						</Chip>
 					)}
 				</div>
-				<div className="ml-auto flex flex-wrap items-center justify-end gap-2 max-sm:w-full">
+				<div className="ml-auto flex flex-wrap items-center justify-end gap-2 max-md:gap-1">
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}

@@ -37,13 +37,17 @@ describe('NotebookPage git-synced editor', () => {
 		expect(screen.queryByText(/updated in its git repository/)).toBeNull();
 	});
 
-	it('header shows the repo chip whose popover links to the source on GitHub', async () => {
+	it.each(['badge', 'menu'])('opens Git source details from the %s', async (entry) => {
 		const user = userEvent.setup();
 		makeFetch({ role: 'editor', sourceType: 'git', session: gitEditSession() });
 		renderPage();
 
-		await user.click(await screen.findByRole('button', { name: 'Forecast — notebook menu' }));
-		await user.click(screen.getByRole('menuitem', { name: 'Git source details…' }));
+		if (entry === 'badge') {
+			await user.click(await screen.findByRole('button', { name: 'Git branch main — details' }));
+		} else {
+			await user.click(await screen.findByRole('button', { name: 'Forecast — notebook menu' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Git source details…' }));
+		}
 		const popover = await screen.findByRole('dialog');
 		expect(within(popover).getByRole('link', { name: 'org/repo' })).toHaveAttribute(
 			'href',
@@ -68,9 +72,7 @@ describe('NotebookPage git-synced editor', () => {
 		const { container } = renderPage('app');
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		expect(
-			screen.queryByRole('button', { name: 'Synced from a git repository — details' }),
-		).toBeNull();
+		expect(screen.queryByRole('button', { name: /Git branch .* — details/ })).toBeNull();
 	});
 
 	it('shows the banner without a restart CTA when the caller cannot stop the session', async () => {

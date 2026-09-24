@@ -28,6 +28,7 @@ export function ShareUrlMenu({
 		<DropdownMenu
 			label={label}
 			triggerLabel={showLabel ? 'Share' : undefined}
+			mobileIcon={showLabel ? <Share2 className="size-4" /> : undefined}
 			icon={showLabel ? undefined : <Share2 className="size-3.5" />}
 			triggerClassName={
 				showLabel

@@ -110,23 +110,23 @@ export function ChangeRequestActions({
 		return (
 			<Button
 				variant="unstyled"
-				className="flex h-8 items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
+				className="flex h-8 items-center justify-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:size-11"
 				isDisabled={publisher.isPending}
 				onPress={() => publish('open')}
 			>
-				<GitPullRequest className="size-3" />
-				{publisher.isPending ? 'Opening…' : terms.open}
+				<GitPullRequest className="size-3 max-md:size-4" />
+				<span className="max-md:sr-only">{publisher.isPending ? 'Opening…' : terms.open}</span>
 			</Button>
 		);
 	}
 	const viewButton = (
 		<Button
 			variant="unstyled"
-			className={`flex h-8 items-center gap-1 border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11 ${publishingAvailable ? 'rounded-l-md' : 'rounded-md'}`}
+			className={`flex h-8 items-center justify-center gap-1 border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:size-11 ${publishingAvailable ? 'rounded-l-md' : 'rounded-md'}`}
 			onPress={() => openChangeRequestUrl(activeChangeRequest.change_request.url)}
 		>
-			<GitPullRequest className="size-3" />
-			{terms.view}
+			<GitPullRequest className="size-3 max-md:size-4" />
+			<span className="max-md:sr-only">{terms.view}</span>
 		</Button>
 	);
 	if (!publishingAvailable) return viewButton;
@@ -137,7 +137,7 @@ export function ChangeRequestActions({
 			<DropdownMenu
 				label={`${terms.kind} options`}
 				icon={<ChevronDown className="size-3" />}
-				triggerClassName="h-8 w-6 rounded-r-md border border-l-0 border-input hover:border-primary max-md:h-11"
+				triggerClassName="h-8 w-6 rounded-r-md border border-l-0 border-input hover:border-primary max-md:size-11"
 				isDisabled={publisher.isPending}
 				options={[
 					{

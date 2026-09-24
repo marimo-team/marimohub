@@ -9,6 +9,7 @@ export interface DropdownMenuOption {
 	id: string;
 	label: ReactNode;
 	icon?: ReactNode;
+	href?: string;
 	separatorBefore?: boolean;
 	isDisabled?: boolean;
 	/** Render the item in the destructive style (e.g. Delete). */
@@ -21,6 +22,7 @@ export interface DropdownMenuProps {
 	/** Trigger icon, e.g. `<MoreHorizontal className="size-4" />`. */
 	icon?: ReactNode;
 	triggerLabel?: ReactNode;
+	mobileIcon?: ReactNode;
 	header?: ReactNode;
 	tooltip?: string;
 	/** Override the trigger button styling. */
@@ -39,6 +41,7 @@ export function DropdownMenu({
 	label,
 	icon,
 	triggerLabel,
+	mobileIcon,
 	header,
 	tooltip,
 	triggerClassName,
@@ -54,14 +57,16 @@ export function DropdownMenu({
 			className={cn(
 				'flex size-7 items-center justify-center text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
 				isLabeled && 'h-8 w-auto min-w-0 shrink-0 gap-1 rounded-md px-2 text-xs max-md:min-h-11',
+				mobileIcon && 'max-md:size-11 max-md:px-0',
 				triggerClassName,
 			)}
 		>
 			{icon}
+			{mobileIcon && <span className="md:hidden">{mobileIcon}</span>}
 			{isLabeled && (
 				<>
-					<span className="truncate">{triggerLabel}</span>
-					<ChevronDown className="size-3 shrink-0" />
+					<span className={cn('truncate', mobileIcon && 'max-md:hidden')}>{triggerLabel}</span>
+					<ChevronDown className={cn('size-3 shrink-0', mobileIcon && 'max-md:hidden')} />
 				</>
 			)}
 		</Button>
@@ -88,6 +93,7 @@ export function DropdownMenu({
 						<MenuItem
 							key={opt.id}
 							id={opt.id}
+							href={opt.href}
 							isDisabled={opt.isDisabled}
 							className={cn(
 								'flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors data-[disabled]:cursor-default data-[disabled]:opacity-50 max-md:min-h-11',

@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { notebookQueryParams } from '@/lib/notebookUrls';
-import { Bot, Camera, Code2, Play, Square } from 'lucide-react';
+import { Bot, Camera, Code2, PanelsTopLeft, Play, Square } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { useSurfaceActions } from '@/api/surfaces';
 import { DropdownMenu } from '@/components/ui';
@@ -188,6 +188,12 @@ export function OpenMenu({
 	};
 
 	return (
-		<DropdownMenu label="Open" triggerLabel="Open" options={options} onAction={handleAction} />
+		<DropdownMenu
+			label="Open"
+			triggerLabel="Open"
+			mobileIcon={<PanelsTopLeft className="size-4" />}
+			options={options}
+			onAction={handleAction}
+		/>
 	);
 }

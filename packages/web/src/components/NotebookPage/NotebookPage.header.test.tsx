@@ -14,7 +14,10 @@ describe('Notebook header', () => {
 		menu.focus();
 		await user.keyboard('{Enter}');
 		expect(screen.getByText('Created by')).toBeVisible();
-		expect(screen.getByRole('menuitem', { name: 'Jobs & schedules' })).toBeVisible();
+		expect(screen.getByRole('menuitem', { name: 'Jobs & schedules' })).toHaveAttribute(
+			'href',
+			'/projects/proj-x/notebooks/nb-1/jobs',
+		);
 		expect(screen.getByRole('menuitem', { name: 'Edit thumbnail…' })).toBeVisible();
 		await user.click(screen.getByRole('menuitem', { name: 'Rename notebook…' }));
 		expect(await screen.findByRole('dialog', { name: 'Rename Notebook' })).toBeVisible();

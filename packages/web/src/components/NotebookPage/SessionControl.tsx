@@ -1,4 +1,5 @@
-import { ChevronDown, RefreshCw, Square } from 'lucide-react';
+import { ChevronDown, Cpu, RefreshCw, Square, Users, UserRound } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Button, Popover, StatusDot } from '@/components/ui';
 import { SESSION_STATUS } from '@/components/ui/sessionStatus';
 import { SessionDetails } from '@/components/ui/SessionDetails';
@@ -42,6 +43,7 @@ export function SessionControl({
 			: undefined;
 	const unavailable =
 		allowOverride && storedName && !profiles.some((profile) => profile.name === storedName);
+	const SessionIcon = sharing === 'Shared' ? Users : sharing === 'Temporary' ? UserRound : Cpu;
 	return (
 		<Popover
 			label={`Session ${status.label}${sharing ? ` · ${sharing}` : ''} — details`}
@@ -49,13 +51,26 @@ export function SessionControl({
 			placement="bottom end"
 			trigger={
 				<>
-					<StatusDot className={status.className} aria-hidden="true" />
-					<span aria-live="polite">{status.label}</span>
-					{sharing && <span className="border-l pl-2 text-muted-foreground">{sharing}</span>}
-					<ChevronDown className="size-3 shrink-0" />
+					<span className="relative flex">
+						<SessionIcon className="size-4 md:hidden" />
+						<StatusDot
+							className={cn(
+								status.className,
+								'max-md:absolute max-md:-right-1 max-md:-top-1 max-md:ring-2 max-md:ring-background',
+							)}
+							aria-hidden="true"
+						/>
+					</span>
+					<span aria-live="polite" className="max-md:sr-only">
+						{status.label}
+					</span>
+					{sharing && (
+						<span className="border-l pl-2 text-muted-foreground max-md:sr-only">{sharing}</span>
+					)}
+					<ChevronDown className="size-3 shrink-0 max-md:hidden" />
 				</>
 			}
-			triggerClassName="h-8 shrink-0 gap-2 rounded-md border border-input px-2 text-xs hover:bg-muted max-md:min-h-11"
+			triggerClassName="h-8 shrink-0 justify-center gap-2 rounded-md border border-input px-2 text-xs hover:bg-muted max-md:size-11 max-md:gap-0 max-md:px-0"
 		>
 			{({ close }) => (
 				<div className="flex max-w-[calc(100vw-3rem)] flex-col gap-3">
