@@ -15,7 +15,12 @@ export function PageContainer({
 	contentClassName?: string;
 }) {
 	return (
-		<div className={cn('flex flex-1 justify-center overflow-y-auto p-8 max-md:p-3', className)}>
+		<div
+			className={cn(
+				'flex flex-1 items-start justify-center overflow-y-auto p-8 max-md:p-3',
+				className,
+			)}
+		>
 			<div className={cn('w-full max-w-3xl pb-8 max-md:pb-5', contentClassName)}>{children}</div>
 		</div>
 	);
