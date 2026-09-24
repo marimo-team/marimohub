@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { icebergRest } from '../../../../core/src/services/integrations/kinds/icebergRest';
+import { IntegrationRegistry } from '../../../../core/src/services/integrations/registry';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -642,6 +644,47 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 				},
 			});
 		});
+	});
+
+	it('omits absent vended S3 settings from R2 readiness, connection tests, and saves', async () => {
+		const user = userEvent.setup();
+		const registry = new IntegrationRegistry();
+		registry.register(icebergRest);
+		const kind = {
+			...registry.describe('iceberg_rest'),
+			secret_sources: { inline: true, references: [] },
+		};
+		const icebergEntry = entry({ id: 'i_iceberg', kind: 'iceberg_rest', name: 'lake' });
+		const { calls } = setup(
+			{},
+			{
+				kinds: [kind],
+				entries: [icebergEntry],
+				details: {
+					i_iceberg: {
+						...icebergEntry,
+						config: {
+							uri: 'https://catalog.cloudflarestorage.com/account-id/warehouse',
+							auth: { method: 'bearer_token', token: { $secret: { kind: 'managed', set: true } } },
+							storage: { scheme: 'catalog' },
+						},
+					},
+				},
+			},
+		);
+
+		await user.click(await screen.findByRole('button', { name: 'Edit lake' }));
+		await user.click(screen.getByRole('button', { name: 'Test connection' }));
+		await waitFor(() => expect(calls.some((call) => call.url.endsWith('/test'))).toBe(true));
+		await user.click(screen.getByRole('button', { name: 'Save changes' }));
+		await waitFor(() => expect(calls.some((call) => call.method === 'PATCH')).toBe(true));
+		for (const request of [
+			calls.find((call) => call.url.includes('/query-readiness')),
+			calls.find((call) => call.url.endsWith('/test')),
+			calls.find((call) => call.method === 'PATCH'),
+		]) {
+			expect(request?.body).toHaveProperty('config.storage', { scheme: 'catalog' });
+		}
 	});
 
 	it('redacts arbitrary record values from automatic readiness requests', async () => {

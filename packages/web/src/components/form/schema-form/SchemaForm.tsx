@@ -11,6 +11,7 @@ import {
 	groupFields,
 	hintFor,
 	isKeepMarker,
+	isOptionalObject,
 	isRecordNode,
 	isSecretNode,
 	KEEP_SECRET,
@@ -71,6 +72,7 @@ export function SchemaForm({
 							key={key}
 							path={key}
 							node={node}
+							required={schema.required?.includes(key) ?? false}
 							hints={hints}
 							value={value[key]}
 							onChange={(next) => setField(key, next)}
@@ -116,6 +118,7 @@ function GroupSection({
 interface SchemaFieldProps {
 	path: string;
 	node: JsonSchemaNode;
+	required: boolean;
 	hints: UiHints;
 	value: unknown;
 	onChange: (next: unknown) => void;
@@ -125,9 +128,18 @@ interface SchemaFieldProps {
 }
 
 function SchemaField(props: SchemaFieldProps) {
+	const optional = isOptionalObject(props.node, props.required);
+	const enabled = props.value !== undefined;
 	return (
 		<div id={schemaFieldId(props.path)} data-schema-field={props.path}>
-			<SchemaFieldControl {...props} />
+			{optional && (
+				<Toggle
+					label={`Enable ${humanize(props.path.split(/\.|\[/).at(-1) ?? props.path)}`}
+					isSelected={enabled}
+					onChange={(selected) => props.onChange(selected ? buildDefaults(props.node) : undefined)}
+				/>
+			)}
+			{(!optional || enabled) && <SchemaFieldControl {...props} />}
 		</div>
 	);
 }
@@ -280,6 +292,7 @@ function UnionField(props: SchemaFieldProps & { label: string }) {
 			/>
 			<NestedFields
 				path={path}
+				required={active.required}
 				properties={Object.fromEntries(
 					Object.entries(active.properties ?? {}).filter(([key]) => key !== discriminator?.key),
 				)}
@@ -302,6 +315,7 @@ function NestedObjectField(props: SchemaFieldProps & { label: string }) {
 			<span className="text-xs font-medium text-muted-foreground">{label}</span>
 			<NestedFields
 				path={path}
+				required={node.required}
 				properties={node.properties ?? {}}
 				hints={hints}
 				record={record}
@@ -316,6 +330,7 @@ function NestedObjectField(props: SchemaFieldProps & { label: string }) {
 
 function NestedFields({
 	path,
+	required,
 	properties,
 	hints,
 	record,
@@ -325,6 +340,7 @@ function NestedFields({
 	secretSources,
 }: {
 	path: string;
+	required?: string[];
 	properties: Record<string, JsonSchemaNode>;
 	hints: UiHints;
 	record: Record<string, unknown>;
@@ -342,6 +358,7 @@ function NestedFields({
 				key={key}
 				path={`${path}.${key}`}
 				node={child}
+				required={required?.includes(key) ?? false}
 				hints={hints}
 				value={record[key]}
 				onChange={(next) => onChange({ ...record, [key]: next })}
@@ -639,6 +656,7 @@ function ObjectListField(props: SchemaFieldProps & { label: string }) {
 							<SchemaField
 								path={`${path}[${i}].${key}`}
 								node={child}
+								required={itemSchema.required?.includes(key) ?? false}
 								hints={hints}
 								value={row.item[key]}
 								onChange={(next) =>

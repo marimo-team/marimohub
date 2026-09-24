@@ -3,6 +3,7 @@ import { ValidationError } from '../../../errors';
 import type { RenderOutput } from '../sdk';
 import { zSecret } from '../secretFields';
 import { INTEGRATIONS_DIR } from '../bundle';
+import { normalizeIcebergRestStorage } from './icebergStorageUtils';
 import {
 	awsStaticCredentials,
 	httpUrlField,
@@ -267,16 +268,19 @@ export const icebergStorageSchema = z
 	])
 	.default({ scheme: 'catalog' });
 
-export const icebergRestStorageSchema = z
-	.discriminatedUnion('scheme', [
-		catalogStorage,
-		brokeredS3Storage,
-		gcsStorage,
-		adlsStorage,
-		hdfsStorage,
-		huggingFaceStorage,
-	])
-	.default({ scheme: 'catalog' });
+export const icebergRestStorageSchema = z.preprocess(
+	normalizeIcebergRestStorage,
+	z
+		.discriminatedUnion('scheme', [
+			catalogStorage,
+			brokeredS3Storage,
+			gcsStorage,
+			adlsStorage,
+			hdfsStorage,
+			huggingFaceStorage,
+		])
+		.default({ scheme: 'catalog' }),
+);
 
 export const extraPropertiesSchema = z
 	.record(z.string(), z.string())
