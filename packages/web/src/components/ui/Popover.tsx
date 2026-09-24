@@ -3,11 +3,10 @@ import {
 	DialogTrigger,
 	Button as AriaButton,
 	Popover as AriaPopover,
-	Tooltip as AriaTooltip,
-	TooltipTrigger,
 	Dialog,
 } from 'react-aria-components';
 import type { Placement } from 'react-aria-components';
+import { Tooltip } from './Tooltip';
 import { cn } from '@/lib/utils';
 
 export interface PopoverProps {
@@ -59,19 +58,7 @@ export function Popover({
 	);
 	return (
 		<DialogTrigger>
-			{tooltip ? (
-				<TooltipTrigger delay={500} closeDelay={0}>
-					{button}
-					<AriaTooltip
-						offset={6}
-						className="z-50 max-w-xs rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
-					>
-						{tooltip}
-					</AriaTooltip>
-				</TooltipTrigger>
-			) : (
-				button
-			)}
+			{tooltip ? <Tooltip content={tooltip}>{button}</Tooltip> : button}
 			<AriaPopover
 				placement={placement}
 				className={cn(

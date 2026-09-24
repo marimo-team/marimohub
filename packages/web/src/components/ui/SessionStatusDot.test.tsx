@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { installMatchMedia } from '@/test/render';
 import type { Session } from '@/types';
 import { SessionStatusDot } from './SessionStatusDot';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
@@ -53,6 +54,8 @@ function renderDot(
 function dot(): Element | null {
 	return screen.getByRole('button').querySelector('span');
 }
+
+beforeEach(() => installMatchMedia());
 
 afterEach(() => {
 	vi.unstubAllGlobals();

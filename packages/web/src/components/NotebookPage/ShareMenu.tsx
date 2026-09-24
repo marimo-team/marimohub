@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useDisclosure } from '@/hooks/useDisclosure';
 import { AppLinksDialog } from './AppLinksDialog';
-import { Camera, Copy, Link, Play, Share2 } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Copy, Link, Share2 } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { DropdownMenu } from '@/components/ui';
 import type { DropdownMenuOption } from '@/components/ui';
@@ -14,7 +14,9 @@ export function ShareUrlMenu({
 	successMessage,
 	options = [],
 	onAction,
+	showLabel = false,
 }: {
+	showLabel?: boolean;
 	label: string;
 	successMessage: string;
 	options?: DropdownMenuOption[];
@@ -25,8 +27,13 @@ export function ShareUrlMenu({
 	return (
 		<DropdownMenu
 			label={label}
-			icon={<Share2 className="size-3.5" />}
-			triggerClassName="h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11"
+			triggerLabel={showLabel ? 'Share' : undefined}
+			icon={showLabel ? undefined : <Share2 className="size-3.5" />}
+			triggerClassName={
+				showLabel
+					? 'border border-input'
+					: 'h-[26px] w-7 rounded-md border border-input hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11 max-md:w-11'
+			}
 			options={[
 				...options,
 				{
@@ -52,8 +59,6 @@ export function ShareUrlMenu({
 interface ShareMenuProps {
 	projectId: string;
 	notebookId: string;
-	title: string;
-	canRunApp: boolean;
 	canManageLinks?: boolean;
 	isApp?: boolean;
 }
@@ -61,59 +66,30 @@ interface ShareMenuProps {
 export function ShareMenu({
 	projectId,
 	notebookId,
-	title,
-	canRunApp,
 	canManageLinks = false,
 	isApp = false,
 }: ShareMenuProps) {
-	const [linksOpen, setLinksOpen] = useState(false);
-	const navigate = useNavigate();
+	const links = useDisclosure();
 	const location = useLocation();
-	const notebookPath = `/projects/${projectId}/notebooks/${notebookId}`;
-
-	const handleAction = (action: string) => {
-		const search = notebookQueryParams(location.search).toString();
-		const query = search ? `?${search}` : '';
-		if (action === 'app-links') {
-			setLinksOpen(true);
-		} else if (action === 'static-outputs') {
-			void navigate(`${notebookPath}/snapshot`, { state: { title } });
-		} else if (action === 'run-app') {
-			void navigate(`${notebookPath}/app${query}`, { state: { title } });
-		}
-	};
 
 	return (
 		<>
 			<ShareUrlMenu
+				showLabel
 				label={isApp ? 'Share app' : 'Share notebook'}
 				successMessage={isApp ? 'App URL copied' : 'Notebook URL copied'}
-				options={[
-					{ id: 'app-links', label: 'App links', icon: <Link className="size-3.5" /> },
-					{
-						id: 'static-outputs',
-						label: 'View static outputs',
-						icon: <Camera className="size-3.5" />,
-					},
-					...(canRunApp
-						? [
-								{
-									id: 'run-app',
-									label: 'Run as app',
-									icon: <Play className="size-3.5" />,
-								},
-							]
-						: []),
-				]}
-				onAction={handleAction}
+				options={[{ id: 'app-links', label: 'App links', icon: <Link className="size-3.5" /> }]}
+				onAction={(action) => {
+					if (action === 'app-links') links.open();
+				}}
 			/>
-			{linksOpen && (
+			{links.isOpen && (
 				<AppLinksDialog
 					projectId={projectId}
 					notebookId={notebookId}
 					canManage={canManageLinks}
 					search={location.search}
-					onClose={() => setLinksOpen(false)}
+					onClose={links.close}
 				/>
 			)}
 		</>

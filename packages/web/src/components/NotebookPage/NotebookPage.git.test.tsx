@@ -42,9 +42,8 @@ describe('NotebookPage git-synced editor', () => {
 		makeFetch({ role: 'editor', sourceType: 'git', session: gitEditSession() });
 		renderPage();
 
-		await user.click(
-			await screen.findByRole('button', { name: 'Synced from a git repository — details' }),
-		);
+		await user.click(await screen.findByRole('button', { name: 'Forecast — notebook menu' }));
+		await user.click(screen.getByRole('menuitem', { name: 'Git source details…' }));
 		const popover = await screen.findByRole('dialog');
 		expect(within(popover).getByRole('link', { name: 'org/repo' })).toHaveAttribute(
 			'href',

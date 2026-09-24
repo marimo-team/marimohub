@@ -23,6 +23,7 @@ describe('NotebookPage app variant', () => {
 		const [, init] = sessionPosts(impl)[0];
 		expect(String(init?.body)).toContain('"mode":"app"');
 		expect(screen.getByText('App')).toBeInTheDocument();
+		await userEvent.click(screen.getByRole('button', { name: 'Session Running — details' }));
 		expect(screen.getByText('Restart')).toBeInTheDocument();
 		expect(screen.getByText('Stop')).toBeInTheDocument();
 		expect(screen.queryByLabelText('Rename notebook')).toBeNull();
@@ -118,6 +119,7 @@ describe('NotebookPage app variant', () => {
 		);
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.getByText('App')).toBeInTheDocument();
+		await userEvent.click(screen.getByRole('button', { name: 'Session Running — details' }));
 		expect(screen.queryByText('Restart')).toBeNull();
 		expect(screen.queryByText('Stop')).toBeNull();
 	});
@@ -144,6 +146,7 @@ describe('NotebookPage app variant', () => {
 		const { container } = renderPage('app');
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 
+		await user.click(screen.getByRole('button', { name: 'Session Running — details' }));
 		await user.click(screen.getByText('Restart'));
 		expect(sessionPosts(impl)).toHaveLength(1);
 		const dialog = await screen.findByRole('dialog');
@@ -164,6 +167,7 @@ describe('NotebookPage app variant', () => {
 		const { container } = renderPage('app');
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 
+		await user.click(screen.getByRole('button', { name: 'Session Running — details' }));
 		await user.click(screen.getByText('Stop'));
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByText(/Anyone using it will be disconnected/)).toBeInTheDocument();

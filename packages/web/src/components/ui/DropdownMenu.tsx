@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
+import { ChevronDown } from 'lucide-react';
+import { Tooltip } from './Tooltip';
 import { cn } from '@/lib/utils';
 
 export interface DropdownMenuOption {
@@ -17,7 +19,10 @@ export interface DropdownMenuProps {
 	/** Accessible label for the trigger button. */
 	label: string;
 	/** Trigger icon, e.g. `<MoreHorizontal className="size-4" />`. */
-	icon: ReactNode;
+	icon?: ReactNode;
+	triggerLabel?: ReactNode;
+	header?: ReactNode;
+	tooltip?: string;
 	/** Override the trigger button styling. */
 	triggerClassName?: string;
 	isDisabled?: boolean;
@@ -33,27 +38,48 @@ export interface DropdownMenuProps {
 export function DropdownMenu({
 	label,
 	icon,
+	triggerLabel,
+	header,
+	tooltip,
 	triggerClassName,
 	isDisabled,
 	options,
 	onAction,
 }: DropdownMenuProps) {
+	const isLabeled = triggerLabel !== undefined;
+	const button = (
+		<Button
+			aria-label={label}
+			isDisabled={isDisabled}
+			className={cn(
+				'flex size-7 items-center justify-center text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+				isLabeled && 'h-8 w-auto min-w-0 shrink-0 gap-1 rounded-md px-2 text-xs max-md:min-h-11',
+				triggerClassName,
+			)}
+		>
+			{icon}
+			{isLabeled && (
+				<>
+					<span className="truncate">{triggerLabel}</span>
+					<ChevronDown className="size-3 shrink-0" />
+				</>
+			)}
+		</Button>
+	);
 	return (
 		<MenuTrigger>
-			<Button
-				aria-label={label}
-				isDisabled={isDisabled}
-				className={cn(
-					'flex size-7 items-center justify-center text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-					triggerClassName,
-				)}
-			>
-				{icon}
-			</Button>
+			{tooltip ? (
+				<Tooltip content={tooltip} className="break-words">
+					{button}
+				</Tooltip>
+			) : (
+				button
+			)}
 			<Popover
 				placement="bottom end"
 				className="z-50 min-w-[200px] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
 			>
+				{header && <div className="border-b px-3 py-2 text-xs">{header}</div>}
 				<Menu className="outline-none" onAction={(key) => onAction(String(key))}>
 					{options.flatMap((opt) => [
 						...(opt.separatorBefore
