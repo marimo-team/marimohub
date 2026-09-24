@@ -112,6 +112,27 @@ string from a JSON secret. Omit it to resolve the complete JSON object.
 
 The hub needs `secretsmanager:GetSecretValue`. It does not write to AWS Secrets Manager.
 
+#### AWS project policies
+
+`MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS` optionally restricts shared AWS credentials
+by secret and project. Unset or blank policies keep existing access with a startup
+warning. `[]` denies all references. Invalid policies stop startup.
+
+```bash
+MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS='[{"resource":"prod/warehouse","projects":["proj-0000000000000000"]},{"resource":"shared/analytics","projects":"*"}]'
+```
+
+- `resource` matches an exact secret ID or ARN, without `#json-key`. IDs and ARNs
+  match separately. `"*"` permits any secret for the listed projects.
+- `projects` lists project IDs. `"*"` permits shared access, including organization
+  integrations. Project-specific rules do not authorize organization integrations.
+
+IAM permissions still apply. The hub checks rules on save and every resolution,
+including cache hits.
+
+Restart the hub to apply policy changes. Existing sessions retain their
+credentials. End affected sessions or revoke credentials at the provider.
+
 ### Kubernetes Secrets
 
 Enable the `k8s` backend and list each allowed Secret:
@@ -204,25 +225,3 @@ sources as project integrations.
 
 The standalone project-secret subsystem was unreleased. This change removes its
 routes, bucket objects, and `MARIMOHUB_SECRETS_BACKEND`. No migration is provided.
-
-## AWS project policies
-
-`MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS` restricts which projects can use the hub's
-AWS Secrets Manager credentials:
-
-```bash
-MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS='[{"resource":"prod/warehouse","projects":["proj-0000000000000000"]},{"resource":"shared/analytics","projects":"*"}]'
-```
-
-Use exact secret IDs or ARNs, without the optional `#json-key` suffix. Names and
-ARNs are separate matches; use the same form in references and policy rules.
-`resource: "*"` permits any secret for the listed projects. `projects: "*"`
-permits shared access, including organization integrations. Project-specific
-rules do not authorize organization integrations.
-
-An empty array (`[]`) denies all references. An unset or blank variable preserves
-existing deployment-wide access and logs a startup warning. Malformed policies
-stop startup. IAM permissions still apply. The hub checks configured rules on
-save and on every resolution, including cache hits. Restart the hub after
-changing rules; existing sandbox credentials remain valid until those sessions
-end or the credentials are revoked at the provider.

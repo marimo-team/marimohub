@@ -463,20 +463,20 @@ and 10 MB of added or modified content.
 
 ## GitHub project policies
 
-`MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` restricts the shared GitHub
-App by repository and project:
+`MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` optionally restricts the
+shared GitHub App by repository and project. Unset or blank policies keep existing
+access with a startup warning. `[]` denies all access. Invalid policies stop startup.
 
 ```bash
 MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]'
 ```
 
-Repositories accept GitHub `owner/repo` coordinates or URLs and match without
-case sensitivity. `resource: "*"` permits any repository for the listed projects;
-`projects: "*"` shares that repository across projects. An empty array (`[]`)
-denies all access. Unset or blank preserves existing access with a startup
-warning. Malformed policies stop startup.
+- `resource` matches a GitHub `owner/repo` or URL, regardless of case. `"*"`
+  permits any repository for the listed projects.
+- `projects` lists project IDs. `"*"` shares the repository across projects.
 
 Rules cover branch checks, workspace and Git downloads, and pull request creation
-and updates. The GitHub App installation must also permit the repository. These
-rules govern the hub's App credentials; they do not restrict credentials that
-users supply themselves. Restart the hub to apply policy changes.
+and updates. The App installation must also allow the repository. The policy does not restrict
+user-supplied credentials.
+
+Restart the hub to apply policy changes.

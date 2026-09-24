@@ -515,7 +515,7 @@ Create a GitHub App with Contents (read and write) and Pull requests (read and w
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
-| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | JSON array of `{resource, projects}` rules. Resources are GitHub owner/repo coordinates or `*`; projects are project IDs or `"*"` for shared access. An empty array denies all. Unset preserves deployment-wide access with a startup warning. See [syncing](syncing.md#github-project-policies). | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
 
 ## Workload Identity Federation
 
@@ -611,7 +611,7 @@ Resolve references with `backend: aws-sm`. The hub needs `secretsmanager:GetSecr
 | `MARIMOHUB_SECRETS_AWS_ACCESS_KEY_ID` 🔒 | Static credential for non-AWS deployments. Set it with the secret access key. Omit both to use the default AWS credential chain. | — | — | — |
 | `MARIMOHUB_SECRETS_AWS_SECRET_ACCESS_KEY` 🔒 | Static credential paired with the access key ID. | — | — | — |
 | `MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS` | Cache duration for resolved values. A value of `0` disables caching. | — | `0` | — |
-| `MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS` | JSON array of `{resource, projects}` rules. Resources are exact secret IDs/ARNs without `#json-key`, or `*`; projects are project IDs or `"*"` for shared/org access. An empty array denies all. Unset preserves deployment-wide access with a startup warning. See [integration secrets](integration-secrets.md#aws-project-policies). | — | — | `[{"resource":"prod/warehouse","projects":["proj-0000000000000000"]}]` |
+| `MARIMOHUB_SECRETS_AWS_ALLOWED_SECRETS` | Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [AWS project policies](integration-secrets.md#aws-project-policies) for syntax. | — | — | `[{"resource":"prod/warehouse","projects":["proj-0000000000000000"]}]` |
 
 ### Kubernetes Secret references
 

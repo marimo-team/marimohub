@@ -8,9 +8,8 @@ open http://localhost:3000        # SPA + API
 open http://localhost:9001        # MinIO console (minioadmin / minioadmin)
 ```
 
-Published ports bind to `127.0.0.1` for local development. For remote access,
-configure authentication and a reverse proxy, then explicitly change the
-Compose port bindings.
+Ports bind to `127.0.0.1`. For remote access, configure authentication and a
+reverse proxy. Then change the Compose port bindings.
 
 - **Storage** → MinIO via the S3 adapter (`forcePathStyle: true`). The server runs
   `verifyConditionalWrites()` at boot to confirm MinIO honors `If-Match`.
