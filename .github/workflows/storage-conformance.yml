@@ -35,9 +35,10 @@ jobs:
       # semantics this contract protects, so GCS remains hermetic-only here.
       - name: Start storage emulators
         run: |
+          docker build -t marimohub/minio:ci scripts/dev-services/minio
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            marimohub/minio:ci server /data
           docker run -d --name azurite -p 10000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.36.0 \
             azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
