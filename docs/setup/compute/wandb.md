@@ -17,16 +17,22 @@ MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 ::: tip Same backend as CoreWeave — no hostname config
 W&B sandboxes are [CoreWeave Sandboxes](/compute#coreweave) behind the W&B
 gateway — same adapter and API; only the credential differs. Kernel URLs are
-resolved automatically (the managed runner assigns each sandbox its own public
-IP), so `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` is not needed. See the
+resolved automatically (the managed runner assigns each kernel its own HTTPS
+endpoint), so `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` is not needed. See the
 [Configuration reference](/configuration#w-b-sandboxes) for all variables.
 :::
 
+Sandboxes created before HTTPS endpoints were enabled retain their HTTP URLs.
+The adapter rejects those URLs. Save the notebook files, stop the old session,
+and start a new session to create an HTTPS endpoint.
+
 ::: warning Gateway limitations
-Kernels are served over **plain HTTP** at a per-sandbox public IP — an
-HTTPS-served hub will hit mixed-content blocking in the browser, so this
-backend currently suits local/HTTP deployments. The gateway also doesn't
-support profile/placement overrides, GPU requests, egress overrides, or
-automatic CAIOS bucket credentials — for cloud-storage access use hub-minted
-[Workload Identity Federation](/workload-identity-federation) instead.
+The gateway doesn't support profile/placement overrides, GPU requests, egress
+overrides, or automatic CAIOS bucket credentials — for cloud-storage access use
+hub-minted [Workload Identity Federation](/workload-identity-federation) instead.
+
+The HTTPS endpoint uses a 900-second request timeout. Setting this timeout to
+zero or omitting it restores the 15-second platform default.
+See [CoreWeave endpoint timeouts](https://docs.coreweave.com/products/sandboxes/client/ref/networking/endpoints).
+The gateway's timeout behavior for upgraded WebSockets remains unverified.
 :::

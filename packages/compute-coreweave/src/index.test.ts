@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { context, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
-import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
+import { CWSandboxNotFoundError, CWSandboxUnavailableError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -57,7 +57,7 @@ describe('CoreWeaveCompute', () => {
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			expect(world.created).toHaveLength(1);
 			const opts = world.created[0];
-			// No `endpoint`: v1 Create rejects a set product endpoint as unimplemented.
+			// No `endpoint` unless `kernelEndpoint` is configured.
 			expect(opts.services).toEqual([
 				{ name: 'kernel', port: 2718, protocol: 'tcp', visibility: 'public' },
 			]);
@@ -370,6 +370,56 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('re-resolved instance', () => {
+		const endpointConfig: CoreWeaveConfig = {
+			...baseConfig,
+			kernelEndpoint: { kind: 'https', auth: 'open' },
+			resolveExposedUrl: async (sandbox, port) =>
+				sandbox.serviceUrls!.find((s) => s.port === port)!.url,
+		};
+
+		it('rejects a legacy HTTP endpoint without blocking file recovery or teardown', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).ready!();
+			world.registry.get('cw-1')!.fake.reads['/workspace/notebook.py'] = 'unsaved edits';
+			const instance = makeCompute(world, endpointConfig).create(SANDBOX_ID);
+
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).rejects.toThrow(
+				/expected HTTPS/,
+			);
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).rejects.toThrow(
+				/expected HTTPS/,
+			);
+			expectFileResult(await instance.readFile('/workspace/notebook.py'), {
+				success: true,
+				content: 'unsaved edits',
+			});
+			expect(world.created).toHaveLength(1);
+			expect(world.deleted).toEqual([]);
+			await instance.destroy();
+			expect(world.deleted).toEqual(['cw-1']);
+		});
+
+		it('reuses an existing HTTPS endpoint', async () => {
+			const world = makeWorld();
+			await makeCompute(world, endpointConfig).create(SANDBOX_ID).ready!();
+			const instance = makeCompute(world, endpointConfig).connectExisting(SANDBOX_ID);
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).resolves.toEqual({
+				url: 'https://cw-1-2718.sandbox.test',
+			});
+			expect(world.created).toHaveLength(1);
+		});
+
+		it('rejects an HTTP URL even when a fresh sandbox requested an HTTPS endpoint', async () => {
+			const world = makeWorld();
+			const instance = makeCompute(world, {
+				...endpointConfig,
+				resolveExposedUrl: async () => 'http://legacy.sandbox.test:2718',
+			}).create(SANDBOX_ID, { reuse: false });
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).rejects.toThrow(
+				/expected HTTPS/,
+			);
+		});
+
 		it('reconnects to the existing sandbox by tag instead of creating a new one', async () => {
 			const world = makeWorld();
 			const compute = makeCompute(world);
@@ -425,6 +475,65 @@ describe('CoreWeaveCompute', () => {
 				{ path: '/w/data/a.csv', content: new Uint8Array([1, 2, 3]) },
 				{ path: '/w/data/b.csv', content: 'x,y' },
 			]);
+		});
+
+		it('retries a write the gateway answers with UNAVAILABLE', async () => {
+			vi.useFakeTimers();
+			try {
+				let failures = 2;
+				const world = makeWorld({
+					writeImpl: async () => {
+						if (failures-- > 0) throw new CWSandboxUnavailableError('W&B server error: 503');
+					},
+				});
+				const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+				const write = inst.writeFiles([{ path: '/tmp/token', content: 'x' }]);
+				await vi.runAllTimersAsync();
+				await write;
+				expect([...world.registry.values()][0].fake.batchWrites).toEqual([
+					[{ path: '/tmp/token', content: 'x' }],
+				]);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('gives up on UNAVAILABLE once the backoff is exhausted', async () => {
+			vi.useFakeTimers();
+			try {
+				let attempts = 0;
+				const world = makeWorld({
+					writeImpl: async () => {
+						attempts++;
+						throw new CWSandboxUnavailableError('W&B server error: 503');
+					},
+				});
+				const write = makeCompute(world)
+					.create(SANDBOX_ID, { reuse: false })
+					.writeFiles([{ path: '/tmp/token', content: 'x' }]);
+				const rejected = expect(write).rejects.toBeInstanceOf(CWSandboxUnavailableError);
+				await vi.runAllTimersAsync();
+				await rejected;
+				expect(attempts).toBe(4);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not retry other write failures', async () => {
+			let attempts = 0;
+			const world = makeWorld({
+				writeImpl: async () => {
+					attempts++;
+					throw new Error('permission denied');
+				},
+			});
+			await expect(
+				makeCompute(world)
+					.create(SANDBOX_ID, { reuse: false })
+					.writeFiles([{ path: '/tmp/token', content: 'x' }]),
+			).rejects.toThrow('permission denied');
+			expect(attempts).toBe(1);
 		});
 
 		it('is a no-op for an empty set', async () => {

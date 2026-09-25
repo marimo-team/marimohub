@@ -432,7 +432,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			// does not support profile/placement overrides, GPU requests, or non-default
 			// egress modes, and CAIOS vending is unconfirmed through it (use hub-minted
 			// WIF for bucket access). Kernel URLs need no hostname config: the managed
-			// runner assigns each sandbox a public IP the adapter resolves at expose time.
+			// runner assigns each kernel an HTTPS endpoint the adapter resolves at expose time.
 			return createWandbCompute({
 				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_WANDB_API_KEY', 'wandb'),
 				entity: env.MARIMOHUB_COMPUTE_WANDB_ENTITY,
