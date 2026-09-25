@@ -33,8 +33,8 @@
  *
  * INTEGRATION SURFACE (validate against the live CoreWeave API before production,
  * same caveat the Modal adapter carries): the kernel `services` declaration
- * (public visibility, no product endpoint — v1 Create rejects a set endpoint
- * as unimplemented); the public kernel URL is CONSTRUCTED from a hostname template (inspect's
+ * (public visibility; a product endpoint only with `kernelEndpoint`, which the
+ * managed serverless pool requires); the public kernel URL is CONSTRUCTED from a hostname template (inspect's
  * `serviceUrls` is assigned-not-edge-ready per the SDK docs); and the
  * `waitForPort` probe assumes `python3` is on the image PATH.
  *
@@ -47,11 +47,16 @@
  * the caller's cluster, so CKS deployments must keep `runnerId` set (the
  * config layer defaults it).
  */
-import { CWSandboxConfigurationError, CWSandboxNotFoundError } from '@coreweave/cwsandbox';
+import {
+	CWSandboxConfigurationError,
+	CWSandboxNotFoundError,
+	CWSandboxUnavailableError,
+} from '@coreweave/cwsandbox';
 import type {
 	CommandProcess,
 	CommandProcessStatus,
 	DataPlaneMode,
+	Endpoint,
 	FileWrites,
 	ListSandboxesResult,
 	ProcessResult,
@@ -152,6 +157,8 @@ const SLOW_BOOT_HINT =
 	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
 
 const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
+/** Backoff before each retry of a file write the gateway answered with UNAVAILABLE. */
+const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
 
 async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -255,6 +262,12 @@ export interface CoreWeaveConfig {
 	 * `kernelIngress` then publishes. Default `public`.
 	 */
 	kernelVisibility?: 'public' | 'custom';
+	/**
+	 * Product endpoint requested on each service. The managed serverless pool
+	 * rejects a bare `public` service and only assigns ingress through an HTTPS
+	 * endpoint, whose URL then arrives on `serviceUrls`.
+	 */
+	kernelEndpoint?: Endpoint;
 	/** Publishes each kernel's hostname (an Ingress in the sandbox namespace). */
 	kernelIngress?: KernelIngressPublisher;
 	/** Secondary-surface ports reserved when the sandbox is created. */
@@ -501,14 +514,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 */
 	private kernelServices(): readonly Service[] {
 		const visibility = this.config.kernelVisibility ?? 'public';
+		const endpoint = this.config.kernelEndpoint ? { endpoint: this.config.kernelEndpoint } : {};
 		return [
-			{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility },
+			{ name: 'kernel', port: this.kernelPort, protocol: 'tcp', visibility, ...endpoint },
 			...(this.config.extraPorts ?? []).map((port) => ({
 				// Names reach pod container-port names; keep them unique + DNS-safe.
 				name: `port-${port}`,
 				port,
 				protocol: 'tcp' as const,
 				visibility,
+				...endpoint,
 			})),
 		];
 	}
@@ -708,7 +723,25 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			await this.exec('true');
 		}
 		// FileContent is `string | Uint8Array`, so bytes pass straight through.
-		await sandbox.files.write(files.map((f) => ({ path: f.path, content: f.content })));
+		const batch = files.map((f) => ({ path: f.path, content: f.content }));
+		// The W&B gateway intermittently answers a write with 503 shortly after
+		// boot. A whole-file write is idempotent, so retrying it is safe.
+		for (let attempt = 0; ; attempt++) {
+			try {
+				await sandbox.files.write(batch);
+				return;
+			} catch (err) {
+				if (
+					!(err instanceof CWSandboxUnavailableError) ||
+					attempt >= WRITE_RETRY_DELAYS_MS.length
+				) {
+					throw err;
+				}
+				await new Promise<void>((resolve) => {
+					setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
+				});
+			}
+		}
 	}
 
 	private writesUnderUserHome(files: readonly SandboxFileWrite[]): boolean {
