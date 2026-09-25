@@ -370,6 +370,56 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('re-resolved instance', () => {
+		const endpointConfig: CoreWeaveConfig = {
+			...baseConfig,
+			kernelEndpoint: { kind: 'https', auth: 'open' },
+			resolveExposedUrl: async (sandbox, port) =>
+				sandbox.serviceUrls!.find((s) => s.port === port)!.url,
+		};
+
+		it('rejects a legacy HTTP endpoint without blocking file recovery or teardown', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).ready!();
+			world.registry.get('cw-1')!.fake.reads['/workspace/notebook.py'] = 'unsaved edits';
+			const instance = makeCompute(world, endpointConfig).create(SANDBOX_ID);
+
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).rejects.toThrow(
+				/expected HTTPS/,
+			);
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).rejects.toThrow(
+				/expected HTTPS/,
+			);
+			expectFileResult(await instance.readFile('/workspace/notebook.py'), {
+				success: true,
+				content: 'unsaved edits',
+			});
+			expect(world.created).toHaveLength(1);
+			expect(world.deleted).toEqual([]);
+			await instance.destroy();
+			expect(world.deleted).toEqual(['cw-1']);
+		});
+
+		it('reuses an existing HTTPS endpoint', async () => {
+			const world = makeWorld();
+			await makeCompute(world, endpointConfig).create(SANDBOX_ID).ready!();
+			const instance = makeCompute(world, endpointConfig).connectExisting(SANDBOX_ID);
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).resolves.toEqual({
+				url: 'https://cw-1-2718.sandbox.test',
+			});
+			expect(world.created).toHaveLength(1);
+		});
+
+		it('rejects an HTTP URL even when a fresh sandbox requested an HTTPS endpoint', async () => {
+			const world = makeWorld();
+			const instance = makeCompute(world, {
+				...endpointConfig,
+				resolveExposedUrl: async () => 'http://legacy.sandbox.test:2718',
+			}).create(SANDBOX_ID, { reuse: false });
+			await expect(instance.exposePort(2718, { hostname: 'unused' })).rejects.toThrow(
+				/expected HTTPS/,
+			);
+		});
+
 		it('reconnects to the existing sandbox by tag instead of creating a new one', async () => {
 			const world = makeWorld();
 			const compute = makeCompute(world);

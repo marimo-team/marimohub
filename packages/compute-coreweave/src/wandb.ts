@@ -73,8 +73,7 @@ export function serviceUrlResolver(
 /**
  * A `SandboxProvider` for W&B sandboxes: `CoreWeaveCompute` composed with a
  * W&B-gateway-authenticated client and per-sandbox URL resolution. The optional
- * `client` preserves the same test-injection seam as the CoreWeave constructor
- * (URL resolution then falls back to the hostname template).
+ * `client` preserves the same test-injection seam as the CoreWeave constructor.
  */
 export function createWandbCompute(
 	config: WandbConfig,
@@ -83,11 +82,19 @@ export function createWandbCompute(
 	const { apiKey, entity, project, baseUrl, ...rest } = config;
 	const coreweave = {
 		...rest,
-		// The managed runner rejects bare public services. 900s is the largest
-		// per-request clock the gateway accepts.
+		// The managed runner requires an HTTPS endpoint. Omission/0 uses a 15s
+		// HTTP request timeout; 900s is the supported maximum, not a sandbox TTL.
 		kernelEndpoint: { kind: 'https', auth: 'open', requestTimeoutSeconds: 900 },
 	} satisfies CoreWeaveConfig;
-	if (client) return new CoreWeaveCompute(coreweave, client);
+	if (client) {
+		return new CoreWeaveCompute(
+			{
+				...coreweave,
+				resolveExposedUrl: serviceUrlResolver((sandboxId) => client.fromId(sandboxId)),
+			},
+			client,
+		);
+	}
 
 	// Reject a blank key up front (a stray trailing newline is a common
 	// secret-file artifact); with `env: {}` the SDK would otherwise fall

@@ -18,8 +18,8 @@ const baseConfig: WandbConfig = { apiKey: 'wb-key', image: 'my-image' };
 
 describe('serviceUrlResolver', () => {
 	const URLS = [
-		{ name: 'other', port: 8080, url: 'http://166.19.118.60:8080' },
-		{ name: 'kernel', port: 2718, url: 'http://166.19.118.62:2718' },
+		{ name: 'other', port: 8080, url: 'https://8080.cw-1.example.com' },
+		{ name: 'kernel', port: 2718, url: 'https://2718.cw-1.example.com' },
 	];
 	const handle = (serviceUrls?: typeof URLS) => ({ sandboxId: 'cw-1', serviceUrls });
 
@@ -29,13 +29,13 @@ describe('serviceUrlResolver', () => {
 			gets++;
 			return {};
 		});
-		expect(await resolve(handle(URLS) as never, 2718)).toBe('http://166.19.118.62:2718');
+		expect(await resolve(handle(URLS) as never, 2718)).toBe('https://2718.cw-1.example.com');
 		expect(gets).toBe(0);
 	});
 
 	it('falls back to a Get when the handle has no URL for the port', async () => {
 		const resolve = serviceUrlResolver(async () => ({ serviceUrls: URLS }));
-		expect(await resolve(handle() as never, 2718)).toBe('http://166.19.118.62:2718');
+		expect(await resolve(handle() as never, 2718)).toBe('https://2718.cw-1.example.com');
 	});
 
 	it('throws when no service URL is assigned for the port', async () => {
@@ -60,6 +60,26 @@ describe('createWandbCompute', () => {
 		expectExecResult(result, { success: true, stdout: '', stderr: '' });
 		expect(world.created).toHaveLength(1);
 		expect(world.created[0].containerImage).toBe('my-image');
+	});
+
+	it('uses the assigned HTTPS URL with an injected client', async () => {
+		const world = makeWorld();
+		const compute = createWandbCompute({ ...baseConfig, kernelPort: 8080 }, world.client);
+		await expect(
+			compute.create(SANDBOX_ID).exposePort(8080, { hostname: 'unused.example.com' }),
+		).resolves.toEqual({ url: 'https://cw-1-8080.sandbox.test' });
+	});
+
+	it('rejects a legacy HTTP endpoint after a hub restart', async () => {
+		const world = makeWorld();
+		const legacy = new CoreWeaveCompute({ image: baseConfig.image }, world.client);
+		await legacy.create(SANDBOX_ID).ready!();
+		const compute = createWandbCompute(baseConfig, world.client);
+		await expect(
+			compute.create(SANDBOX_ID).exposePort(2718, { hostname: 'unused.example.com' }),
+		).rejects.toThrow(/expected HTTPS/);
+		expect(world.created).toHaveLength(1);
+		expect(world.deleted).toEqual([]);
 	});
 
 	it('passes the restricted config subset through to the CoreWeave adapter', async () => {

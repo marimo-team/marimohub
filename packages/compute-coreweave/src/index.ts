@@ -507,10 +507,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	/**
-	 * The kernel port is declared as a service ("the platform chooses the
-	 * mechanism"). No `endpoint`: the v1 proto documents Create as rejecting a
-	 * set endpoint as unimplemented. Egress follows the runner policy default —
-	 * there is no per-create egress knob.
+	 * Services request a product endpoint only when `kernelEndpoint` is set;
+	 * otherwise exposure depends on the runner's network configuration.
 	 */
 	private kernelServices(): readonly Service[] {
 		const visibility = this.config.kernelVisibility ?? 'public';
@@ -1011,19 +1009,26 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
 		const sandbox = await this.ensure();
-		if (this.config.resolveExposedUrl) {
-			return { url: await this.config.resolveExposedUrl(sandbox, port) };
-		}
 		// Without a resolver, construct the public URL from a template (the kernel
 		// port was declared `public` at create). Integration surface — the exact
 		// ingress hostname scheme is CoreWeave backend/profile specific.
 		const template = this.config.hostnameTemplate ?? 'https://{sandboxId}-{port}.{host}';
-		const url = template
-			.replaceAll('{sandboxId}', sandbox.sandboxId)
-			.replaceAll('{port}', String(port))
-			.replaceAll('{host}', options.hostname)
-			.replaceAll('{token}', options.token ?? '');
-		if (this.config.kernelIngress) {
+		const url = this.config.resolveExposedUrl
+			? await this.config.resolveExposedUrl(sandbox, port)
+			: template
+					.replaceAll('{sandboxId}', sandbox.sandboxId)
+					.replaceAll('{port}', String(port))
+					.replaceAll('{host}', options.hostname)
+					.replaceAll('{token}', options.token ?? '');
+		// Reconnected sandboxes retain their create-time service configuration.
+		// Reject incompatible URLs here so teardown can still recover notebook files.
+		if (this.config.kernelEndpoint?.kind === 'https' && new URL(url).protocol !== 'https:') {
+			throw new Error(
+				`CoreWeave sandbox ${sandbox.sandboxId} has an incompatible service URL for port ${port}: ` +
+					'expected HTTPS; save its files and recreate the sandbox',
+			);
+		}
+		if (!this.config.resolveExposedUrl && this.config.kernelIngress) {
 			await this.config.kernelIngress.publish({
 				sandboxId: sandbox.sandboxId,
 				host: new URL(url).hostname,
