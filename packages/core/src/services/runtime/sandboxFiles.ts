@@ -2,7 +2,8 @@ import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
-import type { SandboxInstance } from '../../ports/sandbox';
+import { logOperationalError } from '../../operationalLog';
+import type { ReadFileResult, SandboxInstance } from '../../ports/sandbox';
 import {
 	MAX_ARTIFACT_BYTES,
 	MAX_WORKSPACE_BYTES,
@@ -359,17 +360,17 @@ export async function captureWorkspace(
 		// Presence comes from the listing: skipped uploads retain the last good copy.
 		let capturedBytes = 0;
 		await mapWithConcurrency(selected, CAPTURE_READ_CONCURRENCY, async (rel) => {
-			const bytes = await readBoundedBytes(
+			const result = await readBoundedBytes(
 				sandbox,
 				`${workingDir}/${rel}`,
 				Math.min(MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_BYTES - capturedBytes),
 			);
-			if (!bytes || capturedBytes + bytes.byteLength > MAX_WORKSPACE_BYTES) {
+			if (!result?.success || capturedBytes + result.bytes.byteLength > MAX_WORKSPACE_BYTES) {
 				console.warn(`captureWorkspace: could not read ${rel.slice(0, 256)}; skipping`);
 				return;
 			}
-			capturedBytes += bytes.byteLength;
-			await bucket.put(nb.workspaceFile(rel), bytes);
+			capturedBytes += result.bytes.byteLength;
+			await bucket.put(nb.workspaceFile(rel), result.bytes);
 		});
 		await mapWithConcurrency(directoryMarkers, CAPTURE_FILE_CONCURRENCY, async (marker) =>
 			bucket.put(nb.workspaceFile(marker), new Uint8Array()),
@@ -393,9 +394,9 @@ export async function captureWorkspace(
 /**
  * Read a session's final artifacts back from the sandbox workspace on teardown:
  * the notebook code/deps plus marimo's optional `__marimo__/notebook.html` and
- * `__marimo__/session/notebook.py.json`. Every field is omitted when its file is
- * absent or unreadable. The result is handed to `NotebookService.commitSession`,
- * which cuts a version and attaches the snapshots.
+ * `__marimo__/session/notebook.py.json`. Optional artifacts may be omitted, but
+ * notebook read failures other than NOT_FOUND reject capture so callers can retry.
+ * `NotebookService.commitSession` cuts a version and attaches the snapshots.
  *
  * The session file is keyed by the notebook filename, which is always
  * `notebook.py` in the sandbox (see `SandboxProvisioner.provision`), so the path
@@ -409,13 +410,31 @@ export async function readSessionArtifacts(
 	const sizes = await listFileSizes(sandbox, mountPath);
 	const read = (path: string) => readCappedFile(sandbox, path, sizes);
 	const [code, deps, html, session] = await Promise.all([
-		read(`${mountPath}/notebook.py`),
+		readNotebookCode(sandbox, `${mountPath}/notebook.py`, sizes),
 		read(`${mountPath}/pyproject.toml`),
 		read(`${mountPath}/__marimo__/notebook.html`),
 		read(`${mountPath}/__marimo__/session/notebook.py.json`),
 	]);
 
 	return { code, deps, html, session };
+}
+
+async function readNotebookCode(
+	sandbox: SandboxInstance,
+	absolutePath: string,
+	sizes: ReadonlyMap<string, number>,
+): Promise<string | undefined> {
+	const result = await readCappedBytes(sandbox, absolutePath, sizes);
+	if (result?.success) return new TextDecoder().decode(result.bytes);
+	const code = result?.error.code ?? 'READ_FAILED';
+	const error = Object.assign(new Error(`Could not read notebook.py: ${code}`), {
+		code,
+		operation: 'sandbox.read_session_artifacts',
+		object: 'notebook.py',
+	});
+	if (code !== 'NOT_FOUND') throw error;
+	logOperationalError('session_notebook_missing', { operation: error.operation }, error);
+	return undefined;
 }
 
 /** Listing sizes are an optimization; bounded reads enforce the actual limit. */
@@ -442,6 +461,19 @@ export async function readCappedFile(
 	absolutePath: string,
 	sizes: ReadonlyMap<string, number>,
 ): Promise<string | undefined> {
+	const result = await readCappedBytes(sandbox, absolutePath, sizes);
+	return result?.success ? new TextDecoder().decode(result.bytes) : undefined;
+}
+
+type BoundedBytesResult =
+	| { success: true; bytes: Uint8Array }
+	| Extract<ReadFileResult, { success: false }>;
+
+async function readCappedBytes(
+	sandbox: SandboxInstance,
+	absolutePath: string,
+	sizes: ReadonlyMap<string, number>,
+): Promise<BoundedBytesResult | undefined> {
 	const size = sizes.get(absolutePath);
 	if (size !== undefined && size > MAX_ARTIFACT_BYTES) {
 		console.warn(
@@ -449,22 +481,21 @@ export async function readCappedFile(
 		);
 		return undefined;
 	}
-	const bytes = await readBoundedBytes(sandbox, absolutePath, MAX_ARTIFACT_BYTES);
-	return bytes === undefined ? undefined : new TextDecoder().decode(bytes);
+	return readBoundedBytes(sandbox, absolutePath, MAX_ARTIFACT_BYTES);
 }
 
 async function readBoundedBytes(
 	sandbox: SandboxInstance,
 	path: string,
 	maxBytes: number,
-): Promise<Uint8Array | undefined> {
+): Promise<BoundedBytesResult | undefined> {
 	if (!supportsBoundedReads(sandbox)) return undefined;
 	// External adapters must opt into the bounded contract; never fall back to readFile.
 	const result = await sandbox.readFileBounded?.(path, {
 		maxBytes,
 		timeoutMs: CAPTURE_READ_TIMEOUT_MS,
 	});
-	if (!result?.success) return undefined;
+	if (!result?.success) return result;
 	const encodedLimit = result.encoding === 'base64' ? 4 * Math.ceil(maxBytes / 3) : maxBytes;
 	if (result.content.length > encodedLimit) return undefined;
 	try {
@@ -472,7 +503,7 @@ async function readBoundedBytes(
 			result.encoding === 'base64'
 				? base64Decode(result.content)
 				: new TextEncoder().encode(result.content);
-		return bytes.byteLength <= maxBytes ? bytes : undefined;
+		return bytes.byteLength <= maxBytes ? { success: true, bytes } : undefined;
 	} catch {
 		return undefined;
 	}

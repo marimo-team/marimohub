@@ -8,6 +8,7 @@ import {
 	UserId,
 } from '../../ids';
 import { paths } from '../../paths';
+import { readFileFailure } from '../../ports/sandbox';
 import {
 	ACTOR,
 	EXPOSED_URL,
@@ -2306,6 +2307,44 @@ describe('SandboxProvisioner', () => {
 	});
 
 	describe('captureSession', () => {
+		it.each(['READ_FAILED', 'BACKEND_ERROR'] as const)(
+			'rejects unreadable notebook code while still capturing workspace files (%s)',
+			async (code) => {
+				const env = await setupTestEnv();
+				const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+				const created = await env.notebooks.createNotebook(
+					project.id,
+					{ title: 'NB', description: 'd', code: 'print(1)' },
+					ACTOR,
+				);
+				const { instance, calls } = makeFsSandbox({
+					files: { 'notebook.py': 'print(2)', 'data.csv': '1,2' },
+				});
+				const read = instance.readFileBounded!.bind(instance);
+				instance.readFileBounded = async (path, options) =>
+					path === `${MOUNT_PATH}/notebook.py` ? readFileFailure(code) : read(path, options);
+				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+				await expect(
+					provisioner.captureSession(
+						instance,
+						env.notebooks,
+						env.bucket,
+						project.id,
+						created.id,
+						ACTOR,
+						'workspace',
+					),
+				).rejects.toMatchObject({ code, object: 'notebook.py' });
+
+				expect(await env.notebooks.getNotebookContent(project.id, created.id)).toBe('print(1)');
+				expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(1);
+				const nb = paths.project(project.id).notebook(created.id);
+				expect(await (await env.bucket.get(nb.workspaceFile('data.csv')))!.text()).toBe('1,2');
+				expect(calls.destroy).toBe(0);
+			},
+		);
+
 		it('saves the session edits as a version WITHOUT destroying the sandbox', async () => {
 			const env = await setupTestEnv();
 			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
@@ -2555,6 +2594,60 @@ describe('SandboxProvisioner', () => {
 	// Integration: the provisioner delegates to the filesystemSnapshots module at the
 	// two lifecycle moments (the module's own logic is unit-tested separately).
 	describe('filesystem snapshots (delegation)', () => {
+		it.each(['read', 'commit'] as const)(
+			'preserves the last good snapshot and destroys after a %s failure',
+			async (failure) => {
+				const env = await setupTestEnv();
+				const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+				const created = await env.notebooks.createNotebook(
+					project.id,
+					{ title: 'NB', description: 'd', code: 'print(1)' },
+					ACTOR,
+				);
+				await env.notebooks.setFsSnapshot(project.id, created.id, {
+					snapshot_id: 'known-good',
+					captured_at: '2020-01-01T00:00:00.000Z',
+				});
+				const { instance, calls } = makeFakeSandbox({
+					files: { [`${MOUNT_PATH}/notebook.py`]: 'print(2)' },
+				});
+				if (failure === 'read') {
+					instance.readFileBounded = async () => readFileFailure('BACKEND_ERROR');
+				} else {
+					vi.spyOn(env.notebooks, 'commitSession').mockRejectedValue(new Error('bucket down'));
+				}
+				const compute = makeSnapshotCompute(instance);
+				const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
+				const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+				try {
+					await new SandboxProvisioner(compute).teardown(
+						instance,
+						env.notebooks,
+						env.bucket,
+						project.id,
+						created.id,
+						ACTOR,
+						'source',
+					);
+
+					expect(captureSnapshot).not.toHaveBeenCalled();
+					expect(compute.deleted).toEqual([]);
+					expect(await env.notebooks.getFsSnapshot(project.id, created.id)).toMatchObject({
+						snapshot_id: 'known-good',
+					});
+					expect(calls.destroy).toBe(1);
+					expect(JSON.parse(error.mock.calls[0][0])).toMatchObject({
+						event: 'session_capture_failed',
+						...(failure === 'read'
+							? { error: { code: 'BACKEND_ERROR', object: 'notebook.py' } }
+							: {}),
+					});
+				} finally {
+					error.mockRestore();
+				}
+			},
+		);
+
 		it('teardown captures a snapshot, writes the pointer, and GCs the previous one', async () => {
 			const env = await setupTestEnv();
 			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);

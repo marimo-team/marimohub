@@ -608,6 +608,57 @@ describe('captureWorkspace', () => {
 });
 
 describe('readSessionArtifacts', () => {
+	it.each(['READ_FAILED', 'BACKEND_ERROR'] as const)(
+		'rejects a notebook read failure with its adapter error code (%s)',
+		async (code) => {
+			const { instance } = makeFakeSandbox();
+			instance.readFileBounded = async () => readFileFailure(code);
+
+			await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+				code,
+				operation: 'sandbox.read_session_artifacts',
+				object: 'notebook.py',
+			});
+		},
+	);
+
+	it('logs a missing notebook and still returns optional artifacts', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { instance } = makeFakeSandbox({
+				files: { [`${MOUNT}/pyproject.toml`]: '[project]' },
+			});
+
+			expect(await readSessionArtifacts(instance, MOUNT)).toMatchObject({
+				code: undefined,
+				deps: '[project]',
+			});
+			expect(error).toHaveBeenCalledOnce();
+			expect(JSON.parse(error.mock.calls[0][0])).toMatchObject({
+				event: 'session_notebook_missing',
+				operation: 'sandbox.read_session_artifacts',
+				error: { code: 'NOT_FOUND', object: 'notebook.py' },
+			});
+		} finally {
+			error.mockRestore();
+		}
+	});
+
+	it('omits failed optional reads without rejecting the notebook capture', async () => {
+		const { instance } = makeFakeSandbox();
+		instance.readFileBounded = async (path) =>
+			path === `${MOUNT}/notebook.py`
+				? { success: true, content: 'saved' }
+				: readFileFailure('BACKEND_ERROR');
+
+		expect(await readSessionArtifacts(instance, MOUNT)).toEqual({
+			code: 'saved',
+			deps: undefined,
+			html: undefined,
+			session: undefined,
+		});
+	});
+
 	it('reads code, deps, and both __marimo__ snapshots when present', async () => {
 		const { instance } = makeFakeSandbox({
 			files: {
@@ -830,6 +881,51 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 });
 
 describe('capture transport budgets', () => {
+	it('rejects a notebook above the listed size limit without reading it', async () => {
+		const { instance } = makeFsSandbox({
+			files: { 'notebook.py': 'edited' },
+			sizes: { 'notebook.py': MAX_ARTIFACT_BYTES + 1 },
+		});
+		const read = vi.spyOn(instance, 'readFileBounded');
+
+		await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+			code: 'READ_FAILED',
+			object: 'notebook.py',
+		});
+		expect(read.mock.calls.some(([path]) => path.endsWith('/notebook.py'))).toBe(false);
+	});
+
+	it.each([
+		['text size limit', () => ({ content: 'x'.repeat(MAX_ARTIFACT_BYTES + 1) })],
+		[
+			'encoded base64 size limit',
+			() => ({
+				content: 'A'.repeat(4 * Math.ceil(MAX_ARTIFACT_BYTES / 3) + 4),
+				encoding: 'base64' as const,
+			}),
+		],
+		[
+			'decoded base64 size limit',
+			() => ({
+				content: 'A'.repeat(4 * Math.ceil(MAX_ARTIFACT_BYTES / 3)),
+				encoding: 'base64' as const,
+			}),
+		],
+		['decoded UTF-8 size limit', () => ({ content: 'é'.repeat(MAX_ARTIFACT_BYTES / 2 + 1) })],
+		['malformed base64', () => ({ content: '!!!!', encoding: 'base64' as const })],
+	] as const)('rejects notebook content refused for %s', async (_reason, content) => {
+		const { instance } = makeFakeSandbox();
+		instance.readFileBounded = async (path) =>
+			path === `${MOUNT}/notebook.py`
+				? { success: true, ...content() }
+				: readFileFailure('NOT_FOUND');
+
+		await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+			code: 'READ_FAILED',
+			object: 'notebook.py',
+		});
+	});
+
 	it.each(['source', 'workspace'] as const)(
 		'warns once without changing stored content when bounded reads are unsupported (%s)',
 		async (mode) => {
@@ -920,7 +1016,9 @@ describe('capture transport budgets', () => {
 					: result;
 			};
 			const read = vi.spyOn(instance, 'readFileBounded');
-			expect((await readSessionArtifacts(instance, MOUNT)).code).toBeUndefined();
+			await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+				code: 'READ_FAILED',
+			});
 			expect(read.mock.calls.some(([path]) => path.endsWith('/notebook.py'))).toBe(false);
 		},
 	);
@@ -1018,23 +1116,21 @@ describe('capture transport budgets', () => {
 		expect(await (await bucket.get(nb.workspaceFile('good')))!.text()).toBe('saved');
 	});
 
-	it('omits unsupported or refused bounded reads without invoking the legacy transport', async () => {
+	it('never falls back to the legacy transport for unsupported or failed bounded reads', async () => {
 		const { instance } = makeFakeSandbox({ files: { [`${MOUNT}/notebook.py`]: 'code' } });
 		const legacy = vi.spyOn(instance, 'readFile');
 		expect(
 			(await readSessionArtifacts({ ...instance, readFileBounded: undefined }, MOUNT)).code,
 		).toBeUndefined();
-		expect(
-			(
-				await readSessionArtifacts(
-					{
-						...instance,
-						readFileBounded: async () => readFileFailure(),
-					},
-					MOUNT,
-				)
-			).code,
-		).toBeUndefined();
+		await expect(
+			readSessionArtifacts(
+				{
+					...instance,
+					readFileBounded: async () => readFileFailure(),
+				},
+				MOUNT,
+			),
+		).rejects.toMatchObject({ code: 'READ_FAILED' });
 		expect(legacy).not.toHaveBeenCalled();
 	});
 });
