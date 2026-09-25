@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
-import { devApiTarget, envPort } from './devProxy';
+import { devApiTarget, envPort, waitForDevApi } from './devProxy';
 
 // Opt in only files whose imports do not require browser globals.
 const nodeTests = [
@@ -14,6 +14,7 @@ const nodeTests = [
 ];
 
 const webPort = envPort(process.env.WEB_PORT, 5175);
+const apiTarget = devApiTarget(process.env);
 
 // React SPA. The Cloudflare vite-plugin is intentionally absent — the SPA is a
 // pure consumer of the /api/* surface and is served as static assets by whatever
@@ -21,7 +22,18 @@ const webPort = envPort(process.env.WEB_PORT, 5175);
 export default defineConfig({
 	base: './',
 	// lazyPlugins: only loaded for dev/build/preview, not for `vp lint`/`vp fmt`.
-	plugins: lazyPlugins(() => [react({ compiler: true }), tailwindcss()]),
+	plugins: lazyPlugins(() => [
+		react({ compiler: true }),
+		tailwindcss(),
+		{
+			name: 'wait-for-dev-api',
+			apply: (_, { command, mode }) => command === 'serve' && mode !== 'test',
+			async configureServer(server) {
+				server.config.logger.info(`Waiting for the development API at ${apiTarget}...`);
+				await waitForDevApi(apiTarget);
+			},
+		},
+	]),
 	resolve: {
 		alias: {
 			'@': path.resolve(fileURLToPath(new URL('.', import.meta.url)), './src'),
@@ -39,11 +51,11 @@ export default defineConfig({
 		// server can reach the /api/* surface during development.
 		proxy: {
 			'^/(manifest\\.webmanifest|apple-touch-icon\\.png)$': {
-				target: devApiTarget(process.env),
+				target: apiTarget,
 				changeOrigin: false,
 			},
 			'/api': {
-				target: devApiTarget(process.env),
+				target: apiTarget,
 				// Rewriting Host would make it differ from Origin and trip the CSRF guard.
 				changeOrigin: false,
 			},
