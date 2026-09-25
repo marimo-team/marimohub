@@ -59,6 +59,7 @@ For a real deployment use the durable variables from the `.env` above.
 ```bash
 curl -fsSLO https://github.com/marimo-team/marimohub/releases/latest/download/marimohub-linux-x64
 chmod +x marimohub-linux-x64
+./marimohub-linux-x64 --version
 
 export MARIMOHUB_STORAGE_BACKEND=memory
 export MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true

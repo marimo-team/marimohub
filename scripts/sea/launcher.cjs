@@ -13,6 +13,20 @@ const { pathToFileURL } = require('node:url');
 
 const manifest = JSON.parse(sea.getAsset('manifest.json', 'utf8'));
 
+// Answered before the cache checks and the server's config validation, so they
+// work on a freshly downloaded binary with no environment and no usable cache.
+const arg = process.argv[2];
+if (arg === '--version' || arg === '-v') {
+	console.log(manifest.version);
+	process.exit(0);
+}
+if (arg === '--help' || arg === '-h') {
+	console.log(
+		`marimohub ${manifest.version}\n\nConfigured entirely through MARIMOHUB_* environment variables; see docs/configuration.md.`,
+	);
+	process.exit(0);
+}
+
 const uid = process.getuid ? process.getuid() : null;
 // The unpacked bundle is executed, so the cache defaults to the user's own
 // cache directory, whose ancestors only the user and root can write. A shared
