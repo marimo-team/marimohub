@@ -31,6 +31,14 @@ fail() {
 	exit 1
 }
 
+# Runs without the server variables: --version must answer without loading configuration.
+cli_version="$("$binary" --version 2>"$log")" ||
+	fail "--version exited non-zero"
+echo "--version: $cli_version"
+if [[ -n "$expected_version" && "$cli_version" != "$expected_version" ]]; then
+	fail "expected --version to print $expected_version, got: $cli_version"
+fi
+
 MARIMOHUB_SEA_CACHE_DIR="$cache_dir/cache" \
 	MARIMOHUB_STORAGE_BACKEND=memory \
 	MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true \

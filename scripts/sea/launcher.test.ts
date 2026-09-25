@@ -60,9 +60,13 @@ interface Run {
 	stderr: string;
 }
 
-const runLauncher = (cacheDir: string, env: Record<string, string> = {}): Promise<Run> =>
+const runLauncher = (
+	cacheDir: string,
+	env: Record<string, string> = {},
+	args: string[] = [],
+): Promise<Run> =>
 	new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, ['-r', stub, launcher], {
+		const child = spawn(process.execPath, ['-r', stub, launcher, ...args], {
 			env: { ...process.env, MARIMOHUB_SEA_CACHE_DIR: cacheDir, ...env },
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
@@ -176,6 +180,31 @@ describe.skipIf(process.platform === 'win32')('SEA launcher', () => {
 		expect(run.code).toBe(1);
 		expect(run.stderr).toContain('is a symlink');
 		expect(readdirSync(join(base, 'real'))).toEqual([]);
+	});
+
+	// The ancestor is unusable as a cache, so these pass only if nothing touches it.
+	it.each([
+		['--version', '0.0.0-test\n'],
+		['-v', '0.0.0-test\n'],
+	])('prints the version for %s without unpacking', async (flag, expected) => {
+		const base = mkdtempSync(join(scratch, 'version-'));
+		chmodSync(base, 0o777);
+
+		const run = await runLauncher(join(base, 'cache'), {}, [flag]);
+		expect(run).toEqual({ code: 0, stdout: expected, stderr: '' });
+		expect(readdirSync(base)).toEqual([]);
+	});
+
+	it.each(['--help', '-h'])('prints help for %s without unpacking', async (flag) => {
+		const base = mkdtempSync(join(scratch, 'help-'));
+		chmodSync(base, 0o777);
+
+		const run = await runLauncher(join(base, 'cache'), {}, [flag]);
+		expect(run.code).toBe(0);
+		expect(run.stderr).toBe('');
+		expect(run.stdout).toContain('marimohub 0.0.0-test');
+		expect(run.stdout).toContain('docs/configuration.md');
+		expect(readdirSync(base)).toEqual([]);
 	});
 
 	it.each([
