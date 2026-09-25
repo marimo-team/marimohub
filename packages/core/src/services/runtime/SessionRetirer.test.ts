@@ -1,4 +1,4 @@
-import { execResult } from '../../ports/sandbox';
+import { execResult, readFileFailure } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
@@ -282,31 +282,39 @@ describe('SessionRetirer', () => {
 		expect(capture).not.toHaveBeenCalled();
 	});
 
-	it('does not snapshot or advance the restore pointer when the capture fails', async () => {
-		const { instance } = makeFakeSandbox();
-		const compute = snapshotProvider(instance);
-		const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
-		const deleteSnapshot = vi.spyOn(compute, 'deleteSnapshot');
-		await notebooks.setFsSnapshot(projectId, notebookId, {
-			snapshot_id: 'known-good',
-			captured_at: new Date().toISOString(),
-		});
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockRejectedValue(
-			new Error('bucket unavailable'),
-		);
-		vi.spyOn(console, 'error').mockImplementation(() => {});
-		const session = await persistentSession();
-		await sessions.beginTerminating(projectId, session.session_id);
+	it.each(['capture', 'read'] as const)(
+		'does not snapshot or advance the restore pointer when %s fails',
+		async (failure) => {
+			const { instance, calls } = makeFakeSandbox();
+			const compute = snapshotProvider(instance);
+			const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
+			const deleteSnapshot = vi.spyOn(compute, 'deleteSnapshot');
+			await notebooks.setFsSnapshot(projectId, notebookId, {
+				snapshot_id: 'known-good',
+				captured_at: new Date().toISOString(),
+			});
+			if (failure === 'read') {
+				instance.readFileBounded = async () => readFileFailure('BACKEND_ERROR');
+			} else {
+				vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockRejectedValue(
+					new Error('bucket unavailable'),
+				);
+			}
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const session = await persistentSession();
+			await sessions.beginTerminating(projectId, session.session_id);
 
-		await retirer(compute).retire(session);
+			await retirer(compute).retire(session);
 
-		expect(captureSnapshot).not.toHaveBeenCalled();
-		expect(deleteSnapshot).not.toHaveBeenCalled();
-		expect(await notebooks.getFsSnapshot(projectId, notebookId)).toMatchObject({
-			snapshot_id: 'known-good',
-		});
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
-	});
+			expect(captureSnapshot).not.toHaveBeenCalled();
+			expect(deleteSnapshot).not.toHaveBeenCalled();
+			expect(await notebooks.getFsSnapshot(projectId, notebookId)).toMatchObject({
+				snapshot_id: 'known-good',
+			});
+			expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+			expect(calls.destroy).toBe(1);
+		},
+	);
 
 	it('snapshots and GCs the previous snapshot after a successful capture', async () => {
 		const { instance } = makeFakeSandbox();
@@ -611,27 +619,39 @@ describe('SessionRetirer', () => {
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
 
-	it('keeps a takeover draining when its final strict capture fails', async () => {
-		const { instance, calls } = makeFakeSandbox();
-		const session = await persistentSession();
-		await reserveTakeover(session, 'capture-retry');
-		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
-			.mockRejectedValueOnce(new Error('final save failed'));
-		const service = retirer({ create: () => instance, proxy: async () => null });
+	it.each(['capture', 'read'] as const)(
+		'keeps a takeover draining when its final %s fails',
+		async (failure) => {
+			const { instance, calls } = makeFakeSandbox();
+			const session = await persistentSession();
+			await reserveTakeover(session, 'capture-retry');
+			const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+			const read = vi.spyOn(instance, 'readFileBounded');
+			if (failure === 'read') {
+				read.mockResolvedValue(readFileFailure('READ_FAILED'));
+			} else {
+				capture.mockRejectedValueOnce(new Error('final save failed'));
+			}
+			const service = retirer({ create: () => instance, proxy: async () => null });
 
-		await expect(
-			service.retireForTakeover(session, uid('user_01HXY00000000000000000001')),
-		).rejects.toThrow('final save failed');
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
-		expect(calls.destroy).toBe(0);
+			await expect(
+				service.retireForTakeover(session, uid('user_01HXY00000000000000000001')),
+			).rejects.toThrow(
+				failure === 'read' ? 'Could not read notebook.py: READ_FAILED' : 'final save failed',
+			);
+			expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
+			expect(calls.destroy).toBe(0);
 
-		await sessions.setTakeoverPhase(projectId, notebookId, 'capture-retry', 'draining');
-		capture.mockResolvedValueOnce(true);
-		expect(await service.completeTakeoverDrain(session, 'capture-retry', 'lease-retry')).toBe(true);
-		expect(calls.destroy).toBe(1);
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
-	});
+			await sessions.setTakeoverPhase(projectId, notebookId, 'capture-retry', 'draining');
+			if (failure === 'read') read.mockRestore();
+			else capture.mockResolvedValueOnce(true);
+			expect(await service.completeTakeoverDrain(session, 'capture-retry', 'lease-retry')).toBe(
+				true,
+			);
+			expect(calls.destroy).toBe(1);
+			expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+		},
+	);
 
 	it('resumes after destruction when the terminal status write fails', async () => {
 		const { instance, calls } = makeFakeSandbox();

@@ -1320,7 +1320,8 @@ export class SandboxProvisioner {
 		// `captureSession` owns the persistence checks: false = an ephemeral session
 		// or a synced/remote source, whose edits (and filesystem snapshot) are never
 		// persisted from a session — destroy only.
-		let persisted = true;
+		// Failed captures must not replace the last good restore snapshot.
+		let persisted = false;
 		try {
 			persisted = await this.captureSession(
 				sandbox,

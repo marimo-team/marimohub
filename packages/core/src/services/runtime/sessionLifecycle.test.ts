@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
 
-import { execResult, listFilesFailure } from '../../ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import {
 	fakeComputeFrom,
@@ -471,6 +471,33 @@ describe('SessionLifecycleService', () => {
 	});
 
 	describe('periodic snapshots', () => {
+		it('retries a failed notebook read on the next sweep without advancing the cadence', async () => {
+			const { instance, calls } = makeFakeSandbox({
+				files: { '/workspace/notebook.py': 'edited' },
+			});
+			const read = vi.spyOn(instance, 'readFileBounded');
+			read.mockResolvedValue(readFileFailure('READ_FAILED'));
+			compute = fakeComputeFrom(instance);
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const s = await putSession({ last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000) });
+			const service = makeService();
+
+			expect((await service.sweep(now)).snapshotted).toBe(0);
+			expect((await getStored(s)).last_snapshot_at).toBe(iso(-SNAPSHOT_INTERVAL_MS - 1000));
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+
+			read.mockRestore();
+			expect((await service.sweep(now + 1000)).snapshotted).toBe(1);
+			expect((await getStored(s)).last_snapshot_at).toBe(iso(1000));
+			expect(notebooks.commitSession).toHaveBeenCalledWith(
+				projectId,
+				notebookId,
+				expect.objectContaining({ code: 'edited' }),
+				s.user_id,
+			);
+			expect(calls.destroy).toBe(0);
+		});
+
 		it('saves a due session source-only and advances last_snapshot_at', async () => {
 			const render = vi.spyOn(thumbnailCapture, 'captureThumbnail');
 			const captureSpy = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
