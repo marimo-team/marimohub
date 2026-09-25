@@ -1,8 +1,10 @@
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
+import type { ProxyOptions } from 'vite-plus';
 import { devApiTarget, envPort } from './devProxy';
 
 // Opt in only files whose imports do not require browser globals.
@@ -14,6 +16,28 @@ const nodeTests = [
 ];
 
 const webPort = envPort(process.env.WEB_PORT, 5175);
+const apiTarget = devApiTarget(process.env);
+
+// `pnpm dev` starts Vite and the API in parallel and Vite wins by a couple of
+// seconds; hold proxied requests until the API answers so the first load works.
+let apiUp = false;
+async function waitForApi() {
+	for (let tries = 0; !apiUp && tries < 150; tries++) {
+		apiUp = await fetch(apiTarget, { method: 'HEAD' }).then(
+			() => true,
+			() => false,
+		);
+		if (!apiUp) await sleep(200);
+	}
+}
+
+const apiProxy: ProxyOptions = {
+	target: apiTarget,
+	// Rewriting Host would make it differ from Origin and trip the CSRF guard.
+	changeOrigin: false,
+	// Vite awaits `bypass`; resolving undefined continues to the target.
+	bypass: waitForApi,
+};
 
 // React SPA. The Cloudflare vite-plugin is intentionally absent — the SPA is a
 // pure consumer of the /api/* surface and is served as static assets by whatever
@@ -38,15 +62,8 @@ export default defineConfig({
 		// Proxy API calls to the local Node server (apps/server) so the SPA dev
 		// server can reach the /api/* surface during development.
 		proxy: {
-			'^/(manifest\\.webmanifest|apple-touch-icon\\.png)$': {
-				target: devApiTarget(process.env),
-				changeOrigin: false,
-			},
-			'/api': {
-				target: devApiTarget(process.env),
-				// Rewriting Host would make it differ from Origin and trip the CSRF guard.
-				changeOrigin: false,
-			},
+			'^/(manifest\\.webmanifest|apple-touch-icon\\.png)$': apiProxy,
+			'/api': apiProxy,
 		},
 	},
 	build: {
