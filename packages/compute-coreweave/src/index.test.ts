@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { context, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
-import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
+import { CWSandboxNotFoundError, CWSandboxUnavailableError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -57,7 +57,7 @@ describe('CoreWeaveCompute', () => {
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			expect(world.created).toHaveLength(1);
 			const opts = world.created[0];
-			// No `endpoint`: v1 Create rejects a set product endpoint as unimplemented.
+			// No `endpoint` unless `kernelEndpoint` is configured.
 			expect(opts.services).toEqual([
 				{ name: 'kernel', port: 2718, protocol: 'tcp', visibility: 'public' },
 			]);
@@ -425,6 +425,65 @@ describe('CoreWeaveCompute', () => {
 				{ path: '/w/data/a.csv', content: new Uint8Array([1, 2, 3]) },
 				{ path: '/w/data/b.csv', content: 'x,y' },
 			]);
+		});
+
+		it('retries a write the gateway answers with UNAVAILABLE', async () => {
+			vi.useFakeTimers();
+			try {
+				let failures = 2;
+				const world = makeWorld({
+					writeImpl: async () => {
+						if (failures-- > 0) throw new CWSandboxUnavailableError('W&B server error: 503');
+					},
+				});
+				const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+				const write = inst.writeFiles([{ path: '/tmp/token', content: 'x' }]);
+				await vi.runAllTimersAsync();
+				await write;
+				expect([...world.registry.values()][0].fake.batchWrites).toEqual([
+					[{ path: '/tmp/token', content: 'x' }],
+				]);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('gives up on UNAVAILABLE once the backoff is exhausted', async () => {
+			vi.useFakeTimers();
+			try {
+				let attempts = 0;
+				const world = makeWorld({
+					writeImpl: async () => {
+						attempts++;
+						throw new CWSandboxUnavailableError('W&B server error: 503');
+					},
+				});
+				const write = makeCompute(world)
+					.create(SANDBOX_ID, { reuse: false })
+					.writeFiles([{ path: '/tmp/token', content: 'x' }]);
+				const rejected = expect(write).rejects.toBeInstanceOf(CWSandboxUnavailableError);
+				await vi.runAllTimersAsync();
+				await rejected;
+				expect(attempts).toBe(4);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not retry other write failures', async () => {
+			let attempts = 0;
+			const world = makeWorld({
+				writeImpl: async () => {
+					attempts++;
+					throw new Error('permission denied');
+				},
+			});
+			await expect(
+				makeCompute(world)
+					.create(SANDBOX_ID, { reuse: false })
+					.writeFiles([{ path: '/tmp/token', content: 'x' }]),
+			).rejects.toThrow('permission denied');
+			expect(attempts).toBe(1);
 		});
 
 		it('is a no-op for an empty set', async () => {

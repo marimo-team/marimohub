@@ -78,7 +78,15 @@ describe('createWandbCompute', () => {
 		expect(opts.maxLifetimeSeconds).toBe(3600);
 		// Gateway-unsupported knobs are not configurable: adapter defaults apply.
 		expect(opts.objectStorageAccess).toBeUndefined();
-		expect(opts.services).toEqual([expect.objectContaining({ port: 2718, visibility: 'public' })]);
+		expect(opts.services).toEqual([
+			{
+				name: 'kernel',
+				port: 2718,
+				protocol: 'tcp',
+				visibility: 'public',
+				endpoint: { kind: 'https', auth: 'open', requestTimeoutSeconds: 900 },
+			},
+		]);
 	});
 });
 

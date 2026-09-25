@@ -178,7 +178,7 @@ CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1).
 
 `MARIMOHUB_COMPUTE_BACKEND=wandb`
 
-CoreWeave Sandboxes via the W&B (Weights & Biases) gateway — the `coreweave` backend authenticated with a W&B API key. Kernel URLs are resolved automatically: the managed runner assigns each sandbox a public IP served over plain HTTP, so no sandbox hostname is needed. Profile/placement overrides, GPU requests, egress overrides, and CAIOS vending are not available through the gateway; use hub-minted WIF (docs/workload-identity-federation.md) for bucket access.
+CoreWeave Sandboxes via the W&B (Weights & Biases) gateway — the `coreweave` backend authenticated with a W&B API key. Kernel URLs are resolved automatically: the managed runner assigns each kernel an HTTPS endpoint, so no sandbox hostname is needed. Profile/placement overrides, GPU requests, egress overrides, and CAIOS vending are not available through the gateway; use hub-minted WIF (docs/workload-identity-federation.md) for bucket access.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |

@@ -104,8 +104,9 @@ export interface FakeSandbox {
 
 // `FileWrites` also admits a path→content record, but the adapter only ever
 // sends the array form; normalize so the fake satisfies the SDK type.
-function recordWrite(fake: FakeSandbox) {
+function recordWrite(fake: FakeSandbox, writeImpl?: () => Promise<void>) {
 	return async (files: FileWrites): Promise<void> => {
+		await writeImpl?.();
 		const list = Array.isArray(files)
 			? (files as readonly { path: string; content: unknown }[]).map((f) => ({ ...f }))
 			: Object.entries(files).map(([path, content]) => ({ path, content }));
@@ -118,6 +119,8 @@ export function makeWorld(opts?: {
 	startImpl?: (cmd: readonly string[]) => Promise<CommandProcess>;
 	/** Runs inside the boot `wait()`; use it to simulate a slow boot. */
 	waitImpl?: () => Promise<void>;
+	/** Runs before each `files.write`; throw to fail that write. */
+	writeImpl?: () => Promise<void>;
 	/** State for started processes; omit to leave them running. */
 	proc?: FakeProcessState;
 }) {
@@ -175,7 +178,7 @@ export function makeWorld(opts?: {
 					if (path in fake.reads) return fake.reads[path];
 					throw new Error('not found');
 				},
-				write: recordWrite(fake),
+				write: recordWrite(fake, opts?.writeImpl),
 			},
 			delete: async () => {
 				fake.deleted++;
@@ -255,7 +258,7 @@ export function makeWorld(opts?: {
 					if (path in entry.fake.reads) return entry.fake.reads[path];
 					throw new Error('not found');
 				},
-				write: recordWrite(entry.fake),
+				write: recordWrite(entry.fake, opts?.writeImpl),
 			},
 			delete: async () => {
 				entry.fake.deleted++;
