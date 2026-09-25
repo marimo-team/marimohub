@@ -15,7 +15,7 @@ async function chooseSurfaceAction(
 	user: ReturnType<typeof userEvent.setup>,
 	name: string,
 ): Promise<void> {
-	await user.click(await screen.findByRole('button', { name: 'Surfaces' }));
+	await user.click(await screen.findByRole('button', { name: 'Open' }));
 	await user.click(await screen.findByRole('menuitem', { name }));
 }
 
@@ -66,7 +66,7 @@ describe('NotebookPage viewer modes', () => {
 		expect(notebookUrl.searchParams.has('session_id')).toBe(false);
 
 		expect(screen.queryByRole('tablist', { name: 'Notebook applications' })).toBeNull();
-		await user.click(await screen.findByRole('button', { name: 'Surfaces' }));
+		await user.click(await screen.findByRole('button', { name: 'Open' }));
 		expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).toBeInTheDocument();
 		expect(screen.queryByRole('menuitem', { name: 'Stop VS Code' })).toBeNull();
 		await user.click(screen.getByRole('menuitem', { name: 'Start VS Code' }));
@@ -252,8 +252,8 @@ describe('NotebookPage viewer modes', () => {
 		});
 		renderPage();
 
-		await screen.findByRole('button', { name: 'Stop' });
-		await user.click(screen.getByRole('button', { name: 'Surfaces' }));
+		await screen.findByRole('button', { name: /Session Running/ });
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 		expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).toHaveAttribute(
 			'aria-disabled',
 			'true',
@@ -290,8 +290,8 @@ describe('NotebookPage viewer modes', () => {
 
 		await chooseSurfaceAction(user, 'Start VS Code');
 		await waitFor(() => expect(screen.queryByTitle('Forecast in VS Code')).toBeNull());
-		expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
-		await user.click(screen.getByRole('button', { name: 'Surfaces' }));
+		expect(screen.getByRole('button', { name: /Session Running/ })).toBeEnabled();
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 		await waitFor(() =>
 			expect(screen.getByRole('menuitem', { name: 'Start VS Code' })).not.toHaveAttribute(
 				'aria-disabled',
@@ -319,7 +319,7 @@ describe('NotebookPage viewer modes', () => {
 		const frame = await screen.findByTitle('Forecast in VS Code');
 		await chooseSurfaceAction(user, 'Stop VS Code');
 		await waitFor(() => expect(screen.getByTitle('Forecast in VS Code')).toBe(frame));
-		await user.click(screen.getByRole('button', { name: 'Surfaces' }));
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 		await waitFor(() =>
 			expect(screen.getByRole('menuitem', { name: 'Stop VS Code' })).not.toHaveAttribute(
 				'aria-disabled',
@@ -575,7 +575,10 @@ describe('NotebookPage viewer modes', () => {
 			});
 			const { container } = renderPage(testCase.variant);
 
-			expect(await screen.findByRole('button', { name: 'Stop' })).toBeEnabled();
+			await userEvent.click(
+				await screen.findByRole('button', { name: 'Session Starting — details' }),
+			);
+			expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
 			expect(screen.getByText(testCase.message)).toBeInTheDocument();
 			expect(container.querySelector('iframe')).toBeNull();
 		},
@@ -594,6 +597,7 @@ describe('NotebookPage viewer modes', () => {
 		renderPage();
 
 		await screen.findByText(/session is temporary/);
+		await user.click(screen.getByRole('button', { name: /Session Running/ }));
 		await user.click(screen.getByRole('button', { name: 'Stop' }));
 		await waitFor(() =>
 			expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
@@ -634,7 +638,7 @@ describe('NotebookPage viewer modes', () => {
 		);
 	});
 
-	it('shows the selected compute profile in the header', async () => {
+	it('shows the selected compute profile in session details', async () => {
 		makeFetch({
 			role: 'editor',
 			session: runningSession({ compute_profile: 'large' }),
@@ -647,6 +651,7 @@ describe('NotebookPage viewer modes', () => {
 		});
 		renderPage();
 
+		await userEvent.click(await screen.findByRole('button', { name: /Session Running/ }));
 		expect(await screen.findByText('large — 8 CPU · 32 Gi')).toBeInTheDocument();
 	});
 

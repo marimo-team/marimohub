@@ -1,16 +1,14 @@
 import { AppWindow, Power, RefreshCw } from 'lucide-react';
 import type { Session } from '@/types';
-import { useNotebookQuery, useUsersQuery } from '@/api/hooks';
-import { Button, Popover, UserLabel } from '@/components/ui';
-import { useNow } from '@/hooks/useNow';
+import { useNotebookQuery } from '@/api/hooks';
+import { Button, Popover } from '@/components/ui';
+import { SessionDetails } from '@/components/ui/SessionDetails';
 import { cn } from '@/lib/utils';
 import { isSessionStale } from '@/lib/sessions';
-import { formatDuration, formatRelative } from '@/lib/time';
-import {
-	computeSessionPresentation,
-	effectiveComputeProfile,
-} from '@/components/Notebook/computeProfiles';
+import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
+
+const EMPTY_PROFILES: ComputeProfile[] = [];
 
 // Use a distinct glyph so a shared app is not confused with the editor sandbox.
 const APP_STATUS: Partial<
@@ -42,8 +40,6 @@ function AppSessionDetails({
 	allowComputeOverride: boolean;
 	selectedProfileName?: string;
 }) {
-	const now = useNow();
-	const { data: users } = useUsersQuery([session.user_id]);
 	// Lazy (popover-open only) head-version fetch for the stale hint. `staleTime:
 	// 0` because this mounts only while the popover is open: the shared cache may
 	// hold a head from before an edit session committed a new version, and nothing
@@ -64,82 +60,48 @@ function AppSessionDetails({
 		storedProfileName,
 		allowComputeOverride,
 	);
-	const compute = computeSessionPresentation(session, profiles, selectedProfile);
 
 	return (
-		<div className="flex min-w-[13rem] flex-col gap-2 text-xs">
-			<div className="font-medium text-foreground">{label}</div>
-			<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted-foreground">
-				{session.user_id && (
-					<>
-						<dt>Started by</dt>
-						<dd className="min-w-0">
-							<UserLabel
-								user={users?.[session.user_id]}
-								fallbackId={session.user_id}
-								className="block max-w-[10rem] text-foreground"
-							/>
-						</dd>
-					</>
-				)}
-				<dt>Started</dt>
-				<dd className="text-foreground">{formatRelative(session.started_at, now)}</dd>
-				{session.status === 'running' && (
-					<>
-						<dt>Up for</dt>
-						<dd className="text-foreground tabular-nums">
-							{formatDuration(session.started_at, now)}
-						</dd>
-					</>
-				)}
-				{session.app_pool && (
-					<>
-						<dt>Pool state</dt>
-						<dd className="text-foreground">{session.app_pool.state}</dd>
-						<dt>Users</dt>
-						<dd className="text-foreground">
-							{session.app_pool.users}
-							{session.app_pool.max_users === null ? '' : ` / ${session.app_pool.max_users}`}
-						</dd>
-					</>
-				)}
-				{session.source_version_id && (
-					<>
-						<dt>Version</dt>
-						<dd className="max-w-48 truncate text-foreground" title={session.source_version_id}>
-							{session.source_version_id}
-						</dd>
-					</>
-				)}
-				<dt>Sandbox session</dt>
-				<dd className="max-w-48 truncate text-foreground" title={session.session_id}>
-					{session.session_id}
-				</dd>
-				{typeof connections === 'number' && (
-					<>
-						<dt>Connected</dt>
-						<dd className="text-foreground tabular-nums">~{connections}</dd>
-					</>
-				)}
-				{compute.runningLabel && (
-					<>
-						<dt>{compute.pending ? 'Running' : 'Compute'}</dt>
-						<dd className="text-foreground">{compute.runningLabel}</dd>
-					</>
-				)}
-				{compute.pending && compute.selectedLabel && (
-					<>
-						<dt>Next</dt>
-						<dd className="text-foreground">{compute.selectedLabel}</dd>
-					</>
-				)}
-			</dl>
-			{compute.pendingMessage && (
-				<p className="text-amber-600 dark:text-amber-500">{compute.pendingMessage}</p>
-			)}
-			{compute.snapshotMessage && (
-				<p className="text-amber-600 dark:text-amber-500">{compute.snapshotMessage}</p>
-			)}
+		<SessionDetails
+			session={session}
+			label={label}
+			profiles={profiles}
+			selectedProfileName={selectedProfile?.name}
+			durationLabel="Up for"
+			detailRows={
+				<>
+					{session.app_pool && (
+						<>
+							<dt>Pool state</dt>
+							<dd className="text-foreground">{session.app_pool.state}</dd>
+							<dt>Users</dt>
+							<dd className="text-foreground">
+								{session.app_pool.users}
+								{session.app_pool.max_users === null ? '' : ` / ${session.app_pool.max_users}`}
+							</dd>
+						</>
+					)}
+					{session.source_version_id && (
+						<>
+							<dt>Version</dt>
+							<dd className="max-w-48 truncate text-foreground" title={session.source_version_id}>
+								{session.source_version_id}
+							</dd>
+						</>
+					)}
+					<dt>Sandbox session</dt>
+					<dd className="max-w-48 truncate text-foreground" title={session.session_id}>
+						{session.session_id}
+					</dd>
+					{typeof connections === 'number' && (
+						<>
+							<dt>Connected</dt>
+							<dd className="text-foreground tabular-nums">~{connections}</dd>
+						</>
+					)}
+				</>
+			}
+		>
 			{stale && (
 				<p className="text-amber-600 dark:text-amber-500">
 					This sandbox serves an older version. New users receive the latest version.
@@ -164,7 +126,7 @@ function AppSessionDetails({
 					</Button>
 				</div>
 			)}
-		</div>
+		</SessionDetails>
 	);
 }
 
@@ -174,7 +136,7 @@ export function AppSessionIndicator({
 	editActive = false,
 	onStop,
 	onRestart,
-	profiles = [],
+	profiles = EMPTY_PROFILES,
 	allowComputeOverride = false,
 	selectedProfileName,
 }: {

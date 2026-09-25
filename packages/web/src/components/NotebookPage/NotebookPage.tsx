@@ -2,32 +2,9 @@ import { PageTitle } from '@/components/ui/PageTitle';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import {
-	AlertTriangle,
-	AppWindow,
-	ArrowLeft,
-	Bot,
-	CalendarClock,
-	Code2,
-	Eye,
-	FileCode2,
-	GitBranch,
-	Image,
-	Pencil,
-	RefreshCw,
-} from 'lucide-react';
+import { AlertTriangle, AppWindow, ArrowLeft, Bot, Code2, Eye, FileCode2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import {
-	Button,
-	Chip,
-	ConfirmDialog,
-	ApplicationTabs,
-	IconButton,
-	IconLink,
-	StatusDot,
-	SessionStatusDot,
-	UserLabel,
-} from '@/components/ui';
+import { Button, Chip, ConfirmDialog, ApplicationTabs, IconLink, UserLabel } from '@/components/ui';
 import type { ApplicationTabItem } from '@/components/ui';
 import {
 	useCapabilitiesQuery,
@@ -44,18 +21,18 @@ import { useNotebookSession } from '@/hooks/useNotebookSession';
 import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { GitSourcePopover } from '@/components/Notebook/GitSourcePopover';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
-import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
 import { canManageProject } from '@/lib/roles';
-import { SurfaceMenu } from './SurfaceMenu';
-import type { SecondarySurfaceFrame } from './SurfaceMenu';
+import { OpenMenu } from './OpenMenu';
+import { NotebookMenu } from './NotebookMenu';
+import { SessionControl } from './SessionControl';
+import type { SecondarySurfaceFrame } from './OpenMenu';
 import { ShareMenu } from './ShareMenu';
 import { NotebookFrame } from './NotebookFrame';
 
@@ -213,7 +190,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		isApp,
 	);
 
-	// Metadata for the "created by" line — loaded lazily so it never blocks the
+	// Notebook metadata loads independently so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
 	// It also carries the head version for the staleness banners, which must track
 	// versions committed server-side (snapshotter, teardown, git push) — hence the
@@ -226,22 +203,11 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
 	const title = notebook?.meta.title ?? notebookTitle;
 	const holderId = editorState?.holder?.user_id;
-	const sharedStarterId =
-		session?.editor_sandbox_sharing === 'shared' && !session.ephemeral
-			? session.user_id
-			: undefined;
-	const { data: users } = useUsersQuery([
-		author,
-		holderId,
-		sharedStarterId,
-		endedByUserId ?? undefined,
-	]);
+	const { data: users } = useUsersQuery([author, holderId, endedByUserId ?? undefined]);
 	const holderName = holderId
 		? (users?.[holderId]?.name ?? users?.[holderId]?.email ?? holderId)
 		: '';
-	const sharedStarterName = sharedStarterId
-		? (users?.[sharedStarterId]?.name ?? users?.[sharedStarterId]?.email ?? sharedStarterId)
-		: '';
+
 	const endedByName = endedByUserId
 		? (users?.[endedByUserId]?.name ?? users?.[endedByUserId]?.email ?? endedByUserId)
 		: undefined;
@@ -492,7 +458,6 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		setSelectedApplicationKey,
 		setSplitApplicationKey,
 		sharedPersistentEditor,
-		sharedStarterName,
 		showEditorChoice,
 		showEditorStateFailure,
 		showIdentityStateFailure,
@@ -576,7 +541,6 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		setSelectedApplicationKey,
 		setSplitApplicationKey,
 		sharedPersistentEditor,
-		sharedStarterName,
 		showEditorChoice,
 		showEditorStateFailure,
 		showIdentityStateFailure,
@@ -599,72 +563,39 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 	return (
 		<div className="flex h-dvh flex-col">
 			<PageTitle>{title}</PageTitle>
-			<header className="flex h-10 min-h-10 items-center gap-2 border-b bg-background px-3 max-md:h-11 max-md:min-h-11">
-				<IconLink
-					to={`/projects/${pid}`}
-					label="Back to project"
-					variant="bordered"
-					className="max-md:size-11"
-				>
-					<ArrowLeft className="size-4" />
-				</IconLink>
-				<div className="h-5 w-px bg-border" />
-				<span className="truncate text-[13px] font-medium">{title}</span>
-				{isApp && (
-					<Chip>
-						<AppWindow className="size-3" />
-						App
-					</Chip>
-				)}
-				{!isApp && !isViewer && (
-					<IconButton
-						label="Rename notebook"
-						tooltip="Rename notebook"
-						size="sm"
-						onPress={renameModal.open}
-					>
-						<Pencil className="size-3.5" />
-					</IconButton>
-				)}
-				{!isApp && capabilities?.jobs?.available && (
+			<header className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-3 py-1.5">
+				<div className="flex min-w-0 flex-1 items-center gap-1 max-md:min-w-32">
 					<IconLink
-						to={`/projects/${pid}/notebooks/${nid}/jobs`}
-						label="Jobs & schedules"
-						tooltip="Jobs & schedules"
-						size="sm"
+						to={`/projects/${pid}`}
+						label="Back to project"
+						tooltip="Back to project"
+						className="shrink-0 max-md:size-11"
 					>
-						<CalendarClock className="size-3.5" />
+						<ArrowLeft className="size-4" />
 					</IconLink>
-				)}
-				{!isApp && notebook?.source.type === 'git' && (
-					<GitSourcePopover
-						projectId={pid!}
-						notebookId={nid!}
-						canSync={!isViewer}
-						triggerClassName="shrink-0 cursor-pointer rounded-full"
-						trigger={
-							<span className="flex max-w-[16rem] items-center gap-1 rounded-full border border-input px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary">
-								<GitBranch className="size-3 shrink-0" />
-								<span className="truncate">{notebook.source.repo}</span>
-							</span>
-						}
-					/>
-				)}
-				{author && (
-					<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
-						<span className="text-muted-foreground/70">· created by</span>
-						<UserLabel user={users?.[author]} fallbackId={author} className="max-w-[10rem]" />
-					</span>
-				)}
-				<div className="ml-auto flex items-center gap-2">
-					<ShareMenu
+					<NotebookMenu
 						projectId={pid!}
 						notebookId={nid!}
 						title={title}
-						canRunApp={!isApp && canRunApp}
-						canManageLinks={canManageLinks}
-						isApp={isApp}
+						author={
+							author ? (
+								<UserLabel user={users?.[author]} fallbackId={author} className="max-w-[12rem]" />
+							) : undefined
+						}
+						gitSource={!isApp && notebook?.source.type === 'git' ? notebook.source : undefined}
+						canSync={!isViewer}
+						showJobs={!isApp && !!capabilities?.jobs?.available}
+						onRename={!isApp && !isViewer ? renameModal.open : undefined}
+						onEditThumbnail={canEditThumbnail ? thumbnailModal.open : undefined}
 					/>
+					{isApp && (
+						<Chip>
+							<AppWindow className="size-3" />
+							App
+						</Chip>
+					)}
+				</div>
+				<div className="ml-auto flex flex-wrap items-center justify-end gap-2 max-md:gap-1">
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}
@@ -674,10 +605,14 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						canPublish={canOpenChangeRequest}
 					/>
 					{!staticView && (
-						<ComputeProfileIndicator
+						<SessionControl
+							session={session}
 							profiles={computeProfiles}
+							selectedProfileName={selectedComputeProfile?.name}
 							storedName={notebook?.meta.compute_profile}
 							allowOverride={computeOverrideApplies}
+							isProvisioning={isProvisioning}
+							error={error?.message}
 							hint={
 								isViewer && !isApp
 									? 'Shared views run on default compute'
@@ -685,64 +620,21 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 										? 'Managed by your operator'
 										: undefined
 							}
-						/>
-					)}
-					{error ? (
-						<span className="inline-flex items-center" title="Error">
-							<StatusDot className="bg-destructive" aria-hidden="true" />
-							<span className="sr-only">Error</span>
-						</span>
-					) : session ? (
-						<SessionStatusDot
-							session={session}
-							profiles={computeProfiles}
-							selectedProfileName={selectedComputeProfile?.name}
-						/>
-					) : (
-						isProvisioning && (
-							<span className="inline-flex items-center" title="Starting">
-								<StatusDot className="bg-yellow-500" pulse aria-hidden="true" />
-								<span className="sr-only">Starting</span>
-							</span>
-						)
-					)}
-					{/* Stop/Restart render from the server-evaluated grants: editors on
-					    the shared app, or the owner of their own ephemeral session. */}
-					{isApp && session?.can?.stop && (
-						<Button
-							variant="unstyled"
-							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
-							onPress={() => confirmAppAction.open('restart')}
-						>
-							<RefreshCw className="size-3" />
-							Restart
-						</Button>
-					)}
-					{session?.can?.stop && (
-						<Button
-							variant="unstyled"
-							className="flex h-[26px] items-center rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-destructive hover:bg-destructive/10 hover:text-destructive max-md:min-h-11"
-							onPress={
+							onStop={
 								isApp
 									? () => confirmAppAction.open('stop')
 									: sharedPersistentEditor
 										? confirmEditStop.open
 										: handleStop
 							}
-						>
-							Stop
-						</Button>
+							onRestart={isApp ? () => confirmAppAction.open('restart') : undefined}
+						/>
 					)}
-					{canEditThumbnail && (
-						<IconButton
-							label="Edit thumbnail"
-							tooltip="Edit thumbnail"
-							onPress={thumbnailModal.open}
-						>
-							<Image className="size-4" />
-						</IconButton>
-					)}
-					<SurfaceMenu
+					<OpenMenu
+						projectId={pid!}
+						notebookId={nid!}
+						title={title}
+						canRunApp={!isApp && canRunApp}
 						actions={surfaceActions}
 						session={session}
 						capabilities={capabilities}
@@ -750,6 +642,12 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						isApp={isApp}
 						onOpenFrame={openSecondaryFrame}
 						onCloseFrame={closeSecondaryFrame}
+					/>
+					<ShareMenu
+						projectId={pid!}
+						notebookId={nid!}
+						canManageLinks={canManageLinks}
+						isApp={isApp}
 					/>
 				</div>
 			</header>
@@ -851,15 +749,6 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 
 			{isRunning && (
 				<>
-					{session?.editor_sandbox_sharing === 'shared' && !session.ephemeral && (
-						<div className="flex items-center gap-1.5 border-b bg-primary/5 px-3 py-1.5 text-xs text-muted-foreground">
-							<Eye className="size-3.5 shrink-0" />
-							<span>
-								Trusted shared sandbox started by {sharedStarterName || 'another editor'} — other
-								project editors may view and edit this session.
-							</span>
-						</div>
-					)}
 					{session?.ephemeral && (
 						<div className="flex items-center gap-1.5 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
 							<Eye className="size-3.5 shrink-0" />

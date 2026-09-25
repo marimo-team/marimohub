@@ -4,6 +4,7 @@ import { afterEach, beforeEach, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { installMatchMedia } from '@/test/render';
 import { NotebookPage } from './NotebookPage';
 import { ThemeProvider } from '@/context/ThemeContext';
 import type { ProjectDetail, Session } from '@/types';
@@ -421,17 +422,7 @@ beforeEach(() => {
 	// The theme baked into the kernel iframe URL reads from localStorage; clear it
 	// so each test resolves the default (light) unless it opts into dark.
 	localStorage.clear();
-	// jsdom has no matchMedia; Tooltip's mobile check needs it.
-	vi.stubGlobal('matchMedia', (query: string) => ({
-		matches: false,
-		media: query,
-		onchange: null,
-		addEventListener: () => {},
-		removeEventListener: () => {},
-		addListener: () => {},
-		removeListener: () => {},
-		dispatchEvent: () => false,
-	}));
+	installMatchMedia();
 });
 
 afterEach(() => {

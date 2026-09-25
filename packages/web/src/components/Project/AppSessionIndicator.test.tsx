@@ -133,10 +133,21 @@ describe('AppSessionIndicator', () => {
 	});
 
 	it('opens a popover with attribution, connections, and controls', async () => {
-		renderIndicator(makeAppSession({ active_connections: 3 }));
+		renderIndicator(
+			makeAppSession({
+				active_connections: 3,
+				app_pool: { state: 'ready', users: 2, max_users: 4 },
+			}),
+		);
 		await userEvent.click(screen.getByRole('button'));
 
 		expect(await screen.findByText('App running')).toBeInTheDocument();
+		expect(screen.getByText('Started by')).toBeInTheDocument();
+		expect(screen.getByText('Up for')).toBeInTheDocument();
+		expect(screen.getByText('ready')).toBeInTheDocument();
+		expect(screen.getByText('2 / 4')).toBeInTheDocument();
+		expect(screen.getByText('ver-2')).toBeInTheDocument();
+		expect(screen.getByText('sess-app')).toBeInTheDocument();
 		expect(screen.getByText('~3')).toBeInTheDocument();
 		expect(screen.getByText('Restart')).toBeInTheDocument();
 		expect(screen.getByText('Stop')).toBeInTheDocument();

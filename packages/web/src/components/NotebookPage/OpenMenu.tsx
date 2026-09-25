@@ -1,4 +1,6 @@
-import { Bot, ChevronDown, Code2, Square } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { notebookQueryParams } from '@/lib/notebookUrls';
+import { Bot, Camera, Code2, PanelsTopLeft, Play, Square } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { useSurfaceActions } from '@/api/surfaces';
 import { DropdownMenu } from '@/components/ui';
@@ -36,7 +38,11 @@ const SURFACE_DEFINITIONS = {
 	opencode: { id: 'opencode', label: SURFACE_LABELS.opencode, icon: Bot },
 } satisfies SurfaceDefinitions;
 
-interface SurfaceMenuProps {
+interface OpenMenuProps {
+	projectId: string;
+	notebookId: string;
+	title: string;
+	canRunApp: boolean;
 	actions: ReturnType<typeof useSurfaceActions>;
 	session?: Session | null;
 	capabilities?: Capabilities;
@@ -46,7 +52,11 @@ interface SurfaceMenuProps {
 	onCloseFrame: (surfaceId: SecondarySurfaceId, sessionId: string) => void;
 }
 
-export function SurfaceMenu({
+export function OpenMenu({
+	projectId,
+	notebookId,
+	title,
+	canRunApp,
 	actions,
 	session,
 	capabilities,
@@ -54,7 +64,9 @@ export function SurfaceMenu({
 	isApp,
 	onOpenFrame,
 	onCloseFrame,
-}: SurfaceMenuProps) {
+}: OpenMenuProps) {
+	const navigate = useNavigate();
+	const location = useLocation();
 	const controls = (capabilities?.surfaces ?? []).flatMap((capability) => {
 		const definition: SurfaceDefinition = SURFACE_DEFINITIONS[capability.id];
 		const actionState = actions.states[definition.id];
@@ -77,8 +89,7 @@ export function SurfaceMenu({
 		];
 	});
 
-	if (controls.length === 0) return null;
-
+	const canOpenApp = canRunApp && !isApp;
 	const options: DropdownMenuOption[] = controls.flatMap((control, index) => {
 		const SurfaceIcon = control.icon;
 		return [
@@ -105,6 +116,20 @@ export function SurfaceMenu({
 					]
 				: []),
 		];
+	});
+
+	if (canOpenApp)
+		options.push({
+			id: 'run-app',
+			label: 'Run as app',
+			icon: <Play className="size-3.5" />,
+			separatorBefore: controls.length > 0,
+		});
+	options.push({
+		id: 'static-outputs',
+		label: 'View static outputs',
+		icon: <Camera className="size-3.5" />,
+		separatorBefore: controls.length > 0 && !canOpenApp,
 	});
 
 	const start = (control: (typeof controls)[number]) => {
@@ -144,6 +169,16 @@ export function SurfaceMenu({
 	};
 
 	const handleAction = (action: string) => {
+		const notebookPath = `/projects/${projectId}/notebooks/${notebookId}`;
+		if (action === 'static-outputs') {
+			void navigate(`${notebookPath}/snapshot`, { state: { title } });
+			return;
+		}
+		if (action === 'run-app') {
+			const search = notebookQueryParams(location.search).toString();
+			void navigate(`${notebookPath}/app${search ? `?${search}` : ''}`, { state: { title } });
+			return;
+		}
 		const control = controls.find(
 			(candidate) => action === `start:${candidate.id}` || action === `stop:${candidate.id}`,
 		);
@@ -154,15 +189,9 @@ export function SurfaceMenu({
 
 	return (
 		<DropdownMenu
-			label="Surfaces"
-			icon={
-				<>
-					<Code2 className="size-3" />
-					<span>Surfaces</span>
-					<ChevronDown className="size-3" />
-				</>
-			}
-			triggerClassName="h-[26px] w-auto gap-1 rounded-md border border-input px-2 text-xs hover:border-primary hover:bg-transparent hover:text-primary max-md:h-11"
+			label="Open"
+			triggerLabel="Open"
+			mobileIcon={<PanelsTopLeft className="size-4" />}
 			options={options}
 			onAction={handleAction}
 		/>

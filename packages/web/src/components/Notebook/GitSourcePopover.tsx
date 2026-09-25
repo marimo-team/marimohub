@@ -16,7 +16,7 @@ import {
 
 const LINK_CLASSES = 'text-primary underline-offset-2 hover:underline';
 
-function GitSourceDetails({
+export function GitSourceDetails({
 	projectId,
 	notebookId,
 	canSync = false,

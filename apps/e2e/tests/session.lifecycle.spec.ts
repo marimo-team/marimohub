@@ -181,8 +181,15 @@ if __name__ == "__main__":
 			{ timeout: 150_000 },
 		);
 
-		await page.getByRole('button', { name: 'Stop', exact: true }).click();
-		await page.getByRole('button', { name: 'Stop Sandbox' }).click();
+		await page.getByRole('button', { name: 'Session Running · Shared — details' }).click();
+		await page
+			.getByRole('dialog')
+			.getByRole('button', { name: 'Stop shared session…', exact: true })
+			.click();
+		await page
+			.getByRole('dialog', { name: 'Stop Shared Sandbox' })
+			.getByRole('button', { name: 'Stop Sandbox', exact: true })
+			.click();
 		await expect(page.getByRole('heading', { name: project })).toBeVisible();
 
 		await expectNoProjectSessions(page, projectId);

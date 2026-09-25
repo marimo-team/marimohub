@@ -7,6 +7,27 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { createTestQueryClient, jsonOk } from '@/test/render';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ShareMenu } from './ShareMenu';
+import { OpenMenu } from './OpenMenu';
+import { useSurfaceActions } from '@/api/surfaces';
+
+function TestMenus({ canRunApp }: { canRunApp: boolean }) {
+	const actions = useSurfaceActions('proj-1', 'nb-1');
+	return (
+		<>
+			<ShareMenu projectId="proj-1" notebookId="nb-1" />
+			<OpenMenu
+				projectId="proj-1"
+				notebookId="nb-1"
+				title="Forecast"
+				canRunApp={canRunApp}
+				actions={actions}
+				isApp={false}
+				onOpenFrame={() => {}}
+				onCloseFrame={() => {}}
+			/>
+		</>
+	);
+}
 
 function LocationProbe() {
 	const location = useLocation();
@@ -35,12 +56,7 @@ function renderMenu({
 				path="*"
 				element={
 					<>
-						<ShareMenu
-							projectId="proj-1"
-							notebookId="nb-1"
-							title="Forecast"
-							canRunApp={canRunApp}
-						/>
+						<TestMenus canRunApp={canRunApp} />
 						<LocationProbe />
 					</>
 				}
@@ -56,7 +72,7 @@ afterEach(() => {
 	Reflect.deleteProperty(navigator, 'clipboard');
 });
 
-describe('ShareMenu', () => {
+describe('Notebook sharing and navigation menus', () => {
 	it('passes the current query to the App links dialog', async () => {
 		const user = userEvent.setup();
 		vi.stubGlobal(
@@ -99,7 +115,7 @@ describe('ShareMenu', () => {
 		const user = userEvent.setup();
 		renderMenu();
 
-		await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 		await user.click(screen.getByRole('menuitem', { name: 'View static outputs' }));
 
 		expect(screen.getByTestId('location')).toHaveTextContent(
@@ -111,7 +127,7 @@ describe('ShareMenu', () => {
 		const user = userEvent.setup();
 		renderMenu();
 
-		await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 		await user.click(screen.getByRole('menuitem', { name: 'Run as app' }));
 
 		expect(screen.getByTestId('location')).toHaveTextContent('/projects/proj-1/notebooks/nb-1/app');
@@ -138,7 +154,7 @@ describe('ShareMenu', () => {
 		const user = userEvent.setup();
 		renderMenu({ canRunApp: false });
 
-		await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 
 		expect(screen.queryByRole('menuitem', { name: 'Run as app' })).toBeNull();
 		expect(screen.getByRole('menuitem', { name: 'View static outputs' })).toBeInTheDocument();
@@ -174,7 +190,7 @@ describe('ShareMenu', () => {
 		renderMenu({
 			path: '/projects/proj-1/notebooks/nb-1?id=123&tag=one&tag=two&empty=&access_token=evil&file=other.py',
 		});
-		await user.click(screen.getByRole('button', { name: 'Share notebook' }));
+		await user.click(screen.getByRole('button', { name: 'Open' }));
 		await user.click(screen.getByRole('menuitem', { name: action }));
 		expect(screen.getByTestId('location').textContent).toBe(
 			`/projects/proj-1/notebooks/nb-1${suffix}`,
