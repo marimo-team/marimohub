@@ -881,6 +881,51 @@ describe('captureWorkspace mirror-delete after a skipped file', () => {
 });
 
 describe('capture transport budgets', () => {
+	it('rejects a notebook above the listed size limit without reading it', async () => {
+		const { instance } = makeFsSandbox({
+			files: { 'notebook.py': 'edited' },
+			sizes: { 'notebook.py': MAX_ARTIFACT_BYTES + 1 },
+		});
+		const read = vi.spyOn(instance, 'readFileBounded');
+
+		await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+			code: 'READ_FAILED',
+			object: 'notebook.py',
+		});
+		expect(read.mock.calls.some(([path]) => path.endsWith('/notebook.py'))).toBe(false);
+	});
+
+	it.each([
+		['text size limit', () => ({ content: 'x'.repeat(MAX_ARTIFACT_BYTES + 1) })],
+		[
+			'encoded base64 size limit',
+			() => ({
+				content: 'A'.repeat(4 * Math.ceil(MAX_ARTIFACT_BYTES / 3) + 4),
+				encoding: 'base64' as const,
+			}),
+		],
+		[
+			'decoded base64 size limit',
+			() => ({
+				content: 'A'.repeat(4 * Math.ceil(MAX_ARTIFACT_BYTES / 3)),
+				encoding: 'base64' as const,
+			}),
+		],
+		['decoded UTF-8 size limit', () => ({ content: 'é'.repeat(MAX_ARTIFACT_BYTES / 2 + 1) })],
+		['malformed base64', () => ({ content: '!!!!', encoding: 'base64' as const })],
+	] as const)('rejects notebook content refused for %s', async (_reason, content) => {
+		const { instance } = makeFakeSandbox();
+		instance.readFileBounded = async (path) =>
+			path === `${MOUNT}/notebook.py`
+				? { success: true, ...content() }
+				: readFileFailure('NOT_FOUND');
+
+		await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+			code: 'READ_FAILED',
+			object: 'notebook.py',
+		});
+	});
+
 	it.each(['source', 'workspace'] as const)(
 		'warns once without changing stored content when bounded reads are unsupported (%s)',
 		async (mode) => {
@@ -971,7 +1016,9 @@ describe('capture transport budgets', () => {
 					: result;
 			};
 			const read = vi.spyOn(instance, 'readFileBounded');
-			expect((await readSessionArtifacts(instance, MOUNT)).code).toBeUndefined();
+			await expect(readSessionArtifacts(instance, MOUNT)).rejects.toMatchObject({
+				code: 'READ_FAILED',
+			});
 			expect(read.mock.calls.some(([path]) => path.endsWith('/notebook.py'))).toBe(false);
 		},
 	);

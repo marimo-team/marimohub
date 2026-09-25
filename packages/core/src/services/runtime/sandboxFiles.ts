@@ -425,14 +425,14 @@ async function readNotebookCode(
 	sizes: ReadonlyMap<string, number>,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
-	if (!result) return undefined;
-	if (result.success) return new TextDecoder().decode(result.bytes);
-	const error = Object.assign(new Error(`Could not read notebook.py: ${result.error.code}`), {
-		code: result.error.code,
+	if (result?.success) return new TextDecoder().decode(result.bytes);
+	const code = result?.error.code ?? 'READ_FAILED';
+	const error = Object.assign(new Error(`Could not read notebook.py: ${code}`), {
+		code,
 		operation: 'sandbox.read_session_artifacts',
 		object: 'notebook.py',
 	});
-	if (result.error.code !== 'NOT_FOUND') throw error;
+	if (code !== 'NOT_FOUND') throw error;
 	logOperationalError('session_notebook_missing', { operation: error.operation }, error);
 	return undefined;
 }

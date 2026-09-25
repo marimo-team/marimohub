@@ -2,6 +2,7 @@ import type { SandboxProvider, SandboxInstance } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
+import { MAX_ARTIFACT_BYTES } from '../../constants';
 
 import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -471,32 +472,41 @@ describe('SessionLifecycleService', () => {
 	});
 
 	describe('periodic snapshots', () => {
-		it('retries a failed notebook read on the next sweep without advancing the cadence', async () => {
-			const { instance, calls } = makeFakeSandbox({
-				files: { '/workspace/notebook.py': 'edited' },
-			});
-			const read = vi.spyOn(instance, 'readFileBounded');
-			read.mockResolvedValue(readFileFailure('READ_FAILED'));
-			compute = fakeComputeFrom(instance);
-			vi.spyOn(console, 'error').mockImplementation(() => {});
-			const s = await putSession({ last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000) });
-			const service = makeService();
+		it.each(['adapter error', 'oversized payload', 'malformed base64'])(
+			'retries a notebook read after %s on the next sweep without advancing the cadence',
+			async (failure) => {
+				const { instance, calls } = makeFakeSandbox({
+					files: { '/workspace/notebook.py': 'edited' },
+				});
+				const read = vi.spyOn(instance, 'readFileBounded');
+				if (failure === 'adapter error') {
+					read.mockResolvedValue(readFileFailure('READ_FAILED'));
+				} else if (failure === 'oversized payload') {
+					read.mockResolvedValue({ success: true, content: 'x'.repeat(MAX_ARTIFACT_BYTES + 1) });
+				} else {
+					read.mockResolvedValue({ success: true, content: '!!!!', encoding: 'base64' });
+				}
+				compute = fakeComputeFrom(instance);
+				vi.spyOn(console, 'error').mockImplementation(() => {});
+				const s = await putSession({ last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000) });
+				const service = makeService();
 
-			expect((await service.sweep(now)).snapshotted).toBe(0);
-			expect((await getStored(s)).last_snapshot_at).toBe(iso(-SNAPSHOT_INTERVAL_MS - 1000));
-			expect(notebooks.commitSession).not.toHaveBeenCalled();
+				expect((await service.sweep(now)).snapshotted).toBe(0);
+				expect((await getStored(s)).last_snapshot_at).toBe(iso(-SNAPSHOT_INTERVAL_MS - 1000));
+				expect(notebooks.commitSession).not.toHaveBeenCalled();
 
-			read.mockRestore();
-			expect((await service.sweep(now + 1000)).snapshotted).toBe(1);
-			expect((await getStored(s)).last_snapshot_at).toBe(iso(1000));
-			expect(notebooks.commitSession).toHaveBeenCalledWith(
-				projectId,
-				notebookId,
-				expect.objectContaining({ code: 'edited' }),
-				s.user_id,
-			);
-			expect(calls.destroy).toBe(0);
-		});
+				read.mockRestore();
+				expect((await service.sweep(now + 1000)).snapshotted).toBe(1);
+				expect((await getStored(s)).last_snapshot_at).toBe(iso(1000));
+				expect(notebooks.commitSession).toHaveBeenCalledWith(
+					projectId,
+					notebookId,
+					expect.objectContaining({ code: 'edited' }),
+					s.user_id,
+				);
+				expect(calls.destroy).toBe(0);
+			},
+		);
 
 		it('saves a due session source-only and advances last_snapshot_at', async () => {
 			const render = vi.spyOn(thumbnailCapture, 'captureThumbnail');
