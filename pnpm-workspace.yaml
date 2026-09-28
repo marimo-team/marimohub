@@ -133,7 +133,8 @@ minimumReleaseAgeExclude:
   - nanoid
   # Renovate security update: hono@4.13.5
   - hono@4.12.34 || 4.13.5
-  - ip-address@10.3.1
+  # Renovate security update: ip-address@10.5.1
+  - ip-address@10.3.1 || 10.5.1
   - js-yaml
   - nodemailer
   - linkify-it@5.0.2
