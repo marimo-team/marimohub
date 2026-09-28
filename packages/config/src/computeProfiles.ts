@@ -1,4 +1,4 @@
-import type { ComputeResources } from '@marimo-hub/core';
+import type { ComputeResources, SandboxProvider } from '@marimo-hub/core';
 import { ConfigError } from './errors';
 import { CONFIG_SPEC } from './spec';
 
@@ -54,14 +54,24 @@ const MAX_GPU_COUNT = 8;
 const COMPUTE_BACKENDS =
 	CONFIG_SPEC.find((group) => group.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [];
 
-export function supportsComputeProfiles(backend: string): boolean {
+export function supportsComputeProfiles(
+	backend: string,
+	capabilities?: SandboxProvider['capabilities'],
+): boolean {
+	if (backend === 'library') {
+		return capabilities?.computeProfiles === true || capabilities?.gpuProfiles === true;
+	}
 	return (
 		COMPUTE_BACKENDS.find((candidate) => candidate.selectorValue === backend)
 			?.supportsComputeProfiles === true
 	);
 }
 
-export function supportsGpuProfiles(backend: string): boolean {
+export function supportsGpuProfiles(
+	backend: string,
+	capabilities?: SandboxProvider['capabilities'],
+): boolean {
+	if (backend === 'library') return capabilities?.gpuProfiles === true;
 	return (
 		COMPUTE_BACKENDS.find((candidate) => candidate.selectorValue === backend)
 			?.supportsGpuProfiles === true
@@ -71,8 +81,9 @@ export function supportsGpuProfiles(backend: string): boolean {
 export function profilesForBackend(
 	backend: string,
 	config: ComputeProfilesConfig,
+	capabilities?: SandboxProvider['capabilities'],
 ): ComputeProfilesConfig {
-	if (supportsGpuProfiles(backend)) return config;
+	if (supportsGpuProfiles(backend, capabilities)) return config;
 	const profiles = config.profiles.map((profile) => {
 		const { gpu: _gpu, ...resources } = profile.resources;
 		return { name: profile.name, resources };
@@ -284,11 +295,12 @@ export function unsupportedBackendNotice(
 	backend: string,
 	config: ComputeProfilesConfig,
 	override: ComputeProfileOverride = 'none',
+	capabilities?: SandboxProvider['capabilities'],
 ): string | undefined {
 	const profilesConfigured = hasConfiguredResources(config);
 	const overrideConfigured = override !== 'none';
-	if (supportsComputeProfiles(backend)) {
-		if (!hasConfiguredGpu(config) || supportsGpuProfiles(backend)) return undefined;
+	if (supportsComputeProfiles(backend, capabilities)) {
+		if (!hasConfiguredGpu(config) || supportsGpuProfiles(backend, capabilities)) return undefined;
 		return (
 			`MARIMOHUB_COMPUTE_PROFILES includes gpu values but the ${JSON.stringify(backend)} ` +
 			'compute backend does not apply profile GPUs; gpu values are ignored while CPU and memory values still apply.'

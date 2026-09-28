@@ -43,6 +43,16 @@ implements `SubjectSecurityContextProvider`. Each factory receives the full
 `MARIMOHUB_*` environment. A compute factory also receives
 `sessionMaxLifetimeSeconds` and `sessionIdleTimeoutMs` in `context.compute`.
 
+Library compute adapters opt into profiles through `SandboxProvider.capabilities`:
+
+- `computeProfiles: true`: applies `CreateSandboxOptions.resources.cpu` and `resources.memoryBytes`.
+- `gpuProfiles: true`: also applies `resources.gpu` and implies `computeProfiles: true`.
+
+These flags enable configured profiles, notebook profile selection, and editor overrides.
+Without GPU support, the hub strips GPU values and warns at startup.
+Without either flag, profiles remain disabled and startup warns about ignored configuration.
+The adapter `apiVersion` remains `1`.
+
 At startup, the loader validates the five required `Bucket` methods and its CAS
 safety contract. For compute, it validates `create` and `proxy`, plus optional
 methods when present. It validates the first `SandboxInstance` after the provider

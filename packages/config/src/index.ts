@@ -629,8 +629,13 @@ export function createFromEnv(
 	const sandboxImages = resolveSandboxImages(env);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
 	const computeBackendValue = computeBackend(env) ?? 'unset';
-	const profilesSupported = supportsComputeProfiles(computeBackendValue);
-	const appliedComputeProfiles = profilesForBackend(computeBackendValue, computeProfiles);
+	const computeCapabilities = options?.libraries?.compute?.capabilities;
+	const profilesSupported = supportsComputeProfiles(computeBackendValue, computeCapabilities);
+	const appliedComputeProfiles = profilesForBackend(
+		computeBackendValue,
+		computeProfiles,
+		computeCapabilities,
+	);
 	const computeResources = profilesSupported ? resolveResources(appliedComputeProfiles) : {};
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
@@ -641,6 +646,7 @@ export function createFromEnv(
 		computeBackendValue,
 		computeProfiles,
 		computeProfileOverride,
+		computeCapabilities,
 	);
 	if (profileNotice && !warnedUnsupportedProfileBackends.has(computeBackendValue)) {
 		console.warn(profileNotice);

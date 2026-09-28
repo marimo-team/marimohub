@@ -11,6 +11,7 @@ import {
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { isConfigError } from './errors';
+import { libraryProfileCases } from './testdata/computeProfileCapabilities';
 
 const Gi = 1024 ** 3;
 const Mi = 1024 ** 2;
@@ -299,6 +300,54 @@ describe('supportsComputeProfiles', () => {
 			'local',
 		]) {
 			expect(supportsGpuProfiles(backend), backend).toBe(false);
+		}
+	});
+});
+
+describe('library compute profiles', () => {
+	it.each(libraryProfileCases)(
+		'resolves support and warnings for %s',
+		(_name, capabilities, cpu, gpu) => {
+			expect(supportsComputeProfiles('library', capabilities)).toBe(cpu);
+			expect(supportsGpuProfiles('library', capabilities)).toBe(gpu);
+			const config = parseComputeProfiles('small:cpu=1;mem=2Gi,gpu:cpu=8;mem=32Gi;gpu=A100:2');
+			const applied = profilesForBackend('library', config, capabilities);
+			expect(applied.profiles).toEqual([
+				{ name: 'small', resources: { cpu: 1, memoryBytes: 2 * Gi } },
+				{
+					name: 'gpu',
+					resources: { cpu: 8, memoryBytes: 32 * Gi, ...(gpu ? { gpu: 'A100:2' } : {}) },
+				},
+			]);
+			expect(applied.defaultProfile).toBe(applied.profiles[0]);
+			expect(config.profiles[1].resources.gpu).toBe('A100:2');
+			const notice = unsupportedBackendNotice('library', config, 'editors', capabilities);
+			if (gpu) {
+				expect(notice).toBeUndefined();
+			} else if (cpu) {
+				expect(notice).toContain('gpu values are ignored while CPU and memory values still apply');
+			} else {
+				expect(notice).toContain('profiles and the override policy are ignored');
+			}
+			const cpuNotice = unsupportedBackendNotice(
+				'library',
+				parseComputeProfiles('small:cpu=1'),
+				'editors',
+				capabilities,
+			);
+			if (cpu) expect(cpuNotice).toBeUndefined();
+			else expect(cpuNotice).toContain('profiles and the override policy are ignored');
+		},
+	);
+
+	it('keeps built-in backend support independent of library capabilities', () => {
+		for (const [, capabilities] of libraryProfileCases) {
+			for (const backend of ['docker', 'modal', 'local', 'unknown']) {
+				expect(supportsComputeProfiles(backend, capabilities)).toBe(
+					supportsComputeProfiles(backend),
+				);
+				expect(supportsGpuProfiles(backend, capabilities)).toBe(supportsGpuProfiles(backend));
+			}
 		}
 	});
 });

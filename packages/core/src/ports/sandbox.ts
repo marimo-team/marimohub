@@ -321,6 +321,10 @@ export interface SandboxProvider {
 	readonly warmPool?: WarmPoolSupport;
 	readonly capabilities?: {
 		multiPort: boolean;
+		/** Applies resources.cpu and resources.memoryBytes from compute profiles. */
+		computeProfiles?: boolean;
+		/** Applies resources.gpu from compute profiles; implies computeProfiles. */
+		gpuProfiles?: boolean;
 	};
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/** Attach without creating; a missing or stopped sandbox must fail on first use. */

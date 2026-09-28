@@ -6,10 +6,11 @@ import {
 	createProjectId,
 	createSessionId,
 } from '@marimo-hub/core';
-import type { ProxyExposure, SandboxProvider } from '@marimo-hub/core';
+import type { CreateSandboxOptions, ProxyExposure, SandboxProvider } from '@marimo-hub/core';
 import { ACTOR, makeFakeSandbox } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createFromEnv, createFromEnvAsync } from './index';
+import { libraryProfileCases } from './testdata/computeProfileCapabilities';
 
 const validStorageFixture = fileURLToPath(
 	new URL('./testdata/adapters/valid-storage.mjs', import.meta.url),
@@ -591,6 +592,67 @@ describe('createFromEnv external adapter libraries', () => {
 		);
 		expect(deps.compute).toBe(compute);
 		expect(deps.version?.backends?.compute).toBe('library');
+	});
+
+	it.each(libraryProfileCases)(
+		'wires library profiles for %s',
+		(_name, capabilities, supported, gpu) => {
+			const compute: SandboxProvider = {
+				capabilities,
+				create: () => makeFakeSandbox().instance,
+				proxy: async () => null,
+			};
+			const deps = createFromEnv(
+				{
+					...env,
+					MARIMOHUB_COMPUTE_BACKEND: 'library',
+					MARIMOHUB_COMPUTE_PROFILES: 'gpu:cpu=8;mem=32Gi;gpu=A100:2,small:cpu=1',
+					MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'editors',
+				},
+				undefined,
+				{ libraries: { bucket: new MemoryBucket(), compute } },
+			);
+			const resources = { cpu: 8, memoryBytes: 32 * 1024 ** 3, ...(gpu ? { gpu: 'A100:2' } : {}) };
+			expect(deps.sandbox.resources).toEqual(supported ? resources : {});
+			expect(deps.sandbox.computeProfile).toBe(supported ? 'gpu' : undefined);
+			expect(deps.sandbox.computeProfiles).toEqual(
+				supported
+					? [
+							{ name: 'gpu', resources },
+							{ name: 'small', resources: { cpu: 1 } },
+						]
+					: [],
+			);
+			expect(deps.sandbox.computeProfileOverride).toBe(supported ? 'editors' : 'none');
+		},
+	);
+
+	it('loads library profile capabilities and passes resources to pooled sandboxes', async () => {
+		const deps = await createFromEnvAsync({
+			...env,
+			MARIMOHUB_STORAGE_LIBRARY: validStorageFixture,
+			MARIMOHUB_COMPUTE_BACKEND: 'library',
+			MARIMOHUB_COMPUTE_LIBRARY: fileURLToPath(
+				new URL('./testdata/adapters/compute-profiles.mjs', import.meta.url),
+			),
+			MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1;mem=2Gi,gpu:cpu=8;mem=32Gi;gpu=A100:2',
+			MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'editors',
+			MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true',
+			MARIMOHUB_COMPUTE_WARM_POOL_PROFILES: 'all',
+		});
+		expect(deps.sandbox.computeProfiles).toEqual([
+			{ name: 'small', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
+			{ name: 'gpu', resources: { cpu: 8, memoryBytes: 32 * 1024 ** 3, gpu: 'A100:2' } },
+		]);
+		expect(deps.sandbox.computeProfileOverride).toBe('editors');
+		await deps.warmPool!.sweep();
+		const compute = deps.compute as SandboxProvider & { createdOptions: CreateSandboxOptions[] };
+		expect(compute.createdOptions).toHaveLength(2);
+		for (const profile of deps.sandbox.computeProfiles!) {
+			expect(compute.createdOptions).toContainEqual(
+				expect.objectContaining({ resources: profile.resources }),
+			);
+		}
 	});
 
 	it.each([
