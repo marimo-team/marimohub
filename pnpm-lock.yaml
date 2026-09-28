@@ -1008,6 +1008,9 @@ importers:
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core
+      better-all:
+        specifier: 'catalog:'
+        version: 0.0.7
       modal:
         specifier: 'catalog:'
         version: 0.9.0

@@ -341,6 +341,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				tokenSecret,
 				image: defaultImage,
 				environment: env.MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT,
+				secretNames: parseList(env.MARIMOHUB_COMPUTE_MODAL_SECRETS),
 				// App name scopes reconciler enumeration (listActive) to sandboxes this
 				// deployment owns, so it never reaps co-tenant sandboxes in the workspace.
 				appName: env.MARIMOHUB_COMPUTE_MODAL_APP_NAME,

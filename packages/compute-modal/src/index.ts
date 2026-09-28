@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
+import { all } from 'better-all';
 import {
 	ModalClient,
 	NotFoundError as ModalNotFoundError,
@@ -67,6 +68,8 @@ export interface ModalConfig {
 	environment?: string;
 	/** Modal app name that owns the sandboxes. */
 	appName?: string;
+	/** Named Modal secrets injected into every new sandbox in this deployment. */
+	secretNames?: string[];
 	/** Provider-side fallback, set later than marimohub's graceful idle deadline. */
 	idleFallbackMs?: number;
 }
@@ -114,6 +117,9 @@ export interface ModalClientLike {
 	images: {
 		fromRegistry(image: string): unknown;
 	};
+	secrets: {
+		fromName(name: string): Promise<unknown>;
+	};
 	sandboxes: {
 		create(
 			app: unknown,
@@ -128,6 +134,7 @@ export interface ModalClientLike {
 				cpu?: number;
 				memoryMiB?: number;
 				gpu?: string;
+				secrets?: unknown[];
 			},
 		): Promise<ModalSandboxLike>;
 		fromName(appName: string, name: string): Promise<ModalSandboxLike>;
@@ -259,28 +266,34 @@ class ModalSandboxInstance implements SandboxInstance {
 		private readonly reuse: boolean,
 	) {}
 
-	private createSandbox(): Promise<ModalSandboxLike> {
+	private async createSandbox(): Promise<ModalSandboxLike> {
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
-		return this.client.apps.fromName(appName, { createIfMissing: true }).then((app) =>
-			this.client.sandboxes.create(app, this.client.images.fromRegistry(this.config.image), {
-				name: this.id,
-				// Pin an idle main process. With no command the SDK sends empty
-				// entrypointArgs and Modal boots the image's ENTRYPOINT — a marimo
-				// that grabs the kernel port before the provisioner's `setup && start`
-				// exec, which then rewrites /opt/venv under the live server (#103).
-				command: ['sleep', 'infinity'],
-				tags: {
-					[OWNER_TAG]: appName,
-					[SANDBOX_ID_TAG]: this.id,
-				},
-				encryptedPorts: [KERNEL_PORT],
-				timeoutMs: MAX_SANDBOX_LIFETIME_MS,
-				...(this.config.idleFallbackMs !== undefined
-					? { idleTimeoutMs: this.config.idleFallbackMs }
-					: {}),
-				...this.resources,
-			}),
-		);
+		const { app, secrets } = await all({
+			app: async () => this.client.apps.fromName(appName, { createIfMissing: true }),
+			secrets: async () =>
+				Promise.all(
+					(this.config.secretNames ?? []).map((name) => this.client.secrets.fromName(name)),
+				),
+		});
+		return this.client.sandboxes.create(app, this.client.images.fromRegistry(this.config.image), {
+			name: this.id,
+			// Pin an idle main process. With no command the SDK sends empty
+			// entrypointArgs and Modal boots the image's ENTRYPOINT — a marimo
+			// that grabs the kernel port before the provisioner's `setup && start`
+			// exec, which then rewrites /opt/venv under the live server (#103).
+			command: ['sleep', 'infinity'],
+			tags: {
+				[OWNER_TAG]: appName,
+				[SANDBOX_ID_TAG]: this.id,
+			},
+			encryptedPorts: [KERNEL_PORT],
+			timeoutMs: MAX_SANDBOX_LIFETIME_MS,
+			...(this.config.idleFallbackMs !== undefined
+				? { idleTimeoutMs: this.config.idleFallbackMs }
+				: {}),
+			...this.resources,
+			...(secrets.length > 0 ? { secrets } : {}),
+		});
 	}
 
 	private getSandbox(createIfMissing = true): Promise<ModalSandboxLike> {

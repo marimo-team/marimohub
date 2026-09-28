@@ -11,6 +11,7 @@ MARIMOHUB_COMPUTE_BACKEND=modal
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=…              # secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=…          # secret
 MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT=notebooks   # optional named environment
+# MARIMOHUB_COMPUTE_MODAL_SECRETS=shared-credentials,huggingface
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS=1800     # save and stop after 30 idle minutes
 # MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS=7200  # optional app override
@@ -27,6 +28,16 @@ are isolated in that Modal environment. It passes compute profiles through the
 SDK's `cpu`, `memoryMiB`, and `gpu` options. Modal sets its idle timeout to 1.5
 times the effective timeout for each session mode. This fallback gives the hub
 time to save an edit session and stop its sandbox first.
+
+`MARIMOHUB_COMPUTE_MODAL_SECRETS` accepts comma-separated
+[Modal secret names](https://modal.com/docs/guide/secrets), not secret values.
+Every new editor, app, and job sandbox receives them as environment variables
+across the deployment.
+The secrets must exist in `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`, or the workspace
+default when unset. An empty or unset list adds none.
+
+Any secret lookup failure prevents sandbox creation. Existing sandboxes retain
+their secrets.
 
 ::: warning Cold starts & shared workspaces
 A freshly-started kernel can take a few seconds to boot; a warm sandbox image

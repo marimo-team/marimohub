@@ -201,6 +201,7 @@ Modal sandboxes.
 | `MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET` 🔒 | Modal API token secret. | Yes | — | — |
 | `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT` | Runs Modal apps and sandboxes in this named environment instead of the workspace default. | — | — | `notebooks` |
 | `MARIMOHUB_COMPUTE_MODAL_APP_NAME` | Limits cleanup to sandboxes this deployment created, so it never stops others sharing the same Modal workspace. | — | — | `marimohub` |
+| `MARIMOHUB_COMPUTE_MODAL_SECRETS` | Comma-separated Modal secret names injected into every new sandbox, deployment-wide. Secrets must exist in the configured Modal environment. Unset or empty adds none. | — | — | `shared-credentials,huggingface` |
 
 ### Docker
 

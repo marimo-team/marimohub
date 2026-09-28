@@ -736,6 +736,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Limits cleanup to sandboxes this deployment created, so it never stops others sharing the same Modal workspace.',
 						example: 'marimohub',
 					},
+					{
+						id: 'MARIMOHUB_COMPUTE_MODAL_SECRETS',
+						name: 'Modal secrets',
+						description:
+							'Comma-separated Modal secret names injected into every new sandbox, deployment-wide. Secrets must exist in the configured Modal environment. Unset or empty adds none.',
+						example: 'shared-credentials,huggingface',
+						optIn: true,
+					},
 				],
 			},
 			{

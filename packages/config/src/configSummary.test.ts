@@ -123,6 +123,8 @@ describe('buildConfigSummary', () => {
 			// Names of k8s Secret objects, not their contents.
 			'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET',
 			'MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET',
+			// Names of Modal Secret objects, not their contents.
+			'MARIMOHUB_COMPUTE_MODAL_SECRETS',
 			// Access-token verification settings contain no bearer credentials.
 			'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS',
 			'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',

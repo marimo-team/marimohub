@@ -39,6 +39,7 @@ const configOf = (provider: unknown) =>
 				imagePullPolicy?: string;
 				image?: string;
 				environment?: string;
+				secretNames?: string[];
 				template?: string;
 				host?: string;
 				bindHost?: string;
@@ -171,6 +172,23 @@ describe('makeCompute backend selection', () => {
 				}),
 			).environment,
 		).toBe('notebooks');
+	});
+
+	it('parses deployment-wide Modal secret names', () => {
+		expect(
+			configOf(
+				makeCompute({
+					...modalEnv,
+					MARIMOHUB_COMPUTE_MODAL_SECRETS: ' shared-credentials, , huggingface, ',
+				}),
+			).secretNames,
+		).toEqual(['shared-credentials', 'huggingface']);
+	});
+
+	it.each([undefined, '', ' ,  , '])('adds no Modal secrets for an empty list: %j', (value) => {
+		expect(
+			configOf(makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_MODAL_SECRETS: value })).secretNames,
+		).toBeUndefined();
 	});
 
 	it('selects docker', () => {

@@ -20,6 +20,7 @@
 	"dependencies": {
 		"@marimo-hub/compute-commons": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
+		"better-all": "catalog:",
 		"modal": "catalog:"
 	},
 	"devDependencies": {

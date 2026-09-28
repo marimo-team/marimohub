@@ -131,6 +131,20 @@ describe('config -> code generators', () => {
 		});
 	}
 
+	it.each([generateEnv, generateHelm, generateCompose])(
+		'includes Modal secrets only when explicitly configured in %s',
+		(generate) => {
+			const selection = CASES['default-prod (s3 + modal + oidc)'];
+			expect(generate(selection)).not.toContain('MARIMOHUB_COMPUTE_MODAL_SECRETS');
+			const configured = generate({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_MODAL_SECRETS: 'shared-credentials,huggingface' },
+			});
+			expect(configured).toContain('MARIMOHUB_COMPUTE_MODAL_SECRETS');
+			expect(configured).toContain('shared-credentials,huggingface');
+		},
+	);
+
 	it('marks unresolved required values and retains useful examples as comments', () => {
 		const env = generateEnv(CASES['default-prod (s3 + modal + oidc)']);
 		expect(env).toContain('MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub');

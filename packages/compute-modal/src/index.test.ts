@@ -158,6 +158,9 @@ function makeWorld() {
 				return { image };
 			},
 		},
+		secrets: {
+			fromName: vi.fn(async (name: string) => ({ secretId: `st-${name}` })),
+		},
 		sandboxes: {
 			async create(app, image, options) {
 				const sandbox = new FakeSandbox(options.tags);
@@ -239,6 +242,148 @@ describe('ModalCompute', () => {
 		expect(world.created[0].options.command).toEqual(['sleep', 'infinity']);
 	});
 
+	it.each([false, true])(
+		'injects named secrets into every new sandbox (reuse: %s)',
+		async (reuse) => {
+			const world = makeWorld();
+			const compute = makeCompute(world, { secretNames: ['shared-credentials', 'huggingface'] });
+
+			await compute.create(SANDBOX_ID, { reuse }).exec('true');
+			await compute
+				.create('sb-other' as SandboxId, { reuse, image: 'ghcr.io/acme/other:latest' })
+				.exec('true');
+
+			expect(world.client.secrets.fromName).toHaveBeenCalledTimes(4);
+			expect(world.created).toHaveLength(2);
+			for (const { options } of world.created) {
+				expect(options.secrets).toEqual([
+					{ secretId: 'st-shared-credentials' },
+					{ secretId: 'st-huggingface' },
+				]);
+			}
+		},
+	);
+
+	it('starts app and secret lookups concurrently before creating the sandbox', async () => {
+		const world = makeWorld();
+		const app = Promise.withResolvers<{ appId: string }>();
+		const firstSecret = Promise.withResolvers<{ secretId: string }>();
+		const secondSecret = Promise.withResolvers<{ secretId: string }>();
+		vi.spyOn(world.client.apps, 'fromName').mockReturnValue(app.promise);
+		vi.mocked(world.client.secrets.fromName)
+			.mockReturnValueOnce(firstSecret.promise)
+			.mockReturnValueOnce(secondSecret.promise);
+		const started = makeCompute(world, { secretNames: ['first', 'second'] })
+			.create(SANDBOX_ID, { reuse: false })
+			.exec('true');
+
+		await vi.waitFor(() => {
+			expect(world.client.apps.fromName).toHaveBeenCalledOnce();
+			expect(world.client.secrets.fromName).toHaveBeenCalledTimes(2);
+		});
+		expect(world.created).toHaveLength(0);
+
+		secondSecret.resolve({ secretId: 'st-second' });
+		firstSecret.resolve({ secretId: 'st-first' });
+		app.resolve({ appId: 'ap-hub-app' });
+		await started;
+
+		expect(world.created).toHaveLength(1);
+		expect(world.created[0]).toMatchObject({
+			app: { appId: 'ap-hub-app' },
+			options: { secrets: [{ secretId: 'st-first' }, { secretId: 'st-second' }] },
+		});
+	});
+
+	it.each([
+		['app', 'resolve'],
+		['app', 'reject'],
+		['secret', 'resolve'],
+		['secret', 'reject'],
+	])(
+		'preserves the %s lookup failure when pending lookups later %s',
+		async (failedLookup, lateOutcome) => {
+			const world = makeWorld();
+			const app = Promise.withResolvers<{ appId: string }>();
+			const firstSecret = Promise.withResolvers<{ secretId: string }>();
+			const secondSecret = Promise.withResolvers<{ secretId: string }>();
+			vi.spyOn(world.client.apps, 'fromName').mockReturnValue(app.promise);
+			vi.mocked(world.client.secrets.fromName)
+				.mockReturnValueOnce(firstSecret.promise)
+				.mockReturnValueOnce(secondSecret.promise);
+			const create = vi.spyOn(world.client.sandboxes, 'create');
+			const error = new Error(`${failedLookup} lookup failed`);
+			const started = makeCompute(world, { secretNames: ['first', 'second'] })
+				.create(SANDBOX_ID, { reuse: false })
+				.exec('true');
+			const failure = expect(started).rejects.toBe(error);
+
+			await vi.waitFor(() => {
+				expect(world.client.apps.fromName).toHaveBeenCalledOnce();
+				expect(world.client.secrets.fromName).toHaveBeenCalledTimes(2);
+			});
+			(failedLookup === 'app' ? app : firstSecret).reject(error);
+			await failure;
+			expect(create).not.toHaveBeenCalled();
+
+			if (lateOutcome === 'reject') {
+				const lateError = new Error('Late lookup failure');
+				(failedLookup === 'app' ? firstSecret : app).reject(lateError);
+				secondSecret.reject(lateError);
+			} else {
+				if (failedLookup === 'app') firstSecret.resolve({ secretId: 'st-first' });
+				else app.resolve({ appId: 'ap-hub-app' });
+				secondSecret.resolve({ secretId: 'st-second' });
+			}
+			await new Promise<void>((resolve) => setImmediate(resolve));
+
+			await expect(started).rejects.toBe(error);
+			expect(create).not.toHaveBeenCalled();
+		},
+	);
+
+	it('propagates sandbox creation failures after resolving app and secrets', async () => {
+		const world = makeWorld();
+		const error = new Error('Sandbox quota exceeded');
+		const create = vi.spyOn(world.client.sandboxes, 'create').mockRejectedValue(error);
+
+		await expect(
+			makeCompute(world, { secretNames: ['shared-credentials'] })
+				.create(SANDBOX_ID, { reuse: false })
+				.exec('true'),
+		).rejects.toBe(error);
+
+		expect(create).toHaveBeenCalledExactlyOnceWith(
+			{ appId: 'ap-hub-app' },
+			{ image: 'ghcr.io/acme/marimo:latest' },
+			expect.objectContaining({ secrets: [{ secretId: 'st-shared-credentials' }] }),
+		);
+	});
+
+	it.each([undefined, []])('omits secrets when none are configured: %j', async (secretNames) => {
+		const world = makeWorld();
+		await makeCompute(world, { secretNames }).create(SANDBOX_ID, { reuse: false }).exec('true');
+
+		expect(world.client.secrets.fromName).not.toHaveBeenCalled();
+		expect(world.created[0].options).not.toHaveProperty('secrets');
+	});
+
+	it.each([false, true])(
+		'does not create a sandbox if a secret lookup fails (reuse: %s)',
+		async (reuse) => {
+			const world = makeWorld();
+			const error = new NotFoundError('Secret not found');
+			vi.mocked(world.client.secrets.fromName).mockRejectedValue(error);
+
+			await expect(
+				makeCompute(world, { secretNames: ['missing'] })
+					.create(SANDBOX_ID, { reuse })
+					.exec('true'),
+			).rejects.toBe(error);
+			expect(world.created).toHaveLength(0);
+		},
+	);
+
 	it('derives a per-sandbox idle fallback from the session deadline', async () => {
 		const world = makeWorld();
 		await makeCompute(world)
@@ -268,9 +413,12 @@ describe('ModalCompute', () => {
 		const existing = new FakeSandbox();
 		world.existing.set(SANDBOX_ID, existing);
 
-		await makeCompute(world).create(SANDBOX_ID).exec('echo hi');
+		await makeCompute(world, { secretNames: ['shared-credentials'] })
+			.create(SANDBOX_ID)
+			.exec('echo hi');
 
 		expect(world.created).toHaveLength(0);
+		expect(world.client.secrets.fromName).not.toHaveBeenCalled();
 		expect(existing.execCalls[0].command).toEqual(['sh', '-lc', 'echo hi']);
 	});
 
@@ -278,6 +426,23 @@ describe('ModalCompute', () => {
 		const world = makeWorld();
 		await makeCompute(world).create(SANDBOX_ID).exec('true');
 		expect(world.created).toHaveLength(1);
+	});
+
+	it('does not provision a replacement when reuse lookup fails with a permission error', async () => {
+		const world = makeWorld();
+		const error = new Error('Permission denied');
+		vi.spyOn(world.client.sandboxes, 'fromName').mockRejectedValue(error);
+		const create = vi.spyOn(world.client.sandboxes, 'create');
+
+		await expect(
+			makeCompute(world, { secretNames: ['shared-credentials'] })
+				.create(SANDBOX_ID)
+				.exec('true'),
+		).rejects.toBe(error);
+
+		expect(world.appCalls).toHaveLength(0);
+		expect(world.client.secrets.fromName).not.toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
 	});
 
 	it('maps process output and passes accumulated environment variables', async () => {
