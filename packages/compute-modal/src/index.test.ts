@@ -1,7 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
-import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
+import {
+	App,
+	Image,
+	ModalClient,
+	NotFoundError,
+	Sandbox,
+	Secret,
+	SandboxFilesystemNotADirectoryError,
+} from 'modal';
+import type {
+	AppFromNameParams,
+	ContainerProcess,
+	FileInfo,
+	SandboxCreateParams,
+	SandboxExecParams,
+	Tunnel,
+} from 'modal';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
@@ -18,14 +34,19 @@ import {
 	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
 import { modalProfileResources, ModalCompute } from './index';
-import type {
-	ModalClientLike,
-	ModalFileInfoLike,
-	ModalProcessLike,
-	ModalSandboxLike,
-} from './index';
 
 const SANDBOX_ID = 'sb-abc' as SandboxId;
+
+type ProcessFixture = {
+	stdin: Pick<ContainerProcess<string>['stdin'], 'close'>;
+	stdout: ReadableStream<string>;
+	stderr: ReadableStream<string>;
+	wait: ContainerProcess<string>['wait'];
+};
+
+function makeClient(): ModalClient {
+	return new ModalClient({ tokenId: 'token-id', tokenSecret: 'token-secret' });
+}
 
 function textStream(value: string): ReadableStream<string> {
 	return new ReadableStream({
@@ -36,7 +57,7 @@ function textStream(value: string): ReadableStream<string> {
 	});
 }
 
-function processResult(exitCode = 0, stdout = '', stderr = ''): ModalProcessLike {
+function processResult(exitCode = 0, stdout = '', stderr = ''): ProcessFixture {
 	return {
 		stdin: { close: async () => {} },
 		stdout: textStream(stdout),
@@ -46,7 +67,7 @@ function processResult(exitCode = 0, stdout = '', stderr = ''): ModalProcessLike
 }
 
 function pendingProcessResult(): {
-	process: ModalProcessLike;
+	process: ProcessFixture;
 	resolve: (exitCode: number) => void;
 } {
 	let resolve = (_exitCode: number) => {};
@@ -64,19 +85,45 @@ function pendingProcessResult(): {
 	};
 }
 
-class FakeSandbox implements ModalSandboxLike {
+class FakeSandbox extends Sandbox {
 	readonly files = new Map<string, string | Uint8Array>();
-	readonly directories = new Map<string, ModalFileInfoLike[]>();
+	readonly directories = new Map<string, Pick<FileInfo, 'name' | 'path' | 'type' | 'size'>[]>();
 	readonly execCalls: {
 		command: string[];
-		options?: Parameters<ModalSandboxLike['exec']>[1];
+		options?: SandboxExecParams;
 	}[] = [];
 	readonly tags: Record<string, string>;
 	terminated = false;
-	execImpl: (command: string[]) => ModalProcessLike = () => processResult();
+	execImpl: (command: string[]) => ProcessFixture = () => processResult();
 
 	constructor(tags: Record<string, string> = {}) {
+		super(makeClient(), 'sb-fake');
 		this.tags = tags;
+		vi.spyOn(this.filesystem, 'readText').mockImplementation(async (path) => {
+			const value = this.files.get(path);
+			if (typeof value !== 'string') throw new Error('not found');
+			return value;
+		});
+		vi.spyOn(this.filesystem, 'writeText').mockImplementation(async (content, path) => {
+			this.writeFile(path, content);
+		});
+		vi.spyOn(this.filesystem, 'writeBytes').mockImplementation(async (content, path) => {
+			this.writeFile(path, content instanceof ArrayBuffer ? new Uint8Array(content) : content);
+		});
+		vi.spyOn(this.filesystem, 'listFiles').mockImplementation(async (path) => {
+			if (this.files.has(path)) {
+				throw new SandboxFilesystemNotADirectoryError(`${path} is not a directory`);
+			}
+			return (this.directories.get(path) ?? []).map((file) => ({
+				...file,
+				mode: 0o644,
+				permissions: 'rw-r--r--',
+				owner: 'root',
+				group: 'root',
+				modifiedTime: 0,
+				symlinkTarget: null,
+			}));
+		});
 	}
 
 	private writeFile(path: string, content: string | Uint8Array): void {
@@ -92,44 +139,45 @@ class FakeSandbox implements ModalSandboxLike {
 		this.directories.set(directory, entries);
 	}
 
-	filesystem = {
-		readText: async (path: string) => {
-			const value = this.files.get(path);
-			if (typeof value !== 'string') throw new Error('not found');
-			return value;
-		},
-		writeText: async (content: string, path: string) => {
-			this.writeFile(path, content);
-		},
-		writeBytes: async (content: Uint8Array, path: string) => {
-			this.writeFile(path, content);
-		},
-		listFiles: async (path: string) => {
-			if (this.files.has(path)) {
-				throw new SandboxFilesystemNotADirectoryError(`${path} is not a directory`);
-			}
-			return this.directories.get(path) ?? [];
-		},
-	};
-
-	async exec(
+	override exec(
 		command: string[],
-		options?: Parameters<ModalSandboxLike['exec']>[1],
-	): Promise<ModalProcessLike> {
+		options?: SandboxExecParams & { mode?: 'text' },
+	): Promise<ContainerProcess<string>>;
+	override exec(
+		command: string[],
+		options: SandboxExecParams & { mode: 'binary' },
+	): Promise<ContainerProcess<Uint8Array>>;
+	override async exec(
+		command: string[],
+		options?: SandboxExecParams,
+	): Promise<ContainerProcess<string> | ContainerProcess<Uint8Array>> {
+		if (options?.mode === 'binary') throw new Error('Binary exec is not used by this adapter');
 		this.execCalls.push({ command, options });
-		return this.execImpl(command);
+		// Fixtures provide only the process members exercised by the adapter.
+		return this.execImpl(command) as ContainerProcess<string>;
 	}
 
-	async getTags(): Promise<Record<string, string>> {
+	override async getTags(): Promise<Record<string, string>> {
 		return this.tags;
 	}
 
-	async terminate(): Promise<void> {
+	override terminate(): Promise<void>;
+	override terminate(options: { wait: true }): Promise<number>;
+	override async terminate(options?: { wait: true }): Promise<void | number> {
 		this.terminated = true;
+		if (options?.wait) return 0;
 	}
 
-	async tunnels(): Promise<Record<number, { url: string }>> {
-		return { 2718: { url: 'https://sandbox.modal.host' } };
+	override async tunnels(): Promise<Record<number, Tunnel>> {
+		return {
+			2718: {
+				host: 'sandbox.modal.host',
+				port: 443,
+				url: 'https://sandbox.modal.host',
+				tlsSocket: ['sandbox.modal.host', 443],
+				tcpSocket: ['sandbox.modal.host', 443],
+			},
+		};
 	}
 }
 
@@ -137,47 +185,40 @@ function makeWorld() {
 	const existing = new Map<string, FakeSandbox>();
 	const listed: FakeSandbox[] = [];
 	const created: {
-		app: unknown;
-		image: unknown;
-		options: Parameters<ModalClientLike['sandboxes']['create']>[2];
+		app: App;
+		image: Image;
+		options: SandboxCreateParams;
 		sandbox: FakeSandbox;
 	}[] = [];
-	const appCalls: { name: string; options?: { createIfMissing?: boolean } }[] = [];
+	const appCalls: { name: string; options?: AppFromNameParams }[] = [];
 	const imageCalls: string[] = [];
 
-	const client: ModalClientLike = {
-		apps: {
-			async fromName(name, options) {
-				appCalls.push({ name, options });
-				return { appId: `ap-${name}` };
-			},
-		},
-		images: {
-			fromRegistry(image) {
-				imageCalls.push(image);
-				return { image };
-			},
-		},
-		secrets: {
-			fromName: vi.fn(async (name: string) => ({ secretId: `st-${name}` })),
-		},
-		sandboxes: {
-			async create(app, image, options) {
-				const sandbox = new FakeSandbox(options.tags);
-				existing.set(options.name, sandbox);
-				created.push({ app, image, options, sandbox });
-				return sandbox;
-			},
-			async fromName(_appName, name) {
-				const sandbox = existing.get(name);
-				if (!sandbox) throw new NotFoundError('missing');
-				return sandbox;
-			},
-			async *list() {
-				yield* listed;
-			},
-		},
-	};
+	const client = makeClient();
+	vi.spyOn(client.apps, 'fromName').mockImplementation(async (name, options) => {
+		appCalls.push({ name, options });
+		return new App(`ap-${name}`);
+	});
+	const fromRegistry = client.images.fromRegistry.bind(client.images);
+	vi.spyOn(client.images, 'fromRegistry').mockImplementation((image) => {
+		imageCalls.push(image);
+		return fromRegistry(image);
+	});
+	vi.spyOn(client.secrets, 'fromName').mockImplementation(async (name) => new Secret(`st-${name}`));
+	vi.spyOn(client.sandboxes, 'create').mockImplementation(async (app, image, options = {}) => {
+		if (!options.name) throw new Error('Sandbox name is required by the test fixture');
+		const sandbox = new FakeSandbox(options.tags);
+		existing.set(options.name, sandbox);
+		created.push({ app, image, options, sandbox });
+		return sandbox;
+	});
+	vi.spyOn(client.sandboxes, 'fromName').mockImplementation(async (_appName, name) => {
+		const sandbox = existing.get(name);
+		if (!sandbox) throw new NotFoundError('missing');
+		return sandbox;
+	});
+	vi.spyOn(client.sandboxes, 'list').mockImplementation(async function* () {
+		yield* listed;
+	});
 
 	return { client, existing, listed, created, appCalls, imageCalls };
 }
@@ -204,8 +245,9 @@ describe('ModalCompute', () => {
 			image: 'ghcr.io/acme/marimo:latest',
 			environment: 'notebooks',
 		});
-		const client = Reflect.get(compute, 'client') as { profile: { environment?: string } };
+		const client = Reflect.get(compute, 'client') as ModalClient;
 
+		expect(client).toBeInstanceOf(ModalClient);
 		expect(client.profile.environment).toBe('notebooks');
 	});
 
@@ -256,9 +298,9 @@ describe('ModalCompute', () => {
 			expect(world.client.secrets.fromName).toHaveBeenCalledTimes(4);
 			expect(world.created).toHaveLength(2);
 			for (const { options } of world.created) {
-				expect(options.secrets).toEqual([
-					{ secretId: 'st-shared-credentials' },
-					{ secretId: 'st-huggingface' },
+				expect(options.secrets?.map((secret) => secret.secretId)).toEqual([
+					'st-shared-credentials',
+					'st-huggingface',
 				]);
 			}
 		},
@@ -266,9 +308,9 @@ describe('ModalCompute', () => {
 
 	it('starts app and secret lookups concurrently before creating the sandbox', async () => {
 		const world = makeWorld();
-		const app = Promise.withResolvers<{ appId: string }>();
-		const firstSecret = Promise.withResolvers<{ secretId: string }>();
-		const secondSecret = Promise.withResolvers<{ secretId: string }>();
+		const app = Promise.withResolvers<App>();
+		const firstSecret = Promise.withResolvers<Secret>();
+		const secondSecret = Promise.withResolvers<Secret>();
 		vi.spyOn(world.client.apps, 'fromName').mockReturnValue(app.promise);
 		vi.mocked(world.client.secrets.fromName)
 			.mockReturnValueOnce(firstSecret.promise)
@@ -283,9 +325,9 @@ describe('ModalCompute', () => {
 		});
 		expect(world.created).toHaveLength(0);
 
-		secondSecret.resolve({ secretId: 'st-second' });
-		firstSecret.resolve({ secretId: 'st-first' });
-		app.resolve({ appId: 'ap-hub-app' });
+		secondSecret.resolve(new Secret('st-second'));
+		firstSecret.resolve(new Secret('st-first'));
+		app.resolve(new App('ap-hub-app'));
 		await started;
 
 		expect(world.created).toHaveLength(1);
@@ -304,9 +346,9 @@ describe('ModalCompute', () => {
 		'preserves the %s lookup failure when pending lookups later %s',
 		async (failedLookup, lateOutcome) => {
 			const world = makeWorld();
-			const app = Promise.withResolvers<{ appId: string }>();
-			const firstSecret = Promise.withResolvers<{ secretId: string }>();
-			const secondSecret = Promise.withResolvers<{ secretId: string }>();
+			const app = Promise.withResolvers<App>();
+			const firstSecret = Promise.withResolvers<Secret>();
+			const secondSecret = Promise.withResolvers<Secret>();
 			vi.spyOn(world.client.apps, 'fromName').mockReturnValue(app.promise);
 			vi.mocked(world.client.secrets.fromName)
 				.mockReturnValueOnce(firstSecret.promise)
@@ -331,9 +373,9 @@ describe('ModalCompute', () => {
 				(failedLookup === 'app' ? firstSecret : app).reject(lateError);
 				secondSecret.reject(lateError);
 			} else {
-				if (failedLookup === 'app') firstSecret.resolve({ secretId: 'st-first' });
-				else app.resolve({ appId: 'ap-hub-app' });
-				secondSecret.resolve({ secretId: 'st-second' });
+				if (failedLookup === 'app') firstSecret.resolve(new Secret('st-first'));
+				else app.resolve(new App('ap-hub-app'));
+				secondSecret.resolve(new Secret('st-second'));
 			}
 			await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -354,9 +396,9 @@ describe('ModalCompute', () => {
 		).rejects.toBe(error);
 
 		expect(create).toHaveBeenCalledExactlyOnceWith(
-			{ appId: 'ap-hub-app' },
-			{ image: 'ghcr.io/acme/marimo:latest' },
-			expect.objectContaining({ secrets: [{ secretId: 'st-shared-credentials' }] }),
+			new App('ap-hub-app'),
+			expect.any(Image),
+			expect.objectContaining({ secrets: [new Secret('st-shared-credentials')] }),
 		);
 	});
 
@@ -659,7 +701,7 @@ describe('ModalCompute', () => {
 
 	describe('launchProcess failure paths', () => {
 		/** A process whose streams never emit and whose wait never resolves. */
-		function hangingProcess(): ModalProcessLike {
+		function hangingProcess(): ProcessFixture {
 			return {
 				stdin: { close: async () => {} },
 				stdout: new ReadableStream<string>({ start() {} }),
@@ -923,7 +965,8 @@ function contractWorld() {
 	const world = makeWorld();
 	const create = world.client.sandboxes.create.bind(world.client.sandboxes);
 	world.client.sandboxes.create = async (app, image, options) => {
-		const sandbox = (await create(app, image, options)) as FakeSandbox;
+		const sandbox = await create(app, image, options);
+		if (!(sandbox instanceof FakeSandbox)) throw new Error('Expected a fake sandbox');
 		sandbox.execImpl = (command) => {
 			const launch = scriptContractLaunch(command[2]);
 			if (launch) {

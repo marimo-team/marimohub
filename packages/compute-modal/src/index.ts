@@ -6,6 +6,7 @@ import {
 	NotFoundError as ModalNotFoundError,
 	SandboxFilesystemNotADirectoryError,
 } from 'modal';
+import type { App, ContainerProcess, Sandbox } from 'modal';
 import {
 	validateOutputBudget,
 	readBoundedFile,
@@ -72,74 +73,6 @@ export interface ModalConfig {
 	secretNames?: string[];
 	/** Provider-side fallback, set later than marimohub's graceful idle deadline. */
 	idleFallbackMs?: number;
-}
-
-export interface ModalProcessLike {
-	stdin: Pick<WritableStream<string>, 'close'>;
-	stdout: ReadableStream<string>;
-	stderr: ReadableStream<string>;
-	wait(): Promise<number>;
-}
-
-export interface ModalFileInfoLike {
-	name: string;
-	path: string;
-	type: 'file' | 'directory' | 'symlink';
-	size: number;
-}
-
-export interface ModalSandboxLike {
-	filesystem: {
-		readText(path: string): Promise<string>;
-		writeText(content: string, path: string): Promise<void>;
-		writeBytes(content: Uint8Array, path: string): Promise<void>;
-		listFiles(path: string): Promise<ModalFileInfoLike[]>;
-	};
-	exec(
-		command: string[],
-		options?: {
-			mode?: 'text';
-			workdir?: string;
-			timeoutMs?: number;
-			env?: Record<string, string>;
-			pty?: boolean;
-		},
-	): Promise<ModalProcessLike>;
-	getTags(): Promise<Record<string, string>>;
-	terminate(): Promise<void>;
-	tunnels(timeoutMs?: number): Promise<Record<number, { url: string }>>;
-}
-
-export interface ModalClientLike {
-	apps: {
-		fromName(name: string, options?: { createIfMissing?: boolean }): Promise<{ appId: string }>;
-	};
-	images: {
-		fromRegistry(image: string): unknown;
-	};
-	secrets: {
-		fromName(name: string): Promise<unknown>;
-	};
-	sandboxes: {
-		create(
-			app: unknown,
-			image: unknown,
-			options: {
-				name: string;
-				command: string[];
-				tags: Record<string, string>;
-				encryptedPorts: number[];
-				timeoutMs: number;
-				idleTimeoutMs?: number;
-				cpu?: number;
-				memoryMiB?: number;
-				gpu?: string;
-				secrets?: unknown[];
-			},
-		): Promise<ModalSandboxLike>;
-		fromName(appName: string, name: string): Promise<ModalSandboxLike>;
-		list(options: { appId: string; tags: Record<string, string> }): AsyncIterable<ModalSandboxLike>;
-	};
 }
 
 // Modal exposes stdin EOF, but no process signal API. Keep cancellation outside
@@ -231,7 +164,7 @@ async function consumeStream(
 	}
 }
 
-async function runProcess(process: ModalProcessLike): Promise<ExecResult> {
+async function runProcess(process: ContainerProcess<string>): Promise<ExecResult> {
 	const [stdout, stderr, exitCode] = await Promise.all([
 		readStream(process.stdout),
 		readStream(process.stderr),
@@ -254,19 +187,19 @@ class ModalLaunchTimeoutError extends Error {
 
 class ModalSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
-	private sandboxPromise?: Promise<ModalSandboxLike>;
+	private sandboxPromise?: Promise<Sandbox>;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 
 	constructor(
 		private readonly id: SandboxId,
 		private readonly config: ModalConfig,
-		private readonly client: ModalClientLike,
+		private readonly client: ModalClient,
 		private readonly resources: ReturnType<typeof modalProfileResources>,
 		private readonly reuse: boolean,
 	) {}
 
-	private async createSandbox(): Promise<ModalSandboxLike> {
+	private async createSandbox(): Promise<Sandbox> {
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
 		const { app, secrets } = await all({
 			app: async () => this.client.apps.fromName(appName, { createIfMissing: true }),
@@ -296,7 +229,7 @@ class ModalSandboxInstance implements SandboxInstance {
 		});
 	}
 
-	private getSandbox(createIfMissing = true): Promise<ModalSandboxLike> {
+	private getSandbox(createIfMissing = true): Promise<Sandbox> {
 		if (this.sandboxPromise) return this.sandboxPromise;
 		if (!this.reuse) {
 			if (!createIfMissing) {
@@ -322,7 +255,7 @@ class ModalSandboxInstance implements SandboxInstance {
 			timeout?: number;
 			pty?: boolean;
 		},
-	): Promise<ModalProcessLike> {
+	): Promise<ContainerProcess<string>> {
 		const sandbox = await this.getSandbox();
 		return sandbox.exec(command, {
 			mode: 'text',
@@ -698,21 +631,20 @@ class ModalSandboxInstance implements SandboxInstance {
 
 export class ModalCompute implements SandboxProvider {
 	readonly capabilities = { multiPort: false } as const;
-	private readonly client: ModalClientLike;
+	private readonly client: ModalClient;
 
 	constructor(
 		private readonly config: ModalConfig,
-		client?: ModalClientLike,
+		client?: ModalClient,
 	) {
 		this.client =
 			client ??
-			// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- the SDK class implements this injected seam
-			(new ModalClient({
+			new ModalClient({
 				tokenId: config.tokenId,
 				tokenSecret: config.tokenSecret,
 				environment: config.environment,
 				...(config.apiBase ? { endpoint: config.apiBase } : {}),
-			}) as unknown as ModalClientLike);
+			});
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
@@ -738,7 +670,7 @@ export class ModalCompute implements SandboxProvider {
 
 	async listActive(): Promise<ActiveSandbox[]> {
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
-		let app: { appId: string };
+		let app: App;
 		try {
 			app = await this.client.apps.fromName(appName);
 		} catch (error) {
