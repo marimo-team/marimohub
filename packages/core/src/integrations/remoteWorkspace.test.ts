@@ -4,6 +4,7 @@ import { BadRequestError } from '../errors';
 import type { Source } from '../schema';
 import {
 	isSafeWorkspacePath,
+	isSafeWorkspaceRootPath,
 	isWorkspaceDirectoryMarkerPath,
 	normalizeEntryNotebook,
 	normalizeWorkspaceFilePath,
@@ -85,6 +86,22 @@ describe('remote workspace helpers', () => {
 		expect(isSafeWorkspacePath('/cars.csv')).toBe(false);
 		expect(isSafeWorkspacePath('cars.csv/')).toBe(false);
 	});
+
+	it.each(['.git', 'a/.git', 'A/.GIT', '.Git/x', 'a\tb', 'a\u0000b', 'a\u007fb', '../x'])(
+		'rejects the root path %j',
+		(rootPath) => {
+			expect(isSafeWorkspaceRootPath(rootPath)).toBe(false);
+			expect(() => normalizeWorkspaceRootPath(rootPath)).toThrow(BadRequestError);
+		},
+	);
+
+	it.each(['données', 'my dir', 'a/.github', '.gitlab/ci', 'x.git'])(
+		'accepts the root path %j',
+		(rootPath) => {
+			expect(isSafeWorkspaceRootPath(rootPath)).toBe(true);
+			expect(normalizeWorkspaceRootPath(rootPath)).toBe(rootPath);
+		},
+	);
 
 	it('rejects unsafe mirror file maps before writing to storage', () => {
 		expect(() =>

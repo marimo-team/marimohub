@@ -299,6 +299,28 @@ function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefin
 	);
 }
 
+// Mirrors the modal SDK's own object-name check (`isValidObjectName` in its
+// name_utils): at most 64 of [A-Za-z0-9._-], and not shaped like an app id.
+const MODAL_OBJECT_NAME = /^[A-Za-z0-9._-]{1,64}$/;
+const MODAL_APP_ID = /^ap-[A-Za-z0-9]{22}$/;
+
+function parseModalSecretNames(env: Env): string[] | undefined {
+	const key = 'MARIMOHUB_COMPUTE_MODAL_SECRETS';
+	const names = parseList(env[key]);
+	if (!names) return undefined;
+	for (const name of names) {
+		if (!MODAL_OBJECT_NAME.test(name) || MODAL_APP_ID.test(name)) {
+			throw new ConfigError(`Invalid ${key} entry: ${JSON.stringify(name)}`, {
+				variable: key,
+				remediation:
+					'Use a comma-separated list of Modal secret names. Each name has at most 64 letters, digits, dots, dashes or underscores.',
+				docs: 'docs/setup/compute/modal.md',
+			});
+		}
+	}
+	return [...new Set(names)];
+}
+
 function withWarmPoolSupport(provider: SandboxProvider, support: WarmPoolSupport): SandboxProvider {
 	return Object.assign(provider, { warmPool: support });
 }
@@ -341,7 +363,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				tokenSecret,
 				image: defaultImage,
 				environment: env.MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT,
-				secretNames: parseList(env.MARIMOHUB_COMPUTE_MODAL_SECRETS),
+				secretNames: parseModalSecretNames(env),
 				// App name scopes reconciler enumeration (listActive) to sandboxes this
 				// deployment owns, so it never reaps co-tenant sandboxes in the workspace.
 				appName: env.MARIMOHUB_COMPUTE_MODAL_APP_NAME,

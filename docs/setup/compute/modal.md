@@ -36,8 +36,17 @@ across the deployment.
 The secrets must exist in `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`, or the workspace
 default when unset. An empty or unset list adds none.
 
-Any secret lookup failure prevents sandbox creation. Existing sandboxes retain
-their secrets.
+Any secret lookup failure prevents sandbox creation. The error names the
+secret, the variable, and the Modal environment. The boot preflight also
+resolves each secret, so it reports a misspelled name at startup. Existing
+sandboxes retain their secrets.
+
+::: warning Deployment-wide secrets
+marimohub injects these secrets into every editor, app, and job sandbox in every
+project. Any notebook author can read the values. For credentials that belong to
+one project, use project integration secret references instead. Secret keys must
+not use the `MARIMOHUB_` or `MARIMO_` prefixes, which the hub reserves.
+:::
 
 ::: warning Cold starts & shared workspaces
 A freshly-started kernel can take a few seconds to boot; a warm sandbox image

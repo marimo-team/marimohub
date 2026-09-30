@@ -49,11 +49,13 @@ import {
 	ResourceExhaustedError,
 	saga,
 	MODE_POLICY,
+	isPastAuthorizationDeadline,
 	SandboxProvisioner,
 	SESSION_MODES,
 	SessionId,
 	sessionMode,
 	sessionOwner,
+	sessionWorkspaceDir,
 	SubdomainExposure,
 	UnavailableError,
 	EditSessionOwnedError,
@@ -1309,14 +1311,11 @@ export async function startNotebookSession(input: {
 			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
 			: Promise.resolve(session);
 	const revalidateEditorReuse = async (session: Session) => {
-		const current = await sessions.getSession(pid, session.session_id);
-		if (current.status !== 'running' && current.status !== 'starting') {
+		const current = await sessions.getReusableEditor(pid, session.session_id);
+		if (!current) {
 			throw new ConflictError('The previous editor session is still shutting down. Retry shortly.');
 		}
-		if (
-			current.authorization_expires_at &&
-			Date.now() >= Date.parse(current.authorization_expires_at)
-		) {
+		if (isPastAuthorizationDeadline(current, Date.now())) {
 			throw new ConflictError('The editor session authorization expired. Retry shortly.');
 		}
 		return current;
@@ -1336,6 +1335,7 @@ export async function startNotebookSession(input: {
 	const workspacePrefix = syncedVersionPaths?.workspacePrefix;
 	const workspaceArchive = syncedVersionPaths?.workspaceArchive;
 	const pullSourceGit = pullSourceGitOptions(notebook.source, syncedVersionPaths);
+	const workspaceDir = sessionWorkspaceDir(notebook.source, deps.sandbox.workdir);
 	// Staleness provenance: a session that serves a frozen snapshot — a
 	// non-persisting mode (`app`), or any mode on a synced source (a read-only
 	// mirror, even under `edit`) — is stamped with the head committed version it
@@ -1445,9 +1445,7 @@ export async function startNotebookSession(input: {
 	const reusableCandidate = mode === 'edit' ? editorReuse?.session : await reusableApp();
 	if (reusableCandidate) {
 		let reusable = await tightenAuthorizationDeadline(reusableCandidate);
-		const authorizationExpired =
-			reusable.authorization_expires_at !== undefined &&
-			Date.now() >= Date.parse(reusable.authorization_expires_at);
+		const authorizationExpired = isPastAuthorizationDeadline(reusable, Date.now());
 		// A role change flips the session class the caller is entitled to (a demoted
 		// editor must not keep a persisting, WIF-holding kernel; a promoted viewer's
 		// edits must stop being discarded). A stale-class session is retired below
@@ -1472,7 +1470,7 @@ export async function startNotebookSession(input: {
 					session: reusable,
 					user,
 					ids: requestedSurfaces,
-					workspaceDir: sandbox.workdir,
+					workspaceDir,
 					exposure: sandboxExposure,
 					hostname,
 					appBaseUrl,
@@ -1894,10 +1892,7 @@ export async function startNotebookSession(input: {
 				},
 			})
 			.step('mark_running', async () => {
-				if (
-					session!.authorization_expires_at &&
-					Date.now() >= Date.parse(session!.authorization_expires_at)
-				) {
+				if (isPastAuthorizationDeadline(session!, Date.now())) {
 					throw new ForbiddenError('Group authorization expired while starting the session');
 				}
 				// The lifetime clock starts here — when the kernel is live, not at record
@@ -1978,12 +1973,15 @@ export async function startNotebookSession(input: {
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
 			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
 			if (winnerCandidate?.notebook_id === nid && sessionMode(winnerCandidate) === 'edit') {
-				let winner = await tightenAuthorizationDeadline(winnerCandidate);
+				// Revalidate before the ownership check: a dead holder must yield the
+				// retryable 409, not "owned by" a session that is already gone.
+				const winner = await revalidateEditorReuse(
+					await tightenAuthorizationDeadline(winnerCandidate),
+				);
 				if (sharing === 'exclusive' && winner.user_id !== user.id) {
 					throw new EditSessionOwnedError(`Editing is currently owned by ${winner.user_id}`);
 				}
 				const winnerGrants = await grants(winner);
-				winner = await revalidateEditorReuse(winner);
 				return {
 					...toSessionResponse(winner, winnerGrants),
 					reused: true,
@@ -2056,7 +2054,7 @@ export async function startNotebookSession(input: {
 			session: updated,
 			user,
 			ids: eagerSurfaces,
-			workspaceDir: sandbox.workdir,
+			workspaceDir,
 			exposure: sandboxExposure,
 			hostname,
 			appBaseUrl,
@@ -2226,7 +2224,10 @@ app.openapi(ensureSurfaceRoute, async (c) => {
 		session,
 		user,
 		id: surface,
-		workspaceDir: deps.sandbox.workdir,
+		workspaceDir: sessionWorkspaceDir(
+			await deps.services.notebooks.getNotebookSource(pid, session.notebook_id),
+			deps.sandbox.workdir,
+		),
 		exposure,
 		hostname: resolveSandboxHostname(c, deps.sandbox),
 		appBaseUrl,

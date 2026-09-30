@@ -1,3 +1,5 @@
+import { vi } from 'vitest';
+import { MAX_REQUEST_BYTES } from '../constants';
 import type { SandboxId } from '../ids';
 import type {
 	BoundedReadOptions,
@@ -19,6 +21,7 @@ import type {
 	WaitForPortOptions,
 } from '../ports/sandbox';
 import { execResult, listFilesFailure, readFileFailure } from '../ports/sandbox';
+import { shellQuote } from '../services/runtime/shell';
 
 function validReadBudget({ maxBytes, timeoutMs }: BoundedReadOptions): boolean {
 	return (
@@ -331,6 +334,72 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 	} satisfies SandboxInstance;
 
 	return { instance, fs, calls };
+}
+
+export interface GitWorkingTreeSandboxOptions extends FsSandboxOptions {
+	files: Record<string, string | Uint8Array>;
+	diff?: readonly (readonly [status: string, path: string])[];
+	untracked?: readonly string[];
+	/** Raw `git diff -z` stdout; overrides `diff`. */
+	diffOutput?: string;
+	/** Raw `git ls-files -z` stdout; overrides `untracked`. */
+	untrackedOutput?: string;
+	gitAvailable?: boolean;
+	baseCommitAvailable?: boolean;
+	baseCommitOutput?: string;
+	baseCommitStderr?: string;
+	diffFails?: boolean;
+	secureReadFailures?: readonly string[];
+}
+
+/**
+ * `makeFsSandbox` plus canned answers for the Git commands proposal capture
+ * runs, including the O_NOFOLLOW read script (served from the in-memory files
+ * under `root`).
+ */
+export function makeGitWorkingTreeSandbox(options: GitWorkingTreeSandboxOptions) {
+	const root = options.root ?? DEFAULT_FS_ROOT;
+	const sandbox = makeFsSandbox(options);
+	const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
+		if (command.includes('test -e .git')) {
+			return options.gitAvailable === false
+				? execResult(false, '', 'not a repository')
+				: execResult(true, 'git-working-tree', '');
+		}
+		if (command.includes('rev-parse --verify')) {
+			return options.baseCommitAvailable === false
+				? execResult(false, '', options.baseCommitStderr ?? 'unknown revision')
+				: execResult(true, options.baseCommitOutput ?? `${'a'.repeat(40)}\n`, '');
+		}
+		if (command.includes('diff --name-status')) {
+			if (options.diffFails) return execResult(false, '', 'diff failed');
+			const output =
+				options.diffOutput ??
+				(options.diff ?? [])
+					.flatMap(([status, path]) => [status, path])
+					.map((field) => `${field}\0`)
+					.join('');
+			return execResult(true, output, '');
+		}
+		if (command.includes('ls-files --others')) {
+			return execResult(
+				true,
+				options.untrackedOutput ?? (options.untracked ?? []).map((path) => `${path}\0`).join(''),
+				'',
+			);
+		}
+		if (command.includes('os.O_NOFOLLOW')) {
+			const path = Object.keys(options.files).find((candidate) =>
+				command.endsWith(` ${shellQuote(root)} ${shellQuote(candidate)} ${MAX_REQUEST_BYTES}`),
+			);
+			if (!path || options.secureReadFailures?.includes(path)) {
+				return execResult(false, '', 'unsafe or missing file');
+			}
+			return sandbox.instance.exec(`base64 < ${shellQuote(`${root}/${path}`)}`);
+		}
+		return sandbox.instance.exec(command);
+	});
+	return { ...sandbox, instance: { ...sandbox.instance, exec }, exec };
 }
 
 /** A fake `SandboxProvider` that records the options of its last `create` call. */

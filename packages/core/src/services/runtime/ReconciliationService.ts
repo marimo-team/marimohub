@@ -17,6 +17,7 @@ import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
 import { sessionPersistsEdits } from './sessionState';
 import { listAllKeys } from '../catalog/storage';
+import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
 
 /**
@@ -220,9 +221,7 @@ export class ReconciliationService {
 					// `expireStale()` runs immediately before this sweep, so a provision
 					// slower than the heartbeat TTL arrives here `expired` while it is still
 					// restoring files; tearing it down mid-restore mirror-deletes bucket keys.
-					const authorizationExpired =
-						session.authorization_expires_at !== undefined &&
-						now >= Date.parse(session.authorization_expires_at);
+					const authorizationExpired = isPastAuthorizationDeadline(session, now);
 					if (
 						session.status === 'expired' &&
 						!authorizationExpired &&

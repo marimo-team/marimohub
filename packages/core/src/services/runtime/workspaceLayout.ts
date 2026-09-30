@@ -1,4 +1,5 @@
-import { isSafeWorkspacePath } from '../../integrations/remoteWorkspace';
+import { ConflictError } from '../../errors';
+import { isSafeWorkspaceRootPath } from '../../integrations/remoteWorkspace';
 import type { VersionPaths } from '../../paths';
 import type { GitSource, Source } from '../../schema';
 
@@ -20,8 +21,8 @@ export interface SandboxWorkspaceLayout {
 export function sandboxWorkspaceLayout(workdir: string, rootPath: string): SandboxWorkspaceLayout {
 	// Stored root paths are normalized on write; re-checking here keeps a
 	// corrupt record from steering restores outside the workdir.
-	if (!isSafeWorkspacePath(rootPath, true)) {
-		throw new Error(`Unsafe workspace root path: ${rootPath}`);
+	if (!isSafeWorkspaceRootPath(rootPath)) {
+		throw new ConflictError(`Unsafe workspace root path: ${rootPath}`);
 	}
 	const gitRoot = workdir.replace(/\/+$/, '') || '/';
 	if (!rootPath) return { workdir: gitRoot, gitRoot, rootPath };

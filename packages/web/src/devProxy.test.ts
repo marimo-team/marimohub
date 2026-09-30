@@ -66,6 +66,19 @@ describe('waitForDevApi', () => {
 		await waiting;
 	});
 
+	it('stops waiting without throwing once the dev server closes', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed')));
+		const closing = new AbortController();
+		const settled = vi.fn();
+		const waiting = waitForDevApi('http://127.0.0.1:4100', 60_000, closing.signal).then(settled);
+		await vi.advanceTimersByTimeAsync(300);
+		expect(settled).not.toHaveBeenCalled();
+		closing.abort();
+		await waiting;
+		expect(settled).toHaveBeenCalledOnce();
+	});
+
 	it('bounds a health request that never responds', async () => {
 		vi.stubGlobal(
 			'fetch',

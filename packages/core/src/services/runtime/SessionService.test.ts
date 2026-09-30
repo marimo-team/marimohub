@@ -12,6 +12,7 @@ import {
 	ACTOR,
 	advanceTime,
 	expectNotFound,
+	makeLocalSource,
 	MemoryBucket,
 	restoreClock,
 	TEST_KERNEL_AUTH_TOKEN,
@@ -20,8 +21,15 @@ import {
 import { ConflictError, PreconditionFailedError } from '../../errors';
 
 import type { SessionId } from '../../ids';
+import { Millis } from '../../duration';
 import { paths } from '../../paths';
-import { SessionService } from './SessionService';
+import type { Source } from '../../schema';
+import {
+	isPastAuthorizationDeadline,
+	isReusableSession,
+	SessionService,
+	sessionWorkspaceDir,
+} from './SessionService';
 
 describe('SessionService', () => {
 	let bucket: MemoryBucket;
@@ -1405,5 +1413,54 @@ describe('SessionService terminal retention', () => {
 
 		expect(reaped).toBe(0);
 		expect(await sessions.listSessions()).toHaveLength(1);
+	});
+});
+
+describe('session predicates', () => {
+	const now = Date.parse('2026-01-01T00:00:00.000Z');
+	const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
+
+	it.each([
+		{ deadline: undefined, expired: false },
+		{ deadline: iso(1), expired: false },
+		{ deadline: iso(0), expired: true },
+		{ deadline: iso(-1), expired: true },
+	])('treats the authorization deadline as inclusive ($deadline)', ({ deadline, expired }) => {
+		expect(isPastAuthorizationDeadline({ authorization_expires_at: deadline }, now)).toBe(expired);
+	});
+
+	it.each([
+		{ status: 'running', sandbox_url: 'http://k', age: Millis.hours(1), reusable: true },
+		{ status: 'running', sandbox_url: undefined, age: 0, reusable: false },
+		{ status: 'starting', sandbox_url: undefined, age: Millis.minutes(5) - 1, reusable: true },
+		{ status: 'starting', sandbox_url: undefined, age: Millis.minutes(5), reusable: false },
+		{ status: 'terminating', sandbox_url: 'http://k', age: 0, reusable: false },
+	] as const)(
+		'reuses a $status session aged $age ms: $reusable',
+		({ status, sandbox_url, age, reusable }) => {
+			expect(isReusableSession({ status, sandbox_url, started_at: iso(-Number(age)) }, now)).toBe(
+				reusable,
+			);
+		},
+	);
+
+	it('runs a pull source from its subtree and everything else from the workdir', () => {
+		const git = {
+			schema_version: 1,
+			type: 'git',
+			provider: null,
+			repo: 'org/repo',
+			branch: 'main',
+			root_path: 'python',
+			sync_mode: 'pull',
+			current_version_id: null,
+			commit: null,
+			last_synced_at: null,
+		} as unknown as Source;
+		expect(sessionWorkspaceDir(git, '/workspace')).toBe('/workspace/python');
+		expect(sessionWorkspaceDir({ ...git, sync_mode: 'push' } as Source, '/workspace')).toBe(
+			'/workspace',
+		);
+		expect(sessionWorkspaceDir(makeLocalSource(), '/workspace')).toBe('/workspace');
 	});
 });

@@ -38,7 +38,8 @@ so the feature can be turned back on without loss.
 ## How it works
 
 - **A job belongs to a notebook.** Open **Jobs & schedules** from the notebook's
-  actions menu (or the calendar icon on the notebook page) to define jobs: a
+  actions menu. On the notebook page, it is in the notebook menu. Click the
+  notebook title to open that menu. Define jobs there: a
   name, an optional cron schedule with an IANA time zone, parameters, a
   timeout, a retry policy, and what to do when the previous run is still active.
   A job without a schedule is manual-only.

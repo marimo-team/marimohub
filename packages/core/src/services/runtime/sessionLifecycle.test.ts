@@ -17,7 +17,11 @@ import type { SandboxCalls } from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { kernelActiveConnections, SessionLifecycleService } from './sessionLifecycle';
+import {
+	kernelActiveConnections,
+	RECLAIM_PROVISION_GRACE_MS,
+	SessionLifecycleService,
+} from './sessionLifecycle';
 import type { SessionLifecycleConfig } from './sessionLifecycle';
 import { SessionService } from './SessionService';
 import { SessionRetirer } from './SessionRetirer';
@@ -391,7 +395,8 @@ describe('SessionLifecycleService', () => {
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
 		});
 
-		it('leaves a fresh expired record alone (provision may still be restoring files)', async () => {
+		// Legacy-shape record (no `surfaces`): nothing proves the restore finished.
+		it('leaves a fresh expired record without surface state alone (provision may still be restoring files)', async () => {
 			const s = await putSession({
 				status: 'expired',
 				started_at: iso(-6 * 60 * 1000),
@@ -420,6 +425,59 @@ describe('SessionLifecycleService', () => {
 			expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
 			expect(sandboxCalls.destroy).toBe(1);
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
+		});
+
+		it('reclaims a provisioned idle record WITHOUT saving when a newer live session owns the notebook', async () => {
+			const started = iso(-6 * 60 * 1000);
+			const s = await putSession({
+				status: 'expired',
+				started_at: started,
+				last_heartbeat: started,
+				surfaces: { marimo: { status: 'ready', port: 2718, started_at: started } },
+			});
+			await putSession({
+				status: 'running',
+				sandbox_id: createSandboxId(),
+				last_snapshot_at: iso(0),
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reclaimed).toBe(1);
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
+		});
+
+		it('keeps the provision grace for a provisioned record when connection-aware reaping is off', async () => {
+			const started = iso(-6 * 60 * 1000);
+			const s = await putSession({
+				status: 'expired',
+				started_at: started,
+				last_heartbeat: started,
+				surfaces: { marimo: { status: 'ready', port: 2718, started_at: started } },
+			});
+
+			const result = await makeService({ connectionAware: false }).sweep(now);
+
+			expect(probe).not.toHaveBeenCalled();
+			expect(result.reclaimed).toBe(0);
+			expect(sandboxCalls.destroy).toBe(0);
+			expect((await getStored(s)).sandbox_reclaimed_at).toBeUndefined();
+		});
+
+		it.each([
+			{ age: RECLAIM_PROVISION_GRACE_MS - 1, reclaimed: 0 },
+			{ age: RECLAIM_PROVISION_GRACE_MS, reclaimed: 1 },
+		])('ends the provision grace exactly $age ms after start', async ({ age, reclaimed }) => {
+			await putSession({
+				status: 'expired',
+				started_at: iso(-age),
+				last_heartbeat: iso(-age),
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reclaimed).toBe(reclaimed);
 		});
 
 		it('keeps the provision grace for a provisioned record when the editor probe is unknown', async () => {

@@ -1,14 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSandboxId, execResult } from '@marimo-hub/core';
+import { createSandboxId } from '@marimo-hub/core';
 import type {
 	NotebookId,
 	ProjectId,
-	SandboxInstance,
 	SessionId,
 	SourceControlPublisher,
 	SourceControlReader,
 } from '@marimo-hub/core';
-import { ACTOR, fakeComputeFrom, makeFsSandbox } from '@marimo-hub/core/testing';
+import { ACTOR, fakeComputeFrom, makeGitWorkingTreeSandbox } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectOk, stubSourceControl } from '../testing';
 
 const encode = (value: string) => new TextEncoder().encode(value);
@@ -17,18 +16,12 @@ const HEAD = 'fedcba9876543210';
 
 /** A sandbox whose Git answers come from a subtree checkout rooted below the workdir. */
 function makeSubtreeGitSandbox(root: string) {
-	const sandbox = makeFsSandbox({ root, files: { 'dashboard.py': 'print("after")' } });
-	const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
-		if (command.includes('test -e .git')) return execResult(true, 'git-working-tree', '');
-		if (command.includes('rev-parse --verify')) return execResult(true, `${COMMIT}\n`, '');
-		if (command.includes('diff --name-status')) return execResult(true, 'M\0dashboard.py\0', '');
-		if (command.includes('ls-files --others')) return execResult(true, '', '');
-		if (command.includes('os.O_NOFOLLOW')) {
-			return sandbox.instance.exec(`base64 < '${root}/dashboard.py'`);
-		}
-		return sandbox.instance.exec(command);
+	return makeGitWorkingTreeSandbox({
+		root,
+		files: { 'dashboard.py': 'print("after")' },
+		baseCommitOutput: `${COMMIT}\n`,
+		diff: [['M', 'dashboard.py']],
 	});
-	return { instance: { ...sandbox.instance, exec }, exec };
 }
 
 describe('change requests from a subtree pull source', () => {

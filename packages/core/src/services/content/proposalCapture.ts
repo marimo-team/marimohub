@@ -1,6 +1,11 @@
 import { MAX_REQUEST_BYTES } from '../../constants';
 import { ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { isSafeWorkspacePath } from '../../integrations/remoteWorkspace';
+import {
+	isRegenerableArtifactPath,
+	REGENERABLE_DIRECTORY_NAMES,
+	REGENERABLE_FILE_NAMES,
+} from '../../integrations/workspaceIgnore';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { NotebookProposal, ProposalChange } from '../../schema';
@@ -21,22 +26,17 @@ export interface CapturedProposalChanges {
 	changes: CapturedProposalChange[];
 }
 
-const IGNORED_DIRECTORY_NAMES = new Set([
+// Repository metadata and marimo runtime state are never proposal content.
+const PROPOSAL_IGNORED_DIRECTORY_NAMES = new Set([
+	...REGENERABLE_DIRECTORY_NAMES,
 	'.git',
-	'.ipynb_checkpoints',
-	'.mypy_cache',
-	'.pytest_cache',
-	'.ruff_cache',
-	'.venv',
 	'__marimo__',
-	'__pycache__',
-	'node_modules',
 ]);
 
-const GIT_EXCLUDE_PATHS = [...IGNORED_DIRECTORY_NAMES].map(
-	(name) => `:(exclude,glob)**/${name}/**`,
-);
-GIT_EXCLUDE_PATHS.push(':(exclude,glob)**/.DS_Store');
+const GIT_EXCLUDE_PATHS = [
+	...[...PROPOSAL_IGNORED_DIRECTORY_NAMES].map((name) => `:(exclude,glob)**/${name}/**`),
+	...[...REGENERABLE_FILE_NAMES].map((name) => `:(exclude,glob)**/${name}`),
+];
 
 const READ_REGULAR_FILE_SCRIPT = `
 import base64
@@ -71,10 +71,9 @@ finally:
 `.trim();
 
 function isIgnoredPath(path: string): boolean {
-	const segments = path.split('/');
 	return (
-		segments.some((segment) => IGNORED_DIRECTORY_NAMES.has(segment)) ||
-		segments.at(-1) === '.DS_Store'
+		isRegenerableArtifactPath(path) ||
+		path.split('/').some((segment) => PROPOSAL_IGNORED_DIRECTORY_NAMES.has(segment))
 	);
 }
 

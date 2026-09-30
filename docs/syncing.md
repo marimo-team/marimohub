@@ -145,18 +145,23 @@ Each pull stores a shallow, credential-free Git directory for the exact commit.
 marimohub restores this directory into the session workspace. With a
 `root_path`, `.git` sits above the workspace and the session runs from the
 subtree under a sparse checkout, so `git status` reports only changes inside
-it. Session startup fails if the Git directory cannot be restored completely.
+it. The sparse checkout is best-effort. If it fails, `git status` reports the
+rest of the repository as deleted. Proposals still contain only changes inside
+the subtree, because capture runs with `--relative`. Session startup fails if
+the Git directory cannot be restored completely.
 The GitHub installation token stays on the server.
 
 Git data larger than 25 MB is rejected. Use push mode for a repository that
-exceeds this limit.
+exceeds this limit. The stored `.git` covers the whole repository, not only
+`root_path`. Large monorepos, the main use of `root_path`, can exceed this
+limit.
 
 ### View or edit sync settings
 
-In the notebook menu, open **Sync settings** to view the repository, branch,
-repository folder, entry notebook, and last successful sync. Push sources also
-show the sync URL and token controls. Project editors can change the four source
-coordinates:
+In the project list, open the notebook's actions menu and choose **Sync
+settings**. It shows the repository, branch, repository folder, entry notebook,
+and last successful sync. Push sources also show the sync URL and token
+controls. Project editors can change the four source coordinates:
 
 ```http
 PATCH /api/v1/projects/{pid}/notebooks/{nid}/source
@@ -218,8 +223,9 @@ time and does not change notebook state. Pending source settings always set
 The sync endpoint reads the repository tree at the resolved commit. It applies
 the push-sync file-count and size limits to files under `root_path`. Files
 outside `root_path` do not count against these limits. A pull source's Git
-directory still covers the whole repository at that commit, so the Git data
-limit applies to the full tree.
+directory still covers the whole repository at that commit, so the 25 MB Git
+data limit applies to the full tree. A large monorepo can exceed it even when
+its `root_path` is small.
 
 Server sync omits symlinks and other special entries from the workspace. For a
 pull source, proposal capture also ignores these omitted Git index entries.
@@ -230,9 +236,11 @@ endpoint returns `synced: false` and creates no version. A sync against pending
 source settings makes those settings active. The response includes the resolved
 `commit` and the new `version_id`. For a no-op, `version_id` is `null`.
 
-The web interface shows drift status and **Sync now** in **Sync settings** and
-the repository popover. The action is available to editors when the provider
-supports server sync.
+The web interface shows drift status and **Sync now** in **Sync settings**. On
+the notebook page, it also shows them in the **Git source details** dialog. Open
+that dialog from the branch badge or the notebook menu. In the project list, the
+repository popover shows them too. The action is available to editors when the
+provider supports server sync.
 
 CI uploads and **Sync now** share commit-based idempotency. If one method already
 synced a commit, the other method does not create a duplicate version.

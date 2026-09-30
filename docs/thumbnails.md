@@ -15,7 +15,8 @@ A notebook and its app share one thumbnail.
 1. Capture the notebook or app area you want to show:
    - **Mac:** ⇧⌘4 selects an area. Hold Control to copy it.
    - **Windows:** Win+Shift+S selects and copies an area.
-2. Choose **Edit thumbnail** from the notebook actions or page header.
+2. Choose **Edit thumbnail** from the notebook actions. On the notebook page,
+   click the notebook title to open the notebook menu.
 3. Choose **Upload image**, drop an image, or paste with ⌘V or Ctrl+V.
 4. Adjust the crop in the preview.
 5. Select **Save thumbnail**.

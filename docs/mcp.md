@@ -19,6 +19,10 @@ MARIMOHUB_APP_BASE_URL=https://hub.example.com
 ```
 
 `MARIMOHUB_APP_BASE_URL` must include the public origin and any path prefix.
+`MARIMOHUB_APP_BASE_URL` must use HTTPS, because the OAuth issuer derives from
+it. The server refuses to start with a plain `http://` URL unless the host is
+`localhost` or `127.0.0.1`.
+
 The MCP server URL adds `/mcp` to this value:
 
 ```text
@@ -26,9 +30,6 @@ https://hub.example.com/mcp
 ```
 
 OAuth discovery uses the base URL to publish stable, absolute URLs. The MCP dialog in the user menu shows the MCP URL and client setup instructions.
-
-It must use HTTPS: the OAuth issuer is derived from it, and the server refuses to start
-with a plain `http://` URL unless the host is `localhost` or `127.0.0.1`.
 
 ## Connect a client
 

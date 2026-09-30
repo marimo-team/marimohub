@@ -394,7 +394,11 @@ export {
 	reapFilesystemSnapshots,
 	resolveRestoreSnapshot,
 } from './content/filesystemSnapshots';
-export { SessionService } from './runtime/SessionService';
+export {
+	isPastAuthorizationDeadline,
+	SessionService,
+	sessionWorkspaceDir,
+} from './runtime/SessionService';
 export { SessionRetirer, TakeoverRetirementError } from './runtime/SessionRetirer';
 export type { SessionRetirerDeps } from './runtime/SessionRetirer';
 export * from './runtime/surfaces';

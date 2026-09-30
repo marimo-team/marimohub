@@ -358,7 +358,8 @@ describe('ModalCompute', () => {
 			const started = makeCompute(world, { secretNames: ['first', 'second'] })
 				.create(SANDBOX_ID, { reuse: false })
 				.exec('true');
-			const failure = expect(started).rejects.toBe(error);
+			const expected = failedLookup === 'app' ? error : expect.objectContaining({ cause: error });
+			const failure = expect(started).rejects.toEqual(expected);
 
 			await vi.waitFor(() => {
 				expect(world.client.apps.fromName).toHaveBeenCalledOnce();
@@ -379,7 +380,7 @@ describe('ModalCompute', () => {
 			}
 			await new Promise<void>((resolve) => setImmediate(resolve));
 
-			await expect(started).rejects.toBe(error);
+			await expect(started).rejects.toEqual(expected);
 			expect(create).not.toHaveBeenCalled();
 		},
 	);
@@ -417,14 +418,79 @@ describe('ModalCompute', () => {
 			const error = new NotFoundError('Secret not found');
 			vi.mocked(world.client.secrets.fromName).mockRejectedValue(error);
 
-			await expect(
-				makeCompute(world, { secretNames: ['missing'] })
-					.create(SANDBOX_ID, { reuse })
-					.exec('true'),
-			).rejects.toBe(error);
+			const failure = await makeCompute(world, { secretNames: ['missing'] })
+				.create(SANDBOX_ID, { reuse })
+				.exec('true')
+				.catch((caught: unknown) => caught);
+
+			expect(failure).toBeInstanceOf(Error);
+			expect(failure).not.toBeInstanceOf(NotFoundError);
+			expect(failure).toMatchObject({
+				name: 'ModalSecretLookupError',
+				message:
+					'could not resolve Modal secret "missing" (MARIMOHUB_COMPUTE_MODAL_SECRETS) in the default environment: Secret not found',
+				cause: error,
+			});
 			expect(world.created).toHaveLength(0);
 		},
 	);
+
+	it('names the Modal environment when a secret lookup fails', async () => {
+		const world = makeWorld();
+		vi.spyOn(world.client, 'environmentName').mockReturnValue('notebooks');
+		vi.mocked(world.client.secrets.fromName).mockImplementation(async (name) => {
+			if (name === 'typo') throw new NotFoundError("Secret 'typo' not found");
+			return new Secret(`st-${name}`);
+		});
+
+		await expect(
+			makeCompute(world, { secretNames: ['present', 'typo'] })
+				.create(SANDBOX_ID, { reuse: false })
+				.exec('true'),
+		).rejects.toThrow(
+			'could not resolve Modal secret "typo" (MARIMOHUB_COMPUTE_MODAL_SECRETS) in environment "notebooks"',
+		);
+	});
+
+	describe('healthCheck', () => {
+		it('passes when the app and every secret resolve', async () => {
+			const world = makeWorld();
+			await expect(
+				makeCompute(world, { secretNames: ['first', 'second'] }).healthCheck(),
+			).resolves.toBeUndefined();
+
+			expect(world.appCalls).toEqual([{ name: 'hub-app', options: undefined }]);
+			expect(world.client.secrets.fromName).toHaveBeenCalledTimes(2);
+			expect(world.created).toHaveLength(0);
+		});
+
+		it('passes before the first sandbox has created the app', async () => {
+			const world = makeWorld();
+			vi.spyOn(world.client.apps, 'fromName').mockRejectedValue(new NotFoundError('no app'));
+
+			await expect(makeCompute(world).healthCheck()).resolves.toBeUndefined();
+		});
+
+		it('fails naming the missing secret', async () => {
+			const world = makeWorld();
+			vi.mocked(world.client.secrets.fromName).mockImplementation(async (name) => {
+				if (name === 'typo') throw new NotFoundError('Secret not found');
+				return new Secret(`st-${name}`);
+			});
+
+			await expect(
+				makeCompute(world, { secretNames: ['present', 'typo'] }).healthCheck(),
+			).rejects.toThrow('could not resolve Modal secret "typo" (MARIMOHUB_COMPUTE_MODAL_SECRETS)');
+		});
+
+		it('propagates app lookup failures other than not-found', async () => {
+			const world = makeWorld();
+			const error = new Error('Permission denied');
+			vi.spyOn(world.client.apps, 'fromName').mockRejectedValue(error);
+
+			await expect(makeCompute(world).healthCheck()).rejects.toBe(error);
+		});
+	});
 
 	it('derives a per-sandbox idle fallback from the session deadline', async () => {
 		const world = makeWorld();

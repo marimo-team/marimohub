@@ -16,6 +16,7 @@ import {
 	GITHUB_REPO_INPUT_HINT,
 	isGitHubRepoInput,
 	isRepoInput,
+	normalizeRootPathInput,
 	REPO_INPUT_HINT,
 	rootPathText,
 } from '@/lib/git';
@@ -96,7 +97,7 @@ export function SyncedNotebookDialog({
 					description: value.title.trim(),
 					repo: value.repo.trim(),
 					branch: value.branch.trim(),
-					root_path: value.rootPath.trim() || undefined,
+					root_path: normalizeRootPathInput(value.rootPath) || undefined,
 					entry_notebook: value.entryNotebook.trim(),
 					sync_mode: value.syncMode,
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),

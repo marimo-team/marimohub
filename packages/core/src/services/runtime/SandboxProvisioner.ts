@@ -46,6 +46,8 @@ import type { SandboxWorkspaceLayout } from './workspaceLayout';
  */
 export const DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS = Millis.minutes(2);
 export const SLOW_SANDBOX_SETUP_MS = Millis.seconds(2);
+// Best-effort cosmetics; a hung checkout must not stall the `files` phase.
+const GIT_SPARSE_CHECKOUT_TIMEOUT_MS = Millis.seconds(10);
 const SETUP_OUTPUT_TAIL_BYTES = 4 * 1024;
 const SETUP_MARKER = '__MARIMOHUB_SETUP__';
 const SETUP_STEP_MARKER = /^__MARIMOHUB_SETUP__ step ([a-z0-9_]{1,64}) (\d{1,20})$/;
@@ -1006,6 +1008,7 @@ export class SandboxProvisioner {
 	): Promise<void> {
 		const result = await sandbox.exec(
 			`if command -v git >/dev/null 2>&1; then cd ${shellQuote(layout.gitRoot)} && git -c ${shellQuote(`safe.directory=${layout.gitRoot}`)} sparse-checkout set --cone -- ${shellQuote(layout.rootPath)}; fi`,
+			{ timeout: GIT_SPARSE_CHECKOUT_TIMEOUT_MS },
 		);
 		if (result.success) return;
 		logOperationalError(

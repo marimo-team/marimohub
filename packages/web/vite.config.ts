@@ -30,7 +30,17 @@ export default defineConfig({
 			apply: (_, { command, mode }) => command === 'serve' && mode !== 'test',
 			async configureServer(server) {
 				server.config.logger.info(`Waiting for the development API at ${apiTarget}...`);
-				await waitForDevApi(apiTarget);
+				const closing = new AbortController();
+				server.httpServer?.once('close', () => closing.abort());
+				try {
+					await waitForDevApi(apiTarget, 60_000, closing.signal);
+				} catch (err) {
+					// A slow cold boot (first seed, dependency install) should not kill the
+					// frontend: proxied /api requests fail until the server is up.
+					server.config.logger.warn(
+						`${err instanceof Error ? err.message : String(err)} Starting the frontend anyway.`,
+					);
+				}
 			},
 		},
 	]),

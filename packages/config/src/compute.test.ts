@@ -185,6 +185,28 @@ describe('makeCompute backend selection', () => {
 		).toEqual(['shared-credentials', 'huggingface']);
 	});
 
+	it('collapses duplicate Modal secret names', () => {
+		expect(
+			configOf(
+				makeCompute({
+					...modalEnv,
+					MARIMOHUB_COMPUTE_MODAL_SECRETS: 'huggingface, shared, huggingface,shared',
+				}),
+			).secretNames,
+		).toEqual(['huggingface', 'shared']);
+	});
+
+	it.each(['my secret', 'a/b', 'x'.repeat(65), 'ap-0123456789abcdefghijkl'])(
+		'rejects an invalid Modal secret name: %j',
+		(name) => {
+			const error = getConfigError(() =>
+				makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_MODAL_SECRETS: `ok, ${name}` }),
+			);
+			expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_MODAL_SECRETS');
+			expect(error.message).toContain(JSON.stringify(name));
+		},
+	);
+
 	it.each([undefined, '', ' ,  , '])('adds no Modal secrets for an empty list: %j', (value) => {
 		expect(
 			configOf(makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_MODAL_SECRETS: value })).secretNames,

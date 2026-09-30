@@ -46,7 +46,7 @@ See [App pools](./app-pools.md) for capacity settings, sticky routing, and coord
   inside each app sandbox, so memory scales with its concurrent users.
   Set the account limit per sandbox to distribute users across additional sandboxes.
 
-Start an app from the notebook's actions menu ("Run as app"), or via the API:
+Start an app from **Open → Run as app** in the notebook header, or via the API:
 `POST /api/v1/projects/{pid}/notebooks/{nid}/sessions` with body
 `{"mode": "app"}`. The router reuses the account's assignment or reserves
 capacity on the latest committed version.
@@ -59,7 +59,7 @@ Copied URLs preserve allowed query parameters and remove [reserved parameters](#
 Copying a URL does not change notebook permissions.
 Recipients must sign in and have access to the requested view.
 
-To share saved outputs without starting a sandbox, select **Share notebook → View static outputs**.
+To share saved outputs without starting a sandbox, select **Open → View static outputs**.
 On the snapshot page, select **Share snapshot → Copy URL**.
 A snapshot URL with `?version=<version-id>` keeps that version selected.
 Without a version parameter, the URL opens the latest captured outputs.

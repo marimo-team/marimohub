@@ -1,4 +1,4 @@
-import { SESSION_STATUS } from './sessionStatus';
+import { isKnownSessionStatus, sessionStatusPresentation } from './sessionStatus';
 import { SessionDetails } from './SessionDetails';
 import type { Session } from '@/types';
 import { StatusDot } from './StatusDot';
@@ -26,8 +26,8 @@ export function SessionStatusDot({
 	// Before the first poll we can't tell stopped from running; hold a placeholder.
 	if (loading && !session) return <Skeleton className="size-2 rounded-full" />;
 	if (!session || session.status === 'terminated' || session.status === 'expired') return null;
-	const dot = SESSION_STATUS[session.status];
-	if (!dot) return null;
+	if (!isKnownSessionStatus(session.status)) return null;
+	const dot = sessionStatusPresentation(session.status);
 
 	return (
 		<Popover

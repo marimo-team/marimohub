@@ -1,6 +1,7 @@
 import { execResult, readFileFailure } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -120,6 +121,46 @@ describe('SessionRetirer', () => {
 				automaticThumbnails: enabled,
 			}).retire(session);
 			expect(order).toEqual(enabled ? ['save', 'thumbnail', 'destroy'] : ['save', 'destroy']);
+		},
+	);
+
+	it.each([
+		{ source: 'subtree', expected: '/srv/work/python' },
+		{ source: 'missing', expected: '/srv/work' },
+	] as const)(
+		'captures thumbnails from the $source workspace dir',
+		async ({ source, expected }) => {
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
+			const getSource = vi.spyOn(notebooks, 'getNotebookSource');
+			if (source === 'subtree') {
+				getSource.mockResolvedValue({
+					schema_version: 1,
+					type: 'git',
+					provider: 'github',
+					repo: 'org/repo',
+					branch: 'main',
+					root_path: 'python',
+					sync_mode: 'pull',
+					current_version_id: null,
+					commit: null,
+					last_synced_at: null,
+				} as never);
+			} else {
+				getSource.mockRejectedValue(new NotFoundError('gone'));
+			}
+			const session = await persistentSession();
+			await sessions.beginTerminating(projectId, session.session_id);
+			await new SessionRetirer({
+				sessions,
+				notebooks,
+				compute: fakeComputeFrom(instance),
+				bucket,
+				persistWorkspace: 'source',
+				workdir: '/srv/work',
+			}).retire(session);
+			expect(capture.mock.calls[0]?.[5]).toBe(expected);
 		},
 	);
 

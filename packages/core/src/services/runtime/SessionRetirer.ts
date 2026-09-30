@@ -10,10 +10,12 @@ import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { sessionPersistsEdits } from './sessionState';
+import { sessionWorkspaceDir } from './SessionService';
 import type { SessionService, TakeoverDrainStage } from './SessionService';
 import { stopSurfaceProcessCommand, surfaceCancelFile, surfacePidFile } from './surfaces/state';
 import type { SurfaceId } from './surfaces/types';
 
+const DEFAULT_WORKDIR = '/workspace';
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
 class SecondarySurfaceStopError extends Error {
@@ -373,7 +375,7 @@ export class SessionRetirer {
 				session.project_id,
 				session.notebook_id,
 				session.sandbox_id,
-				this.deps.workdir,
+				await this.workspaceDir(session),
 				Math.min(thumbnailDeadlineAt ?? Infinity, this.deps.thumbnailDeadline?.() ?? Infinity),
 			);
 		}
@@ -389,6 +391,24 @@ export class SessionRetirer {
 				owner_user_id: session.user_id,
 			},
 		);
+	}
+
+	/**
+	 * Session records do not store the subtree, so it is read from the live
+	 * source. The thumbnail is best-effort: any failure falls back to the workdir
+	 * rather than blocking the sandbox destroy that follows.
+	 */
+	private async workspaceDir(session: Session): Promise<string | undefined> {
+		const workdir = this.deps.workdir;
+		try {
+			const source = await this.deps.notebooks.getNotebookSource(
+				session.project_id,
+				session.notebook_id,
+			);
+			return sessionWorkspaceDir(source, workdir ?? DEFAULT_WORKDIR);
+		} catch {
+			return workdir;
+		}
 	}
 
 	private async stopSecondarySurfaces(

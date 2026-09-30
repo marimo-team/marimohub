@@ -10,6 +10,7 @@ import {
 	isGitHubRepoInput,
 	isRepoInput,
 	isValidRootPath,
+	normalizeRootPathInput,
 	providerLabel,
 	shortCommit,
 	versionCommit,
@@ -259,15 +260,39 @@ describe('versionCommit', () => {
 	});
 });
 
-describe('isValidRootPath', () => {
-	it.each(['', 'apps', 'python/apps', ' apps ', 'a-b.c_d'])('accepts %j', (input) => {
-		expect(isValidRootPath(input)).toBe(true);
+describe('normalizeRootPathInput', () => {
+	it.each([
+		['apps/', 'apps'],
+		['  python/apps//  ', 'python/apps'],
+		['', ''],
+		['/', ''],
+	])('normalises %j to %j', (input, expected) => {
+		expect(normalizeRootPathInput(input)).toBe(expected);
 	});
+});
 
-	it.each(['/apps', 'apps/', '..', '../x', 'a/../b', '.', 'a//b', 'a\\b'])(
-		'rejects %j',
+describe('isValidRootPath', () => {
+	it.each(['', 'apps', 'apps/', 'python/apps', ' apps ', 'a-b.c_d', 'x/.github'])(
+		'accepts %j',
 		(input) => {
-			expect(isValidRootPath(input)).toBe(false);
+			expect(isValidRootPath(input)).toBe(true);
 		},
 	);
+
+	it.each([
+		'/apps',
+		'..',
+		'../x',
+		'a/../b',
+		'.',
+		'a//b',
+		'a\\b',
+		'a\u0001b',
+		'apps\u007f',
+		'.git',
+		'x/.GIT',
+		'.Git/apps',
+	])('rejects %j', (input) => {
+		expect(isValidRootPath(input)).toBe(false);
+	});
 });

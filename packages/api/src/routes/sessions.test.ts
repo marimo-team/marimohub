@@ -300,6 +300,39 @@ describe('Session routes', () => {
 			expect(sb.calls.startProcess[0].options?.cwd).toBe('/workspace/python');
 		});
 
+		it('starts secondary surfaces in a subtree pull source', async () => {
+			const synced = await createSyncedNotebook('import marimo', 'pull', 'python');
+			const sb = makeFakeSandbox();
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(sb.instance, { capabilities: { multiPort: true } }),
+				deps: {
+					sandbox: sandboxConfig({
+						surfaces: {
+							vscode: {
+								flavor: 'code-server',
+								start: 'eager',
+								port: 8443,
+								settings: {},
+								extensionGallery: 'openvsx',
+								embed: 'tab',
+							},
+						},
+					}),
+				},
+			}).request;
+
+			await expectOk<ApiSession>(
+				await request('POST', `/projects/${pid}/notebooks/${synced}/sessions`),
+			);
+
+			await vi.waitFor(() => {
+				const surface = sb.calls.startProcess.find(({ cmd }) => cmd.includes('code-server'));
+				expect(surface?.options?.cwd).toBe('/workspace/python');
+			});
+		});
+
 		it('installs inline dependencies for a local edit session', async () => {
 			const services = createServices(bucket);
 			const local = await services.notebooks.createNotebook(
@@ -2159,7 +2192,7 @@ describe('Session routes', () => {
 			notebook_id: nid,
 			user_id: ACTOR,
 			status: 'running',
-			sandbox_url: undefined,
+			sandbox_url: 'http://winner.test',
 		});
 		await bucket.put(paths.session(pid, winner.session_id), JSON.stringify(winner));
 		await bucket.put(
@@ -2171,7 +2204,7 @@ describe('Session routes', () => {
 			}),
 		);
 		const deadline = new Date(Date.now() + Millis.minutes(15)).toISOString();
-		const groupEditor = createTestApi({
+		const groupApi = createTestApi({
 			bucket,
 			userId: STRANGER,
 			compute: makeFakeCompute(),
@@ -2186,7 +2219,12 @@ describe('Session routes', () => {
 					}),
 				},
 			},
-		}).request;
+		});
+		// Miss the winner at lookup so the start loses the claim race to it.
+		vi.spyOn(groupApi.deps.services.sessions, 'findReusableEditor').mockResolvedValueOnce({
+			sharing: 'shared',
+		});
+		const groupEditor = groupApi.request;
 
 		const attached = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
 
@@ -2242,6 +2280,83 @@ describe('Session routes', () => {
 			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBe(first.session_id);
 		},
 	);
+
+	const seedEditorHolder = async (overrides: Partial<Session>) => {
+		const holder = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			sandbox_id: createSandboxId(),
+			sandbox_url: 'http://holder.test',
+			started_at: new Date().toISOString(),
+			last_heartbeat: new Date().toISOString(),
+			...overrides,
+		});
+		await bucket.put(paths.session(pid, holder.session_id), JSON.stringify(holder));
+		await bucket.put(
+			paths.editorClaim(pid, nid),
+			JSON.stringify({
+				session_id: holder.session_id,
+				sharing: overrides.editor_sandbox_sharing ?? 'shared',
+				claimed_at: holder.started_at,
+			}),
+		);
+		return holder;
+	};
+
+	it('does not reuse a wedged starting holder after losing the editor claim', async () => {
+		const startedAt = new Date(Date.now() - Millis.minutes(6)).toISOString();
+		const holder = await seedEditorHolder({
+			user_id: ACTOR,
+			status: 'starting',
+			sandbox_url: undefined,
+			started_at: startedAt,
+			last_heartbeat: startedAt,
+		});
+		const api = createTestApi({ bucket, userId: ACTOR, compute: makeFakeCompute() });
+		vi.spyOn(api.deps.services.sessions, 'claimEditor').mockResolvedValueOnce({
+			claimed: false,
+			claim: { session_id: holder.session_id, sharing: 'shared', claimed_at: startedAt },
+		});
+
+		const res = await api.request('POST', sessionsPath());
+
+		await expectError(res, 409, 'CONFLICT');
+	});
+
+	describe('exclusive claim-lost path', () => {
+		const exclusive = () => {
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: makeFakeCompute(),
+				deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
+			});
+			vi.spyOn(api.deps.services.sessions, 'findReusableEditor').mockResolvedValueOnce({
+				sharing: 'exclusive',
+			});
+			return api.request;
+		};
+
+		it("answers a retryable conflict while another user's holder shuts down", async () => {
+			await seedEditorHolder({
+				user_id: STRANGER,
+				status: 'terminated',
+				editor_sandbox_sharing: 'exclusive',
+			});
+
+			await expectError(await exclusive()('POST', sessionsPath()), 409, 'CONFLICT');
+		});
+
+		it("reports ownership when another user's holder is live", async () => {
+			await seedEditorHolder({
+				user_id: STRANGER,
+				status: 'running',
+				editor_sandbox_sharing: 'exclusive',
+			});
+
+			await expectError(await exclusive()('POST', sessionsPath()), 409, 'EDIT_SESSION_OWNED');
+		});
+	});
 
 	it('rejects editor reuse when authorization expires during the kernel probe', async () => {
 		const services = createServices(bucket);

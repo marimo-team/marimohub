@@ -25,9 +25,10 @@ MARIMOHUB_SURFACES=marimo,vscode,opencode
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest-tools
 ```
 
-The toolbar has a **Surfaces** menu, even when only one surface is enabled. The
-menu has a start action for each surface. It has a stop action when that surface
-is running.
+The notebook header has an **Open** menu. While the editor session runs, the
+menu has a start action for each enabled surface. It has a stop action when that
+surface is running. The same menu also has **Run as app** and **View static
+outputs**.
 
 By default, a surface opens in the notebook's application tabs. Set its `EMBED`
 variable to `iframe` to open it beside marimo in a split view. The most recently

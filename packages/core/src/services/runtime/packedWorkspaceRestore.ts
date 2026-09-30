@@ -1,11 +1,11 @@
-import { MAX_WORKSPACE_FILE_BYTES } from '../../constants';
+import { MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES } from '../../constants';
+import { isSafeWorkspaceRootPath } from '../../integrations/remoteWorkspace';
 import { MAX_DECOMPRESSED_ARCHIVE_BYTES } from '../../integrations/workspaceArchive';
 import type { Bucket } from '../../ports/bucket';
 import { MAX_GIT_DIRECTORY_BYTES, MAX_GIT_DIRECTORY_FILES } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { shellQuote } from './shell';
 
-const MAX_WORKSPACE_FILES = 1000;
 // Valid workspace and Git trees top out at 200 MiB; the remainder covers ZIP metadata.
 const MAX_PACKED_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
@@ -49,12 +49,13 @@ try:
         or os.path.islink(destination)
     ):
         fail('unsafe extraction destination')
+    # Mirrors isSafeWorkspaceRootPath: no .git segment at any depth, any case.
     subdirectory_parts = workspace_subdirectory.split('/') if workspace_subdirectory else []
     if (
-        any(not part or part in ('.', '..') for part in subdirectory_parts)
+        any(not part or part in ('.', '..') or part.lower() == '.git' for part in subdirectory_parts)
         or '\\' in workspace_subdirectory
-        or '\x00' in workspace_subdirectory
-        or (subdirectory_parts and subdirectory_parts[0] in (temporary_name, '.git'))
+        or any(ord(character) < 32 or ord(character) == 127 for character in workspace_subdirectory)
+        or (subdirectory_parts and subdirectory_parts[0] == temporary_name)
     ):
         fail('unsafe workspace subdirectory')
     shutil.rmtree(staging, ignore_errors=True)
@@ -176,6 +177,9 @@ export async function restorePackedWorkspace(
 	let cleanup: (() => Promise<unknown>) | undefined;
 	try {
 		const normalizedWorkingDir = normalizeWorkingDir(workingDir);
+		if (!isSafeWorkspaceRootPath(workspaceSubdirectory)) {
+			throw new Error('Packed workspace restore requires a safe workspace subdirectory');
+		}
 		const temporaryRoot = `${normalizedWorkingDir}/.marimohub-packed-restore`;
 		const archivePath = `${temporaryRoot}/workspace.zip`;
 		const scriptPath = `${temporaryRoot}/extract.py`;

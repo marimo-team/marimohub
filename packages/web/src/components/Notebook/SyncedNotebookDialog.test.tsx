@@ -217,7 +217,7 @@ describe('SyncedNotebookDialog', () => {
 		expect(pullDescription).not.toHaveClass('truncate');
 		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
 		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
-		await user.type(screen.getByLabelText('Folder in repo (optional)'), 'python');
+		await user.type(screen.getByLabelText('Folder in repo (optional)'), 'python/');
 		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
 		await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -281,7 +281,7 @@ describe('SyncedNotebookDialog', () => {
 		await user.type(screen.getByLabelText('Folder in repo (optional)'), '../apps');
 		await user.tab();
 
-		expect(screen.getByText(/without leading or trailing slashes/i)).toBeInTheDocument();
+		expect(screen.getByText(/without a leading slash/i)).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});

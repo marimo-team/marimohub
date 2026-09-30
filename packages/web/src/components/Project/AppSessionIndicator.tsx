@@ -3,6 +3,7 @@ import type { Session } from '@/types';
 import { useNotebookQuery } from '@/api/hooks';
 import { Button, Popover } from '@/components/ui';
 import { SessionDetails } from '@/components/ui/SessionDetails';
+import { sessionStatusPresentation } from '@/components/ui/sessionStatus';
 import { cn } from '@/lib/utils';
 import { isSessionStale } from '@/lib/sessions';
 import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
@@ -11,12 +12,11 @@ import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 const EMPTY_PROFILES: ComputeProfile[] = [];
 
 // Use a distinct glyph so a shared app is not confused with the editor sandbox.
-const APP_STATUS: Partial<
-	Record<Session['status'], { className: string; label: string; pulse?: boolean }>
-> = {
-	running: { className: 'text-green-600 dark:text-green-500', label: 'App running' },
-	starting: { className: 'text-amber-500', label: 'App starting', pulse: true },
-	terminating: { className: 'text-orange-500', label: 'App stopping', pulse: true },
+// Text colours differ from the editor dot's backgrounds; stopped apps are hidden.
+const APP_STATUS_COLOR: Partial<Record<Session['status'], string>> = {
+	running: 'text-green-600 dark:text-green-500',
+	starting: 'text-amber-500',
+	terminating: 'text-orange-500',
 };
 
 function AppSessionDetails({
@@ -151,8 +151,10 @@ export function AppSessionIndicator({
 	allowComputeOverride?: boolean;
 	selectedProfileName?: string;
 }) {
-	const status = APP_STATUS[session.status];
-	if (!status) return null;
+	const color = APP_STATUS_COLOR[session.status];
+	if (!color) return null;
+	const { label: sessionLabel, pulse } = sessionStatusPresentation(session.status);
+	const status = { className: color, label: `App ${sessionLabel.toLowerCase()}`, pulse };
 
 	return (
 		<Popover

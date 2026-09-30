@@ -199,14 +199,14 @@ describe('SyncSettingsDialog', () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
-	it('PATCHes a subtree for a pull source', async () => {
+	it('PATCHes a normalised subtree for a pull source', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({ syncMode: 'pull', syncProviders: ['github'] });
 
 		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
 		const folder = screen.getByLabelText('Folder in repo (optional)');
 		await user.clear(folder);
-		await user.type(folder, 'python/apps');
+		await user.type(folder, 'python/apps/');
 		await user.click(screen.getByRole('button', { name: 'Save' }));
 
 		await waitFor(() =>
@@ -229,7 +229,7 @@ describe('SyncSettingsDialog', () => {
 		await user.type(folder, '/apps/');
 		await user.tab();
 
-		expect(screen.getByText(/without leading or trailing slashes/i)).toBeInTheDocument();
+		expect(screen.getByText(/without a leading slash/i)).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 		expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
 	});

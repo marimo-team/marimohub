@@ -18,7 +18,14 @@ import {
 import type { OpenChangeRequestResult, SourceControlPublisher } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
-import { ACTOR, makeFsSandbox, makeSession, setupTestEnv, uid } from '../../testing';
+import {
+	ACTOR,
+	makeFsSandbox,
+	makeGitWorkingTreeSandbox,
+	makeSession,
+	setupTestEnv,
+	uid,
+} from '../../testing';
 import { shellQuote } from '../runtime/shell';
 import {
 	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
@@ -28,7 +35,6 @@ import {
 import { MAX_VERSIONS } from './NotebookService';
 
 const encode = (value: string) => new TextEncoder().encode(value);
-const GIT_COMMIT = 'a'.repeat(40);
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -47,69 +53,6 @@ function runShellCommand(command: string) {
 	});
 	if (result.error) throw result.error;
 	return execResult(result.status === 0, result.stdout ?? '', result.stderr);
-}
-
-interface GitSandboxOptions {
-	/** Sandbox directory the workspace files live in. Defaults to `/workspace`. */
-	root?: string;
-	files: Record<string, string | Uint8Array>;
-	diff?: readonly (readonly [status: string, path: string])[];
-	untracked?: readonly string[];
-	diffOutput?: string;
-	untrackedOutput?: string;
-	gitAvailable?: boolean;
-	baseCommitAvailable?: boolean;
-	baseCommitOutput?: string;
-	baseCommitStderr?: string;
-	diffFails?: boolean;
-	sizes?: Record<string, number>;
-	secureReadFailures?: readonly string[];
-}
-
-function makeGitSandbox(options: GitSandboxOptions) {
-	const root = options.root ?? '/workspace';
-	const sandbox = makeFsSandbox({ root, files: options.files, sizes: options.sizes });
-	const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
-		if (command.includes('test -e .git')) {
-			return options.gitAvailable === false
-				? execResult(false, '', 'not a repository')
-				: execResult(true, 'git-working-tree', '');
-		}
-		if (command.includes('rev-parse --verify')) {
-			return options.baseCommitAvailable === false
-				? execResult(false, '', options.baseCommitStderr ?? 'unknown revision')
-				: execResult(true, options.baseCommitOutput ?? `${GIT_COMMIT}\n`, '');
-		}
-		if (command.includes('diff --name-status')) {
-			const output =
-				options.diffOutput ??
-				(options.diff ?? [])
-					.flatMap(([status, path]) => [status, path])
-					.map((field) => `${field}\0`)
-					.join('');
-			return options.diffFails
-				? execResult(false, '', 'diff failed')
-				: execResult(true, output, '');
-		}
-		if (command.includes('ls-files --others')) {
-			return execResult(
-				true,
-				options.untrackedOutput ?? (options.untracked ?? []).map((path) => `${path}\0`).join(''),
-				'',
-			);
-		}
-		if (command.includes('os.O_NOFOLLOW')) {
-			const path = Object.keys(options.files).find((candidate) =>
-				command.endsWith(` ${shellQuote(root)} ${shellQuote(candidate)} ${MAX_REQUEST_BYTES}`),
-			);
-			if (!path || options.secureReadFailures?.includes(path)) {
-				return execResult(false, '', 'unsafe or missing file');
-			}
-			return sandbox.instance.exec(`base64 < ${shellQuote(`${root}/${path}`)}`);
-		}
-		return sandbox.instance.exec(command);
-	});
-	return { ...sandbox, instance: { ...sandbox.instance, exec }, exec };
 }
 
 describe('NotebookProposalService', () => {
@@ -271,7 +214,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('captures a subtree checkout relative to the workdir with the Git root trusted', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			root: '/workspace/python',
 			files: { 'dashboard.py': 'print("after")' },
 			diff: [['M', 'dashboard.py']],
@@ -299,7 +242,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('falls back to the entry notebook when the subtree has no Git root', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			root: '/workspace/python',
 			files: { 'dashboard.py': 'print("after")' },
 			gitAvailable: false,
@@ -318,7 +261,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('refuses a subtree checkout whose pinned commit is missing', async () => {
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			root: '/workspace/python',
 			files: { 'dashboard.py': 'print("after")' },
 			baseCommitAvailable: false,
@@ -332,7 +275,7 @@ describe('NotebookProposalService', () => {
 	it('captures tracked and untracked Git working-tree changes together', async () => {
 		const base = paths.project(projectId).notebook(notebookId).version(versionId);
 		await env.bucket.put(base.workspaceFile('old.txt'), 'old');
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			files: {
 				'dashboard.py': 'print("after")',
 				'new.txt': 'new file',
@@ -394,7 +337,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('ignores deleted Git entries that were excluded from the synced workspace', async () => {
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("after")' },
 			diff: [
 				['M', 'dashboard.py'],
@@ -410,7 +353,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('treats a workspace with only excluded Git deletions as unchanged', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("before")' },
 			diff: [
 				['D', 'link-to-data'],
@@ -428,9 +371,11 @@ describe('NotebookProposalService', () => {
 			'.venv/lib/python.py',
 			'pkg/__pycache__/module.pyc',
 			'node_modules/pkg/index.js',
+			'.pytest_cache/v/cache/lastfailed',
+			'.git/config',
 			'.DS_Store',
 		];
-		const { instance, calls, exec } = makeGitSandbox({
+		const { instance, calls, exec } = makeGitWorkingTreeSandbox({
 			files: Object.fromEntries([...ignored.map((path) => [path, 'runtime']), ['new.txt', 'keep']]),
 			untracked: [...ignored, 'new.txt'],
 		});
@@ -442,8 +387,20 @@ describe('NotebookProposalService', () => {
 		]);
 		expect(calls.readFile).toHaveLength(0);
 		const commands = exec.mock.calls.map(([command]) => command).join('\n');
-		expect(commands).toContain(':(exclude,glob)**/__marimo__/**');
-		expect(commands).toContain(':(exclude,glob)**/.venv/**');
+		for (const pathspec of [
+			'.git',
+			'.ipynb_checkpoints',
+			'.mypy_cache',
+			'.pytest_cache',
+			'.ruff_cache',
+			'.venv',
+			'__marimo__',
+			'__pycache__',
+			'node_modules',
+		].map((name) => `:(exclude,glob)**/${name}/**`)) {
+			expect(commands).toContain(shellQuote(pathspec));
+		}
+		expect(commands).toContain(shellQuote(':(exclude,glob)**/.DS_Store'));
 		const reads = exec.mock.calls
 			.map(([command]) => command)
 			.filter((command) => command.includes('os.O_NOFOLLOW'));
@@ -455,7 +412,7 @@ describe('NotebookProposalService', () => {
 
 	it('captures binary Git files byte for byte', async () => {
 		const bytes = Uint8Array.from([0, 255, 128, 10, 13, 1]);
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			files: { 'asset.bin': bytes },
 			untracked: ['asset.bin'],
 		});
@@ -471,7 +428,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('falls back to entry-notebook capture when Git cannot resolve the pinned commit', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("after")' },
 			gitAvailable: false,
 		});
@@ -484,7 +441,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('does not silently fall back after selecting Git capture', async () => {
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("after")' },
 			diffFails: true,
 		});
@@ -495,7 +452,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('does not silently fall back when the pinned commit is absent from a Git working tree', async () => {
-		const { instance, calls } = makeGitSandbox({
+		const { instance, calls } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("after")' },
 			baseCommitAvailable: false,
 		});
@@ -507,7 +464,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('includes git stderr when the working tree is untrusted', async () => {
-		const { instance, calls, exec } = makeGitSandbox({
+		const { instance, calls, exec } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("after")' },
 			baseCommitAvailable: false,
 			baseCommitStderr: "fatal: detected dubious ownership in repository at '/workspace'",
@@ -519,7 +476,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('rejects an invalid commit returned by Git', async () => {
-		const { instance, calls } = makeGitSandbox({
+		const { instance, calls } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("after")' },
 			baseCommitOutput: 'not-a-commit\n',
 		});
@@ -531,7 +488,7 @@ describe('NotebookProposalService', () => {
 	it('supports a delete-only Git proposal and an empty payload marker', async () => {
 		const base = paths.project(projectId).notebook(notebookId).version(versionId);
 		await env.bucket.put(base.workspaceFile('old.txt'), 'old');
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("before")' },
 			diff: [['D', 'old.txt']],
 		});
@@ -546,7 +503,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('ignores a mode-only tracked change whose bytes match the synced version', async () => {
-		const { instance, calls, exec } = makeGitSandbox({
+		const { instance, calls, exec } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("before")' },
 			diff: [['M', 'dashboard.py']],
 		});
@@ -563,7 +520,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('treats a tracked deletion recreated as untracked content as a modification', async () => {
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("recreated")' },
 			diff: [['D', 'dashboard.py']],
 			untracked: ['dashboard.py'],
@@ -589,7 +546,7 @@ describe('NotebookProposalService', () => {
 			'malformed untracked-file output',
 		],
 	] as const)('rejects %s from Git', async (_label, options, message) => {
-		const { instance } = makeGitSandbox({
+		const { instance } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'changed', 'new.txt': 'new' },
 			...options,
 		});
@@ -597,7 +554,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('rejects a tracked modification outside the immutable synced source version', async () => {
-		const { instance, calls } = makeGitSandbox({
+		const { instance, calls } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("before")', 'unknown.txt': 'changed' },
 			diff: [['M', 'unknown.txt']],
 		});
@@ -607,7 +564,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('rejects changed symlinks without reading through them', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			files: { 'dashboard.py': 'print("before")', 'link.txt': 'target bytes' },
 			untracked: ['link.txt'],
 			secureReadFailures: ['link.txt'],
@@ -618,7 +575,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('rejects changed files beneath symlinked directories without reading through them', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			files: { 'linked/new.txt': 'outside bytes' },
 			untracked: ['linked/new.txt'],
 			secureReadFailures: ['linked/new.txt'],
@@ -629,7 +586,7 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('captures changed files through no-follow directory descriptors', async () => {
-		const { instance, exec } = makeGitSandbox({
+		const { instance, exec } = makeGitWorkingTreeSandbox({
 			files: { 'nested/new.txt': 'new bytes' },
 			untracked: ['nested/new.txt'],
 		});
@@ -651,7 +608,7 @@ describe('NotebookProposalService', () => {
 			{ length: 100 },
 			(_, index) => `generated/shared/deep/file-${index}.txt`,
 		);
-		const sandbox = makeGitSandbox({
+		const sandbox = makeGitWorkingTreeSandbox({
 			files: Object.fromEntries(changedPaths.map((path) => [path, path])),
 			untracked: changedPaths,
 		});
@@ -678,7 +635,7 @@ describe('NotebookProposalService', () => {
 			writeFileSync(join(workdir, 'nested', 'first.txt'), 'inside first');
 			writeFileSync(join(workdir, 'nested', 'second.txt'), 'inside second');
 			writeFileSync(join(outside, 'second.txt'), 'outside secret');
-			const sandbox = makeGitSandbox({
+			const sandbox = makeGitWorkingTreeSandbox({
 				files: {
 					'nested/first.txt': 'inside first',
 					'nested/second.txt': 'inside second',
@@ -716,7 +673,7 @@ describe('NotebookProposalService', () => {
 			const fifo = join(workdir, 'pipe');
 			const created = spawnSync('mkfifo', [fifo]);
 			if (created.status !== 0) throw new Error('mkfifo failed');
-			const sandbox = makeGitSandbox({ files: { pipe: '' }, untracked: ['pipe'] });
+			const sandbox = makeGitWorkingTreeSandbox({ files: { pipe: '' }, untracked: ['pipe'] });
 			const exec = vi.fn<SandboxInstance['exec']>(async (command) =>
 				command.includes('os.O_NOFOLLOW')
 					? runShellCommand(command)
@@ -734,7 +691,7 @@ describe('NotebookProposalService', () => {
 
 	it('bounds the number of Git changes before reading their content', async () => {
 		const untracked = Array.from({ length: 1_001 }, (_, index) => `generated/${index}.txt`);
-		const { instance, calls } = makeGitSandbox({ files: {}, untracked });
+		const { instance, calls } = makeGitWorkingTreeSandbox({ files: {}, untracked });
 
 		await expect(capture(instance)).rejects.toThrow('1000-change limit');
 		expect(calls.readFile).toHaveLength(0);
@@ -744,7 +701,7 @@ describe('NotebookProposalService', () => {
 		'bounds the combined content size across Git changes',
 		async () => {
 			const halfPlusOne = Math.floor(MAX_REQUEST_BYTES / 2) + 1;
-			const { instance } = makeGitSandbox({
+			const { instance } = makeGitWorkingTreeSandbox({
 				files: {
 					'one.bin': new Uint8Array(halfPlusOne),
 					'two.bin': new Uint8Array(halfPlusOne),
@@ -762,7 +719,7 @@ describe('NotebookProposalService', () => {
 	it(
 		'enforces the byte limit after reading Git content',
 		async () => {
-			const { instance } = makeGitSandbox({
+			const { instance } = makeGitWorkingTreeSandbox({
 				files: { 'oversized.bin': new Uint8Array(MAX_REQUEST_BYTES + 1) },
 				untracked: ['oversized.bin'],
 				sizes: { 'oversized.bin': 1 },
@@ -1958,7 +1915,7 @@ describe('NotebookProposalService', () => {
 			return env.bucket.put(key, value, options);
 		}, deleteObject);
 		const service = new NotebookProposalService(bucket);
-		const sandbox = makeGitSandbox({
+		const sandbox = makeGitWorkingTreeSandbox({
 			files: { 'first.txt': 'first', 'second.txt': 'second' },
 			untracked: ['first.txt', 'second.txt'],
 		}).instance;
@@ -2388,7 +2345,7 @@ describe('NotebookProposalService', () => {
 	it('prunes every retained payload in a multi-file proposal', async () => {
 		const proposalId = createProposalId();
 		const proposal = await capture(
-			makeGitSandbox({
+			makeGitWorkingTreeSandbox({
 				files: { 'first.txt': 'first', 'second.txt': 'second' },
 				untracked: ['first.txt', 'second.txt'],
 			}).instance,

@@ -309,7 +309,11 @@ confirm-destroy. The destroy is re-confirmed (idempotent) before stamping the
 one-shot `sandbox_reclaimed_at` marker, so a failed destroy is retried next
 sweep. `expired` records younger than 15 minutes from `started_at` are left
 alone (a slow provision flipped to `expired` mid-restore must not be torn down
-mid-copy). `starting` sessions are never touched.
+mid-copy), unless their marimo surface is `ready` and the connection probe
+reports zero connected editors: `ready` is only set after the restore finishes,
+so such a record is reclaimed on the next sweep and releases its editor claim.
+Reconciliation keeps the full 15-minute grace because it cannot probe the
+kernel. `starting` sessions are never touched.
 
 Coordination mirrors §3: single replica + its own bucket-CAS lease
 (`_system/_session_lifecycle.lock` — a separate key from the maintenance lease

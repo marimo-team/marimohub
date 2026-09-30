@@ -245,6 +245,31 @@ describe('external adapter library loading', () => {
 	});
 
 	it.each([
+		[{ multiPort: false, computeProfiles: 'true' }, /non-boolean capabilities: computeProfiles$/],
+		[{ multiPort: false, gpuProfiles: 1 }, /non-boolean capabilities: gpuProfiles$/],
+		[{ multiPort: 'no', computeProfiles: null }, /multiPort, computeProfiles$/],
+		['all', /non-object capabilities/],
+	])('rejects invalid provider capabilities %j at load', async (capabilities, message) => {
+		await expectConfigError(
+			loadAdapterLibraries({
+				...computeEnv(fixture('valid-compute.mjs')),
+				MARIMOHUB_COMPUTE_LIBRARY_PROVIDER_CAPABILITIES: JSON.stringify(capabilities),
+			}),
+			'MARIMOHUB_COMPUTE_LIBRARY',
+			message,
+		);
+	});
+
+	it('accepts boolean provider capabilities', async () => {
+		const capabilities = { multiPort: true, computeProfiles: true, gpuProfiles: false };
+		const loaded = await loadAdapterLibraries({
+			...computeEnv(fixture('valid-compute.mjs')),
+			MARIMOHUB_COMPUTE_LIBRARY_PROVIDER_CAPABILITIES: JSON.stringify(capabilities),
+		});
+		expect(loaded.compute?.capabilities).toEqual(capabilities);
+	});
+
+	it.each([
 		['MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS', '0'],
 		['MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS', 'not-an-integer'],
 	] as const)(

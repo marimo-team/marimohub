@@ -128,6 +128,12 @@ replacement. If destruction fails, the editor claim remains protected and no
 replacement starts. Retry the same takeover request to continue the drain.
 Reconciliation can also destroy the old sandbox before the retry.
 
+If you reopen a notebook right after its editor session expires, the request
+can return `409` "still shutting down" until the next session sweep reclaims
+the old sandbox. The sweep runs every
+`MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (default 60). Retry after that
+interval.
+
 Only one retry can drain the old sandbox at a time. A recovery attempt renews
 its lease every minute while it works. Concurrent requests must retry later. A
 lease expires after ten minutes without a successful renewal, and an expired

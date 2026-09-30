@@ -1771,6 +1771,8 @@ describe('SandboxProvisioner', () => {
 					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python/apps'",
 				),
 			);
+			const sparseCheckout = calls.exec.findIndex((command) => command.includes('sparse-checkout'));
+			expect(calls.execOptions[sparseCheckout]?.timeout).toBeGreaterThan(0);
 			expect(calls.startProcess[0].options?.cwd).toBe(`${MOUNT_PATH}/python/apps`);
 			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'app.py'");
 		});

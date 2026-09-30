@@ -27,6 +27,7 @@ import type {
 	AppPoolPolicy,
 	AppVisit,
 } from './AppPoolRouter';
+import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
 import { isTerminal, sessionMode } from './sessionState';
 
@@ -432,8 +433,7 @@ export class AppPoolService {
 					if (
 						isTerminal(session.status) ||
 						session.status === 'terminating' ||
-						(session.authorization_expires_at &&
-							Date.parse(session.authorization_expires_at) <= this.now())
+						isPastAuthorizationDeadline(session, this.now())
 					)
 						member.state = 'retiring';
 				} else if (

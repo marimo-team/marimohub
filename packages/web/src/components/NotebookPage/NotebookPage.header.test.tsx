@@ -43,6 +43,29 @@ describe('Notebook header', () => {
 		});
 	});
 
+	it('prefixes the Jobs link with the router basename', async () => {
+		const user = userEvent.setup();
+		render(
+			<MemoryRouter basename="/hub" initialEntries={['/hub/projects/proj-x/notebooks/nb-1']}>
+				<NotebookMenu
+					projectId="proj-x"
+					notebookId="nb-1"
+					title="Forecast"
+					canSync={false}
+					showJobs
+				/>
+				<LocationState />
+			</MemoryRouter>,
+		);
+		await user.click(screen.getByRole('button', { name: 'Forecast — notebook menu' }));
+		const jobs = screen.getByRole('menuitem', { name: 'Jobs & schedules' });
+		expect(jobs).toHaveAttribute('href', '/hub/projects/proj-x/notebooks/nb-1/jobs');
+		await user.click(jobs);
+		expect(JSON.parse(screen.getByTestId('location').textContent)).toMatchObject({
+			pathname: '/projects/proj-x/notebooks/nb-1/jobs',
+		});
+	});
+
 	it('groups notebook actions with attribution and opens the rename dialog', async () => {
 		const user = userEvent.setup();
 		makeFetch({ role: 'editor' });

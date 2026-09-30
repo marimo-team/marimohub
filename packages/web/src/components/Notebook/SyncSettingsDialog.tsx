@@ -21,7 +21,9 @@ import { ServerSyncRow } from '@/components/Notebook/SyncNow';
 import {
 	ENTRY_NOTEBOOK_HINT,
 	ENTRY_NOTEBOOK_PATTERN,
+	gitEntryPath,
 	isRepoInput,
+	normalizeRootPathInput,
 	REPO_INPUT_HINT,
 	rootPathText,
 } from '@/lib/git';
@@ -57,10 +59,7 @@ function activeSourceLabel(source: {
 	commit: string | null;
 }) {
 	const commit = source.commit ? ` at ${source.commit.slice(0, 12)}` : '';
-	const file = source.root_path
-		? `${source.root_path}/${source.entry_notebook}`
-		: source.entry_notebook;
-	return `${source.repo} · ${source.branch} · ${file}${commit}`;
+	return `${source.repo} · ${source.branch} · ${gitEntryPath(source)}${commit}`;
 }
 
 export function SyncSettingsDialog({
@@ -101,7 +100,7 @@ export function SyncSettingsDialog({
 					notebookId,
 					repo: value.repo.trim(),
 					branch: value.branch.trim(),
-					root_path: value.rootPath.trim(),
+					root_path: normalizeRootPathInput(value.rootPath),
 					entry_notebook: value.entryNotebook.trim(),
 				});
 				toast.success(

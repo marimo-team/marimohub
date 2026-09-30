@@ -61,3 +61,67 @@ describe('DropdownMenu', () => {
 		expect(onAction).not.toHaveBeenCalled();
 	});
 });
+
+describe('DropdownMenu presentation props', () => {
+	it('renders an href option as a link', async () => {
+		const user = userEvent.setup();
+		render(
+			<DropdownMenu
+				label="Notebook menu"
+				icon={<MoreHorizontal />}
+				options={[{ id: 'jobs', label: 'Jobs & schedules', href: '/jobs' }]}
+				onAction={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Notebook menu' }));
+
+		const item = screen.getByRole('menuitem', { name: 'Jobs & schedules' });
+		expect(item.tagName).toBe('A');
+		expect(item).toHaveAttribute('href', '/jobs');
+	});
+
+	it('renders the header above the items', async () => {
+		const user = userEvent.setup();
+		render(
+			<DropdownMenu
+				label="Notebook menu"
+				icon={<MoreHorizontal />}
+				header={<span>Created by Ada</span>}
+				options={[{ id: 'rename', label: 'Rename' }]}
+				onAction={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Notebook menu' }));
+
+		const header = screen.getByText('Created by Ada');
+		const menu = screen.getByRole('menu');
+		expect(header.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(menu).not.toContainElement(header);
+	});
+
+	it('keeps the compact trigger for icon-only callers', () => {
+		setup();
+		const trigger = screen.getByRole('button', { name: 'Notebook actions' });
+		expect(trigger).toHaveClass('size-7');
+		expect(trigger).not.toHaveClass('h-8', 'w-auto');
+	});
+
+	it('renders a labelled trigger with a mobile icon', () => {
+		render(
+			<DropdownMenu
+				label="Open"
+				triggerLabel="Open"
+				mobileIcon={<svg data-testid="mobile-icon" />}
+				options={[{ id: 'static', label: 'View static outputs' }]}
+				onAction={vi.fn()}
+			/>,
+		);
+
+		const trigger = screen.getByRole('button', { name: 'Open' });
+		expect(trigger).toHaveClass('h-8', 'w-auto');
+		expect(screen.getByText('Open')).toHaveClass('max-md:hidden');
+		expect(screen.getByTestId('mobile-icon').parentElement).toHaveClass('md:hidden');
+	});
+});

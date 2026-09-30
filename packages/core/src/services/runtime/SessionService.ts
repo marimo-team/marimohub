@@ -33,7 +33,7 @@ import {
 	SessionSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
-import type { EditorClaim, Session, SurfaceState } from '../../schema';
+import type { EditorClaim, Session, Source, SurfaceState } from '../../schema';
 import type { SurfaceId } from './surfaces/types';
 import { assertValidKernelAuthToken } from './kernelAuth';
 import {
@@ -48,6 +48,7 @@ import {
 } from './sessionState';
 import { listAllObjects } from '../catalog/storage';
 import { AppPoolStore } from './AppPoolStore';
+import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
 
 export interface CreateSessionInput {
 	notebook_id: NotebookId;
@@ -77,6 +78,38 @@ export const SURFACE_START_LEASE_MS = Millis.minutes(3);
 
 const HEARTBEAT_TTL_MS = Millis.minutes(5);
 const TERMINAL_RETENTION_MS = Millis.hours(24);
+
+/** The deadline is inclusive: a session is unauthorized AT `authorization_expires_at`. */
+export function isPastAuthorizationDeadline(
+	session: Pick<Session, 'authorization_expires_at'>,
+	now: number,
+): boolean {
+	return (
+		session.authorization_expires_at !== undefined &&
+		now >= Date.parse(session.authorization_expires_at)
+	);
+}
+
+/**
+ * A session a caller may attach to instead of starting a new one. A `starting`
+ * record older than the heartbeat TTL is a wedged provision the stale reaper
+ * has not flipped yet, so handing it out would strand the caller.
+ */
+export function isReusableSession(
+	session: Pick<Session, 'status' | 'sandbox_url' | 'started_at'>,
+	now: number,
+): boolean {
+	return (
+		(session.status === 'running' && !!session.sandbox_url) ||
+		(session.status === 'starting' && now - Date.parse(session.started_at) < HEARTBEAT_TTL_MS)
+	);
+}
+
+/** Where a session's marimo runs: a pull source's subtree, else the workdir itself. */
+export function sessionWorkspaceDir(source: Source, workdir: string): string {
+	return sandboxWorkspaceLayout(workdir, source.type === 'git' ? pullSourceRootPath(source) : '')
+		.workdir;
+}
 const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
 const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
 const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
@@ -536,11 +569,7 @@ export class SessionService {
 	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
 			if (session.status !== 'running') return null;
-			if (
-				session.authorization_expires_at &&
-				Date.now() >= Date.parse(session.authorization_expires_at)
-			)
-				return null;
+			if (isPastAuthorizationDeadline(session, Date.now())) return null;
 			const ageMs = Date.now() - new Date(session.last_heartbeat).getTime();
 			if (ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
 			return { ...session, last_heartbeat: new Date().toISOString() };
@@ -790,13 +819,26 @@ export class SessionService {
 				s.notebook_id === notebookId &&
 				sessionMode(s) === mode &&
 				(userBlind || s.user_id === userId) &&
-				((s.status === 'running' && !!s.sandbox_url) ||
-					(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
+				isReusableSession(s, now),
 		);
 		if (policy.sharedApp) return this.claimHolderAmong(projectId, notebookId, candidates);
 		return candidates.sort(
 			(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
 		)[0];
+	}
+
+	/** Re-read an editor chosen for reuse; undefined once it can no longer be attached to. */
+	async getReusableEditor(
+		projectId: ProjectId,
+		sessionId: SessionId,
+	): Promise<Session | undefined> {
+		try {
+			const session = await this.getSession(projectId, sessionId);
+			return isReusableSession(session, Date.now()) ? session : undefined;
+		} catch (err) {
+			if (err instanceof NotFoundError) return undefined;
+			throw err;
+		}
 	}
 
 	async findReusableEditor(
@@ -814,11 +856,7 @@ export class SessionService {
 		const now = Date.now();
 		const sessions = await this.scanProject(projectId, (session) => session);
 		const live = sessions.filter(
-			(s) =>
-				s.notebook_id === notebookId &&
-				sessionMode(s) === 'edit' &&
-				((s.status === 'running' && !!s.sandbox_url) ||
-					(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
+			(s) => s.notebook_id === notebookId && sessionMode(s) === 'edit' && isReusableSession(s, now),
 		);
 		if (temporary) {
 			return {
@@ -1011,13 +1049,8 @@ export class SessionService {
 			) {
 				return false;
 			}
-			if (session.status === 'running') return true;
-			if (
-				session.status === 'starting' &&
-				Date.now() - new Date(session.started_at).getTime() < HEARTBEAT_TTL_MS
-			) {
-				return true;
-			}
+			if (isReusableSession(session, Date.now())) return true;
+			// A retired holder keeps the claim until its sandbox is confirmed gone.
 			return (
 				!!session.sandbox_id &&
 				!session.sandbox_reclaimed_at &&
@@ -1581,11 +1614,7 @@ export class SessionService {
 			if (session.notebook_id !== notebookId || !sessionModePolicy(session).sharedApp) {
 				return false;
 			}
-			return (
-				session.status === 'running' ||
-				(session.status === 'starting' &&
-					Date.now() - new Date(session.started_at).getTime() < HEARTBEAT_TTL_MS)
-			);
+			return isReusableSession(session, Date.now());
 		} catch (err) {
 			if (err instanceof NotFoundError) return false;
 			throw err;

@@ -385,7 +385,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_PROFILES',
 						name: 'Compute profiles',
 						description:
-							'Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend applies GPU requests. Other backends ignore GPU values and log a startup warning.',
+							'Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend, and library adapters that declare `gpuProfiles`, apply GPU requests. Other backends ignore GPU values and log a startup warning.',
 						example: 'small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100',
 						optIn: true,
 					},
@@ -740,7 +740,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_MODAL_SECRETS',
 						name: 'Modal secrets',
 						description:
-							'Comma-separated Modal secret names injected into every new sandbox, deployment-wide. Secrets must exist in the configured Modal environment. Unset or empty adds none.',
+							'Comma-separated Modal secret names injected into every new sandbox, deployment-wide. Secrets must exist in the configured Modal environment. Unset or empty adds none. Every editor, app, and job sandbox in every project receives these values, and any notebook author can read them. Use project integration secret references for project-scoped credentials.',
 						example: 'shared-credentials,huggingface',
 						optIn: true,
 					},
@@ -1680,7 +1680,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_PERSIST_WORKSPACE',
 						name: 'Persist workspace',
 						description:
-							'Which sandbox working-dir files survive a session (source | workspace). `source` persists only the source files (notebook.py + pyproject.toml); `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session.',
+							'Which sandbox working-dir files survive a session (source | workspace). `source` persists only the source files (notebook.py + pyproject.toml). `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session. This includes hidden files such as `.env` and `.gitignore`, `.git/`, and `__marimo__/`. It excludes regenerable caches such as `.venv/`, `__pycache__/`, `node_modules/`, and `.pytest_cache/`. Any project member with read access can read the captured files, and every later session restores them.',
 						example: 'workspace',
 						default: 'source',
 					},

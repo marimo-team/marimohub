@@ -1,11 +1,28 @@
 import type { ReactNode } from 'react';
 import { CalendarClock, GitBranch, Image, Pencil } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useHref, useNavigate } from 'react-router-dom';
 import { RouterProvider } from 'react-aria-components';
 import { GitSourceDetails } from '@/components/Notebook/GitSourcePopover';
 import { Button, DialogModal, DropdownMenu, Tooltip } from '@/components/ui';
 import type { DropdownMenuOption } from '@/components/ui';
 import { useDisclosure } from '@/hooks/useDisclosure';
+
+// `useHref` applies the router basename to rendered anchors, so modifier-click,
+// open in new tab and copy link work on base-path deployments. Kept in its own
+// component because passing a hook as a value opts it out of the React Compiler.
+function RouterLinks({
+	navigate,
+	children,
+}: {
+	navigate: (href: string) => void;
+	children: ReactNode;
+}) {
+	return (
+		<RouterProvider navigate={navigate} useHref={useHref}>
+			{children}
+		</RouterProvider>
+	);
+}
 
 interface NotebookMenuProps {
 	projectId: string;
@@ -70,11 +87,7 @@ export function NotebookMenu({
 
 	return (
 		<>
-			<RouterProvider
-				navigate={(href) => {
-					void navigate(href, { state: { title } });
-				}}
-			>
+			<RouterLinks navigate={(href) => void navigate(href, { state: { title } })}>
 				<DropdownMenu
 					label={`${title} — notebook menu`}
 					tooltip={title}
@@ -97,7 +110,7 @@ export function NotebookMenu({
 						else if (action === 'source') source.open();
 					}}
 				/>
-			</RouterProvider>
+			</RouterLinks>
 			{gitSource && (
 				<Tooltip content={`${gitSource.repo} · ${gitSource.branch} — Git source details`}>
 					<Button

@@ -69,11 +69,24 @@ export function isSafeWorkspacePath(path: string, allowEmpty = false): boolean {
 	return path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
 }
 
+/**
+ * A pull source restores `.git` at the Git root and the workspace beneath it,
+ * so a root path through any `.git` directory would write workspace files into
+ * repository metadata. Case-insensitive because macOS/Windows checkouts are.
+ * The session layout and the packed-restore extractor apply this same rule.
+ */
+export function isSafeWorkspaceRootPath(path: string): boolean {
+	return (
+		isSafeWorkspacePath(path, true) &&
+		!path.split('/').some((segment) => segment.toLowerCase() === '.git')
+	);
+}
+
 export function normalizeWorkspaceRootPath(path: string | undefined): string {
 	const raw = path?.trim() ?? '';
 	const normalized = raw.replace(/\/+$/, '');
-	if (!isSafeWorkspacePath(normalized, true)) {
-		throw new BadRequestError('root_path must be a relative path without . or .. segments');
+	if (!isSafeWorkspaceRootPath(normalized)) {
+		throw new BadRequestError('root_path must be a relative path without ., .., or .git segments');
 	}
 	return normalized;
 }

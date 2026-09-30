@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ConflictError } from '../../errors';
 import { createVersionId } from '../../ids';
 import {
 	pullSourceGitOptions,
@@ -42,14 +43,30 @@ describe('sandboxWorkspaceLayout', () => {
 		expect(sandboxWorkspaceLayout('/', '')).toMatchObject({ workdir: '/', gitRoot: '/' });
 	});
 
-	it.each(['..', '../escape', 'a/../b', '/absolute', 'trailing/', 'a//b', '.', 'back\\slash'])(
-		'rejects the unsafe root path %j',
-		(rootPath) => {
-			expect(() => sandboxWorkspaceLayout('/workspace', rootPath)).toThrow(
-				'Unsafe workspace root path',
-			);
-		},
-	);
+	it.each([
+		'..',
+		'../escape',
+		'a/../b',
+		'/absolute',
+		'trailing/',
+		'a//b',
+		'.',
+		'back\\slash',
+		'.git',
+		'a/.git',
+		'A/.GIT',
+		'line\nbreak',
+		'nul\u0000byte',
+	])('rejects the unsafe root path %j as a corrupt record', (rootPath) => {
+		expect(() => sandboxWorkspaceLayout('/workspace', rootPath)).toThrow(ConflictError);
+		expect(() => sandboxWorkspaceLayout('/workspace', rootPath)).toThrow(
+			'Unsafe workspace root path',
+		);
+	});
+
+	it.each(['données', 'my dir'])('accepts the root path %j', (rootPath) => {
+		expect(sandboxWorkspaceLayout('/workspace', rootPath).workdir).toBe(`/workspace/${rootPath}`);
+	});
 });
 
 describe('pullSourceRootPath', () => {

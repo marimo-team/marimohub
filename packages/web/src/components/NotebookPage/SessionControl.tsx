@@ -1,7 +1,7 @@
 import { ChevronDown, Cpu, RefreshCw, Square, Users, UserRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button, Popover, StatusDot } from '@/components/ui';
-import { SESSION_STATUS } from '@/components/ui/sessionStatus';
+import { sessionStatusPresentation } from '@/components/ui/sessionStatus';
 import { SessionDetails } from '@/components/ui/SessionDetails';
 import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
@@ -32,9 +32,9 @@ export function SessionControl({
 	onStop,
 	onRestart,
 }: SessionControlProps) {
-	const status = SESSION_STATUS[
-		error ? 'failed' : (session?.status ?? (isProvisioning ? 'starting' : 'terminated'))
-	] ?? { label: 'Unknown', className: 'bg-muted-foreground' };
+	const status = sessionStatusPresentation(
+		error ? 'failed' : (session?.status ?? (isProvisioning ? 'starting' : 'terminated')),
+	);
 	const sharing = session?.ephemeral
 		? 'Temporary'
 		: session?.mode === 'edit' && session.editor_sandbox_sharing === 'shared'

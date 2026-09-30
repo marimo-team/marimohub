@@ -7,27 +7,6 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { createTestQueryClient, jsonOk } from '@/test/render';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ShareMenu } from './ShareMenu';
-import { OpenMenu } from './OpenMenu';
-import { useSurfaceActions } from '@/api/surfaces';
-
-function TestMenus({ canRunApp }: { canRunApp: boolean }) {
-	const actions = useSurfaceActions('proj-1', 'nb-1');
-	return (
-		<>
-			<ShareMenu projectId="proj-1" notebookId="nb-1" />
-			<OpenMenu
-				projectId="proj-1"
-				notebookId="nb-1"
-				title="Forecast"
-				canRunApp={canRunApp}
-				actions={actions}
-				isApp={false}
-				onOpenFrame={() => {}}
-				onCloseFrame={() => {}}
-			/>
-		</>
-	);
-}
 
 function LocationProbe() {
 	const location = useLocation();
@@ -40,10 +19,9 @@ function LocationProbe() {
 }
 
 function renderMenu({
-	canRunApp = true,
 	path = '/projects/proj-1/notebooks/nb-1',
 	basename,
-}: { canRunApp?: boolean; path?: string; basename?: string } = {}) {
+}: { path?: string; basename?: string } = {}) {
 	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<MemoryRouter basename={basename} initialEntries={[path]}>
@@ -56,7 +34,7 @@ function renderMenu({
 				path="*"
 				element={
 					<>
-						<TestMenus canRunApp={canRunApp} />
+						<ShareMenu projectId="proj-1" notebookId="nb-1" />
 						<LocationProbe />
 					</>
 				}
@@ -72,7 +50,7 @@ afterEach(() => {
 	Reflect.deleteProperty(navigator, 'clipboard');
 });
 
-describe('Notebook sharing and navigation menus', () => {
+describe('ShareMenu', () => {
 	it('passes the current query to the App links dialog', async () => {
 		const user = userEvent.setup();
 		vi.stubGlobal(
@@ -111,28 +89,6 @@ describe('Notebook sharing and navigation menus', () => {
 		},
 	);
 
-	it('opens the latest static outputs', async () => {
-		const user = userEvent.setup();
-		renderMenu();
-
-		await user.click(screen.getByRole('button', { name: 'Open' }));
-		await user.click(screen.getByRole('menuitem', { name: 'View static outputs' }));
-
-		expect(screen.getByTestId('location')).toHaveTextContent(
-			'/projects/proj-1/notebooks/nb-1/snapshot',
-		);
-	});
-
-	it('opens the shared app', async () => {
-		const user = userEvent.setup();
-		renderMenu();
-
-		await user.click(screen.getByRole('button', { name: 'Open' }));
-		await user.click(screen.getByRole('menuitem', { name: 'Run as app' }));
-
-		expect(screen.getByTestId('location')).toHaveTextContent('/projects/proj-1/notebooks/nb-1/app');
-	});
-
 	it('copies the canonical notebook URL', async () => {
 		const user = userEvent.setup();
 		const writeText = vi.fn(() => Promise.resolve());
@@ -148,16 +104,6 @@ describe('Notebook sharing and navigation menus', () => {
 		expect(writeText).toHaveBeenCalledWith(
 			new URL('/projects/proj-1/notebooks/nb-1', window.location.origin).toString(),
 		);
-	});
-
-	it('hides app sharing when the viewer cannot start apps', async () => {
-		const user = userEvent.setup();
-		renderMenu({ canRunApp: false });
-
-		await user.click(screen.getByRole('button', { name: 'Open' }));
-
-		expect(screen.queryByRole('menuitem', { name: 'Run as app' })).toBeNull();
-		expect(screen.getByRole('menuitem', { name: 'View static outputs' })).toBeInTheDocument();
 	});
 
 	it.each(['', '/app'])('copies the current route and filtered parameters (%s)', async (suffix) => {
@@ -180,20 +126,5 @@ describe('Notebook sharing and navigation menus', () => {
 		} finally {
 			base.remove();
 		}
-	});
-
-	it.each([
-		['Run as app', '/app?id=123&tag=one&tag=two&empty='],
-		['View static outputs', '/snapshot'],
-	])('handles query parameters for %s', async (action, suffix) => {
-		const user = userEvent.setup();
-		renderMenu({
-			path: '/projects/proj-1/notebooks/nb-1?id=123&tag=one&tag=two&empty=&access_token=evil&file=other.py',
-		});
-		await user.click(screen.getByRole('button', { name: 'Open' }));
-		await user.click(screen.getByRole('menuitem', { name: action }));
-		expect(screen.getByTestId('location').textContent).toBe(
-			`/projects/proj-1/notebooks/nb-1${suffix}`,
-		);
 	});
 });

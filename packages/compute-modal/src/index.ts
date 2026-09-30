@@ -6,7 +6,7 @@ import {
 	NotFoundError as ModalNotFoundError,
 	SandboxFilesystemNotADirectoryError,
 } from 'modal';
-import type { App, ContainerProcess, Sandbox } from 'modal';
+import type { App, ContainerProcess, Sandbox, Secret } from 'modal';
 import {
 	validateOutputBudget,
 	readBoundedFile,
@@ -125,6 +125,29 @@ function isNotFound(error: unknown): boolean {
 	);
 }
 
+// Deliberately not a NotFoundError: `isNotFound` treats that name as "sandbox
+// gone", and a missing secret must never be mistaken for one.
+class ModalSecretLookupError extends Error {
+	override readonly name = 'ModalSecretLookupError';
+}
+
+async function resolveSecrets(client: ModalClient, names: readonly string[]): Promise<Secret[]> {
+	const environment = client.environmentName();
+	const where = environment ? `in environment "${environment}"` : 'in the default environment';
+	return Promise.all(
+		names.map(async (name) => {
+			try {
+				return await client.secrets.fromName(name);
+			} catch (cause) {
+				throw new ModalSecretLookupError(
+					`could not resolve Modal secret "${name}" (MARIMOHUB_COMPUTE_MODAL_SECRETS) ${where}: ${errorMessage(cause)}`,
+					{ cause },
+				);
+			}
+		}),
+	);
+}
+
 function isNotADirectory(error: unknown): boolean {
 	return (
 		error instanceof SandboxFilesystemNotADirectoryError ||
@@ -203,10 +226,7 @@ class ModalSandboxInstance implements SandboxInstance {
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
 		const { app, secrets } = await all({
 			app: async () => this.client.apps.fromName(appName, { createIfMissing: true }),
-			secrets: async () =>
-				Promise.all(
-					(this.config.secretNames ?? []).map((name) => this.client.secrets.fromName(name)),
-				),
+			secrets: async () => resolveSecrets(this.client, this.config.secretNames ?? []),
 		});
 		return this.client.sandboxes.create(app, this.client.images.fromRegistry(this.config.image), {
 			name: this.id,
@@ -666,6 +686,21 @@ export class ModalCompute implements SandboxProvider {
 
 	async proxy(_request: Request): Promise<Response | null> {
 		return null;
+	}
+
+	async healthCheck(): Promise<void> {
+		await all({
+			app: async () => {
+				try {
+					return await this.client.apps.fromName(this.config.appName ?? DEFAULT_APP_NAME);
+				} catch (error) {
+					// The first sandbox create makes the app; a missing one is not a fault.
+					if (isNotFound(error)) return;
+					throw error;
+				}
+			},
+			secrets: async () => resolveSecrets(this.client, this.config.secretNames ?? []),
+		});
 	}
 
 	async listActive(): Promise<ActiveSandbox[]> {

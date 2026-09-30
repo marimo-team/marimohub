@@ -249,7 +249,32 @@ function validateCompute(value: unknown, specifier: string): SandboxProvider {
 			`Compute adapter from "${specifier}" has non-callable optional SandboxProvider method(s): ${invalidOptional.join(', ')}`,
 		);
 	}
+	validateProviderCapabilities(provider, specifier);
 	return validateFirstSandbox(provider, specifier);
+}
+
+const PROVIDER_CAPABILITY_FLAGS = ['multiPort', 'computeProfiles', 'gpuProfiles'] as const;
+
+function validateProviderCapabilities(provider: SandboxProvider, specifier: string): void {
+	const capabilities: unknown = provider.capabilities;
+	if (capabilities === undefined) return;
+	if (typeof capabilities !== 'object' || capabilities === null) {
+		throw adapterConfigError(
+			'compute',
+			`Compute adapter from "${specifier}" has non-object capabilities`,
+		);
+	}
+	const invalid = PROVIDER_CAPABILITY_FLAGS.filter((flag) => {
+		const value: unknown = Reflect.get(capabilities, flag);
+		return value !== undefined && typeof value !== 'boolean';
+	});
+	if (invalid.length > 0) {
+		throw adapterConfigError(
+			'compute',
+			`Compute adapter from "${specifier}" has non-boolean capabilities: ${invalid.join(', ')}`,
+			{ remediation: 'Declare each SandboxProvider capability flag as true or false.' },
+		);
+	}
 }
 
 function validateFirstSandbox(provider: SandboxProvider, specifier: string): SandboxProvider {

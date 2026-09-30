@@ -177,14 +177,29 @@ describe('packed workspace extractor', () => {
 			'.',
 			'.git',
 			'.git/hooks',
+			'a/.git',
+			'A/.GIT',
 			'.marimohub-packed-restore/x',
 			'a\\b',
+			'a\tb',
+			'a\u007fb',
 		]) {
 			const { destination, result } = runExtractor(archive, true, false, subdirectory);
 			expect(result.status, subdirectory).toBe(1);
 			expect(result.stderr.toString()).toContain('unsafe workspace subdirectory');
 			expect(existsSync(join(destination, 'app.py'))).toBe(false);
 		}
+	});
+
+	it.each(['données', 'my dir'])('places workspace entries under the subdirectory %j', (dir) => {
+		const archive = createPackedWorkspaceArchive({
+			workspace: new Map([['app.py', encode('print(1)')]]),
+			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
+		});
+		const { destination, result } = runExtractor(archive, true, false, dir);
+
+		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(readFileSync(join(destination, dir, 'app.py'), 'utf8')).toBe('print(1)');
 	});
 
 	it('rejects traversal paths before replacing an existing destination', () => {
@@ -393,6 +408,27 @@ describe('restorePackedWorkspace', () => {
 			expect(get).not.toHaveBeenCalled();
 		}
 	});
+
+	it.each(['.git', 'a/.git', 'A/.GIT', 'a\nb'])(
+		'rejects the workspace subdirectory %j before fetching the archive',
+		async (subdirectory) => {
+			const { instance } = makeFakeSandbox();
+			const bucket = new MemoryBucket();
+			const get = vi.spyOn(bucket, 'get');
+
+			const result = await restorePackedWorkspace(
+				instance,
+				bucket,
+				'workspace.zip',
+				'/workspace',
+				true,
+				subdirectory,
+			);
+
+			expect(result.status).toBe('failed');
+			expect(get).not.toHaveBeenCalled();
+		},
+	);
 
 	it('rejects an oversized object without reading or writing its body', async () => {
 		const { instance, calls } = makeFakeSandbox();

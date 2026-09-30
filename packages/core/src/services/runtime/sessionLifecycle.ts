@@ -16,6 +16,7 @@ import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
+import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { kernelBasePathFromUrl } from './sandboxExposure';
@@ -201,8 +202,7 @@ export class SessionLifecycleService {
 					!hasAppUsers &&
 					now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMsByMode[sessionMode(s)];
 				const pastDeadline = !!s.expires_at && now >= Date.parse(s.expires_at);
-				const pastAuthorizationDeadline =
-					!!s.authorization_expires_at && now >= Date.parse(s.authorization_expires_at);
+				const pastAuthorizationDeadline = isPastAuthorizationDeadline(s, now);
 
 				// Only probe when a reap decision hinges on it (cost control: one exec per
 				// near-deadline/stale session per sweep, nothing for healthy ones). Only an

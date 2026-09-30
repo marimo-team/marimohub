@@ -244,14 +244,32 @@ export const ENTRY_NOTEBOOK_HINT =
 	'Must point to a marimo notebook (.py, .md, .markdown, or .qmd), e.g. dashboard.py';
 
 export const ROOT_PATH_HINT =
-	'Folder must be a relative path such as apps or python/apps, without leading or trailing slashes or . segments';
+	'Folder must be a relative path such as apps or python/apps, without a leading slash, . or .. segments, or a .git folder';
+
+/** Trims and drops trailing slashes, as the server does before validating (`apps/` → `apps`). */
+export function normalizeRootPathInput(input: string): string {
+	return input.trim().replace(/\/+$/, '');
+}
+
+function hasAsciiControlCharacter(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code <= 31 || code === 127) return true;
+	}
+	return false;
+}
 
 /** Mirrors the server's root path rule so a bad folder fails in the form, not at the next sync. */
 export function isValidRootPath(input: string): boolean {
-	const value = input.trim();
+	const value = normalizeRootPathInput(input);
 	if (value === '') return true;
-	if (value.startsWith('/') || value.endsWith('/') || value.includes('\\')) return false;
-	return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+	if (value.startsWith('/') || value.includes('\\') || hasAsciiControlCharacter(value))
+		return false;
+	return value
+		.split('/')
+		.every(
+			(part) => part.length > 0 && part !== '.' && part !== '..' && part.toLowerCase() !== '.git',
+		);
 }
 
 /** An optional repository folder field validated with {@link isValidRootPath}. */

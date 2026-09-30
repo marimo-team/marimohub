@@ -41,8 +41,10 @@ export default {
 	apiVersion: 1,
 	kind: 'compute',
 	create(context) {
+		const capabilities = context.env.MARIMOHUB_COMPUTE_LIBRARY_PROVIDER_CAPABILITIES;
 		return {
 			factoryContext: context,
+			...(capabilities ? { capabilities: JSON.parse(capabilities) } : {}),
 			create() {
 				return sandbox(context.env.MARIMOHUB_COMPUTE_LIBRARY_INVALID_CAPABILITY);
 			},

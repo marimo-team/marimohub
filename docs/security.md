@@ -322,6 +322,12 @@ Workspace file transfers are unchanged.
 Cloudflare endpoint bucket mounts use the SDK credential proxy to keep mount
 credentials outside the container filesystem.
 
+With `MARIMOHUB_PERSIST_WORKSPACE=workspace`, session teardown persists hidden
+files such as `.env` and `.git/` to the bucket. Any project member with read
+access can read them through the workspace files API. Every later session
+restores them into the sandbox. Keep credentials in
+[integration secrets](integration-secrets.md), not in workspace files.
+
 ## Shared deployment credentials
 
 [AWS](integration-secrets.md#aws-project-policies) and
