@@ -11,10 +11,10 @@ description: Sync read-only notebooks into marimohub from external Git repositor
 marimohub can serve a notebook whose source of truth is an external **Git
 repository**. Choose a source mode when you create the notebook:
 
-| Mode   | Primary sync path               | Credential | Supported path  | Git metadata                    |
-| ------ | ------------------------------- | ---------- | --------------- | ------------------------------- |
-| `push` | CI upload or **Sync now**       | Sync token | Root or subtree | Only when the upload has `.git` |
-| `pull` | Create request and **Sync now** | GitHub App | Root only       | Included in every version       |
+| Mode   | Primary sync path               | Credential | Supported path   | Git metadata                    |
+| ------ | ------------------------------- | ---------- | ---------------- | ------------------------------- |
+| `push` | CI upload or **Sync now**       | Sync token | Root or subtree  | Only when the upload has `.git` |
+| `pull` | Create request and **Sync now** | GitHub App | Any subdirectory | Included in every version       |
 
 The source mode cannot change after creation. For a push source, **Sync now**
 updates the files but does not add Git metadata to the version.
@@ -173,9 +173,9 @@ Content-Type: application/json
 For an existing custom-host source, a bare `owner/repo` continues to use that
 host. GitHub.com shorthand remains bare.
 
-The source mode cannot change. A pull source must continue to use the repository
-root and a supported GitHub.com repository. marimohub rejects unsupported source
-changes before it stores them.
+The source mode cannot change. A pull source must continue to use a supported
+GitHub.com repository. marimohub rejects unsupported source changes before it
+stores them.
 
 Before the first successful sync, changes take effect immediately. After that,
 changes remain pending until a CI upload or server sync matches the new source

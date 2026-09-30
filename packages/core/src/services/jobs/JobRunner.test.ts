@@ -153,6 +153,58 @@ describe('JobRunner', () => {
 		);
 	});
 
+	it('restores a pinned pull version with its own subtree after the source moved', async () => {
+		const encode = (value: string) => new TextEncoder().encode(value);
+		const { meta } = await env.notebooks.synced.create(
+			pid,
+			{
+				title: 'Pulled',
+				description: '',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			},
+			ACTOR,
+		);
+		const sync = (rootPath: string, commit: string) =>
+			env.notebooks.synced.sync(pid, meta.id, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: rootPath,
+				commit,
+				files: [{ path: 'app.py', bytes: encode('import marimo') }],
+				git_files: [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
+			});
+		const { versionId: rootVersion } = await sync('', 'commit-aaaa');
+		const pulledJob = await env.jobs.createJob(pid, meta.id, { name: 'nightly' }, ACTOR);
+		const queued = await env.jobRuns.enqueue({
+			job: pulledJob,
+			trigger: 'manual',
+			triggeredBy: ACTOR,
+			timeoutSeconds: 900,
+			sourceVersionId: rootVersion!,
+		});
+		await env.notebooks.synced.updateSource(
+			pid,
+			meta.id,
+			{ repo: 'org/repo', branch: 'main', root_path: 'python', entry_notebook: 'app.py' },
+			ACTOR,
+		);
+		await sync('python', 'commit-bbbb');
+		const sandbox = makeJobSandbox({ html: '<html/>' });
+
+		const run = await runner(sandbox).execute(queued);
+
+		expect(run.error).toBeUndefined();
+		expect(run.status).toBe('succeeded');
+		expect(run.source_version_id).toBe(rootVersion);
+		expect(sandbox.jobCommands[0]).toContain(`cd '${WORKDIR}'`);
+		const extract = sandbox.calls.exec.find((command) => command.startsWith('python3 '));
+		expect(extract).toMatch(/ '\/workspace' 1 ''$/);
+		expect(sandbox.calls.exec.some((command) => command.includes('sparse-checkout'))).toBe(false);
+	});
+
 	it('runs the export headlessly, captures the output, and destroys the sandbox', async () => {
 		const log = vi.spyOn(console, 'log');
 		const sandbox = makeJobSandbox({ html: '<html>rendered</html>' });

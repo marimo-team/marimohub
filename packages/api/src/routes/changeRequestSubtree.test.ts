@@ -126,6 +126,8 @@ describe('change requests from a subtree pull source', () => {
 		for (const command of commands) {
 			expect(command).toContain("cd '/workspace/python' && git -c 'safe.directory=/workspace'");
 		}
+		// Without --relative, git would report python/dashboard.py and publishing would double-prefix it.
+		expect(commands.find((c) => c.includes('diff --name-status'))).toContain('--relative');
 		expect(openChangeRequest).toHaveBeenCalledWith(
 			expect.objectContaining({
 				baseCommit: COMMIT,

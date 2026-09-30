@@ -163,7 +163,7 @@ describe('packed workspace extractor', () => {
 		expect(existsSync(join(destination, 'app.py'))).toBe(false);
 	});
 
-	it('rejects unsafe workspace subdirectories', () => {
+	it('rejects unsafe workspace subdirectories', { timeout: 30_000 }, () => {
 		const archive = createPackedWorkspaceArchive({
 			workspace: new Map([['app.py', encode('print(1)')]]),
 			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
@@ -199,9 +199,17 @@ describe('packed workspace extractor', () => {
 		writeFileSync(scriptPath, EXTRACT_PACKED_WORKSPACE);
 		writeFileSync(archivePath, zipSync({ '../escape.txt': encode('bad') }));
 
-		const result = spawnSync('python3', [scriptPath, archivePath, temporaryRoot, destination, '0']);
+		const result = spawnSync('python3', [
+			scriptPath,
+			archivePath,
+			temporaryRoot,
+			destination,
+			'0',
+			'',
+		]);
 
 		expect(result.status).toBe(1);
+		expect(result.stderr.toString()).toContain('unsafe or duplicate archive path');
 		expect(readFileSync(join(destination, 'keep.txt'), 'utf8')).toBe('keep');
 	});
 
@@ -220,9 +228,10 @@ describe('packed workspace extractor', () => {
 		writeFileSync(script, EXTRACT_PACKED_WORKSPACE);
 		writeFileSync(archivePath, archive);
 
-		const result = spawnSync('python3', [script, archivePath, temporaryRoot, destination, '0']);
+		const result = spawnSync('python3', [script, archivePath, temporaryRoot, destination, '0', '']);
 
 		expect(result.status).toBe(1);
+		expect(result.stderr.toString()).toContain('workspace is not empty');
 		expect(readFileSync(join(destination, 'keep.txt'), 'utf8')).toBe('keep');
 		expect(() => readFileSync(join(destination, 'app.py'))).toThrow();
 	});

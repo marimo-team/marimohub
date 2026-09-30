@@ -270,6 +270,22 @@ describe('SyncedNotebookDialog', () => {
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 
+	it('rejects an unsafe folder before submitting', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = vi.fn();
+		renderDialog(fetchImpl, true);
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
+		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
+		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
+		await user.type(screen.getByLabelText('Folder in repo (optional)'), '../apps');
+		await user.tab();
+
+		expect(screen.getByText(/without leading or trailing slashes/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
 	it('revalidates the repository when switching between pull and push modes', async () => {
 		const user = userEvent.setup();
 		renderDialog(vi.fn(), true);

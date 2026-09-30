@@ -4,7 +4,6 @@ import { z } from 'zod';
 import { useSelector } from '@tanstack/react-store';
 import {
 	FormDialog,
-	optionalText,
 	requiredText,
 	schemaValidators,
 	useAppForm,
@@ -18,6 +17,7 @@ import {
 	isGitHubRepoInput,
 	isRepoInput,
 	REPO_INPUT_HINT,
+	rootPathText,
 } from '@/lib/git';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from './baseImage';
 import { computeProfileOptions, DEFAULT_COMPUTE_PROFILE } from './computeProfiles';
@@ -43,7 +43,7 @@ const syncedSchema = z
 		title: requiredText('Notebook name'),
 		repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 		branch: requiredText('Branch'),
-		rootPath: optionalText(),
+		rootPath: rootPathText(),
 		entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
 		baseImage: z.string(),
 		computeProfile: z.string(),

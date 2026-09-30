@@ -3,6 +3,7 @@
 // when the host's URL layout is known (GitHub or GitLab) — an unrecognized
 // host degrades to "no link", never a wrong one.
 
+import { z } from 'zod';
 import type { NotebookDetail, NotebookVersion } from '@/types';
 
 export type GitProvider = 'github' | 'gitlab';
@@ -241,3 +242,19 @@ export const ENTRY_NOTEBOOK_PATTERN = /[^/]\.(py|md|markdown|qmd)$/;
 
 export const ENTRY_NOTEBOOK_HINT =
 	'Must point to a marimo notebook (.py, .md, .markdown, or .qmd), e.g. dashboard.py';
+
+export const ROOT_PATH_HINT =
+	'Folder must be a relative path such as apps or python/apps, without leading or trailing slashes or . segments';
+
+/** Mirrors the server's root path rule so a bad folder fails in the form, not at the next sync. */
+export function isValidRootPath(input: string): boolean {
+	const value = input.trim();
+	if (value === '') return true;
+	if (value.startsWith('/') || value.endsWith('/') || value.includes('\\')) return false;
+	return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+}
+
+/** An optional repository folder field validated with {@link isValidRootPath}. */
+export function rootPathText() {
+	return z.string().refine(isValidRootPath, ROOT_PATH_HINT);
+}

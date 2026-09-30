@@ -219,6 +219,21 @@ describe('SyncSettingsDialog', () => {
 		);
 	});
 
+	it('rejects an unsafe folder without PATCHing', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({ syncMode: 'pull', syncProviders: ['github'] });
+
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
+		const folder = screen.getByLabelText('Folder in repo (optional)');
+		await user.clear(folder);
+		await user.type(folder, '/apps/');
+		await user.tab();
+
+		expect(screen.getByText(/without leading or trailing slashes/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+		expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
+	});
+
 	it('renders read-only settings for a viewer without operational controls', async () => {
 		setup({ canManage: false, canOperate: false });
 

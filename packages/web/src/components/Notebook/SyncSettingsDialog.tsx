@@ -3,7 +3,6 @@ import { toast } from 'sonner';
 import { z } from 'zod';
 import {
 	FormDialog,
-	optionalText,
 	requiredText,
 	schemaValidators,
 	useAppForm,
@@ -24,6 +23,7 @@ import {
 	ENTRY_NOTEBOOK_PATTERN,
 	isRepoInput,
 	REPO_INPUT_HINT,
+	rootPathText,
 } from '@/lib/git';
 import { DOCS_SYNCING_URL } from '@/lib/links';
 import { formatRelative } from '@/lib/time';
@@ -43,7 +43,7 @@ interface SyncSettingsDialogProps {
 const settingsSchema = z.object({
 	repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 	branch: requiredText('Branch'),
-	rootPath: optionalText(),
+	rootPath: rootPathText(),
 	entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
 });
 
