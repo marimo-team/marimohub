@@ -260,7 +260,10 @@ class ModalSandboxInstance implements SandboxInstance {
 		return sandbox.exec(command, {
 			mode: 'text',
 			...(options?.cwd ? { workdir: options.cwd } : {}),
-			...(options?.timeout !== undefined ? { timeoutMs: options.timeout } : {}),
+			// Modal requires whole seconds; round up to preserve the caller's budget.
+			...(options?.timeout !== undefined && options.timeout > 0
+				? { timeoutMs: Math.ceil(options.timeout / 1000) * 1000 }
+				: {}),
 			env: { ...this.env, ...definedEnv(options?.env) },
 			...(options?.pty ? { pty: true } : {}),
 		});

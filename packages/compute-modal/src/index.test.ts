@@ -502,6 +502,41 @@ describe('ModalCompute', () => {
 		expect(sandbox.execCalls[0].options?.env).toEqual({ A: '1', B: '2' });
 	});
 
+	it.each([
+		[1, 1000],
+		[1000, 1000],
+		[119_999, 120_000],
+		[120_000, 120_000],
+	])('rounds exec timeout %i up to %i ms for Modal', async (timeout, timeoutMs) => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, sandbox);
+		const instance = makeCompute(world).create(SANDBOX_ID);
+
+		await instance.exec('run', { timeout });
+		await instance.execStream('run', { timeout });
+
+		expect(sandbox.execCalls).toHaveLength(2);
+		for (const call of sandbox.execCalls) {
+			expect(call.options?.timeoutMs).toBe(timeoutMs);
+		}
+	});
+
+	it.each([0, undefined])('omits the Modal exec timeout for %s', async (timeout) => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, sandbox);
+		const instance = makeCompute(world).create(SANDBOX_ID);
+
+		await instance.exec('run', { timeout });
+		await instance.execStream('run', { timeout });
+
+		expect(sandbox.execCalls).toHaveLength(2);
+		for (const call of sandbox.execCalls) {
+			expect(call.options).not.toHaveProperty('timeoutMs');
+		}
+	});
+
 	it('applies onlyIfUnset vars as a guarded prefix, not exec env', async () => {
 		const world = makeWorld();
 		const sandbox = new FakeSandbox();
