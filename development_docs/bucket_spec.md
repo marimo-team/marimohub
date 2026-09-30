@@ -1196,11 +1196,12 @@ if exists __marimo__/session/{notebook}.py.json:
 patch versions/{vid}/version.json with html_snapshot / session_snapshot descriptors (§4.7)
 
 // 4. Capture the rest of the workspace IF PERSIST_WORKSPACE=workspace (best-effort).
-//    Source files (notebook.py / pyproject.toml) and __marimo__/ are excluded —
-//    they are persisted by steps 1–3 — as are regenerable Python artifacts
-//    (.venv/, __pycache__/). Everything else is mirrored into workspace/.
+//    Steps 1–2 own the root source files (notebook.py / pyproject.toml).
+//    Capture excludes those files and .venv/ or __pycache__/ at any depth.
+//    It includes __marimo__/ and hidden files, subject to path, file-type, and size limits.
+//    Step 3 separately saves only the selected HTML/session artifacts in versions/.
 if PERSIST_WORKSPACE == "workspace":
-  for each runtime file under the working dir (excluding notebook.py, pyproject.toml, __marimo__/, .venv/, __pycache__/):
+  for each eligible runtime file under the working dir (including hidden files and __marimo__/):
     PUT projects/{pid}/notebooks/{nid}/workspace/{path}    // binary-safe
   delete workspace/{path} objects no longer present in the sandbox  // mirror deletes
 

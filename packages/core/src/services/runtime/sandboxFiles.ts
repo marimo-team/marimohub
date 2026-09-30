@@ -261,12 +261,15 @@ export async function restoreWorkspace(
 
 /**
  * Capture the notebook's `workspace/` folder from the sandbox working directory
- * back into the bucket on teardown. Source files (`notebook.py`,
- * `pyproject.toml`) and `__marimo__/` snapshots are excluded — they are owned by
- * `NotebookService.commitSession` — so this captures only the runtime workspace.
+ * back into the bucket on teardown. `NotebookService.commitSession` owns the
+ * root source files (`notebook.py`, `pyproject.toml`), so capture excludes them.
+ * Capture also excludes `.venv/` and `__pycache__/` at any depth.
  *
- * In `workspace` mode every remaining file is read with a byte/deadline budget
- * and written to its `workspace/` key. In `source` mode no runtime
+ * In `workspace` mode, capture includes `__marimo__/` and hidden files, subject
+ * to path, file-type, and size limits. The workspace copies of marimo artifacts
+ * are separate from the selected HTML/session artifacts saved in versions.
+ * Each file is read with a byte/deadline budget and written to its `workspace/`
+ * key. In `source` mode no runtime
  * files are uploaded. Both modes then mirror-delete: any key under `workspace/`
  * (other than the excluded source files) that is no longer present in the sandbox
  * is removed, keeping `workspace/` an accurate latest-only mirror and cleaning up
