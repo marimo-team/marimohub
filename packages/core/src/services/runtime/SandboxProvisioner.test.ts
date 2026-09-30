@@ -2179,12 +2179,19 @@ describe('SandboxProvisioner', () => {
 			);
 			const nb = paths.project(project.id).notebook(created.id);
 
-			// A working dir with source files plus a generated runtime file.
+			const runtimeFiles = {
+				'data/cars.csv': 'a,b\n1,2\n',
+				'__marimo__/notebook.html': '<html>output</html>',
+				'__marimo__/session/notebook.py.json': '{"version":"1"}',
+				'.git/HEAD': 'ref: refs/heads/main\n',
+				'.env': 'EXAMPLE=value\n',
+				'.gitignore': '*.csv\n',
+			};
 			const { instance, calls } = makeFsSandbox({
 				files: {
 					'notebook.py': 'print(2)',
 					'pyproject.toml': '[project]',
-					'data/cars.csv': 'a,b\n1,2\n',
+					...runtimeFiles,
 				},
 			});
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
@@ -2199,21 +2206,17 @@ describe('SandboxProvisioner', () => {
 				'workspace',
 			);
 
-			// Runtime file persisted under workspace/; source stays out of it (commitSession owns it).
-			expect(await (await env.bucket.get(nb.workspaceFile('data/cars.csv')))?.text()).toBe(
-				'a,b\n1,2\n',
-			);
+			for (const [path, content] of Object.entries(runtimeFiles)) {
+				expect(await (await env.bucket.get(nb.workspaceFile(path)))?.text()).toBe(content);
+			}
 			expect(calls.destroy).toBe(1);
 		});
 
 		it('still destroys the sandbox when captureWorkspace throws (best-effort)', async () => {
 			const { instance: base, calls } = makeFakeSandbox();
-			// Fail only the capture listing (no includeHidden); readSessionArtifacts passes
-			// includeHidden:true and is left to succeed.
 			const instance = {
 				...base,
-				listFiles: async (path: string, options?: { includeHidden?: boolean }) => {
-					if (options?.includeHidden) return { success: true, files: [] };
+				listFiles: async () => {
 					throw new Error('list boom');
 				},
 			} as unknown as SandboxInstance;
@@ -2512,12 +2515,9 @@ describe('SandboxProvisioner', () => {
 
 		it('throws the workspace error and logs the commit error when both reject', async () => {
 			const { instance: base, calls } = makeFakeSandbox();
-			// Fail the workspace capture (listFiles without includeHidden); the commit
-			// (readSessionArtifacts passes includeHidden:true) is failed via commitSession.
 			const instance = {
 				...base,
-				listFiles: async (_path: string, options?: { includeHidden?: boolean }) => {
-					if (options?.includeHidden) return { success: true, files: [] };
+				listFiles: async () => {
 					throw new Error('workspace list boom');
 				},
 			} as unknown as SandboxInstance;

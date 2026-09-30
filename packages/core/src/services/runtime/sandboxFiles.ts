@@ -123,25 +123,12 @@ async function createSandboxDirectories(
 }
 
 /**
- * Workspace-relative paths the capture/restore path leaves alone. Entries ending
- * in `/` are directory names matched at any depth; the rest are exact root files.
- * `notebook.py` / `pyproject.toml` are the source files — owned by
- * `NotebookService.commitSession`, which writes them into `workspace/` and into
- * the immutable `versions/{vid}/` record. `__marimo__/` holds marimo's rendered
- * HTML / session snapshots, which are versioned separately. `.venv/` and
- * `__pycache__/` are regenerable Python build/env artifacts (uv resolves the venv
- * beside the notebook) — large, churny, and pointless to persist. Everything else
- * under the working dir is "the workspace."
+ * `commitSession` owns the root source files. Python environments and bytecode
+ * caches are regenerated rather than persisted. Directory exclusions apply at
+ * any depth; source-file exclusions apply only at the workspace root.
  */
-const WORKSPACE_EXCLUDE = [
-	'notebook.py',
-	'pyproject.toml',
-	'__marimo__/',
-	'.venv/',
-	'__pycache__/',
-];
+const WORKSPACE_EXCLUDE = ['notebook.py', 'pyproject.toml', '.venv/', '__pycache__/'];
 
-/** True when a workspace-relative path is a source/snapshot/junk path we never capture/delete. */
 function isExcluded(rel: string): boolean {
 	const segments = rel.split('/');
 	return WORKSPACE_EXCLUDE.some((ex) =>
@@ -300,11 +287,11 @@ export async function captureWorkspace(
 	const nb = paths.project(projectId).notebook(notebookId);
 
 	// Relative paths currently present in the sandbox working dir, excluding source
-	// files and snapshots. Used to upload files and drive mirror-deletes.
+	// files and regenerable Python artifacts. Used to upload files and drive mirror-deletes.
 	const present = new Set<string>();
 
 	if (mode === 'workspace') {
-		const listing = await sandbox.listFiles(workingDir, { recursive: true });
+		const listing = await sandbox.listFiles(workingDir, { recursive: true, includeHidden: true });
 		if (!listing.success) {
 			// Could not enumerate the working dir — bail out entirely. Falling through
 			// to the mirror-delete below with an empty `present` set would treat every

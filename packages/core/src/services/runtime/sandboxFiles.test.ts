@@ -385,7 +385,7 @@ describe('captureWorkspace', () => {
 		expect(await bucket.get(nb.code)).toBeNull();
 	});
 
-	it('workspace mode: captures runtime files but excludes source + __marimo__', async () => {
+	it('workspace mode: captures runtime files but excludes source files', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
 		const bucket = new MemoryBucket();
 		const { instance } = makeFsSandbox({
@@ -405,11 +405,58 @@ describe('captureWorkspace', () => {
 			'a,b\n1,2\n',
 		);
 		expect(decode(await (await bucket.get(nb.workspaceFile('out.txt')))!.bytes())).toBe('hello');
-		// Source + __marimo__ excluded.
 		expect(await bucket.get(nb.code)).toBeNull();
 		expect(await bucket.get(nb.deps)).toBeNull();
-		expect(await bucket.get(nb.workspaceFile('__marimo__/notebook.html'))).toBeNull();
+		expect(await (await bucket.get(nb.workspaceFile('__marimo__/notebook.html')))?.text()).toBe(
+			'<html></html>',
+		);
 	});
+
+	it('captures and restores marimo state, dotfiles, and hidden directories', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const files = {
+			'__marimo__/notebook.html': '<html>output</html>',
+			'__marimo__/session/notebook.py.json': '{"version":"1"}',
+			'__marimo__/cache/state.bin': new Uint8Array([0, 255, 128]),
+			'pkg/__marimo__/state.json': '{}',
+			'.env': 'EXAMPLE=value\n',
+			'.gitignore': '*.csv\n',
+			'.git/HEAD': 'ref: refs/heads/main\n',
+			'.git/objects/ab/cdef': new Uint8Array([0, 137, 254, 255]),
+			'pkg/.config/.settings': 'enabled=true\n',
+		};
+		const { instance, fs } = makeFsSandbox({ files });
+		const listFiles = vi.fn(instance.listFiles.bind(instance));
+
+		await captureWorkspace(
+			{ ...instance, listFiles },
+			bucket,
+			projectId,
+			notebookId,
+			MOUNT,
+			'workspace',
+		);
+
+		expect(listFiles).toHaveBeenCalledWith(MOUNT, { recursive: true, includeHidden: true });
+		const restored = makeFsSandbox();
+		await restoreWorkspace(restored.instance, bucket, nb.workspacePrefix, MOUNT);
+		expect(restored.fs).toEqual(fs);
+	});
+
+	it.each(['__marimo__/cache/state.bin', '.env', '.gitignore', '.git/HEAD', 'pkg/.config/file'])(
+		'mirror-deletes removed workspace file %s',
+		async (path) => {
+			const { projectId, notebookId, nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			await bucket.put(nb.workspaceFile(path), 'old');
+			const { instance } = makeFsSandbox();
+
+			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+			expect(await bucket.get(nb.workspaceFile(path))).toBeNull();
+		},
+	);
 
 	it('workspace mode: excludes regenerable .venv and __pycache__ (incl. nested) junk', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
@@ -418,6 +465,7 @@ describe('captureWorkspace', () => {
 			files: {
 				'data/cars.csv': 'a,b\n',
 				'.venv/bin/python': 'binary',
+				'pkg/.venv/bin/python': 'binary',
 				'__pycache__/mod.cpython-312.pyc': 'bytecode',
 				'pkg/__pycache__/util.cpython-312.pyc': 'bytecode', // nested, not at root
 			},
@@ -428,6 +476,7 @@ describe('captureWorkspace', () => {
 		// Real data captured; venv + bytecode caches (root and nested) skipped.
 		expect(await bucket.get(nb.workspaceFile('data/cars.csv'))).not.toBeNull();
 		expect(await bucket.get(nb.workspaceFile('.venv/bin/python'))).toBeNull();
+		expect(await bucket.get(nb.workspaceFile('pkg/.venv/bin/python'))).toBeNull();
 		expect(await bucket.get(nb.workspaceFile('__pycache__/mod.cpython-312.pyc'))).toBeNull();
 		expect(await bucket.get(nb.workspaceFile('pkg/__pycache__/util.cpython-312.pyc'))).toBeNull();
 	});
@@ -605,6 +654,180 @@ describe('captureWorkspace', () => {
 			expect(warn).toHaveBeenCalled();
 		});
 	});
+});
+
+describe('workspace metadata edge cases', () => {
+	beforeEach(() => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it('round-trips empty dotfiles and empty hidden or marimo directories', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const directories = ['.git/refs/heads', 'pkg/.config', '__marimo__/cache'];
+		const { instance, fs } = makeFsSandbox({
+			files: { '.env': '', '.gitignore': '' },
+			directories,
+		});
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+		const restored = makeFsSandbox();
+		await restoreWorkspace(restored.instance, bucket, nb.workspacePrefix, MOUNT);
+
+		expect(restored.fs).toEqual(fs);
+		expect(restored.calls.exec).toHaveLength(1);
+		for (const directory of directories) {
+			expect(restored.calls.exec[0]).toContain(`'${MOUNT}/${directory}'`);
+		}
+	});
+
+	it('source mode removes stored metadata without touching source files or versioned snapshots', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const version = nb.version(createVersionId());
+		const files = {
+			'.env': 'EXAMPLE=value',
+			'.gitignore': '*.csv',
+			'.git/HEAD': 'ref: refs/heads/main',
+			'__marimo__/notebook.html': '<html>workspace</html>',
+			'__marimo__/session/notebook.py.json': '{}',
+		};
+		for (const [path, content] of Object.entries(files)) {
+			await bucket.put(nb.workspaceFile(path), content);
+		}
+		const preserved = [nb.code, nb.deps, version.html, version.session];
+		for (const key of preserved) await bucket.put(key, 'saved');
+		const { instance, calls } = makeFsSandbox({ files });
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'source');
+
+		for (const path of Object.keys(files)) {
+			expect(await bucket.get(nb.workspaceFile(path))).toBeNull();
+		}
+		for (const key of preserved) expect(await (await bucket.get(key))?.text()).toBe('saved');
+		expect(calls.readFile).toHaveLength(0);
+	});
+
+	it('excludes Python artifacts inside hidden and marimo directories without excluding lookalikes', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const excluded = ['.config/.venv/bin/python', '__marimo__/__pycache__/cache.pyc'];
+		const included = ['.venv-backup/config', '__pycache__.txt', '__marimo__/cache/value'];
+		const { instance, calls } = makeFsSandbox({
+			files: Object.fromEntries([...excluded, ...included].map((path) => [path, 'contents'])),
+			directories: ['.config/.venv', '__marimo__/__pycache__'],
+		});
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		expect(
+			(await bucket.list({ prefix: nb.workspacePrefix })).objects.map((o) => o.key).sort(),
+		).toEqual(included.map((path) => nb.workspaceFile(path)).sort());
+		for (const path of excluded) expect(calls.readFile).not.toContain(`${MOUNT}/${path}`);
+	});
+
+	it('never reads unsafe or reserved paths returned by the hidden-file listing', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const unsafe = [
+			'.git/../../outside',
+			'/tmp/.env',
+			'.config/../outside',
+			'.git\\config',
+			'.env\nextra',
+			WORKSPACE_DIRECTORY_MARKER,
+			`.git/${WORKSPACE_DIRECTORY_MARKER}/config`,
+		];
+		const { instance, calls } = makeFsSandbox({
+			files: Object.fromEntries([...unsafe, '.git/config'].map((path) => [path, 'contents'])),
+		});
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		expect(calls.readFile).toEqual([`${MOUNT}/.git/config`]);
+		expect((await bucket.list({ prefix: nb.workspacePrefix })).objects.map((o) => o.key)).toEqual([
+			nb.workspaceFile('.git/config'),
+		]);
+	});
+
+	it.each(['NOT_FOUND', 'READ_FAILED', 'malformed base64'] as const)(
+		'preserves saved metadata after %s while saving readable siblings',
+		async (failure) => {
+			const { projectId, notebookId, nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			const failedPaths = ['.env', '.git/objects/ab/cdef', '__marimo__/cache/state'];
+			for (const path of failedPaths) await bucket.put(nb.workspaceFile(path), 'last good');
+			await bucket.put(nb.workspaceFile('.git/refs/heads/deleted'), 'stale');
+			const { instance } = makeFsSandbox({
+				files: {
+					...Object.fromEntries(failedPaths.map((path) => [path, 'new'])),
+					'.gitignore': '*.csv',
+				},
+			});
+			const read = instance.readFileBounded!.bind(instance);
+			vi.spyOn(instance, 'readFileBounded').mockImplementation(async (path, options) => {
+				if (path === `${MOUNT}/.gitignore`) return read(path, options);
+				return failure === 'malformed base64'
+					? { success: true, content: '!!!!', encoding: 'base64' }
+					: readFileFailure(failure);
+			});
+
+			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+			for (const path of failedPaths) {
+				expect(await (await bucket.get(nb.workspaceFile(path)))?.text()).toBe('last good');
+			}
+			expect(await (await bucket.get(nb.workspaceFile('.gitignore')))?.text()).toBe('*.csv');
+			expect(await bucket.get(nb.workspaceFile('.git/refs/heads/deleted'))).toBeNull();
+		},
+	);
+
+	it.each(['.git/objects/ab/cdef', '__marimo__/cache/state'])(
+		'preserves %s when its listed size exceeds the file limit',
+		async (path) => {
+			const { projectId, notebookId, nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			await bucket.put(nb.workspaceFile(path), 'last good');
+			const { instance, calls } = makeFsSandbox({
+				files: { [path]: 'new', '.env': '' },
+				sizes: { [path]: MAX_WORKSPACE_FILE_BYTES + 1 },
+			});
+
+			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+			expect(await (await bucket.get(nb.workspaceFile(path)))?.text()).toBe('last good');
+			expect(calls.readFile).not.toContain(`${MOUNT}/${path}`);
+			expect(await (await bucket.get(nb.workspaceFile('.env')))?.text()).toBe('');
+		},
+	);
+
+	it.each(['listing', 'read', 'upload'] as const)(
+		'preserves stored metadata and skips cleanup when %s throws',
+		async (stage) => {
+			const { projectId, notebookId, nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			const stored = ['.env', '.git/HEAD', '__marimo__/cache/state'];
+			for (const path of stored) await bucket.put(nb.workspaceFile(path), 'last good');
+			const { instance } = makeFsSandbox({ files: { '.env': 'new' } });
+			const error = new Error(`${stage} unavailable`);
+			if (stage === 'listing') vi.spyOn(instance, 'listFiles').mockRejectedValue(error);
+			if (stage === 'read') vi.spyOn(instance, 'readFileBounded').mockRejectedValue(error);
+			if (stage === 'upload') vi.spyOn(bucket, 'put').mockRejectedValue(error);
+			const remove = vi.spyOn(bucket, 'delete');
+
+			await expect(
+				captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace'),
+			).rejects.toThrow(error);
+
+			for (const path of stored) {
+				expect(await (await bucket.get(nb.workspaceFile(path)))?.text()).toBe('last good');
+			}
+			expect(remove).not.toHaveBeenCalled();
+		},
+	);
 });
 
 describe('readSessionArtifacts', () => {
