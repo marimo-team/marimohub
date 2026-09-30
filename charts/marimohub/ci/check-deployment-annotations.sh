@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../../.."
 
+# Reload controllers read Deployment metadata, not pod-template annotations;
+# keep the two settings separate for both API and maintenance workloads.
 for maintenance in true false; do
   for configured in true false; do
     args=(--set "maintenance.enabled=$maintenance")
