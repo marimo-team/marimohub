@@ -537,6 +537,24 @@ describe('ModalCompute', () => {
 		}
 	});
 
+	it.each([-1, -1000, Number.NaN, Infinity, -Infinity])(
+		'rejects invalid exec timeout %s before acquiring a sandbox',
+		async (timeout) => {
+			const world = makeWorld();
+			const instance = makeCompute(world).create(SANDBOX_ID);
+
+			await expect(instance.exec('run', { timeout })).rejects.toThrow(
+				new RangeError('Sandbox exec timeout must be finite and nonnegative'),
+			);
+			await expect(instance.execStream('run', { timeout })).rejects.toThrow(
+				new RangeError('Sandbox exec timeout must be finite and nonnegative'),
+			);
+
+			expect(world.client.sandboxes.fromName).not.toHaveBeenCalled();
+			expect(world.client.sandboxes.create).not.toHaveBeenCalled();
+		},
+	);
+
 	it('applies onlyIfUnset vars as a guarded prefix, not exec env', async () => {
 		const world = makeWorld();
 		const sandbox = new FakeSandbox();
