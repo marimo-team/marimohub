@@ -131,7 +131,7 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 					value={value}
 					onChange={(e) => onChange(e.target.value as AssignableProjectRole)}
 					disabled={disabled}
-					className="h-8 rounded-md border border-input bg-background appearance-none pl-2 pr-8 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+					className="peer h-8 rounded-md border border-input bg-background appearance-none pl-2 pr-8 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 				>
 					{value === 'admin' && (
 						<option value="admin" disabled>
@@ -147,7 +147,7 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 			</Tooltip>
 			<ChevronDown
 				aria-hidden="true"
-				className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground"
+				className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground peer-disabled:opacity-50"
 			/>
 		</span>
 	);
