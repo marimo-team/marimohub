@@ -2176,6 +2176,73 @@ describe('Session routes', () => {
 		).toBe(deadline);
 	});
 
+	it.each(['normal', 'claim-lost'] as const)(
+		'revalidates %s editor reuse after a concurrent stop',
+		async (reusePath) => {
+			const kernelProbe = vi.fn<NonNullable<ApiDeps['kernelProbe']>>();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: makeFakeCompute(),
+				deps: { kernelProbe },
+			});
+			const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			const { sessions } = api.deps.services;
+			const stop = () => sessions.beginTerminating(pid, first.session_id);
+
+			if (reusePath === 'normal') {
+				kernelProbe.mockImplementationOnce(async () => {
+					await stop();
+					return 'alive';
+				});
+			} else {
+				vi.spyOn(sessions, 'findReusableEditor').mockResolvedValueOnce({ sharing: 'shared' });
+				const claimEditor = sessions.claimEditor.bind(sessions);
+				let lostClaim = false;
+				vi.spyOn(sessions, 'claimEditor').mockImplementation(async (...args) => {
+					const result = await claimEditor(...args);
+					lostClaim = !result.claimed;
+					return result;
+				});
+				const getSession = sessions.getSession.bind(sessions);
+				vi.spyOn(sessions, 'getSession').mockImplementation(async (...args) => {
+					const snapshot = await getSession(...args);
+					if (lostClaim && snapshot.session_id === first.session_id) {
+						lostClaim = false;
+						await stop();
+					}
+					return snapshot;
+				});
+			}
+
+			await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+			expect((await sessions.getSession(pid, first.session_id)).status).toBe('terminating');
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBe(first.session_id);
+		},
+	);
+
+	it('rejects editor reuse when authorization expires during the kernel probe', async () => {
+		const services = createServices(bucket);
+		const kernelProbe = vi.fn<NonNullable<ApiDeps['kernelProbe']>>();
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { services, kernelProbe },
+		});
+		const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+		kernelProbe.mockImplementationOnce(async () => {
+			await services.sessions.tightenAuthorizationDeadline(
+				pid,
+				first.session_id,
+				new Date(Date.now() - Millis.seconds(1)).toISOString(),
+			);
+			return 'alive';
+		});
+
+		await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+	});
+
 	it('refuses to reuse an expired editor until the sweep reclaims its sandbox', async () => {
 		const startedAt = new Date(Date.now() - Millis.minutes(7)).toISOString();
 		const stale = makeSession({

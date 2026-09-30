@@ -1307,6 +1307,19 @@ export async function startNotebookSession(input: {
 		authorizationExpiresAt
 			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
 			: Promise.resolve(session);
+	const revalidateEditorReuse = async (session: Session) => {
+		const current = await sessions.getSession(pid, session.session_id);
+		if (current.status !== 'running' && current.status !== 'starting') {
+			throw new ConflictError('The previous editor session is still shutting down. Retry shortly.');
+		}
+		if (
+			current.authorization_expires_at &&
+			Date.now() >= Date.parse(current.authorization_expires_at)
+		) {
+			throw new ConflictError('The editor session authorization expired. Retry shortly.');
+		}
+		return current;
+	};
 
 	const workspacePolicy = workspaceSourcePolicy(notebook.source);
 	// Synced sources are read-only mirrors served from the immutable workspace of the
@@ -1467,6 +1480,8 @@ export async function startNotebookSession(input: {
 					appBaseUrl,
 				});
 			}
+			// Probing and surface startup can overlap a stop or an authorization update.
+			if (mode === 'edit') reusable = await revalidateEditorReuse(reusable);
 			return {
 				...(body?.replace_app_session_id
 					? withoutConnectionUrls(toSessionResponse(reusable, reusableGrants))
@@ -1965,25 +1980,14 @@ export async function startNotebookSession(input: {
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
 			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
 			if (winnerCandidate?.notebook_id === nid && sessionMode(winnerCandidate) === 'edit') {
-				// A terminal holder still fences the claim until its sandbox is reclaimed,
-				// but the proxy refuses anything not running, so it must not be reused.
-				if (winnerCandidate.status !== 'running' && winnerCandidate.status !== 'starting') {
-					throw new ConflictError(
-						'The previous editor session is still shutting down. Retry shortly.',
-					);
-				}
-				const winner = await tightenAuthorizationDeadline(winnerCandidate);
-				if (
-					winner.authorization_expires_at &&
-					Date.now() >= Date.parse(winner.authorization_expires_at)
-				) {
-					throw new ConflictError('The editor session authorization expired. Retry shortly.');
-				}
+				let winner = await tightenAuthorizationDeadline(winnerCandidate);
 				if (sharing === 'exclusive' && winner.user_id !== user.id) {
 					throw new EditSessionOwnedError(`Editing is currently owned by ${winner.user_id}`);
 				}
+				const winnerGrants = await grants(winner);
+				winner = await revalidateEditorReuse(winner);
 				return {
-					...toSessionResponse(winner, await grants(winner)),
+					...toSessionResponse(winner, winnerGrants),
 					reused: true,
 					editor_session: {
 						sharing,
