@@ -16,7 +16,7 @@ import type { AppPool, AppPoolMember } from './AppPoolRouter';
 
 const version = createVersionId();
 const now = 100_000;
-const policy = { ...DEFAULT_APP_POOL_POLICY, maxUsersPerSession: 4 };
+const policy = { ...DEFAULT_APP_POOL_POLICY, maxVisitsPerSession: 4 };
 const member = (overrides: Partial<AppPoolMember> = {}): AppPoolMember => ({
 	session_id: createSessionId(),
 	sandbox_id: createSandboxId(),
@@ -184,7 +184,7 @@ describe('pure app routing', () => {
 		}));
 		const arrival = routeApp(
 			result.pool,
-			{ ...limited, maxUsersPerSession: 1 },
+			{ ...limited, maxVisitsPerSession: 1 },
 			{
 				userId: UserId.parse('new-account'),
 				visitId: 'tab',

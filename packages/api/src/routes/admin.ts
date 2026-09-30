@@ -437,7 +437,12 @@ const unsuspendUser = createRoute({
 
 const RuntimeDashboardSchema = RuntimeInspectionSchema.extend({
 	limits: z.object({
-		max_users_per_session: z.number().int().positive().nullable(),
+		max_users_per_session: z
+			.number()
+			.int()
+			.positive()
+			.nullable()
+			.describe('Maximum browser-session slots per sandbox.'),
 		max_sessions_per_version: z.number().int().positive().nullable(),
 	}),
 }).openapi('RuntimeDashboard');
@@ -475,7 +480,7 @@ app.openapi(inspectRuntime, async (c) => {
 			data: {
 				...snapshot,
 				limits: {
-					max_users_per_session: policy.maxUsersPerSession ?? null,
+					max_users_per_session: policy.maxVisitsPerSession ?? null,
 					max_sessions_per_version: policy.maxSessionsPerVersion ?? null,
 				},
 			},

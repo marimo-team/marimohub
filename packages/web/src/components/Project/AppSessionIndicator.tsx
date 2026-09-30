@@ -104,7 +104,7 @@ function AppSessionDetails({
 		>
 			{stale && (
 				<p className="text-amber-600 dark:text-amber-500">
-					This sandbox serves an older version. New users receive the latest version.
+					This sandbox serves an older version. New browser sessions receive the latest version.
 				</p>
 			)}
 			{!canControl && (

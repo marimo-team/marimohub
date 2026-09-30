@@ -1516,10 +1516,10 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: '5',
 					},
 					{
-						id: 'MARIMOHUB_APP_MAX_USERS_PER_SESSION',
-						name: 'Max users per app session',
+						id: 'MARIMOHUB_APP_MAX_VISITS_PER_SESSION',
+						name: 'Max visits per app sandbox',
 						description:
-							'Distinct accounts per sandbox. Unset means unlimited users in one current-version sandbox.',
+							'Browser sessions (managed page visits) per sandbox. Each tab consumes a slot, including tabs from the same account. Unset means unlimited.',
 					},
 					{
 						id: 'MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION',
@@ -1545,7 +1545,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS',
 						name: 'App session idle timeout (seconds)',
 						description:
-							'Time an app sandbox remains empty after its last account assignment expires, including reconnect grace, subject to connection protection. Falls back to MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS (1800 seconds by default). Credential and provider lifetime limits still apply.',
+							'Time an app sandbox remains empty after its last visit assignment expires, including reconnect grace, subject to connection protection. Falls back to MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS (1800 seconds by default). Credential and provider lifetime limits still apply.',
 					},
 					{
 						id: 'MARIMOHUB_AUTOMATIC_THUMBNAILS',

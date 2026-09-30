@@ -775,7 +775,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						>
 							<AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
 							<span>
-								This sandbox serves an older version. New users receive the latest version.
+								This sandbox serves an older version. New browser sessions receive the latest
+								version.
 							</span>
 						</div>
 					)}

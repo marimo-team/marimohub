@@ -4,6 +4,7 @@ import {
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
+	createSessionId,
 	createVersionId,
 	UserId,
 } from '../../ids';
@@ -33,7 +34,7 @@ describe('app pool admission and lifecycle', () => {
 		bucket = new MemoryBucket();
 		await bucket.put(paths.project(pid).notebook(nid).source, JSON.stringify(makeLocalSource(v1)));
 		sessions = new SessionService(bucket);
-		policy = { ...DEFAULT_APP_POOL_POLICY, maxUsersPerSession: 4 };
+		policy = { ...DEFAULT_APP_POOL_POLICY, maxVisitsPerSession: 4 };
 		pool = new AppPoolService(bucket, sessions, policy, undefined, () => now);
 	});
 
@@ -101,10 +102,29 @@ describe('app pool admission and lifecycle', () => {
 		await pool.complete(pid, nid, admission.member.session_id, admission.member.operation_token);
 		return admission;
 	};
-	const visit = (admission: Awaited<ReturnType<typeof admit>>, visitId = 'tab') => ({
+	const visit = (
+		admission: Awaited<ReturnType<typeof admit>>,
+		visitId = admission.assignment.visit_id!,
+	) => ({
 		visit_id: visitId,
 		generation: admission.assignment.generation,
 	});
+	const renew = (admission: Awaited<ReturnType<typeof admit>>) =>
+		pool.heartbeat(
+			pid,
+			nid,
+			admission.assignment.user_id,
+			admission.member.session_id,
+			visit(admission),
+		);
+	const depart = (admission: Awaited<ReturnType<typeof admit>>) =>
+		pool.leave(
+			pid,
+			nid,
+			admission.assignment.user_id,
+			admission.member.session_id,
+			visit(admission),
+		);
 	const effects = () => ({ probe: vi.fn(async () => 0), retire: vi.fn(async () => true) });
 
 	it('checks an empty deletion tombstone with one read and no writes', async () => {
@@ -163,7 +183,7 @@ describe('app pool admission and lifecycle', () => {
 		expect((await pool.inspect(pid, nid))[0]).toMatchObject({ state: 'retiring', users: 0 });
 	});
 
-	it('rejects startup heartbeats at the operation deadline and frees the account slot', async () => {
+	it('rejects startup heartbeats at the operation deadline and frees the visit slot', async () => {
 		const first = await admit();
 		now = first.member.operation_expires_at - 1;
 		expect(
@@ -279,23 +299,223 @@ describe('app pool admission and lifecycle', () => {
 	});
 
 	it('defaults to one unlimited sandbox per version', async () => {
-		delete policy.maxUsersPerSession;
+		delete policy.maxVisitsPerSession;
 		const first = await ready(await admit());
 		for (let i = 0; i < 12; i++)
 			expect((await admit(`user-${i}`)).member.session_id).toBe(first.member.session_id);
 		expect((await pool.inspect(pid, nid))[0].users).toBe(13);
 	});
 
-	it('counts concurrent tabs and devices once and releases only the departed visit', async () => {
+	it('counts concurrent tabs and devices separately and releases only the departed visit', async () => {
 		const first = await ready(await admit());
 		const secondTab = await admit('alice', v1, 'phone');
-		expect(secondTab.assignment.generation).toBe(first.assignment.generation);
-		expect((await pool.inspect(pid, nid))[0].users).toBe(1);
+		expect(secondTab.assignment.generation).not.toBe(first.assignment.generation);
+		expect((await pool.inspect(pid, nid))[0].users).toBe(2);
 		await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first));
 		now += policy.reconnectGraceMs + 1;
 		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
 			true,
 		);
+	});
+
+	it('allocates three browser sessions from one account across two two-slot sandboxes', async () => {
+		policy.maxVisitsPerSession = 2;
+		const first = await ready(await admit());
+		const second = await admit('alice', v1, 'second');
+		now++;
+		const third = await ready(await admit('alice', v1, 'third'));
+		expect(second.member.session_id).toBe(first.member.session_id);
+		expect(third.member.session_id).not.toBe(first.member.session_id);
+		expect((await pool.inspect(pid, nid)).map((member) => member.users)).toEqual([2, 1]);
+		for (const admission of [first, second, third]) {
+			expect(
+				await pool.canAccess(pid, nid, UserId.parse('alice'), admission.member.session_id),
+			).toBe(true);
+			expect(await renew(admission)).toBe(true);
+		}
+		await depart(first);
+		expect((await pool.inspect(pid, nid))[0].users).toBe(2);
+		now += policy.reconnectGraceMs;
+		expect((await pool.inspect(pid, nid)).map((member) => member.users)).toEqual([1, 1]);
+		expect((await admit('alice', v1, 'fourth')).member.session_id).toBe(first.member.session_id);
+	});
+
+	it('expires each visit independently and revokes access only to its sandbox', async () => {
+		policy.maxVisitsPerSession = 1;
+		const first = await ready(await admit());
+		const second = await ready(await admit('alice', v1, 'second'));
+		now += policy.userLeaseMs / 2;
+		await renew(second);
+		now += policy.userLeaseMs / 2;
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
+			false,
+		);
+		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), second.member.session_id)).toBe(
+			true,
+		);
+		expect((await pool.inspect(pid, nid)).map((member) => member.users)).toEqual([0, 1]);
+	});
+
+	it.each(['user', 'sandbox', 'visit', 'generation'] as const)(
+		'rejects presence tokens with a mismatched %s without changing sibling visits',
+		async (mismatch) => {
+			const first = await ready(await admit());
+			const sibling = await admit('alice', v1, 'phone');
+			await admit('bob');
+			const userId = UserId.parse(mismatch === 'user' ? 'bob' : 'alice');
+			const sessionId = mismatch === 'sandbox' ? createSessionId() : first.member.session_id;
+			const token = {
+				visit_id: mismatch === 'visit' ? 'phone' : 'tab',
+				generation:
+					mismatch === 'generation' ? sibling.assignment.generation : first.assignment.generation,
+			};
+			const before = await pool.store.read(pid, nid);
+			const put = vi.spyOn(bucket, 'put');
+			expect(await pool.heartbeat(pid, nid, userId, sessionId, token)).toBe(false);
+			await pool.leave(pid, nid, userId, sessionId, token);
+			expect(put).not.toHaveBeenCalled();
+			expect(await pool.store.read(pid, nid)).toEqual(before);
+		},
+	);
+
+	it.each(['heartbeat', 'departure'] as const)(
+		'does not acknowledge or apply a failed %s write and permits retry',
+		async (operation) => {
+			const first = await ready(await admit());
+			const sibling = await admit('alice', v1, 'phone');
+			now += APP_PRESENCE_PERSIST_INTERVAL_MS;
+			const before = await pool.store.read(pid, nid);
+			const failure = new Error('storage unavailable');
+			const put = vi.spyOn(bucket, 'put').mockRejectedValueOnce(failure);
+			const act = () => (operation === 'heartbeat' ? renew(first) : depart(first));
+			await expect(act()).rejects.toBe(failure);
+			expect(await pool.store.read(pid, nid)).toEqual(before);
+			put.mockRestore();
+			await act();
+			const after = await pool.store.read(pid, nid);
+			expect(after?.assignments.find((item) => item.visit_id === 'phone')).toEqual(
+				sibling.assignment,
+			);
+			expect(after?.assignments.find((item) => item.visit_id === 'tab')).toMatchObject(
+				operation === 'heartbeat'
+					? { visits: [{ visit_id: 'tab', expires_at: now + policy.userLeaseMs }] }
+					: { visits: [], grace_until: now + policy.reconnectGraceMs },
+			);
+		},
+	);
+
+	it('duplicate departure does not extend grace or release a re-admitted visit', async () => {
+		policy.maxVisitsPerSession = 1;
+		const first = await ready(await admit());
+		await depart(first);
+		const deadline = now + policy.reconnectGraceMs;
+		now++;
+		await depart(first);
+		expect((await pool.store.read(pid, nid))?.assignments[0].grace_until).toBe(deadline);
+		now = deadline;
+		const replacement = await admit();
+		expect(replacement.assignment.generation).not.toBe(first.assignment.generation);
+		await depart(first);
+		expect(await renew(first)).toBe(false);
+		expect(await renew(replacement)).toBe(true);
+		expect((await pool.inspect(pid, nid))[0].users).toBe(1);
+	});
+
+	it('keeps an over-capacity migrated sandbox accessible but blocks new visits until space opens', async () => {
+		policy.maxVisitsPerSession = 1;
+		policy.maxSessionsPerVersion = 1;
+		const first = await ready(await admit());
+		await pool.store.mutate(pid, nid, (record) => {
+			delete record.assignments[0].visit_id;
+			record.assignments[0].visits.push({
+				visit_id: 'phone',
+				expires_at: now + policy.userLeaseMs,
+			});
+			return { pool: record, value: undefined };
+		});
+		const phone = await admit('alice', v1, 'phone');
+		expect(phone.member.session_id).toBe(first.member.session_id);
+		expect(await renew(first)).toBe(true);
+		expect(await renew(phone)).toBe(true);
+		await expect(admit('alice', v1, 'third')).rejects.toMatchObject({ status: 429 });
+		await depart(first);
+		now += policy.reconnectGraceMs;
+		await expect(admit('alice', v1, 'third')).rejects.toMatchObject({ status: 429 });
+		await depart(phone);
+		now += policy.reconnectGraceMs;
+		expect((await admit('alice', v1, 'third')).member.session_id).toBe(first.member.session_id);
+	});
+
+	it('retains legacy grace without inventing a visit identity or restarting its deadline', async () => {
+		policy.maxVisitsPerSession = 1;
+		policy.maxSessionsPerVersion = 1;
+		const first = await ready(await admit());
+		const deadline = now + policy.reconnectGraceMs;
+		await pool.store.mutate(pid, nid, (record) => {
+			delete record.assignments[0].visit_id;
+			record.assignments[0].visits = [];
+			record.assignments[0].grace_until = deadline;
+			return { pool: record, value: undefined };
+		});
+		expect(await renew(first)).toBe(false);
+		await depart(first);
+		await expect(admit()).rejects.toMatchObject({ status: 429 });
+		now = deadline;
+		const next = await admit();
+		expect(next.member.session_id).toBe(first.member.session_id);
+		expect(next.assignment.generation).not.toBe(first.assignment.generation);
+		expect((await pool.store.read(pid, nid))?.assignments).toEqual([next.assignment]);
+	});
+
+	it('splits stored account assignments into visit slots without moving existing sessions', async () => {
+		policy.maxVisitsPerSession = 2;
+		const first = await ready(await admit());
+		await pool.store.mutate(pid, nid, (record) => {
+			delete record.assignments[0].visit_id;
+			record.assignments[0].visits.push({
+				visit_id: 'phone',
+				expires_at: now + policy.userLeaseMs,
+			});
+			return { pool: record, value: undefined };
+		});
+		expect((await pool.inspect(pid, nid))[0].users).toBe(2);
+		const phone = await admit('alice', v1, 'phone');
+		expect(phone.member.session_id).toBe(first.member.session_id);
+		expect(phone.assignment.generation).toBe(first.assignment.generation);
+		const third = await admit('alice', v1, 'third');
+		expect(third.member.session_id).not.toBe(first.member.session_id);
+		await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first));
+		expect(
+			await pool.heartbeat(
+				pid,
+				nid,
+				UserId.parse('alice'),
+				phone.member.session_id,
+				visit(phone, 'phone'),
+			),
+		).toBe(true);
+		expect(
+			await pool.heartbeat(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first)),
+		).toBe(false);
+	});
+
+	it('does not overbook when independent tabs from the same account race for capacity', async () => {
+		policy.maxVisitsPerSession = 2;
+		policy.maxSessionsPerVersion = 2;
+		const results = await Promise.allSettled(
+			Array.from({ length: 6 }, (_, i) =>
+				admit(
+					'alice',
+					v1,
+					`tab-${i}`,
+					new AppPoolService(bucket, sessions, policy, undefined, () => now),
+				),
+			),
+		);
+		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(4);
+		for (const result of results)
+			if (result.status === 'rejected') expect(result.reason).toMatchObject({ status: 429 });
+		expect((await pool.inspect(pid, nid)).map((member) => member.users)).toEqual([2, 2]);
 	});
 
 	it('retains stickiness during grace but uses the latest version after departure', async () => {
@@ -309,7 +529,7 @@ describe('app pool admission and lifecycle', () => {
 		expect(next.assignment.generation).not.toBe(first.assignment.generation);
 	});
 
-	it('pins users across repeated releases while allowing rollover surge', async () => {
+	it('pins visits across repeated releases while allowing rollover surge', async () => {
 		policy.maxSessionsPerVersion = 1;
 		const first = await ready(await admit());
 		await ready(await admit('bob', v2));
@@ -323,7 +543,7 @@ describe('app pool admission and lifecycle', () => {
 	});
 
 	it('rejects a full pool without overbooking or losing existing assignments', async () => {
-		policy.maxUsersPerSession = 1;
+		policy.maxVisitsPerSession = 1;
 		policy.maxSessionsPerVersion = 1;
 		const first = await ready(await admit());
 		await expect(admit('bob')).rejects.toMatchObject({ status: 429 });
@@ -331,14 +551,14 @@ describe('app pool admission and lifecycle', () => {
 	});
 
 	it('reserves starting capacity before compute or session creation', async () => {
-		policy.maxUsersPerSession = 1;
+		policy.maxVisitsPerSession = 1;
 		const first = await admit();
 		const second = await admit('bob');
 		expect(first.member.session_id).not.toBe(second.member.session_id);
 	});
 
 	it('independent instances race for the last slot without over-admission', async () => {
-		policy.maxUsersPerSession = 1;
+		policy.maxVisitsPerSession = 1;
 		policy.maxSessionsPerVersion = 1;
 		const contenders = Array.from({ length: 8 }, (_, i) =>
 			admit(
@@ -355,17 +575,15 @@ describe('app pool admission and lifecycle', () => {
 		expect((await pool.inspect(pid, nid))[0].users).toBe(1);
 	});
 
-	it('duplicate account admissions have only one provisioning winner', async () => {
-		const results = await Promise.all(
-			Array.from({ length: 6 }, (_, i) => admit('alice', v1, `tab-${i}`)),
-		);
+	it('duplicate visit admissions have only one provisioning winner', async () => {
+		const results = await Promise.all(Array.from({ length: 6 }, () => admit('alice', v1, 'tab')));
 		expect(results.filter((result) => result.kind === 'reserve')).toHaveLength(1);
 		expect(new Set(results.map((result) => result.member.session_id)).size).toBe(1);
 		expect((await pool.inspect(pid, nid))[0].users).toBe(1);
 	});
 
 	it('prefers ready capacity to a starting sandbox', async () => {
-		policy.maxUsersPerSession = 1;
+		policy.maxVisitsPerSession = 1;
 		const first = await ready(await admit());
 		await admit('bob');
 		await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first));
@@ -379,9 +597,9 @@ describe('app pool admission and lifecycle', () => {
 		expect((await pool.store.read(pid, nid))?.latest_version_id).toBe(v2);
 	});
 
-	it('observes the latest version while preserving a reconnecting account assignment', async () => {
+	it('observes the latest version while preserving a reconnecting visit assignment', async () => {
 		const first = await ready(await admit());
-		const reconnect = await admit('alice', v2, 'second-tab');
+		const reconnect = await admit('alice', v2, 'tab');
 		expect(reconnect.assignment.generation).toBe(first.assignment.generation);
 		expect(reconnect.member.session_id).toBe(first.member.session_id);
 		expect(reconnect.member.state).toBe('draining');
@@ -390,11 +608,15 @@ describe('app pool admission and lifecycle', () => {
 		expect((await pool.store.read(pid, nid))?.latest_version_id).toBe(v2);
 	});
 
-	it.each(['reserve', 'reuse', 'replace'] as const)(
-		'%s compensates a source commit between the head read and pool CAS',
-		async (operation) => {
+	it.each(
+		(['reserve', 'reuse', 'replace'] as const).flatMap((operation) =>
+			['alice', 'bob'].map((user) => [operation, user] as const),
+		),
+	)(
+		'%s compensates a source commit during CAS for %s without removing existing visits',
+		async (operation, user) => {
 			const first = await ready(await admit());
-			if (operation === 'reserve') policy.maxUsersPerSession = 1;
+			if (operation === 'reserve') policy.maxVisitsPerSession = 1;
 			const put = bucket.put.bind(bucket);
 			let committed = false;
 			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
@@ -409,15 +631,17 @@ describe('app pool admission and lifecycle', () => {
 					? pool.replace({
 							projectId: pid,
 							notebookId: nid,
-							userId: UserId.parse('bob'),
+							userId: UserId.parse(user),
 							versionId: v1,
 							startupMs: 900_000,
 							replacesSessionId: first.member.session_id,
 						})
-					: admit('bob');
+					: admit(user, v1, 'phone');
 			await expect(admission).rejects.toMatchObject({ status: 409 });
 			const stored = await pool.store.read(pid, nid);
-			expect(stored?.assignments.map((item) => item.user_id)).toEqual(['alice']);
+			expect(stored?.assignments.map((item) => [item.user_id, item.visit_id])).toEqual([
+				['alice', 'tab'],
+			]);
 			const abandoned = stored?.members.filter(
 				(item) => item.session_id !== first.member.session_id,
 			);
@@ -425,34 +649,39 @@ describe('app pool admission and lifecycle', () => {
 			expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
 				true,
 			);
-			const next = await admit('bob', v2);
+			const next = await admit(user, v2, 'phone');
 			expect(next.member.source_version_id).toBe(v2);
 		},
 	);
 
-	it('abandons a reservation when the post-CAS source check is unavailable', async () => {
-		const first = await ready(await admit());
-		policy.maxUsersPerSession = 1;
-		const sourceKey = paths.project(pid).notebook(nid).source;
-		const get = bucket.get.bind(bucket);
-		const failure = new Error('source unavailable');
-		let sourceReads = 0;
-		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-			if (key === sourceKey && ++sourceReads === 2) throw failure;
-			return get(key);
-		});
-		await expect(admit('bob')).rejects.toBe(failure);
-		const stored = await pool.store.read(pid, nid);
-		expect(stored?.assignments.map((item) => item.user_id)).toEqual(['alice']);
-		expect(stored?.members).toHaveLength(1);
-		expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
-			true,
-		);
-		await pool.reconcile(pid, nid, effects());
-		expect((await pool.inspect(pid, nid)).map((item) => item.session_id)).toEqual([
-			first.member.session_id,
-		]);
-	});
+	it.each(['reserve', 'reuse'] as const)(
+		'%s compensates a failed post-CAS source read without removing sibling visits',
+		async (operation) => {
+			const first = await ready(await admit());
+			if (operation === 'reserve') policy.maxVisitsPerSession = 1;
+			const sourceKey = paths.project(pid).notebook(nid).source;
+			const get = bucket.get.bind(bucket);
+			const failure = new Error('source unavailable');
+			let sourceReads = 0;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === sourceKey && ++sourceReads === 2) throw failure;
+				return get(key);
+			});
+			await expect(admit('alice', v1, 'phone')).rejects.toBe(failure);
+			const stored = await pool.store.read(pid, nid);
+			expect(stored?.assignments.map((item) => [item.user_id, item.visit_id])).toEqual([
+				['alice', 'tab'],
+			]);
+			expect(stored?.members).toHaveLength(1);
+			expect(await pool.canAccess(pid, nid, UserId.parse('alice'), first.member.session_id)).toBe(
+				true,
+			);
+			await pool.reconcile(pid, nid, effects());
+			expect((await pool.inspect(pid, nid)).map((item) => item.session_id)).toEqual([
+				first.member.session_id,
+			]);
+		},
+	);
 
 	it('preserves a newer assignment when stale admission compensation loses a race', async () => {
 		const first = await ready(await admit());
@@ -705,7 +934,7 @@ describe('app pool admission and lifecycle', () => {
 		'%s reports capacity rejection consistently',
 		async (operation) => {
 			policy.maxSessionsPerVersion = 1;
-			policy.maxUsersPerSession = 1;
+			policy.maxVisitsPerSession = 1;
 			const first = await ready(await admit());
 			const versionId = operation === 'replace' ? v2 : v1;
 			if (operation === 'replace') await ready(await admit('carol', versionId));
@@ -743,7 +972,7 @@ describe('app pool admission and lifecycle', () => {
 	it.each(['probe', 'retire'] as const)(
 		'continues maintenance after a %s failure and retries safely',
 		async (stage) => {
-			policy.maxUsersPerSession = 1;
+			policy.maxVisitsPerSession = 1;
 			const first = await ready(await admit());
 			await ready(await admit('bob'));
 			now += policy.userLeaseMs + policy.idleMs;
@@ -779,7 +1008,7 @@ describe('app pool admission and lifecycle', () => {
 		'rejects a %s visit even when its assignment generation is current',
 		async (state) => {
 			const first = await ready(await admit());
-			await admit('alice', v1, 'phone');
+			const phone = await admit('alice', v1, 'phone');
 			const invalidVisit = visit(first, state === 'unknown' ? 'unknown' : 'tab');
 			if (state === 'departed')
 				await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, invalidVisit);
@@ -802,7 +1031,7 @@ describe('app pool admission and lifecycle', () => {
 					nid,
 					UserId.parse('alice'),
 					first.member.session_id,
-					visit(first, 'phone'),
+					visit(phone, 'phone'),
 				),
 			).toBe(true);
 		},

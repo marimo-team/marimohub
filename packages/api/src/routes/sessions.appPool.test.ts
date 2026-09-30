@@ -25,7 +25,7 @@ describe('app pool HTTP integration', () => {
 	let bucket: MemoryBucket;
 	let pid: ProjectId;
 	let nid: NotebookId;
-	const policy = { ...DEFAULT_APP_POOL_POLICY, maxUsersPerSession: 4, maxSessionsPerVersion: 2 };
+	const policy = { ...DEFAULT_APP_POOL_POLICY, maxVisitsPerSession: 4, maxSessionsPerVersion: 2 };
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
 		const services = createServices(bucket);
@@ -50,7 +50,7 @@ describe('app pool HTTP integration', () => {
 	const start = async (user = 'alice', visitId = 'tab') =>
 		expectOk<any>(await api(user).request('POST', path(), { mode: 'app', app_visit_id: visitId }));
 
-	it('packs accounts, scales, and sends only new accounts to a new committed version', async () => {
+	it('packs visits, scales, and sends only new visits to a new committed version', async () => {
 		const first = await start();
 		for (const name of ['bob', 'charlie', 'dan'])
 			expect((await start(name)).session_id).toBe(first.session_id);
@@ -59,7 +59,8 @@ describe('app pool HTTP integration', () => {
 		await createServices(bucket).notebooks.commitSession(pid, nid, { code: 'updated' }, ACTOR);
 		const latest = await start('frank');
 		expect(latest.source_version_id).not.toBe(first.source_version_id);
-		expect((await start('alice', 'phone')).session_id).toBe(first.session_id);
+		expect((await start('alice', 'tab')).session_id).toBe(first.session_id);
+		expect((await start('alice', 'phone')).session_id).toBe(latest.session_id);
 		const old = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
 		expect(old.app_pool).toMatchObject({ state: 'draining', users: 4, max_users: 4 });
 	});
@@ -72,6 +73,72 @@ describe('app pool HTTP integration', () => {
 		expect(response.items).toHaveLength(2);
 		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(1);
 		expect(response.items.map((item: any) => item.app_pool.users).sort()).toEqual([1, 4]);
+	});
+
+	it('scales visits from one account and allows heartbeats on both sandboxes', async () => {
+		const admissions = [];
+		for (let i = 0; i < 5; i++) admissions.push(await start('alice', `tab-${i}`));
+		expect(new Set(admissions.slice(0, 4).map((item) => item.session_id)).size).toBe(1);
+		expect(admissions[4].session_id).not.toBe(admissions[0].session_id);
+		for (const admission of admissions) {
+			const current = await expectOk<any>(
+				await api().request(
+					'POST',
+					path(`/${admission.session_id}/heartbeat`),
+					admission.app_assignment,
+				),
+			);
+			expect(current.can.attach).toBe(true);
+		}
+		await expectError(
+			await api().request('POST', path(`/${admissions[0].session_id}/heartbeat`), {
+				...admissions[0].app_assignment,
+				generation: admissions[1].app_assignment.generation,
+			}),
+			409,
+			'CONFLICT',
+		);
+	});
+
+	it('preserves the legacy API visit when callers omit the visit ID', async () => {
+		const first = await expectOk<any>(await api().request('POST', path(), { mode: 'app' }));
+		const second = await expectOk<any>(await api().request('POST', path(), { mode: 'app' }));
+		expect(second.app_assignment).toEqual(first.app_assignment);
+		expect(second.app_assignment.visit_id).toBe('api');
+		const current = await expectOk<any>(await api().request('GET', path(`/${second.session_id}`)));
+		expect(current.app_pool.users).toBe(1);
+		await expectOk(await api().request('POST', path(`/${first.session_id}/heartbeat`)));
+	});
+
+	it('returns retryable capacity errors for new tabs while existing tabs can reconnect', async () => {
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: makeFakeCompute(),
+			deps: {
+				policy: {
+					defaultRole: 'editor',
+					appPool: {
+						...policy,
+						maxVisitsPerSession: 2,
+						maxSessionsPerVersion: 1,
+					},
+				},
+			},
+		});
+		const enter = (visitId: string) =>
+			client.request('POST', path(), { mode: 'app', app_visit_id: visitId });
+		const first = await expectOk<any>(await enter('first'));
+		await expectOk(await enter('second'));
+		const create = vi.spyOn(client.deps.services.sessions, 'createSession');
+		const rejected = await enter('third');
+		expect(rejected.headers.get('Retry-After')).toBeTruthy();
+		await expectError(rejected, 429, 'RESOURCE_EXHAUSTED');
+		expect(create).not.toHaveBeenCalled();
+		const reconnected = await expectOk<any>(await enter('first'));
+		expect(reconnected.app_assignment).toEqual(first.app_assignment);
+		const current = await expectOk<any>(await client.request('GET', path(`/${first.session_id}`)));
+		expect(current.app_pool.users).toBe(2);
 	});
 
 	it('returns terminal app status through the heartbeat without renewing presence', async () => {
@@ -99,7 +166,7 @@ describe('app pool HTTP integration', () => {
 		expect(replacement.can.attach).toBe(false);
 		expect(replacement.sandbox_url).toBeUndefined();
 		expect(replacement.surfaces?.marimo?.url).toBeUndefined();
-		expect((await start('alice', 'phone')).session_id).toBe(assigned.session_id);
+		expect((await start('alice', 'tab')).session_id).toBe(assigned.session_id);
 		expect((await start('carol')).session_id).toBe(replacement.session_id);
 		const retry = await expectOk<any>(await api('alice').request('POST', path(), body));
 		expect(retry.session_id).toBe(replacement.session_id);
@@ -506,7 +573,7 @@ describe('app pool HTTP integration', () => {
 			'CONFLICT',
 		);
 		const current = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
-		expect(current.app_pool.users).toBe(1);
+		expect(current.app_pool.users).toBe(2);
 		const now = Date.now();
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		try {
@@ -515,9 +582,10 @@ describe('app pool HTTP integration', () => {
 			);
 			const pool = new AppPoolService(bucket, createServices(bucket).sessions, policy);
 			expect((await pool.store.read(pid, nid))?.assignments).toMatchObject([
+				{ visits: [], grace_until: expect.any(Number) },
 				{ visits: [], grace_until: now + policy.reconnectGraceMs },
 			]);
-			expect((await pool.inspect(pid, nid))[0].users).toBe(1);
+			expect((await pool.inspect(pid, nid))[0].users).toBe(2);
 			clock.mockReturnValue(now + policy.reconnectGraceMs + 1);
 			await expectError(
 				await api().request('POST', path(`/${first.session_id}/heartbeat`), phone.app_assignment),
@@ -552,6 +620,7 @@ describe('app pool HTTP integration', () => {
 			userId: ACTOR,
 			compute: makeFakeCompute(),
 			deps: {
+				policy: { appPool: { ...policy, maxVisitsPerSession: 1 } },
 				sandbox: {
 					...api().deps.sandbox,
 					hostname: 'test.local',
@@ -570,7 +639,26 @@ describe('app pool HTTP integration', () => {
 			kind: 'reject',
 			status: 410,
 		});
+		const second = await expectOk<any>(
+			await owner.request('POST', path(), { mode: 'app', app_visit_id: 'phone' }),
+		);
+		expect(second.session_id).not.toBe(first.session_id);
+		for (const session of [first, second]) {
+			for (const headers of [undefined, { Upgrade: 'websocket' }]) {
+				expect(
+					await authorizeProxyRequest(new Request(session.sandbox_url, { headers }), owner.deps),
+				).toMatchObject({ kind: 'forward' });
+			}
+		}
+		await expectOk(
+			await owner.request('POST', path(`/${first.session_id}/leave`), first.app_assignment),
+		);
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + policy.reconnectGraceMs + 1);
 		expect(await authorizeProxyRequest(new Request(first.sandbox_url), owner.deps)).toMatchObject({
+			kind: 'reject',
+			status: 410,
+		});
+		expect(await authorizeProxyRequest(new Request(second.sandbox_url), owner.deps)).toMatchObject({
 			kind: 'forward',
 		});
 	});

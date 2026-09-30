@@ -3,7 +3,7 @@ import { APP_USER_LEASE_MS, APP_RECONNECT_GRACE_MS } from '../../constants';
 import { SandboxId, SessionId, UserId, VersionId } from '../../ids';
 
 export interface AppPoolPolicy {
-	maxUsersPerSession?: number;
+	maxVisitsPerSession?: number;
 	maxSessionsPerVersion?: number;
 	userLeaseMs: number;
 	reconnectGraceMs: number;
@@ -36,6 +36,7 @@ export const AppPoolMemberSchema = z.object({
 });
 
 export const AppPoolAssignmentSchema = z.object({
+	visit_id: z.string().optional(),
 	user_id: z.string().refine(UserId.is),
 	session_id: z.string().refine(SessionId.is),
 	generation: z.string(),
@@ -59,11 +60,35 @@ export type AppVisit = z.infer<typeof AppVisitSchema>;
 export const emptyAppPool = (): AppPool => ({ schema_version: 1, members: [], assignments: [] });
 
 export function appOccupancy(pool: AppPool, sessionId: SessionId): number {
-	return pool.assignments.filter((assignment) => assignment.session_id === sessionId).length;
+	return appOccupancyBySession(pool).get(sessionId) ?? 0;
+}
+
+export function appOccupancyBySession(pool: Pick<AppPool, 'assignments'>): Map<SessionId, number> {
+	const counts = new Map<SessionId, number>();
+	for (const assignment of pool.assignments)
+		counts.set(assignment.session_id, (counts.get(assignment.session_id) ?? 0) + 1);
+	return counts;
+}
+
+export function appPresenceExpiresAt(assignment: AppPoolAssignment): number {
+	return Math.max(
+		assignment.grace_until ?? 0,
+		...assignment.visits.map((visit) => visit.expires_at),
+	);
 }
 
 /** Expiry is evaluated inside the same CAS as admission or retirement. */
 export function expireAppPresence(pool: AppPool, now: number): void {
+	// Split pre-visit assignments without moving live kernels or changing their tokens.
+	pool.assignments = pool.assignments.flatMap((assignment) =>
+		assignment.visit_id === undefined && assignment.visits.length > 0
+			? assignment.visits.map((visit) => ({
+					...assignment,
+					visit_id: visit.visit_id,
+					visits: [visit],
+				}))
+			: [assignment],
+	);
 	const lastPresence = new Map<SessionId, number>();
 	const liveMembers = new Set(
 		pool.members
@@ -71,13 +96,9 @@ export function expireAppPresence(pool: AppPool, now: number): void {
 			.map((member) => member.session_id),
 	);
 	for (const assignment of pool.assignments) {
-		const expiresAt = Math.max(
-			assignment.grace_until ?? 0,
-			...assignment.visits.map((visit) => visit.expires_at),
-		);
 		lastPresence.set(
 			assignment.session_id,
-			Math.max(lastPresence.get(assignment.session_id) ?? 0, expiresAt),
+			Math.max(lastPresence.get(assignment.session_id) ?? 0, appPresenceExpiresAt(assignment)),
 		);
 		assignment.visits = assignment.visits.filter((visit) => visit.expires_at > now);
 	}
@@ -149,22 +170,22 @@ export function routeApp(
 	const next = structuredClone(pool);
 	expireAppPresence(next, input.now);
 	observeVersion(next, input.versionId);
-	const existing = next.assignments.find((assignment) => assignment.user_id === input.userId);
+	const existing = next.assignments.find(
+		(assignment) => assignment.user_id === input.userId && assignment.visit_id === input.visitId,
+	);
 	if (existing) {
 		const member = next.members.find((item) => item.session_id === existing.session_id)!;
 		renewAppVisit(existing, input.visitId, input.now + policy.userLeaseMs);
 		delete member.idle_since;
 		return { pool: next, decision: { kind: 'reuse', member, assignment: existing } };
 	}
-	const counts = new Map<SessionId, number>();
-	for (const assignment of next.assignments)
-		counts.set(assignment.session_id, (counts.get(assignment.session_id) ?? 0) + 1);
+	const counts = appOccupancyBySession(next);
 	const occupancy = (member: AppPoolMember) => counts.get(member.session_id) ?? 0;
 	const eligible = currentVersionMembers(next, input.versionId, input.now);
 	const available = eligible
 		.filter(
 			(member) =>
-				policy.maxUsersPerSession === undefined || occupancy(member) < policy.maxUsersPerSession,
+				policy.maxVisitsPerSession === undefined || occupancy(member) < policy.maxVisitsPerSession,
 		)
 		.sort(
 			(a, b) =>
@@ -183,6 +204,7 @@ export function routeApp(
 		next.members.push(member);
 	}
 	const assignment: AppPoolAssignment = {
+		visit_id: input.visitId,
 		user_id: input.userId,
 		session_id: member.session_id,
 		generation: input.generation,

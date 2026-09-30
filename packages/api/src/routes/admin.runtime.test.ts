@@ -84,7 +84,7 @@ describe('GET /admin/runtime', () => {
 				policy: {
 					superAdmins: [ACTOR],
 					appPool: {
-						maxUsersPerSession: 4,
+						maxVisitsPerSession: 4,
 						maxSessionsPerVersion: 3,
 						userLeaseMs: 120_000,
 						reconnectGraceMs: 15_000,

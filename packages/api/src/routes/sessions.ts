@@ -197,10 +197,10 @@ const createSession = createRoute({
 	summary: 'Create a session and provision a sandbox',
 	// `Idempotency-Key` is accepted and documented, but this route is already
 	// idempotent through session reuse. Edit reuse follows the configured sharing
-	// policy; app reuse follows the account assignment.
+	// policy; app reuse follows the visit assignment.
 	description:
 		'Create or reuse a notebook sandbox. Edit-session reuse follows the configured ' +
-		'editor sandbox-sharing policy. App sessions use sticky account assignments in a version-aware pool.',
+		'editor sandbox-sharing policy. App sessions use sticky visit assignments in a version-aware pool.',
 	request: {
 		params: NotebookIdParam,
 		headers: IdempotencyKeyHeader,

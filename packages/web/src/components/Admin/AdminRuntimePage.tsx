@@ -148,8 +148,8 @@ function AppCard({
 				Current-version pool: {app.current_version_members ?? 'Unknown'} /{' '}
 				{limits.max_sessions_per_version ?? 'unlimited'} sandboxes ·{' '}
 				{limits.max_users_per_session === null
-					? 'Unlimited accounts per sandbox'
-					: `${limits.max_users_per_session} accounts per sandbox`}
+					? 'Unlimited browser sessions per sandbox'
+					: `${limits.max_users_per_session} browser sessions per sandbox`}
 			</p>
 			{app.current_version_id &&
 				!app.sandboxes.some((sandbox) => sandbox.version_status === 'current') && (
@@ -277,11 +277,11 @@ function SandboxDetails({
 			</dl>
 			<div>
 				<h3 className="mb-2 text-sm font-medium">
-					Accounts · {sandbox.users ?? 'unknown occupancy'}
+					Accounts · {sandbox.users === null ? 'unknown occupancy' : sandbox.assignments.length}
 				</h3>
 				<p className="mb-3 text-xs text-muted-foreground">
-					Presence as of {formatAbsolute(observedAt)}. Multiple visits share one account slot;
-					reconnect grace still occupies a slot.
+					Presence as of {formatAbsolute(observedAt)}. Each browser session occupies a slot,
+					including during reconnect grace. Visits are grouped by account.
 				</p>
 				{isError && (
 					<p className="text-sm text-muted-foreground">Names unavailable; showing account IDs.</p>
@@ -289,8 +289,8 @@ function SandboxDetails({
 				{sandbox.assignments.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
 						{sandbox.users === null
-							? 'Account occupancy is unavailable for this sandbox.'
-							: 'No occupied account slots.'}
+							? 'Session occupancy is unavailable for this sandbox.'
+							: 'No occupied session slots.'}
 					</p>
 				) : (
 					<ul className="divide-y">
@@ -438,7 +438,7 @@ export default function AdminRuntimePage() {
 			icon: Server,
 		},
 		{
-			label: 'Occupied account slots',
+			label: 'Occupied session slots',
 			value: occupiedSlots(sandboxes),
 			icon: Users,
 		},

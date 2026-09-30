@@ -97,7 +97,7 @@ describe('runtime inspection', () => {
 		const pool = new AppPoolService(
 			bucket,
 			sessions,
-			{ ...DEFAULT_APP_POOL_POLICY, maxUsersPerSession: 4 },
+			{ ...DEFAULT_APP_POOL_POLICY, maxVisitsPerSession: 4 },
 			undefined,
 			() => now,
 		);
@@ -148,7 +148,7 @@ describe('runtime inspection', () => {
 		});
 	});
 
-	it('counts accounts, keeps grace, drops expired visits, and never persists inspection', async () => {
+	it('counts visits, keeps grace, drops expired visits, and never persists inspection', async () => {
 		const m = member();
 		await saveSession(m);
 		await savePool(
@@ -184,7 +184,7 @@ describe('runtime inspection', () => {
 		const remove = vi.spyOn(bucket, 'delete');
 		const snapshot = await inspection.inspect();
 		const sandbox = snapshot.apps[0].sandboxes[0];
-		expect(sandbox.users).toBe(2);
+		expect(sandbox.users).toBe(3);
 		expect(sandbox.assignments).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ user_id: ACTOR, visits: 2, state: 'active' }),

@@ -4606,7 +4606,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions",
 			"summary": "Create a session and provision a sandbox",
-			"description": "Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App sessions use sticky account assignments in a version-aware pool.",
+			"description": "Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App sessions use sticky visit assignments in a version-aware pool.",
 			"parameters": [
 				{
 					"name": "idempotency-key",

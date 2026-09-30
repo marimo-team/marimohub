@@ -1138,7 +1138,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a session and provision a sandbox
-		 * @description Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App sessions use sticky account assignments in a version-aware pool.
+		 * @description Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App sessions use sticky visit assignments in a version-aware pool.
 		 */
 		post: operations['sessions.create'];
 		delete?: never;
@@ -2464,6 +2464,7 @@ export interface components {
 					/** @enum {string} */
 					version_status: 'current' | 'old' | 'unknown';
 					legacy: boolean;
+					/** @description Occupied browser-session slots, including reconnect grace. */
 					users: number | null;
 					/** Format: date-time */
 					idle_since: string | null;
@@ -2501,6 +2502,7 @@ export interface components {
 			}[];
 			incomplete: boolean;
 			limits: {
+				/** @description Maximum browser-session slots per sandbox. */
 				max_users_per_session: number | null;
 				max_sessions_per_version: number | null;
 			};
@@ -3291,7 +3293,9 @@ export interface components {
 			app_pool?: {
 				/** @enum {string} */
 				state: 'starting' | 'ready' | 'draining' | 'retiring';
+				/** @description Occupied browser-session slots, including reconnect grace. */
 				users: number;
+				/** @description Maximum browser-session slots per sandbox. */
 				max_users: number | null;
 			};
 			session_id: string;

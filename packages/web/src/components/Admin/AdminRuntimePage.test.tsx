@@ -22,7 +22,7 @@ const sandbox: RuntimeDashboard['apps'][number]['sandboxes'][number] = {
 	pool_state: 'ready',
 	version_status: 'current',
 	legacy: false,
-	users: 2,
+	users: 3,
 	idle_since: null,
 	incomplete: false,
 	assignments: [
@@ -115,7 +115,7 @@ describe('AdminRuntimePage', () => {
 		const { fetcher, user } = setup();
 		await screen.findByRole('region', { name: 'Sales dashboard pool' });
 		expect(screen.getByText('Old version')).toBeInTheDocument();
-		expect(screen.getAllByText('2 / 4 occupied slots')).toHaveLength(2);
+		expect(screen.getAllByText('3 / 4 occupied slots')).toHaveLength(2);
 		expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('/api/v1/users?'))).toBe(
 			false,
 		);
@@ -174,7 +174,7 @@ describe('AdminRuntimePage', () => {
 		await screen.findByText('Occupancy unknown');
 		expect(screen.getByText('Unknown version')).toBeInTheDocument();
 		expect(screen.getByText('≥ 0')).toBeInTheDocument();
-		expect(screen.getByText(/Unlimited accounts per sandbox/)).toBeInTheDocument();
+		expect(screen.getByText(/Unlimited browser sessions per sandbox/)).toBeInTheDocument();
 		expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
 	});
 
@@ -187,7 +187,7 @@ describe('AdminRuntimePage', () => {
 		setup(data);
 		const meter = await screen.findByRole('progressbar', { name: 'Occupied slots' });
 		expect(meter).toHaveAttribute('max', '100');
-		expect(meter).toHaveAttribute('value', '2');
+		expect(meter).toHaveAttribute('value', '3');
 		expect(screen.getByText(/^Reserved /)).toBeInTheDocument();
 	});
 
@@ -317,7 +317,7 @@ describe('AdminRuntimePage', () => {
 		});
 		const dialog = screen.getByRole('dialog');
 		expect(within(dialog).getByText('Accounts · 0')).toBeInTheDocument();
-		expect(within(dialog).getByText('No occupied account slots.')).toBeInTheDocument();
+		expect(within(dialog).getByText('No occupied session slots.')).toBeInTheDocument();
 		expect(within(dialog).getByText('Old version')).toBeInTheDocument();
 		await user.keyboard('{Escape}');
 		expect(screen.queryByRole('alert')).not.toBeInTheDocument();

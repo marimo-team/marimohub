@@ -5,6 +5,16 @@ import type { ConfigErrorOptions } from './errors';
 
 export type Env = Record<string, string | undefined>;
 
+export function aliasDeprecatedEnv(env: Env, key: string, legacyKey: string): Env {
+	if (env[key]?.trim() || !env[legacyKey]?.trim()) return env;
+	warnLegacyEnv(legacyKey, key);
+	return { ...env, [key]: env[legacyKey] };
+}
+
+export function warnLegacyEnv(legacyKey: string, key: string): void {
+	console.warn(`[marimohub] ${legacyKey} is deprecated; use ${key}.`);
+}
+
 /** Read a required env var or throw — the standard fail-fast for missing config. */
 export function required(env: Env, key: string): string {
 	const value = env[key];

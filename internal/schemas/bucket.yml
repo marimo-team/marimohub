@@ -1073,7 +1073,7 @@ paths:
         '204':
           description: Stored.
   /_system/app-pools/{pid}/{nid}.json:
-    summary: App sandbox reservations, account assignments, and visit leases.
+    summary: App sandbox reservations, visit assignments, and visit leases.
     parameters:
       - name: pid
         in: path
@@ -3618,6 +3618,8 @@ components:
           items:
             type: object
             properties:
+              visit_id:
+                type: string
               user_id:
                 type: string
               session_id:

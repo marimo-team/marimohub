@@ -81,7 +81,7 @@ export interface SessionModePolicy {
 	workspaceLoad: 'source-policy' | 'copy-only';
 	/** App sessions skip this because `marimo run` has no editor surface. */
 	injectEditorConfig: boolean;
-	/** App sandboxes share account assignments through the notebook pool. */
+	/** App sandboxes share visit assignments through the notebook pool. */
 	sharedApp: boolean;
 	/**
 	 * What a viewer-admitted session of this mode is (`VIEWER_SESSION_MODES`

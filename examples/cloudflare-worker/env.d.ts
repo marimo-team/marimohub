@@ -6,7 +6,7 @@ declare global {
 	interface Env extends ThemeEnv {
 		MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS?: string;
 		MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS?: string;
-		MARIMOHUB_APP_MAX_USERS_PER_SESSION?: string;
+		MARIMOHUB_APP_MAX_VISITS_PER_SESSION?: string;
 		MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION?: string;
 		MARIMOHUB_EDITOR_SANDBOX_SHARING?: 'shared' | 'exclusive';
 		// Notebook jobs are off unless `on` (see docs/jobs.md).

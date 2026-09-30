@@ -493,7 +493,9 @@ describe('Project — Notebook Actions: configuration', () => {
 		await renderProject();
 
 		await user.click(await screen.findByRole('button', { name: 'App running — details' }));
-		expect(await screen.findByText(/New users receive the latest version/)).toBeInTheDocument();
+		expect(
+			await screen.findByText(/New browser sessions receive the latest version/),
+		).toBeInTheDocument();
 	});
 
 	it('surfaces an edit-session restart failure from the compute toast', async () => {

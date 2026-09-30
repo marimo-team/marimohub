@@ -960,6 +960,7 @@ components:
                         - integer
                         - 'null'
                       minimum: 0
+                      description: Occupied browser-session slots, including reconnect grace.
                     idle_since:
                       type:
                         - string
@@ -1103,6 +1104,7 @@ components:
                 - integer
                 - 'null'
               exclusiveMinimum: 0
+              description: Maximum browser-session slots per sandbox.
             max_sessions_per_version:
               type:
                 - integer
@@ -2898,10 +2900,12 @@ components:
                 - retiring
             users:
               type: number
+              description: Occupied browser-session slots, including reconnect grace.
             max_users:
               type:
                 - number
                 - 'null'
+              description: Maximum browser-session slots per sandbox.
           required:
             - state
             - users
@@ -13013,8 +13017,8 @@ paths:
         - Sessions
       summary: Create a session and provision a sandbox
       description: Create or reuse a notebook sandbox. Edit-session reuse follows the
-        configured editor sandbox-sharing policy. App sessions use sticky
-        account assignments in a version-aware pool.
+        configured editor sandbox-sharing policy. App sessions use sticky visit
+        assignments in a version-aware pool.
       parameters:
         - schema:
             type: string

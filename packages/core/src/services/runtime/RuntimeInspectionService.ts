@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { StaleWhileRevalidateCache } from '../../cache';
 import { BUCKET_SCAN_CONCURRENCY, SESSION_STATUSES } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
-import type { NotebookId, ProjectId, SessionId } from '../../ids';
+import type { NotebookId, ProjectId, SessionId, UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { Bucket } from '../../ports/bucket';
@@ -11,7 +11,7 @@ import type { Session } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { AppPoolStore } from './AppPoolStore';
 import { readForInspection } from './inspection';
-import { expireAppPresence } from './AppPoolRouter';
+import { appOccupancyBySession, appPresenceExpiresAt, expireAppPresence } from './AppPoolRouter';
 import type { AppPool, AppPoolMember } from './AppPoolRouter';
 import type { SessionService } from './SessionService';
 import { PRESENT_STATUSES, sessionMode } from './sessionState';
@@ -47,7 +47,12 @@ export const RuntimeSandboxSchema = RuntimeSessionSchema.extend({
 	pool_state: z.enum(['starting', 'ready', 'draining', 'retiring']).nullable(),
 	version_status: z.enum(['current', 'old', 'unknown']),
 	legacy: z.boolean(),
-	users: z.number().int().nonnegative().nullable(),
+	users: z
+		.number()
+		.int()
+		.nonnegative()
+		.nullable()
+		.describe('Occupied browser-session slots, including reconnect grace.'),
 	idle_since: z.iso.datetime().nullable(),
 	assignments: z.array(RuntimeAssignmentSchema),
 	incomplete: z.boolean(),
@@ -200,20 +205,27 @@ export class RuntimeInspectionService {
 					...(pool?.assignments.map((assignment) => assignment.session_id) ?? []),
 				]);
 				if (pool) expireAppPresence(pool, now);
-				const assignments = new Map<SessionId, RuntimeSandbox['assignments']>();
+				const occupancy = appOccupancyBySession(pool ?? { assignments: [] });
+				const assignments = new Map<
+					SessionId,
+					Map<UserId, RuntimeSandbox['assignments'][number]>
+				>();
 				for (const assignment of pool?.assignments ?? []) {
-					const rows = assignments.get(assignment.session_id) ?? [];
-					rows.push({
+					const rows =
+						assignments.get(assignment.session_id) ??
+						new Map<UserId, RuntimeSandbox['assignments'][number]>();
+					const existing = rows.get(assignment.user_id);
+					const row = {
 						user_id: assignment.user_id,
 						visits: assignment.visits.length,
-						state: assignment.visits.length > 0 ? 'active' : 'grace',
-						expires_at: new Date(
-							Math.max(
-								assignment.grace_until ?? 0,
-								...assignment.visits.map((visit) => visit.expires_at),
-							),
-						).toISOString(),
-					});
+						state: assignment.visits.length > 0 ? ('active' as const) : ('grace' as const),
+						expires_at: new Date(appPresenceExpiresAt(assignment)).toISOString(),
+					};
+					if (existing) {
+						existing.visits += row.visits;
+						if (row.state === 'active') existing.state = 'active';
+						if (row.expires_at > existing.expires_at) existing.expires_at = row.expires_at;
+					} else rows.set(assignment.user_id, row);
 					assignments.set(assignment.session_id, rows);
 				}
 				const members = new Map(pool?.members.map((member) => [member.session_id, member]));
@@ -227,7 +239,7 @@ export class RuntimeInspectionService {
 						const session = allSessions.get(id);
 						const summary = sessionSummary(session ? { session, member } : { member: member! });
 						const legacy = member ? member.legacy === true : session?.app_pool !== true;
-						const rows = assignments.get(id) ?? [];
+						const rows = [...(assignments.get(id)?.values() ?? [])];
 						const incomplete = (!member && !legacy) || (!session && member?.state !== 'starting');
 						return {
 							...summary,
@@ -239,7 +251,7 @@ export class RuntimeInspectionService {
 										? 'current'
 										: 'old',
 							legacy,
-							users: member && !legacy ? rows.length : null,
+							users: member && !legacy ? (occupancy.get(id) ?? 0) : null,
 							idle_since:
 								member?.idle_since === undefined || !knownIdle.has(id)
 									? null

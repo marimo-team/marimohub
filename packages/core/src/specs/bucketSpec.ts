@@ -326,7 +326,7 @@ const OBJECTS: BucketObject[] = [
 		name: 'AppPool',
 		key: paths.appPool(PID, NID),
 		schema: AppPoolSchema,
-		summary: 'App sandbox reservations, account assignments, and visit leases.',
+		summary: 'App sandbox reservations, visit assignments, and visit leases.',
 		mutability: 'cas',
 		owner: 'AppPoolStore',
 		tag: 'session',

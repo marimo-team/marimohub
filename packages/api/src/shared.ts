@@ -1259,8 +1259,8 @@ export const SessionResponseSchema = z
 		app_pool: z
 			.object({
 				state: z.enum(['starting', 'ready', 'draining', 'retiring']),
-				users: z.number(),
-				max_users: z.number().nullable(),
+				users: z.number().describe('Occupied browser-session slots, including reconnect grace.'),
+				max_users: z.number().nullable().describe('Maximum browser-session slots per sandbox.'),
 			})
 			.optional(),
 		session_id: z.string(),

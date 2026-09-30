@@ -14,6 +14,7 @@ import { parseTheme } from './theme';
  * examples/cloudflare-worker rather than here.
  */
 import {
+	aliasDeprecatedEnv,
 	parseBool,
 	parseEnum,
 	parseEnumOr,
@@ -21,6 +22,7 @@ import {
 	parseList,
 	parseOnOff,
 	parseSecondsEnv,
+	warnLegacyEnv,
 } from './env';
 import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
@@ -235,7 +237,7 @@ function dataPreviewFromEnv(
 		),
 		{
 			memoryLimitMb: parsePositiveIntEnv(
-				legacyDuckDBFallback(
+				aliasDeprecatedEnv(
 					env,
 					'MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB',
 					'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
@@ -247,7 +249,7 @@ function dataPreviewFromEnv(
 			executionTimeoutMs,
 			maxPoolSize: maxConcurrent,
 			idleTimeoutMs: parseSecondsEnv(
-				legacyDuckDBFallback(
+				aliasDeprecatedEnv(
 					env,
 					'MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS',
 					'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS',
@@ -284,16 +286,6 @@ function embeddedPreviewRuntimeMode(env: Env): DuckDBWasmRuntimeMode {
 		'auto',
 	);
 	return mode === 'inline' ? 'worker' : mode;
-}
-
-function legacyDuckDBFallback(env: Env, key: string, legacyKey: string): Env {
-	if (env[key]?.trim() || !env[legacyKey]?.trim()) return env;
-	warnLegacyEnv(legacyKey, key);
-	return { ...env, [key]: env[legacyKey] };
-}
-
-function warnLegacyEnv(legacyKey: string, key: string): void {
-	console.warn(`[marimohub] ${legacyKey} is deprecated; use ${key}.`);
 }
 
 function dataQueryFromEnv(

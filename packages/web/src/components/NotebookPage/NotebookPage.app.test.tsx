@@ -38,7 +38,7 @@ describe('NotebookPage app variant', () => {
 		renderPage('app');
 
 		await waitFor(() => expect(screen.getByText(/serves an older version/)).toBeInTheDocument());
-		expect(screen.getByText(/New users receive the latest version/)).toBeInTheDocument();
+		expect(screen.getByText(/New browser sessions receive the latest version/)).toBeInTheDocument();
 		expect(screen.queryByText('Restart to update')).toBeNull();
 	});
 

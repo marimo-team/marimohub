@@ -1,11 +1,12 @@
 import { DEFAULT_APP_POOL_POLICY } from '@marimo-hub/core';
 import type { AppPoolPolicy } from '@marimo-hub/core';
-import { parseIntEnv } from './env';
+import { aliasDeprecatedEnv, parseIntEnv } from './env';
 import { ConfigError } from './errors';
 import { parseSessionIdleTimeouts } from './sessionDefaults';
 
 type AppPoolEnv = Partial<
 	Record<
+		| 'MARIMOHUB_APP_MAX_VISITS_PER_SESSION'
 		| 'MARIMOHUB_APP_MAX_USERS_PER_SESSION'
 		| 'MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION'
 		| 'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS'
@@ -15,8 +16,13 @@ type AppPoolEnv = Partial<
 >;
 
 export function parseAppPoolPolicy(env: AppPoolEnv): AppPoolPolicy {
+	const config = aliasDeprecatedEnv(
+		env,
+		'MARIMOHUB_APP_MAX_VISITS_PER_SESSION',
+		'MARIMOHUB_APP_MAX_USERS_PER_SESSION',
+	);
 	const cap = (key: string) => {
-		const value = parseIntEnv(env, key);
+		const value = parseIntEnv(config, key);
 		if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
 			throw new ConfigError(`${key} must be a positive integer`, { variable: key });
 		}
@@ -24,8 +30,8 @@ export function parseAppPoolPolicy(env: AppPoolEnv): AppPoolPolicy {
 	};
 	return {
 		...DEFAULT_APP_POOL_POLICY,
-		maxUsersPerSession: cap('MARIMOHUB_APP_MAX_USERS_PER_SESSION'),
+		maxVisitsPerSession: cap('MARIMOHUB_APP_MAX_VISITS_PER_SESSION'),
 		maxSessionsPerVersion: cap('MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION'),
-		idleMs: parseSessionIdleTimeouts(env).app,
+		idleMs: parseSessionIdleTimeouts(config).app,
 	};
 }

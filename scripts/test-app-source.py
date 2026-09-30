@@ -82,6 +82,39 @@ def request(origin, path, session, body=None):
     return response.status, text
 
 
+async def receive_until(ws, received, needle):
+    async with asyncio.timeout(45):
+        while not any(needle in message for message in received):
+            received.append(check_source(await ws.recv()))
+
+
+async def set_slider(origin, session, ws, value):
+    received = []
+    await receive_until(ws, received, "APP_VALUE_1")
+    match = re.search(r"object-id='([^']+)'", "\n".join(received))
+    assert match, "Slider object id missing from rendered output"
+    status, body = request(
+        origin,
+        "/api/kernel/set_ui_element_value",
+        session,
+        {"objectIds": [match[1]], "values": [value]},
+    )
+    assert status == 200, (status, body)
+    await receive_until(ws, received, f"APP_VALUE_{value}")
+    return received
+
+
+def export_html(origin, session, *, include_code):
+    status, exported = request(
+        origin,
+        "/api/export/html",
+        session,
+        {"includeCode": include_code, "download": False, "files": []},
+    )
+    assert status == 200, (status, exported[:200])
+    return exported
+
+
 async def check_kernel(origin):
     global SERVER_TOKEN
     session = str(uuid.uuid4())
@@ -93,27 +126,8 @@ async def check_kernel(origin):
     async with websockets.connect(
         origin.replace("http:", "ws:") + f"/ws?session_id={session}"
     ) as ws:
-        received = []
-
-        async def until(needle):
-            async with asyncio.timeout(45):
-                while not any(needle in message for message in received):
-                    message = check_source(await ws.recv())
-                    received.append(message)
-
-        await until("APP_VALUE_1")
-        await until("marimo-error")
-        payloads = "\n".join(received)
-        match = re.search(r"object-id='([^']+)'", payloads)
-        assert match, "Slider object id missing from rendered output"
-        status, body = request(
-            origin,
-            "/api/kernel/set_ui_element_value",
-            session,
-            {"objectIds": [match[1]], "values": [7]},
-        )
-        assert status == 200, (status, body)
-        await until("APP_VALUE_7")
+        received = await set_slider(origin, session, ws, 7)
+        await receive_until(ws, received, "marimo-error")
         for path in [
             "/api/files/read_code",
             "/api/export/script",
@@ -127,20 +141,30 @@ async def check_kernel(origin):
             assert status in (401, 403, 404, 405), (path, status)
         status, _ = request(origin, "/api/files/download?path=notebook.py", session)
         assert status in (401, 403), status
-        status, exported = request(
-            origin,
-            "/api/export/html",
-            session,
-            {"includeCode": True, "download": False, "files": []},
-        )
-        assert status == 200, (status, exported[:200])
+        exported = export_html(origin, session, include_code=True)
         assert "APP_VALUE_7" in exported, "HTML export did not include the live output"
+        await check_independent_session(origin, session)
         # Drain messages queued during HTTP checks, including error notifications.
         while True:
             try:
                 check_source(await asyncio.wait_for(ws.recv(), timeout=0.5))
             except TimeoutError:
                 break
+
+
+async def check_independent_session(origin, first_session):
+    second_session = str(uuid.uuid4())
+    async with websockets.connect(
+        origin.replace("http:", "ws:") + f"/ws?session_id={second_session}"
+    ) as ws:
+        await set_slider(origin, second_session, ws, 9)
+        for session, own_value, other_value in [
+            (first_session, "APP_VALUE_7", "APP_VALUE_9"),
+            (second_session, "APP_VALUE_9", "APP_VALUE_7"),
+        ]:
+            exported = export_html(origin, session, include_code=False)
+            assert own_value in exported, "Session lost its own slider state"
+            assert other_value not in exported, "Slider state leaked between sessions"
 
 
 def main():
@@ -198,7 +222,7 @@ def main():
                     process.kill()
                     process.wait()
     print(
-        "App interaction, error output, WebSocket data, source endpoints, and HTML export passed"
+        "App interaction, session isolation, error output, WebSocket data, source endpoints, and HTML export passed"
     )
 
 
