@@ -47,7 +47,7 @@ import type { SandboxWorkspaceLayout } from './workspaceLayout';
 export const DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS = Millis.minutes(2);
 export const SLOW_SANDBOX_SETUP_MS = Millis.seconds(2);
 // Best-effort cosmetics; a hung checkout must not stall the `files` phase.
-const GIT_SPARSE_CHECKOUT_TIMEOUT_MS = Millis.seconds(10);
+const GIT_SPARSE_CHECKOUT_TIMEOUT_MS = Millis.minutes(1);
 const SETUP_OUTPUT_TAIL_BYTES = 4 * 1024;
 const SETUP_MARKER = '__MARIMOHUB_SETUP__';
 const SETUP_STEP_MARKER = /^__MARIMOHUB_SETUP__ step ([a-z0-9_]{1,64}) (\d{1,20})$/;
@@ -1057,7 +1057,7 @@ export class SandboxProvisioner {
 					options.bucketHandle,
 					gitPrefix,
 					`${layout.gitRoot}/.git`,
-					{ requireComplete: true },
+					{ requireComplete: true, excludeRelativeRoots: ['hooks'] },
 				);
 				if (stats.objectCount === 0) throw new Error('the stored Git directory is empty');
 				return stats;

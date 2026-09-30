@@ -1,6 +1,6 @@
 import { Gunzip } from 'fflate';
 import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
-import { isSafeWorkspacePath } from '@marimo-hub/core/remote-workspace';
+import { isSafeWorkspaceRootPath } from '@marimo-hub/core/remote-workspace';
 import {
 	MAX_DECOMPRESSED_ARCHIVE_BYTES,
 	WorkspaceTarCollector,
@@ -32,7 +32,7 @@ export function validateCommit(commit: unknown): asserts commit is string {
 }
 
 export function validateRootPath(rootPath: unknown): asserts rootPath is string {
-	if (typeof rootPath !== 'string' || !isSafeWorkspacePath(rootPath, true)) {
+	if (typeof rootPath !== 'string' || !isSafeWorkspaceRootPath(rootPath)) {
 		throw new ValidationError('Invalid workspace root path');
 	}
 }

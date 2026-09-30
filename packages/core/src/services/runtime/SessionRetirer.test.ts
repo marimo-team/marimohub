@@ -1,6 +1,6 @@
 import { execResult, readFileFailure } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import { NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
@@ -11,6 +11,7 @@ import {
 	makeFakeSandbox,
 	makeLocalSource,
 	makeSession,
+	makeVersion,
 	MemoryBucket,
 	uid,
 } from '../../testing';
@@ -125,11 +126,14 @@ describe('SessionRetirer', () => {
 	);
 
 	it.each([
-		{ source: 'subtree', expected: '/srv/work/python' },
-		{ source: 'missing', expected: '/srv/work' },
+		{ source: 'subtree', version: 'none', expected: '/srv/work/python' },
+		{ source: 'subtree', version: 'pinned', expected: '/srv/work/old' },
+		{ source: 'subtree', version: 'legacy', expected: '/srv/work/python' },
+		{ source: 'subtree', version: 'missing', expected: '/srv/work/python' },
+		{ source: 'missing', version: 'none', expected: '/srv/work' },
 	] as const)(
-		'captures thumbnails from the $source workspace dir',
-		async ({ source, expected }) => {
+		'captures thumbnails from the $source workspace dir ($version version)',
+		async ({ source, version, expected }) => {
 			const { instance } = makeFakeSandbox();
 			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
 			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
@@ -142,6 +146,7 @@ describe('SessionRetirer', () => {
 					repo: 'org/repo',
 					branch: 'main',
 					root_path: 'python',
+					entry_notebook: 'nb.py',
 					sync_mode: 'pull',
 					current_version_id: null,
 					commit: null,
@@ -150,7 +155,34 @@ describe('SessionRetirer', () => {
 			} else {
 				getSource.mockRejectedValue(new NotFoundError('gone'));
 			}
-			const session = await persistentSession();
+			const sourceVersionId = createVersionId();
+			if (version === 'pinned' || version === 'legacy') {
+				await bucket.put(
+					paths.project(projectId).notebook(notebookId).version(sourceVersionId).meta,
+					JSON.stringify(
+						makeVersion({
+							version_id: sourceVersionId,
+							notebook_id: notebookId,
+							commit: 'abc123',
+							...(version === 'pinned'
+								? {
+										git_source: {
+											provider: 'github',
+											repo: 'org/repo',
+											branch: 'main',
+											root_path: 'old',
+											entry_notebook: 'nb.py',
+											commit: 'abc123',
+										},
+									}
+								: {}),
+						}),
+					),
+				);
+			}
+			const session = await persistentSession(
+				version === 'none' ? {} : { source_version_id: sourceVersionId },
+			);
 			await sessions.beginTerminating(projectId, session.session_id);
 			await new SessionRetirer({
 				sessions,

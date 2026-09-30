@@ -249,6 +249,7 @@ describe('external adapter library loading', () => {
 		[{ multiPort: false, gpuProfiles: 1 }, /non-boolean capabilities: gpuProfiles$/],
 		[{ multiPort: 'no', computeProfiles: null }, /multiPort, computeProfiles$/],
 		['all', /non-object capabilities/],
+		[[], /non-object capabilities/],
 	])('rejects invalid provider capabilities %j at load', async (capabilities, message) => {
 		await expectConfigError(
 			loadAdapterLibraries({

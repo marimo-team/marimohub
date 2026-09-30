@@ -19,9 +19,9 @@ const UNKNOWN: SessionStatusPresentation = { label: 'Unknown', className: 'bg-mu
 
 // The server may send a status newer than this client.
 export function isKnownSessionStatus(status: string): boolean {
-	return SESSION_STATUS[status] !== undefined;
+	return Object.hasOwn(SESSION_STATUS, status);
 }
 
 export function sessionStatusPresentation(status: Session['status']): SessionStatusPresentation {
-	return SESSION_STATUS[status] ?? UNKNOWN;
+	return (isKnownSessionStatus(status) && SESSION_STATUS[status]) || UNKNOWN;
 }

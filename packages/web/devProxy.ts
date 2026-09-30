@@ -52,15 +52,22 @@ export async function waitForDevApi(
 			// The API may not be listening yet while it initializes and seeds local data.
 		}
 		await new Promise<void>((resolve) => {
-			const timer = setTimeout(resolve, Math.min(250, Math.max(0, deadline - Date.now())));
-			signal?.addEventListener(
-				'abort',
+			if (signal?.aborted) {
+				resolve();
+				return;
+			}
+			const onAbort = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(
 				() => {
-					clearTimeout(timer);
+					signal?.removeEventListener('abort', onAbort);
 					resolve();
 				},
-				{ once: true },
+				Math.min(250, Math.max(0, deadline - Date.now())),
 			);
+			signal?.addEventListener('abort', onAbort, { once: true });
 		});
 	}
 	if (signal?.aborted) return;

@@ -360,7 +360,7 @@ export interface GitWorkingTreeSandboxOptions extends FsSandboxOptions {
 export function makeGitWorkingTreeSandbox(options: GitWorkingTreeSandboxOptions) {
 	const root = options.root ?? DEFAULT_FS_ROOT;
 	const sandbox = makeFsSandbox(options);
-	const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
+	const cannedAnswer = (command: string): ExecResult | undefined => {
 		if (command.includes('test -e .git')) {
 			return options.gitAvailable === false
 				? execResult(false, '', 'not a repository')
@@ -395,9 +395,19 @@ export function makeGitWorkingTreeSandbox(options: GitWorkingTreeSandboxOptions)
 			if (!path || options.secureReadFailures?.includes(path)) {
 				return execResult(false, '', 'unsafe or missing file');
 			}
-			return sandbox.instance.exec(`base64 < ${shellQuote(`${root}/${path}`)}`);
+			const bytes = sandbox.fs.get(path);
+			if (bytes === undefined) return execResult(false, '', 'not found');
+			return execResult(true, fsBase64Encode(bytes), '');
 		}
-		return sandbox.instance.exec(command);
+		return undefined;
+	};
+	const exec = vi.fn<SandboxInstance['exec']>(async (command, execOptions) => {
+		const canned = cannedAnswer(command);
+		// Delegation records the call itself; canned answers must be recorded here.
+		if (canned === undefined) return sandbox.instance.exec(command, execOptions);
+		sandbox.calls.exec.push(command);
+		sandbox.calls.execOptions.push(execOptions);
+		return canned;
 	});
 	return { ...sandbox, instance: { ...sandbox.instance, exec }, exec };
 }

@@ -150,8 +150,11 @@ function isMirrorProtected(rel: string): boolean {
 	return isRootSourceFile(rel) || isRegenerableArtifactPath(rel);
 }
 
-function isGitMetadataPath(rel: string): boolean {
-	return rel === '.git' || rel.startsWith('.git/');
+/** The repository a path belongs to (`.git`, `pkg/.git`, …), or null outside any `.git`. */
+function gitGroupOf(rel: string): string | null {
+	const segments = rel.split('/');
+	const index = segments.indexOf('.git');
+	return index === -1 ? null : segments.slice(0, index + 1).join('/');
 }
 
 /**
@@ -206,7 +209,7 @@ export async function restoreWorkspace(
 		if (!rel) continue;
 		const markerDirectory = workspaceDirectoryFromMarkerPath(rel);
 		if (markerDirectory !== null) {
-			if (!markerDirectory) continue;
+			if (!markerDirectory || isGitHooksPath(markerDirectory)) continue;
 			if (
 				options.excludeRelativeRoots?.some(
 					(root) => markerDirectory === root || markerDirectory.startsWith(`${root}/`),
@@ -224,7 +227,10 @@ export async function restoreWorkspace(
 			directories.push(`${workingDir}/${markerDirectory}`);
 			continue;
 		}
-		if (options.excludeRelativeRoots?.some((root) => rel === root || rel.startsWith(`${root}/`))) {
+		if (
+			isGitHooksPath(rel) ||
+			options.excludeRelativeRoots?.some((root) => rel === root || rel.startsWith(`${root}/`))
+		) {
 			continue;
 		}
 		// A poisoned key (e.g. from a compromised/synced source) whose relative path
@@ -297,8 +303,8 @@ export async function restoreWorkspace(
  * to path, file-type, and size limits. The workspace copies of marimo artifacts
  * are separate from the selected HTML/session artifacts saved in versions.
  * Visible files claim the budget first, then `__marimo__/`, then other hidden
- * paths. `.git/` goes last and all-or-nothing, because a partial repository
- * restores corrupt. Each file is read with a byte/deadline budget and written
+ * paths. Each Git directory (`.git/`, `pkg/.git/`, …) goes last and
+ * all-or-nothing, because a partial repository restores corrupt. Each file is read with a byte/deadline budget and written
  * to its `workspace/` key. In `source` mode no runtime
  * files are uploaded. Both modes then mirror-delete: any key under `workspace/`
  * (other than the excluded source files) that is no longer present in the sandbox
@@ -322,7 +328,7 @@ export async function captureWorkspace(
 	// Relative paths currently present in the sandbox working dir, excluding source
 	// files and regenerable artifacts. Used to upload files and drive mirror-deletes.
 	const present = new Set<string>();
-	let retainStoredGit = false;
+	const retainedGitGroups = new Set<string>();
 
 	if (mode === 'workspace') {
 		const listing = await sandbox.listFiles(workingDir, { recursive: true, includeHidden: true });
@@ -344,27 +350,37 @@ export async function captureWorkspace(
 		const selected: string[] = [];
 		const directoryMarkers: string[] = [];
 		const candidates: { rel: string; size: number; tier: number }[] = [];
-		const gitFiles: string[] = [];
-		const gitDirectoryMarkers: string[] = [];
-		let gitBytes = 0;
-		let gitFitsPerFileCap = true;
+		const gitGroups = new Map<
+			string,
+			{ files: string[]; directoryMarkers: string[]; bytes: number; fitsPerFileCap: boolean }
+		>();
+		const gitGroupFor = (group: string) => {
+			let entry = gitGroups.get(group);
+			if (!entry) {
+				entry = { files: [], directoryMarkers: [], bytes: 0, fitsPerFileCap: true };
+				gitGroups.set(group, entry);
+			}
+			return entry;
+		};
 		for (const file of listing.files) {
 			const rel = file.relativePath;
 			if (!isSafeWorkspacePath(rel) || isWorkspaceInternalPath(rel) || isCaptureExcluded(rel)) {
 				continue;
 			}
+			const group = gitGroupOf(rel);
 			if (file.type === 'directory') {
-				(isGitMetadataPath(rel) ? gitDirectoryMarkers : directoryMarkers).push(
+				(group === null ? directoryMarkers : gitGroupFor(group).directoryMarkers).push(
 					workspaceDirectoryMarkerPath(rel),
 				);
 				continue;
 			}
 			if (file.type !== 'file') continue;
 			present.add(rel);
-			if (isGitMetadataPath(rel)) {
-				gitFiles.push(rel);
-				gitBytes += file.size;
-				if (file.size > MAX_WORKSPACE_FILE_BYTES) gitFitsPerFileCap = false;
+			if (group !== null) {
+				const entry = gitGroupFor(group);
+				entry.files.push(rel);
+				entry.bytes += file.size;
+				if (file.size > MAX_WORKSPACE_FILE_BYTES) entry.fitsPerFileCap = false;
 				continue;
 			}
 			candidates.push({ rel, size: file.size, tier: captureTier(rel) });
@@ -396,21 +412,25 @@ export async function captureWorkspace(
 			totalBytes += size;
 		}
 
-		if (gitFiles.length > 0 || gitDirectoryMarkers.length > 0) {
+		// Root repository first, then nested ones in listing order.
+		const orderedGitGroups = [...gitGroups].sort(
+			([left], [right]) => Number(right === '.git') - Number(left === '.git'),
+		);
+		for (const [group, entry] of orderedGitGroups) {
 			if (
-				gitFitsPerFileCap &&
-				selected.length + gitFiles.length <= MAX_WORKSPACE_FILES &&
-				totalBytes + gitBytes <= MAX_WORKSPACE_BYTES
+				entry.fitsPerFileCap &&
+				selected.length + entry.files.length <= MAX_WORKSPACE_FILES &&
+				totalBytes + entry.bytes <= MAX_WORKSPACE_BYTES
 			) {
-				selected.push(...gitFiles);
-				directoryMarkers.push(...gitDirectoryMarkers);
-				totalBytes += gitBytes;
+				selected.push(...entry.files);
+				directoryMarkers.push(...entry.directoryMarkers);
+				totalBytes += entry.bytes;
 			} else {
 				// A stale but complete repository beats a deleted one, so the stored
 				// copy is kept whole rather than mirror-deleted.
-				retainStoredGit = true;
+				retainedGitGroups.add(group);
 				console.warn(
-					`captureWorkspace: .git (${gitFiles.length} files, ${gitBytes} bytes) does not fit the remaining workspace budget; keeping the stored copy`,
+					`captureWorkspace: ${group.slice(0, 256)} (${entry.files.length} files, ${entry.bytes} bytes) does not fit the remaining workspace budget; keeping the stored copy`,
 				);
 			}
 		}
@@ -442,7 +462,9 @@ export async function captureWorkspace(
 	const staleKeys = existingKeys.filter((key) => {
 		const rel = key.slice(nb.workspacePrefix.length);
 		if (!rel || isMirrorProtected(rel)) return false;
-		if (retainStoredGit && isGitMetadataPath(rel) && !isGitHooksPath(rel)) return false;
+		if (isGitHooksPath(rel)) return true;
+		const group = gitGroupOf(rel);
+		if (group !== null && retainedGitGroups.has(group)) return false;
 		return !present.has(rel);
 	});
 	if (staleKeys.length > 0) {

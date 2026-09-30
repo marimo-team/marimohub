@@ -81,6 +81,24 @@ describe('restoreWorkspace', () => {
 		expect(fs.has('.git/HEAD')).toBe(false);
 	});
 
+	it('never restores stored Git hooks, at any depth', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('.git/HEAD'), 'ref: refs/heads/main\n');
+		await bucket.put(nb.workspaceFile('.git/hooks/post-checkout'), '#!/bin/sh\n');
+		await bucket.put(nb.workspaceFile(`.git/hooks/${WORKSPACE_DIRECTORY_MARKER}`), '');
+		await bucket.put(nb.workspaceFile('pkg/.git/hooks/pre-commit'), '#!/bin/sh\n');
+		const { instance, fs, calls } = makeFsSandbox();
+
+		const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+			requireComplete: true,
+		});
+
+		expect(stats.objectCount).toBe(1);
+		expect([...fs.keys()].filter((path) => path.includes('hooks'))).toEqual([]);
+		expect(calls.exec.some((command) => command.includes('hooks'))).toBe(false);
+	});
+
 	it('empty workspace: still creates the working dir marimo runs in', async () => {
 		const { nb } = nbCtx();
 		const { instance, calls } = makeFsSandbox();
@@ -725,6 +743,55 @@ describe('captureWorkspace selection order', () => {
 			['.git/HEAD', '.git/objects/ab/cdef', 'app.py'].sort(),
 		);
 		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('captures a nested repository that fits as a whole', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const { instance } = makeFsSandbox({
+			files: {
+				'pkg/.git/HEAD': 'ref: refs/heads/main\n',
+				'pkg/.git/objects/ab/cdef': new Uint8Array([1, 2, 3]),
+				'pkg/.git/hooks/pre-commit': '#!/bin/sh\n',
+				'pkg/module.py': 'x = 1',
+			},
+		});
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		expect(await storedKeys(bucket, nb.workspacePrefix)).toEqual(
+			['pkg/.git/HEAD', 'pkg/.git/objects/ab/cdef', 'pkg/module.py'].sort(),
+		);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('skips an oversized nested repository wholesale and keeps its stored copy', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('pkg/.git/HEAD'), 'ref: refs/heads/old\n');
+		await bucket.put(nb.workspaceFile('pkg/.git/objects/old'), 'old object');
+		await bucket.put(nb.workspaceFile('pkg/.git/hooks/post-checkout'), '#!/bin/sh\n');
+		const files: Record<string, string> = {
+			'.git/HEAD': 'ref: refs/heads/main\n',
+			'pkg/.git/HEAD': 'ref: refs/heads/main\n',
+			'data/a.csv': 'a,b\n',
+		};
+		for (let i = 0; i < MAX_WORKSPACE_FILES; i++) files[`pkg/.git/objects/${i}`] = 'x';
+		const { instance, calls } = makeFsSandbox({ files });
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		expect(await storedKeys(bucket, nb.workspacePrefix)).toEqual(
+			['.git/HEAD', 'data/a.csv', 'pkg/.git/HEAD', 'pkg/.git/objects/old'].sort(),
+		);
+		expect(await (await bucket.get(nb.workspaceFile('pkg/.git/HEAD')))?.text()).toBe(
+			'ref: refs/heads/old\n',
+		);
+		expect(calls.readFile.filter((path) => path.includes('/pkg/.git/'))).toHaveLength(0);
+		const gitWarnings = warn.mock.calls.filter((args: unknown[]) =>
+			String(args[0]).includes('pkg/.git'),
+		);
+		expect(gitWarnings).toHaveLength(1);
 	});
 
 	it('spends the file budget on visible files, then __marimo__, then other hidden paths', async () => {

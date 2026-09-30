@@ -258,7 +258,7 @@ const PROVIDER_CAPABILITY_FLAGS = ['multiPort', 'computeProfiles', 'gpuProfiles'
 function validateProviderCapabilities(provider: SandboxProvider, specifier: string): void {
 	const capabilities: unknown = provider.capabilities;
 	if (capabilities === undefined) return;
-	if (typeof capabilities !== 'object' || capabilities === null) {
+	if (typeof capabilities !== 'object' || capabilities === null || Array.isArray(capabilities)) {
 		throw adapterConfigError(
 			'compute',
 			`Compute adapter from "${specifier}" has non-object capabilities`,

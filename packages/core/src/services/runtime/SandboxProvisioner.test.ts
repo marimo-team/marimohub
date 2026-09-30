@@ -1711,6 +1711,7 @@ describe('SandboxProvisioner', () => {
 			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
 			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
 			await bucketHandle.put(version.gitFile('objects/pack/pack-a.pack'), 'pack');
+			await bucketHandle.put(version.gitFile('hooks/post-checkout'), '#!/bin/sh\n');
 
 			const result = await provisioner.provision({
 				sandboxId,
@@ -1729,6 +1730,7 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/app.py`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`);
+			expect(restored.some((path) => path.includes('/.git/hooks'))).toBe(false);
 			expect(result.counters).toMatchObject({ files_objects: 3 });
 			expect(
 				calls.exec.some((command) =>
@@ -1772,7 +1774,7 @@ describe('SandboxProvisioner', () => {
 				),
 			);
 			const sparseCheckout = calls.exec.findIndex((command) => command.includes('sparse-checkout'));
-			expect(calls.execOptions[sparseCheckout]?.timeout).toBeGreaterThan(0);
+			expect(calls.execOptions[sparseCheckout]?.timeout).toBe(60_000);
 			expect(calls.startProcess[0].options?.cwd).toBe(`${MOUNT_PATH}/python/apps`);
 			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'app.py'");
 		});
