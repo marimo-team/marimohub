@@ -194,6 +194,51 @@ describe('ProjectMembersDialog — admin', () => {
 		});
 	});
 
+	it.each(['mouse', 'keyboard'])(
+		'closes suggestions after adding a member with the %s',
+		async (input) => {
+			const user = userEvent.setup();
+			makeFetch();
+			await renderDialog('admin');
+
+			const search = screen.getByRole('combobox', { name: 'Search users' });
+			await user.type(search, 'nina');
+			const option = await screen.findByRole('option', { name: /Nina New/ });
+			if (input === 'mouse') {
+				await user.click(option);
+			} else {
+				await user.keyboard('{ArrowDown}{Enter}');
+			}
+
+			await screen.findByText('Member added');
+			await waitFor(() => {
+				expect(search).toHaveValue('');
+				expect(search).toHaveAttribute('aria-expanded', 'false');
+			});
+			expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+			expect(screen.queryByText('Type at least 2 characters to search')).not.toBeInTheDocument();
+
+			await user.type(search, 'another@x.io');
+			expect(
+				await screen.findByRole('option', { name: /Invite "another@x\.io" by email/ }),
+			).toBeInTheDocument();
+		},
+	);
+
+	it('closes suggestions when the search is cleared', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderDialog('admin');
+
+		const search = screen.getByRole('combobox', { name: 'Search users' });
+		await user.type(search, 'nina');
+		await screen.findByRole('option', { name: /Nina New/ });
+		await user.clear(search);
+
+		await waitFor(() => expect(search).toHaveAttribute('aria-expanded', 'false'));
+		expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+	});
+
 	it('POSTs an email invite when the query is an unknown email', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({ searchResults: [] });
@@ -384,6 +429,7 @@ describe('ProjectMembersDialog — admin', () => {
 		await pickOption(user, 'u-dup', /Add "u-dup" by user id/);
 
 		expect(await screen.findByText(/already a member/)).toBeInTheDocument();
+		expect(screen.getByRole('combobox', { name: 'Search users' })).toHaveValue('u-dup');
 		expect(screen.getByRole('dialog', { name: 'Project Access' })).toBeInTheDocument();
 	});
 
