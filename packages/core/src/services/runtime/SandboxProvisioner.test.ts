@@ -1523,7 +1523,7 @@ describe('SandboxProvisioner', () => {
 			).toBe(true);
 			expect(calls.writeFile.some((file) => file.path.endsWith('app.py'))).toBe(false);
 			expect(calls.exec.some((command) => command.startsWith('python3 '))).toBe(true);
-			expect(calls.exec.find((command) => command.startsWith('python3 '))).toMatch(/ 1$/);
+			expect(calls.exec.find((command) => command.startsWith('python3 '))).toMatch(/ 1 ''$/);
 			expect(
 				calls.exec.some((command) =>
 					command.includes("git config --global --add safe.directory '/workspace'"),
@@ -1735,6 +1735,220 @@ describe('SandboxProvisioner', () => {
 					command.includes("git config --global --add safe.directory '/workspace'"),
 				),
 			).toBe(true);
+		});
+
+		it('restores a subtree pull source beside the repository Git directory', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				entryNotebook: 'app.py',
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+				gitRootPath: 'python/apps',
+			});
+
+			const restored = calls.writeFiles.flat().map((file) => file.path);
+			expect(restored).toContain(`${MOUNT_PATH}/python/apps/app.py`);
+			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
+			expect(result.counters).toMatchObject({ files_objects: 2 });
+			expect(calls.exec).toContainEqual(
+				expect.stringContaining("git config --global --add safe.directory '/workspace'"),
+			);
+			expect(calls.exec).toContainEqual(
+				expect.stringContaining(
+					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python/apps'",
+				),
+			);
+			expect(calls.startProcess[0].options?.cwd).toBe(`${MOUNT_PATH}/python/apps`);
+			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'app.py'");
+		});
+
+		it('unpacks a subtree pull source archive with Git metadata at the repository root', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+				gitRootPath: 'python',
+				workspaceArchive: version.workspaceArchive,
+			});
+
+			const extract = calls.exec.find((command) => command.startsWith('python3 '));
+			expect(extract).toMatch(/ '\/workspace' 1 'python'$/);
+			expect(
+				calls.writeFiles[0].every(({ path }) =>
+					path.startsWith(`${MOUNT_PATH}/.marimohub-packed-restore/`),
+				),
+			).toBe(true);
+			expect(calls.exec).toContainEqual(
+				expect.stringContaining("sparse-checkout set --cone -- 'python'"),
+			);
+		});
+
+		it('ignores a root path without pull-source Git metadata', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				entryNotebook: 'app.py',
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				gitRootPath: 'python',
+			});
+
+			expect(calls.writeFiles.flat().map((file) => file.path)).toContain(`${MOUNT_PATH}/app.py`);
+			expect(calls.exec.some((command) => command.includes('sparse-checkout'))).toBe(false);
+			expect(calls.startProcess[0].options?.cwd).toBe(MOUNT_PATH);
+		});
+
+		it('keeps provisioning when the sparse checkout cannot be configured', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const exec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				const result = await exec(command, options);
+				return command.includes('sparse-checkout set')
+					? {
+							success: false,
+							stdout: '',
+							stderr: 'git: sparse-checkout is not a git command',
+							error: { code: 'COMMAND_FAILED' },
+						}
+					: result;
+			};
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			try {
+				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					entryNotebook: 'app.py',
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+					gitRootPath: 'python',
+				});
+
+				expect(result.url).toBeTruthy();
+				expect(calls.destroy).toBe(0);
+				expect(calls.startProcess[0].options?.cwd).toBe(`${MOUNT_PATH}/python`);
+				expect(log).toHaveBeenCalledWith(expect.stringContaining('git_sparse_checkout_failed'));
+			} finally {
+				log.mockRestore();
+			}
+		});
+
+		it('falls back to the subtree layout when packed extraction fails', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const exec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				const result = await exec(command, options);
+				return command.startsWith('python3 ')
+					? {
+							success: false,
+							stdout: '',
+							stderr: 'invalid archive',
+							error: { code: 'COMMAND_FAILED' },
+						}
+					: result;
+			};
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceArchive, new Uint8Array([1, 2, 3]));
+			await bucketHandle.put(version.workspaceFile('app.py'), 'canonical');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			try {
+				const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+					gitRootPath: 'python',
+					workspaceArchive: version.workspaceArchive,
+				});
+
+				const restored = calls.writeFiles.flat().map((file) => file.path);
+				expect(restored).toContain(`${MOUNT_PATH}/python/app.py`);
+				expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
+				expect(restored).not.toContain(`${MOUNT_PATH}/app.py`);
+				expect(result.counters).toMatchObject({ files_archive_failed: 1 });
+				expect(calls.exec).toContainEqual(
+					expect.stringContaining("sparse-checkout set --cone -- 'python'"),
+				);
+			} finally {
+				log.mockRestore();
+			}
+		});
+
+		it('rejects an unsafe root path before touching the sandbox', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+					gitRootPath: '../escape',
+				}),
+			).rejects.toThrow('Unsafe workspace root path');
+
+			expect(calls.writeFiles).toHaveLength(0);
+			expect(calls.writeFile).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('preserves Git metadata stored in an ordinary copied workspace', async () => {

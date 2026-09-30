@@ -2,6 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "marimohub.fullname" . }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "marimohub.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -20,6 +24,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "marimohub.fullname" . }}-maintenance
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "marimohub.labels" . | nindent 4 }}
     app.kubernetes.io/component: maintenance

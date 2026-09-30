@@ -37,10 +37,14 @@ function makeJobSandbox(
 		html?: string;
 		stderr?: string;
 		stdout?: string;
+		/** Where the job runs; a subtree pull source runs below the workdir. */
+		workdir?: string;
 	} = {},
 ): JobSandbox {
 	const files: Record<string, string> = {};
-	if (opts.html !== undefined) files[OUTPUT] = opts.html;
+	if (opts.html !== undefined) {
+		files[opts.workdir ? `${opts.workdir}/__marimo__/job_output.html` : OUTPUT] = opts.html;
+	}
 	const { instance, calls } = makeFakeSandbox({ files });
 	const jobCommands: string[] = [];
 	const baseExec = instance.exec.bind(instance);
@@ -101,6 +105,105 @@ describe('JobRunner', () => {
 			timeoutSeconds: 900,
 			...overrides,
 		});
+
+	it('runs a subtree pull source from the subtree beside the repository Git directory', async () => {
+		const encode = (value: string) => new TextEncoder().encode(value);
+		const { meta } = await env.notebooks.synced.create(
+			pid,
+			{
+				title: 'Pulled',
+				description: '',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: 'python',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			},
+			ACTOR,
+		);
+		await env.notebooks.synced.sync(pid, meta.id, {
+			repo: 'org/repo',
+			branch: 'main',
+			root_path: 'python',
+			commit: 'commit-aaaa',
+			files: [{ path: 'app.py', bytes: encode('import marimo') }],
+			git_files: [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
+		});
+		const pulledJob = await env.jobs.createJob(pid, meta.id, { name: 'nightly' }, ACTOR);
+		const sandbox = makeJobSandbox({ html: '<html/>', workdir: `${WORKDIR}/python` });
+
+		const queued = await env.jobRuns.enqueue({
+			job: pulledJob,
+			trigger: 'manual',
+			triggeredBy: ACTOR,
+			timeoutSeconds: 900,
+		});
+
+		const run = await runner(sandbox).execute(queued);
+
+		expect(run.error).toBeUndefined();
+		expect(run.status).toBe('succeeded');
+		expect(sandbox.jobCommands[0]).toContain(`cd '${WORKDIR}/python'`);
+		expect(sandbox.jobCommands[0]).toContain("marimo export html 'app.py'");
+		// The synced version ships a packed archive, so the layout comes from the extractor arguments.
+		const extract = sandbox.calls.exec.find((command) => command.startsWith('python3 '));
+		expect(extract).toMatch(/ '\/workspace' 1 'python'$/);
+		expect(sandbox.calls.exec).toContainEqual(
+			expect.stringContaining("sparse-checkout set --cone -- 'python'"),
+		);
+	});
+
+	it('restores a pinned pull version with its own subtree after the source moved', async () => {
+		const encode = (value: string) => new TextEncoder().encode(value);
+		const { meta } = await env.notebooks.synced.create(
+			pid,
+			{
+				title: 'Pulled',
+				description: '',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			},
+			ACTOR,
+		);
+		const sync = (rootPath: string, commit: string) =>
+			env.notebooks.synced.sync(pid, meta.id, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: rootPath,
+				commit,
+				files: [{ path: 'app.py', bytes: encode('import marimo') }],
+				git_files: [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
+			});
+		const { versionId: rootVersion } = await sync('', 'commit-aaaa');
+		const pulledJob = await env.jobs.createJob(pid, meta.id, { name: 'nightly' }, ACTOR);
+		const queued = await env.jobRuns.enqueue({
+			job: pulledJob,
+			trigger: 'manual',
+			triggeredBy: ACTOR,
+			timeoutSeconds: 900,
+			sourceVersionId: rootVersion!,
+		});
+		await env.notebooks.synced.updateSource(
+			pid,
+			meta.id,
+			{ repo: 'org/repo', branch: 'main', root_path: 'python', entry_notebook: 'app.py' },
+			ACTOR,
+		);
+		await sync('python', 'commit-bbbb');
+		const sandbox = makeJobSandbox({ html: '<html/>' });
+
+		const run = await runner(sandbox).execute(queued);
+
+		expect(run.error).toBeUndefined();
+		expect(run.status).toBe('succeeded');
+		expect(run.source_version_id).toBe(rootVersion);
+		expect(sandbox.jobCommands[0]).toContain(`cd '${WORKDIR}'`);
+		const extract = sandbox.calls.exec.find((command) => command.startsWith('python3 '));
+		expect(extract).toMatch(/ '\/workspace' 1 ''$/);
+		expect(sandbox.calls.exec.some((command) => command.includes('sparse-checkout'))).toBe(false);
+	});
 
 	it('runs the export headlessly, captures the output, and destroys the sandbox', async () => {
 		const log = vi.spyOn(console, 'log');

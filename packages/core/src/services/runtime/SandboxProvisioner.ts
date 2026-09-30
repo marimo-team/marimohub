@@ -34,6 +34,8 @@ import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 import type { WorkspaceRestoreStats } from './sandboxFiles';
 import { restorePackedWorkspace } from './packedWorkspaceRestore';
+import { sandboxWorkspaceLayout } from './workspaceLayout';
+import type { SandboxWorkspaceLayout } from './workspaceLayout';
 
 /**
  * Default wait for marimo to bind its port (override per deployment via
@@ -270,6 +272,13 @@ export interface ProvisionOptions {
 	workspaceOverlay?: { path: string; key: string }[];
 	/** Pull-source Git metadata restored into `<workdir>/.git`. */
 	gitPrefix?: string;
+	/**
+	 * Subtree of the repository a pull source mirrors. The workspace and kernel
+	 * then live at `<workdir>/<gitRootPath>` under a sparse checkout while
+	 * `.git` stays at `<workdir>`, where its repository-relative index resolves.
+	 * Ignored without `gitPrefix`.
+	 */
+	gitRootPath?: string;
 	/** Optional packed copy of a synced workspace and its Git metadata. */
 	workspaceArchive?: string;
 }
@@ -733,8 +742,11 @@ export class SandboxProvisioner {
 		mountPath: string;
 	}> {
 		const nb = paths.project(options.projectId).notebook(options.notebookId);
-		const workdir = options.workdir ?? DEFAULT_WORKDIR;
-		const mountPath = workdir;
+		const layout = sandboxWorkspaceLayout(
+			options.workdir ?? DEFAULT_WORKDIR,
+			options.gitPrefix ? (options.gitRootPath ?? '') : '',
+		);
+		const mountPath = layout.workdir;
 		const sw = new Stopwatch();
 
 		const ensureReachable = () => this.ensureReachable(sandbox, sw);
@@ -744,7 +756,7 @@ export class SandboxProvisioner {
 					const loaded = await this.loadWorkspace(
 						sandbox,
 						options,
-						mountPath,
+						layout,
 						options.workspacePrefix ?? nb.workspacePrefix,
 					);
 					await this.applyWorkspaceOverlay(sandbox, options, mountPath);
@@ -914,12 +926,13 @@ export class SandboxProvisioner {
 	private async loadWorkspace(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
-		mountPath: string,
+		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 	): Promise<WorkspaceLoadResult> {
-		const loaded = await this.restoreWorkspaceFiles(sandbox, options, mountPath, workspacePrefix);
+		const loaded = await this.restoreWorkspaceFiles(sandbox, options, layout, workspacePrefix);
 		if (options.gitPrefix) {
-			await this.markGitWorkdirTrusted(sandbox, mountPath);
+			await this.markGitWorkdirTrusted(sandbox, layout.gitRoot);
+			if (layout.rootPath) await this.configureSparseCheckout(sandbox, options, layout);
 		}
 		return loaded;
 	}
@@ -927,7 +940,7 @@ export class SandboxProvisioner {
 	private async restoreWorkspaceFiles(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
-		mountPath: string,
+		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 	): Promise<WorkspaceLoadResult> {
 		if (
@@ -939,8 +952,9 @@ export class SandboxProvisioner {
 				sandbox,
 				options.bucketHandle,
 				options.workspaceArchive,
-				mountPath,
+				layout.gitRoot,
 				Boolean(options.gitPrefix),
+				layout.rootPath,
 			);
 			if (packed.status === 'restored') {
 				return {
@@ -963,18 +977,13 @@ export class SandboxProvisioner {
 					packed.error,
 				);
 			}
-			const fallback = await this.loadWorkspaceObjects(
-				sandbox,
-				options,
-				mountPath,
-				workspacePrefix,
-			);
+			const fallback = await this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix);
 			return {
 				...fallback,
 				archiveStatus: packed.status === 'missing' ? 'missing' : 'failed',
 			};
 		}
-		return this.loadWorkspaceObjects(sandbox, options, mountPath, workspacePrefix);
+		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix);
 	}
 
 	private async markGitWorkdirTrusted(sandbox: SandboxInstance, workdir: string): Promise<void> {
@@ -984,12 +993,41 @@ export class SandboxProvisioner {
 		);
 	}
 
+	/**
+	 * Narrow the checkout to the mirrored subtree so `git status` in the session
+	 * is clean instead of reporting the rest of the repository as deleted.
+	 * Best-effort: proposal capture scopes its own diff to the subtree, so a
+	 * missing or old `git` only costs the cosmetic cleanliness.
+	 */
+	private async configureSparseCheckout(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		layout: SandboxWorkspaceLayout,
+	): Promise<void> {
+		const result = await sandbox.exec(
+			`if command -v git >/dev/null 2>&1; then cd ${shellQuote(layout.gitRoot)} && git -c ${shellQuote(`safe.directory=${layout.gitRoot}`)} sparse-checkout set --cone -- ${shellQuote(layout.rootPath)}; fi`,
+		);
+		if (result.success) return;
+		logOperationalError(
+			'git_sparse_checkout_failed',
+			{
+				operation: 'session.git.sparse_checkout',
+				object: layout.workdir,
+				project_id: options.projectId,
+				notebook_id: options.notebookId,
+				recovered: true,
+			},
+			new Error(result.stderr.trim().slice(-500) || 'git sparse-checkout failed'),
+		);
+	}
+
 	private async loadWorkspaceObjects(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
-		mountPath: string,
+		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 	): Promise<WorkspaceLoadResult> {
+		const mountPath = layout.workdir;
 		const strategy =
 			options.workspaceLoadMode === 'copy-only'
 				? this.workspaceLoadStrategies.copyOnly
@@ -1015,7 +1053,7 @@ export class SandboxProvisioner {
 					sandbox,
 					options.bucketHandle,
 					gitPrefix,
-					`${mountPath}/.git`,
+					`${layout.gitRoot}/.git`,
 					{ requireComplete: true },
 				);
 				if (stats.objectCount === 0) throw new Error('the stored Git directory is empty');

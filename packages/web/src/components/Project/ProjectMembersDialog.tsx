@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { z } from 'zod';
-import { Trash2 } from 'lucide-react';
+import { ChevronDown, Trash2 } from 'lucide-react';
 import {
 	ComboBox,
 	ConfirmDialog,
@@ -124,26 +124,32 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 		</div>
 	);
 	return (
-		<Tooltip content={tooltip}>
-			<select
-				aria-label={label}
-				value={value}
-				onChange={(e) => onChange(e.target.value as AssignableProjectRole)}
-				disabled={disabled}
-				className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-			>
-				{value === 'admin' && (
-					<option value="admin" disabled>
-						Admin (legacy)
-					</option>
-				)}
-				{ASSIGNABLE_ROLES.map((role) => (
-					<option key={role} value={role}>
-						{roleLabel(role)}
-					</option>
-				))}
-			</select>
-		</Tooltip>
+		<span className="relative inline-flex shrink-0 items-center">
+			<Tooltip content={tooltip}>
+				<select
+					aria-label={label}
+					value={value}
+					onChange={(e) => onChange(e.target.value as AssignableProjectRole)}
+					disabled={disabled}
+					className="peer h-8 rounded-md border border-input bg-background appearance-none pl-2 pr-8 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+				>
+					{value === 'admin' && (
+						<option value="admin" disabled>
+							Admin (legacy)
+						</option>
+					)}
+					{ASSIGNABLE_ROLES.map((role) => (
+						<option key={role} value={role}>
+							{roleLabel(role)}
+						</option>
+					))}
+				</select>
+			</Tooltip>
+			<ChevronDown
+				aria-hidden="true"
+				className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground peer-disabled:opacity-50"
+			/>
+		</span>
 	);
 }
 
@@ -263,14 +269,16 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 				placeholder="Search by name or email, or paste a user ID…"
 				inputValue={query}
 				onInputChange={setQuery}
-				options={options}
+				options={trimmed ? options : []}
 				isDisabled={isPending}
 				emptyState={
-					debounced.trim().length < 2
-						? 'Type at least 2 characters to search'
-						: search.isFetching
-							? 'Searching…'
-							: 'No matching users'
+					!trimmed
+						? undefined
+						: debounced.trim().length < 2
+							? 'Type at least 2 characters to search'
+							: search.isFetching
+								? 'Searching…'
+								: 'No matching users'
 				}
 				onSelect={(id) => {
 					const option = options.find((o) => o.id === id);
@@ -382,7 +390,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	return (
 		<>
 			<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
-				<div className="max-h-[70dvh] overflow-y-auto overscroll-contain pr-1">
+				<div className="-m-1 max-h-[70dvh] overflow-y-auto overscroll-contain p-1">
 					<div className="flex flex-col gap-5 text-sm">
 						<section
 							aria-labelledby="your-access-heading"

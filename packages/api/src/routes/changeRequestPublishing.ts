@@ -1,4 +1,11 @@
-import { ConflictError, NotFoundError, sessionOwner, UnavailableError } from '@marimo-hub/core';
+import {
+	ConflictError,
+	NotFoundError,
+	pullSourceRootPath,
+	sandboxWorkspaceLayout,
+	sessionOwner,
+	UnavailableError,
+} from '@marimo-hub/core';
 import type {
 	AuthSubject,
 	GitSourceRevision,
@@ -129,6 +136,15 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		legacySourceRevision,
 	);
 	const publisher = publisherFor(input.deps, sourceRevision.provider, input.project.id);
+	// The session was provisioned from this revision's subtree, so its layout
+	// follows the revision's root path rather than any pending settings edit.
+	const layout = sandboxWorkspaceLayout(
+		input.deps.sandbox.workdir,
+		pullSourceRootPath({
+			sync_mode: notebook.source.sync_mode,
+			root_path: sourceRevision.root_path,
+		}),
+	);
 	const { proposal, created, publicationState } =
 		await input.deps.services.proposals.captureProposalWithOutcome({
 			projectId: input.project.id,
@@ -136,7 +152,8 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 			proposalId: input.proposalId,
 			session,
 			sandbox: input.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
-			workdir: input.deps.sandbox.workdir,
+			workdir: layout.workdir,
+			gitRoot: layout.gitRoot,
 			author: input.author,
 			targetProposalId: input.targetProposalId,
 			resolvedSourceRevision: sourceRevision,

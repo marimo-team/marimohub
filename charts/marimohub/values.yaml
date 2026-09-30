@@ -204,5 +204,7 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# Deployment metadata for both API and maintenance (e.g. reload controllers).
+deploymentAnnotations: {}
 podAnnotations: {}
 podLabels: {}

@@ -204,6 +204,7 @@ describe('Session routes', () => {
 		async function createSyncedNotebook(
 			entryCode: string,
 			syncMode: 'push' | 'pull' = 'push',
+			rootPath = '',
 		): Promise<NotebookId> {
 			const services = createServices(bucket);
 			const { meta } = await services.notebooks.synced.create(
@@ -213,6 +214,7 @@ describe('Session routes', () => {
 					description: 'd',
 					repo: 'org/repo',
 					branch: 'main',
+					root_path: rootPath,
 					entry_notebook: ENTRY,
 					sync_mode: syncMode,
 				},
@@ -221,7 +223,7 @@ describe('Session routes', () => {
 			await services.notebooks.synced.sync(pid, meta.id, {
 				repo: 'org/repo',
 				branch: 'main',
-				root_path: '',
+				root_path: rootPath,
 				commit: 'commit-aaaa',
 				files: [{ path: ENTRY, bytes: enc(entryCode) }],
 				...(syncMode === 'pull'
@@ -270,12 +272,32 @@ describe('Session routes', () => {
 					command.startsWith('python3 ') &&
 					command.includes('/workspace/.marimohub-packed-restore/extract.py'),
 			)!;
-			expect(extract).toMatch(/ 1$/);
+			expect(extract).toMatch(/ 1 ''$/);
 			expect(archiveReads(get)).toBe(1);
 			// Launch-strategy detection reads the entry once; a canonical fallback would read it again.
 			expect(entryReads(get)).toBe(1);
 			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(setup).not.toContain('uv export');
+		});
+
+		it('runs a subtree pull source from the subtree under a sparse checkout', async () => {
+			const synced = await createSyncedNotebook('import marimo', 'pull', 'python');
+			const { sb, post } = await startSessionApi(synced);
+			await expectOk<ApiSession>(await post());
+			const extract = sb.calls.exec.find(
+				(command) =>
+					command.startsWith('python3 ') &&
+					command.includes('/workspace/.marimohub-packed-restore/extract.py'),
+			)!;
+			expect(extract).toMatch(/ '\/workspace' 1 'python'$/);
+			expect(sb.calls.exec).toContainEqual(
+				expect.stringContaining(
+					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python'",
+				),
+			);
+			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			expect(setup).toContain("cd '/workspace/python'");
+			expect(sb.calls.startProcess[0].options?.cwd).toBe('/workspace/python');
 		});
 
 		it('installs inline dependencies for a local edit session', async () => {

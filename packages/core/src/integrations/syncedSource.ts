@@ -181,9 +181,6 @@ export function applyGitSourceUpdate(
 	if (input.sync_mode && input.sync_mode !== current.sync_mode) {
 		throw new BadRequestError('Changing sync_mode is not supported');
 	}
-	if (current.sync_mode === 'pull' && desired.root_path !== '') {
-		throw new BadRequestError('Pull-mode sources require root_path to be empty');
-	}
 	const resolved = resolveUpdatedConfig(current, desired);
 	const active = gitSourceConfig(current);
 	if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved))
@@ -208,9 +205,6 @@ export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
 		normalizeGitSourceConfig(input),
 		input.provider === 'gitlab' ? 'https://gitlab.com' : null,
 	);
-	if (input.sync_mode === 'pull' && config.root_path !== '') {
-		throw new BadRequestError('Pull-mode sources require root_path to be empty');
-	}
 	return {
 		schema_version: 1,
 		type: 'git',

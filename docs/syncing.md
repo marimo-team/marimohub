@@ -11,10 +11,10 @@ description: Sync read-only notebooks into marimohub from external Git repositor
 marimohub can serve a notebook whose source of truth is an external **Git
 repository**. Choose a source mode when you create the notebook:
 
-| Mode   | Primary sync path               | Credential | Supported path  | Git metadata                    |
-| ------ | ------------------------------- | ---------- | --------------- | ------------------------------- |
-| `push` | CI upload or **Sync now**       | Sync token | Root or subtree | Only when the upload has `.git` |
-| `pull` | Create request and **Sync now** | GitHub App | Root only       | Included in every version       |
+| Mode   | Primary sync path               | Credential | Supported path   | Git metadata                    |
+| ------ | ------------------------------- | ---------- | ---------------- | ------------------------------- |
+| `push` | CI upload or **Sync now**       | Sync token | Root or subtree  | Only when the upload has `.git` |
+| `pull` | Create request and **Sync now** | GitHub App | Any subdirectory | Included in every version       |
 
 The source mode cannot change after creation. For a push source, **Sync now**
 updates the files but does not add Git metadata to the version.
@@ -83,7 +83,7 @@ Content-Type: application/json
 | `branch`         | yes      | Branch this notebook tracks.                                                              |
 | `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).               |
 | `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**. |
-| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode is GitHub-only and requires `root_path: ""`.        |
+| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode is GitHub-only.                                     |
 
 `repo` accepts `owner/repo` or a repository URL. The shorthand refers to GitHub,
 unless `provider` is `gitlab`. GitLab URLs can contain nested groups, such as
@@ -114,7 +114,7 @@ only a SHA-256 of it.
 ### Pull mode: connect a GitHub repository
 
 Use pull mode when marimohub must sync the repository. Set `sync_mode` to
-`pull` and use an empty `root_path`:
+`pull`:
 
 ```json
 {
@@ -122,7 +122,7 @@ Use pull mode when marimohub must sync the repository. Set `sync_mode` to
 	"description": "Connected to the analytics repo",
 	"repo": "acme/analytics",
 	"branch": "main",
-	"root_path": "",
+	"root_path": "python",
 	"entry_notebook": "apps/dashboard.py",
 	"sync_mode": "pull"
 }
@@ -137,14 +137,16 @@ If the first pull fails, the response contains a draft notebook and
 `sync_error`. Correct the repository coordinates or GitHub App access. Then use
 **Sync now** to retry.
 
-Pull mode supports only the repository root in v1. Put the full
-repository-relative path in `entry_notebook`. For example, use
-`apps/dashboard.py` instead of `root_path: "apps"`.
+`root_path` selects the subtree to mirror, such as the `python/` directory of a
+monorepo. The workspace contains only that subtree, and `entry_notebook` is
+relative to it. Leave it empty to mirror the whole repository.
 
 Each pull stores a shallow, credential-free Git directory for the exact commit.
-marimohub restores this directory into the session workspace. Session startup
-fails if the Git directory cannot be restored completely. The GitHub
-installation token stays on the server.
+marimohub restores this directory into the session workspace. With a
+`root_path`, `.git` sits above the workspace and the session runs from the
+subtree under a sparse checkout, so `git status` reports only changes inside
+it. Session startup fails if the Git directory cannot be restored completely.
+The GitHub installation token stays on the server.
 
 Git data larger than 25 MB is rejected. Use push mode for a repository that
 exceeds this limit.
@@ -171,9 +173,9 @@ Content-Type: application/json
 For an existing custom-host source, a bare `owner/repo` continues to use that
 host. GitHub.com shorthand remains bare.
 
-The source mode cannot change. A pull source must continue to use the repository
-root and a supported GitHub.com repository. marimohub rejects unsupported source
-changes before it stores them.
+The source mode cannot change. A pull source must continue to use a supported
+GitHub.com repository. marimohub rejects unsupported source changes before it
+stores them.
 
 Before the first successful sync, changes take effect immediately. After that,
 changes remain pending until a CI upload or server sync matches the new source
@@ -214,9 +216,10 @@ time and does not change notebook state. Pending source settings always set
 `in_sync` to `false`.
 
 The sync endpoint reads the repository tree at the resolved commit. It applies
-the push-sync file-count and size limits to files under `root_path`. For a push
-source, files outside `root_path` do not count against these limits. Pull sources
-always use the repository root.
+the push-sync file-count and size limits to files under `root_path`. Files
+outside `root_path` do not count against these limits. A pull source's Git
+directory still covers the whole repository at that commit, so the Git data
+limit applies to the full tree.
 
 Server sync omits symlinks and other special entries from the workspace. For a
 pull source, proposal capture also ignores these omitted Git index entries.

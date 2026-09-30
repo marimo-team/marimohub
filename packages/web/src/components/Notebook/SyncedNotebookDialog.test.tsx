@@ -215,15 +215,15 @@ describe('SyncedNotebookDialog', () => {
 		);
 		expect(pullDescription).toHaveClass('whitespace-normal', 'break-words');
 		expect(pullDescription).not.toHaveClass('truncate');
-		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
 		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
+		await user.type(screen.getByLabelText('Folder in repo (optional)'), 'python');
 		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
 		await user.click(screen.getByRole('button', { name: 'Create' }));
 
 		const [, init] = fetchImpl.mock.calls[0];
 		expect(JSON.parse(init!.body as string)).toMatchObject({
-			root_path: '',
+			root_path: 'python',
 			sync_mode: 'pull',
 		});
 		expect(onCreated).toHaveBeenCalledWith({
@@ -251,7 +251,7 @@ describe('SyncedNotebookDialog', () => {
 
 		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
 		expect(screen.getByLabelText('Notebook name')).toHaveValue('Connected');
-		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
+		expect(screen.getByLabelText('Folder in repo (optional)')).toBeInTheDocument();
 	});
 
 	it.each([
@@ -266,6 +266,22 @@ describe('SyncedNotebookDialog', () => {
 		await user.tab();
 
 		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it('rejects an unsafe folder before submitting', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = vi.fn();
+		renderDialog(fetchImpl, true);
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
+		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
+		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
+		await user.type(screen.getByLabelText('Folder in repo (optional)'), '../apps');
+		await user.tab();
+
+		expect(screen.getByText(/without leading or trailing slashes/i)).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});

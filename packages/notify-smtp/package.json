@@ -19,7 +19,7 @@
 	},
 	"dependencies": {
 		"@marimo-hub/core": "workspace:*",
-		"nodemailer": "^9.1.1"
+		"nodemailer": "^10.0.0"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

@@ -9,6 +9,7 @@ import {
 	gitSourceUrl,
 	isGitHubRepoInput,
 	isRepoInput,
+	isValidRootPath,
 	providerLabel,
 	shortCommit,
 	versionCommit,
@@ -256,4 +257,17 @@ describe('versionCommit', () => {
 		expect(versionCommit({ message: 'Sync not-a-sha!' })).toBeNull();
 		expect(versionCommit({ message: '' })).toBeNull();
 	});
+});
+
+describe('isValidRootPath', () => {
+	it.each(['', 'apps', 'python/apps', ' apps ', 'a-b.c_d'])('accepts %j', (input) => {
+		expect(isValidRootPath(input)).toBe(true);
+	});
+
+	it.each(['/apps', 'apps/', '..', '../x', 'a/../b', '.', 'a//b', 'a\\b'])(
+		'rejects %j',
+		(input) => {
+			expect(isValidRootPath(input)).toBe(false);
+		},
+	);
 });

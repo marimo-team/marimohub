@@ -76,6 +76,8 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `secrets.existingSecret` | `""` | Secret you create with the secret vars (recommended) |
 | `secrets.data` | `{}` | Or let the chart create the Secret (dev) |
 | `extraVolumes` / `extraVolumeMounts` | `[]` / `[]` | Volumes and container mounts for API and maintenance pods |
+| `deploymentAnnotations` | `{}` | Metadata annotations on both API and maintenance Deployments |
+| `podAnnotations` | `{}` | Pod-template annotations on both API and maintenance pods |
 | `ingress.enabled` / `.className` / `.host` | `true` / `""` / `hub.example.com` | |
 | `ingress.tls.*` | enabled, `marimohub-tls` | |
 | `metrics.enabled` / `.port` | `false` / `9464` | Prometheus scrape mode; port exposed on the Service, never the ingress |
@@ -93,6 +95,19 @@ baked in, so the chart is portable across any Kubernetes.
 The chart sets `MARIMOHUB_RUN_MAINTENANCE` per deployment (`false` on API pods,
 `true` on the maintenance pod), overriding any value in `config`. The maintenance
 pod is pinned to one replica with the `Recreate` strategy — don't scale it.
+
+### Deployment annotations
+
+Controllers such as Stakater Reloader read annotations from the Deployment,
+not its pod template. Use `deploymentAnnotations` for these integrations:
+
+```yaml
+deploymentAnnotations:
+  reloader.stakater.com/auto: 'true'
+```
+
+This does not install a reload controller. `podAnnotations` remains separate;
+neither setting applies to notebook sandbox pods.
 
 ### Extra volumes
 

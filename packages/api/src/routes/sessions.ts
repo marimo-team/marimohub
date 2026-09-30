@@ -44,6 +44,7 @@ import {
 	resolveLaunchStrategyForSession,
 	resolveNotebookLaunchSource,
 	resolveRestoreSnapshot,
+	pullSourceGitOptions,
 	recipientFromIdentity,
 	ResourceExhaustedError,
 	saga,
@@ -1334,10 +1335,7 @@ export async function startNotebookSession(input: {
 	const syncedVersionPaths = syncedVersionId ? notebookPaths.version(syncedVersionId) : undefined;
 	const workspacePrefix = syncedVersionPaths?.workspacePrefix;
 	const workspaceArchive = syncedVersionPaths?.workspaceArchive;
-	const gitPrefix =
-		notebook.source.type === 'git' && notebook.source.sync_mode === 'pull'
-			? syncedVersionPaths?.gitPrefix
-			: undefined;
+	const pullSourceGit = pullSourceGitOptions(notebook.source, syncedVersionPaths);
 	// Staleness provenance: a session that serves a frozen snapshot — a
 	// non-persisting mode (`app`), or any mode on a synced source (a read-only
 	// mirror, even under `edit`) — is stamped with the head committed version it
@@ -1868,7 +1866,7 @@ export async function startNotebookSession(input: {
 										? 'copy-only'
 										: workspacePolicy.loadMode,
 								workspacePrefix,
-								gitPrefix,
+								...pullSourceGit,
 								workspaceArchive,
 								workspaceOverlay: launchSource.workspaceOverlay,
 							});
