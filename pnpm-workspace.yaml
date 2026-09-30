@@ -129,7 +129,8 @@ minimumReleaseAgeExclude:
   - '@coreweave/cwsandbox'
   # Security fixes take precedence over the release-age cooldown.
   - brace-expansion
-  - fast-uri@3.1.6
+  # Renovate security update: fast-uri@3.1.8
+  - fast-uri@3.1.6 || 3.1.8
   - nanoid
   # Renovate security update: hono@4.13.5
   - hono@4.12.34 || 4.13.5
