@@ -272,6 +272,12 @@ export type {
 	WorkspaceLoadStrategy,
 } from './runtime/SandboxProvisioner';
 export { captureWorkspace, restoreWorkspace } from './runtime/sandboxFiles';
+export {
+	pullSourceGitOptions,
+	pullSourceRootPath,
+	sandboxWorkspaceLayout,
+} from './runtime/workspaceLayout';
+export type { SandboxWorkspaceLayout } from './runtime/workspaceLayout';
 export { ProxyExposure, SubdomainExposure } from './runtime/sandboxExposure';
 export {
 	ACTIVE_STATUSES,

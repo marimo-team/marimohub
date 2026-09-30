@@ -18,6 +18,7 @@ import type { JobDefinition, JobRun, Project, RunError } from '../../schema';
 import { utf8Tail } from '../../text';
 import { Stopwatch } from '../../timing';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
+import { pullSourceGitOptions } from '../runtime/workspaceLayout';
 import type { NotebookDetail, NotebookService } from '../content/NotebookService';
 import type { ProjectService } from '../content/ProjectService';
 import { resolveBaseImage } from '../runtime/resolveBaseImage';
@@ -482,10 +483,6 @@ export class JobRunner {
 			workspacePrefix: syncedPaths?.workspacePrefix ?? nb.workspacePrefix,
 			localVersion,
 		});
-		const gitPrefix =
-			notebook.source.type === 'git' && notebook.source.sync_mode === 'pull'
-				? syncedPaths?.gitPrefix
-				: undefined;
 		const launchStrategy = await resolveLaunchStrategyForSession({
 			entryNotebookKey: launchSource.entryNotebookKey,
 			bucket,
@@ -521,7 +518,7 @@ export class JobRunner {
 			workspaceLoadMode: 'copy-only' as const,
 			workspacePrefix: syncedPaths?.workspacePrefix,
 			workspaceOverlay: launchSource.workspaceOverlay,
-			gitPrefix,
+			...pullSourceGitOptions(notebook.source, syncedPaths),
 			workspaceArchive: syncedPaths?.workspaceArchive,
 		};
 	}

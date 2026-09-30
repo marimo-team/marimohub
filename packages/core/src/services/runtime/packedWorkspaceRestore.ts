@@ -16,7 +16,7 @@ import stat
 import sys
 import zipfile
 
-archive, temporary_root, destination, require_git_value = sys.argv[1:]
+archive, temporary_root, destination, require_git_value, workspace_subdirectory = sys.argv[1:]
 require_git = require_git_value == '1'
 workspace_file_limit = ${MAX_WORKSPACE_FILES}
 workspace_byte_limit = ${MAX_DECOMPRESSED_ARCHIVE_BYTES}
@@ -49,6 +49,14 @@ try:
         or os.path.islink(destination)
     ):
         fail('unsafe extraction destination')
+    subdirectory_parts = workspace_subdirectory.split('/') if workspace_subdirectory else []
+    if (
+        any(not part or part in ('.', '..') for part in subdirectory_parts)
+        or '\\' in workspace_subdirectory
+        or '\x00' in workspace_subdirectory
+        or (subdirectory_parts and subdirectory_parts[0] in (temporary_name, '.git'))
+    ):
+        fail('unsafe workspace subdirectory')
     shutil.rmtree(staging, ignore_errors=True)
     os.makedirs(staging)
     staging_prefix = staging + os.sep
@@ -78,7 +86,8 @@ try:
             declared_counts[group] += 1
             declared_bytes[group] += info.file_size
             check_limit(group, declared_counts[group], declared_bytes[group])
-            target = os.path.abspath(os.path.join(staging, *parts))
+            placed = parts if group == 'git' else subdirectory_parts + parts
+            target = os.path.abspath(os.path.join(staging, *placed))
             if not target.startswith(staging_prefix):
                 fail('unsafe archive path')
             seen.add(name)
@@ -151,12 +160,18 @@ function normalizeWorkingDir(workingDir: string): string {
 	return normalized;
 }
 
+/**
+ * Restore a packed workspace into `workingDir`. With `workspaceSubdirectory`,
+ * workspace entries land under `<workingDir>/<subdirectory>` while `.git`
+ * entries stay at `workingDir`: a subtree pull source's checkout layout.
+ */
 export async function restorePackedWorkspace(
 	sandbox: SandboxInstance,
 	bucket: Bucket,
 	archiveKey: string,
 	workingDir: string,
 	requireGit: boolean,
+	workspaceSubdirectory = '',
 ): Promise<PackedWorkspaceRestoreResult> {
 	let cleanup: (() => Promise<unknown>) | undefined;
 	try {
@@ -179,7 +194,7 @@ export async function restorePackedWorkspace(
 			{ path: scriptPath, content: EXTRACT_PACKED_WORKSPACE },
 		]);
 		const result = await sandbox.exec(
-			`python3 ${shellQuote(scriptPath)} ${shellQuote(archivePath)} ${shellQuote(temporaryRoot)} ${shellQuote(normalizedWorkingDir)} ${requireGit ? '1' : '0'}`,
+			`python3 ${shellQuote(scriptPath)} ${shellQuote(archivePath)} ${shellQuote(temporaryRoot)} ${shellQuote(normalizedWorkingDir)} ${requireGit ? '1' : '0'} ${shellQuote(workspaceSubdirectory)}`,
 		);
 		if (!result.success) {
 			const detail = result.stderr.trim().slice(-2000);

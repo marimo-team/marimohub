@@ -96,7 +96,7 @@ export function SyncedNotebookDialog({
 					description: value.title.trim(),
 					repo: value.repo.trim(),
 					branch: value.branch.trim(),
-					root_path: value.syncMode === 'pull' ? '' : value.rootPath.trim() || undefined,
+					root_path: value.rootPath.trim() || undefined,
 					entry_notebook: value.entryNotebook.trim(),
 					sync_mode: value.syncMode,
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
@@ -193,11 +193,9 @@ export function SyncedNotebookDialog({
 			<form.AppField name="branch">
 				{(f) => <f.TextField label="Branch" placeholder="main" />}
 			</form.AppField>
-			{syncMode === 'push' && (
-				<form.AppField name="rootPath">
-					{(f) => <f.TextField label="Folder in repo (optional)" placeholder="apps" />}
-				</form.AppField>
-			)}
+			<form.AppField name="rootPath">
+				{(f) => <f.TextField label="Folder in repo (optional)" placeholder="apps" />}
+			</form.AppField>
 			<form.AppField name="entryNotebook">
 				{(f) => <f.TextField label="Notebook file" placeholder="dashboard.py" />}
 			</form.AppField>

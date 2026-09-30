@@ -189,30 +189,104 @@ describe('Source drift and sync-now routes', () => {
 		).toHaveLength(1);
 	});
 
-	it('rejects pull creation without Git materialization support or with a subtree', async () => {
+	it('rejects pull creation without Git materialization support', async () => {
 		const { request } = api(stubReader());
-		const body = {
-			title: 'Connected app',
-			description: 'Pulled by the server',
-			repo: 'org/repo',
-			branch: 'main',
-			root_path: '',
-			entry_notebook: 'app.py',
-			sync_mode: 'pull',
-		};
 		await expectError(
-			await request('POST', `/projects/${projectId}/notebooks/git`, body),
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
 			409,
 			'SYNC_NOT_CONFIGURED',
 		);
-		const capable = api(stubReader({ fetchGitDirectory: async () => [] }));
-		await expectError(
-			await capable.request('POST', `/projects/${projectId}/notebooks/git`, {
-				...body,
-				root_path: 'apps',
+	});
+
+	it('creates a pull source rooted at a repository subtree', async () => {
+		const fetchWorkspace = vi.fn(async () => [{ path: 'app.py', bytes: encode('print(1)') }]);
+		const { request } = api(
+			stubReader({
+				fetchWorkspace,
+				fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
 			}),
-			400,
 		);
+		const created = await expectOk<{ notebook: { id: string; status: string } }>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: 'python/apps/',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		expect(created.notebook.status).toBe('active');
+		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'python/apps');
+		const detail = await expectOk<{ source: { sync_mode: string; root_path: string } }>(
+			await request('GET', `/projects/${projectId}/notebooks/${created.notebook.id}`),
+		);
+		expect(detail.source).toMatchObject({ sync_mode: 'pull', root_path: 'python/apps' });
+	});
+
+	it('rejects an unsafe pull root path without creating a notebook', async () => {
+		const { request } = api(
+			stubReader({ fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }] }),
+		);
+		for (const root_path of ['../escape', '/absolute', 'a/./b']) {
+			await expectError(
+				await request('POST', `/projects/${projectId}/notebooks/git`, {
+					title: 'Connected app',
+					description: 'Pulled by the server',
+					repo: 'org/repo',
+					branch: 'main',
+					root_path,
+					entry_notebook: 'app.py',
+					sync_mode: 'pull',
+				}),
+				400,
+			);
+		}
+		const listed = await expectOk<{ items: unknown[] }>(
+			await request('GET', `/projects/${projectId}/notebooks`),
+		);
+		expect(listed.items).toHaveLength(0);
+	});
+
+	it('keeps a draft pull source when the entry notebook is missing from the subtree', async () => {
+		const fetchWorkspace = vi.fn(async () => [{ path: 'other.py', bytes: encode('print(1)') }]);
+		const { request } = api(
+			stubReader({
+				fetchWorkspace,
+				fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+			}),
+		);
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_error: { code: string; message: string };
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: 'python',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'python');
+		expect(created.notebook.status).toBe('draft');
+		expect(created.sync_error).toMatchObject({
+			code: 'VALIDATION_ERROR',
+			message: expect.stringContaining('entry_notebook not found'),
+		});
 	});
 
 	it('keeps a draft pull source and surfaces an inline sync failure', async () => {
@@ -308,27 +382,38 @@ describe('Source drift and sync-now routes', () => {
 		expect(detail.source.sync_mode).toBe('pull');
 	});
 
-	it('rejects subtree settings for a pull source', async () => {
+	it('stages subtree settings for a pull source until the next sync', async () => {
+		const fetchWorkspace = vi.fn(async () => [{ path: 'app.py', bytes: encode('print(1)') }]);
 		const { request } = api(
-			stubReader({ fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }] }),
+			stubReader({
+				fetchWorkspace,
+				fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+			}),
 		);
 		const notebookId = await createPullNotebook(request);
 		const path = `/projects/${projectId}/notebooks/${notebookId}/source`;
 
-		await expectError(
+		await expectOk(
 			await request('PATCH', path, {
 				repo: 'org/repo',
 				branch: 'main',
 				root_path: 'apps',
 				entry_notebook: 'app.py',
 			}),
-			400,
 		);
-		const detail = await expectOk<{
-			source: { root_path: string; pending_config?: unknown };
+		const staged = await expectOk<{
+			source: { root_path: string; pending_config?: { root_path: string } };
 		}>(await request('GET', `/projects/${projectId}/notebooks/${notebookId}`));
-		expect(detail.source).toMatchObject({ root_path: '' });
-		expect(detail.source.pending_config).toBeUndefined();
+		expect(staged.source).toMatchObject({ root_path: '', pending_config: { root_path: 'apps' } });
+
+		fetchWorkspace.mockClear();
+		await expectOk(await request('POST', `${path}/sync`));
+		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'apps');
+		const promoted = await expectOk<{ source: { root_path: string; pending_config?: unknown } }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebookId}`),
+		);
+		expect(promoted.source).toMatchObject({ root_path: 'apps' });
+		expect(promoted.source.pending_config).toBeUndefined();
 	});
 
 	it('rejects unsupported pull repositories without mutating the source', async () => {

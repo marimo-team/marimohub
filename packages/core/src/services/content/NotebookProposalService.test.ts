@@ -50,6 +50,8 @@ function runShellCommand(command: string) {
 }
 
 interface GitSandboxOptions {
+	/** Sandbox directory the workspace files live in. Defaults to `/workspace`. */
+	root?: string;
 	files: Record<string, string | Uint8Array>;
 	diff?: readonly (readonly [status: string, path: string])[];
 	untracked?: readonly string[];
@@ -65,7 +67,8 @@ interface GitSandboxOptions {
 }
 
 function makeGitSandbox(options: GitSandboxOptions) {
-	const sandbox = makeFsSandbox({ files: options.files, sizes: options.sizes });
+	const root = options.root ?? '/workspace';
+	const sandbox = makeFsSandbox({ root, files: options.files, sizes: options.sizes });
 	const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
 		if (command.includes('test -e .git')) {
 			return options.gitAvailable === false
@@ -97,14 +100,12 @@ function makeGitSandbox(options: GitSandboxOptions) {
 		}
 		if (command.includes('os.O_NOFOLLOW')) {
 			const path = Object.keys(options.files).find((candidate) =>
-				command.endsWith(
-					` ${shellQuote('/workspace')} ${shellQuote(candidate)} ${MAX_REQUEST_BYTES}`,
-				),
+				command.endsWith(` ${shellQuote(root)} ${shellQuote(candidate)} ${MAX_REQUEST_BYTES}`),
 			);
 			if (!path || options.secureReadFailures?.includes(path)) {
 				return execResult(false, '', 'unsafe or missing file');
 			}
-			return sandbox.instance.exec(`base64 < ${shellQuote(`/workspace/${path}`)}`);
+			return sandbox.instance.exec(`base64 < ${shellQuote(`${root}/${path}`)}`);
 		}
 		return sandbox.instance.exec(command);
 	});
@@ -162,6 +163,7 @@ describe('NotebookProposalService', () => {
 			author: UserId;
 			targetProposalId: ProposalId;
 			workdir: string;
+			gitRoot: string;
 		}> = {},
 	) {
 		return env.proposals.captureProposal({
@@ -170,6 +172,7 @@ describe('NotebookProposalService', () => {
 			session: overrides.session ?? session,
 			sandbox,
 			workdir: overrides.workdir ?? '/workspace',
+			gitRoot: overrides.gitRoot,
 			author: overrides.author ?? ACTOR,
 			proposalId: overrides.proposalId,
 			targetProposalId: overrides.targetProposalId,
@@ -265,6 +268,65 @@ describe('NotebookProposalService', () => {
 		await expect(
 			env.proposals.getProposal(projectId, notebookId, proposal.proposal_id),
 		).resolves.toMatchObject({ proposal: { capture_strategy: 'entry-notebook' } });
+	});
+
+	it('captures a subtree checkout relative to the workdir with the Git root trusted', async () => {
+		const { instance, exec } = makeGitSandbox({
+			root: '/workspace/python',
+			files: { 'dashboard.py': 'print("after")' },
+			diff: [['M', 'dashboard.py']],
+		});
+
+		const proposal = await capture(instance, {
+			workdir: '/workspace/python',
+			gitRoot: '/workspace',
+		});
+
+		expect(proposal.capture_strategy).toBe('git-working-tree');
+		expect(proposal.changes).toEqual([
+			expect.objectContaining({ path: 'dashboard.py', operation: 'modify' }),
+		]);
+		const commands = exec.mock.calls.map(([command]) => command);
+		expect(commands).toContainEqual(expect.stringContaining("cd '/workspace' && test -e .git"));
+		const gitCommands = commands.filter((command) => command.includes('git -c'));
+		expect(gitCommands.length).toBeGreaterThan(0);
+		for (const command of gitCommands) {
+			expect(command).toContain("cd '/workspace/python' && git -c 'safe.directory=/workspace'");
+		}
+		expect(commands).toContainEqual(
+			expect.stringContaining('diff --name-status -z --no-renames --relative'),
+		);
+	});
+
+	it('falls back to the entry notebook when the subtree has no Git root', async () => {
+		const { instance, exec } = makeGitSandbox({
+			root: '/workspace/python',
+			files: { 'dashboard.py': 'print("after")' },
+			gitAvailable: false,
+		});
+
+		const proposal = await capture(instance, {
+			workdir: '/workspace/python',
+			gitRoot: '/workspace',
+		});
+
+		expect(proposal.capture_strategy).toBe('entry-notebook');
+		expect(proposal.changes).toEqual([
+			expect.objectContaining({ path: 'dashboard.py', operation: 'modify' }),
+		]);
+		expect(exec.mock.calls.some(([command]) => command.includes('git -c'))).toBe(false);
+	});
+
+	it('refuses a subtree checkout whose pinned commit is missing', async () => {
+		const { instance } = makeGitSandbox({
+			root: '/workspace/python',
+			files: { 'dashboard.py': 'print("after")' },
+			baseCommitAvailable: false,
+		});
+
+		await expect(
+			capture(instance, { workdir: '/workspace/python', gitRoot: '/workspace' }),
+		).rejects.toThrow('The Git working tree does not contain the pinned source commit');
 	});
 
 	it('captures tracked and untracked Git working-tree changes together', async () => {

@@ -215,15 +215,15 @@ describe('SyncedNotebookDialog', () => {
 		);
 		expect(pullDescription).toHaveClass('whitespace-normal', 'break-words');
 		expect(pullDescription).not.toHaveClass('truncate');
-		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
 		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
+		await user.type(screen.getByLabelText('Folder in repo (optional)'), 'python');
 		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
 		await user.click(screen.getByRole('button', { name: 'Create' }));
 
 		const [, init] = fetchImpl.mock.calls[0];
 		expect(JSON.parse(init!.body as string)).toMatchObject({
-			root_path: '',
+			root_path: 'python',
 			sync_mode: 'pull',
 		});
 		expect(onCreated).toHaveBeenCalledWith({
@@ -251,7 +251,7 @@ describe('SyncedNotebookDialog', () => {
 
 		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
 		expect(screen.getByLabelText('Notebook name')).toHaveValue('Connected');
-		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
+		expect(screen.getByLabelText('Folder in repo (optional)')).toBeInTheDocument();
 	});
 
 	it.each([

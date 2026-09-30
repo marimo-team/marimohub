@@ -1,4 +1,12 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -77,7 +85,12 @@ function bucketObject(bytes: Uint8Array, size = bytes.byteLength): BucketObjectB
 	};
 }
 
-function runExtractor(archive: Uint8Array, requireGit: boolean, readOnlyParent = false) {
+function runExtractor(
+	archive: Uint8Array,
+	requireGit: boolean,
+	readOnlyParent = false,
+	workspaceSubdirectory = '',
+) {
 	const root = mkdtempSync(join(tmpdir(), 'marimohub-packed-'));
 	temporaryDirectories.push(root);
 	const destination = join(root, 'workspace');
@@ -96,6 +109,7 @@ function runExtractor(archive: Uint8Array, requireGit: boolean, readOnlyParent =
 			temporaryRoot,
 			destination,
 			requireGit ? '1' : '0',
+			workspaceSubdirectory,
 		]);
 	} finally {
 		if (readOnlyParent) chmodSync(root, 0o755);
@@ -130,6 +144,47 @@ describe('packed workspace extractor', () => {
 		expect(readFileSync(join(destination, 'data/blob.bin'))).toEqual(Buffer.from([0, 255, 1]));
 		expect(readFileSync(join(destination, '分析/empty.txt'))).toHaveLength(0);
 		expect(readFileSync(join(destination, '.git/HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
+	});
+
+	it('places workspace entries under a subdirectory while Git metadata stays at the root', () => {
+		const archive = createPackedWorkspaceArchive({
+			workspace: new Map([
+				['app.py', encode('print(1)')],
+				['lib/util.py', encode('x = 1')],
+			]),
+			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
+		});
+		const { destination, result } = runExtractor(archive, true, false, 'python/apps');
+
+		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(readFileSync(join(destination, 'python/apps/app.py'), 'utf8')).toBe('print(1)');
+		expect(readFileSync(join(destination, 'python/apps/lib/util.py'), 'utf8')).toBe('x = 1');
+		expect(readFileSync(join(destination, '.git/HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
+		expect(existsSync(join(destination, 'app.py'))).toBe(false);
+	});
+
+	it('rejects unsafe workspace subdirectories', () => {
+		const archive = createPackedWorkspaceArchive({
+			workspace: new Map([['app.py', encode('print(1)')]]),
+			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
+		});
+		for (const subdirectory of [
+			'../escape',
+			'a/../b',
+			'a//b',
+			'/absolute',
+			'trailing/',
+			'.',
+			'.git',
+			'.git/hooks',
+			'.marimohub-packed-restore/x',
+			'a\\b',
+		]) {
+			const { destination, result } = runExtractor(archive, true, false, subdirectory);
+			expect(result.status, subdirectory).toBe(1);
+			expect(result.stderr.toString()).toContain('unsafe workspace subdirectory');
+			expect(existsSync(join(destination, 'app.py'))).toBe(false);
+		}
 	});
 
 	it('rejects traversal paths before replacing an existing destination', () => {

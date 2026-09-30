@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BadRequestError, ConflictError } from '../errors';
+import { ConflictError } from '../errors';
 import type { VersionId } from '../ids';
 import type { GitSource } from '../schema';
 import {
@@ -30,18 +30,18 @@ const PENDING = { repo: 'org/repo', branch: 'main', root_path: '', entry_noteboo
 const ACTIVE = { repo: 'org/repo', branch: 'main', root_path: '', entry_notebook: 'app.py' };
 
 describe('createGitSource', () => {
-	it('rejects a pull source rooted below the repository root', () => {
-		expect(() =>
+	it('accepts a pull source rooted below the repository root', () => {
+		expect(
 			createGitSource({
 				title: 'Dash',
 				description: 'd',
 				repo: 'org/repo',
 				branch: 'main',
-				root_path: 'notebooks',
+				root_path: 'notebooks/',
 				entry_notebook: 'app.py',
 				sync_mode: 'pull',
 			}),
-		).toThrow(BadRequestError);
+		).toMatchObject({ sync_mode: 'pull', root_path: 'notebooks', entry_notebook: 'app.py' });
 	});
 });
 
@@ -58,13 +58,14 @@ describe('applyGitSourceUpdate', () => {
 		).toThrow('Changing sync_mode is not supported');
 	});
 
-	it('rejects subtree settings for a pull source when the mode is omitted', () => {
-		expect(() =>
-			applyGitSourceUpdate(syncedSource({ sync_mode: 'pull' }), {
-				...ACTIVE,
-				root_path: 'apps',
-			}),
-		).toThrow('Pull-mode sources require root_path to be empty');
+	it('accepts subtree settings for a pull source', () => {
+		const updated = applyGitSourceUpdate(syncedSource({ sync_mode: 'pull' }), {
+			...ACTIVE,
+			root_path: 'apps',
+		});
+
+		expect(updated).toMatchObject({ sync_mode: 'pull', root_path: 'apps' });
+		expect(updated?.pending_config).toBeUndefined();
 	});
 
 	it('returns no mutation for active and already-pending settings', () => {

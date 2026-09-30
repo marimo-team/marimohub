@@ -213,17 +213,15 @@ export function SyncSettingsDialog({
 				<form.AppField name="branch">
 					{(f) => <f.TextField label="Branch" placeholder="main" isDisabled={!source} />}
 				</form.AppField>
-				{!isPull && (
-					<form.AppField name="rootPath">
-						{(f) => (
-							<f.TextField
-								label="Folder in repo (optional)"
-								placeholder="apps"
-								isDisabled={!source}
-							/>
-						)}
-					</form.AppField>
-				)}
+				<form.AppField name="rootPath">
+					{(f) => (
+						<f.TextField
+							label="Folder in repo (optional)"
+							placeholder="apps"
+							isDisabled={!source}
+						/>
+					)}
+				</form.AppField>
 				<form.AppField name="entryNotebook">
 					{(f) => (
 						<f.TextField label="Notebook file" placeholder="dashboard.py" isDisabled={!source} />
@@ -240,7 +238,7 @@ export function SyncSettingsDialog({
 				<div className="grid gap-4 sm:grid-cols-2">
 					<TextField label="Repository" value={values.repo} isReadOnly />
 					<TextField label="Branch" value={values.branch} isReadOnly />
-					{!isPull && <TextField label="Folder in repo" value={values.rootPath} isReadOnly />}
+					<TextField label="Folder in repo" value={values.rootPath} isReadOnly />
 					<TextField label="Notebook file" value={values.entryNotebook} isReadOnly />
 				</div>
 				{sourceStatus}

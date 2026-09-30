@@ -63,6 +63,8 @@ export interface CaptureProposalInput {
 	session: Session;
 	sandbox: SandboxInstance;
 	workdir: string;
+	/** Directory holding `.git` when the session runs from a subtree of the checkout. */
+	gitRoot?: string;
 	author: UserId;
 	targetProposalId?: ProposalId;
 	resolvedSourceRevision?: NotebookProposal['source'];
@@ -188,7 +190,7 @@ export class NotebookProposalService {
 		const capturedChanges = await captureProposalChanges(
 			this.bucket,
 			input.sandbox,
-			input.workdir,
+			{ workdir: input.workdir, gitRoot: input.gitRoot ?? input.workdir },
 			base,
 			source,
 		);
