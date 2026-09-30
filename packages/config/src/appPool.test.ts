@@ -44,6 +44,12 @@ describe('app pool configuration', () => {
 		).toBe(3);
 		expect(console.warn).not.toHaveBeenCalled();
 	});
+	it('parses padded values identically through canonical and deprecated names', () => {
+		const value = ' \t2\n ';
+		const aliased = parseAppPoolPolicy({ MARIMOHUB_APP_MAX_USERS_PER_SESSION: value });
+		expect(aliased).toEqual(parseAppPoolPolicy({ MARIMOHUB_APP_MAX_VISITS_PER_SESSION: value }));
+		expect(aliased.maxVisitsPerSession).toBe(2);
+	});
 	it.each(['0', 'not-a-number'])(
 		'validates an aliased value through the canonical setting: %s',
 		(value) => {

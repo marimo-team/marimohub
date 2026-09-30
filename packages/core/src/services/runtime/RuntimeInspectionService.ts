@@ -223,8 +223,12 @@ export class RuntimeInspectionService {
 					};
 					if (existing) {
 						existing.visits += row.visits;
-						if (row.state === 'active') existing.state = 'active';
-						if (row.expires_at > existing.expires_at) existing.expires_at = row.expires_at;
+						if (row.state === existing.state) {
+							if (row.expires_at > existing.expires_at) existing.expires_at = row.expires_at;
+						} else if (row.state === 'active') {
+							existing.state = 'active';
+							existing.expires_at = row.expires_at;
+						}
 					} else rows.set(assignment.user_id, row);
 					assignments.set(assignment.session_id, rows);
 				}
