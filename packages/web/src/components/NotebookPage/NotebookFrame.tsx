@@ -1,6 +1,8 @@
 import { useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
+import { useHref, useNavigate } from 'react-router-dom';
+import { appNavigationHref } from '@marimo-hub/notebook-bridge/navigation';
 import { createHostBridge } from '@marimo-hub/notebook-bridge/host';
-import type { QuerySnapshot } from '@marimo-hub/notebook-bridge/protocol';
+import type { AppNavigation, QuerySnapshot } from '@marimo-hub/notebook-bridge/protocol';
 import { ExternalLink, X } from 'lucide-react';
 import { Button, IconButton, LinkButton } from '@/components/ui';
 import { useTimeout } from '@/hooks/useTimeout';
@@ -44,6 +46,12 @@ function FrameAttempt({
 	initialSrc: string;
 }) {
 	const [launchSrc] = useState(initialSrc);
+	const navigate = useNavigate();
+	const appBaseUrl = new URL(useHref('/app/'), window.location.origin).href;
+	const navigateApp = useEffectEvent((destination: AppNavigation) => {
+		void navigate(appNavigationHref(destination));
+		onRetry();
+	});
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const receiveQuery = useEffectEvent((snapshot: QuerySnapshot) => onQuery?.(snapshot) ?? false);
 	useLayoutEffect(() => {
@@ -57,6 +65,13 @@ function FrameAttempt({
 				iframe,
 				origin: new URL(launchSrc).origin,
 				excludedKeys: [...trusted.searchParams.keys()],
+				appBaseUrl,
+				onNavigateApp: (destination) => {
+					if (!active) return false;
+					active = false;
+					navigateApp(destination);
+					return true;
+				},
 				onQuery: (snapshot) => active && receiveQuery(snapshot),
 				onStatus: (status) => {
 					iframe.dataset.notebookBridgeStatus = status;
@@ -69,7 +84,7 @@ function FrameAttempt({
 			active = false;
 			bridge?.dispose();
 		};
-	}, [sandboxUrl, launchSrc]);
+	}, [sandboxUrl, launchSrc, appBaseUrl]);
 	const [loaded, setLoaded] = useState(false);
 	const [showRecovery, setShowRecovery] = useState(false);
 

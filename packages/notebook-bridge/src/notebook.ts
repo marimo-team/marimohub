@@ -1,5 +1,6 @@
 import {
 	Connect,
+	NAVIGATION_CAPABILITY,
 	HANDSHAKE_TIMEOUT_MS,
 	NAMESPACE,
 	Probe,
@@ -12,6 +13,7 @@ import {
 	randomIdentifier,
 } from './protocol';
 import type { BridgeHandle, BridgeStatus, HostApi, NotebookApi, StatusOptions } from './protocol';
+import { observeAppLinks } from './navigation';
 import { notebookQueryParams } from './query';
 import { createChannelRpc } from './transport';
 import { createHandshakeRetry } from './handshake';
@@ -31,6 +33,8 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	let status: BridgeStatus = 'connecting';
 	let channel: ReturnType<typeof createChannelRpc<HostApi, NotebookApi>> | undefined;
 	let excludedKeys: string[] = [];
+	let stopLinks: (() => void) | undefined;
+	let navigating = false;
 	let connectionId: string | undefined;
 	let revision = 0;
 	let lastSent: string | undefined;
@@ -48,7 +52,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 				namespace: NAMESPACE,
 				kind: 'ready',
 				version: VERSION,
-				capabilities: [QUERY_CAPABILITY],
+				capabilities: [QUERY_CAPABILITY, NAVIGATION_CAPABILITY],
 				documentId,
 			},
 			parentOrigin,
@@ -56,7 +60,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	};
 	const handshake = createHandshakeRetry(ready, () => updateStatus('unavailable'));
 	const schedule = () => {
-		if (status !== 'connected' || inFlight || timer !== undefined) return;
+		if (status !== 'connected' || navigating || inFlight || timer !== undefined) return;
 		timer = setTimeout(() => {
 			timer = undefined;
 			flush();
@@ -64,7 +68,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	};
 	const flush = () => {
 		const current = channel;
-		if (status !== 'connected' || !current || inFlight) return;
+		if (status !== 'connected' || !current || navigating || inFlight) return;
 		const params = notebookQueryParams(win.location.search, excludedKeys);
 		const search = params.toString();
 		if (search === lastSent) return;
@@ -78,6 +82,8 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 			})
 			.catch(() => {
 				if (channel === current && status !== 'disposed') {
+					stopLinks?.();
+					stopLinks = undefined;
 					current.dispose();
 					channel = undefined;
 					updateStatus('unavailable');
@@ -108,6 +114,26 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 			for (const port of event.ports) port.close();
 			return;
 		}
+		let appBaseUrl: string | undefined;
+		if (parsed.data.capabilities.includes(NAVIGATION_CAPABILITY) && parsed.data.appBaseUrl) {
+			try {
+				const base = new URL(parsed.data.appBaseUrl);
+				if (
+					base.origin === parentOrigin &&
+					!base.username &&
+					!base.password &&
+					!base.search &&
+					!base.hash &&
+					base.pathname.endsWith('/app/')
+				)
+					appBaseUrl = base.href;
+			} catch {
+				/* An invalid optional capability must not break query mirroring. */
+			}
+		}
+		stopLinks?.();
+		stopLinks = undefined;
+		navigating = false;
 		connectionId = parsed.data.connectionId;
 		channel?.dispose();
 		clearTimeout(timer);
@@ -126,12 +152,39 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 				connected() {
 					clearTimeout(readyTimer);
 					updateStatus('connected');
+					if (appBaseUrl && !stopLinks) {
+						stopLinks = observeAppLinks(win, appBaseUrl, excludedKeys, (destination) => {
+							const current = channel;
+							if (status !== 'connected' || !current || navigating) return;
+							navigating = true;
+							void current.rpc
+								.navigateApp(destination)
+								.then((result) => {
+									if (channel === current && !result.applied) {
+										navigating = false;
+										schedule();
+									}
+								})
+								.catch(() => {
+									if (channel === current && status !== 'disposed') {
+										navigating = false;
+										stopLinks?.();
+										stopLinks = undefined;
+										current.dispose();
+										channel = undefined;
+										updateStatus('unavailable');
+									}
+								});
+						});
+					}
 					schedule();
 					return { ready: true };
 				},
 			},
 		);
 		readyTimer = setTimeout(() => {
+			stopLinks?.();
+			stopLinks = undefined;
 			channel?.dispose();
 			channel = undefined;
 			updateStatus('unavailable');
@@ -160,6 +213,8 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 			clearTimeout(timer);
 			clearTimeout(readyTimer);
 			handshake.stop();
+			stopLinks?.();
+			stopLinks = undefined;
 			channel?.dispose();
 			channel = undefined;
 			win.removeEventListener('message', onMessage);

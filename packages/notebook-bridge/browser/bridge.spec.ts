@@ -236,3 +236,210 @@ test('preserves native History arguments, serialization errors, and third-party 
 	await page.waitForTimeout(200);
 	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
 });
+
+for (const href of ['/app/team/match', 'app/team/match']) {
+	test(`routes dynamic ${href} links through the parent and fences old updates`, async ({
+		page,
+	}) => {
+		await page.goto(`${server.hostOrigin}/?navigation=1`);
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		const frame = page.frames().find((f) => f.parentFrame())!;
+		const loads = await page.evaluate(() => window.loads);
+		await frame.evaluate((href) => {
+			const anchor = document.createElement('a');
+			anchor.href = `${href}?id=xyz&tag=a&tag=b&provider=secret&access_token=secret#result`;
+			anchor.innerHTML = '<span>Other app</span>';
+			document.body.append(anchor);
+		}, href);
+		const link = frame.getByRole('link', { name: 'Other app' });
+		await expect(link).toHaveAttribute(
+			'href',
+			`${server.hostOrigin}/prefix/app/team/match?id=xyz&tag=a&tag=b#result`,
+		);
+		await link.getByText('Other app').click();
+		await expect(page).toHaveURL(
+			`${server.hostOrigin}/prefix/app/team/match?id=xyz&tag=a&tag=b#result`,
+		);
+		await frame.evaluate(() => history.replaceState({}, '', '?stale=ignored'));
+		await page.waitForTimeout(250);
+		await expect(page).toHaveURL(
+			`${server.hostOrigin}/prefix/app/team/match?id=xyz&tag=a&tag=b#result`,
+		);
+		expect(await page.evaluate(() => window.loads)).toBe(loads);
+	});
+}
+
+test('preserves native new-tab navigation and restores owned hrefs on disposal', async ({
+	page,
+}) => {
+	await page.goto(`${server.hostOrigin}/?navigation=1`);
+	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+	const frame = page.frames().find((f) => f.parentFrame())!;
+	await frame.evaluate(() => {
+		document.body.insertAdjacentHTML(
+			'beforeend',
+			'<a href="/app/match?id=xyz" target="_blank">New tab</a><a href="/app/original">Mutable</a><a href="/app/download" download>Download</a><a href="/other">Other</a>',
+		);
+	});
+	const link = frame.getByRole('link', { name: 'New tab' });
+	await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/match?id=xyz`);
+	await expect(frame.getByRole('link', { name: 'Download' })).toHaveAttribute(
+		'href',
+		'/app/download',
+	);
+	await expect(frame.getByRole('link', { name: 'Other', exact: true })).toHaveAttribute(
+		'href',
+		'/other',
+	);
+	const popupPromise = page.waitForEvent('popup');
+	await link.click();
+	const popup = await popupPromise;
+	await popup.waitForURL(`${server.hostOrigin}/prefix/app/match?id=xyz`);
+	await popup.close();
+	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+	await frame
+		.getByRole('link', { name: 'Mutable' })
+		.evaluate((anchor) => anchor.setAttribute('href', '/app/replaced?id=new'));
+	await expect(frame.getByRole('link', { name: 'Mutable' })).toHaveAttribute(
+		'href',
+		`${server.hostOrigin}/prefix/app/replaced?id=new`,
+	);
+	await frame.evaluate(() => window.bridge.dispose());
+	await expect(link).toHaveAttribute('href', '/app/match?id=xyz');
+	await expect(frame.getByRole('link', { name: 'Mutable' })).toHaveAttribute(
+		'href',
+		'/app/replaced?id=new',
+	);
+});
+
+test('leaves app links unchanged without negotiated navigation', async ({ page }) => {
+	await page.goto(server.hostOrigin);
+	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+	const frame = page.frames().find((f) => f.parentFrame())!;
+	await frame.evaluate(() =>
+		document.body.insertAdjacentHTML('beforeend', '<a href="/app/match">Other app</a>'),
+	);
+	await expect(frame.getByRole('link', { name: 'Other app' })).toHaveAttribute(
+		'href',
+		'/app/match',
+	);
+});
+
+for (const gesture of ['keyboard', 'modified', 'middle'] as const) {
+	test(`supports ${gesture} activation of app links`, async ({ page }) => {
+		await page.goto(`${server.hostOrigin}/?navigation=1`);
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		const frame = page.frames().find((f) => f.parentFrame())!;
+		await frame.evaluate(() =>
+			document.body.insertAdjacentHTML('beforeend', '<a href="/app/match?id=xyz">Match</a>'),
+		);
+		const link = frame.getByRole('link', { name: 'Match', exact: true });
+		await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/match?id=xyz`);
+		if (gesture === 'keyboard') {
+			await link.focus();
+			await page.keyboard.press('Enter');
+			await expect(page).toHaveURL(`${server.hostOrigin}/prefix/app/match?id=xyz`);
+		} else {
+			const prevented = await link.evaluate((anchor, gesture) => {
+				let prevented: boolean | undefined;
+				const type = gesture === 'middle' ? 'auxclick' : 'click';
+				anchor.addEventListener(
+					type,
+					(event) => {
+						prevented = event.defaultPrevented;
+						event.preventDefault();
+					},
+					{ once: true },
+				);
+				anchor.dispatchEvent(
+					new MouseEvent(type, {
+						bubbles: true,
+						composed: true,
+						cancelable: true,
+						button: gesture === 'middle' ? 1 : 0,
+						ctrlKey: gesture === 'modified',
+					}),
+				);
+				return prevented;
+			}, gesture);
+			expect(prevented).toBe(false);
+			await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		}
+	});
+}
+
+test('leaves resource hrefs alone and restores links changed to downloads', async ({ page }) => {
+	await page.goto(`${server.hostOrigin}/?navigation=1`);
+	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+	const frame = page.frames().find((f) => f.parentFrame())!;
+	await frame.evaluate(() => {
+		document.body.insertAdjacentHTML('beforeend', '<a href="/app/match">Match</a>');
+		const resource = document.createElement('link');
+		resource.id = 'resource';
+		document.head.append(resource);
+		resource.href = '/app/resource';
+	});
+	const link = frame.getByRole('link', { name: 'Match' });
+	await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/match`);
+	await expect(frame.locator('#resource')).toHaveAttribute('href', '/app/resource');
+	await link.evaluate((anchor) => anchor.setAttribute('download', ''));
+	await expect(link).toHaveAttribute('href', '/app/match');
+	await link.evaluate((anchor) => anchor.removeAttribute('download'));
+	await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/match`);
+});
+
+for (const late of [false, true]) {
+	test(`rewrites nested shadow links and cleans up removed outputs (late root: ${late})`, async ({
+		page,
+	}) => {
+		await page.goto(`${server.hostOrigin}/?navigation=1`);
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		const frame = page.frames().find((f) => f.parentFrame())!;
+		await frame.evaluate((late) => {
+			const host = document.createElement('div');
+			host.id = 'shadow-host';
+			if (late) document.body.append(host);
+			const root = host.attachShadow({ mode: 'open' });
+			const nested = document.createElement('div');
+			root.append(nested);
+			nested.attachShadow({ mode: 'open' }).innerHTML =
+				'<a href="/app/match?id=xyz"><span>Shadow app</span></a>';
+			if (!late) document.body.append(host);
+		}, late);
+		const link = frame.getByRole('link', { name: 'Shadow app' });
+		await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/match?id=xyz`);
+		const host = await frame.locator('#shadow-host').elementHandle();
+		await host!.evaluate((element) => element.remove());
+		await expect
+			.poll(() =>
+				host!.evaluate((element) =>
+					element
+						.shadowRoot!.querySelector('div')!
+						.shadowRoot!.querySelector('a')!
+						.getAttribute('href'),
+				),
+			)
+			.toBe('/app/match?id=xyz');
+		await host!.evaluate((element) => document.body.append(element));
+		await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/match?id=xyz`);
+		await link.click();
+		await expect(page).toHaveURL(`${server.hostOrigin}/prefix/app/match?id=xyz`);
+		await frame.evaluate(() => {
+			const previous = Element.prototype.attachShadow;
+			const wrapper: Element['attachShadow'] = function (this: Element, options) {
+				return previous.call(this, options);
+			};
+			Element.prototype.attachShadow = wrapper;
+			window.bridge.dispose();
+			if (Element.prototype.attachShadow !== wrapper) throw new Error('Lost third-party wrapper');
+			const host = document.createElement('div');
+			document.body.append(host);
+			host.attachShadow({ mode: 'open' }).innerHTML = '<a href="/app/after">After disposal</a>';
+		});
+		await expect(link).toHaveAttribute('href', '/app/match?id=xyz');
+		await expect(frame.getByRole('link', { name: 'After disposal' })).toHaveAttribute(
+			'href',
+			'/app/after',
+		);
+	});
+}

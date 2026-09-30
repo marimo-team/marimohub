@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import { wirePeer } from './testing-peer';
 import { createHostBridge } from './host';
+import type { AppNavigation } from './protocol';
 import { HANDSHAKE_TIMEOUT_MS, NAMESPACE } from './protocol';
 
 const cleanups: (() => void)[] = [];
@@ -11,7 +12,7 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function fixture() {
+function fixture(navigation = false, peerNavigation = navigation) {
 	const parent = new EventTarget();
 	Object.assign(parent, { crypto: globalThis.crypto });
 	const frame = new EventTarget();
@@ -19,12 +20,14 @@ function fixture() {
 	Object.assign(frame, { ownerDocument: { defaultView: parent }, contentWindow: peer });
 	const onQuery = vi.fn(() => true);
 	const onStatus = vi.fn();
+	const onNavigateApp = vi.fn<(destination: AppNavigation) => boolean>(() => true);
 	const bridge = createHostBridge({
 		iframe: frame as HTMLIFrameElement,
 		origin: 'https://notebook.example',
 		excludedKeys: ['provider'],
 		onQuery,
 		onStatus,
+		...(navigation ? { appBaseUrl: 'https://hub.example/prefix/app/', onNavigateApp } : {}),
 	});
 	cleanups.push(() => bridge.dispose());
 	const ready = (overrides = {}, origin = 'https://notebook.example', source: unknown = peer) => {
@@ -37,7 +40,11 @@ function fixture() {
 				kind: 'ready',
 				documentId: 'frozen-document',
 				version: { major: 1, minor: 7 },
-				capabilities: ['query-params.v1', 'optional.future'],
+				capabilities: [
+					'query-params.v1',
+					'optional.future',
+					...(peerNavigation ? ['app-navigation.v1'] : []),
+				],
 				future: true,
 				...overrides,
 			},
@@ -61,7 +68,7 @@ function fixture() {
 		await connected;
 		return remote;
 	};
-	return { parent, frame, peer, bridge, ready, onQuery, onStatus, negotiate };
+	return { parent, frame, peer, bridge, ready, onQuery, onStatus, onNavigateApp, negotiate };
 }
 
 describe('host lifecycle and frozen v1 peer', () => {
@@ -282,4 +289,137 @@ describe('host lifecycle and frozen v1 peer', () => {
 		expect(bridge.status).toBe('unavailable');
 		expect(close).toHaveBeenCalledOnce();
 	});
+});
+
+describe('app navigation', () => {
+	it('filters credentials and fences old queries and repeated navigation', async () => {
+		const { negotiate, onNavigateApp, onQuery, peer } = fixture(true);
+		const remote = await negotiate();
+		expect(peer.postMessage.mock.calls.at(-1)![0]).toMatchObject({
+			appBaseUrl: 'https://hub.example/prefix/app/',
+			capabilities: ['query-params.v1', 'app-navigation.v1'],
+		});
+		const destination = {
+			slug: 'team/match',
+			entries: [
+				['id', 'xyz'],
+				['provider', 'secret'],
+				['access_token', 'secret'],
+				['file', 'notebook.py'],
+			],
+			hash: '#result',
+		};
+		await expect(remote.call('navigateApp', destination)).resolves.toEqual({ applied: true });
+		expect(onNavigateApp).toHaveBeenCalledExactlyOnceWith({
+			slug: 'team/match',
+			entries: [['id', 'xyz']],
+			hash: '#result',
+		});
+		await expect(
+			remote.call('replaceQuery', { revision: 1, entries: [['old', 'value']] }),
+		).resolves.toEqual({ applied: false });
+		await expect(remote.call('navigateApp', destination)).resolves.toEqual({ applied: false });
+		expect(onQuery).not.toHaveBeenCalled();
+	});
+	it.each([
+		[false, false],
+		[true, false],
+		[false, true],
+	])(
+		'does not enable navigation unless both sides opt in (host: %s, notebook: %s)',
+		async (enabled, peerEnabled) => {
+			const { negotiate, onNavigateApp, peer } = fixture(enabled, peerEnabled);
+			const remote = await negotiate();
+			expect(peer.postMessage.mock.calls.at(-1)![0]).not.toHaveProperty('appBaseUrl');
+			await expect(
+				remote.call('navigateApp', { slug: 'match', entries: [], hash: '' }),
+			).resolves.toEqual({ applied: false });
+			expect(onNavigateApp).not.toHaveBeenCalled();
+		},
+	);
+	it('rejects malformed destinations before dispatch and resumes after a declined navigation', async () => {
+		const { negotiate, onNavigateApp, onQuery } = fixture(true);
+		const remote = await negotiate();
+		for (const slug of ['../admin', '//evil.example', 'match?next=evil', '%2e%2e', 'match\\evil']) {
+			remote.send({ t: 'q', i: slug, m: 'navigateApp', a: [{ slug, entries: [], hash: '' }] });
+		}
+		await remote.call('replaceQuery', { revision: 1, entries: [] });
+		expect(onNavigateApp).not.toHaveBeenCalled();
+		onNavigateApp.mockReturnValueOnce(false);
+		await expect(
+			remote.call('navigateApp', { slug: 'match', entries: [], hash: '' }),
+		).resolves.toEqual({ applied: false });
+		await expect(
+			remote.call('navigateApp', { slug: 'match', entries: [], hash: '' }),
+		).resolves.toEqual({ applied: true });
+		expect(onQuery).toHaveBeenCalledOnce();
+	});
+});
+
+it('resumes queries after the navigation callback throws and permits another click', async () => {
+	const { negotiate, onNavigateApp, onQuery } = fixture(true);
+	const remote = await negotiate();
+	onNavigateApp.mockImplementationOnce(() => {
+		throw new Error('Router unavailable');
+	});
+	const destination = { slug: 'match', entries: [], hash: '' };
+	await expect(remote.call('navigateApp', destination)).resolves.toEqual({ applied: false });
+	await expect(
+		remote.call('replaceQuery', { revision: 1, entries: [['id', 'retained']] }),
+	).resolves.toEqual({ applied: true });
+	expect(onQuery).toHaveBeenCalledExactlyOnceWith({ revision: 1, entries: [['id', 'retained']] });
+	await expect(remote.call('navigateApp', destination)).resolves.toEqual({ applied: true });
+	expect(onNavigateApp).toHaveBeenCalledTimes(2);
+});
+
+it('rejects navigation before the handshake completes', async () => {
+	const { ready, peer, onNavigateApp } = fixture(true);
+	ready();
+	const [connect, , ports] = peer.postMessage.mock.calls.at(-1)!;
+	const remote = wirePeer(ports[0], connect.connectionId);
+	cleanups.push(remote.dispose);
+	await remote.nextRequest();
+	await expect(
+		remote.call('navigateApp', { slug: 'match', entries: [], hash: '' }),
+	).resolves.toEqual({ applied: false });
+	expect(onNavigateApp).not.toHaveBeenCalled();
+});
+
+it('rejects queued navigation from an old document and resets the fence on reload', async () => {
+	const { negotiate, frame, onNavigateApp, onQuery } = fixture(true);
+	const old = await negotiate();
+	const destination = { slug: 'match', entries: [], hash: '' };
+	await old.call('navigateApp', destination);
+	old.send({ t: 'q', i: 'queued', m: 'navigateApp', a: [{ ...destination, slug: 'stale' }] });
+	frame.dispatchEvent(new Event('load'));
+	const current = await negotiate('new-document');
+	await expect(current.call('replaceQuery', { revision: 0, entries: [] })).resolves.toEqual({
+		applied: true,
+	});
+	await expect(current.call('navigateApp', destination)).resolves.toEqual({ applied: true });
+	expect(onNavigateApp.mock.calls.map(([value]) => value.slug)).toEqual(['match', 'match']);
+	expect(onQuery).toHaveBeenCalledOnce();
+});
+
+it('drops invalid navigation arguments before invoking the host', async () => {
+	const { negotiate, onNavigateApp } = fixture(true);
+	const remote = await negotiate();
+	const valid = { slug: 'match', entries: [], hash: '' };
+	for (const value of [
+		null,
+		{},
+		{ ...valid, slug: 'a'.repeat(64) },
+		{ ...valid, entries: [['id', 123]] },
+		{ ...valid, entries: [['id']] },
+		{ ...valid, entries: Array.from({ length: 257 }, () => ['id', 'x']) },
+		{ ...valid, entries: [['id', 'é'.repeat(11000)]] },
+		{ ...valid, hash: 'https://evil.example' },
+		{ ...valid, hash: '#bad\n' },
+		{ ...valid, hash: `#${'x'.repeat(8192)}` },
+	])
+		remote.send({ t: 'q', i: 'invalid', m: 'navigateApp', a: [value] });
+	remote.send({ t: 'q', i: 'extra', m: 'navigateApp', a: [valid, valid] });
+	await remote.call('replaceQuery', { revision: 1, entries: [] });
+	expect(onNavigateApp).not.toHaveBeenCalled();
+	await expect(remote.call('navigateApp', valid)).resolves.toEqual({ applied: true });
 });

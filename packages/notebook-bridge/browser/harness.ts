@@ -8,6 +8,8 @@ declare global {
 		bridge: BridgeHandle;
 		connect: () => void;
 		navigateNotebook: (query: string) => void;
+		navigationBehavior: 'accept' | 'reject' | 'throw';
+		navigationRequests: number;
 		updates: number;
 		loads: number;
 	}
@@ -81,15 +83,28 @@ export async function harness() {
 		const params = new URL(req.url!, 'http://localhost').searchParams;
 		const source = params.get('child') ?? `${childOrigin}/?early=1`;
 		// Test-only fixture URLs are escaped as data, never HTML attributes.
-		res.end(`<iframe id="frame" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+		res.end(`<iframe id="frame" sandbox="allow-scripts allow-same-origin allow-popups" referrerpolicy="no-referrer"></iframe>
   <script type="module">
    import { createHostBridge } from '/host.js';
    import { mergeNotebookQuery } from '/query.js';
    const frame = document.querySelector('iframe');
    const excludedKeys = ['provider'];
+   const navigationEnabled = new URLSearchParams(location.search).has('navigation');
    window.updates = 0; window.loads = 0;
+   window.navigationBehavior = 'accept'; window.navigationRequests = 0;
    frame.addEventListener('load', () => window.loads++);
-   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys, onQuery({entries}) {
+   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys,
+   ...(navigationEnabled ? {
+    appBaseUrl: location.origin + '/prefix/app/',
+    onNavigateApp({slug, entries, hash}) {
+     window.navigationRequests++;
+     if (window.navigationBehavior === 'throw') throw new Error('Router unavailable');
+     if (window.navigationBehavior === 'reject') return false;
+     const query = new URLSearchParams(entries).toString();
+     history.pushState({}, '', '/prefix/app/' + slug + (query ? '?' + query : '') + hash);
+     return true;
+    }
+   } : {}), onQuery({entries}) {
     window.updates++; const query = mergeNotebookQuery(location.search, entries, excludedKeys);
     history.replaceState(history.state, '', location.pathname + query + location.hash);
     return true;

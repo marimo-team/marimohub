@@ -1,5 +1,6 @@
 import {
 	Connect,
+	NAVIGATION_CAPABILITY,
 	NAMESPACE,
 	QUERY_CAPABILITY,
 	Ready,
@@ -10,6 +11,7 @@ import {
 	randomIdentifier,
 } from './protocol';
 import type {
+	AppNavigation,
 	BridgeHandle,
 	BridgeStatus,
 	HostApi,
@@ -25,6 +27,8 @@ export interface HostBridgeOptions extends StatusOptions {
 	iframe: HTMLIFrameElement;
 	origin: string;
 	excludedKeys?: readonly string[];
+	appBaseUrl?: string;
+	onNavigateApp?: (destination: AppNavigation) => boolean;
 	onQuery(snapshot: QuerySnapshot): boolean;
 }
 
@@ -37,6 +41,7 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 	let channel: ReturnType<typeof createChannelRpc<NotebookApi, HostApi>> | undefined;
 	let documentId: string | undefined;
 	let revision = -1;
+	let navigating = false;
 	let lastApplied = -Infinity;
 	let lastQuery: string | undefined;
 	const updateStatus = (next: BridgeStatus) => {
@@ -65,6 +70,7 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 			return;
 		}
 		revision = -1;
+		navigating = false;
 		lastApplied = -Infinity;
 		lastQuery = undefined;
 		updateStatus('connecting');
@@ -83,11 +89,17 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 		channel?.dispose();
 		documentId = parsed.data.documentId;
 		const connectionId = randomIdentifier(win.crypto);
+		const navigation = Boolean(
+			options.appBaseUrl &&
+			options.onNavigateApp &&
+			parsed.data.capabilities.includes(NAVIGATION_CAPABILITY),
+		);
 		const connect = Connect.safeParse({
 			namespace: NAMESPACE,
 			kind: 'connect',
 			version: VERSION,
-			capabilities: [QUERY_CAPABILITY],
+			capabilities: [QUERY_CAPABILITY, ...(navigation ? [NAVIGATION_CAPABILITY] : [])],
+			...(navigation ? { appBaseUrl: options.appBaseUrl } : {}),
 			documentId,
 			connectionId,
 			excludedKeys,
@@ -98,10 +110,28 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 		}
 		const ports = new MessageChannel();
 		const current = createChannelRpc<NotebookApi, HostApi>(ports.port1, connectionId, 'host', {
+			navigateApp(destination) {
+				if (channel !== current || status !== 'connected' || navigating || !navigation)
+					return { applied: false };
+				// Fence query updates before the router can mount the next app.
+				navigating = true;
+				try {
+					const applied = options.onNavigateApp!({
+						...destination,
+						entries: [...notebookQueryParams(destination.entries, excludedKeys)],
+					});
+					navigating = applied;
+					return { applied };
+				} catch {
+					navigating = false;
+					return { applied: false };
+				}
+			},
 			replaceQuery(snapshot) {
 				if (
 					channel !== current ||
 					status !== 'connected' ||
+					navigating ||
 					snapshot.revision <= revision ||
 					Date.now() - lastApplied < UPDATE_INTERVAL_MS
 				)

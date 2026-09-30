@@ -205,3 +205,23 @@ describe('notebook observer lifecycle', () => {
 		expect(next).not.toBe(bridge);
 	});
 });
+
+it.each([
+	'https://evil.example/app/',
+	'https://hub.example/admin/',
+	'https://hub.example/app/?token=secret',
+	'not a URL',
+])('ignores invalid app bases without disabling the query bridge: %s', async (appBaseUrl) => {
+	const { connect, bridge } = fixture();
+	const { peer: port } = connect({
+		capabilities: ['query-params.v1', 'app-navigation.v1'],
+		appBaseUrl,
+	});
+	const peer = wirePeer(port, 'fresh');
+	cleanups.push(peer.dispose);
+	await expect(peer.call('connected')).resolves.toEqual({ ready: true });
+	expect(bridge.status).toBe('connected');
+	const snapshot = await peer.nextRequest();
+	expect(snapshot.m).toBe('replaceQuery');
+	peer.reply(snapshot, { applied: true });
+});

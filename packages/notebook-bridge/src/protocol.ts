@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 export const NAMESPACE = 'marimohub.notebook-bridge';
-export const VERSION = { major: 1, minor: 0 } as const;
+export const VERSION = { major: 1, minor: 1 } as const;
+export const NAVIGATION_CAPABILITY = 'app-navigation.v1';
 export const QUERY_CAPABILITY = 'query-params.v1';
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 export const REQUEST_TIMEOUT_MS = 5_000;
@@ -20,6 +21,7 @@ export const Connect = z.object({
 	kind: z.literal('connect'),
 	documentId: identifier,
 	connectionId: identifier,
+	appBaseUrl: z.string().max(8192).optional(),
 	excludedKeys: z.array(z.string().max(MAX_QUERY_BYTES)).max(256),
 });
 export const Probe = z.object({ namespace: z.literal(NAMESPACE), kind: z.literal('probe') });
@@ -31,11 +33,29 @@ export const QuerySnapshot = z
 			.max(256),
 	})
 	.refine(({ entries }) => new URLSearchParams(entries).toString().length <= MAX_QUERY_BYTES);
+export const AppNavigation = z
+	.object({
+		// Keep the slug grammar aligned with core's DeepLinkSlugSchema.
+		slug: z
+			.string()
+			.min(1)
+			.max(63)
+			.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])/),
+		entries: QuerySnapshot.shape.entries,
+		hash: z
+			.string()
+			.max(8192)
+			// eslint-disable-next-line no-control-regex -- Reject URL controls before constructing a navigation target.
+			.regex(/^(?:#[^\u0000-\u0020\u007f]*)?(?![\s\S])/),
+	})
+	.refine(({ entries }) => new URLSearchParams(entries).toString().length <= MAX_QUERY_BYTES);
+export type AppNavigation = z.infer<typeof AppNavigation>;
 export type QuerySnapshot = z.infer<typeof QuerySnapshot>;
 export const QueryResult = z.object({ applied: z.boolean() });
 export type QueryResult = z.infer<typeof QueryResult>;
 export interface HostApi {
 	replaceQuery(snapshot: QuerySnapshot): QueryResult;
+	navigateApp(destination: AppNavigation): QueryResult;
 }
 export interface NotebookApi {
 	connected(): { ready: true };

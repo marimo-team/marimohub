@@ -46,6 +46,10 @@ def _(mo, params):
     clear_query = mo.ui.button(label="Clear query", on_click=lambda _: params.clear())
     mo.vstack([mo.hstack([set_query, append_query, delete_query, clear_query]), mo.md("Current id: " + str(params["id"]))])
     return (set_query, append_query, delete_query, clear_query)
+@app.cell
+def _(mo):
+    mo.vstack([mo.nav_menu({"/app/match?id=xyz": "Match app"}), mo.Html('<a href="app/html?id=abc">HTML app</a>')])
+    return
 if __name__ == "__main__":
     app.run()
 `;
@@ -109,7 +113,9 @@ for (const version of versions) {
 					expect(child.exitCode, logs).toBeNull();
 					expect((await fetch(url)).ok).toBe(true);
 				}).toPass({ timeout: 120_000 });
-				await page.goto(`${host.hostOrigin}/?child=${encodeURIComponent(`${url}?id=123`)}`);
+				await page.goto(
+					`${host.hostOrigin}/?navigation=1&child=${encodeURIComponent(`${url}?id=123`)}`,
+				);
 				await expect
 					.poll(() => page.evaluate(() => window.bridge?.status), { timeout: 30_000 })
 					.toBe('connected');
@@ -143,6 +149,14 @@ for (const version of versions) {
 					await frame.locator('html').evaluate(() => history.replaceState({}, '', '?id=456'));
 				}
 				await expect(page).toHaveURL(`${host.hostOrigin}/?id=456`);
+				const menu = frame.getByRole('link', { name: 'Match app', exact: true });
+				await expect(menu).toHaveAttribute('href', `${host.hostOrigin}/prefix/app/match?id=xyz`);
+				await expect(frame.getByRole('link', { name: 'HTML app', exact: true })).toHaveAttribute(
+					'href',
+					`${host.hostOrigin}/prefix/app/html?id=abc`,
+				);
+				await menu.click();
+				await expect(page).toHaveURL(`${host.hostOrigin}/prefix/app/match?id=xyz`);
 				expect(await page.evaluate(() => window.loads)).toBe(loads + 1);
 			} finally {
 				if (child.pid && child.exitCode === null) {

@@ -1,6 +1,7 @@
 import { createBirpc } from 'birpc';
 import { z } from 'zod';
 import {
+	AppNavigation,
 	ConnectedResult,
 	NAMESPACE,
 	QueryResult,
@@ -14,7 +15,7 @@ const Packet = z.discriminatedUnion('t', [
 	z.object({
 		t: z.literal('q'),
 		i: z.string().min(1).max(128),
-		m: z.enum(['replaceQuery', 'connected']),
+		m: z.enum(['replaceQuery', 'navigateApp', 'connected']),
 		a: z.array(z.unknown()).max(1),
 	}),
 	z.object({ t: z.literal('s'), i: z.string().min(1).max(128), r: z.unknown() }),
@@ -50,8 +51,10 @@ export function createChannelRpc<
 				const packet = parsed.data.packet;
 				if (packet.t === 'q') {
 					if (role === 'host') {
-						if (packet.m !== 'replaceQuery' || packet.a.length !== 1) return;
-						const snapshot = QuerySnapshot.safeParse(packet.a[0]);
+						if (!['replaceQuery', 'navigateApp'].includes(packet.m) || packet.a.length !== 1)
+							return;
+						const schema = packet.m === 'navigateApp' ? AppNavigation : QuerySnapshot;
+						const snapshot = schema.safeParse(packet.a[0]);
 						if (!snapshot.success) return;
 						packet.a = [snapshot.data];
 					} else if (packet.m !== 'connected' || packet.a.length > 0) return;

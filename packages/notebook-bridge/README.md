@@ -1,10 +1,11 @@
 # Notebook bridge
 
-`@marimo-hub/notebook-bridge` mirrors notebook query parameters into the Hub URL.
-It preserves the mounted iframe and its kernel connection. Cross-origin isolation
-and the iframe sandbox remain unchanged. Proxy exposure is not required.
+`@marimo-hub/notebook-bridge` mirrors notebook query parameters and routes app
+links through Hub. Query updates preserve the mounted iframe and kernel connection.
+App navigation opens the target through the Hub router. Both features work across
+origins without proxy exposure or changes to the iframe sandbox.
 
-## Browser API
+## Query mirroring API
 
 ```ts
 import { createHostBridge } from '@marimo-hub/notebook-bridge/host';
@@ -40,7 +41,7 @@ notebook.dispose();
 Both clients expose package-owned interfaces. They do not expose birpc instances.
 Repeated notebook initialization returns the existing document observer.
 Disposal is idempotent. It closes ports, cancels timers, removes listeners, and
-rejects pending requests. History restoration preserves wrappers from other scripts.
+rejects pending requests. History and `attachShadow` restoration preserve wrappers from other scripts.
 
 The notebook observer wraps `pushState` and `replaceState` and listens for
 `popstate`. It preserves native arguments, return values, and exceptions. Early
@@ -58,7 +59,7 @@ the shared filtering policy.
 4. Both sides require protocol major `1` and capability `query-params.v1`.
 5. The host completes the `connected()` RPC before it accepts query snapshots.
 
-Messages contain complete ordered string pairs and increasing revisions. Duplicate
+Query snapshots contain complete ordered string pairs and increasing revisions. Duplicate
 keys, empty values, Unicode, deletion, and clear operations retain their meaning.
 Both sides exclude reserved Hub keys and all keys from the original sandbox URL.
 Negotiation sends excluded names, never their values.
@@ -70,8 +71,8 @@ and rejects stale revisions. Unchanged snapshots do not update the router.
 
 Handshake retries stop after ten seconds. RPC requests time out after five
 seconds. A new iframe load starts a new connection. An absent or incompatible
-peer leaves the notebook usable, with status `unavailable`. Hub exposes the status through the iframe
-`data-notebook-bridge-status` attribute.
+peer leaves the notebook usable, with status `unavailable`. Hub exposes this status
+through the iframe `data-notebook-bridge-status` attribute.
 
 ### Evolution rules
 
@@ -83,8 +84,55 @@ peer leaves the notebook usable, with status `unavailable`. Hub exposes the stat
 - Run interoperability tests before any birpc upgrade. The current dependency is pinned to `4.2.0`.
 
 The transport checks JSON envelopes, connection IDs, registered method names,
-argument schemas, and response schemas before dispatch. It does not accept
-arbitrary method execution or navigation requests.
+argument schemas, and response schemas before dispatch. It accepts only registered
+methods. Navigation requests can target only validated Hub app slugs.
+
+## Cross-app navigation
+
+Hub enables `app-navigation.v1` for app and editor frames. HTML links can use
+`/app/match?id=xyz` or `app/match?id=xyz`. `mo.nav_menu` requires the leading slash:
+
+```python
+mo.nav_menu({"/app/match?id=xyz": "Match"})
+```
+
+The bridge rewrites recognized anchors to the Hub origin and deployment prefix.
+It observes dynamic content and open shadow roots used by marimo plugins.
+Default same-tab clicks call `navigateApp({ slug, entries, hash })` on the parent.
+Modified clicks and new-tab actions use the rewritten URL directly.
+The bridge respects link targets and `<base target>`.
+
+### Host contract
+
+`createHostBridge` enables navigation only when both options are present and the
+notebook advertises `app-navigation.v1`:
+
+- `appBaseUrl`: An absolute URL on the configured parent origin, ending in `/app/`.
+  It includes the deployment prefix and contains no credentials, query, or fragment.
+- `onNavigateApp(destination)`: A synchronous callback with a validated slug,
+  filtered query entries, and fragment. `appNavigationHref` from the `navigation`
+  export formats this destination as a route.
+
+A `true` result accepts navigation and blocks subsequent queries and navigation
+from that connection. The host must replace the iframe, including for the same URL.
+A `false` result or thrown error declines navigation and resumes query mirroring.
+
+An RPC timeout disables the connection and restores rewritten links.
+A fresh handshake can reconnect it. Older peers retain query mirroring without navigation.
+
+Both endpoints remove reserved parameters and keys from the original sandbox URL.
+Application values, duplicate keys, empty values, and fragments remain intact.
+Requests allow 256 query pairs and 64 KiB after URL encoding.
+Slugs use the core deep-link grammar, with a 63-character limit including separators.
+Fragments allow 8,192 characters, including `#`. They reject ASCII whitespace and control characters.
+
+Hub resolves the target through its existing access checks.
+
+Downloads, external URLs, and unrelated paths are not intercepted.
+Closed shadow roots, nested iframe documents, form submissions, and programmatic
+`location` changes are outside this capability. Standalone sandbox pages and
+static exports do not have a parent bridge. Existing sessions need a restart
+as described in [runtime installation](#automatic-runtime-installation).
 
 ## Automatic runtime installation
 
@@ -134,7 +182,7 @@ and application links use the current query.
 Explicit Hub query navigation retains the existing iframe reload behavior.
 Retry and restart use the current shareable parameters and current sandbox credentials.
 
-This protocol mirrors URLs in one direction. It does not restore Python state
+Query mirroring runs from notebook to Hub. It does not restore Python state
 from browser Back/Forward navigation. A fresh app initializes from its query.
 An editor reconnect can retain the existing kernel state. Full two-way Python
 history restoration requires a separate protocol capability.

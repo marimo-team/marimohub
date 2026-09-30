@@ -8,6 +8,7 @@
 		"./host": "./src/host.ts",
 		"./notebook": "./src/notebook.ts",
 		"./protocol": "./src/protocol.ts",
+		"./navigation": "./src/navigation.ts",
 		"./query": "./src/query.ts",
 		"./runtime": "./src/runtime.ts"
 	},

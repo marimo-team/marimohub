@@ -69,8 +69,9 @@ App users cannot open snapshots because their role does not grant access to save
 
 From a notebook, open **Share notebook → App links** to create or copy a URL
 such as `/app/sales`. Project managers and admins can create and remove links.
-Each name is unique across the hub. Names contain 1–63 lowercase letters,
-digits, or hyphens, and start and end with a letter or digit.
+Each name is unique across the hub and contains 1–63 characters, including `/` separators.
+Names can have segments, such as `team/sales`. Each segment contains lowercase letters,
+digits, or hyphens, and starts and ends with a letter or digit.
 
 Links inherit the notebook's permissions. Recipients must sign in and have
 permission to run the app. Several names can point to one notebook, and each
@@ -87,6 +88,30 @@ Removing a link releases its name immediately. Old shared URLs can then open
 another notebook that registers the same name. Removal does not stop running
 apps or change notebook permissions. Deleting the notebook or project also
 releases its names.
+
+## Link between apps
+
+A link inside a notebook can open another app in the outer Hub page.
+First, create an [app link](#authenticated-app-links) for the target notebook.
+Then use its path in HTML output or `mo.nav_menu`:
+
+```python
+mo.Html('<a href="/app/match?id=xyz">Open match</a>')
+
+mo.nav_menu({"/app/match?id=xyz": "Match"})
+```
+
+HTML links also accept `app/match?id=xyz` without the leading slash.
+Hub supplies its origin and deployment prefix, so the link does not need the sandbox hostname.
+The target receives the link parameters, including repeated and empty values.
+Hub removes [reserved parameters](#reserved-parameters) and parameters from the source sandbox URL.
+The target keeps its existing sign-in and access requirements.
+
+This works in Hub app and editor views with a connected notebook bridge.
+Normal clicks open the target in the same tab. New-tab actions use the Hub URL.
+Downloads and external links retain their normal behavior.
+Standalone sandbox pages, static outputs, nested iframes, forms, and programmatic redirects do not use this feature.
+Existing sandbox sessions need a restart after the upgrade.
 
 ## Notebooks with query parameters
 
