@@ -18,7 +18,7 @@
 		"@types/markdown-it": "^14.1.2",
 		"@types/markdown-it-container": "^2.0.10",
 		"@types/node": "catalog:",
-		"markdown-it": "^14.2.0",
+		"markdown-it": "^14.3.1",
 		"markdown-it-container": "^4.0.0",
 		"simple-icons": "catalog:",
 		"typescript": "catalog:",
