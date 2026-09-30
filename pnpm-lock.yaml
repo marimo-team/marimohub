@@ -1405,8 +1405,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       nodemailer:
-        specifier: ^9.1.1
-        version: 9.1.1
+        specifier: ^10.0.0
+        version: 10.0.13
     devDependencies:
       '@marimo-hub/tsconfig':
         specifier: workspace:*
@@ -7025,9 +7025,9 @@ packages:
     resolution: {integrity: sha512-jVe6Z61gPcPjCElPZ6j8llB3wnqGcuQzefim1ERsqIakxnEy5JlzV7XKdO1KmacRG5TKwPc4vJTgSRQ0LfkbFw==}
     engines: {node: '>=8'}
 
-  nodemailer@9.1.1:
-    resolution: {integrity: sha512-izw9mVKFix6YSnC9eLgV6g1opl9DUlRio9ZNcq+Wu9Ujn2UwF+8Nl0B8nz22kEC+CTZCvinkxwJ0DeFbb6NwcQ==}
-    engines: {node: '>=6.0.0'}
+  nodemailer@10.0.13:
+    resolution: {integrity: sha512-SzG86OlvcW/NNhUFC6uROMwRTL4n7MswfQqC/T8mhkmnY1YVa23zUEMYi4ijSeXSl9GLz9ZeTJDUatEDuY5FeQ==}
+    engines: {node: '>=20.0.0'}
 
   oauth4webapi@3.8.6:
     resolution: {integrity: sha512-iwemM91xz8nryHti2yTmg5fhyEMVOkOXwHNqbvcATjyajb5oQxCQzrNOA6uElRHuMhQQTKUyFKV9y/CNyg25BQ==}
@@ -13346,7 +13346,7 @@ snapshots:
       '@types/pegjs': 0.10.6
       big-integer: 1.6.52
 
-  nodemailer@9.1.1: {}
+  nodemailer@10.0.13: {}
 
   oauth4webapi@3.8.6: {}
 
