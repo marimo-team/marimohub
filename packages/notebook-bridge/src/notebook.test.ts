@@ -212,6 +212,7 @@ it.each([
 	'https://hub.example/app/?token=secret',
 	'not a URL',
 ])('ignores invalid app bases without disabling the query bridge: %s', async (appBaseUrl) => {
+	vi.useFakeTimers();
 	const { connect, bridge } = fixture();
 	const { peer: port } = connect({
 		capabilities: ['query-params.v1', 'app-navigation.v1'],
@@ -221,6 +222,7 @@ it.each([
 	cleanups.push(peer.dispose);
 	await expect(peer.call('connected')).resolves.toEqual({ ready: true });
 	expect(bridge.status).toBe('connected');
+	await vi.advanceTimersByTimeAsync(100);
 	const snapshot = await peer.nextRequest();
 	expect(snapshot.m).toBe('replaceQuery');
 	peer.reply(snapshot, { applied: true });

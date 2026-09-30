@@ -18,6 +18,7 @@ vi.mock('@marimo-hub/notebook-bridge/host', () => ({
 }));
 afterEach(() => {
 	connections.length = 0;
+	vi.unstubAllGlobals();
 });
 
 function Location() {

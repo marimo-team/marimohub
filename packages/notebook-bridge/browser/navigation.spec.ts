@@ -98,16 +98,24 @@ test('ignores double clicks and disposes safely while navigation is pending', as
 	expect(errors).toEqual([]);
 });
 
-test('honors case-insensitive self targets', async ({ page }) => {
-	await page.goto(`${server.hostOrigin}/?navigation=1`);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	const frame = page.frames().find((frame) => frame.parentFrame())!;
-	await frame.evaluate(() =>
-		document.body.insertAdjacentHTML('beforeend', '<a href="/app/match" target="_SELF">Match</a>'),
-	);
-	await frame.getByRole('link', { name: 'Match' }).click();
-	await expect(page).toHaveURL(`${server.hostOrigin}/prefix/app/match`);
-});
+for (const target of ['', '_self', '_SELF']) {
+	test(`explicit target ${JSON.stringify(target)} overrides the base target`, async ({ page }) => {
+		await page.goto(`${server.hostOrigin}/?navigation=1`);
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		const frame = page.frames().find((frame) => frame.parentFrame())!;
+		await frame.evaluate((target) => {
+			document.head.insertAdjacentHTML('beforeend', '<base target="_blank">');
+			const link = document.createElement('a');
+			link.href = '/app/match';
+			link.target = target;
+			link.textContent = 'Match';
+			document.body.append(link);
+		}, target);
+		await frame.getByRole('link', { name: 'Match' }).click();
+		await expect(page).toHaveURL(`${server.hostOrigin}/prefix/app/match`);
+		expect(await page.evaluate(() => window.navigationRequests)).toBe(1);
+	});
+}
 
 test('honors a base target without intercepting new-tab navigation', async ({ page }) => {
 	await page.goto(`${server.hostOrigin}/?navigation=1`);

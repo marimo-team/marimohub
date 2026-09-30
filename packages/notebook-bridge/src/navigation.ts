@@ -124,9 +124,9 @@ export function observeAppLinks(
 		)
 			return;
 		const target = (
-			anchor.target ||
-			doc.querySelector<HTMLBaseElement>('base[target]')?.target ||
-			''
+			anchor.hasAttribute('target')
+				? anchor.target
+				: (doc.querySelector<HTMLBaseElement>('base[target]')?.target ?? '')
 		).toLowerCase();
 		if (target && target !== '_self') return;
 		const destination = appNavigation(anchor.getAttribute('href') ?? '', appBaseUrl, excludedKeys);
