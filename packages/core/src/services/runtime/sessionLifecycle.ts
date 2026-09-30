@@ -31,7 +31,9 @@ const CONNECTION_COUNT_REFRESH_MS = Millis.minutes(5);
  * heartbeat TTL and be flipped to `expired` while still restoring files; tearing
  * it down mid-restore would mirror-delete not-yet-restored workspace keys from
  * the bucket. Shared with `ReconciliationService`, the other reclaimer, so both
- * hold off for the same window; sized like the reconciler's orphan grace.
+ * hold off for the same window; sized like the reconciler's orphan grace. Only
+ * the sweep exempts a fully provisioned record, because only it probes for
+ * editors still connected to the expired kernel.
  */
 export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
 
@@ -246,9 +248,14 @@ export class SessionLifecycleService {
 						// A provision that outlived the heartbeat TTL can be flipped `expired`
 						// while still restoring files — leave it alone until safely past the
 						// provision window (a teardown mid-restore mirror-deletes bucket keys).
+						// A `ready` marimo surface is only set after restore completes, so a
+						// record that reached it and has no connected editors can go now:
+						// otherwise it keeps the editor claim and blocks reopening the notebook.
+						const idleAfterProvision = s.surfaces?.marimo?.status === 'ready' && active === 0;
 						if (
 							s.status === 'expired' &&
 							!pastAuthorizationDeadline &&
+							!idleAfterProvision &&
 							now - Date.parse(s.started_at) < RECLAIM_PROVISION_GRACE_MS
 						) {
 							return;

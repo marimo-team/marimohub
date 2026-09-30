@@ -374,6 +374,24 @@ describe('ReconciliationService', () => {
 		expect(stored.sandbox_reclaimed_at).toBeUndefined();
 	});
 
+	it('Rule 1: keeps the provision grace for a provisioned record (it cannot probe for editors)', async () => {
+		const started = iso(-6 * 60_000);
+		const session = await putSession({
+			status: 'expired',
+			sandbox_id: terminalId,
+			started_at: started,
+			surfaces: { marimo: { status: 'ready', port: 2718, started_at: started } },
+		});
+		compute.active = [{ id: terminalId }];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.sandbox_reclaimed_at).toBeUndefined();
+	});
+
 	it('Rule 1: expireStale cannot make reconciliation commit after authorization expiry', async () => {
 		const session = await putSession({
 			status: 'running',

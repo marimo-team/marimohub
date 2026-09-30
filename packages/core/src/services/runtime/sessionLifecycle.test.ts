@@ -405,6 +405,40 @@ describe('SessionLifecycleService', () => {
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeUndefined();
 		});
 
+		it('reclaims a fresh expired record that already finished provisioning', async () => {
+			const started = iso(-6 * 60 * 1000);
+			const s = await putSession({
+				status: 'expired',
+				started_at: started,
+				last_heartbeat: started,
+				surfaces: { marimo: { status: 'ready', port: 2718, started_at: started } },
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reclaimed).toBe(1);
+			expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
+			expect(sandboxCalls.destroy).toBe(1);
+			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
+		});
+
+		it('keeps the provision grace for a provisioned record when the editor probe is unknown', async () => {
+			probe.mockResolvedValue(null);
+			const started = iso(-6 * 60 * 1000);
+			const s = await putSession({
+				status: 'expired',
+				started_at: started,
+				last_heartbeat: started,
+				surfaces: { marimo: { status: 'ready', port: 2718, started_at: started } },
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reclaimed).toBe(0);
+			expect(sandboxCalls.destroy).toBe(0);
+			expect((await getStored(s)).sandbox_reclaimed_at).toBeUndefined();
+		});
+
 		it('authorization expiry overrides active editors and the provision-reclaim grace', async () => {
 			probe.mockResolvedValue(3);
 			const s = await putSession({

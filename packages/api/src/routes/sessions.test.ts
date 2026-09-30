@@ -3,6 +3,7 @@ import {
 	BadRequestError,
 	createNotebookId,
 	createProjectId,
+	createSandboxId,
 	createServices,
 	KERNEL_AUTH_TOKEN_FILE,
 	KERNEL_AUTH_TOKEN_PATTERN,
@@ -2173,6 +2174,39 @@ describe('Session routes', () => {
 			(await createServices(bucket).sessions.getSession(pid, winner.session_id))
 				.authorization_expires_at,
 		).toBe(deadline);
+	});
+
+	it('refuses to reuse an expired editor until the sweep reclaims its sandbox', async () => {
+		const startedAt = new Date(Date.now() - Millis.minutes(7)).toISOString();
+		const stale = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			status: 'expired',
+			sandbox_id: createSandboxId(),
+			started_at: startedAt,
+			last_heartbeat: startedAt,
+			surfaces: { marimo: { status: 'ready', port: 2718, started_at: startedAt } },
+		});
+		await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
+		await bucket.put(
+			paths.editorClaim(pid, nid),
+			JSON.stringify({ session_id: stale.session_id, sharing: 'shared', claimed_at: startedAt }),
+		);
+		const post = createTestApi({ bucket, userId: ACTOR, compute: makeFakeCompute() }).request;
+		const services = createServices(bucket);
+
+		await expectError(await post('POST', sessionsPath()), 409, 'CONFLICT');
+		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(stale.session_id);
+
+		// What the lifecycle sweep's reclaim leaves behind.
+		await services.sessions.markSandboxReclaimed(pid, stale.session_id, new Date().toISOString());
+		await services.sessions.releaseEditorFor(stale);
+
+		const started = await expectOk<ApiSession>(await post('POST', sessionsPath()));
+		expect(started.session_id).not.toBe(stale.session_id);
+		expect(started.reused).not.toBe(true);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(started.session_id);
 	});
 
 	it('POST /sessions hammered for one notebook reuses one record and never trips the cap', async () => {
