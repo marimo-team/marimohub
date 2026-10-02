@@ -1,3 +1,4 @@
+import type { GitProviderHosts } from '../../integrations/gitRepo';
 import type { Bucket } from '../../ports/bucket';
 import { BadRequestError, ConflictError, NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
@@ -41,6 +42,7 @@ import {
 } from '../../integrations/packedWorkspace';
 
 interface SyncedNotebookServiceHooks {
+	repositoryHosts?: GitProviderHosts;
 	getNotebook: (
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -70,7 +72,7 @@ export class SyncedNotebookService {
 	): Promise<{ meta: NotebookMeta; sync_token?: string }> {
 		const notebookId = createNotebookId();
 		const now = new Date().toISOString();
-		const source = createGitSource(input);
+		const source = createGitSource(input, this.hooks.repositoryHosts);
 		const syncToken = source.sync_mode === 'push' ? createSyncToken() : undefined;
 
 		const meta = buildNotebookMeta({
@@ -164,7 +166,7 @@ export class SyncedNotebookService {
 			this.bucket,
 			nb.source,
 			(raw) => assertSyncedSource(parseStored(SourceSchema, raw, nb.source)),
-			(current) => applyGitSourceUpdate(current, input),
+			(current) => applyGitSourceUpdate(current, input, this.hooks.repositoryHosts),
 		);
 		const now = new Date().toISOString();
 		await mutateObject(
@@ -280,7 +282,7 @@ export class SyncedNotebookService {
 			commit: prepared.commit,
 		});
 		version.git_source = {
-			provider: providerForRepo(syncedSource, prepared.config.repo),
+			provider: providerForRepo(syncedSource, prepared.config.repo, this.hooks.repositoryHosts),
 			...prepared.config,
 			commit: prepared.commit,
 		};
@@ -351,7 +353,11 @@ export class SyncedNotebookService {
 						return {
 							...withoutPending,
 							...currentPrepared.config,
-							provider: providerForRepo(git, currentPrepared.config.repo),
+							provider: providerForRepo(
+								git,
+								currentPrepared.config.repo,
+								this.hooks.repositoryHosts,
+							),
 							current_version_id: versionId,
 							commit: currentPrepared.commit,
 							last_synced_at: now,

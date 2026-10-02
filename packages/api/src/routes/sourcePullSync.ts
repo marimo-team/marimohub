@@ -40,10 +40,9 @@ function requireSyncReader(
 	}
 	// Dispatch on the effective repository, not the stored provider: a pending
 	// settings edit may move the source between providers, and a provider match
-	// alone is not enough — host detection labels e.g. GitHub Enterprise as
-	// `github` while the reader serves github.com only.
+	// alone is not enough when the reader serves a different host.
 	const config = effectiveGitSourceConfig(source);
-	const provider = providerForRepo(source, config.repo);
+	const provider = providerForRepo(source, config.repo, deps.sourceControl?.repositoryHosts);
 	const reader = provider ? deps.sourceControl?.getReader(provider, projectId) : undefined;
 	if (!reader?.supportsRepository(config.repo)) throw new SyncNotConfiguredError();
 	if (source.sync_mode === 'pull' && !reader.fetchGitDirectory) {

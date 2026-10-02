@@ -180,6 +180,7 @@ export async function collectGitDirectoryFiles(
 }
 
 export async function materializeGitDirectory(options: {
+	origin?: string;
 	repository: string;
 	owner: string;
 	repo: string;
@@ -190,7 +191,7 @@ export async function materializeGitDirectory(options: {
 }): Promise<SourceWorkspaceFile[]> {
 	const directory = await mkdtemp(join(tmpdir(), 'marimohub-git-'));
 	const gitdir = join(directory, '.git');
-	const remoteUrl = `https://github.com/${options.owner}/${options.repo}.git`;
+	const remoteUrl = `${options.origin ?? 'https://github.com'}/${options.owner}/${options.repo}.git`;
 	try {
 		await git.init({ fs, dir: directory, defaultBranch: options.branch });
 		await git.addRemote({ fs, dir: directory, remote: 'origin', url: remoteUrl });

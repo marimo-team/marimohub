@@ -113,6 +113,13 @@ describe('detectProvider', () => {
 		expect(detectProvider('acme/analytics')).toBe('github');
 	});
 
+	it('uses exact configured hosts without inherited object properties', () => {
+		const hosts = { 'git.acme.corp': 'github' as const };
+		expect(detectProvider('https://git.acme.corp/acme/analytics', hosts)).toBe('github');
+		expect(detectProvider('https://other.corp/acme/analytics', hosts)).toBeNull();
+		expect(detectProvider('https://constructor/acme/analytics', hosts)).toBeNull();
+	});
+
 	it('recognizes github and gitlab hosts, including self-hosted names', () => {
 		expect(detectProvider('https://github.com/acme/analytics')).toBe('github');
 		expect(detectProvider('https://www.github.com/acme/analytics')).toBe('github');

@@ -239,3 +239,56 @@ describe('GitHub repository policies', () => {
 		);
 	});
 });
+
+describe('GitHub Enterprise configuration', () => {
+	const credentials = {
+		MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+		MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
+	};
+
+	it('maps an arbitrary enterprise host and authorizes its full repository URLs', () => {
+		const project = ProjectId.parse('proj-0000000000000000');
+		const { sourceControl } = makeSourceControl({
+			...credentials,
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: 'https://git.acme.corp/',
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify([
+				{ resource: 'https://git.acme.corp/Team/Repo.git', projects: [project] },
+			]),
+		});
+		expect(sourceControl?.repositoryHosts).toEqual({ 'git.acme.corp': 'github' });
+		const reader = sourceControl!.getReader('github', project)!;
+		expect(reader.supportsRepository('https://git.acme.corp/team/repo')).toBe(true);
+		expect(reader.supportsRepository('https://github.com/team/repo')).toBe(false);
+		expect(reader.supportsRepository('team/repo')).toBe(false);
+		expect(() => reader.supportsRepository('https://git.acme.corp/team/other')).toThrow(
+			'not allowed',
+		);
+		expect(() =>
+			sourceControl!.getReader('github')!.supportsRepository('https://git.acme.corp/team/repo'),
+		).toThrow('not allowed');
+	});
+
+	it('rejects allowlist rules for another host at startup', () => {
+		expect(() =>
+			makeSourceControl({
+				...credentials,
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: 'https://git.acme.corp',
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify([
+					{ resource: 'https://github.com/team/repo', projects: '*' },
+				]),
+			}),
+		).toThrow('ALLOWED_REPOSITORIES');
+	});
+
+	it.each([
+		'http://git.acme.corp',
+		'https://git.acme.corp/api/v3',
+		'https://user:secret@git.acme.corp',
+		'https://git.acme.corp?query=1',
+		'invalid',
+	])('rejects invalid GitHub URL %s', (url) => {
+		expect(() =>
+			makeSourceControl({ ...credentials, MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: url }),
+		).toThrow('MARIMOHUB_SOURCE_CONTROL_GITHUB_URL');
+	});
+});

@@ -213,14 +213,7 @@ export function isGitHubRepoInput(input: string): boolean {
 		} catch {
 			return false;
 		}
-		if (
-			url.hostname.toLowerCase() !== 'github.com' ||
-			url.port ||
-			url.username ||
-			url.password ||
-			url.search ||
-			url.hash
-		) {
+		if (url.username || url.password || url.search || url.hash) {
 			return false;
 		}
 		path = url.pathname.replaceAll(/^\/+|\/+$/g, '');
@@ -234,7 +227,7 @@ export function isGitHubRepoInput(input: string): boolean {
 }
 
 export const GITHUB_REPO_INPUT_HINT =
-	'Pull mode supports github.com repositories, e.g. acme/analytics or https://github.com/acme/analytics';
+	'Use owner/repo for github.com or a full HTTPS repository URL for the configured GitHub Enterprise host';
 
 // Mirrors the server's notebook-extension gate (core `isNotebookFilePath`),
 // including its non-empty-stem rule: a bare dotfile like `.md` is not a notebook.

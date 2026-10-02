@@ -73,6 +73,7 @@ export function pullRequestUrl(
 	owner: string,
 	repo: string,
 	number: number,
+	origin = 'https://github.com',
 ): string {
 	const raw = stringField(value, 'html_url');
 	let url: URL;
@@ -84,8 +85,7 @@ export function pullRequestUrl(
 	const expectedPath = `/${owner}/${repo}/pull/${number}`.toLowerCase();
 	if (
 		url.protocol !== 'https:' ||
-		url.hostname.toLowerCase() !== 'github.com' ||
-		url.port ||
+		url.origin !== origin ||
 		url.username ||
 		url.password ||
 		url.search ||

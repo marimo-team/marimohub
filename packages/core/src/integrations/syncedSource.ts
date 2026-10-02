@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { GitProviderHosts } from './gitRepo';
 import { BadRequestError, ConflictError, ValidationError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { sha256Hex } from '../internal/sha256';
@@ -139,8 +140,9 @@ export function gitSourceConfigsEqual(a: GitSourceConfig, b: GitSourceConfig): b
 export function providerForRepo(
 	current: Pick<GitSource, 'repo' | 'provider'>,
 	nextRepo: string,
+	hosts?: GitProviderHosts,
 ): string | null {
-	const detected = detectProvider(nextRepo);
+	const detected = detectProvider(nextRepo, hosts);
 	if (detected) return detected;
 	const host = repoHost(nextRepo);
 	return host !== null && host === repoHost(current.repo) ? current.provider : null;
@@ -176,6 +178,7 @@ export function resolveUpdatedConfig(
 export function applyGitSourceUpdate(
 	current: GitSource,
 	input: UpdateSyncedNotebookSourceInput,
+	hosts?: GitProviderHosts,
 ): GitSource | null {
 	const desired = normalizeGitSourceConfig(input);
 	if (input.sync_mode && input.sync_mode !== current.sync_mode) {
@@ -193,13 +196,16 @@ export function applyGitSourceUpdate(
 		return {
 			...withoutPending,
 			...resolved,
-			provider: providerForRepo(current, resolved.repo),
+			provider: providerForRepo(current, resolved.repo, hosts),
 		};
 	}
 	return { ...current, pending_config: resolved };
 }
 
-export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
+export function createGitSource(
+	input: CreateSyncedNotebookInput,
+	hosts?: GitProviderHosts,
+): GitSource {
 	// Shorthand means github.com — unless the caller says GitLab, then gitlab.com.
 	const config = rehomeShorthand(
 		normalizeGitSourceConfig(input),
@@ -210,7 +216,7 @@ export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
 		type: 'git',
 		// Host detection wins over the caller's claim so the stored provider can
 		// never contradict a recognized host; the claim covers unknown hosts.
-		provider: detectProvider(config.repo) ?? input.provider ?? null,
+		provider: detectProvider(config.repo, hosts) ?? input.provider ?? null,
 		...config,
 		sync_mode: input.sync_mode ?? 'push',
 		current_version_id: null,

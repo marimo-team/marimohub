@@ -7,6 +7,7 @@ import {
 	assertSyncSourcePrecondition,
 	createGitSource,
 	isAtBranchHead,
+	providerForRepo,
 	sourceDrift,
 } from './syncedSource';
 
@@ -166,6 +167,31 @@ describe('sourceDrift', () => {
 		expect(sourceDrift(syncedSource({ pending_config: PENDING }), 'aaa111', 't')).toMatchObject({
 			in_sync: false,
 			pending_config: true,
+		});
+	});
+});
+
+describe('configured GitHub hosts', () => {
+	const hosts = { 'git.acme.corp': 'github' as const };
+	const repo = 'https://git.acme.corp/org/repo';
+
+	it('recognizes an enterprise host on create and update', () => {
+		const source = createGitSource({ title: 'Dash', description: '', ...ACTIVE, repo }, hosts);
+		expect(source.provider).toBe('github');
+		expect(applyGitSourceUpdate(syncedSource(), { ...ACTIVE, repo }, hosts)?.provider).toBe(
+			'github',
+		);
+		expect(providerForRepo(syncedSource(), repo, hosts)).toBe('github');
+		expect(providerForRepo(source, 'https://other.corp/org/repo', hosts)).toBeNull();
+	});
+
+	it('keeps shorthand on github.com at creation and on the existing host at update', () => {
+		const input = { title: 'Dash', description: '', ...ACTIVE };
+		expect(createGitSource(input, hosts).repo).toBe('org/repo');
+		const source = createGitSource({ ...input, repo }, hosts);
+		expect(applyGitSourceUpdate(source, { ...ACTIVE, repo: 'org/other' }, hosts)).toMatchObject({
+			repo: 'https://git.acme.corp/org/other',
+			provider: 'github',
 		});
 	});
 });

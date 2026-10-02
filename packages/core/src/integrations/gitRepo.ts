@@ -6,6 +6,7 @@
 import { parseHttpUrl } from '../url';
 
 export type GitProvider = 'github' | 'gitlab';
+export type GitProviderHosts = Readonly<Record<string, GitProvider>>;
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
 // "anything/anything" check would admit both). Owners cannot contain dots,
@@ -70,10 +71,12 @@ export function normalizeRepo(input: string): string | null {
  * self-hosted instances like `gitlab.my-company.org`. Null means links
  * cannot be built safely.
  */
-export function detectProvider(repo: string): GitProvider | null {
+export function detectProvider(repo: string, hosts?: GitProviderHosts): GitProvider | null {
 	if (OWNER_REPO_PATTERN.test(repo)) return 'github';
 	const url = parseRepoUrl(repo);
 	if (!url) return null;
+	const configured = hosts && Object.hasOwn(hosts, url.host) ? hosts[url.host] : undefined;
+	if (configured) return configured;
 	const host = url.hostname.toLowerCase();
 	if (host.includes('github')) return 'github';
 	if (host.includes('gitlab')) return 'gitlab';

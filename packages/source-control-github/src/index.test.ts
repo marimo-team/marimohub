@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubAppPublisher } from './index';
 
+const ORIGINS = ['https://github.com', 'https://git.acme.corp'];
+
 const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
 	.privateKey.export({ type: 'pkcs8', format: 'pem' })
 	.toString();
@@ -16,9 +18,9 @@ function response(value: unknown, status = 200): Response {
 
 function publisher(
 	fetcher: (url: string, init?: RequestInit) => Promise<Response>,
-	now?: () => number,
+	{ now, url }: { now?: () => number; url?: string } = {},
 ) {
-	return new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher, now });
+	return new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY, url }, { fetcher, now });
 }
 
 const input = {
@@ -86,32 +88,58 @@ function pullRequestMetadataResponse(
 	parsed: URL,
 	init: RequestInit | undefined,
 	headCommit: string,
+	request = updateInput,
 ): Response | null {
 	if (
-		parsed.pathname !== `/repos/owner/repo/pulls/${updateInput.changeRequest.number}` ||
+		parsed.pathname !== `/repos/owner/repo/pulls/${request.changeRequest.number}` ||
 		init?.method !== 'PATCH'
 	) {
 		return null;
 	}
 	expect(JSON.parse(String(init.body))).toEqual({
-		title: updateInput.title,
-		body: updateInput.body,
+		title: request.title,
+		body: request.body,
 	});
 	return response({
-		number: updateInput.changeRequest.number,
-		html_url: updateInput.changeRequest.url,
-		title: updateInput.title,
-		body: updateInput.body,
+		number: request.changeRequest.number,
+		html_url: request.changeRequest.url,
+		title: request.title,
+		body: request.body,
 		head: { sha: headCommit },
 	});
 }
 
+function updateInputFor(origin: string) {
+	return {
+		...updateInput,
+		repository: `${origin}/owner/repo`,
+		changeRequest: { ...updateInput.changeRequest, url: `${origin}/owner/repo/pull/17` },
+	};
+}
+
+function parseApiRequest(url: string, origin: string): URL {
+	const parsed = new URL(url);
+	expect(parsed.origin).toBe(origin === 'https://github.com' ? 'https://api.github.com' : origin);
+	if (origin !== 'https://github.com') {
+		if (parsed.pathname.endsWith('/graphql')) {
+			expect(parsed.pathname).toBe('/api/graphql');
+		} else {
+			expect(parsed.pathname.startsWith('/api/v3/')).toBe(true);
+		}
+		parsed.pathname = parsed.pathname
+			.replace(/^\/api\/v3/, '')
+			.replace(/^\/api\/graphql$/, '/graphql');
+	}
+	return parsed;
+}
+
 describe('GitHubAppPublisher', () => {
-	it('appends a commit to an existing open pull request', async () => {
+	it.each(ORIGINS)('appends a PR commit on %s', async (origin) => {
+		const request = updateInputFor(origin);
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
+			const parsed = parseApiRequest(url, origin);
 			const method = init?.method ?? 'GET';
-			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'appended-head');
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'appended-head', request);
 			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
@@ -122,7 +150,7 @@ describe('GitHubAppPublisher', () => {
 					{
 						number: 17,
 						state: 'open',
-						html_url: updateInput.changeRequest.url,
+						html_url: request.changeRequest.url,
 						head: { sha: 'existing-head' },
 					},
 				]);
@@ -167,10 +195,12 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
-			...updateInput.changeRequest,
-			headCommit: 'appended-head',
-		});
+		await expect(publisher(fetcher, { url: origin }).updateChangeRequest(request)).resolves.toEqual(
+			{
+				...request.changeRequest,
+				headCommit: 'appended-head',
+			},
+		);
 		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
 	});
 
@@ -263,12 +293,18 @@ describe('GitHubAppPublisher', () => {
 		expect(metadataPatchCount).toBe(2);
 	});
 
-	it('force-replaces an owned branch when its current tree cannot accept the update', async () => {
+	it.each(ORIGINS)('conditionally replaces a PR branch on %s', async (origin) => {
+		const request = updateInputFor(origin);
 		let ref = 'existing-head';
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
+			const parsed = parseApiRequest(url, origin);
 			const method = init?.method ?? 'GET';
-			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'replacement-head');
+			const metadataResponse = pullRequestMetadataResponse(
+				parsed,
+				init,
+				'replacement-head',
+				request,
+			);
 			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
@@ -279,7 +315,7 @@ describe('GitHubAppPublisher', () => {
 					{
 						number: 17,
 						state: 'open',
-						html_url: updateInput.changeRequest.url,
+						html_url: request.changeRequest.url,
 						head: { sha: ref },
 					},
 				]);
@@ -340,10 +376,12 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
-			...updateInput.changeRequest,
-			headCommit: 'replacement-head',
-		});
+		await expect(publisher(fetcher, { url: origin }).updateChangeRequest(request)).resolves.toEqual(
+			{
+				...request.changeRequest,
+				headCommit: 'replacement-head',
+			},
+		);
 	});
 
 	it('does not report success when the conditional force update loses its race', async () => {
@@ -806,9 +844,9 @@ describe('GitHubAppPublisher', () => {
 		},
 	);
 
-	it('preserves executable mode while creating a draft pull request', async () => {
+	it.each(ORIGINS)('creates a draft PR preserving file mode on %s', async (origin) => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
+			const parsed = parseApiRequest(url, origin);
 			const method = init?.method ?? 'GET';
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens'))
@@ -845,7 +883,7 @@ describe('GitHubAppPublisher', () => {
 				return response(
 					{
 						number: 17,
-						html_url: 'https://github.com/owner/repo/pull/17',
+						html_url: `${origin}/owner/repo/pull/17`,
 						head: { sha: 'head-sha' },
 					},
 					201,
@@ -856,6 +894,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
+				url: origin,
 				privateKey: PRIVATE_KEY,
 			},
 			{
@@ -864,9 +903,11 @@ describe('GitHubAppPublisher', () => {
 			},
 		);
 
-		await expect(publisher.openChangeRequest(input)).resolves.toEqual({
+		await expect(
+			publisher.openChangeRequest({ ...input, repository: `${origin}/owner/repo` }),
+		).resolves.toEqual({
 			number: 17,
-			url: 'https://github.com/owner/repo/pull/17',
+			url: `${origin}/owner/repo/pull/17`,
 			headBranch: input.headBranch,
 			headCommit: 'head-sha',
 		});
@@ -1620,9 +1661,9 @@ describe('GitHubAppPublisher', () => {
 
 	it('rejects an invalid injected clock before network access', async () => {
 		const fetcher = vi.fn();
-		await expect(publisher(fetcher, () => Number.NaN).openChangeRequest(input)).rejects.toThrow(
-			'clock is invalid',
-		);
+		await expect(
+			publisher(fetcher, { now: () => Number.NaN }).openChangeRequest(input),
+		).rejects.toThrow('clock is invalid');
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
