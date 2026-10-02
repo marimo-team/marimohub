@@ -517,7 +517,7 @@ Create a GitHub App with Contents and Pull requests read/write permissions. Inst
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL` | GitHub HTTPS origin, without a path. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com. | — | `https://github.com` | `https://git.acme.corp` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
-| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
 
 ## Workload Identity Federation
 

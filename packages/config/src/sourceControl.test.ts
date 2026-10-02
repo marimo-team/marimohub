@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectId } from '@marimo-hub/core/ids';
 import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
 import { makeSourceControl } from './sourceControl';
+import { CONFIG_SPEC } from './spec';
 
 function privateKey(): string {
 	return generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -245,6 +246,31 @@ describe('GitHub Enterprise configuration', () => {
 		MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
 		MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
 	};
+
+	it.each([undefined, '', '   '])('defaults to github.com when the URL is %j', (url) => {
+		const { sourceControl } = makeSourceControl({
+			...credentials,
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: url,
+		});
+		expect(sourceControl?.repositoryHosts).toEqual({ 'github.com': 'github' });
+		const reader = sourceControl!.getReader('github')!;
+		expect(reader.supportsRepository('team/repo')).toBe(true);
+		expect(reader.supportsRepository('https://github.com/team/repo')).toBe(true);
+		expect(reader.supportsRepository('https://git.acme.corp/team/repo')).toBe(false);
+	});
+
+	it('accepts the documented github.com policy with the default origin', () => {
+		const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES';
+		const example = CONFIG_SPEC.flatMap((group) =>
+			group.backends.flatMap((backend) => backend.vars),
+		).find((entry) => entry.id === variable)?.example;
+		expect(example).toBeDefined();
+		const { sourceControl } = makeSourceControl({ ...credentials, [variable]: example });
+		const project = ProjectId.parse('proj-0000000000000000');
+		const reader = sourceControl!.getReader('github', project)!;
+		expect(reader.supportsRepository('https://github.com/team/notebooks')).toBe(true);
+		expect(() => reader.supportsRepository('https://github.com/team/other')).toThrow('not allowed');
+	});
 
 	it('maps an arbitrary enterprise host and authorizes its full repository URLs', () => {
 		const project = ProjectId.parse('proj-0000000000000000');

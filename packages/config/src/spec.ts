@@ -1830,6 +1830,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'GitHub HTTPS origin, without a path. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com.',
 						default: 'https://github.com',
 						example: 'https://git.acme.corp',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID',
@@ -1851,7 +1852,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
 						name: 'GitHub repository project policy',
 						description:
-							'Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
+							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
 						optIn: true,
 					},
