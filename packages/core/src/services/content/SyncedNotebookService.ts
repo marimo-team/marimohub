@@ -225,7 +225,7 @@ export class SyncedNotebookService {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
 		const syncedSource = assertSyncedSource(source);
-		const prepared = prepareSync(syncedSource, input);
+		const prepared = prepareSync(syncedSource, input, this.hooks.repositoryHosts);
 		if (input.git_files) assertGitDirectoryLimits(input.git_files);
 		const gitFiles = input.git_files ? toSyncedWorkspaceFileMap(input.git_files) : undefined;
 		if (syncedSource.sync_mode === 'pull' && !gitFiles) {
@@ -343,7 +343,7 @@ export class SyncedNotebookService {
 					(raw) => parseStored(SourceSchema, raw, nb.source),
 					(current) => {
 						const git = assertSyncedSource(current);
-						const currentPrepared = prepareSync(git, input);
+						const currentPrepared = prepareSync(git, input, this.hooks.repositoryHosts);
 						if (isAtBranchHead(git, currentPrepared.commit)) return null;
 						// A pull that resolved its head against an older source state must
 						// not regress a pointer another sync advanced meanwhile. Failing

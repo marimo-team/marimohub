@@ -162,6 +162,7 @@ function rehomeShorthand(config: GitSourceConfig, origin: string | null): GitSou
 export function resolveUpdatedConfig(
 	current: GitSource,
 	desired: GitSourceConfig,
+	hosts?: GitProviderHosts,
 ): GitSourceConfig {
 	const onGitHub = repoHost(current.repo) === 'github.com';
 	const rehomed = rehomeShorthand(desired, onGitHub ? null : repoOrigin(current.repo));
@@ -169,7 +170,7 @@ export function resolveUpdatedConfig(
 	// stage a phantom change when the stored spelling differs — e.g. a URL-form
 	// GitHub source (`https://github.com/owner/repo`) edited with bare
 	// `owner/repo`. Return the stored spelling verbatim so equality holds.
-	if (rehomed.repo !== current.repo && reposMatch(current.repo, rehomed.repo)) {
+	if (rehomed.repo !== current.repo && reposMatch(current.repo, rehomed.repo, hosts)) {
 		return { ...rehomed, repo: current.repo };
 	}
 	return rehomed;
@@ -184,7 +185,7 @@ export function applyGitSourceUpdate(
 	if (input.sync_mode && input.sync_mode !== current.sync_mode) {
 		throw new BadRequestError('Changing sync_mode is not supported');
 	}
-	const resolved = resolveUpdatedConfig(current, desired);
+	const resolved = resolveUpdatedConfig(current, desired, hosts);
 	const active = gitSourceConfig(current);
 	if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved))
 		return null;
@@ -301,13 +302,14 @@ export function sourceDrift(source: GitSource, headCommit: string, checkedAt: st
 export function prepareSync(
 	source: GitSource,
 	input: SyncNotebookInput,
+	hosts?: GitProviderHosts,
 ): { commit: string; config: GitSourceConfig; files: SyncedWorkspaceFileMap } {
 	const config = effectiveGitSourceConfig(source);
 	const rootPath = normalizeWorkspaceRootPath(input.root_path);
 	// Repo matches by repository, not byte-for-byte: CI pushers send bare paths
 	// (`$GITHUB_REPOSITORY`, `$CI_PROJECT_PATH`) while the store may hold a URL.
 	const checks: [header: string, received: string, expected: string, ok: boolean][] = [
-		['X-Marimohub-Repo', input.repo, config.repo, reposMatch(config.repo, input.repo)],
+		['X-Marimohub-Repo', input.repo, config.repo, reposMatch(config.repo, input.repo, hosts)],
 		['X-Marimohub-Branch', input.branch, config.branch, input.branch === config.branch],
 		['X-Marimohub-Root-Path', rootPath, config.root_path, rootPath === config.root_path],
 	];

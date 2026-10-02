@@ -109,14 +109,15 @@ export function repoOrigin(repo: string): string | null {
  * URL must be on the stored host. Case folds only on GitHub, whose paths are
  * case-insensitive.
  */
-export function reposMatch(expected: string, received: string): boolean {
+export function reposMatch(expected: string, received: string, hosts?: GitProviderHosts): boolean {
 	const a = normalizeRepo(expected) ?? expected.trim();
 	const b = normalizeRepo(received) ?? received.trim();
 	if (a.length === 0 || b.length === 0) return false;
 	if (a === b) return true;
 	const receivedHost = parseRepoUrl(b)?.host ?? null;
 	if (receivedHost && receivedHost !== repoHost(a)) return false;
-	const fold = (path: string) => (detectProvider(a) === 'github' ? path.toLowerCase() : path);
+	const fold = (path: string) =>
+		detectProvider(a, hosts) === 'github' ? path.toLowerCase() : path;
 	const pathA = fold(repoPath(a));
 	return pathA.length > 0 && pathA === fold(repoPath(b));
 }

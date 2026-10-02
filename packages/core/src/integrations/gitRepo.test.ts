@@ -180,6 +180,24 @@ describe('reposMatch', () => {
 		);
 	});
 
+	it.each([
+		['https://git.acme.corp/Team/Repo', 'team/repo', true],
+		['https://git.acme.corp/Team/Repo', 'https://git.acme.corp/team/repo.git', true],
+		['https://git.acme.corp/Team/Repo', 'https://other.corp/team/repo', false],
+		['https://git.acme.corp/Team/Repo', 'https://git.acme.corp:8443/team/repo', false],
+		['https://git.acme.corp:8443/Team/Repo', 'team/repo', false],
+		['https://gitlab.com/Team/Repo', 'team/repo', false],
+		['https://git.internal/Team/Repo', 'team/repo', false],
+		['https://unknown.corp/Team/Repo', 'team/repo', false],
+	])('matches %s against %s using configured hosts: %s', (expected, received, matches) => {
+		expect(
+			reposMatch(expected, received, {
+				'git.acme.corp': 'github',
+				'git.internal': 'gitlab',
+			}),
+		).toBe(matches);
+	});
+
 	it('rejects different repositories', () => {
 		expect(reposMatch('acme/analytics', 'other/analytics')).toBe(false);
 		expect(reposMatch('acme/analytics', 'acme/analytics2')).toBe(false);
