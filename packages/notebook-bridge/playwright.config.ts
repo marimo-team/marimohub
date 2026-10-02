@@ -9,6 +9,8 @@ export default defineConfig({
 			name,
 			testIgnore: /runtime\.spec\.ts$/,
 			use: {
+				// Headless shell stalls COOP navigations opened by middle or modified clicks.
+				...(name === 'chromium' ? { channel: 'chromium' } : {}),
 				...devices[
 					name === 'chromium'
 						? 'Desktop Chrome'

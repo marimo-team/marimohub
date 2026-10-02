@@ -103,6 +103,14 @@ describe('NotebookPage viewer modes', () => {
 		expect(screen.getByTitle('Forecast in VS Code')).toBe(vscodeFrame);
 		expect(vscodeFrame.parentElement).toBe(vscodePanel);
 		expect(screen.getByTitle('Forecast')).toBe(notebookFrame);
+		for (const frame of [notebookFrame, vscodeFrame, opencodeFrame]) {
+			const permissions = frame.getAttribute('sandbox')!.split(' ');
+			expect(permissions).toEqual(
+				expect.arrayContaining(['allow-popups', 'allow-popups-to-escape-sandbox']),
+			);
+			expect(permissions).not.toContain('allow-top-navigation');
+			expect(permissions).not.toContain('allow-top-navigation-by-user-activation');
+		}
 		expect(notebookFrame.closest('[role="tabpanel"]')).toBe(notebookPanel);
 		expect(vscodePanel).toHaveAttribute('inert');
 		expect(opencodeFrame.closest('[role="tabpanel"]')).not.toHaveAttribute('inert');

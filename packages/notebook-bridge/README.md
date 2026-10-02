@@ -2,8 +2,8 @@
 
 `@marimo-hub/notebook-bridge` mirrors notebook query parameters and routes app
 links through Hub. Query updates preserve the mounted iframe and kernel connection.
-App navigation opens the target through the Hub router. Both features work across
-origins without proxy exposure or changes to the iframe sandbox.
+Same-tab app navigation opens the target through the Hub router.
+Both features work across origins without proxy exposure.
 
 ## Query mirroring API
 
@@ -101,6 +101,13 @@ It observes dynamic content and open shadow roots used by marimo plugins.
 Default same-tab clicks call `navigateApp({ slug, entries, hash })` on the parent.
 Modified clicks and new-tab actions use the rewritten URL directly.
 The bridge respects link targets and `<base target>`.
+
+Hub uses `NOTEBOOK_IFRAME_SANDBOX` from the `host` export for notebook and secondary
+surface iframes. It permits popups without sandbox inheritance through
+`allow-popups` and `allow-popups-to-escape-sandbox`.
+Without the second token, Chrome blocks new tabs that return
+`Cross-Origin-Opener-Policy: same-origin` with `net::ERR_BLOCKED_BY_RESPONSE`.
+The source iframe remains sandboxed, and direct top-level navigation stays blocked.
 
 ### Host contract
 

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { harness } from './harness';
 
 let server: Awaited<ReturnType<typeof harness>>;
@@ -9,13 +10,25 @@ test.afterAll(async () => {
 	await server.close();
 });
 
+async function loadNotebook(page: Page, url = `${server.hostOrigin}/?navigation=1`) {
+	await page.goto(url);
+	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+	return page.frames().find((frame) => frame.parentFrame())!;
+}
+
+async function openTab(page: Page, activate: () => Promise<void>) {
+	const opened = page.context().waitForEvent('page');
+	await activate();
+	const tab = await opened;
+	await tab.bringToFront();
+	return tab;
+}
+
 for (const behavior of ['reject', 'throw'] as const) {
 	test(`recovers from a host that ${behavior}s navigation`, async ({ page }) => {
 		const errors: string[] = [];
 		page.on('pageerror', (error) => errors.push(error.message));
-		await page.goto(`${server.hostOrigin}/?navigation=1`);
-		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-		const frame = page.frames().find((frame) => frame.parentFrame())!;
+		const frame = await loadNotebook(page);
 		await frame.evaluate(() =>
 			document.body.insertAdjacentHTML('beforeend', '<a href="/app/match?id=xyz">Match</a>'),
 		);
@@ -43,9 +56,7 @@ for (const timeout of [false, true]) {
 	}) => {
 		const errors: string[] = [];
 		page.on('pageerror', (error) => errors.push(error.message));
-		await page.goto(`${server.hostOrigin}/?navigation=1`);
-		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-		const frame = page.frames().find((frame) => frame.parentFrame())!;
+		const frame = await loadNotebook(page);
 		await frame.evaluate(() =>
 			document.body.insertAdjacentHTML('beforeend', '<a href="/app/match?id=xyz">Match</a>'),
 		);
@@ -74,9 +85,7 @@ for (const timeout of [false, true]) {
 test('ignores double clicks and disposes safely while navigation is pending', async ({ page }) => {
 	const errors: string[] = [];
 	page.on('pageerror', (error) => errors.push(error.message));
-	await page.goto(`${server.hostOrigin}/?navigation=1`);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	const frame = page.frames().find((frame) => frame.parentFrame())!;
+	const frame = await loadNotebook(page);
 	await frame.evaluate(() => {
 		const link = document.createElement('a');
 		link.href = '/app/match?id=xyz';
@@ -100,9 +109,7 @@ test('ignores double clicks and disposes safely while navigation is pending', as
 
 for (const target of ['', '_self', '_SELF']) {
 	test(`explicit target ${JSON.stringify(target)} overrides the base target`, async ({ page }) => {
-		await page.goto(`${server.hostOrigin}/?navigation=1`);
-		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-		const frame = page.frames().find((frame) => frame.parentFrame())!;
+		const frame = await loadNotebook(page);
 		await frame.evaluate((target) => {
 			document.head.insertAdjacentHTML('beforeend', '<base target="_blank">');
 			const link = document.createElement('a');
@@ -117,21 +124,124 @@ for (const target of ['', '_self', '_SELF']) {
 	});
 }
 
-test('honors a base target without intercepting new-tab navigation', async ({ page }) => {
-	await page.goto(`${server.hostOrigin}/?navigation=1`);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	const frame = page.frames().find((frame) => frame.parentFrame())!;
-	await frame.evaluate(() => {
-		document.head.insertAdjacentHTML('beforeend', '<base target="_blank">');
-		document.body.insertAdjacentHTML('beforeend', '<a href="/app/match">Match</a>');
+for (const target of ['anchor', 'base', 'named', 'middle', 'modified', 'script']) {
+	test(`loads a COOP-protected app in a new tab (${target})`, async ({ page, browserName }) => {
+		test.skip(
+			browserName === 'webkit' && target === 'middle',
+			'Playwright WebKit does not open a new tab on middle-click, even without a sandbox.',
+		);
+		const frame = await loadNotebook(page);
+		await frame.evaluate((target) => {
+			if (target === 'base')
+				document.head.insertAdjacentHTML('beforeend', '<base target="_blank">');
+			const link = document.createElement('a');
+			link.href = '/app/match?id=xyz#section';
+			link.textContent = 'Match';
+			if (target === 'anchor' || target === 'script') link.target = '_blank';
+			if (target === 'named') link.target = 'app-window';
+			if (target === 'script') {
+				link.addEventListener('click', (event) => {
+					event.preventDefault();
+					window.open(link.href, '_blank');
+				});
+			}
+			document.body.append(link);
+		}, target);
+		await expect(frame.getByRole('link', { name: 'Match' })).toHaveAttribute(
+			'href',
+			`${server.hostOrigin}/prefix/app/match?id=xyz#section`,
+		);
+		const popup = await openTab(page, () =>
+			frame.getByRole('link', { name: 'Match' }).click({
+				button: target === 'middle' ? 'middle' : 'left',
+				modifiers: target === 'modified' ? ['ControlOrMeta'] : [],
+			}),
+		);
+		await expect(popup).toHaveURL(`${server.hostOrigin}/prefix/app/match?id=xyz#section`);
+		await expect(popup.getByRole('heading', { name: 'Hub app' })).toBeVisible();
+		expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+		await popup.close();
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		expect(await page.evaluate(() => window.navigationRequests)).toBe(0);
 	});
-	const popupPromise = page.waitForEvent('popup');
-	await frame.getByRole('link', { name: 'Match' }).click();
-	const popup = await popupPromise;
-	await popup.waitForURL(`${server.hostOrigin}/prefix/app/match`);
+}
+
+test('follows an external redirect to a COOP-protected app without a navigation bridge', async ({
+	page,
+}) => {
+	const destination = `${server.hostOrigin}/prefix/app/match?id=xyz#section`;
+	const frame = await loadNotebook(page, server.hostOrigin);
+	await frame.evaluate(() => {
+		document.body.insertAdjacentHTML(
+			'beforeend',
+			'<a href="/redirect" target="_blank">Redirect</a>',
+		);
+	});
+	const popup = await openTab(page, () => frame.getByRole('link', { name: 'Redirect' }).click());
+	await expect(popup).toHaveURL(destination);
+	await expect(popup.getByRole('heading', { name: 'Hub app' })).toBeVisible();
+	expect(await popup.evaluate(() => window.opener === null)).toBe(true);
 	await popup.close();
 	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	expect(await page.evaluate(() => window.navigationRequests)).toBe(0);
+});
+
+for (const status of [403, 404, 503]) {
+	test(`loads a popup error response (${status}) and leaves the source notebook usable`, async ({
+		page,
+		context,
+	}) => {
+		await context.route(`${server.hostOrigin}/prefix/app/unavailable`, (route) =>
+			route.fulfill({
+				status,
+				contentType: 'text/html',
+				headers: { 'Cross-Origin-Opener-Policy': 'same-origin' },
+				body: '<h1>App unavailable</h1>',
+			}),
+		);
+		const frame = await loadNotebook(page);
+		await frame.evaluate(() => {
+			document.body.insertAdjacentHTML(
+				'beforeend',
+				'<a href="/app/unavailable" target="_blank">Unavailable</a><a href="/app/match">Match</a>',
+			);
+		});
+		const link = frame.getByRole('link', { name: 'Unavailable' });
+		await expect(link).toHaveAttribute('href', `${server.hostOrigin}/prefix/app/unavailable`);
+		const popup = await openTab(page, () => link.click());
+		await expect(popup.getByRole('heading', { name: 'App unavailable' })).toBeVisible();
+		await popup.close();
+		await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+		expect(await page.evaluate(() => window.navigationRequests)).toBe(0);
+		await frame.evaluate(() => history.replaceState({}, '', '?after=popup-error'));
+		await expect(page).toHaveURL(`${server.hostOrigin}/?after=popup-error`);
+		await frame.getByRole('link', { name: 'Match' }).click();
+		await expect(page).toHaveURL(`${server.hostOrigin}/prefix/app/match`);
+	});
+}
+
+test('still blocks direct top-level navigation from the notebook after a user click', async ({
+	page,
+}) => {
+	const frame = await loadNotebook(page);
+	await frame.evaluate((destination) => {
+		const button = document.createElement('button');
+		button.textContent = 'Navigate top';
+		button.onclick = () => {
+			try {
+				window.top!.location.href = destination;
+				button.dataset.result = 'allowed';
+			} catch (error) {
+				button.dataset.result = (error as DOMException).name;
+			}
+		};
+		document.body.append(button);
+	}, `${server.hostOrigin}/prefix/app/match`);
+	const button = frame.getByRole('button', { name: 'Navigate top' });
+	await button.click();
+	await expect(button).toHaveAttribute('data-result', 'SecurityError');
+	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
+	await frame.evaluate(() => history.replaceState({}, '', '?after=blocked-navigation'));
+	await expect(page).toHaveURL(`${server.hostOrigin}/?after=blocked-navigation`);
 });
 
 test('does not intercept cancelled clicks, downloads, named targets, or unrelated links', async ({
@@ -146,9 +256,7 @@ test('does not intercept cancelled clicks, downloads, named targets, or unrelate
 			true,
 		);
 	});
-	await page.goto(`${server.hostOrigin}/?navigation=1`);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	const frame = page.frames().find((frame) => frame.parentFrame())!;
+	const frame = await loadNotebook(page);
 	const results = await frame.evaluate(() => {
 		const cases = [
 			{ href: '/app/match', id: 'cancelled' },
@@ -181,9 +289,7 @@ test('does not intercept cancelled clicks, downloads, named targets, or unrelate
 });
 
 test('preserves application href changes and restores detached links', async ({ page }) => {
-	await page.goto(`${server.hostOrigin}/?navigation=1`);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	const frame = page.frames().find((frame) => frame.parentFrame())!;
+	const frame = await loadNotebook(page);
 	await frame.evaluate(() =>
 		document.body.insertAdjacentHTML(
 			'beforeend',
@@ -207,9 +313,7 @@ test('preserves application href changes and restores detached links', async ({ 
 });
 
 test('does not rewrite removed descendants from queued mutations', async ({ page }) => {
-	await page.goto(`${server.hostOrigin}/?navigation=1`);
-	await expect(page).toHaveURL(`${server.hostOrigin}/?early=observed`);
-	const frame = page.frames().find((frame) => frame.parentFrame())!;
+	const frame = await loadNotebook(page);
 	await frame.evaluate(() =>
 		document.body.insertAdjacentHTML(
 			'beforeend',

@@ -23,6 +23,10 @@ import { notebookQueryParams } from './query';
 import { createChannelRpc } from './transport';
 import { createHandshakeRetry } from './handshake';
 
+// Popups must not inherit the iframe sandbox: Hub's COOP header rejects sandboxed tabs.
+export const NOTEBOOK_IFRAME_SANDBOX =
+	'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads';
+
 export interface HostBridgeOptions extends StatusOptions {
 	iframe: HTMLIFrameElement;
 	origin: string;

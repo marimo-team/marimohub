@@ -8,7 +8,8 @@ import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookP
 const connections = vi.hoisted(
 	() => [] as { options: HostBridgeOptions; dispose: ReturnType<typeof vi.fn> }[],
 );
-vi.mock('@marimo-hub/notebook-bridge/host', () => ({
+vi.mock(import('@marimo-hub/notebook-bridge/host'), async (importOriginal) => ({
+	...(await importOriginal()),
 	createHostBridge: (options: HostBridgeOptions) => {
 		const dispose = vi.fn();
 		connections.push({ options, dispose });

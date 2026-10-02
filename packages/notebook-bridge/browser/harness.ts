@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { build } from 'vite-plus';
 import type { BridgeHandle } from '../src/protocol';
+import { NOTEBOOK_IFRAME_SANDBOX } from '../src/host';
 
 declare global {
 	interface Window {
@@ -50,6 +51,11 @@ export async function harness() {
 	]);
 	let hostOrigin = '';
 	const child = createServer((req, res) => {
+		if (req.url === '/redirect') {
+			res.writeHead(302, { Location: `${hostOrigin}/prefix/app/match?id=xyz#section` });
+			res.end();
+			return;
+		}
 		if (req.url === '/incompatible') {
 			res.setHeader('Content-Type', 'text/html');
 			res.end(
@@ -80,10 +86,15 @@ export async function harness() {
 			res.end(script);
 			return;
 		}
+		res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+		if (req.url?.startsWith('/prefix/app/')) {
+			res.end('<h1>Hub app</h1>');
+			return;
+		}
 		const params = new URL(req.url!, 'http://localhost').searchParams;
 		const source = params.get('child') ?? `${childOrigin}/?early=1`;
 		// Test-only fixture URLs are escaped as data, never HTML attributes.
-		res.end(`<iframe id="frame" sandbox="allow-scripts allow-same-origin allow-popups" referrerpolicy="no-referrer"></iframe>
+		res.end(`<iframe id="frame" sandbox="${NOTEBOOK_IFRAME_SANDBOX}" referrerpolicy="no-referrer"></iframe>
   <script type="module">
    import { createHostBridge } from '/host.js';
    import { mergeNotebookQuery } from '/query.js';

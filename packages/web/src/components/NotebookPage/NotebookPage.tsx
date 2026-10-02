@@ -1,6 +1,7 @@
 import { PageTitle } from '@/components/ui/PageTitle';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { useMemo, useState } from 'react';
+import { NOTEBOOK_IFRAME_SANDBOX } from '@marimo-hub/notebook-bridge/host';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertTriangle, AppWindow, ArrowLeft, Bot, Code2, Eye, FileCode2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -298,7 +299,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 						<iframe
 							className="size-full border-0"
 							src={frame.url}
-							sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+							sandbox={NOTEBOOK_IFRAME_SANDBOX}
 							allow="clipboard-read; clipboard-write"
 							title={`${title} in ${frame.label}`}
 						/>

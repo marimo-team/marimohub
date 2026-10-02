@@ -1,7 +1,7 @@
 import { useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { appNavigationHref } from '@marimo-hub/notebook-bridge/navigation';
-import { createHostBridge } from '@marimo-hub/notebook-bridge/host';
+import { createHostBridge, NOTEBOOK_IFRAME_SANDBOX } from '@marimo-hub/notebook-bridge/host';
 import type { AppNavigation, QuerySnapshot } from '@marimo-hub/notebook-bridge/protocol';
 import { ExternalLink, X } from 'lucide-react';
 import { Button, IconButton, LinkButton } from '@/components/ui';
@@ -116,7 +116,7 @@ function FrameAttempt({
 				className="min-h-0 w-full flex-1 border-0"
 				src={launchSrc}
 				onLoad={() => setLoaded(true)}
-				sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+				sandbox={NOTEBOOK_IFRAME_SANDBOX}
 				referrerPolicy="no-referrer"
 				allow="clipboard-read; clipboard-write"
 				title={title}
