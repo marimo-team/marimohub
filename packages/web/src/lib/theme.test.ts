@@ -40,7 +40,7 @@ describe('theme bootstrap', () => {
 		);
 	});
 
-	it('accepts older theme responses without installation icon fields', async () => {
+	it('accepts older theme responses without forced mode or installation icon fields', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn().mockResolvedValue(
@@ -78,6 +78,9 @@ describe('theme bootstrap', () => {
 		jsonOk([]),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, name: '   ' }),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, name: 42 }),
+		...['system', '', 'Light', false, 0, ['light'], { mode: 'light' }].map((force_mode) =>
+			jsonOk({ ...DEFAULT_THEME_CONFIG, force_mode }),
+		),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, favicon: '//example.com/icon.svg' }),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, logo_dark: 'data:image/svg+xml,<svg/>' }),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, secondary_color: '#abcd' }),
@@ -200,7 +203,7 @@ describe('theme bootstrap', () => {
 		await vi.advanceTimersByTimeAsync(1);
 		expect(await pending).toEqual(DEFAULT_THEME_CONFIG);
 		expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
-		late.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'Late hub' }));
+		late.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'Late hub', force_mode: 'dark' }));
 		expect(await pending).toEqual(DEFAULT_THEME_CONFIG);
 		expect((await loadThemeConfig()).name).toBe('Recovered hub');
 		expect(vi.getTimerCount()).toBe(0);
@@ -213,8 +216,8 @@ describe('theme bootstrap', () => {
 		vi.stubGlobal('fetch', fetchMock);
 		const pending = loadThemeConfig();
 		await vi.advanceTimersByTimeAsync(1999);
-		deferred.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'On time' }));
-		expect((await pending).name).toBe('On time');
+		deferred.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'On time', force_mode: 'light' }));
+		expect(await pending).toMatchObject({ name: 'On time', force_mode: 'light' });
 		await vi.advanceTimersByTimeAsync(2000);
 		expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(false);
 		expect(vi.getTimerCount()).toBe(0);

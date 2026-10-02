@@ -2,16 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { installMatchMedia, renderWithClient } from '@/test/render';
+import { THEME_STORAGE_KEY as STORAGE_KEY } from '@/lib/theme';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { BrandingContext } from './BrandingContext';
 import { ThemeProvider, useTheme } from './ThemeContext';
 import type { Theme } from './ThemeContext';
 
-const STORAGE_KEY = 'marimohub-theme';
-
 function Probe() {
-	const { theme, toggleTheme, setTheme } = useTheme();
+	const { theme, isThemeForced, toggleTheme, setTheme } = useTheme();
 	return (
 		<div>
 			<span data-testid="theme">{theme}</span>
+			<span data-testid="forced">{String(isThemeForced)}</span>
 			<button type="button" onClick={toggleTheme}>
 				Toggle
 			</button>
@@ -25,11 +27,13 @@ function Probe() {
 	);
 }
 
-function renderTheme() {
+function renderTheme(forceMode: Theme | null = null) {
 	return renderWithClient(
-		<ThemeProvider>
-			<Probe />
-		</ThemeProvider>,
+		<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, force_mode: forceMode }}>
+			<ThemeProvider>
+				<Probe />
+			</ThemeProvider>
+		</BrandingContext>,
 		{ toaster: false },
 	);
 }
@@ -44,6 +48,7 @@ beforeEach(() => {
 afterEach(() => {
 	localStorage.clear();
 	document.documentElement.classList.remove('dark');
+	document.documentElement.style.removeProperty('color-scheme');
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 });
@@ -59,6 +64,72 @@ describe('useTheme', () => {
 });
 
 describe('ThemeProvider', () => {
+	it.each<Theme>(['light', 'dark'])(
+		'enforces %s and restores the saved preference when removed',
+		async (forced) => {
+			const user = userEvent.setup();
+			const preferred = forced === 'light' ? 'dark' : 'light';
+			localStorage.setItem(STORAGE_KEY, preferred);
+			installMatchMedia(preferred === 'dark');
+			const store = vi.spyOn(Storage.prototype, 'setItem');
+
+			const { unmount } = renderTheme(forced);
+			expect(screen.getByTestId('theme')).toHaveTextContent(forced);
+			expect(isDarkClassOn()).toBe(forced === 'dark');
+			expect(document.documentElement.style.colorScheme).toBe(forced);
+
+			await user.click(screen.getByRole('button', { name: 'Toggle' }));
+			await user.click(screen.getByRole('button', { name: 'Go dark' }));
+			await user.click(screen.getByRole('button', { name: 'Go light' }));
+			expect(screen.getByTestId('theme')).toHaveTextContent(forced);
+			expect(store).not.toHaveBeenCalled();
+			expect(localStorage.getItem(STORAGE_KEY)).toBe(preferred);
+
+			unmount();
+			renderTheme();
+			expect(screen.getByTestId('theme')).toHaveTextContent(preferred);
+			expect(screen.getByTestId('forced')).toHaveTextContent('false');
+			await user.click(screen.getByRole('button', { name: 'Toggle' }));
+			expect(screen.getByTestId('theme')).toHaveTextContent(forced);
+			expect(localStorage.getItem(STORAGE_KEY)).toBe(forced);
+		},
+	);
+
+	it.each<Theme>(['light', 'dark'])('enforces %s when browser preference APIs fail', (forced) => {
+		vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+			throw new DOMException('Storage blocked', 'SecurityError');
+		});
+		const store = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+			throw new DOMException('Storage blocked', 'SecurityError');
+		});
+		vi.stubGlobal('matchMedia', () => {
+			throw new Error('Unavailable');
+		});
+
+		renderTheme(forced);
+		expect(screen.getByTestId('theme')).toHaveTextContent(forced);
+		expect(screen.getByTestId('forced')).toHaveTextContent('true');
+		expect(isDarkClassOn()).toBe(forced === 'dark');
+		expect(document.documentElement.style.colorScheme).toBe(forced);
+		expect(store).not.toHaveBeenCalled();
+	});
+
+	it.each([null, 'invalid'])(
+		'does not save forced mode over an absent or invalid preference (%s)',
+		(stored) => {
+			if (stored !== null) localStorage.setItem(STORAGE_KEY, stored);
+			installMatchMedia(true);
+			const { unmount } = renderTheme('light');
+			expect(screen.getByTestId('theme')).toHaveTextContent('light');
+			expect(localStorage.getItem(STORAGE_KEY)).toBe(stored);
+
+			unmount();
+			renderTheme();
+			expect(screen.getByTestId('theme')).toHaveTextContent('dark');
+			expect(screen.getByTestId('forced')).toHaveTextContent('false');
+		},
+	);
+
 	it.each<Theme>(['light', 'dark'])('starts from the stored %s theme', (stored) => {
 		localStorage.setItem(STORAGE_KEY, stored);
 		// The stored value wins over a conflicting system preference.

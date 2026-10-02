@@ -4658,6 +4658,15 @@ paths:
                   data:
                     type: object
                     properties:
+                      force_mode:
+                        type:
+                          - string
+                          - 'null'
+                        enum:
+                          - light
+                          - dark
+                          - null
+                        default: null
                       name:
                         type: string
                         minLength: 1

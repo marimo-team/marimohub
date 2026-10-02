@@ -7,7 +7,7 @@ import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { withBasePath } from './basePath';
 import { generateThemePalette } from './themePalette';
 
-export type Theme = 'light' | 'dark';
+export type Theme = NonNullable<ThemeConfig['force_mode']>;
 export const THEME_STORAGE_KEY = 'marimohub-theme';
 
 export function getInitialTheme(): Theme {

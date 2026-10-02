@@ -5,6 +5,9 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { BrandingContext } from '@/context/BrandingContext';
+import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys } from '@/api/queryKeys';
 import { AppsPage, ProjectEntryPage } from './AppsPage';
@@ -31,6 +34,7 @@ function setup(
 	entry = '/apps',
 	items = [app],
 	options: Partial<Parameters<typeof makeFetch>[0]> & {
+		forceMode?: Theme;
 		appStatus?: number;
 		projectStatus?: number;
 		projectReload?: Promise<void>;
@@ -83,19 +87,21 @@ function setup(
 	const result = render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={[entry]}>
-				<ThemeProvider>
-					<Suspense fallback={<p>Loading…</p>}>
-						<Routes>
-							<Route path="/apps" element={<AppsPage />} />
-							<Route path="/projects/:pid" element={<ProjectEntryPage />} />
-							<Route
-								path="/projects/:pid/notebooks/:nid"
-								element={<AppEntryPage variant="edit" />}
-							/>
-							<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
-						</Routes>
-					</Suspense>
-				</ThemeProvider>
+				<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, force_mode: options.forceMode ?? null }}>
+					<ThemeProvider>
+						<Suspense fallback={<p>Loading…</p>}>
+							<Routes>
+								<Route path="/apps" element={<AppsPage />} />
+								<Route path="/projects/:pid" element={<ProjectEntryPage />} />
+								<Route
+									path="/projects/:pid/notebooks/:nid"
+									element={<AppEntryPage variant="edit" />}
+								/>
+								<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
+							</Routes>
+						</Suspense>
+					</ThemeProvider>
+				</BrandingContext>
 			</MemoryRouter>
 		</QueryClientProvider>,
 	);
@@ -354,6 +360,23 @@ describe('stakeholder apps', () => {
 		expect(await screen.findByRole('heading', { name: 'Apps' })).toBeVisible();
 		expect(await screen.findByText('No apps available.')).toBeVisible();
 	});
+
+	it.each(['light', 'dark'] as const)(
+		'forces %s mode in embedded apps despite saved and URL preferences',
+		async (mode) => {
+			const preferred = mode === 'light' ? 'dark' : 'light';
+			localStorage.setItem('marimohub-theme', preferred);
+			try {
+				const { container } = setup(`${app.url}?theme=${preferred}`, [app], { forceMode: mode });
+				await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+				const src = container.querySelector('iframe')!.getAttribute('src')!;
+				expect(new URL(src).searchParams.get('theme')).toBe(mode);
+				expect(localStorage.getItem('marimohub-theme')).toBe(preferred);
+			} finally {
+				localStorage.removeItem('marimohub-theme');
+			}
+		},
+	);
 
 	it('redirects editor URLs and uses only the app API and session endpoints', async () => {
 		const { container, fetch, existing } = setup(

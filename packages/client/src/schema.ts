@@ -4049,6 +4049,11 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: {
+							/**
+							 * @default null
+							 * @enum {string|null}
+							 */
+							force_mode: 'light' | 'dark' | null;
 							name: string;
 							favicon: string | null;
 							logo: string | null;

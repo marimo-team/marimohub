@@ -110,6 +110,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Branding',
 				vars: [
 					{
+						id: 'MARIMOHUB_THEME_FORCE_MODE',
+						name: 'Forced color mode',
+						description:
+							'Force light or dark mode for all roles and hide the theme toggle. Unset or blank uses saved or operating-system preferences.',
+						example: 'light',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_THEME_NAME',
 						name: 'Display name',
 						description: 'Display name, browser-title suffix, and installed app name.',
