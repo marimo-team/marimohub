@@ -6,6 +6,7 @@ import {
 	NAMESPACE,
 	QueryResult,
 	QuerySnapshot,
+	TitleSnapshot,
 	REQUEST_TIMEOUT_MS,
 } from './protocol';
 import type { HostApi, NotebookApi } from './protocol';
@@ -15,7 +16,7 @@ const Packet = z.discriminatedUnion('t', [
 	z.object({
 		t: z.literal('q'),
 		i: z.string().min(1).max(128),
-		m: z.enum(['replaceQuery', 'navigateApp', 'connected']),
+		m: z.enum(['replaceQuery', 'navigateApp', 'replaceTitle', 'connected']),
 		a: z.array(z.unknown()).max(1),
 	}),
 	z.object({ t: z.literal('s'), i: z.string().min(1).max(128), r: z.unknown() }),
@@ -51,9 +52,12 @@ export function createChannelRpc<
 				const packet = parsed.data.packet;
 				if (packet.t === 'q') {
 					if (role === 'host') {
-						if (!['replaceQuery', 'navigateApp'].includes(packet.m) || packet.a.length !== 1)
-							return;
-						const schema = packet.m === 'navigateApp' ? AppNavigation : QuerySnapshot;
+						if (packet.m === 'connected' || packet.a.length !== 1) return;
+						const schema = {
+							replaceQuery: QuerySnapshot,
+							replaceTitle: TitleSnapshot,
+							navigateApp: AppNavigation,
+						}[packet.m];
 						const snapshot = schema.safeParse(packet.a[0]);
 						if (!snapshot.success) return;
 						packet.a = [snapshot.data];

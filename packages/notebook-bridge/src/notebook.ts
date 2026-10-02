@@ -5,6 +5,8 @@ import {
 	NAMESPACE,
 	Probe,
 	QUERY_CAPABILITY,
+	TITLE_CAPABILITY,
+	TitleSnapshot,
 	QuerySnapshot,
 	UPDATE_INTERVAL_MS,
 	VERSION,
@@ -12,7 +14,14 @@ import {
 	exactOrigin,
 	randomIdentifier,
 } from './protocol';
-import type { BridgeHandle, BridgeStatus, HostApi, NotebookApi, StatusOptions } from './protocol';
+import type {
+	BridgeHandle,
+	BridgeStatus,
+	HostApi,
+	NotebookApi,
+	QueryResult,
+	StatusOptions,
+} from './protocol';
 import { observeAppLinks } from './navigation';
 import { notebookQueryParams } from './query';
 import { createChannelRpc } from './transport';
@@ -37,8 +46,11 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	let navigating = false;
 	let connectionId: string | undefined;
 	let revision = 0;
-	let lastSent: string | undefined;
-	let inFlight = false;
+	let lastSent: { query?: string; title?: string } = {};
+	const initialTitle = win.document.title;
+	let changedTitle: string | undefined;
+	let syncTitle = false;
+	let inFlight: { query?: boolean; title?: boolean } = {};
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let readyTimer: ReturnType<typeof setTimeout> | undefined;
 	const updateStatus = (next: BridgeStatus) => {
@@ -52,7 +64,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 				namespace: NAMESPACE,
 				kind: 'ready',
 				version: VERSION,
-				capabilities: [QUERY_CAPABILITY, NAVIGATION_CAPABILITY],
+				capabilities: [QUERY_CAPABILITY, NAVIGATION_CAPABILITY, TITLE_CAPABILITY],
 				documentId,
 			},
 			parentOrigin,
@@ -60,7 +72,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	};
 	const handshake = createHandshakeRetry(ready, () => updateStatus('unavailable'));
 	const schedule = () => {
-		if (status !== 'connected' || navigating || inFlight || timer !== undefined) return;
+		if (status !== 'connected' || navigating || timer !== undefined) return;
 		timer = setTimeout(() => {
 			timer = undefined;
 			flush();
@@ -68,33 +80,47 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	};
 	const flush = () => {
 		const current = channel;
-		if (status !== 'connected' || !current || navigating || inFlight) return;
+		if (status !== 'connected' || !current || navigating) return;
 		const params = notebookQueryParams(win.location.search, excludedKeys);
 		const search = params.toString();
-		if (search === lastSent) return;
-		const parsed = QuerySnapshot.safeParse({ revision: ++revision, entries: [...params] });
-		if (!parsed.success) return;
-		inFlight = true;
-		void current.rpc
-			.replaceQuery(parsed.data)
-			.then((result) => {
-				if (channel === current && result.applied) lastSent = search;
-			})
-			.catch(() => {
-				if (channel === current && status !== 'disposed') {
-					stopLinks?.();
-					stopLinks = undefined;
-					current.dispose();
-					channel = undefined;
-					updateStatus('unavailable');
-				}
-			})
-			.finally(() => {
-				if (channel === current) {
-					inFlight = false;
-					schedule();
-				}
-			});
+		const title = syncTitle ? changedTitle : undefined;
+		const track = (key: keyof typeof lastSent, value: string, request: Promise<QueryResult>) => {
+			inFlight[key] = true;
+			void request
+				.then(({ applied }) => {
+					if (channel === current && applied) lastSent[key] = value;
+				})
+				.catch(() => {
+					if (channel !== current || status === 'disposed') return;
+					if (key === 'title') {
+						syncTitle = false;
+					} else {
+						stopLinks?.();
+						stopLinks = undefined;
+						current.dispose();
+						channel = undefined;
+						updateStatus('unavailable');
+					}
+				})
+				.finally(() => {
+					if (channel === current) {
+						inFlight[key] = false;
+						schedule();
+					}
+				});
+		};
+		if (!inFlight.query && search !== lastSent.query) {
+			const parsed = QuerySnapshot.safeParse({ revision: ++revision, entries: [...params] });
+			if (parsed.success) {
+				track('query', search, current.rpc.replaceQuery(parsed.data));
+			}
+		}
+		if (!inFlight.title && title !== undefined && title !== lastSent.title) {
+			const parsed = TitleSnapshot.safeParse({ revision: ++revision, title });
+			if (parsed.success) {
+				track('title', title, current.rpc.replaceTitle(parsed.data));
+			}
+		}
 	};
 	const onMessage = (event: MessageEvent) => {
 		if (status === 'disposed' || event.source !== win.parent || event.origin !== parentOrigin)
@@ -141,8 +167,9 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 		clearTimeout(readyTimer);
 		handshake.stop();
 		excludedKeys = parsed.data.excludedKeys;
-		lastSent = undefined;
-		inFlight = false;
+		lastSent = {};
+		syncTitle = parsed.data.capabilities.includes(TITLE_CAPABILITY);
+		inFlight = {};
 		updateStatus('connecting');
 		channel = createChannelRpc<HostApi, NotebookApi>(
 			event.ports[0],
@@ -204,6 +231,13 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	win.history.replaceState = replace;
 	win.addEventListener('message', onMessage);
 	win.addEventListener('popstate', schedule);
+	const titleObserver = new MutationObserver(() => {
+		const title = win.document.title;
+		if (title === (changedTitle ?? initialTitle)) return;
+		changedTitle = title;
+		schedule();
+	});
+	titleObserver.observe(win.document.head, { childList: true, subtree: true, characterData: true });
 	const handle: BridgeHandle = {
 		get status() {
 			return status;
@@ -219,6 +253,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 			channel = undefined;
 			win.removeEventListener('message', onMessage);
 			win.removeEventListener('popstate', schedule);
+			titleObserver.disconnect();
 			if (win.history.pushState === push) win.history.pushState = originalPush;
 			if (win.history.replaceState === replace) win.history.replaceState = originalReplace;
 			instances.delete(win);

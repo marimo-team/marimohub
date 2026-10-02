@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
@@ -85,6 +86,7 @@ function StakeholderApp({
 	title: string;
 	canRun: boolean;
 }) {
+	const [documentTitle, onTitle] = useState<string | null>(null);
 	const { data: capabilities } = useCapabilitiesQuery();
 	const { sandboxUrl, isProvisioning, error, ended, start } = useNotebookSession(pid, nid, {
 		enabled: canRun,
@@ -101,7 +103,7 @@ function StakeholderApp({
 	} = useNotebookFrameLocation(sandboxUrl, theme, true);
 	return (
 		<div className="flex h-dvh flex-col">
-			<PageTitle>{title}</PageTitle>
+			<PageTitle>{documentTitle ?? title}</PageTitle>
 			<header className="flex min-h-12 items-center gap-4 border-b px-4">
 				<Link to="/apps" className="text-sm text-muted-foreground hover:text-foreground">
 					Back to apps
@@ -134,6 +136,7 @@ function StakeholderApp({
 						retrySrc={latestSrc}
 						sandboxUrl={sandboxUrl}
 						onQuery={onQuery}
+						onTitle={onTitle}
 						title={title}
 					/>
 				</div>

@@ -7,12 +7,24 @@ import {
 	NAMESPACE,
 	QUERY_CAPABILITY,
 	QuerySnapshot,
+	TitleSnapshot,
+	MAX_TITLE_LENGTH,
 	VERSION,
 } from './protocol';
 import type { HostApi, QueryResult } from './protocol';
 import { mergeNotebookQuery, notebookQueryParams } from './query';
 
 describe('v1 protocol', () => {
+	it('bounds title snapshots and accepts empty titles', () => {
+		expect(TitleSnapshot.safeParse({ revision: 1, title: '' }).success).toBe(true);
+		expect(
+			TitleSnapshot.safeParse({ revision: 1, title: 'x'.repeat(MAX_TITLE_LENGTH) }).success,
+		).toBe(true);
+		for (const title of [null, 1, 'x'.repeat(MAX_TITLE_LENGTH + 1)]) {
+			expect(TitleSnapshot.safeParse({ revision: 1, title }).success).toBe(false);
+		}
+	});
+
 	it('accepts additive fields and newer minors, but requires a shared capability and major', () => {
 		const connect = Connect.parse({
 			namespace: NAMESPACE,

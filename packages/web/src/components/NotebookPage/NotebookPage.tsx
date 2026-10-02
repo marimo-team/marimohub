@@ -202,6 +202,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	const author = notebook?.meta.author;
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
 	const title = notebook?.meta.title ?? notebookTitle;
+	const [documentTitle, onTitle] = useState<string | null>(null);
 	const holderId = editorState?.holder?.user_id;
 	const { data: users } = useUsersQuery([author, holderId, endedByUserId ?? undefined]);
 	const holderName = holderId
@@ -283,6 +284,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 						retrySrc={latestSrc}
 						sandboxUrl={sandboxUrl}
 						onQuery={onQuery}
+						onTitle={onTitle}
 						title={title}
 					/>
 				),
@@ -439,6 +441,8 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		latestSrc,
 		sandboxUrl,
 		onQuery,
+		onTitle,
+		documentTitle,
 		isApp,
 		isProvisioning,
 		isRunning,
@@ -522,6 +526,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		latestSrc,
 		sandboxUrl,
 		onQuery,
+		onTitle,
+		documentTitle,
 		isApp,
 		isProvisioning,
 		isRunning,
@@ -562,7 +568,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 	} = model;
 	return (
 		<div className="flex h-dvh flex-col">
-			<PageTitle>{title}</PageTitle>
+			<PageTitle>{documentTitle ?? title}</PageTitle>
 			<header className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-3 py-1.5">
 				<div className="flex min-w-0 flex-1 items-center gap-1 max-md:min-w-32">
 					<IconLink
@@ -812,6 +818,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 								retrySrc={latestSrc}
 								sandboxUrl={sandboxUrl}
 								onQuery={onQuery}
+								onTitle={onTitle}
 								title={title}
 							/>
 						) : (

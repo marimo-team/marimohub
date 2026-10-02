@@ -19,6 +19,7 @@ function fixture() {
 	const host = createChannelRpc<NotebookApi, HostApi>(ports.port1, 'connection-v1', 'host', {
 		replaceQuery: handler,
 		navigateApp: () => ({ applied: false }),
+		replaceTitle: vi.fn(() => ({ applied: true })),
 	});
 	disposals.push(() => {
 		host.dispose();

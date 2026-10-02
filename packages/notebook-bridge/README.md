@@ -1,8 +1,8 @@
 # Notebook bridge
 
-`@marimo-hub/notebook-bridge` mirrors notebook query parameters and routes app
-links through Hub. Query updates preserve the mounted iframe and kernel connection.
-App navigation opens the target through the Hub router. Both features work across
+`@marimo-hub/notebook-bridge` mirrors notebook query parameters and document titles,
+and routes app links through Hub. Query updates preserve the mounted iframe and kernel connection.
+App navigation opens the target through the Hub router. These features work across
 origins without proxy exposure or changes to the iframe sandbox.
 
 ## Query mirroring API
@@ -23,6 +23,10 @@ const host = createHostBridge({
 		const search = mergeNotebookQuery(location.search, snapshot.entries, excludedKeys);
 		// A router integration must preserve the iframe's launch URL.
 		history.replaceState(history.state, '', location.pathname + search + location.hash);
+		return true;
+	},
+	onTitle(title) {
+		document.title = title;
 		return true;
 	},
 	onStatus(status) {
@@ -66,8 +70,21 @@ Negotiation sends excluded names, never their values.
 
 Snapshots have a limit of 256 pairs and 64 KiB after URL encoding. The client
 rejects oversized snapshots without truncation. It sends the latest snapshot at
-most every 100 ms, with one request outstanding. The host also limits updates
+most every 100 ms, with one request outstanding per snapshot type. The host also limits updates
 and rejects stale revisions. Unchanged snapshots do not update the router.
+
+Title synchronization requires the optional `document-title.v1` capability and a host `onTitle` callback.
+The notebook observes its document head with `MutationObserver` and sends `replaceTitle` snapshots.
+The initial child title does not replace the Hub title. Synchronization starts after the first child title change.
+Subsequent title changes, replacements, and removals update the Hub title.
+Titles have a limit of 4096 UTF-16 code units. Oversized titles do not block query updates.
+The host tracks title rate limits and stale revisions separately from query updates.
+Title request failures stop title synchronization until the next connection. Query synchronization continues.
+Older peers continue to synchronize query parameters without title support.
+
+The Hub retains its branding suffix and uses the notebook name when the child title is empty.
+The Hub clears the previous child title through its bridge status callback and frame cleanup.
+Frame reload, replacement, and disposal restore the notebook name.
 
 Handshake retries stop after ten seconds. RPC requests time out after five
 seconds. A new iframe load starts a new connection. An absent or incompatible
