@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { GitProviderHosts } from './gitRepo';
 import { BadRequestError, ConflictError, ValidationError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { sha256Hex } from '../internal/sha256';
@@ -139,8 +140,9 @@ export function gitSourceConfigsEqual(a: GitSourceConfig, b: GitSourceConfig): b
 export function providerForRepo(
 	current: Pick<GitSource, 'repo' | 'provider'>,
 	nextRepo: string,
+	hosts?: GitProviderHosts,
 ): string | null {
-	const detected = detectProvider(nextRepo);
+	const detected = detectProvider(nextRepo, hosts);
 	if (detected) return detected;
 	const host = repoHost(nextRepo);
 	return host !== null && host === repoHost(current.repo) ? current.provider : null;
@@ -160,6 +162,7 @@ function rehomeShorthand(config: GitSourceConfig, origin: string | null): GitSou
 export function resolveUpdatedConfig(
 	current: GitSource,
 	desired: GitSourceConfig,
+	hosts?: GitProviderHosts,
 ): GitSourceConfig {
 	const onGitHub = repoHost(current.repo) === 'github.com';
 	const rehomed = rehomeShorthand(desired, onGitHub ? null : repoOrigin(current.repo));
@@ -167,7 +170,7 @@ export function resolveUpdatedConfig(
 	// stage a phantom change when the stored spelling differs — e.g. a URL-form
 	// GitHub source (`https://github.com/owner/repo`) edited with bare
 	// `owner/repo`. Return the stored spelling verbatim so equality holds.
-	if (rehomed.repo !== current.repo && reposMatch(current.repo, rehomed.repo)) {
+	if (rehomed.repo !== current.repo && reposMatch(current.repo, rehomed.repo, hosts)) {
 		return { ...rehomed, repo: current.repo };
 	}
 	return rehomed;
@@ -176,12 +179,13 @@ export function resolveUpdatedConfig(
 export function applyGitSourceUpdate(
 	current: GitSource,
 	input: UpdateSyncedNotebookSourceInput,
+	hosts?: GitProviderHosts,
 ): GitSource | null {
 	const desired = normalizeGitSourceConfig(input);
 	if (input.sync_mode && input.sync_mode !== current.sync_mode) {
 		throw new BadRequestError('Changing sync_mode is not supported');
 	}
-	const resolved = resolveUpdatedConfig(current, desired);
+	const resolved = resolveUpdatedConfig(current, desired, hosts);
 	const active = gitSourceConfig(current);
 	if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved))
 		return null;
@@ -193,13 +197,16 @@ export function applyGitSourceUpdate(
 		return {
 			...withoutPending,
 			...resolved,
-			provider: providerForRepo(current, resolved.repo),
+			provider: providerForRepo(current, resolved.repo, hosts),
 		};
 	}
 	return { ...current, pending_config: resolved };
 }
 
-export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
+export function createGitSource(
+	input: CreateSyncedNotebookInput,
+	hosts?: GitProviderHosts,
+): GitSource {
 	// Shorthand means github.com — unless the caller says GitLab, then gitlab.com.
 	const config = rehomeShorthand(
 		normalizeGitSourceConfig(input),
@@ -210,7 +217,7 @@ export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
 		type: 'git',
 		// Host detection wins over the caller's claim so the stored provider can
 		// never contradict a recognized host; the claim covers unknown hosts.
-		provider: detectProvider(config.repo) ?? input.provider ?? null,
+		provider: detectProvider(config.repo, hosts) ?? input.provider ?? null,
 		...config,
 		sync_mode: input.sync_mode ?? 'push',
 		current_version_id: null,
@@ -295,13 +302,14 @@ export function sourceDrift(source: GitSource, headCommit: string, checkedAt: st
 export function prepareSync(
 	source: GitSource,
 	input: SyncNotebookInput,
+	hosts?: GitProviderHosts,
 ): { commit: string; config: GitSourceConfig; files: SyncedWorkspaceFileMap } {
 	const config = effectiveGitSourceConfig(source);
 	const rootPath = normalizeWorkspaceRootPath(input.root_path);
 	// Repo matches by repository, not byte-for-byte: CI pushers send bare paths
 	// (`$GITHUB_REPOSITORY`, `$CI_PROJECT_PATH`) while the store may hold a URL.
 	const checks: [header: string, received: string, expected: string, ok: boolean][] = [
-		['X-Marimohub-Repo', input.repo, config.repo, reposMatch(config.repo, input.repo)],
+		['X-Marimohub-Repo', input.repo, config.repo, reposMatch(config.repo, input.repo, hosts)],
 		['X-Marimohub-Branch', input.branch, config.branch, input.branch === config.branch],
 		['X-Marimohub-Root-Path', rootPath, config.root_path, rootPath === config.root_path],
 	];

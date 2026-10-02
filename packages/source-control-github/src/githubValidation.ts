@@ -11,9 +11,32 @@ export interface GitHubRepository {
 	repo: string;
 }
 
-export function parseRepository(value: unknown): GitHubRepository {
+export function githubOrigin(value = 'https://github.com'): string {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new ValidationError('GitHub URL must be an HTTPS origin');
+	}
+	if (
+		url.protocol !== 'https:' ||
+		url.username ||
+		url.password ||
+		url.pathname !== '/' ||
+		url.search ||
+		url.hash
+	) {
+		throw new ValidationError('GitHub URL must be an HTTPS origin');
+	}
+	return url.origin;
+}
+
+export function parseRepository(value: unknown, origin = 'https://github.com'): GitHubRepository {
 	if (typeof value !== 'string') throw new ValidationError('GitHub repository must be owner/repo');
 	let path = value.trim();
+	if (!/^https:\/\//i.test(path) && origin !== 'https://github.com') {
+		throw new ValidationError(`Use a full repository URL for ${origin}`);
+	}
 	if (/^https:\/\//i.test(path)) {
 		let url: URL;
 		try {
@@ -21,15 +44,8 @@ export function parseRepository(value: unknown): GitHubRepository {
 		} catch {
 			throw new ValidationError('Invalid GitHub repository URL');
 		}
-		if (
-			url.hostname.toLowerCase() !== 'github.com' ||
-			url.port ||
-			url.username ||
-			url.password ||
-			url.search ||
-			url.hash
-		) {
-			throw new ValidationError('GitHub publishing supports github.com repositories only');
+		if (url.origin !== origin || url.username || url.password || url.search || url.hash) {
+			throw new ValidationError(`GitHub is configured for ${origin} repositories only`);
 		}
 		path = url.pathname.replaceAll(/^\/+|\/+$/g, '');
 	}
@@ -157,8 +173,9 @@ export function coAuthorTrailer(coAuthor: SourceControlCommitIdentity | undefine
 
 function validateCommonInput(
 	input: OpenChangeRequestInput | UpdateChangeRequestInput,
+	origin: string,
 ): GitHubRepository {
-	const repository = parseRepository(input.repository);
+	const repository = parseRepository(input.repository, origin);
 	validateBranch(input.baseBranch);
 	validateChanges(input.changes);
 	if (typeof input.baseCommit !== 'string' || input.baseCommit.length === 0) {
@@ -174,8 +191,11 @@ function validateCommonInput(
 	return repository;
 }
 
-export function validateOpenInput(input: OpenChangeRequestInput): GitHubRepository {
-	const repository = validateCommonInput(input);
+export function validateOpenInput(
+	input: OpenChangeRequestInput,
+	origin = 'https://github.com',
+): GitHubRepository {
+	const repository = validateCommonInput(input, origin);
 	validateBranch(input.headBranch);
 	if (typeof input.draft !== 'boolean') {
 		throw new ValidationError('Invalid GitHub pull request metadata');
@@ -183,8 +203,11 @@ export function validateOpenInput(input: OpenChangeRequestInput): GitHubReposito
 	return repository;
 }
 
-export function validateUpdateInput(input: UpdateChangeRequestInput): GitHubRepository {
-	const repository = validateCommonInput(input);
+export function validateUpdateInput(
+	input: UpdateChangeRequestInput,
+	origin = 'https://github.com',
+): GitHubRepository {
+	const repository = validateCommonInput(input, origin);
 	validateBranch(input.changeRequest.headBranch);
 	return repository;
 }

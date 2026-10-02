@@ -1,5 +1,6 @@
 import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
 import { BadRequestError } from '../errors';
+import type { GitProviderHosts } from '../integrations/gitRepo';
 import type { ProjectId } from '../ids';
 
 export interface SourceControlContentChange {
@@ -179,7 +180,7 @@ export interface SourceControlReader {
 	/**
 	 * Whether this reader can serve the repository coordinate. Provider ids are
 	 * host-detected, so a provider match is not enough — e.g. the GitHub App
-	 * serves github.com only, while a GitHub Enterprise repository carries the
+	 * serves a configured host, while another GitHub Enterprise repository carries the
 	 * same `github` id. Unsupported repositories stay push-only.
 	 */
 	supportsRepository(repository: string): boolean;
@@ -214,6 +215,7 @@ export interface SourceControlReader {
 
 /** Server-side source-control capabilities configured for this deployment. */
 export interface SourceControlRegistry {
+	readonly repositoryHosts?: GitProviderHosts;
 	getPublisher(provider: string, projectId?: ProjectId): SourceControlPublisher | undefined;
 	getReader(provider: string, projectId?: ProjectId): SourceControlReader | undefined;
 	/** Provider ids that can publish change requests. */

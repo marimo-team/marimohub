@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { gzipSync } from 'fflate';
 import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import { GitHubAppPublisher } from './index';
+import { GitHubClient } from './githubClient';
 import { collectTarballWorkspace, tarballPathMapper } from './githubWorkspace';
 
 const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -67,6 +68,23 @@ function reader(routes: (url: URL, init?: RequestInit) => Response | null) {
 }
 
 describe('GitHubAppPublisher reader', () => {
+	it('follows github.com archive redirects without forwarding installation credentials', async () => {
+		const github = reader((url, init) => {
+			expect(init?.redirect).toBe('manual');
+			if (url.hostname === 'api.github.com')
+				return new Response(null, {
+					status: 302,
+					headers: { location: 'https://codeload.github.com/owner/repo/tar.gz/abc1234' },
+				});
+			expect(url.hostname).toBe('codeload.github.com');
+			expect(new Headers(init?.headers).has('authorization')).toBe(false);
+			return new Response(tarball({ 'app.py': 'print(1)' }));
+		});
+		await expect(github.fetchWorkspace('owner/repo', 'abc1234', '')).resolves.toEqual([
+			{ path: 'app.py', bytes: encode('print(1)') },
+		]);
+	});
+
 	it('resolves a branch head', async () => {
 		const github = reader((url) =>
 			url.pathname === '/repos/owner/repo/branches/main'
@@ -325,5 +343,116 @@ describe('collectTarballWorkspace', () => {
 		await expect(
 			collectTarballWorkspace(new Response(Uint8Array.from(GZIP_HEADER)), ''),
 		).rejects.toThrow(/missing end-of-archive marker/);
+	});
+});
+
+describe('GitHub Enterprise reader', () => {
+	const origin = 'https://git.acme.corp';
+	const repository = `${origin}/owner/repo`;
+	const commit = 'a'.repeat(40);
+
+	function enterpriseReader(archive: (url: URL, init?: RequestInit) => Response) {
+		return new GitHubAppPublisher(
+			{ appId: '123', privateKey: PRIVATE_KEY, url: origin },
+			{
+				fetcher: async (input, init) => {
+					const url = new URL(input);
+					if (url.pathname.startsWith('/api/v3/')) {
+						expect(url.origin).toBe(origin);
+						expect(new Headers(init?.headers).get('authorization')).toMatch(/^Bearer /);
+					}
+					if (url.pathname === '/api/v3/repos/owner/repo/installation') return response({ id: 42 });
+					if (url.pathname === '/api/v3/app/installations/42/access_tokens')
+						return response({ token: 'installation-token' });
+					if (url.pathname === '/api/v3/repos/owner/repo/branches/main')
+						return response({ commit: { sha: commit } });
+					return archive(url, init);
+				},
+			},
+		);
+	}
+
+	it('resolves only repositories on the configured host through /api/v3', async () => {
+		const github = enterpriseReader(() => {
+			throw new Error('Unexpected request');
+		});
+		expect(github.supportsRepository(repository)).toBe(true);
+		for (const other of [
+			'owner/repo',
+			'https://github.com/owner/repo',
+			'https://other.corp/owner/repo',
+		]) {
+			expect(github.supportsRepository(other)).toBe(false);
+			await expect(github.getBranchHead(other, 'main')).rejects.toThrow(ValidationError);
+		}
+		await expect(github.getBranchHead(repository, 'main')).resolves.toEqual({ commit });
+	});
+
+	it.each([
+		`/_codeload/owner/repo/tar.gz/${commit}`,
+		`${origin}/_codeload/owner/repo/tar.gz/${commit}`,
+		`https://codeload.git.acme.corp/owner/repo/tar.gz/${commit}`,
+	])('downloads an archive via %s', async (location) => {
+		const github = enterpriseReader((url, init) => {
+			expect(init?.redirect).toBe('manual');
+			if (url.pathname.startsWith('/api/v3/repos/owner/repo/tarball/')) {
+				return new Response(null, { status: 302, headers: { location } });
+			}
+			expect(url.href).toBe(new URL(location, origin).href);
+			expect(new Headers(init?.headers).get('authorization')).toBe(
+				url.origin === origin ? 'Bearer installation-token' : null,
+			);
+			return new Response(tarball({ 'app.py': 'print(1)' }));
+		});
+		await expect(github.fetchWorkspace(repository, commit, '')).resolves.toEqual([
+			{ path: 'app.py', bytes: encode('print(1)') },
+		]);
+	});
+
+	it.each([
+		'https://evil.example/archive',
+		'http://git.acme.corp/archive',
+		'https://user:password@git.acme.corp/archive',
+	])('rejects an archive redirect to %s', async (location) => {
+		let calls = 0;
+		const github = enterpriseReader(() => {
+			calls++;
+			return new Response(null, { status: 302, headers: { location } });
+		});
+		await expect(github.fetchWorkspace(repository, commit, '')).rejects.toThrow(
+			'Unexpected GitHub archive redirect',
+		);
+		expect(calls).toBe(1);
+	});
+
+	it('bounds redirect loops', async () => {
+		let calls = 0;
+		const github = enterpriseReader(() => {
+			calls++;
+			return new Response(null, { status: 302, headers: { location: `${origin}/_codeload/loop` } });
+		});
+		await expect(github.fetchWorkspace(repository, commit, '')).rejects.toThrow(
+			'Invalid GitHub archive redirect',
+		);
+		expect(calls).toBe(6);
+	});
+
+	it('enforces the streamed download limit after a redirect', async () => {
+		const client = new GitHubClient(
+			{ appId: '123', privateKey: PRIVATE_KEY, url: origin },
+			{
+				fetcher: async (url) =>
+					url.includes('/api/v3/')
+						? new Response(null, {
+								status: 302,
+								headers: { location: `${origin}/_codeload/archive` },
+							})
+						: new Response(tarball({ 'app.py': 'print(1)' })),
+			},
+		);
+		const archive = await client.tarball('/repos/owner/repo/tarball/abc1234', 'token');
+		await expect(collectTarballWorkspace(archive, '', { maxCompressedBytes: 1 })).rejects.toThrow(
+			'size limit',
+		);
 	});
 });

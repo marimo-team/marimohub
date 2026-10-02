@@ -1,3 +1,4 @@
+import type { GitProviderHosts } from '../integrations/gitRepo';
 import type { Bucket } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
@@ -441,6 +442,7 @@ const bucketAttrs: AttrExtractors<Bucket> = {
 };
 
 export interface CreateServicesOptions {
+	repositoryHosts?: GitProviderHosts;
 	/**
 	 * Wrap the bucket and every service in OTEL spans (one per method call).
 	 * Enable only when a global tracer provider is registered — otherwise the
@@ -527,7 +529,7 @@ export function createServices(
 	);
 	const notebooks = wrap(
 		'NotebookService',
-		new NotebookService(bucket, catalog, metrics, sessions, deepLinks),
+		new NotebookService(bucket, catalog, metrics, sessions, deepLinks, options?.repositoryHosts),
 		{
 			listNotebooks: project,
 			createNotebook: project,

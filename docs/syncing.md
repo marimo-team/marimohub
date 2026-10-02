@@ -79,7 +79,7 @@ Content-Type: application/json
 | Field            | Required | Notes                                                                                     |
 | ---------------- | -------- | ----------------------------------------------------------------------------------------- |
 | `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`.                                        |
-| `repo`           | yes      | Repository URL or `owner/name`. Pull mode currently supports GitHub.com only.             |
+| `repo`           | yes      | Repository URL or `owner/name`. Pull mode supports the configured GitHub host.            |
 | `branch`         | yes      | Branch this notebook tracks.                                                              |
 | `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).               |
 | `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**. |
@@ -90,7 +90,7 @@ unless `provider` is `gitlab`. GitLab URLs can contain nested groups, such as
 `https://gitlab.example.com/group/subgroup/project`. marimohub converts
 scheme-less and SSH remotes to HTTPS when it stores them.
 
-marimohub normally derives `provider` from the host name. Set it only when a
+marimohub derives `provider` from the configured GitHub host or the host name. Set it only when a
 custom host does not identify the provider. The value controls provider links
 in the web interface. If neither the host nor `provider` identifies a provider,
 the interface shows the sync metadata without links.
@@ -179,7 +179,7 @@ For an existing custom-host source, a bare `owner/repo` continues to use that
 host. GitHub.com shorthand remains bare.
 
 The source mode cannot change. A pull source must continue to use a supported
-GitHub.com repository. marimohub rejects unsupported source changes before it
+GitHub repository on the configured host. marimohub rejects unsupported source changes before it
 stores them.
 
 Before the first successful sync, changes take effect immediately. After that,
@@ -196,8 +196,7 @@ action as their normal sync method. Push sources can use it as an alternative to
 a CI upload.
 
 The deployment must have a configured
-[GitHub App](configuration.md#source-control-publishing). This feature currently
-supports GitHub.com repositories only.
+[GitHub App](configuration.md#source-control-publishing). This feature supports github.com or the configured GitHub Enterprise Server host.
 
 The deployment advertises supported providers in
 `source_control.sync_providers` from `GET /api/v1/capabilities`. The list
@@ -472,6 +471,35 @@ the proposal can contain changes from the full working tree. Otherwise, the
 proposal contains only the entry notebook. Each proposal supports 1,000 changes
 and 10 MB of added or modified content.
 
+## GitHub Enterprise Server
+
+A deployment connects to github.com (default) or one GitHub Enterprise Server (GHES) instance.
+
+1. Register a [GitHub App](configuration.md#github-app) on GHES with Contents and Pull requests read/write permissions.
+2. Install the App on the repositories marimohub will access.
+3. Generate a private key from the App settings.
+4. Set these variables on the marimohub server, then restart it:
+
+```bash
+MARIMOHUB_SOURCE_CONTROL_GITHUB_URL=https://git.acme.corp
+MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID=123
+MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY='<PEM or base64-encoded PEM>'
+MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"https://git.acme.corp/team/notebooks","projects":["proj-0000000000000000"]}]'
+```
+
+Use full HTTPS URLs for GHES sources and allowlist rules. The configured host
+supplies the `github` provider automatically. On creation, `owner/repo` still
+means github.com; when editing a source, shorthand keeps its current host.
+
+The server needs HTTPS access to GHES and, with subdomain isolation enabled,
+its `codeload.` subdomain. Archive downloads retain their size limits and do
+not forward installation tokens to the codeload subdomain.
+
+For an internal CA, mount its PEM certificate chain and set
+`NODE_EXTRA_CA_CERTS=/path/to/ca.pem` before starting Node. Keep TLS verification
+enabled. The Cloudflare Worker entrypoint usually cannot reach an on-premises
+host; use the Node server on a network with access to GHES.
+
 ## GitHub project policies
 
 `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` optionally restricts the
@@ -482,7 +510,8 @@ access with a startup warning. `[]` denies all access. Invalid policies stop sta
 MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]'
 ```
 
-- `resource` matches a GitHub `owner/repo` or URL, regardless of case. `"*"`
+- `resource` matches a GitHub repository URL, including its host, regardless of case.
+  For github.com, `owner/repo` is also accepted. GHES rules require full URLs. `"*"`
   permits any repository for the listed projects.
 - `projects` lists project IDs. `"*"` shares the repository across projects.
 

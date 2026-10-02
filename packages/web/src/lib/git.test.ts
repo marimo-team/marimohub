@@ -194,6 +194,8 @@ describe('isGitHubRepoInput', () => {
 		for (const repo of [
 			'acme/analytics',
 			'acme/analytics.git',
+			'https://git.acme.corp/acme/analytics',
+			'https://git.acme.corp:8443/acme/analytics',
 			'https://github.com/acme/analytics',
 			'github.com/acme/analytics',
 			'GitHub.com/acme/analytics.git',
@@ -203,13 +205,9 @@ describe('isGitHubRepoInput', () => {
 		}
 	});
 
-	it('rejects other providers and unsupported GitHub hosts or coordinates', () => {
+	it('rejects unsupported repository coordinates', () => {
 		for (const repo of [
-			'https://gitlab.com/acme/analytics',
-			'https://github.mycompany.com/acme/analytics',
-			'https://github.com:444/acme/analytics',
 			'http://github.com/acme/analytics',
-			'https://notgithub.com/acme/analytics',
 			'https://github.com/acme/team/analytics',
 			'https://github.com/acme/analytics?tab=readme',
 			'https://github.com/acme/analytics#readme',

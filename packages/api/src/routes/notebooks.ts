@@ -1105,7 +1105,7 @@ app.openapi(createGitNotebook, async (c) => {
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
 	const input = { ...body, base_image, compute_profile };
-	const prospectiveSource = createGitSource(input);
+	const prospectiveSource = createGitSource(input, deps.sourceControl?.repositoryHosts);
 	if (prospectiveSource.sync_mode === 'pull') {
 		assertPullSourceSupported(deps, prospectiveSource, pid);
 	}
@@ -1182,7 +1182,8 @@ app.openapi(updateGitSource, async (c) => {
 	const current = assertSyncedSource(
 		(await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.manage')).source,
 	);
-	const prospective = applyGitSourceUpdate(current, input) ?? current;
+	const prospective =
+		applyGitSourceUpdate(current, input, deps.sourceControl?.repositoryHosts) ?? current;
 	if (current.sync_mode === 'pull') assertPullSourceSupported(deps, prospective, pid);
 	const source = await notebooks.synced.updateSource(pid, nid, input, user.id);
 	const { schema_version: _schemaVersion, ...publicSource } = source;

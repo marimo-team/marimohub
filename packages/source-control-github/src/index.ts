@@ -27,7 +27,7 @@ import { collectTarballWorkspace, validateCommit, validateRootPath } from './git
 import { materializeGitDirectory } from './githubGitDirectory';
 
 export type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './githubClient';
-export { parseRepository as parseGitHubRepository } from './githubValidation';
+export { githubOrigin, parseRepository as parseGitHubRepository } from './githubValidation';
 
 interface GitHubPublicationContext {
 	repository: GitHubRepositoryWriter;
@@ -67,7 +67,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 
 	/** Repo API prefix + short-lived installation token, shared by the reader methods. */
 	private async readContext(repository: string): Promise<{ base: string; token: string }> {
-		const { owner, repo } = parseRepository(repository);
+		const { owner, repo } = parseRepository(repository, this.client.origin);
 		return {
 			base: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
 			token: await this.client.installationToken(owner, repo, 'read'),
@@ -76,7 +76,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 
 	supportsRepository(repository: string): boolean {
 		try {
-			parseRepository(repository);
+			parseRepository(repository, this.client.origin);
 			return true;
 		} catch {
 			return false;
@@ -106,7 +106,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		validateCommit(commit);
 		validateRootPath(rootPath);
 		const { base, token } = await this.readContext(repository);
-		const response = await this.client.request(
+		const response = await this.client.tarball(
 			`${base}/tarball/${encodeURIComponent(commit)}`,
 			token,
 		);
@@ -120,9 +120,10 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 	): Promise<SourceWorkspaceFile[]> {
 		validateCommit(commit);
 		validateBranch(branch);
-		const { owner, repo } = parseRepository(repository);
+		const { owner, repo } = parseRepository(repository, this.client.origin);
 		return materializeGitDirectory({
 			repository,
+			origin: this.client.origin,
 			owner,
 			repo,
 			commit,
@@ -133,7 +134,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 	}
 
 	async openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult> {
-		const { owner, repo } = validateOpenInput(input);
+		const { owner, repo } = validateOpenInput(input, this.client.origin);
 		const { repository, pullRequests } = await this.atStage('installation', () =>
 			this.publicationContext(owner, repo),
 		);
@@ -177,7 +178,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 	}
 
 	async updateChangeRequest(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult> {
-		const { owner, repo } = validateUpdateInput(input);
+		const { owner, repo } = validateUpdateInput(input, this.client.origin);
 		const { repository, pullRequests } = await this.atStage('installation', () =>
 			this.publicationContext(owner, repo),
 		);

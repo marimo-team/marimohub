@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectId } from '@marimo-hub/core/ids';
 import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
 import { makeSourceControl } from './sourceControl';
+import { CONFIG_SPEC } from './spec';
 
 function privateKey(): string {
 	return generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -237,5 +238,83 @@ describe('GitHub repository policies', () => {
 		expect(() => registry([{ resource: 'https://gitlab.com/team/repo', projects: '*' }])).toThrow(
 			'invalid GitHub repository',
 		);
+	});
+});
+
+describe('GitHub Enterprise configuration', () => {
+	const credentials = {
+		MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+		MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
+	};
+
+	it.each([undefined, '', '   '])('defaults to github.com when the URL is %j', (url) => {
+		const { sourceControl } = makeSourceControl({
+			...credentials,
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: url,
+		});
+		expect(sourceControl?.repositoryHosts).toEqual({ 'github.com': 'github' });
+		const reader = sourceControl!.getReader('github')!;
+		expect(reader.supportsRepository('team/repo')).toBe(true);
+		expect(reader.supportsRepository('https://github.com/team/repo')).toBe(true);
+		expect(reader.supportsRepository('https://git.acme.corp/team/repo')).toBe(false);
+	});
+
+	it('accepts the documented github.com policy with the default origin', () => {
+		const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES';
+		const example = CONFIG_SPEC.flatMap((group) =>
+			group.backends.flatMap((backend) => backend.vars),
+		).find((entry) => entry.id === variable)?.example;
+		expect(example).toBeDefined();
+		const { sourceControl } = makeSourceControl({ ...credentials, [variable]: example });
+		const project = ProjectId.parse('proj-0000000000000000');
+		const reader = sourceControl!.getReader('github', project)!;
+		expect(reader.supportsRepository('https://github.com/team/notebooks')).toBe(true);
+		expect(() => reader.supportsRepository('https://github.com/team/other')).toThrow('not allowed');
+	});
+
+	it('maps an arbitrary enterprise host and authorizes its full repository URLs', () => {
+		const project = ProjectId.parse('proj-0000000000000000');
+		const { sourceControl } = makeSourceControl({
+			...credentials,
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: 'https://git.acme.corp/',
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify([
+				{ resource: 'https://git.acme.corp/Team/Repo.git', projects: [project] },
+			]),
+		});
+		expect(sourceControl?.repositoryHosts).toEqual({ 'git.acme.corp': 'github' });
+		const reader = sourceControl!.getReader('github', project)!;
+		expect(reader.supportsRepository('https://git.acme.corp/team/repo')).toBe(true);
+		expect(reader.supportsRepository('https://github.com/team/repo')).toBe(false);
+		expect(reader.supportsRepository('team/repo')).toBe(false);
+		expect(() => reader.supportsRepository('https://git.acme.corp/team/other')).toThrow(
+			'not allowed',
+		);
+		expect(() =>
+			sourceControl!.getReader('github')!.supportsRepository('https://git.acme.corp/team/repo'),
+		).toThrow('not allowed');
+	});
+
+	it('rejects allowlist rules for another host at startup', () => {
+		expect(() =>
+			makeSourceControl({
+				...credentials,
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: 'https://git.acme.corp',
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify([
+					{ resource: 'https://github.com/team/repo', projects: '*' },
+				]),
+			}),
+		).toThrow('ALLOWED_REPOSITORIES');
+	});
+
+	it.each([
+		'http://git.acme.corp',
+		'https://git.acme.corp/api/v3',
+		'https://user:secret@git.acme.corp',
+		'https://git.acme.corp?query=1',
+		'invalid',
+	])('rejects invalid GitHub URL %s', (url) => {
+		expect(() =>
+			makeSourceControl({ ...credentials, MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: url }),
+		).toThrow('MARIMOHUB_SOURCE_CONTROL_GITHUB_URL');
 	});
 });

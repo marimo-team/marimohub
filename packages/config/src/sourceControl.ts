@@ -2,7 +2,11 @@ import type { SourceControlRegistry } from '@marimo-hub/core/ports/source-contro
 import type { ProjectId } from '@marimo-hub/core/ids';
 import { ForbiddenError } from '@marimo-hub/core/errors';
 import { allowsProjectResource } from '@marimo-hub/core/project-resource-policy';
-import { GitHubAppPublisher, parseGitHubRepository } from '@marimo-hub/source-control-github';
+import {
+	GitHubAppPublisher,
+	githubOrigin,
+	parseGitHubRepository,
+} from '@marimo-hub/source-control-github';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { projectResourceRules } from './projectResourcePolicy';
@@ -36,11 +40,18 @@ export function makeSourceControl(env: Env): SourceControlConfig {
 		);
 	}
 
-	// One credential, two capabilities: the GitHub App publishes change requests
-	// and serves server-initiated pull sync.
+	const urlVariable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_URL';
+	let url: string;
+	try {
+		url = githubOrigin(env[urlVariable]?.trim() || undefined);
+	} catch {
+		throw new ConfigError(`${urlVariable} must be an HTTPS origin without a path`, {
+			variable: urlVariable,
+		});
+	}
 	let github: GitHubAppPublisher;
 	try {
-		github = new GitHubAppPublisher({ appId, privateKey });
+		github = new GitHubAppPublisher({ appId, privateKey, url });
 	} catch {
 		throw new ConfigError(`Invalid ${GITHUB_APP_PRIVATE_KEY_ENV}`, {
 			variable: GITHUB_APP_PRIVATE_KEY_ENV,
@@ -50,8 +61,8 @@ export function makeSourceControl(env: Env): SourceControlConfig {
 	const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES';
 	const rules = projectResourceRules(env, variable);
 	const canonical = (repository: string) => {
-		const { owner, repo } = parseGitHubRepository(repository);
-		return `${owner}/${repo}`.toLowerCase();
+		const { owner, repo } = parseGitHubRepository(repository, url);
+		return `${url}/${owner}/${repo}`.toLowerCase();
 	};
 	if (rules) {
 		try {
@@ -67,5 +78,9 @@ export function makeSourceControl(env: Env): SourceControlConfig {
 				}
 			}
 		: undefined;
-	return { sourceControl: new ConfiguredSourceControlRegistry([github], [github], authorize) };
+	return {
+		sourceControl: new ConfiguredSourceControlRegistry([github], [github], authorize, {
+			[new URL(url).host]: 'github',
+		}),
+	};
 }

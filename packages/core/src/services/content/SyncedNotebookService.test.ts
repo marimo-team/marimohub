@@ -377,6 +377,56 @@ describe('SyncedNotebookService', () => {
 	});
 
 	describe('sync', () => {
+		it.each(['owner/repo', 'https://git.acme.corp/owner/repo'])(
+			'accepts GHES casing differences in %s through CAS retries and source edits',
+			async (repo) => {
+				const synced = new SyncedNotebookService(bucket, catalog, noopMetrics, {
+					repositoryHosts: { 'git.acme.corp': 'github' },
+					getNotebook: notebooks.getNotebook.bind(notebooks),
+					pruneVersions: async () => {},
+				});
+				const storedRepo = 'https://git.acme.corp/Owner/Repo';
+				const { meta } = await synced.create(
+					projectId,
+					{ ...CREATE_INPUT, repo: storedRepo },
+					ACTOR,
+				);
+				const sourceKey = paths.project(projectId).notebook(meta.id).source;
+				const realPut = bucket.put.bind(bucket);
+				let sourceWrites = 0;
+				const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+					if (key === sourceKey && options?.onlyIfEtagMatches && ++sourceWrites === 1) {
+						throw new PreconditionFailedError('Concurrent source update');
+					}
+					return realPut(key, value, options);
+				});
+				try {
+					const result = await synced.sync(projectId, meta.id, {
+						...syncInput('commit-aaaa'),
+						repo,
+					});
+					expect(sourceWrites).toBe(2);
+					expect(result.versionId).not.toBeNull();
+					await synced.updateSource(
+						projectId,
+						meta.id,
+						{ ...CREATE_INPUT, repo, root_path: '' },
+						ACTOR,
+					);
+					const after = await notebooks.getNotebook(projectId, meta.id);
+					expect(after.source).toMatchObject({
+						repo: storedRepo,
+						provider: 'github',
+						commit: 'commit-aaaa',
+						current_version_id: result.versionId,
+					});
+					expect(after.source).not.toHaveProperty('pending_config');
+				} finally {
+					putSpy.mockRestore();
+				}
+			},
+		);
+
 		it('does not roll back a concurrent metadata update token', async () => {
 			const clock = useFakeClock(Date.parse('2026-01-01T00:00:00.000Z'));
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);

@@ -1,3 +1,4 @@
+import type { GitProviderHosts } from '../../integrations/gitRepo';
 import { ThumbnailService } from './ThumbnailService';
 import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
@@ -151,9 +152,11 @@ export class NotebookService {
 		private metrics: Metrics = noopMetrics,
 		private sessions = new SessionService(bucket, metrics),
 		private deepLinks = new DeepLinkService(bucket, metrics),
+		repositoryHosts?: GitProviderHosts,
 	) {
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
+			repositoryHosts,
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
 			pruneVersions: (projectId, notebookId, keep) =>
 				this.pruneVersions(projectId, notebookId, MAX_VERSIONS, keep),

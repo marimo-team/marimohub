@@ -657,7 +657,11 @@ export function createFromEnv(
 		console.warn(profileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
-	const services = createServices(bucket, metrics, { tracing: options?.tracing });
+	const sourceControlConfig = makeSourceControl(env);
+	const services = createServices(bucket, metrics, {
+		tracing: options?.tracing,
+		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
+	});
 	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
 	const surfaces = surfacesFromEnv(env);
 	const compute = makeCompute(env, {
@@ -801,7 +805,7 @@ export function createFromEnv(
 		...makeWif(env),
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
-		...makeSourceControl(env),
+		...sourceControlConfig,
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time

@@ -84,18 +84,26 @@ Install the app only on repositories marimohub may publish to or sync from. Conf
 GitHub source control. If only one variable is set, startup fails. The key can be PEM or a
 single-line base64 encoding of the PEM. No GitHub App webhook is required.
 
+For GHES, set `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL` to the instance's HTTPS origin.
+REST uses `/api/v3`, GraphQL uses `/api/graphql`, and Git and PR links use the web origin.
+See [GHES setup](../docs/syncing.md#github-enterprise-server) for App, network, and TLS configuration.
+
+GHES must support REST API version `2022-11-28`, draft PRs, and GraphQL `updateRefs`
+for conditional branch replacement. Tests use injected responses; a minimum GHES
+release has not been verified against a live installation. References:
+[REST archives](https://docs.github.com/en/enterprise-server%403.19/rest/repos/contents?apiVersion=2022-11-28#download-a-repository-archive-tar)
+and [GraphQL](https://docs.github.com/en/enterprise-server%403.19/graphql/guides/using-graphql-clients).
+
 The GitHub App supports publishing and
 [server sync](../docs/syncing.md#sync-now-with-github). Project editors can
 compare a synced notebook with its branch head and pull that commit on demand. Pulls use the same
 workspace parser and limits as pushed archives. The drift and sync endpoints always use the
 source coordinates stored on the notebook. They do not accept a repository from the caller.
 
-The repositories selected during App installation define the v1 repository authorization
-boundary. Marimohub does not keep a second allowlist that binds projects or tenants to an App
-installation. A project manager can configure or publish to any repository on which the App is
-installed. A project editor can pull from the repository configured on the notebook. Multi-tenant
-deployments must use narrowly selected installations. Do not install the App on repositories that
-project managers must not share.
+The App installation limits repository access. The optional
+`MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` policy further restricts
+access by project. Rules include the repository host. See
+[GitHub project policies](../docs/syncing.md#github-project-policies).
 
 The adapter discovers the installation for the target repository and creates a short-lived token.
 The token is restricted to that repository and to the configured App permissions. During
