@@ -166,8 +166,8 @@ internals. The extension appends the bundled script to `app.state.html_head`,
 preserves existing content, and prevents duplicate injection. Unsupported extension
 state does not stop the server.
 
-The integration supports marimo **0.23.10** and **0.24.2**, in app and editor modes.
-Other versions can work when they retain the same lifespan and HTML-head contracts.
+The integration works in app and editor modes and depends on marimo's lifespan
+and HTML-head contracts.
 Scheduled jobs and static exports receive no bridge configuration. An installed
 extension remains inert without `MARIMOHUB_BRIDGE_PARENT_ORIGIN`.
 Existing sessions acquire the bridge on their next restart. No image rebuild or
@@ -205,5 +205,5 @@ pnpm --filter @marimo-hub/notebook-bridge test:browser --project=runtime
 ```
 
 The runtime suite requires `uv` and Chromium. Its marimo environment setup can
-download the two supported versions. Wheel installation itself remains offline.
+download the marimo versions in the test matrix. Wheel installation itself remains offline.
 The E2E workflow runs all three browsers and the runtime suite on every pull request.
