@@ -872,6 +872,19 @@ describe('sandbox image list', () => {
 		).toEqual(['img-a', 'img-b']);
 	});
 
+	it('preserves named Modal references in a mixed image list', () => {
+		const env = {
+			...modalEnv,
+			MARIMOHUB_COMPUTE_IMAGE: 'modal://marimo-sandbox:v1, ghcr.io/acme/marimo:latest',
+		};
+
+		expect(configOf(makeCompute(env)).image).toBe('modal://marimo-sandbox:v1');
+		expect(resolveSandboxImages(env)).toEqual([
+			'modal://marimo-sandbox:v1',
+			'ghcr.io/acme/marimo:latest',
+		]);
+	});
+
 	it('constructs providers with the first image as their default', () => {
 		expect(
 			configOf(makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_IMAGE: 'img-a,img-b' })).image,

@@ -17,6 +17,18 @@ MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS=1800     # save and stop after 30 idle mi
 # MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS=7200  # optional app override
 ```
 
+For private [named Modal images](https://modal.com/docs/guide/named-images)
+published with `image.publish()`, prefix the name with `modal://`:
+
+```bash
+MARIMOHUB_COMPUTE_IMAGE=modal://marimo-sandbox:v1
+```
+
+The tag defaults to `latest`. Names resolve in `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`,
+or the workspace default when unset. The configured token must have access to the image.
+Registry images and named Modal images can share a
+[comma-separated image list](/sandbox-image#multiple-images).
+
 ::: tip No infrastructure to run
 Modal is fully serverless — nothing to provision or scale, and you pay only for
 running kernels. The easiest path if you don't already run a cluster.

@@ -61,7 +61,7 @@ import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/
 export interface ModalConfig {
 	tokenId: string;
 	tokenSecret: string;
-	/** Registry image containing marimo, uv, and Python. */
+	/** Registry image or modal://name:tag containing marimo, uv, and Python. */
 	image: string;
 	/** Modal API endpoint override. */
 	apiBase?: string;
@@ -224,11 +224,15 @@ class ModalSandboxInstance implements SandboxInstance {
 
 	private async createSandbox(): Promise<Sandbox> {
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
-		const { app, secrets } = await all({
+		const { app, image, secrets } = await all({
 			app: async () => this.client.apps.fromName(appName, { createIfMissing: true }),
+			image: async () =>
+				this.config.image.startsWith('modal://')
+					? this.client.images.fromName(this.config.image.slice('modal://'.length))
+					: this.client.images.fromRegistry(this.config.image),
 			secrets: async () => resolveSecrets(this.client, this.config.secretNames ?? []),
 		});
-		return this.client.sandboxes.create(app, this.client.images.fromRegistry(this.config.image), {
+		return this.client.sandboxes.create(app, image, {
 			name: this.id,
 			// Pin an idle main process. With no command the SDK sends empty
 			// entrypointArgs and Modal boots the image's ENTRYPOINT — a marimo
