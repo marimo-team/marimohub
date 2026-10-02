@@ -86,8 +86,8 @@ export async function harness() {
 			res.end(script);
 			return;
 		}
-		res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
 		if (req.url?.startsWith('/prefix/app/')) {
+			res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
 			res.end('<h1>Hub app</h1>');
 			return;
 		}
