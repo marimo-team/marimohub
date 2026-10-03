@@ -31,6 +31,19 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		const fetchGitDirectory = reader.fetchGitDirectory?.bind(reader);
 		return {
 			provider,
+			previews: reader.previews,
+			...(reader.listBranches
+				? { listBranches: this.guard(reader.listBranches.bind(reader), projectId) }
+				: {}),
+			...(reader.listCommits
+				? { listCommits: this.guard(reader.listCommits.bind(reader), projectId) }
+				: {}),
+			...(reader.resolveCommit
+				? { resolveCommit: this.guard(reader.resolveCommit.bind(reader), projectId) }
+				: {}),
+			...(reader.getPullRequest
+				? { getPullRequest: this.guard(reader.getPullRequest.bind(reader), projectId) }
+				: {}),
 			supportsRepository: (repository) => {
 				if (!reader.supportsRepository(repository)) return false;
 				this.authorize!(repository, projectId);

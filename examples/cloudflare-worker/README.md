@@ -24,6 +24,10 @@ sessions keep their mode until stopped and restarted. See
 [Native kernel authentication](../../docs/security.md#native-kernel-authentication)
 for ingress requirements and cross-site cookie restrictions.
 
+Notebook previews are unavailable in this reference deployment. It does not configure
+a GitHub App source-control registry or schedule preview preparation. See
+[Notebook previews](../../docs/notebook-previews.md) for deployment requirements.
+
 ## Optional: E2B for compute
 
 Compute is a pluggable port — you can run kernels on [E2B](https://e2b.dev)

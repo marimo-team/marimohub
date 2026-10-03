@@ -645,6 +645,19 @@ export function createFromEnv(
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
+	const previewComputeProfile = env.MARIMOHUB_PREVIEW_COMPUTE_PROFILE?.trim() || undefined;
+	if (
+		previewComputeProfile &&
+		(!profilesSupported ||
+			!appliedComputeProfiles.profiles.some((profile) => profile.name === previewComputeProfile))
+	)
+		throw new ConfigError(
+			'MARIMOHUB_PREVIEW_COMPUTE_PROFILE must name an available compute profile',
+			{
+				variable: 'MARIMOHUB_PREVIEW_COMPUTE_PROFILE',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
 	const editorSandboxSharing = parseEditorSandboxSharing(env);
 	const userHome = makeSandboxUserHome(env, editorSandboxSharing);
 	const profileNotice = unsupportedBackendNotice(
@@ -750,6 +763,7 @@ export function createFromEnv(
 			resources: computeResources,
 			computeProfile: profilesSupported ? appliedComputeProfiles.defaultProfile?.name : undefined,
 			computeProfiles: profilesSupported ? [...appliedComputeProfiles.profiles] : [],
+			previewComputeProfile,
 			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
 			userHome,
 			surfaces,

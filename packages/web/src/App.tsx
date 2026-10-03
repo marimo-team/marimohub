@@ -1,3 +1,5 @@
+import { PreviewsPage } from '@/components/Previews/PreviewsPage';
+import { PreviewPage } from '@/components/Previews/PreviewPage';
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
@@ -189,6 +191,11 @@ function AppContent() {
 						<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<SnapshotPage />} />
 						{/* Scheduled + on-demand headless runs and their history (no session). */}
 						<Route path="/projects/:pid/notebooks/:nid/jobs" element={<JobsPage />} />
+						<Route path="/projects/:pid/notebooks/:nid/previews" element={<PreviewsPage />} />
+						<Route
+							path="/projects/:pid/notebooks/:nid/previews/:previewId"
+							element={<PreviewPage />}
+						/>
 						<Route path="*" element={<StandardLayout />} />
 					</Routes>
 				</Suspense>

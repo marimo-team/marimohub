@@ -1,3 +1,4 @@
+import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { useMemo, useState } from 'react';
@@ -586,6 +587,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						gitSource={!isApp && notebook?.source.type === 'git' ? notebook.source : undefined}
 						canSync={!isViewer}
 						showJobs={!isApp && !!capabilities?.jobs?.available}
+						showPreviews={notebook?.source.type === 'git' && hasNotebookPreviews(capabilities)}
 						onRename={!isApp && !isViewer ? renameModal.open : undefined}
 						onEditThumbnail={canEditThumbnail ? thumbnailModal.open : undefined}
 					/>

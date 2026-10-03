@@ -14,6 +14,7 @@ import type { MiddlewareHandler } from 'hono';
 import {
 	AppPoolService,
 	sessionMode,
+	sessionResourceNotebookId,
 	NotFoundError,
 	ProxyExposure,
 	UnavailableError,
@@ -22,7 +23,7 @@ import {
 import type { ResourceSecurityLabels } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
-import { authorizationService, fail } from './shared';
+import { assertSessionPreviewActive, authorizationService, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -177,9 +178,10 @@ export async function authorizeProxyRequest(
 	// unavailable rather than pretending the session is gone.
 	let notebookLabels: ResourceSecurityLabels | null;
 	try {
+		await assertSessionPreviewActive(deps, projectId, session);
 		notebookLabels = await deps.services.notebooks.getSecurityLabels(
 			projectId,
-			session.notebook_id,
+			sessionResourceNotebookId(session),
 		);
 	} catch (err) {
 		if (err instanceof NotFoundError) {

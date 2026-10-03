@@ -33,10 +33,14 @@ export function nestedString(value: unknown, parent: string, field: string): str
 	return stringField(value[parent], field);
 }
 
-export async function responseJson(response: Response): Promise<unknown> {
+export async function responseJson(response: Response, signal?: AbortSignal): Promise<unknown> {
+	signal?.throwIfAborted();
 	try {
-		return await response.json();
+		const data: unknown = await response.json();
+		signal?.throwIfAborted();
+		return data;
 	} catch (error) {
+		signal?.throwIfAborted();
 		throw new UnavailableError('GitHub returned invalid JSON', { cause: error });
 	}
 }

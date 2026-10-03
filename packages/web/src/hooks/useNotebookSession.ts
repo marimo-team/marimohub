@@ -1,3 +1,4 @@
+import { leaveAppVisit } from '@/api/sessionVisits';
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
@@ -11,27 +12,17 @@ import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
 import { useInterval } from '@/hooks/useInterval';
 import type { Session } from '@/types';
+import {
+	EDITOR_HEARTBEAT_INTERVAL_MS,
+	SESSION_STATUS_INTERVAL_MS,
+	SESSION_START_POLL_INTERVAL_MS,
+	sessionStartupDeadlineMs,
+} from '@/lib/sessions';
 
-/** How often a running notebook pings the heartbeat endpoint, in ms. */
-const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 const DEFAULT_APP_HEARTBEAT_INTERVAL_SECONDS = APP_HEARTBEAT_INTERVAL_MS / 1000;
-
-/** How often to poll a still-`starting` session until it is running, in ms. */
-const START_POLL_INTERVAL_MS = 2_000;
 
 /** Startup-timeout fallback when capabilities are unavailable (server default). */
 const DEFAULT_STARTUP_TIMEOUT_S = 120;
-
-/**
- * Slack past the server's startup timeout before the client fails a
- * still-`starting` session itself. The server enforces the timeout on the
- * kernel wait and returns a richer error, so this only catches a start nothing
- * else concludes (e.g. the provisioning replica died mid-start).
- */
-const STARTUP_TIMEOUT_GRACE_MS = 30_000;
-
-/** Editor takeovers need status checks more often than editor heartbeats. */
-const RUN_WATCH_INTERVAL_MS = 30_000;
 
 export interface SessionError {
 	message: string;
@@ -47,17 +38,6 @@ function toSessionError(err: Error): SessionError {
 		code: err instanceof ApiRequestError ? err.code : undefined,
 		kind: 'request',
 	};
-}
-
-function leaveAppVisit(projectId: string, notebookId: string, session: Session | null) {
-	if (!session?.app_assignment) return;
-	void apiClient
-		.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/leave', {
-			params: { path: { pid: projectId, nid: notebookId, sid: session.session_id } },
-			body: session.app_assignment,
-			keepalive: true,
-		})
-		.catch(() => {});
 }
 
 /** Why a watched session stopped being renderable — see `ended` below. */
@@ -342,7 +322,7 @@ export function useNotebookSession(
 			// timeout, matching the server's own timeout error; the grace is an
 			// implementation detail.
 			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
-			const deadlineMs = timeoutSeconds * 1000 + STARTUP_TIMEOUT_GRACE_MS;
+			const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
 			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > deadlineMs) {
 				failStart({
 					code: 'STARTUP_TIMEOUT',
@@ -365,7 +345,7 @@ export function useNotebookSession(
 				() => failStart(undefined, 'NOT_FOUND'),
 			);
 		},
-		session?.status === 'starting' ? START_POLL_INTERVAL_MS : null,
+		session?.status === 'starting' ? SESSION_START_POLL_INTERVAL_MS : null,
 	);
 
 	const concludeSession = useCallback(
@@ -399,7 +379,7 @@ export function useNotebookSession(
 			if (!sid) return;
 			pollSession(sid, updateRunningSession, () => concludeSession('gone'));
 		},
-		mode !== 'app' && session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
+		mode !== 'app' && session?.status === 'running' ? SESSION_STATUS_INTERVAL_MS : null,
 	);
 
 	const heartbeatActive =
@@ -438,7 +418,7 @@ export function useNotebookSession(
 		heartbeatActive
 			? mode === 'app'
 				? appHeartbeatIntervalSeconds * 1000
-				: HEARTBEAT_INTERVAL_MS
+				: EDITOR_HEARTBEAT_INTERVAL_MS
 			: null,
 	);
 

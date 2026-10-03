@@ -61,6 +61,7 @@ components:
                 - PRECONDITION_FAILED
                 - NOT_FOUND
                 - CONFLICT
+                - PREVIEW_NOT_READY
                 - PROPOSAL_RETRY_REQUIRED
                 - EDIT_SESSION_OWNED
                 - EDIT_SESSION_CHANGED
@@ -167,6 +168,14 @@ components:
         source_control:
           type: object
           properties:
+            preview_providers:
+              type: array
+              items:
+                type: string
+              description: Provider ids configured to publish notebook previews through a
+                GitHub App.
+              example:
+                - github
             change_request_providers:
               type: array
               items:
@@ -192,6 +201,7 @@ components:
               example:
                 - github
           required:
+            - preview_providers
             - change_request_providers
             - sync_providers
             - pull_source_providers
@@ -869,6 +879,31 @@ components:
           items:
             type: object
             properties:
+              origin:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum:
+                      - preview
+                  notebook_id:
+                    type: string
+                  preview_id:
+                    type: string
+                    pattern: ^[a-f0-9]{32}$
+                  revision_id:
+                    type: string
+                  commit:
+                    type: string
+                    pattern: ^[a-fA-F0-9]{40}$
+                required:
+                  - type
+                  - notebook_id
+                  - preview_id
+                  - revision_id
+                  - commit
+              resource_path:
+                type: string
               project_id:
                 type: string
               project_name:
@@ -891,6 +926,29 @@ components:
                 items:
                   type: object
                   properties:
+                    origin:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum:
+                            - preview
+                        notebook_id:
+                          type: string
+                        preview_id:
+                          type: string
+                          pattern: ^[a-f0-9]{32}$
+                        revision_id:
+                          type: string
+                        commit:
+                          type: string
+                          pattern: ^[a-fA-F0-9]{40}$
+                      required:
+                        - type
+                        - notebook_id
+                        - preview_id
+                        - revision_id
+                        - commit
                     session_id:
                       type: string
                     sandbox_id:
@@ -1025,6 +1083,31 @@ components:
           items:
             type: object
             properties:
+              origin:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum:
+                      - preview
+                  notebook_id:
+                    type: string
+                  preview_id:
+                    type: string
+                    pattern: ^[a-f0-9]{32}$
+                  revision_id:
+                    type: string
+                  commit:
+                    type: string
+                    pattern: ^[a-fA-F0-9]{40}$
+                required:
+                  - type
+                  - notebook_id
+                  - preview_id
+                  - revision_id
+                  - commit
+              resource_path:
+                type: string
               project_id:
                 type: string
               project_name:
@@ -1493,6 +1576,7 @@ components:
                   - notebook.write
                   - notebook.manage
                   - deep-link.manage
+                  - preview.manage
                   - integration.read
                   - integration.use
                   - integration.manage
@@ -1939,6 +2023,7 @@ components:
                           - notebook.write
                           - notebook.manage
                           - deep-link.manage
+                          - preview.manage
                           - integration.read
                           - integration.use
                           - integration.manage
@@ -1990,6 +2075,7 @@ components:
             - notebook.write
             - notebook.manage
             - deep-link.manage
+            - preview.manage
             - integration.read
             - integration.use
             - integration.manage
@@ -2138,6 +2224,8 @@ components:
                 - edit
                 - app
             ephemeral:
+              type: boolean
+            restricted_viewer_credentials:
               type: boolean
             user_id:
               type: string
@@ -2747,52 +2835,107 @@ components:
         - created_by
         - created_at
       additionalProperties: false
-    NotebookApp:
+    NotebookPreview:
       type: object
       properties:
-        project_id:
+        id:
           type: string
-        project_name:
+          pattern: ^[a-f0-9]{32}$
+        name:
           type: string
-        notebook_id:
+        state:
           type: string
-        title:
+          enum:
+            - active
+            - deleting
+            - deleted
+        preparation:
+          type: string
+          enum:
+            - pending
+            - preparing
+            - ready
+            - failed
+        source_type:
+          type: string
+          enum:
+            - branch
+            - commit
+        source:
+          oneOf:
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - branch
+                branch:
+                  type: string
+                  minLength: 1
+                  pattern: ^(?!@(?:$|\{))(?![-/])(?!.*(?:\.\.|\/\/|@\{|[\x00-\x20\x7f~^:?*[\\]))(?!.*(?:^|\/)\.)(?!.*\.lock(?:\/|$))[^/]+(?:\/[^/]+)*(?<![/.])$
+              required:
+                - type
+                - branch
+              additionalProperties: false
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - commit
+                commit:
+                  type: string
+                  pattern: ^[a-fA-F0-9]{40}$
+              required:
+                - type
+                - commit
+              additionalProperties: false
+        repository:
+          type: string
+        commit:
+          type: string
+        version_id:
+          type: string
+        error:
+          type: string
+        expires_at:
+          type: string
+        created_at:
+          type: string
+        compute_profile:
           type: string
         url:
           type: string
-        your_role:
-          type:
-            - string
-            - 'null'
-          enum:
-            - admin
-            - manager
-            - editor
-            - viewer
-            - app-user
-            - null
         can:
           type: object
           properties:
-            run:
+            manage:
+              type: boolean
+            app:
+              type: boolean
+            edit:
               type: boolean
           required:
-            - run
+            - manage
+            - app
+            - edit
       required:
-        - project_id
-        - project_name
-        - notebook_id
-        - title
+        - id
+        - name
+        - state
+        - preparation
+        - source_type
+        - expires_at
+        - created_at
         - url
-        - your_role
         - can
-    NotebookAppPage:
+    NotebookPreviewPage:
       type: object
       properties:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/NotebookApp'
+            $ref: '#/components/schemas/NotebookPreview'
         next_cursor:
           type:
             - string
@@ -2800,84 +2943,110 @@ components:
       required:
         - items
         - next_cursor
-    OpenNotebookChangeRequestResult:
+    PreviewSessionCreateResult:
+      allOf:
+        - $ref: '#/components/schemas/Session'
+        - type: object
+          properties:
+            app_assignment:
+              type: object
+              properties:
+                visit_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                generation:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+              required:
+                - visit_id
+                - generation
+            reused:
+              type: boolean
+            editor_session:
+              type: object
+              properties:
+                sharing:
+                  type: string
+                  enum:
+                    - shared
+                    - exclusive
+                access:
+                  type: string
+                  enum:
+                    - shared
+                    - owner
+                    - temporary
+              required:
+                - sharing
+                - access
+          required:
+            - reused
+    Surface:
       type: object
       properties:
-        proposal_id:
+        status:
           type: string
-          pattern: ^prop-[0-9a-z]{16}$
-          description: Identifier of the immutable proposal captured from the notebook
-            session and published by this change request.
-          example: prop-7h2k9qm4xz7rp3w8
-        change_request:
+          enum:
+            - starting
+            - ready
+            - stopping
+            - stopped
+            - failed
+            - unavailable
+        port:
+          type: integer
+          exclusiveMinimum: 0
+        url:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          example: 2025-03-05T14:00:00Z
+        probe:
           type: object
           properties:
-            provider:
+            available:
+              type: boolean
+            reason:
               type: string
-              minLength: 1
-              example: github
-            number:
-              type: integer
-              exclusiveMinimum: 0
-              example: 42
-            url:
+            version:
               type: string
-              format: uri
-              example: https://github.com/acme/analytics/pull/42
-            head_branch:
-              type: string
-              minLength: 1
-              example: marimohub/nb-7h2k9qm4xz7rp3w8/prop-7h2k9qm4xz7rp3w8
-            head_commit:
-              type: string
-              minLength: 1
-              example: 9e107d9d372bb6826bd81d3542a419d6
           required:
-            - provider
-            - number
-            - url
-            - head_branch
-            - head_commit
+            - available
+        last_error:
+          type: string
       required:
-        - proposal_id
-        - change_request
-    OpenNotebookChangeRequestBody:
-      type: object
-      properties:
-        title:
-          type: string
-          minLength: 1
-          maxLength: 256
-          description: Change request title. Defaults to the notebook title.
-          example: Update revenue dashboard
-        body:
-          type: string
-          maxLength: 65536
-          description: Change request description. Defaults to the session and base commit.
-          example: Updates the regional revenue analysis.
-        target_proposal_id:
-          type: string
-          pattern: ^prop-[0-9a-z]{16}$
-          description: Published proposal whose existing change request should receive
-            this new proposal. Omit to create a new change request.
-          example: prop-7h2k9qm4xz7rp3w8
-    SessionPage:
-      type: object
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Session'
-        next_cursor:
-          type:
-            - string
-            - 'null'
-      required:
-        - items
-        - next_cursor
+        - status
     Session:
       type: object
       properties:
+        origin:
+          type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - preview
+            notebook_id:
+              type: string
+            preview_id:
+              type: string
+              pattern: ^[a-f0-9]{32}$
+            revision_id:
+              type: string
+            commit:
+              type: string
+              pattern: ^[a-fA-F0-9]{40}$
+          required:
+            - type
+            - notebook_id
+            - preview_id
+            - revision_id
+            - commit
+        resource_path:
+          type: string
         app_assignment:
           type: object
           properties:
@@ -3030,42 +3199,134 @@ components:
         - last_heartbeat
         - mode
         - can
-    Surface:
+    NotebookApp:
       type: object
       properties:
-        status:
+        project_id:
           type: string
-          enum:
-            - starting
-            - ready
-            - stopping
-            - stopped
-            - failed
-            - unavailable
-        port:
-          type: integer
-          exclusiveMinimum: 0
+        project_name:
+          type: string
+        notebook_id:
+          type: string
+        title:
+          type: string
         url:
           type: string
-        started_at:
-          type: string
-          format: date-time
-          example: 2025-03-05T14:00:00Z
-        probe:
+        your_role:
+          type:
+            - string
+            - 'null'
+          enum:
+            - admin
+            - manager
+            - editor
+            - viewer
+            - app-user
+            - null
+        can:
           type: object
           properties:
-            available:
+            run:
               type: boolean
-            reason:
-              type: string
-            version:
-              type: string
           required:
-            - available
-        last_error:
-          type: string
+            - run
       required:
-        - status
+        - project_id
+        - project_name
+        - notebook_id
+        - title
+        - url
+        - your_role
+        - can
+    NotebookAppPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotebookApp'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    OpenNotebookChangeRequestResult:
+      type: object
+      properties:
+        proposal_id:
+          type: string
+          pattern: ^prop-[0-9a-z]{16}$
+          description: Identifier of the immutable proposal captured from the notebook
+            session and published by this change request.
+          example: prop-7h2k9qm4xz7rp3w8
+        change_request:
+          type: object
+          properties:
+            provider:
+              type: string
+              minLength: 1
+              example: github
+            number:
+              type: integer
+              exclusiveMinimum: 0
+              example: 42
+            url:
+              type: string
+              format: uri
+              example: https://github.com/acme/analytics/pull/42
+            head_branch:
+              type: string
+              minLength: 1
+              example: marimohub/nb-7h2k9qm4xz7rp3w8/prop-7h2k9qm4xz7rp3w8
+            head_commit:
+              type: string
+              minLength: 1
+              example: 9e107d9d372bb6826bd81d3542a419d6
+          required:
+            - provider
+            - number
+            - url
+            - head_branch
+            - head_commit
+      required:
+        - proposal_id
+        - change_request
+    OpenNotebookChangeRequestBody:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Change request title. Defaults to the notebook title.
+          example: Update revenue dashboard
+        body:
+          type: string
+          maxLength: 65536
+          description: Change request description. Defaults to the session and base commit.
+          example: Updates the regional revenue analysis.
+        target_proposal_id:
+          type: string
+          pattern: ^prop-[0-9a-z]{16}$
+          description: Published proposal whose existing change request should receive
+            this new proposal. Omit to create a new change request.
+          example: prop-7h2k9qm4xz7rp3w8
+    SessionPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
     EditorSessionState:
       type: object
       properties:
@@ -4602,6 +4863,7 @@ components:
                       - notebook.write
                       - notebook.manage
                       - deep-link.manage
+                      - preview.manage
                       - integration.read
                       - integration.use
                       - integration.manage
@@ -4863,6 +5125,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - preview.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -12188,6 +12451,847 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/previews:
+    post:
+      operationId: notebooks.previews.create
+      tags:
+        - Previews
+      summary: Create a notebook preview
+      description: Creation persists intent and returns immediately; preparation runs
+        asynchronously. Idempotency keys are retained for seven days from
+        creation. Branch previews automatically publish future branch commits.
+        Commit previews remain pinned. Previews inherit notebook access,
+        integrations, and secrets. Editors are temporary and never write back.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: false
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                source:
+                  oneOf:
+                    - type: object
+                      properties:
+                        type:
+                          type: string
+                          enum:
+                            - branch
+                        branch:
+                          type: string
+                          minLength: 1
+                          pattern: ^(?!@(?:$|\{))(?![-/])(?!.*(?:\.\.|\/\/|@\{|[\x00-\x20\x7f~^:?*[\\]))(?!.*(?:^|\/)\.)(?!.*\.lock(?:\/|$))[^/]+(?:\/[^/]+)*(?<![/.])$
+                      required:
+                        - type
+                        - branch
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        type:
+                          type: string
+                          enum:
+                            - commit
+                        commit:
+                          type: string
+                          pattern: ^[a-fA-F0-9]{40}$
+                      required:
+                        - type
+                        - commit
+                      additionalProperties: false
+                compute_profile:
+                  type: string
+                  minLength: 1
+                expires_at:
+                  type: string
+                  format: date-time
+                pull_request:
+                  type: integer
+                  exclusiveMinimum: 0
+              required:
+                - name
+                - source
+              additionalProperties: false
+      responses:
+        '202':
+          description: Preview accepted for preparation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/NotebookPreview'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      operationId: notebooks.previews.list
+      tags:
+        - Previews
+      summary: List notebook previews
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+      responses:
+        '200':
+          description: Previews
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/NotebookPreviewPage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}:
+    get:
+      operationId: notebooks.previews.get
+      tags:
+        - Previews
+      summary: Get a notebook preview
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[a-f0-9]{32}$
+          required: true
+          name: preview_id
+          in: path
+      responses:
+        '200':
+          description: Preview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/NotebookPreview'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: notebooks.previews.delete
+      tags:
+        - Previews
+      summary: Delete a preview and retire its compute
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[a-f0-9]{32}$
+          required: true
+          name: preview_id
+          in: path
+      responses:
+        '202':
+          description: Preview revoked; cleanup pending
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: 'null'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions:
+    post:
+      operationId: notebooks.previews.sessions.create
+      tags:
+        - Previews
+      summary: Run a preview app or temporary editor
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[a-f0-9]{32}$
+          required: true
+          name: preview_id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum:
+                    - app
+                    - edit
+                app_visit_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+              required:
+                - mode
+              additionalProperties: false
+      responses:
+        '200':
+          description: Preview session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PreviewSessionCreateResult'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/source/refs:
+    get:
+      operationId: notebooks.source.refs
+      tags:
+        - Previews
+      summary: Suggest GitHub branches or recent commits
+      description: Returns at most 30 matches from the first 100 branches or recent
+        commits. Manual values remain supported. Providers without suggestion
+        support return 422; explicit resolution remains available.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            enum:
+              - branch
+              - commit
+          required: true
+          name: type
+          in: query
+        - schema:
+            type: string
+            maxLength: 250
+            default: ''
+          required: false
+          name: query
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
+          required: false
+          name: resolve
+          in: query
+      responses:
+        '200':
+          description: Source suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        value:
+                          type: string
+                        commit:
+                          type: string
+                        label:
+                          type: string
+                      required:
+                        - value
+                        - commit
+                        - label
+                    maxItems: 30
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/apps:
     get:
       operationId: apps.list
@@ -19101,6 +20205,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - preview.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -19496,6 +20601,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - preview.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -19551,6 +20657,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - preview.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -19883,6 +20990,7 @@ paths:
                                         - notebook.write
                                         - notebook.manage
                                         - deep-link.manage
+                                        - preview.manage
                                         - integration.read
                                         - integration.use
                                         - integration.manage
@@ -20047,6 +21155,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - preview.manage
                               - integration.read
                               - integration.use
                               - integration.manage
@@ -20310,6 +21419,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - preview.manage
                               - integration.read
                               - integration.use
                               - integration.manage

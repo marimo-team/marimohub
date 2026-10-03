@@ -1004,6 +1004,82 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List notebook previews */
+		get: operations['notebooks.previews.list'];
+		put?: never;
+		/**
+		 * Create a notebook preview
+		 * @description Creation persists intent and returns immediately; preparation runs asynchronously. Idempotency keys are retained for seven days from creation. Branch previews automatically publish future branch commits. Commit previews remain pinned. Previews inherit notebook access, integrations, and secrets. Editors are temporary and never write back.
+		 */
+		post: operations['notebooks.previews.create'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get a notebook preview */
+		get: operations['notebooks.previews.get'];
+		put?: never;
+		post?: never;
+		/** Delete a preview and retire its compute */
+		delete: operations['notebooks.previews.delete'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Run a preview app or temporary editor */
+		post: operations['notebooks.previews.sessions.create'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/source/refs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Suggest GitHub branches or recent commits
+		 * @description Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422; explicit resolution remains available.
+		 */
+		get: operations['notebooks.source.refs'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/apps': {
 		parameters: {
 			query?: never;
@@ -2078,6 +2154,7 @@ export interface components {
 					| 'PRECONDITION_FAILED'
 					| 'NOT_FOUND'
 					| 'CONFLICT'
+					| 'PREVIEW_NOT_READY'
 					| 'PROPOSAL_RETRY_REQUIRED'
 					| 'EDIT_SESSION_OWNED'
 					| 'EDIT_SESSION_CHANGED'
@@ -2133,6 +2210,13 @@ export interface components {
 				available: boolean;
 			};
 			source_control: {
+				/**
+				 * @description Provider ids configured to publish notebook previews through a GitHub App.
+				 * @example [
+				 *       "github"
+				 *     ]
+				 */
+				preview_providers: string[];
 				/**
 				 * @description Provider ids configured to publish pull requests, merge requests, or equivalents from notebook sessions.
 				 * @example [
@@ -2431,6 +2515,15 @@ export interface components {
 			/** Format: date-time */
 			observed_at: string;
 			apps: {
+				origin?: {
+					/** @enum {string} */
+					type: 'preview';
+					notebook_id: string;
+					preview_id: string;
+					revision_id: string;
+					commit: string;
+				};
+				resource_path?: string;
 				project_id: string;
 				project_name: string;
 				notebook_id: string;
@@ -2438,6 +2531,14 @@ export interface components {
 				current_version_id: string | null;
 				current_version_members: number | null;
 				sandboxes: {
+					origin?: {
+						/** @enum {string} */
+						type: 'preview';
+						notebook_id: string;
+						preview_id: string;
+						revision_id: string;
+						commit: string;
+					};
 					session_id: string;
 					sandbox_id: string | null;
 					user_id: string;
@@ -2481,6 +2582,15 @@ export interface components {
 				incomplete: boolean;
 			}[];
 			editors: {
+				origin?: {
+					/** @enum {string} */
+					type: 'preview';
+					notebook_id: string;
+					preview_id: string;
+					revision_id: string;
+					commit: string;
+				};
+				resource_path?: string;
 				project_id: string;
 				project_name: string;
 				notebook_id: string;
@@ -2654,6 +2764,7 @@ export interface components {
 					| 'notebook.write'
 					| 'notebook.manage'
 					| 'deep-link.manage'
+					| 'preview.manage'
 					| 'integration.read'
 					| 'integration.use'
 					| 'integration.manage'
@@ -2842,6 +2953,7 @@ export interface components {
 								| 'notebook.write'
 								| 'notebook.manage'
 								| 'deep-link.manage'
+								| 'preview.manage'
 								| 'integration.read'
 								| 'integration.use'
 								| 'integration.manage'
@@ -2874,6 +2986,7 @@ export interface components {
 				| 'notebook.write'
 				| 'notebook.manage'
 				| 'deep-link.manage'
+				| 'preview.manage'
 				| 'integration.read'
 				| 'integration.use'
 				| 'integration.manage'
@@ -2937,6 +3050,7 @@ export interface components {
 				/** @enum {string} */
 				mode?: 'edit' | 'app';
 				ephemeral?: boolean;
+				restricted_viewer_credentials?: boolean;
 				user_id: string;
 				/** @enum {string} */
 				editor_sandbox_sharing?: 'shared' | 'exclusive';
@@ -3226,66 +3340,84 @@ export interface components {
 			/** Format: date-time */
 			created_at: string;
 		};
-		NotebookApp: {
-			project_id: string;
-			project_name: string;
-			notebook_id: string;
-			title: string;
+		NotebookPreview: {
+			id: string;
+			name: string;
+			/** @enum {string} */
+			state: 'active' | 'deleting' | 'deleted';
+			/** @enum {string} */
+			preparation: 'pending' | 'preparing' | 'ready' | 'failed';
+			/** @enum {string} */
+			source_type: 'branch' | 'commit';
+			source?:
+				| {
+						/** @enum {string} */
+						type: 'branch';
+						branch: string;
+				  }
+				| {
+						/** @enum {string} */
+						type: 'commit';
+						commit: string;
+				  };
+			repository?: string;
+			commit?: string;
+			version_id?: string;
+			error?: string;
+			expires_at: string;
+			created_at: string;
+			compute_profile?: string;
 			url: string;
-			/** @enum {string|null} */
-			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 			can: {
-				run: boolean;
+				manage: boolean;
+				app: boolean;
+				edit: boolean;
 			};
 		};
-		NotebookAppPage: {
-			items: components['schemas']['NotebookApp'][];
+		NotebookPreviewPage: {
+			items: components['schemas']['NotebookPreview'][];
 			next_cursor: string | null;
 		};
-		OpenNotebookChangeRequestResult: {
-			/**
-			 * @description Identifier of the immutable proposal captured from the notebook session and published by this change request.
-			 * @example prop-7h2k9qm4xz7rp3w8
-			 */
-			proposal_id: string;
-			change_request: {
-				/** @example github */
-				provider: string;
-				/** @example 42 */
-				number: number;
-				/**
-				 * Format: uri
-				 * @example https://github.com/acme/analytics/pull/42
-				 */
-				url: string;
-				/** @example marimohub/nb-7h2k9qm4xz7rp3w8/prop-7h2k9qm4xz7rp3w8 */
-				head_branch: string;
-				/** @example 9e107d9d372bb6826bd81d3542a419d6 */
-				head_commit: string;
+		PreviewSessionCreateResult: components['schemas']['Session'] & {
+			app_assignment?: {
+				visit_id: string;
+				generation: string;
+			};
+			reused: boolean;
+			editor_session?: {
+				/** @enum {string} */
+				sharing: 'shared' | 'exclusive';
+				/** @enum {string} */
+				access: 'shared' | 'owner' | 'temporary';
 			};
 		};
-		OpenNotebookChangeRequestBody: {
+		Surface: {
+			/** @enum {string} */
+			status: 'starting' | 'ready' | 'stopping' | 'stopped' | 'failed' | 'unavailable';
+			port?: number;
+			url?: string;
 			/**
-			 * @description Change request title. Defaults to the notebook title.
-			 * @example Update revenue dashboard
+			 * Format: date-time
+			 * @example 2025-03-05T14:00:00Z
 			 */
-			title?: string;
-			/**
-			 * @description Change request description. Defaults to the session and base commit.
-			 * @example Updates the regional revenue analysis.
-			 */
-			body?: string;
-			/**
-			 * @description Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.
-			 * @example prop-7h2k9qm4xz7rp3w8
-			 */
-			target_proposal_id?: string;
-		};
-		SessionPage: {
-			items: components['schemas']['Session'][];
-			next_cursor: string | null;
+			started_at?: string;
+			probe?: {
+				available: boolean;
+				reason?: string;
+				version?: string;
+			};
+			last_error?: string;
 		};
 		Session: {
+			origin?: {
+				/** @enum {string} */
+				type: 'preview';
+				notebook_id: string;
+				preview_id: string;
+				revision_id: string;
+				commit: string;
+			};
+			resource_path?: string;
 			app_assignment?: {
 				visit_id: string;
 				generation: string;
@@ -3355,22 +3487,64 @@ export interface components {
 				message: string;
 			};
 		};
-		Surface: {
-			/** @enum {string} */
-			status: 'starting' | 'ready' | 'stopping' | 'stopped' | 'failed' | 'unavailable';
-			port?: number;
-			url?: string;
-			/**
-			 * Format: date-time
-			 * @example 2025-03-05T14:00:00Z
-			 */
-			started_at?: string;
-			probe?: {
-				available: boolean;
-				reason?: string;
-				version?: string;
+		NotebookApp: {
+			project_id: string;
+			project_name: string;
+			notebook_id: string;
+			title: string;
+			url: string;
+			/** @enum {string|null} */
+			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
+			can: {
+				run: boolean;
 			};
-			last_error?: string;
+		};
+		NotebookAppPage: {
+			items: components['schemas']['NotebookApp'][];
+			next_cursor: string | null;
+		};
+		OpenNotebookChangeRequestResult: {
+			/**
+			 * @description Identifier of the immutable proposal captured from the notebook session and published by this change request.
+			 * @example prop-7h2k9qm4xz7rp3w8
+			 */
+			proposal_id: string;
+			change_request: {
+				/** @example github */
+				provider: string;
+				/** @example 42 */
+				number: number;
+				/**
+				 * Format: uri
+				 * @example https://github.com/acme/analytics/pull/42
+				 */
+				url: string;
+				/** @example marimohub/nb-7h2k9qm4xz7rp3w8/prop-7h2k9qm4xz7rp3w8 */
+				head_branch: string;
+				/** @example 9e107d9d372bb6826bd81d3542a419d6 */
+				head_commit: string;
+			};
+		};
+		OpenNotebookChangeRequestBody: {
+			/**
+			 * @description Change request title. Defaults to the notebook title.
+			 * @example Update revenue dashboard
+			 */
+			title?: string;
+			/**
+			 * @description Change request description. Defaults to the session and base commit.
+			 * @example Updates the regional revenue analysis.
+			 */
+			body?: string;
+			/**
+			 * @description Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.
+			 * @example prop-7h2k9qm4xz7rp3w8
+			 */
+			target_proposal_id?: string;
+		};
+		SessionPage: {
+			items: components['schemas']['Session'][];
+			next_cursor: string | null;
 		};
 		EditorSessionState: {
 			/** @enum {string} */
@@ -4006,6 +4180,7 @@ export interface components {
 							| 'notebook.write'
 							| 'notebook.manage'
 							| 'deep-link.manage'
+							| 'preview.manage'
 							| 'integration.read'
 							| 'integration.use'
 							| 'integration.manage'
@@ -4187,6 +4362,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -11283,6 +11459,778 @@ export interface operations {
 			};
 		};
 	};
+	'notebooks.previews.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Previews */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookPreviewPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.previews.create': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					name: string;
+					source:
+						| {
+								/** @enum {string} */
+								type: 'branch';
+								branch: string;
+						  }
+						| {
+								/** @enum {string} */
+								type: 'commit';
+								commit: string;
+						  };
+					compute_profile?: string;
+					/** Format: date-time */
+					expires_at?: string;
+					pull_request?: number;
+				};
+			};
+		};
+		responses: {
+			/** @description Preview accepted for preparation */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookPreview'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.previews.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				preview_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Preview */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookPreview'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.previews.delete': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				preview_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Preview revoked; cleanup pending */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: null;
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.previews.sessions.create': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				preview_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @enum {string} */
+					mode: 'app' | 'edit';
+					app_visit_id?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Preview session */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PreviewSessionCreateResult'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.source.refs': {
+		parameters: {
+			query: {
+				type: 'branch' | 'commit';
+				query?: string;
+				resolve?: 'true' | 'false';
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Source suggestions */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							value: string;
+							commit: string;
+							label: string;
+						}[];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'apps.list': {
 		parameters: {
 			query?: {
@@ -17726,6 +18674,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -18089,6 +19038,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -18122,6 +19072,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -18407,6 +19358,7 @@ export interface operations {
 													| 'notebook.write'
 													| 'notebook.manage'
 													| 'deep-link.manage'
+													| 'preview.manage'
 													| 'integration.read'
 													| 'integration.use'
 													| 'integration.manage'
@@ -18548,6 +19500,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'
@@ -18780,6 +19733,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
 									| 'integration.manage'

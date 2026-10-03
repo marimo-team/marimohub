@@ -103,6 +103,18 @@ function setup(
 }
 
 describe('stakeholder apps', () => {
+	it.each([false, true])(
+		'shows the preview link only with the integration: %s',
+		async (enabled) => {
+			const { container } = setup(app.url, [app], { previewProviders: enabled ? ['github'] : [] });
+			await screen.findByText('Forecast');
+			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+			if (enabled)
+				expect(await screen.findByRole('link', { name: 'Previews' })).toBeInTheDocument();
+			else expect(screen.queryByRole('link', { name: 'Previews' })).not.toBeInTheDocument();
+		},
+	);
+
 	it('shares the app URL without exposing notebook actions', async () => {
 		const user = userEvent.setup();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');

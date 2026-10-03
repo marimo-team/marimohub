@@ -77,7 +77,6 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 
 	// Response shapes that omit exactly `schema_version` (internal persistence field).
 	const omitsSchemaVersion: [string, unknown, unknown][] = [
-		['NotebookMeta', NotebookMetaResponseSchema, CoreNotebookMetaSchema],
 		['NotebookVersion', NotebookVersionResponseSchema, CoreVersionSchema],
 		['LocalSource', LocalSourceResponseSchema, CoreLocalSourceSchema],
 		['GitSource', GitSourceResponseSchema, CoreGitSourceSchema],
@@ -87,6 +86,15 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		const coreKeys = shapeKeys(core);
 		expect(coreKeys.filter((k) => k !== 'schema_version')).toEqual(shapeKeys(api));
 		expect(coreKeys).toContain('schema_version');
+	});
+
+	it('NotebookMeta omits storage version and internal preview ownership', () => {
+		const coreKeys = shapeKeys(CoreNotebookMetaSchema);
+		expect(coreKeys).toContain('schema_version');
+		expect(coreKeys).toContain('preview');
+		expect(coreKeys.filter((key) => !['schema_version', 'preview'].includes(key))).toEqual(
+			shapeKeys(NotebookMetaResponseSchema),
+		);
 	});
 
 	// Project omits `schema_version` and adds the request-scoped `your_role`.
@@ -140,6 +148,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		// `takeover_capture_completed_at`) stays internal until the UI surfaces the
 		// deadline.
 		const internalSessionFields = [
+			'idle_timeout_ms',
+			'restricted_viewer_credentials',
 			'app_pool',
 			'runtime',
 			'sandbox_id',
@@ -154,7 +164,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		];
 		// `can` is response-only: the caller's evaluated grants, computed per
 		// request — never stored on the record.
-		const responseOnlyFields = ['app_assignment', 'app_pool', 'can'];
+		const responseOnlyFields = ['app_assignment', 'app_pool', 'can', 'resource_path'];
 		const coreKeys = shapeKeys(CoreSessionSchema);
 		const apiKeys = shapeKeys(SessionResponseSchema);
 		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(

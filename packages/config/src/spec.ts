@@ -414,6 +414,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_PREVIEW_COMPUTE_PROFILE',
+						name: 'Preview compute profile',
+						description:
+							'Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default.',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
 						name: 'Compute profile override',
 						description:

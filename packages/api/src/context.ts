@@ -193,6 +193,7 @@ export interface SandboxConfig {
 	computeProfiles?: SandboxComputeProfile[];
 	/** Whether editors may persist a non-default profile on a notebook. */
 	computeProfileOverride?: 'none' | 'editors';
+	previewComputeProfile?: string;
 	/** Resolve personal storage for owner-isolated editor sandboxes. */
 	userHome?: SandboxUserHomeResolver;
 	surfaces?: {

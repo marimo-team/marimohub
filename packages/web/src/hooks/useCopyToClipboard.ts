@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
+import { copyText } from '@/lib/clipboard';
 
 export interface Clipboard {
 	/** True for `resetAfterMs` following a successful copy — drives the ✓ swap. */
@@ -22,20 +22,11 @@ export function useCopyToClipboard(resetAfterMs = 1500): Clipboard {
 
 	const copy = useCallback(
 		async (value: string) => {
-			try {
-				await navigator.clipboard.writeText(value);
-				setCopied(true);
-				clearTimeout(timer.current);
-				timer.current = setTimeout(() => setCopied(false), resetAfterMs);
-				return true;
-			} catch {
-				// Clear the flag rather than leaving it: a failed copy that follows a
-				// successful one inside the reset window would otherwise keep showing ✓.
-				clearTimeout(timer.current);
-				setCopied(false);
-				toast.error('Could not copy to clipboard');
-				return false;
-			}
+			const copied = await copyText(value);
+			setCopied(copied);
+			clearTimeout(timer.current);
+			if (copied) timer.current = setTimeout(() => setCopied(false), resetAfterMs);
+			return copied;
 		},
 		[resetAfterMs],
 	);

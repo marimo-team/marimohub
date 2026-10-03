@@ -24,6 +24,7 @@ import type { SessionId } from '../../ids';
 import { Millis } from '../../duration';
 import { paths } from '../../paths';
 import type { Source } from '../../schema';
+import { StoredObjectError } from '../../schema';
 import {
 	isPastAuthorizationDeadline,
 	isReusableSession,
@@ -1067,6 +1068,114 @@ describe('SessionService', () => {
 
 			const list = await sessions.listSessions();
 			expect(list.map((s) => s.session_id)).toEqual([valid.session_id]);
+		});
+	});
+
+	describe('listByProject', () => {
+		it('includes terminal sessions regardless of reclamation and scans only the owning project', async () => {
+			const create = (pid = projectId, nid = notebookId) =>
+				sessions.createSession({
+					project_id: pid,
+					notebook_id: nid,
+					user_id: ACTOR,
+					sandbox_id: createSandboxId(),
+				});
+			const starting = await create();
+			const terminated = await create();
+			await sessions.markTerminated(projectId, terminated.session_id);
+			const failed = await create();
+			await sessions.markFailed(projectId, failed.session_id);
+			const reclaimed = await create();
+			await sessions.markTerminated(projectId, reclaimed.session_id);
+			const reclaimedAt = new Date().toISOString();
+			await sessions.markSandboxReclaimed(projectId, reclaimed.session_id, reclaimedAt);
+			const otherNotebook = await create(projectId, createNotebookId());
+			const otherProject = await create(createProjectId());
+			const list = vi.spyOn(bucket, 'list');
+			const get = vi.spyOn(bucket, 'get');
+
+			expect(
+				(await sessions.listByProject(projectId)).map((session) => session.session_id).sort(),
+			).toEqual(
+				[
+					starting.session_id,
+					terminated.session_id,
+					failed.session_id,
+					reclaimed.session_id,
+					otherNotebook.session_id,
+				].sort(),
+			);
+			const scoped = await sessions.listByProject(projectId, notebookId);
+			expect(scoped.map((session) => session.session_id).sort()).toEqual(
+				[
+					starting.session_id,
+					terminated.session_id,
+					failed.session_id,
+					reclaimed.session_id,
+				].sort(),
+			);
+			expect(scoped.filter((session) => session.status !== 'starting')).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ status: 'terminated', sandbox_id: terminated.sandbox_id }),
+					expect.objectContaining({ status: 'failed', sandbox_id: failed.sandbox_id }),
+				]),
+			);
+			expect(
+				scoped.find((session) => session.session_id === reclaimed.session_id)?.sandbox_reclaimed_at,
+			).toBe(reclaimedAt);
+			expect(
+				scoped
+					.filter((session) => !session.sandbox_reclaimed_at)
+					.map((session) => session.session_id)
+					.sort(),
+			).toEqual([starting.session_id, terminated.session_id, failed.session_id].sort());
+			expect(list).toHaveBeenCalled();
+			expect(
+				list.mock.calls.every(
+					([options]) => options?.prefix === paths.sessionsForProject(projectId),
+				),
+			).toBe(true);
+			expect(get.mock.calls.map(([key]) => key)).not.toContain(
+				paths.session(otherProject.project_id, otherProject.session_id),
+			);
+			list.mockRestore();
+			get.mockRestore();
+		});
+		it.each(['invalid JSON', 'invalid schema'])(
+			'rejects cleanup scans containing %s',
+			async (failure) => {
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebookId,
+					user_id: ACTOR,
+				});
+				await bucket.put(
+					paths.session(projectId, session.session_id),
+					failure === 'invalid JSON' ? '{' : JSON.stringify({ ...session, status: 'corrupt' }),
+				);
+				await expect(sessions.listByProject(projectId, notebookId)).rejects.toThrow(
+					StoredObjectError,
+				);
+			},
+		);
+
+		it('rejects cleanup scans when a session cannot be read', async () => {
+			const session = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+			});
+			const read = bucket.get.bind(bucket);
+			const unavailable = new Error('storage unavailable');
+			const get = vi
+				.spyOn(bucket, 'get')
+				.mockImplementation((key) =>
+					key === paths.session(projectId, session.session_id)
+						? Promise.reject(unavailable)
+						: read(key),
+				);
+			await expect(sessions.listByProject(projectId, notebookId)).rejects.toBe(unavailable);
+			get.mockRestore();
 		});
 	});
 

@@ -1,3 +1,16 @@
+import {
+	PreviewProjectSchema,
+	PreviewReceiptsSchema,
+	PreviewWorkSchema,
+	PreviewCursorSchema,
+	PreviewActiveProjectSchema,
+	previewActiveProjectKey,
+	previewProjectKey,
+	previewReceiptsKey,
+	previewWorkKey,
+	previewCleanupCursorKey,
+} from '../services/content/PreviewStore';
+import { PreviewRecordSchema, previewKey } from '../services/content/notebookPreviews';
 import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
 import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
@@ -34,6 +47,7 @@ import {
 	JobRunMarkerSchema,
 	JobRunSchema,
 	NotebookMetaSchema,
+	PreviewRuntimeMetaSchema,
 	NotebookProposalSchema,
 	ProposalPayloadMarkerSchema,
 	ProjectSchema,
@@ -103,6 +117,60 @@ const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}')
 
 const OBJECTS: BucketObject[] = [
 	{
+		name: 'NotebookPreview',
+		key: previewKey(PID, NID, '{preview_id}'),
+		schema: PreviewRecordSchema,
+		summary: 'Published preview revision, ownership, and terminal cleanup fence.',
+		mutability: 'cas',
+		owner: 'NotebookPreviewService',
+		tag: 'notebook',
+	},
+	{
+		name: 'PreviewProject',
+		key: previewProjectKey(PID),
+		schema: PreviewProjectSchema,
+		summary: 'Bounded active preview membership, recovery intents, and artifact reservations.',
+		mutability: 'cas',
+		owner: 'PreviewStore',
+		tag: 'notebook',
+	},
+	{
+		name: 'PreviewActiveProject',
+		key: previewActiveProjectKey(PID, '{work_id}'),
+		schema: PreviewActiveProjectSchema,
+		summary: 'Active project discovery marker, removed after its project CAS fences publication.',
+		mutability: 'immutable',
+		owner: 'PreviewStore',
+		tag: 'notebook',
+	},
+	{
+		name: 'PreviewReceipts',
+		key: previewReceiptsKey(PID),
+		schema: PreviewReceiptsSchema,
+		summary: 'Seven-day bounded idempotency receipts, separate from listing membership.',
+		mutability: 'cas',
+		owner: 'PreviewStore',
+		tag: 'notebook',
+	},
+	{
+		name: 'PreviewWork',
+		key: previewWorkKey,
+		schema: PreviewWorkSchema,
+		summary: 'Fair project preparation cursor and bounded deployment-wide leases.',
+		mutability: 'cas',
+		owner: 'PreviewStore',
+		tag: 'notebook',
+	},
+	{
+		name: 'PreviewCleanupCursor',
+		key: previewCleanupCursorKey,
+		schema: PreviewCursorSchema,
+		summary: 'Bounded project cleanup scan position.',
+		mutability: 'cas',
+		owner: 'PreviewStore',
+		tag: 'notebook',
+	},
+	{
 		name: 'Thumbnail',
 		key: notebook.thumbnail,
 		schema: ThumbnailRecordSchema,
@@ -165,6 +233,15 @@ const OBJECTS: BucketObject[] = [
 		schema: NotebookMetaSchema,
 		summary: 'Notebook metadata record.',
 		mutability: 'last-writer-wins',
+		tag: 'notebook',
+	},
+
+	{
+		name: 'PreviewRuntimeMeta',
+		key: notebook.previewMeta,
+		schema: PreviewRuntimeMetaSchema,
+		summary: 'Immutable runtime metadata isolated from older notebook writers.',
+		mutability: 'immutable',
 		tag: 'notebook',
 	},
 	{

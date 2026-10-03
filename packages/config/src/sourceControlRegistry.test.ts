@@ -97,6 +97,41 @@ describe('ConfiguredSourceControlRegistry', () => {
 		expect(authorize).not.toHaveBeenCalled();
 	});
 
+	it('authorizes every preview metadata operation against the project repository policy', async () => {
+		const adapter = {
+			...new Provider(),
+			provider: 'github',
+			previews: true,
+			supportsRepository: () => true,
+			getBranchHead: vi.fn(),
+			fetchWorkspace: vi.fn(),
+			listBranches: vi.fn(),
+			listCommits: vi.fn(),
+			resolveCommit: vi.fn(),
+			getPullRequest: vi.fn(),
+		};
+		const authorize = vi.fn(() => {
+			throw new Error('Repository denied');
+		});
+		const reader = new ConfiguredSourceControlRegistry([], [adapter], authorize).getReader(
+			'github',
+			projectId,
+		)!;
+		for (const invoke of [
+			() => reader.listBranches!('private/repo', ''),
+			() => reader.listCommits!('private/repo', ''),
+			() => reader.resolveCommit!('private/repo', 'a'.repeat(40)),
+			() => reader.getPullRequest!('private/repo', 1),
+		])
+			await expect(invoke()).rejects.toThrow('Repository denied');
+		expect(authorize).toHaveBeenCalledTimes(4);
+		expect(authorize.mock.calls).toEqual(
+			Array.from({ length: 4 }, () => ['private/repo', projectId]),
+		);
+		expect(adapter.listBranches).not.toHaveBeenCalled();
+		expect(adapter.getPullRequest).not.toHaveBeenCalled();
+	});
+
 	it('returns the original adapters when policies are omitted', () => {
 		const adapter = new Provider();
 		const registry = new ConfiguredSourceControlRegistry([adapter], [adapter]);

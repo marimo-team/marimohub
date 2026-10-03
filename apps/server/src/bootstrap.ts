@@ -6,7 +6,13 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
-import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
+import {
+	startPreviewPreparation,
+	startJobScheduler,
+	startMaintenance,
+	startSessionLifecycle,
+	startWarmPools,
+} from './cron';
 import { validateServerEnv } from './env';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
@@ -165,6 +171,8 @@ export async function bootstrap(
 			drainWarmPools = warmPools.drain;
 		}
 		stops.push(startMaintenance(deps, wideEvents));
+		const stopPreviews = startPreviewPreparation(deps);
+		if (stopPreviews) stops.push(stopPreviews);
 		const stopLifecycle = startSessionLifecycle(deps);
 		if (stopLifecycle) stops.push(stopLifecycle);
 		if (deps.jobs) {

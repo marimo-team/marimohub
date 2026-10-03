@@ -1,3 +1,4 @@
+import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
@@ -107,6 +108,11 @@ function StakeholderApp({
 					Back to apps
 				</Link>
 				<h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
+				{hasNotebookPreviews(capabilities) && (
+					<Link to={`/projects/${pid}/notebooks/${nid}/previews`} className="text-sm">
+						Previews
+					</Link>
+				)}
 				<ShareUrlMenu label="Share app" successMessage="App URL copied" />
 			</header>
 			{!canRun ? (

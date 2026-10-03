@@ -19,6 +19,9 @@ import {
 	JobDefinitionSchema,
 	JobRunSchema,
 	NotebookIdSchema,
+	NotebookMetaSchema,
+	PreviewRuntimeMetaSchema,
+	PreviewSessionOriginSchema,
 	parseStored,
 	parseStoredJobDefinition,
 	parseStoredJobRun,
@@ -40,12 +43,63 @@ import {
 } from './schema';
 import {
 	makeCatalog,
+	makeNotebookMeta,
 	makeProject,
 	makeSnapshotNotebookEntry,
 	makeSnapshotProjectEntry,
 	ACTOR,
 	NOW,
 } from './testing';
+
+describe('preview metadata schemas', () => {
+	it('requires ownership for runtime metadata while allowing ordinary notebook metadata', () => {
+		const meta = makeNotebookMeta();
+		expect(NotebookMetaSchema.safeParse(meta).success).toBe(true);
+		expect(PreviewRuntimeMetaSchema.safeParse(meta).success).toBe(false);
+		expect(
+			PreviewRuntimeMetaSchema.safeParse({
+				...meta,
+				preview: { notebook_id: createNotebookId(), preview_id: 'a'.repeat(32) },
+			}).success,
+		).toBe(true);
+	});
+
+	it.each(['', 'arbitrary-preview', 'a'.repeat(31), 'g'.repeat(32)])(
+		'rejects malformed preview IDs: %s',
+		(preview_id) => {
+			expect(
+				NotebookMetaSchema.safeParse(
+					makeNotebookMeta({ preview: { notebook_id: createNotebookId(), preview_id } }),
+				).success,
+			).toBe(false);
+		},
+	);
+
+	it('accepts a valid preview ID', () => {
+		const meta = makeNotebookMeta({
+			preview: { notebook_id: createNotebookId(), preview_id: 'a'.repeat(32) },
+		});
+		expect(NotebookMetaSchema.parse(meta)).toEqual(meta);
+	});
+
+	it.each(['a'.repeat(40), 'ABCDEF0123'.repeat(4)])(
+		'preserves hexadecimal commit validation in generated schemas: %s',
+		(commit) => {
+			const origin = {
+				type: 'preview',
+				notebook_id: createNotebookId(),
+				preview_id: 'a'.repeat(32),
+				revision_id: createVersionId(),
+				commit,
+			};
+			expect(PreviewSessionOriginSchema.parse(origin)).toEqual(origin);
+			const schema = z.toJSONSchema(PreviewSessionOriginSchema, { unrepresentable: 'any' });
+			const pattern = (schema.properties!.commit as { pattern: string }).pattern;
+			expect(new RegExp(pattern).test(commit)).toBe(true);
+			expect(new RegExp(pattern).test('g'.repeat(40))).toBe(false);
+		},
+	);
+});
 
 describe('IdentitySchema', () => {
 	const identity = {

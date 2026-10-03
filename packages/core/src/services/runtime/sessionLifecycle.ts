@@ -200,7 +200,8 @@ export class SessionLifecycleService {
 				const hasAppUsers = pool !== null && appOccupancy(pool, s.session_id) > 0;
 				const heartbeatStale =
 					!hasAppUsers &&
-					now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMsByMode[sessionMode(s)];
+					now - Date.parse(s.last_heartbeat) >
+						Math.min(this.cfg.idleTimeoutMsByMode[sessionMode(s)], s.idle_timeout_ms ?? Infinity);
 				const pastDeadline = !!s.expires_at && now >= Date.parse(s.expires_at);
 				const pastAuthorizationDeadline = isPastAuthorizationDeadline(s, now);
 
