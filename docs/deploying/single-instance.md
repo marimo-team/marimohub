@@ -226,13 +226,14 @@ Keep the key unchanged across restarts. Each hub also needs its own storage root
 port, and session secret. Separate storage roots or container networks alone do
 not isolate cleanup.
 
-Existing containers keep their original labels. Changing the key excludes those
-containers from cleanup. Before changing an existing hub's key:
+Existing containers keep their original labels. A shared key cannot identify
+which hub owns a container. Changing the key also excludes existing containers
+from cleanup. Coordinate migration across **all hubs sharing the old key**:
 
-1. Save notebooks and stop the hub's sessions and jobs.
-2. Stop the hub to prevent new sandbox creation.
-3. Remove only that hub's remaining sandbox containers, including idle pool containers.
-4. Set the new key and restart the hub.
+1. Save notebooks and stop sessions and jobs in all affected hubs.
+2. Stop all affected hubs to prevent new sandbox creation.
+3. Remove their remaining sandbox containers with the old key, including idle pool containers.
+4. Set a distinct key for each hub, then restart the hubs.
 
 ## Production cautions
 

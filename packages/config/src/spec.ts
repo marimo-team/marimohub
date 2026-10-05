@@ -790,7 +790,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY',
 						name: 'Docker sandbox label key',
 						description:
-							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Docker daemon.',
+							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Docker daemon. Surrounding whitespace is trimmed. Set a non-empty key using only ASCII letters, digits, underscores, dots, and hyphens, or leave the variable unset.',
 						default: 'marimohub.sandbox',
 						example: 'marimohub.prod.sandbox',
 						optIn: true,
@@ -826,7 +826,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY',
 						name: 'Podman sandbox label key',
 						description:
-							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Podman container store.',
+							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Podman container store. Surrounding whitespace is trimmed. Set a non-empty key using only ASCII letters, digits, underscores, dots, and hyphens, or leave the variable unset.',
 						default: 'marimohub.sandbox',
 						example: 'marimohub.prod.sandbox',
 						optIn: true,

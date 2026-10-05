@@ -224,12 +224,32 @@ describe('makeCompute backend selection', () => {
 
 	it.each(['docker', 'podman'])('configures the %s sandbox label key', (backend) => {
 		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`;
-		for (const labelKey of [undefined, '', 'marimohub.dev.sandbox', 'marimohub.prod.sandbox']) {
+		for (const labelKey of [undefined, 'marimohub.dev.sandbox', '  Hub_1.prod-sandbox\t']) {
 			const provider = makeCompute({
 				MARIMOHUB_COMPUTE_BACKEND: backend,
 				[key]: labelKey,
 			});
-			expect(configOf(provider).labelKey).toBe(labelKey || 'marimohub.sandbox');
+			expect(configOf(provider).labelKey).toBe(labelKey?.trim() ?? 'marimohub.sandbox');
+		}
+	});
+
+	it.each(['docker', 'podman'])('rejects invalid %s sandbox label keys at startup', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`;
+		for (const value of [
+			'',
+			'   ',
+			'\t\n',
+			'team=prod',
+			'team prod',
+			'team\nprod',
+			'team/prod',
+			'é',
+		]) {
+			const error = getConfigError(() =>
+				makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend, [key]: value }),
+			);
+			expect(error.opts.variable).toBe(key);
+			expect(error.opts.remediation).toContain('letters, digits, underscores, dots, and hyphens');
 		}
 	});
 
@@ -240,7 +260,7 @@ describe('makeCompute backend selection', () => {
 				: 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY';
 		const env = {
 			MARIMOHUB_COMPUTE_BACKEND: backend,
-			[otherKey]: 'marimohub.other.sandbox',
+			[otherKey]: 'invalid=other',
 		};
 		expect(configOf(makeCompute(env)).labelKey).toBe('marimohub.sandbox');
 		expect(

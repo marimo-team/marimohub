@@ -15,6 +15,24 @@ class StubProxyHeaderAuthenticator {
 	constructor(readonly config: Record<string, unknown>) {}
 }
 
+class StubContainerCompute {
+	constructor(readonly config: Record<string, unknown>) {}
+}
+
+function containerLibraryConfig(
+	selection: WizardSelection,
+	env: Record<string, string | undefined> = {},
+): Record<string, unknown> {
+	const source = generateLibrary(selection).match(/const compute = ([\s\S]*?);\n/)?.[1];
+	if (!source) throw new Error('Missing compute Library wiring.');
+	const compute = runInNewContext(`(${source})`, {
+		process: { env },
+		DockerCompute: StubContainerCompute,
+		PodmanCompute: StubContainerCompute,
+	}) as StubContainerCompute;
+	return compute.config;
+}
+
 function proxyHeaderLibraryConfig(
 	env: Record<string, string | undefined>,
 ): Record<string, unknown> {
@@ -175,6 +193,35 @@ describe('config -> code generators', () => {
 				expect(configured).toContain('marimohub.dev.sandbox');
 				expect(configured).not.toContain('marimohub.prod.sandbox');
 			}
+		},
+	);
+
+	it.each(['docker', 'podman'])(
+		'passes %s label keys to the generated Library constructor',
+		(compute) => {
+			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_LABEL_KEY`;
+			const otherKey = `MARIMOHUB_COMPUTE_${compute === 'docker' ? 'PODMAN' : 'DOCKER'}_LABEL_KEY`;
+			const selection = { storage: 'fs', compute, auth: 'dev', ai: 'none' };
+			for (const value of [undefined, '', '   ']) {
+				const values = {
+					[otherKey]: 'marimohub.other.sandbox',
+					...(value === undefined ? {} : { [key]: value }),
+				};
+				expect(containerLibraryConfig({ ...selection, values }).labelKey).toBeUndefined();
+				expect(
+					containerLibraryConfig({ ...selection, values }, { [key]: 'marimohub.env.sandbox' })
+						.labelKey,
+				).toBe('marimohub.env.sandbox');
+			}
+			expect(
+				containerLibraryConfig(
+					{
+						...selection,
+						values: { [key]: ' marimohub.dev.sandbox ', [otherKey]: 'marimohub.other.sandbox' },
+					},
+					{ [key]: 'marimohub.env.sandbox' },
+				).labelKey,
+			).toBe('marimohub.dev.sandbox');
 		},
 	);
 
