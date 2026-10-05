@@ -133,9 +133,9 @@ API key. Project configuration and bring-your-own-key providers can override it.
   start rather than silently falling back to the `dev` bypass.
 - OIDC requires `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Set explicit domains or
   `*` to allow all. This prevents accidental access for every IdP account.
-- OIDC requires boolean `email_verified=true` by default. `trusted-issuer`
-  permits omission only. Other present values are invalid. UserInfo must have
-  the same `sub` as the ID token.
+- OIDC requires email verification by default. Each present `email_verified`
+  claim must be boolean `true` or the exact string `"true"`. `trusted-issuer`
+  permits missing claims only. UserInfo must have the same `sub` as the ID token.
 - Group policy accepts at most 200 group IDs and stores only mapped entitlements.
   Group sessions and kernels expire with the entitlement credential. Active
   connections cannot extend this deadline.

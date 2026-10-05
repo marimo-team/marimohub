@@ -375,7 +375,7 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL` | Optional HTTPS signing-key endpoint. Defaults to the JWKS URL discovered from the OIDC issuer. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` value. `select_account` displays the account chooser. Use `consent` to display consent again. Space-separated combinations are valid. | — | `select_account` | `consent` |
 | `MARIMOHUB_AUTH_OIDC_SCOPES` | Space-separated scopes. Must include `openid` and `email`. Add only scopes that the provider requires for group claims. `offline_access` is invalid because marimohub stores no refresh tokens. | — | `openid email profile` | — |
-| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid. | — | `required` | `trusted-issuer` |
+| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Each present `email_verified` claim must be boolean `true` or the exact string `"true"`. `required` also requires the claim from the email source. `trusted-issuer` permits missing claims only. | — | `required` | `trusted-issuer` |
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
 | `MARIMOHUB_AUTH_SESSION_TTL_SECONDS` | Signed browser-session lifetime, from 300 to 86400 seconds. | — | `28800` | — |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |

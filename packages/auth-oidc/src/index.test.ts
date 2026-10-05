@@ -933,6 +933,34 @@ describe('OIDC routes', () => {
 		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
 	});
 
+	it.each(['required', 'trusted-issuer'] as const)(
+		'accepts Cognito UserInfo string verification under %s',
+		async (emailVerification) => {
+			oauthMock.processDiscoveryResponse.mockReturnValue({
+				issuer: 'https://issuer.example.com',
+				authorization_endpoint: 'https://issuer.example.com/authorize',
+				token_endpoint: 'https://issuer.example.com/token',
+				jwks_uri: 'https://issuer.example.com/jwks',
+				userinfo_endpoint: 'https://issuer.example.com/userinfo',
+			});
+			oauthMock.processUserInfoResponse.mockResolvedValue({
+				sub: 'user-1',
+				email: 'user@example.com',
+				email_verified: 'true',
+			});
+			const { routes } = makeOidc({ emailVerification });
+			const txn = await beginOidcTransaction(routes);
+
+			const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+				headers: { cookie: txn },
+			});
+
+			expect(res.status).toBe(302);
+			expect(res.headers.get('location')).toBe('/');
+			expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
+		},
+	);
+
 	it('allows an omitted UserInfo email_verified with a domain allowlist under trusted-issuer', async () => {
 		oauthMock.processDiscoveryResponse.mockReturnValue({
 			issuer: 'https://issuer.example.com',
@@ -2038,8 +2066,8 @@ describe('OIDC callback integrity (security)', () => {
 		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
 	});
 
-	it.each(['true', 1, null])(
-		'rejects a non-boolean email_verified claim under strict policy: %j',
+	it.each(['false', 'TRUE', ' true ', 1, null])(
+		'rejects an invalid email_verified claim under strict policy: %j',
 		async (emailVerified) => {
 			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
 				sub: 'user-1',

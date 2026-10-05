@@ -1260,7 +1260,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION',
 						name: 'Email verification policy',
 						description:
-							'Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid.',
+							'Each present `email_verified` claim must be boolean `true` or the exact string `"true"`. `required` also requires the claim from the email source. `trusted-issuer` permits missing claims only.',
 						default: 'required',
 						example: 'trusted-issuer',
 						optIn: true,

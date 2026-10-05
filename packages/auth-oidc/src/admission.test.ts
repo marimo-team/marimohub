@@ -53,31 +53,100 @@ describe('shared OIDC identity admission', () => {
 		});
 	});
 
-	it.each([false, null, 'true', 1])(
-		'rejects a contradictory verification claim %j even with trusted-issuer',
-		(email_verified) => {
-			const trusted = createAdmissionPolicy({ emailVerification: 'trusted-issuer' });
-			expect(admitOidcIdentity({ ...identity, email_verified }, trusted, identity)).toEqual({
-				error: 'email_not_verified',
+	describe.each(['required', 'trusted-issuer'] as const)(
+		'%s email verification',
+		(emailVerification) => {
+			const admissionPolicy = createAdmissionPolicy({ emailVerification });
+
+			it.each([
+				[true, 'true'],
+				['true', true],
+				['true', 'true'],
+				[undefined, 'true'],
+			])('accepts ID-token %j and UserInfo %j verification', (tokenVerified, userInfoVerified) => {
+				expect(
+					admitOidcIdentity({ ...identity, email_verified: tokenVerified }, admissionPolicy, {
+						...identity,
+						email: 'other@example.com',
+						email_verified: userInfoVerified,
+					}),
+				).toMatchObject({ user: { email: 'other@example.com' } });
 			});
-			expect(admitOidcIdentity(identity, trusted, { ...identity, email_verified })).toEqual({
-				error: 'email_not_verified',
+
+			it('accepts string verification without UserInfo', () => {
+				expect(
+					admitOidcIdentity({ ...identity, email_verified: 'true' }, admissionPolicy),
+				).toMatchObject({ user: { email: identity.email } });
 			});
-			expect(admitOidcIdentity(identity, trusted, { sub: identity.sub, email_verified })).toEqual({
-				error: 'email_not_verified',
+
+			it.each([undefined, true, 'true'])(
+				'uses the verified ID-token email when UserInfo omits email (verification: %j)',
+				(email_verified) => {
+					expect(
+						admitOidcIdentity({ ...identity, email_verified: 'true' }, admissionPolicy, {
+							sub: identity.sub,
+							email_verified,
+						}),
+					).toMatchObject({ user: { email: identity.email } });
+				},
+			);
+
+			it.each([
+				['without UserInfo', undefined, undefined],
+				['absent from both sources', undefined, { ...identity, email_verified: undefined }],
+				['absent from UserInfo email source', 'true', { ...identity, email_verified: undefined }],
+				[
+					'absent from ID-token email source',
+					undefined,
+					{ sub: identity.sub, email_verified: 'true' },
+				],
+			] as const)('handles missing verification %s', (_label, email_verified, userInfo) => {
+				const result = admitOidcIdentity(
+					{ ...identity, email_verified },
+					admissionPolicy,
+					userInfo,
+				);
+				if (emailVerification === 'required') {
+					expect(result).toEqual({ error: 'email_not_verified' });
+				} else {
+					expect(result).toMatchObject({ user: { email: identity.email } });
+				}
+			});
+
+			it.each([
+				false,
+				'false',
+				null,
+				0,
+				1,
+				'',
+				'TRUE',
+				'True',
+				' true',
+				'true ',
+				'true\n',
+				{},
+				[],
+				['true'],
+			])('rejects a contradictory verification claim %j', (email_verified) => {
+				const verifiedIdentity = { ...identity, email_verified: 'true' };
+				const invalidIdentity = { ...identity, email_verified };
+				const missingVerification = { ...identity, email_verified: undefined };
+				for (const [source, token, userInfo] of [
+					['ID token only', invalidIdentity, undefined],
+					['ID token with verified UserInfo', invalidIdentity, verifiedIdentity],
+					['ID token with missing UserInfo verification', invalidIdentity, missingVerification],
+					['UserInfo with verified ID token', verifiedIdentity, invalidIdentity],
+					['UserInfo with missing ID-token verification', missingVerification, invalidIdentity],
+					['UserInfo without email', verifiedIdentity, { sub: identity.sub, email_verified }],
+				] as const) {
+					expect(admitOidcIdentity(token, admissionPolicy, userInfo), source).toEqual({
+						error: 'email_not_verified',
+					});
+				}
 			});
 		},
 	);
-
-	it('requires verification from the selected email source', () => {
-		expect(
-			admitOidcIdentity(identity, policy, { sub: identity.sub, email: 'other@example.com' }),
-		).toEqual({ error: 'email_not_verified' });
-		const trusted = createAdmissionPolicy({ emailVerification: 'trusted-issuer' });
-		expect(admitOidcIdentity({ ...identity, email_verified: undefined }, trusted)).toHaveProperty(
-			'user',
-		);
-	});
 
 	it('prefers UserInfo groups and falls back only when the claim is absent', () => {
 		const groups = createAdmissionPolicy(groupConfig);

@@ -22,12 +22,13 @@ this exact value with your provider. A different value causes a
 `redirect_uri_mismatch` error. `ALLOWED_EMAIL_DOMAINS` is **required**. Set one
 or more domains, or set `*` to allow all.
 
-If the provider publishes UserInfo, marimohub uses it for profile claims.
-UserInfo must have the same `sub` as the validated ID token. Email verification
-is required by default. If a trusted issuer omits `email_verified`, use
-`MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer`. This mode also permits
-an omitted claim when a domain allowlist is active. If the claim is present, its
-value must be boolean `true`.
+The login email comes from UserInfo when it supplies `email`, otherwise from
+the ID token. UserInfo must match the validated ID token's `sub`.
+
+By default, the email source must supply `email_verified`. Every present claim
+in either source must be boolean `true` or the exact string `"true"` (Cognito
+compatibility). `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer` permits
+missing claims only, including with a domain allowlist.
 
 The signed session JWT has a 3,800-byte limit. If necessary, marimohub omits the
 profile picture first and the display name second. Required identity and
@@ -252,16 +253,16 @@ The audience and JWKS variables require `MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on`.
 
 Configure the issuer to issue JWT access tokens for the Hub resource with these claims:
 
-| Claim            | Requirement                                                                  |
-| ---------------- | ---------------------------------------------------------------------------- |
-| `iss`            | Exact configured OIDC issuer                                                 |
-| `aud`            | Configured access-token audience. Must not include the browser client ID.    |
-| `sub`            | Same subject as browser login                                                |
-| `email`          | User email that satisfies the domain allowlist                               |
-| `email_verified` | Boolean `true`, unless the existing `trusted-issuer` policy permits omission |
-| `client_id`      | Nonempty ID of the OAuth client that requested the token                     |
-| `iat`, `exp`     | Integer issuance and expiry times, in Unix seconds                           |
-| `scope`          | Space-separated OAuth scopes, including a Hub grant scope                    |
+| Claim            | Requirement                                                               |
+| ---------------- | ------------------------------------------------------------------------- |
+| `iss`            | Exact configured OIDC issuer                                              |
+| `aud`            | Configured access-token audience. Must not include the browser client ID. |
+| `sub`            | Same subject as browser login                                             |
+| `email`          | User email that satisfies the domain allowlist                            |
+| `email_verified` | `true` or `"true"`. Omission requires `trusted-issuer`.                   |
+| `client_id`      | Nonempty ID of the OAuth client that requested the token                  |
+| `iat`, `exp`     | Integer issuance and expiry times, in Unix seconds                        |
+| `scope`          | Space-separated OAuth scopes, including a Hub grant scope                 |
 
 The total token lifetime (`exp - iat`) cannot exceed 3,600 seconds.
 If group authorization uses a shorter session lifetime, that limit applies instead.

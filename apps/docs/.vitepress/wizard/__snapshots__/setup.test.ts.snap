@@ -19,12 +19,12 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com  # REQUIRED allowlist (verified
 this exact value with your provider. A different value causes a
 <code>redirect_uri_mismatch</code> error. <code>ALLOWED_EMAIL_DOMAINS</code> is <strong>required</strong>. Set one
 or more domains, or set <code>*</code> to allow all.</p>
-<p>If the provider publishes UserInfo, marimohub uses it for profile claims.
-UserInfo must have the same <code>sub</code> as the validated ID token. Email verification
-is required by default. If a trusted issuer omits <code>email_verified</code>, use
-<code>MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer</code>. This mode also permits
-an omitted claim when a domain allowlist is active. If the claim is present, its
-value must be boolean <code>true</code>.</p>
+<p>The login email comes from UserInfo when it supplies <code>email</code>, otherwise from
+the ID token. UserInfo must match the validated ID token's <code>sub</code>.</p>
+<p>By default, the email source must supply <code>email_verified</code>. Every present claim
+in either source must be boolean <code>true</code> or the exact string <code>&quot;true&quot;</code> (Cognito
+compatibility). <code>MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer</code> permits
+missing claims only, including with a domain allowlist.</p>
 <p>The signed session JWT has a 3,800-byte limit. If necessary, marimohub omits the
 profile picture first and the display name second. Required identity and
 authorization claims are never omitted. Login fails if they exceed the limit.</p>
@@ -226,7 +226,7 @@ The audience and JWKS variables require <code>MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=
 </tr>
 <tr>
 <td><code>email_verified</code></td>
-<td>Boolean <code>true</code>, unless the existing <code>trusted-issuer</code> policy permits omission</td>
+<td><code>true</code> or <code>&quot;true&quot;</code>. Omission requires <code>trusted-issuer</code>.</td>
 </tr>
 <tr>
 <td><code>client_id</code></td>

@@ -253,6 +253,18 @@ describe('external OIDC access tokens', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(['required', 'trusted-issuer'] as const)(
+		'accepts string email verification in a signed access token under %s',
+		async (emailVerification) => {
+			const auth = createOidcAccessTokenAuthenticator({ ...config, emailVerification });
+			const token = await sign(claims({ email_verified: 'true' }));
+			expect(await auth.authenticate(request(token))).toMatchObject({
+				id: 'user-one',
+				email: 'user@example.com',
+			});
+		},
+	);
+
 	it('allows missing email verification only with the trusted-issuer policy', async () => {
 		const auth = createOidcAccessTokenAuthenticator({
 			...config,
@@ -261,9 +273,9 @@ describe('external OIDC access tokens', () => {
 		expect(
 			await auth.authenticate(request(await sign(claims({ email_verified: undefined })))),
 		).not.toBeNull();
-		expect(
-			await auth.authenticate(request(await sign(claims({ email_verified: false })))),
-		).toBeNull();
+		for (const email_verified of [false, 'false', 'TRUE', ' true ', 1, null]) {
+			expect(await auth.authenticate(request(await sign(claims({ email_verified }))))).toBeNull();
+		}
 	});
 
 	it('maps groups, requires membership, and bounds entitlements by token expiry', async () => {
