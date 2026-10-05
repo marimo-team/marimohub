@@ -183,13 +183,18 @@ export function emailDomainAllowed(email: string, allowedDomains: readonly strin
 	return allowedDomains.includes(email.slice(at + 1).toLowerCase());
 }
 
+function isEmailVerified(value: unknown): boolean {
+	// Cognito UserInfo returns a string even when the ID token uses a boolean.
+	return value === true || value === 'true';
+}
+
 export function emailVerificationAllowed(
 	verified: unknown,
 	sources: readonly unknown[],
 	policy: EmailVerificationPolicy,
 ): boolean {
 	return (
-		sources.every((value) => value === undefined || value === true) &&
-		(policy === 'trusted-issuer' || verified === true)
+		sources.every((value) => value === undefined || isEmailVerified(value)) &&
+		(policy === 'trusted-issuer' || isEmailVerified(verified))
 	);
 }

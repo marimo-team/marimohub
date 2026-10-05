@@ -110,10 +110,10 @@ legacy roster that contains both forms is collapsed to one user-id row with the
 higher role. Email matching remains active until that claim occurs, so access is
 continuous.
 
-The login email grants access, so OIDC requires `email_verified: true` by
-default. `trusted-issuer` permits an enterprise issuer to omit the claim,
-including when a domain allowlist is active. If the claim is present, its value
-must be boolean `true`.
+The login email grants access, so OIDC requires email verification by default.
+Each present `email_verified` claim must be boolean `true` or the exact string
+`"true"`. `trusted-issuer` permits missing claims, including with a domain
+allowlist.
 
 Invite emails are PII of people who never signed in: the members list and
 project detail show them only to project managers (and to the invitee themself).
